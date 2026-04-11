@@ -112,6 +112,7 @@ set +a
 missing=()
 [[ "${TAILSCALE_AUTHKEY:-}" == "" || "${TAILSCALE_AUTHKEY:-}" == *REPLACE_ME* ]] && missing+=("TAILSCALE_AUTHKEY")
 [[ "${TELEGRAM_BOT_TOKEN_SCOUT:-}" == "" || "${TELEGRAM_BOT_TOKEN_SCOUT:-}" == *REPLACE_ME* ]] && missing+=("TELEGRAM_BOT_TOKEN_SCOUT")
+[[ "${MAC_SYNCTHING_DEVICE_ID:-}" == "" || "${MAC_SYNCTHING_DEVICE_ID:-}" == *REPLACE_ME* ]] && missing+=("MAC_SYNCTHING_DEVICE_ID")
 
 if (( ${#missing[@]} > 0 )); then
   red "  ✗ .env has placeholder values for: ${missing[*]}"
@@ -123,11 +124,91 @@ if (( ${#missing[@]} > 0 )); then
         (Generate auth key → enable "Reusable")
     - TELEGRAM_BOT_TOKEN_SCOUT
         DM @BotFather → /newbot → copy the token
+    - MAC_SYNCTHING_DEVICE_ID
+        Open http://localhost:8384 → top-right menu → "Show ID"
+        Copy the 56-char ID.
 
 EOF
   exit 1
 fi
-green "  ✓ .env has TAILSCALE_AUTHKEY and all bot tokens set"
+green "  ✓ .env has TAILSCALE_AUTHKEY, bot tokens, and MAC_SYNCTHING_DEVICE_ID"
+echo
+
+###############################################################################
+# 3b. Prerequisite: Syncthing installed and running on the Mac
+###############################################################################
+bold "▸ Checking Syncthing on this Mac..."
+if ! command -v syncthing >/dev/null 2>&1; then
+  yellow "  ! Syncthing not installed — installing via Homebrew..."
+  if ! command -v brew >/dev/null 2>&1; then
+    fail "Homebrew not found. Install it from https://brew.sh then re-run."
+  fi
+  brew install syncthing
+  green "  ✓ Syncthing installed"
+else
+  green "  ✓ syncthing $(syncthing --version 2>/dev/null | awk '{print $2}' | head -1) present"
+fi
+
+# Ensure Syncthing is actually listening on 8384. If the port is already
+# bound, something (brew service, Syncthing.app, or a manual launch) is
+# already running it — leave it alone.
+if nc -z localhost 8384 2>/dev/null; then
+  green "  ✓ Syncthing already listening on localhost:8384"
+elif command -v brew >/dev/null 2>&1; then
+  yellow "  ! Syncthing not running — attempting 'brew services start syncthing'..."
+  if brew services start syncthing >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5; do
+      nc -z localhost 8384 2>/dev/null && break
+      sleep 1
+    done
+    if nc -z localhost 8384 2>/dev/null; then
+      green "  ✓ Syncthing service started"
+    else
+      yellow "  ! brew services reported success but port 8384 is not listening yet."
+      yellow "    Start Syncthing manually and re-run this script:"
+      yellow "      syncthing --no-browser &"
+    fi
+  else
+    yellow "  ! 'brew services start syncthing' failed (likely a stale launchctl plist)."
+    yellow "    Start Syncthing manually in another terminal and re-run:"
+    yellow "      syncthing --no-browser &"
+    yellow "    Or fix the brew service with:"
+    yellow "      brew services stop syncthing; brew services start syncthing"
+    fail "Syncthing is not running on localhost:8384."
+  fi
+fi
+echo
+
+###############################################################################
+# 3c. Prerequisite: Mac-side Syncthing hub folders inside the repo
+###############################################################################
+bold "▸ Ensuring Mac-side hub folders exist..."
+
+# Both live under the repo so everything wolfpack-related is in one place.
+#   shared/   — git-tracked, hub sends to wolves
+#   dens/     — gitignored, bidi sync with wolves (living data)
+mkdir -p "$REPO_ROOT/shared"
+green "  ✓ $REPO_ROOT/shared/ ready (git-tracked, pushed to wolves)"
+
+mkdir -p "$REPO_ROOT/dens"
+green "  ✓ $REPO_ROOT/dens/ ready (gitignored, bidi with wolves)"
+
+# Clean up legacy paths from the old layout, if present.
+for legacy in "$HOME/Code/wolfpack-dens" "$HOME/Code/wolfpack-shared"; do
+  if [[ -e "$legacy" || -L "$legacy" ]]; then
+    yellow "  ! legacy path detected: $legacy"
+    yellow "    You can safely remove it if you've migrated content:"
+    yellow "      rm -rf \"$legacy\"     # (or mv it aside first)"
+  fi
+done
+
+# Sanity: syncthing running on Mac (best-effort check via the API port)
+if command -v nc >/dev/null 2>&1 && nc -z localhost 8384 2>/dev/null; then
+  green "  ✓ Syncthing web UI reachable on localhost:8384"
+else
+  yellow "  ! Syncthing web UI not detected on localhost:8384"
+  yellow "    Make sure it's running:  brew services start syncthing"
+fi
 echo
 
 ###############################################################################

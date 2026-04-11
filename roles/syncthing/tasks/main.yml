@@ -14,10 +14,116 @@
     enabled: true
     state: started
 
-- name: Wait for Syncthing config
+- name: Wait for Syncthing config.xml
   wait_for:
     path: "/home/{{ wolf_user }}/.local/state/syncthing/config.xml"
     timeout: 30
+
+- name: Wait for Syncthing REST API to be reachable
+  wait_for:
+    host: 127.0.0.1
+    port: 8384
+    timeout: 30
+
+- name: Configure Syncthing folders and Mac hub device via REST API
+  # Reads the local API key out of config.xml, then talks to the local
+  # Syncthing REST API to add the Mac as a remote device and create two
+  # folders: den-<wolf> (sendreceive) and wolfpack-shared (receiveonly),
+  # both shared with the Mac.
+  #
+  # Idempotent: checks for existing device/folder entries before adding.
+  shell: |
+    python3 - <<'PY'
+    import json, os, re, sys, urllib.request, urllib.error
+
+    CONFIG_XML = "/home/{{ wolf_user }}/.local/state/syncthing/config.xml"
+    API_BASE   = "http://127.0.0.1:8384/rest"
+    MAC_ID     = "{{ mac_syncthing_device_id }}"
+    WOLF_NAME  = "{{ wolf_name }}"
+    WOLF_USER  = "{{ wolf_user }}"
+
+    if not MAC_ID or "REPLACE_ME" in MAC_ID:
+        sys.exit("MAC_SYNCTHING_DEVICE_ID is unset — set it in .env and re-run.")
+
+    with open(CONFIG_XML) as f:
+        m = re.search(r"<apikey>([^<]+)</apikey>", f.read())
+    if not m:
+        sys.exit("Could not extract API key from config.xml")
+    api_key = m.group(1)
+
+    def api(method, path, body=None):
+        req = urllib.request.Request(
+            API_BASE + path,
+            method=method,
+            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            data=json.dumps(body).encode() if body is not None else None,
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            sys.exit(f"REST {method} {path} -> {e.code}: {e.read().decode()}")
+
+    # 1. Ensure Mac hub is a known remote device
+    devices = api("GET", "/config/devices") or []
+    if not any(d.get("deviceID") == MAC_ID for d in devices):
+        api("POST", "/config/devices", {
+            "deviceID":          MAC_ID,
+            "name":              "mac-hub",
+            "addresses":         ["dynamic"],
+            "compression":       "metadata",
+            "certName":          "",
+            "introducer":        False,
+            "autoAcceptFolders": False,
+            "paused":            False,
+        })
+        print("added mac-hub device")
+    else:
+        print("mac-hub device already present")
+
+    # 2. Helper to upsert a folder
+    def upsert_folder(folder_id, label, path, folder_type, rescan):
+        existing = api("GET", "/config/folders") or []
+        if any(f.get("id") == folder_id for f in existing):
+            print(f"folder {folder_id} already present")
+            return
+        api("POST", "/config/folders", {
+            "id":                folder_id,
+            "label":             label,
+            "path":              path,
+            "type":              folder_type,
+            "rescanIntervalS":   rescan,
+            "fsWatcherEnabled":  True,
+            "fsWatcherDelayS":   10,
+            "devices": [
+                {"deviceID": MAC_ID},
+            ],
+        })
+        print(f"added folder {folder_id} ({folder_type}) at {path}")
+
+    # 3. Den — sendreceive, bidi with Mac
+    upsert_folder(
+        folder_id   = f"den-{WOLF_NAME}",
+        label       = f"{WOLF_NAME}-den",
+        path        = f"/home/{WOLF_USER}/workspace/den",
+        folder_type = "sendreceive",
+        rescan      = 60,
+    )
+
+    # 4. Shared — receiveonly, pulled from Mac
+    upsert_folder(
+        folder_id   = "wolfpack-shared",
+        label       = "wolfpack-shared",
+        path        = f"/home/{WOLF_USER}/workspace/shared",
+        folder_type = "receiveonly",
+        rescan      = 120,
+    )
+
+    print("OK")
+    PY
+  register: syncthing_config_result
+  changed_when: "'added' in syncthing_config_result.stdout"
 
 - name: Get Syncthing device ID
   command: syncthing --device-id
@@ -25,10 +131,22 @@
   register: syncthing_device_id
   changed_when: false
 
-- name: Show Syncthing device ID and pairing step
+- name: Get Tailscale IP for Syncthing pairing instructions
+  command: tailscale ip -4
+  register: syncthing_ts_ip
+  changed_when: false
+
+- name: Show Syncthing device ID and Mac-side pairing step
   debug:
     msg:
-      - "🔗 Syncthing Device ID for {{ wolf_name }}:"
+      - "🔗 Syncthing device ID for {{ wolf_name }}:"
       - "    {{ syncthing_device_id.stdout }}"
-      - "ACTION: on your laptop's Syncthing, add this device ID to pair."
-      - "        Web UI on wolf: http://{{ ansible_host }}:8384 (tunnel via Tailscale)"
+      - "ACTION: on your Mac's Syncthing (http://localhost:8384):"
+      - "  1. Accept the incoming device request (ID above)"
+      - "     Then click Edit on the new device and set Addresses to:"
+      - "       tcp://{{ syncthing_ts_ip.stdout }}:22000"
+      - "     (dynamic discovery is unreliable over Tailscale)"
+      - "  2. Accept folder 'den-{{ wolf_name }}' → path ~/Code/wolfpack/dens/{{ wolf_name }}"
+      - "     Type: Send & Receive"
+      - "  3. Accept folder 'wolfpack-shared' → path ~/Code/wolfpack/shared"
+      - "     Type: Send Only"

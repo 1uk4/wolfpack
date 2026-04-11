@@ -65,11 +65,11 @@
 
   roles:
     - tailscale
-    - syncthing
     - bun
     - claude-code
     - telegram
     - workspace
+    - syncthing
     - wolf-service
 
   post_tasks:
@@ -90,6 +90,28 @@
       changed_when: false
       failed_when: false
 
+    - name: Update inventory/hosts.yml to use Tailscale IP
+      # Runs on the control machine, rewrites this host's ansible_host
+      # to the tailscale IP so future runs go over the tailnet.
+      delegate_to: localhost
+      become: false
+      replace:
+        path: "{{ playbook_dir }}/../inventory/hosts.yml"
+        regexp: '(^\s*{{ inventory_hostname }}:\s*\n(?:\s+[^\n]*\n)*?\s+ansible_host:\s*)\S+'
+        replace: '\g<1>{{ final_ts_ip.stdout }}'
+
+    - name: Update ~/.ssh/config 'wolfpack' alias to Tailscale IP
+      # Best-effort: only touches the line under "Host wolfpack" if present.
+      delegate_to: localhost
+      become: false
+      lineinfile:
+        path: "{{ lookup('env', 'HOME') }}/.ssh/config"
+        regexp: '^(\s*HostName\s+).*'
+        line: '    HostName {{ final_ts_ip.stdout }}'
+        insertafter: '^Host wolfpack'
+        firstmatch: true
+      failed_when: false
+
     - name: "🐺 BOOTSTRAP COMPLETE — post-run checklist"
       debug:
         msg:
@@ -101,20 +123,28 @@
           - "  Syncthing ID:      {{ final_st_id.stdout }}"
           - "  wolf-service:      {{ wolf_svc_status.stdout }}"
           - ""
+          - "  AUTO-UPDATED on your Mac:"
+          - "    ✓ inventory/hosts.yml  →  ansible_host: {{ final_ts_ip.stdout }}"
+          - "    ✓ ~/.ssh/config        →  Host wolfpack HostName {{ final_ts_ip.stdout }}"
+          - ""
           - "  MANUAL STEPS REMAINING:"
           - ""
-          - "  1. Update inventory/hosts.yml to use the Tailscale IP:"
-          - "       ansible_host: {{ ansible_host }}   -->   ansible_host: {{ final_ts_ip.stdout }}"
-          - "     Future runs will then go over Tailscale instead of public SSH."
+          - "  1. Accept the Syncthing folders on your Mac (one-time per wolf):"
+          - "       a. Open http://localhost:8384 on your Mac."
+          - "       b. Accept the new device '{{ wolf_name }}' when it appears"
+          - "          (device ID: {{ final_st_id.stdout }})"
+          - "          IMPORTANT: click 'Edit' on the device after adding and"
+          - "          set Addresses to:   tcp://{{ final_ts_ip.stdout }}:22000"
+          - "          (dynamic discovery is unreliable over Tailscale)"
+          - "       c. Accept folder 'den-{{ wolf_name }}' → path:"
+          - "            ~/Code/wolfpack/dens/{{ wolf_name }}"
+          - "          type: Send & Receive"
+          - "       d. Accept folder 'wolfpack-shared' → path:"
+          - "            ~/Code/wolfpack/shared"
+          - "          type: Send Only"
+          - "     (Already accepted previously? Skip.)"
           - ""
-          - "  2. Update ~/.ssh/config 'wolfpack' Host alias to the Tailscale IP:"
-          - "       HostName {{ final_ts_ip.stdout }}"
-          - "     So 'ssh wolfpack' routes over Tailscale, not the old public IP."
-          - ""
-          - "  3. Pair Syncthing with your other devices using the ID above."
-          - "     (Web UI on this host: http://{{ final_ts_ip.stdout }}:8384 — tunnel via Tailscale)"
-          - ""
-          - "  4. Verify the wolf is live in Telegram: send it a DM."
+          - "  2. DM the Telegram bot to verify the wolf is alive."
           - "     Owner ID {{ owner_telegram_id }} is pre-allowlisted."
           - "================================================================"
 

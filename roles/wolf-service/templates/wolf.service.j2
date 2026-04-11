@@ -5,7 +5,7 @@ After=network.target tailscaled.service
 [Service]
 Type=forking
 User={{ wolf_user }}
-WorkingDirectory=/home/{{ wolf_user }}/workspace
+WorkingDirectory=/home/{{ wolf_user }}/workspace/den
 Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/{{ wolf_user }}
 ExecStart=/usr/bin/tmux new-session -d -s {{ wolf_name }} '/usr/bin/claude --channels plugin:telegram@claude-plugins-official'

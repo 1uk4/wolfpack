@@ -2,3 +2,10 @@ keys/
 *.env
 .vault_pass
 
+# Wolf dens are living workspaces synced via Syncthing — not source.
+dens/
+
+# Syncthing metadata anywhere in the tree (including shared/).
+**/.stfolder
+**/.stversions/
+**/.stignore

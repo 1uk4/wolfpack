@@ -1,42 +1,129 @@
 ---
-- name: Create workspace directory
+# Creates the wolf's "den" — its personal Obsidian-compatible brain — and the
+# shared/ receive-point for pack-wide content from the Mac hub.
+#
+# Layout:
+#   /home/wolf/workspace/
+#     den/                       <- sendreceive Syncthing, private brain
+#       CLAUDE.md  SOUL.md  MEMORY.md
+#       memory/{human,decisions,lessons}.md
+#       memory/daily/             (populated over time)
+#       tasks/{inbox,active,done}.md
+#       knowledge/                (populated by the wolf)
+#       reports/                  (populated by the wolf)
+#       .stignore
+#     shared/                    <- receiveonly Syncthing, pushed from Mac
+#       .stignore
+
+- name: Create den and shared directory tree
   file:
-    path: "/home/{{ wolf_user }}/workspace"
+    path: "/home/{{ wolf_user }}/workspace/{{ item }}"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
+  loop:
+    - "den"
+    - "den/memory"
+    - "den/memory/daily"
+    - "den/tasks"
+    - "den/knowledge"
+    - "den/reports"
+    - "shared"
 
-- name: Create skills directory
-  file:
-    path: "/home/{{ wolf_user }}/workspace/skills"
-    state: directory
-    owner: "{{ wolf_user }}"
-    group: "{{ wolf_user }}"
-
-- name: Deploy CLAUDE.md
+- name: Deploy den/CLAUDE.md (identity)
   template:
-    src: CLAUDE.md.j2
-    dest: "/home/{{ wolf_user }}/workspace/CLAUDE.md"
+    src: den/CLAUDE.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/den/CLAUDE.md"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
+    force: false
 
-- name: Deploy AGENTS.md
+- name: Deploy den/SOUL.md (personality)
   template:
-    src: AGENTS.md.j2
-    dest: "/home/{{ wolf_user }}/workspace/AGENTS.md"
+    src: den/SOUL.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/den/SOUL.md"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
+    force: false
 
-- name: Sync skills library
+- name: Deploy den/MEMORY.md (routing doc)
+  template:
+    src: den/MEMORY.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/den/MEMORY.md"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    force: false
+
+- name: Deploy den/memory/ skeletons
   copy:
-    src: "{{ playbook_dir }}/../skills/"
-    dest: "/home/{{ wolf_user }}/workspace/skills/"
+    content: "{{ item.content }}"
+    dest: "/home/{{ wolf_user }}/workspace/den/memory/{{ item.name }}"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
+    force: false
+  loop:
+    - name: "human.md"
+      content: |
+        # About 1uk4
 
-- name: Pre-trust workspace directory in ~/.claude.json
-  # Ensures claude won't show the "trust this folder?" prompt on first launch
-  # under systemd, which would otherwise block the tmux session from starting.
+        - Bay Area, PST
+        - Owner of the Wolfpack
+    - name: "decisions.md"
+      content: |
+        # Decisions
+
+        <!-- Key decisions the wolf has made or participated in -->
+    - name: "lessons.md"
+      content: |
+        # Lessons
+
+        <!-- Mistakes and what was learned -->
+
+- name: Deploy den/tasks/ skeletons
+  copy:
+    content: "{{ item.content }}"
+    dest: "/home/{{ wolf_user }}/workspace/den/tasks/{{ item.name }}"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    force: false
+  loop:
+    - name: "inbox.md"
+      content: |
+        # Task Inbox
+
+        New tasks from 1uk4 or HQ land here.
+        Move to `active.md` when starting. Log completion in `done.md`.
+
+        ## Pending
+        (none)
+    - name: "active.md"
+      content: |
+        # Active Tasks
+
+        (none)
+    - name: "done.md"
+      content: |
+        # Done
+
+        <!-- Append-only log of completed tasks -->
+
+- name: Deploy .stignore in den and shared
+  copy:
+    content: |
+      .obsidian
+      .DS_Store
+      *.tmp
+      ~*
+    dest: "/home/{{ wolf_user }}/workspace/{{ item }}/.stignore"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+  loop:
+    - den
+    - shared
+
+- name: Pre-trust den directory in ~/.claude.json
+  # wolf-service will run `claude` with WorkingDirectory=.../workspace/den.
+  # Pre-accepting the folder-trust dialog prevents the first-run tmux hang.
   shell: |
     python3 - <<'PY'
     import json, os
@@ -46,8 +133,8 @@
     with open(p) as f:
         data = json.load(f)
     projects = data.setdefault("projects", {})
-    ws = projects.setdefault("/home/{{ wolf_user }}/workspace", {})
-    ws["hasTrustDialogAccepted"] = True
+    den = projects.setdefault("/home/{{ wolf_user }}/workspace/den", {})
+    den["hasTrustDialogAccepted"] = True
     with open(p, "w") as f:
         json.dump(data, f, indent=2)
     PY

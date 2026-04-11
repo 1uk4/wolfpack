@@ -14,6 +14,14 @@
   command: tailscale up --authkey={{ tailscale_authkey }} --hostname={{ wolf_name }}
   when: "'Logged out' in ts_status.stdout or ts_status.rc != 0"
 
+- name: Allow all inbound traffic on tailscale0 interface
+  # Syncthing, web UIs, and future tailnet-only services all need this.
+  # Safe because tailscale0 only carries authenticated tailnet peers.
+  ufw:
+    rule: allow
+    direction: in
+    interface: tailscale0
+
 - name: Get Tailscale IP
   command: tailscale ip -4
   register: tailscale_ip

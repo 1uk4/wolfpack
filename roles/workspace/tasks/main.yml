@@ -1,0 +1,55 @@
+---
+- name: Create workspace directory
+  file:
+    path: "/home/{{ wolf_user }}/workspace"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Create skills directory
+  file:
+    path: "/home/{{ wolf_user }}/workspace/skills"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Deploy CLAUDE.md
+  template:
+    src: CLAUDE.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/CLAUDE.md"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Deploy AGENTS.md
+  template:
+    src: AGENTS.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/AGENTS.md"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Sync skills library
+  copy:
+    src: "{{ playbook_dir }}/../skills/"
+    dest: "/home/{{ wolf_user }}/workspace/skills/"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Pre-trust workspace directory in ~/.claude.json
+  # Ensures claude won't show the "trust this folder?" prompt on first launch
+  # under systemd, which would otherwise block the tmux session from starting.
+  shell: |
+    python3 - <<'PY'
+    import json, os
+    p = "/home/{{ wolf_user }}/.claude.json"
+    if not os.path.exists(p):
+        raise SystemExit(0)
+    with open(p) as f:
+        data = json.load(f)
+    projects = data.setdefault("projects", {})
+    ws = projects.setdefault("/home/{{ wolf_user }}/workspace", {})
+    ws["hasTrustDialogAccepted"] = True
+    with open(p, "w") as f:
+        json.dump(data, f, indent=2)
+    PY
+    chown {{ wolf_user }}:{{ wolf_user }} /home/{{ wolf_user }}/.claude.json
+  changed_when: false

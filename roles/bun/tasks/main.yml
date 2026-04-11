@@ -1,0 +1,12 @@
+---
+- name: Install Bun
+  shell: curl -fsSL https://bun.sh/install | bash
+  become_user: "{{ wolf_user }}"
+  args:
+    creates: "/home/{{ wolf_user }}/.bun/bin/bun"
+
+- name: Add Bun to PATH in bashrc
+  lineinfile:
+    path: "/home/{{ wolf_user }}/.bashrc"
+    line: 'export PATH="$HOME/.bun/bin:$PATH"'
+    state: present

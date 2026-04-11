@@ -1,0 +1,29 @@
+---
+- name: Install Tailscale
+  shell: curl -fsSL https://tailscale.com/install.sh | sh
+  args:
+    creates: /usr/bin/tailscale
+
+- name: Check if Tailscale is authenticated
+  command: tailscale status
+  register: ts_status
+  changed_when: false
+  failed_when: false
+
+- name: Authenticate Tailscale
+  command: tailscale up --authkey={{ tailscale_authkey }} --hostname={{ wolf_name }}
+  when: "'Logged out' in ts_status.stdout or ts_status.rc != 0"
+
+- name: Get Tailscale IP
+  command: tailscale ip -4
+  register: tailscale_ip
+  changed_when: false
+
+- name: Show Tailscale IP and next step
+  debug:
+    msg:
+      - "🐺 {{ wolf_name }} Tailscale IP: {{ tailscale_ip.stdout }}"
+      - "⚠️  ACTION REQUIRED: update inventory/hosts.yml"
+      - "    Replace  ansible_host: {{ ansible_host }}"
+      - "    With     ansible_host: {{ tailscale_ip.stdout }}"
+      - "    Then future runs go over Tailscale (public SSH can be firewalled off)."

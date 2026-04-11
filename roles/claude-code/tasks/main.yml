@@ -1,0 +1,187 @@
+---
+- name: Install Node.js 22
+  shell: |
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+  args:
+    creates: /usr/bin/node
+
+- name: Install Claude Code
+  npm:
+    name: "@anthropic-ai/claude-code"
+    global: true
+    state: present
+
+- name: Create Claude config directory
+  file:
+    path: "/home/{{ wolf_user }}/.claude"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
+- name: Check Claude authentication status (wolf user)
+  command: sudo -iu {{ wolf_user }} claude auth status
+  register: claude_auth_status
+  changed_when: false
+  failed_when: false
+
+- name: Parse wolf Claude auth status
+  set_fact:
+    claude_authed: "{{ (claude_auth_status.stdout | from_json).loggedIn | default(false) }}"
+    claude_auth_email: "{{ (claude_auth_status.stdout | from_json).email | default('unknown') }}"
+  when: claude_auth_status.stdout | trim != ''
+
+- name: Default to unauthenticated if status parse failed
+  set_fact:
+    claude_authed: false
+    claude_auth_email: "unknown"
+  when: claude_authed is not defined
+
+- name: Check Claude authentication status (root user)
+  command: claude auth status
+  register: root_auth_status
+  changed_when: false
+  failed_when: false
+  when: not claude_authed
+
+- name: Parse root Claude auth status
+  set_fact:
+    root_authed: "{{ (root_auth_status.stdout | from_json).loggedIn | default(false) }}"
+  when: not claude_authed and root_auth_status.stdout | default('') | trim != ''
+
+- name: Default root auth to false if parse failed
+  set_fact:
+    root_authed: false
+  when: not claude_authed and root_authed is not defined
+
+- name: Copy Claude credentials from root to wolf (when root is authed)
+  block:
+    - name: Ensure wolf .claude directory exists
+      file:
+        path: "/home/{{ wolf_user }}/.claude"
+        state: directory
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0700"
+
+    - name: Copy /root/.claude/.credentials.json to wolf
+      copy:
+        src: /root/.claude/.credentials.json
+        dest: "/home/{{ wolf_user }}/.claude/.credentials.json"
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0600"
+        remote_src: true
+
+    - name: Check if /root/.claude.json exists
+      stat:
+        path: /root/.claude.json
+      register: root_claude_json
+
+    - name: Copy /root/.claude.json to wolf if present
+      copy:
+        src: /root/.claude.json
+        dest: "/home/{{ wolf_user }}/.claude.json"
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0600"
+        remote_src: true
+      when: root_claude_json.stat.exists
+
+    - name: Re-verify wolf auth after credential copy
+      command: sudo -iu {{ wolf_user }} claude auth status
+      register: wolf_auth_after_copy
+      changed_when: false
+      failed_when: "(wolf_auth_after_copy.stdout | from_json).loggedIn | default(false) != true"
+
+    - name: Mark wolf as authed after copy
+      set_fact:
+        claude_authed: true
+        claude_auth_email: "{{ (wolf_auth_after_copy.stdout | from_json).email }}"
+  when: not claude_authed and root_authed | default(false)
+
+- name: Show authentication status
+  debug:
+    msg: "🔐 Claude auth ({{ wolf_user }}): {{ 'logged in as ' + claude_auth_email if claude_authed else 'NOT logged in' }}"
+
+- name: Pause for manual Claude login (only when neither root nor wolf is authed)
+  pause:
+    prompt: |
+
+      ================================================================
+        CLAUDE LOGIN REQUIRED for wolf '{{ wolf_name }}' ({{ ansible_host }})
+      ================================================================
+
+      Neither root nor the wolf user is logged into Claude on this host.
+      Open a NEW terminal on your laptop and run:
+
+        ssh -i ~/.ssh/wolfpack -o IdentityAgent=none root@{{ ansible_host }}
+        claude auth login
+
+      (Log in as root — the playbook will auto-copy credentials to the
+      wolf user on the next step.)
+
+      Complete the OAuth flow in your browser, then come back here and
+      press ENTER to continue.
+      ================================================================
+  when: not claude_authed
+
+- name: Re-check auth after pause and auto-copy from root
+  block:
+    - name: Verify root is now authed
+      command: claude auth status
+      register: root_auth_recheck
+      changed_when: false
+      failed_when: "(root_auth_recheck.stdout | from_json).loggedIn | default(false) != true"
+
+    - name: Ensure wolf .claude directory exists (post-pause)
+      file:
+        path: "/home/{{ wolf_user }}/.claude"
+        state: directory
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0700"
+
+    - name: Copy credentials from root to wolf (post-pause)
+      copy:
+        src: /root/.claude/.credentials.json
+        dest: "/home/{{ wolf_user }}/.claude/.credentials.json"
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0600"
+        remote_src: true
+
+    - name: Copy /root/.claude.json to wolf if present (post-pause)
+      stat:
+        path: /root/.claude.json
+      register: root_claude_json_post
+
+    - name: Copy /root/.claude.json (post-pause)
+      copy:
+        src: /root/.claude.json
+        dest: "/home/{{ wolf_user }}/.claude.json"
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0600"
+        remote_src: true
+      when: root_claude_json_post.stat.exists
+
+    - name: Final wolf auth verification
+      command: sudo -iu {{ wolf_user }} claude auth status
+      register: final_wolf_auth
+      changed_when: false
+      failed_when: "(final_wolf_auth.stdout | from_json).loggedIn | default(false) != true"
+  when: not claude_authed
+
+- name: Install plugin marketplace
+  command: claude plugin marketplace add anthropics/claude-plugins-official
+  become_user: "{{ wolf_user }}"
+  register: marketplace_result
+  changed_when: "'Adding' in marketplace_result.stdout"
+  failed_when: false
+
+- name: Claude Code status
+  debug:
+    msg:
+      - "✅ Claude Code installed and authenticated for {{ wolf_user }}"

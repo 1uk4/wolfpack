@@ -1,0 +1,59 @@
+---
+- name: Install Telegram plugin
+  command: claude plugin install telegram@claude-plugins-official
+  become_user: "{{ wolf_user }}"
+  register: plugin_result
+  changed_when: "'Successfully installed' in plugin_result.stdout"
+  failed_when: false
+
+- name: Create Telegram channel directory
+  file:
+    path: "/home/{{ wolf_user }}/.claude/channels/telegram"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
+- name: Configure Telegram bot token
+  copy:
+    content: "TELEGRAM_BOT_TOKEN={{ telegram_bot_token }}"
+    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/.env"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+
+- name: Configure Telegram access (pre-paired)
+  copy:
+    content: |
+      {
+        "dmPolicy": "allowlist",
+        "allowFrom": ["{{ owner_telegram_id }}"],
+        "groups": {},
+        "pending": {}
+      }
+    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/access.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+
+- name: Create approved sender drop-file
+  file:
+    path: "/home/{{ wolf_user }}/.claude/channels/telegram/approved"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Write approved sender file
+  copy:
+    content: "{{ owner_telegram_id }}"
+    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/approved/{{ owner_telegram_id }}"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Telegram channel status
+  debug:
+    msg:
+      - "📨 Telegram plugin installed for {{ wolf_name }}"
+      - "    Bot token: ...{{ telegram_bot_token[-6:] }} (last 6 chars)"
+      - "    Owner allowlisted: {{ owner_telegram_id }}"
+      - "    ACTION: once wolf-service is up, DM the bot to verify."

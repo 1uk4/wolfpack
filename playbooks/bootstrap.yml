@@ -1,0 +1,125 @@
+---
+- name: Bootstrap a wolf
+  hosts: wolves
+  become: true
+
+  vars:
+    tailscale_authkey: "{{ lookup('env', 'TAILSCALE_AUTHKEY') }}"
+
+  pre_tasks:
+    - name: Create wolf user
+      user:
+        name: "{{ wolf_user }}"
+        shell: /bin/bash
+        groups: sudo
+        create_home: true
+
+    - name: Allow wolf user sudo without password
+      copy:
+        content: "{{ wolf_user }} ALL=(ALL) NOPASSWD:ALL"
+        dest: "/etc/sudoers.d/{{ wolf_user }}"
+        mode: "0440"
+
+    - name: Authorize SSH key for wolf user
+      authorized_key:
+        user: "{{ wolf_user }}"
+        state: present
+        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/wolfpack.pub') }}"
+
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install essentials
+      apt:
+        name:
+          - curl
+          - git
+          - ufw
+          - fail2ban
+          - unzip
+          - tmux
+        state: present
+
+    - name: Configure UFW defaults
+      ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: "22"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Disable root password login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin prohibit-password"
+      notify: restart sshd
+
+  roles:
+    - tailscale
+    - syncthing
+    - bun
+    - claude-code
+    - telegram
+    - workspace
+    - wolf-service
+
+  post_tasks:
+    - name: Get Tailscale IP for summary
+      command: tailscale ip -4
+      register: final_ts_ip
+      changed_when: false
+
+    - name: Get Syncthing device ID for summary
+      command: syncthing --device-id
+      become_user: "{{ wolf_user }}"
+      register: final_st_id
+      changed_when: false
+
+    - name: Check wolf service status
+      command: systemctl is-active {{ wolf_name }}
+      register: wolf_svc_status
+      changed_when: false
+      failed_when: false
+
+    - name: "🐺 BOOTSTRAP COMPLETE — post-run checklist"
+      debug:
+        msg:
+          - "================================================================"
+          - "  {{ wolf_name | upper }} is provisioned."
+          - "================================================================"
+          - ""
+          - "  Tailscale IP:      {{ final_ts_ip.stdout }}"
+          - "  Syncthing ID:      {{ final_st_id.stdout }}"
+          - "  wolf-service:      {{ wolf_svc_status.stdout }}"
+          - ""
+          - "  MANUAL STEPS REMAINING:"
+          - ""
+          - "  1. Update inventory/hosts.yml to use the Tailscale IP:"
+          - "       ansible_host: {{ ansible_host }}   -->   ansible_host: {{ final_ts_ip.stdout }}"
+          - "     Future runs will then go over Tailscale instead of public SSH."
+          - ""
+          - "  2. Update ~/.ssh/config 'wolfpack' Host alias to the Tailscale IP:"
+          - "       HostName {{ final_ts_ip.stdout }}"
+          - "     So 'ssh wolfpack' routes over Tailscale, not the old public IP."
+          - ""
+          - "  3. Pair Syncthing with your other devices using the ID above."
+          - "     (Web UI on this host: http://{{ final_ts_ip.stdout }}:8384 — tunnel via Tailscale)"
+          - ""
+          - "  4. Verify the wolf is live in Telegram: send it a DM."
+          - "     Owner ID {{ owner_telegram_id }} is pre-allowlisted."
+          - "================================================================"
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: sshd
+        state: restarted

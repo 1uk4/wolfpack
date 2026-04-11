@@ -1,0 +1,17 @@
+[Unit]
+Description=Wolfpack - {{ wolf_name }}
+After=network.target tailscaled.service
+
+[Service]
+Type=forking
+User={{ wolf_user }}
+WorkingDirectory=/home/{{ wolf_user }}/workspace
+Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/{{ wolf_user }}
+ExecStart=/usr/bin/tmux new-session -d -s {{ wolf_name }} '/usr/bin/claude --channels plugin:telegram@claude-plugins-official'
+ExecStop=/usr/bin/tmux kill-session -t {{ wolf_name }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

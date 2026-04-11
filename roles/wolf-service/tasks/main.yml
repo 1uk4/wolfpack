@@ -1,0 +1,60 @@
+---
+- name: Create systemd service
+  template:
+    src: wolf.service.j2
+    dest: "/etc/systemd/system/{{ wolf_name }}.service"
+  notify: restart wolf
+
+- name: Flush handlers (restart wolf now if the unit file changed)
+  meta: flush_handlers
+
+- name: Enable and start wolf service
+  systemd:
+    name: "{{ wolf_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wolf service status
+  command: systemctl is-active {{ wolf_name }}
+  register: wolf_svc_active
+  changed_when: false
+  failed_when: false
+
+- name: Wait for tmux session to exist
+  command: sudo -iu {{ wolf_user }} tmux has-session -t {{ wolf_name }}
+  register: tmux_check
+  retries: 12
+  delay: 5
+  until: tmux_check.rc == 0
+  changed_when: false
+  failed_when: tmux_check.rc != 0
+
+- name: Wait for claude to print the channel listener banner
+  # Captures the live tmux pane contents and greps for the banner that
+  # only appears once claude has started the telegram MCP server.
+  shell: |
+    sudo -iu {{ wolf_user }} tmux capture-pane -t {{ wolf_name }} -p -S -200
+  register: pane_capture
+  retries: 24
+  delay: 5
+  until: "'Listening for channel messages' in pane_capture.stdout"
+  changed_when: false
+
+- name: Smoke test passed
+  debug:
+    msg:
+      - "✅ wolf-service '{{ wolf_name }}' is live:"
+      - "    - systemd status:  {{ wolf_svc_active.stdout }}"
+      - "    - tmux session:    present"
+      - "    - channel listener: connected (banner detected in pane)"
+
+- name: Show wolf service status
+  debug:
+    msg:
+      - "🐺 wolf-service '{{ wolf_name }}' status: {{ wolf_svc_active.stdout }}"
+      - "    Attach to live claude session: sudo -iu {{ wolf_user }} tmux attach -t {{ wolf_name }}"
+      - "    (detach with Ctrl-b then d — do NOT Ctrl-c, that kills claude)"
+      - "    Service logs:  journalctl -u {{ wolf_name }} -f"
+      - "    Stop:          systemctl stop {{ wolf_name }}"
+      - "    Start:         systemctl start {{ wolf_name }}"

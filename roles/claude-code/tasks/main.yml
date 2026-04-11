@@ -174,6 +174,19 @@
       failed_when: "(final_wolf_auth.stdout | from_json).loggedIn | default(false) != true"
   when: not claude_authed
 
+- name: Deploy Claude Code permission allowlist (~/.claude/settings.json)
+  # Sets defaultMode=dontAsk with a generous allow list so Telegram-driven
+  # tool calls don't trigger interactive permission prompts that nobody can
+  # answer inside the headless tmux session. Denies win over allows, so the
+  # catastrophic-shell-command denies act as a safety net.
+  copy:
+    src: settings.json
+    dest: "/home/{{ wolf_user }}/.claude/settings.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+  notify: restart wolf
+
 - name: Install plugin marketplace
   command: claude plugin marketplace add anthropics/claude-plugins-official
   become_user: "{{ wolf_user }}"

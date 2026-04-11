@@ -1,119 +1,72 @@
 ---
-# Creates the wolf's "den" — its personal Obsidian-compatible brain — and the
-# shared/ receive-point for pack-wide content from the Mac hub.
+# Builds the wolf's den — private Obsidian-compatible brain at
+# /home/wolf/workspace/den/ — plus an empty shared/ receive-point for
+# the Mac hub's read-only skill/template/pack library.
 #
-# Layout:
-#   /home/wolf/workspace/
-#     den/                       <- sendreceive Syncthing, private brain
-#       CLAUDE.md  SOUL.md  MEMORY.md
-#       memory/{human,decisions,lessons}.md
-#       memory/daily/             (populated over time)
-#       tasks/{inbox,active,done}.md
-#       knowledge/                (populated by the wolf)
-#       reports/                  (populated by the wolf)
-#       .stignore
-#     shared/                    <- receiveonly Syncthing, pushed from Mac
-#       .stignore
+# Static content lives in files/ (copy as-is).
+# Templated content lives in templates/ (Jinja substitution).
+#
+# shared/ is NOT deployed from this playbook — it's pulled from the Mac
+# via Syncthing (receive-only). Editing pack content happens on the Mac.
 
-- name: Create den and shared directory tree
+- name: Create den directory structure
   file:
-    path: "/home/{{ wolf_user }}/workspace/{{ item }}"
+    path: "/home/{{ wolf_user }}/workspace/den/{{ item }}"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
   loop:
-    - "den"
-    - "den/memory"
-    - "den/memory/daily"
-    - "den/tasks"
-    - "den/knowledge"
-    - "den/reports"
-    - "shared"
+    - ""
+    - memory
+    - memory/daily
+    - tasks
+    - knowledge
+    - reports
 
-- name: Deploy den/CLAUDE.md (identity)
+- name: Create shared receive-point directory
+  file:
+    path: "/home/{{ wolf_user }}/workspace/shared"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Deploy CLAUDE.md (identity, rules, startup)
   template:
-    src: den/CLAUDE.md.j2
+    src: CLAUDE.md.j2
     dest: "/home/{{ wolf_user }}/workspace/den/CLAUDE.md"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     force: false
 
-- name: Deploy den/SOUL.md (personality)
+- name: Deploy config.yml (wolf metadata)
   template:
-    src: den/SOUL.md.j2
-    dest: "/home/{{ wolf_user }}/workspace/den/SOUL.md"
+    src: config.yml.j2
+    dest: "/home/{{ wolf_user }}/workspace/den/config.yml"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
-    force: false
 
-- name: Deploy den/MEMORY.md (routing doc)
-  template:
-    src: den/MEMORY.md.j2
-    dest: "/home/{{ wolf_user }}/workspace/den/MEMORY.md"
-    owner: "{{ wolf_user }}"
-    group: "{{ wolf_user }}"
-    force: false
-
-- name: Deploy den/memory/ skeletons
+- name: Deploy static den files (force:false — never overwrite wolf edits)
   copy:
-    content: "{{ item.content }}"
-    dest: "/home/{{ wolf_user }}/workspace/den/memory/{{ item.name }}"
+    src: "{{ item.src }}"
+    dest: "/home/{{ wolf_user }}/workspace/den/{{ item.dest }}"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     force: false
   loop:
-    - name: "human.md"
-      content: |
-        # About 1uk4
+    - { src: "SOUL.md",      dest: "SOUL.md" }
+    - { src: "MEMORY.md",    dest: "MEMORY.md" }
+    - { src: "HEARTBEAT.md", dest: "HEARTBEAT.md" }
+    - { src: "human.md",     dest: "memory/human.md" }
+    - { src: "decisions.md", dest: "memory/decisions.md" }
+    - { src: "lessons.md",   dest: "memory/lessons.md" }
+    - { src: "errors.md",    dest: "memory/errors.md" }
+    - { src: "inbox.md",     dest: "tasks/inbox.md" }
+    - { src: "active.md",    dest: "tasks/active.md" }
+    - { src: "done.md",      dest: "tasks/done.md" }
 
-        - Bay Area, PST
-        - Owner of the Wolfpack
-    - name: "decisions.md"
-      content: |
-        # Decisions
-
-        <!-- Key decisions the wolf has made or participated in -->
-    - name: "lessons.md"
-      content: |
-        # Lessons
-
-        <!-- Mistakes and what was learned -->
-
-- name: Deploy den/tasks/ skeletons
+- name: Deploy .stignore in den and shared (Syncthing reads one per folder)
   copy:
-    content: "{{ item.content }}"
-    dest: "/home/{{ wolf_user }}/workspace/den/tasks/{{ item.name }}"
-    owner: "{{ wolf_user }}"
-    group: "{{ wolf_user }}"
-    force: false
-  loop:
-    - name: "inbox.md"
-      content: |
-        # Task Inbox
-
-        New tasks from 1uk4 or HQ land here.
-        Move to `active.md` when starting. Log completion in `done.md`.
-
-        ## Pending
-        (none)
-    - name: "active.md"
-      content: |
-        # Active Tasks
-
-        (none)
-    - name: "done.md"
-      content: |
-        # Done
-
-        <!-- Append-only log of completed tasks -->
-
-- name: Deploy .stignore in den and shared
-  copy:
-    content: |
-      .obsidian
-      .DS_Store
-      *.tmp
-      ~*
+    src: stignore
     dest: "/home/{{ wolf_user }}/workspace/{{ item }}/.stignore"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -122,7 +75,7 @@
     - shared
 
 - name: Pre-trust den directory in ~/.claude.json
-  # wolf-service will run `claude` with WorkingDirectory=.../workspace/den.
+  # wolf-service runs claude with WorkingDirectory=.../workspace/den.
   # Pre-accepting the folder-trust dialog prevents the first-run tmux hang.
   shell: |
     python3 - <<'PY'

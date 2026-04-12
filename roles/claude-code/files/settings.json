@@ -12,7 +12,11 @@
       "WebSearch",
       "TodoWrite",
       "NotebookEdit",
-      "mcp__telegram"
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__react",
+      "mcp__plugin_telegram_telegram__edit_message",
+      "mcp__plugin_telegram_*",
+      "mcp__*"
     ],
     "deny": [
       "Bash(rm -rf /)",

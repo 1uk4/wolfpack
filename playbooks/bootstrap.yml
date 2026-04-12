@@ -63,6 +63,39 @@
         line: "PermitRootLogin prohibit-password"
       notify: restart sshd
 
+    - name: Generate SSH keypair for wolf user (for GitHub etc.)
+      become_user: "{{ wolf_user }}"
+      command: ssh-keygen -t ed25519 -f /home/{{ wolf_user }}/.ssh/id_ed25519 -C "{{ wolf_name }}@wolfpack" -N ""
+      args:
+        creates: "/home/{{ wolf_user }}/.ssh/id_ed25519"
+
+    - name: Set git user name
+      become_user: "{{ wolf_user }}"
+      git_config:
+        name: user.name
+        scope: global
+        value: "{{ wolf_name }}"
+
+    - name: Set git user email
+      become_user: "{{ wolf_user }}"
+      git_config:
+        name: user.email
+        scope: global
+        value: "{{ wolf_name }}@wolfpack.local"
+
+    - name: Read wolf SSH public key
+      slurp:
+        src: "/home/{{ wolf_user }}/.ssh/id_ed25519.pub"
+      register: wolf_ssh_pubkey
+
+    - name: Show wolf SSH public key
+      debug:
+        msg:
+          - "🔑 SSH public key for {{ wolf_name }}:"
+          - "    {{ wolf_ssh_pubkey.content | b64decode | trim }}"
+          - "ACTION: add this key to GitHub → https://github.com/settings/keys"
+          - "    Name it '{{ wolf_name }}-wolfpack'"
+
   roles:
     - tailscale
     - bun
@@ -144,7 +177,11 @@
           - "          type: Send Only"
           - "     (Already accepted previously? Skip.)"
           - ""
-          - "  2. DM the Telegram bot to verify the wolf is alive."
+          - "  2. Add the wolf's SSH key to GitHub (one-time per wolf):"
+          - "       {{ wolf_ssh_pubkey.content | b64decode | trim }}"
+          - "       → https://github.com/settings/keys → name it '{{ wolf_name }}-wolfpack'"
+          - ""
+          - "  3. DM the Telegram bot to verify the wolf is alive."
           - "     Owner ID {{ owner_telegram_id }} is pre-allowlisted."
           - "================================================================"
 

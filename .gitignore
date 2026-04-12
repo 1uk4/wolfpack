@@ -9,3 +9,4 @@ dens/
 **/.stfolder
 **/.stversions/
 **/.stignore
+.DS_Store

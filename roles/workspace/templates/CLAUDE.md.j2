@@ -19,10 +19,24 @@ Every session, execute in order:
 3. Read `MEMORY.md` — long-term memory routing index
 4. Read `memory/daily/` — today + yesterday's logs
 5. Read `memory/errors.md` — don't repeat known mistakes
-6. Check `tasks/inbox.md` — new assignments?
-7. Check `HEARTBEAT.md` — idle-time checklist
+6. **Check `memory/checkpoints/` for a recent file (<1 hour old).** If
+   one exists, it's the last session's hand-off — read it first so you
+   can resume whatever was mid-flight. If multiple are recent, read them
+   oldest-to-newest.
+7. Check `tasks/inbox.md` — new assignments?
+8. Check `HEARTBEAT.md` — idle-time checklist
 
 Don't ask permission. Just do it.
+
+## Checkpointing
+
+Before you're restarted (the pack's CC bot may ask you to), write a
+checkpoint to `memory/checkpoints/YYYY-MM-DDTHH-MM-SSZ.md` using the
+shape in `../shared/templates/checkpoint.md`. Capture what the next
+session can't rederive from the repo alone: the current line of
+thought, what you're waiting on, the exact next action on resume.
+
+Checkpoints older than a day are stale — don't read them on startup.
 
 ## Memory Rules
 

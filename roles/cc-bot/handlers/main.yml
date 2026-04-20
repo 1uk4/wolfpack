@@ -1,0 +1,9 @@
+---
+- name: reload systemd
+  systemd:
+    daemon_reload: true
+
+- name: restart wolfpack-cc
+  systemd:
+    name: wolfpack-cc.service
+    state: restarted

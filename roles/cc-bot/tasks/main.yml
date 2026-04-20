@@ -1,0 +1,117 @@
+---
+# cc-bot role — provisions the Wolfpack command-center bot.
+#
+# Creates a dedicated 'wolfpack' Linux user that owns a clone of this repo
+# and runs the bot (TS + grammy + bun) under a systemd unit. A sudoers
+# drop-in grants the wolfpack user permission to systemctl/journalctl
+# against each wolf service — nothing else.
+#
+# Expects:
+#   - cc_bot_token   : TELEGRAM_BOT_TOKEN_WOLFPACK_CC env var (via .env)
+#   - owner_telegram_id : set at group_vars / inventory level
+#   - groups.wolves  : the list of hosts providing wolf_name per host
+
+- name: Create wolfpack user
+  user:
+    name: wolfpack
+    shell: /bin/bash
+    create_home: true
+    comment: "Wolfpack command center"
+
+- name: Ensure wolfpack .ssh directory
+  file:
+    path: /home/wolfpack/.ssh
+    state: directory
+    owner: wolfpack
+    group: wolfpack
+    mode: "0700"
+
+- name: Authorize the pack SSH key for wolfpack user
+  authorized_key:
+    user: wolfpack
+    state: present
+    key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/wolfpack.pub') }}"
+
+- name: Install bun for wolfpack user
+  shell: curl -fsSL https://bun.sh/install | bash
+  become_user: wolfpack
+  args:
+    creates: /home/wolfpack/.bun/bin/bun
+
+- name: Add bun to wolfpack PATH
+  lineinfile:
+    path: /home/wolfpack/.bashrc
+    line: 'export PATH="$HOME/.bun/bin:$PATH"'
+    create: true
+    owner: wolfpack
+    group: wolfpack
+
+- name: Create wolfpack repo clone target
+  file:
+    path: /home/wolfpack/wolfpack
+    state: directory
+    owner: wolfpack
+    group: wolfpack
+    mode: "0755"
+
+- name: Sync repo to /home/wolfpack/wolfpack (excluding .git, dens, node_modules)
+  # rsync from the control machine's repo checkout so the deployed code
+  # matches exactly what's in this Ansible run. Avoids a second git clone
+  # with its own auth surface.
+  synchronize:
+    src: "{{ playbook_dir }}/../"
+    dest: /home/wolfpack/wolfpack/
+    delete: false
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=dens/"
+      - "--exclude=node_modules/"
+      - "--exclude=.env"
+      - "--chown=wolfpack:wolfpack"
+
+- name: Install bot dependencies (bun install)
+  command: /home/wolfpack/.bun/bin/bun install
+  args:
+    chdir: /home/wolfpack/wolfpack/cc-bot
+    creates: /home/wolfpack/wolfpack/cc-bot/node_modules
+  become_user: wolfpack
+
+- name: Deploy wolfpack-cc.env
+  template:
+    src: wolfpack-cc.env.j2
+    dest: /home/wolfpack/wolfpack-cc.env
+    owner: wolfpack
+    group: wolfpack
+    mode: "0600"
+  notify: restart wolfpack-cc
+
+- name: Deploy sudoers for wolfpack user
+  template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/wolfpack-cc
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Deploy wolfpack-cc systemd unit
+  template:
+    src: wolfpack-cc.service.j2
+    dest: /etc/systemd/system/wolfpack-cc.service
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart wolfpack-cc
+
+- name: Enable and start wolfpack-cc
+  systemd:
+    name: wolfpack-cc.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: CC bot status
+  debug:
+    msg:
+      - "🐺 Wolfpack CC bot running as user 'wolfpack'"
+      - "   service: wolfpack-cc.service"
+      - "   inventory: /home/wolfpack/wolfpack/inventory/hosts.yml"
+      - "   DM: @wolfpack_den_bot"

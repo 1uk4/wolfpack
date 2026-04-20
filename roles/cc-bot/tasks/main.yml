@@ -54,6 +54,13 @@
     group: wolfpack
     mode: "0755"
 
+- name: Ensure rsync is installed on target
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: yes
+  become: true
+
 - name: Sync repo to /home/wolfpack/wolfpack (excluding .git, dens, node_modules)
   # rsync from the control machine's repo checkout so the deployed code
   # matches exactly what's in this Ansible run. Avoids a second git clone

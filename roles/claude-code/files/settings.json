@@ -24,5 +24,17 @@
       "Bash(dd *)",
       "Bash(mkfs *)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-end-journal.sh"
+          }
+        ]
+      }
+    ]
   }
 }

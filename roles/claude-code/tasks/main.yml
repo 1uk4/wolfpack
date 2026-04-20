@@ -187,6 +187,25 @@
     mode: "0600"
   notify: restart wolf
 
+- name: Create Claude Code hooks directory
+  file:
+    path: "/home/{{ wolf_user }}/.claude/hooks"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
+- name: Deploy Claude Code hook scripts
+  copy:
+    src: "hooks/{{ item }}"
+    dest: "/home/{{ wolf_user }}/.claude/hooks/{{ item }}"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0755"
+  loop:
+    - session-end-journal.sh
+  notify: restart wolf
+
 - name: Install plugin marketplace
   command: claude plugin marketplace add anthropics/claude-plugins-official
   become_user: "{{ wolf_user }}"

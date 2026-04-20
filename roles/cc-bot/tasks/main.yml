@@ -58,6 +58,8 @@
   # rsync from the control machine's repo checkout so the deployed code
   # matches exactly what's in this Ansible run. Avoids a second git clone
   # with its own auth surface.
+  # Ownership is fixed in the follow-up `file` task below — `--chown` is a
+  # GNU rsync extension and macOS ships openrsync, which rejects the flag.
   synchronize:
     src: "{{ playbook_dir }}/../"
     dest: /home/wolfpack/wolfpack/
@@ -67,7 +69,14 @@
       - "--exclude=dens/"
       - "--exclude=node_modules/"
       - "--exclude=.env"
-      - "--chown=wolfpack:wolfpack"
+
+- name: Ensure wolfpack owns the synced tree
+  file:
+    path: /home/wolfpack/wolfpack
+    state: directory
+    owner: wolfpack
+    group: wolfpack
+    recurse: true
 
 - name: Install bot dependencies (bun install)
   command: /home/wolfpack/.bun/bin/bun install

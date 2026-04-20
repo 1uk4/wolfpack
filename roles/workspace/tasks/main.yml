@@ -19,6 +19,7 @@
     - ""
     - memory
     - memory/daily
+    - memory/checkpoints
     - tasks
     - knowledge
     - reports

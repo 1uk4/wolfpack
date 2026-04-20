@@ -5,6 +5,9 @@ keys/
 # Wolf dens are living workspaces synced via Syncthing — not source.
 dens/
 
+# Bot runtime
+cc-bot/node_modules/
+
 # Syncthing metadata anywhere in the tree (including shared/).
 **/.stfolder
 **/.stversions/

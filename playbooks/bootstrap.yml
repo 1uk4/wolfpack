@@ -190,3 +190,12 @@
       service:
         name: sshd
         state: restarted
+
+- name: Provision command-center bot
+  hosts: cc_hosts
+  become: true
+  # Runs after the wolves play so sudoers entries reflect the current
+  # wolves group — the cc-bot role templates a sudoers drop-in per wolf.
+
+  roles:
+    - cc-bot

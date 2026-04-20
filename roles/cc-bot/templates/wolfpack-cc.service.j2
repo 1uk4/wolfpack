@@ -1,0 +1,26 @@
+[Unit]
+Description=Wolfpack Command Center Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wolfpack
+WorkingDirectory=/home/wolfpack/wolfpack/cc-bot
+EnvironmentFile=/home/wolfpack/wolfpack-cc.env
+Environment=PATH=/home/wolfpack/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/wolfpack/.bun/bin/bun run src/index.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Minor hardening — the bot needs to call sudo systemctl/journalctl, so
+# we can't lock it down completely, but these still reduce blast radius.
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

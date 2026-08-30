@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# wolfpack — front door for the pack on this host.
+#
+# Bare `wolfpack` lists the commands; each one does the work. Wolves are
+# discovered from systemd (units described "Wolfpack - <name>"), never
+# hardcoded, so adding or renaming a wolf needs no change here.
+#
+# Installed to /usr/local/bin/wolfpack by the wolfpack-cli role.
+
+set -uo pipefail
+
+PROBE="${WOLF_HEALTH_BIN:-/usr/local/bin/wolf-health}"
+REPO="${WOLFPACK_REPO:-/home/wolfpack/wolfpack}"
+WOLF_USER="${WOLF_USER:-wolf}"
+
+if [ -t 1 ]; then
+  B=$'\e[1m'; DIM=$'\e[2m'; R=$'\e[0m'; RED=$'\e[31m'; YEL=$'\e[33m'; CYA=$'\e[36m'
+else
+  B=""; DIM=""; R=""; RED=""; YEL=""; CYA=""
+fi
+
+die() { printf '%swolfpack:%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
+
+# root for anything touching another user's session or systemd state
+need_root() {
+  [ "$(id -u)" = "0" ] && return 0
+  command -v sudo >/dev/null || die "must run as root"
+  exec sudo -E "$0" "$@"
+}
+
+discover() {   # -> "unit<TAB>name"
+  # One glob call, not one `systemctl show` per service — on a 135-service host
+  # the per-unit loop cost ~2.3s. Paragraph mode gives one record per unit.
+  systemctl show '*.service' --property=Id,Description --no-pager 2>/dev/null \
+  | awk 'BEGIN{RS=""; FS="\n"} {
+      id=""; desc="";
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^Id=/)          id   = substr($i, 4);
+        if ($i ~ /^Description=/) desc = substr($i, 13);
+      }
+      if (id != "" && desc ~ /^Wolfpack - /) {
+        sub(/^Wolfpack - /, "", desc);
+        printf "%s\t%s\n", id, desc;
+      }
+    }' | sort -u
+}
+
+names() { discover | cut -f2; }
+
+# Note: these run inside $(...), so die() would only kill the subshell.
+# They return non-zero instead and every caller must use `|| exit 1`.
+resolve() {   # name -> unit, with a helpful error
+  local want="$1" unit
+  unit=$(discover | awk -F'\t' -v n="$want" '$2==n {print $1}')
+  if [ -z "$unit" ]; then
+    printf '%swolfpack:%s no wolf named %s on this host. Known: %s\n' \
+      "$RED" "$R" "'$want'" "$(names | tr '\n' ' ' | sed 's/ $//')" >&2
+    return 1
+  fi
+  printf '%s' "$unit"
+}
+
+tmux_sock() {   # name -> tmux socket args
+  # Wolves from `wolfpack add` run their own tmux server so their lifecycles
+  # are independent; the first wolf on a host is on the default socket.
+  [ -d "/home/${WOLF_USER}/wolves/${1}" ] && printf -- '-L %s' "$1" || true
+}
+
+den_path() {   # name -> den directory
+  # Wolves built by `wolfpack add` live at /home/<user>/wolves/<name>/den.
+  # The first wolf on a host predates that layout and sits in workspace/den.
+  local p="/home/${WOLF_USER}/wolves/${1}/den"
+  [ -d "$p" ] || p="/home/${WOLF_USER}/workspace/den"
+  printf '%s' "$p"
+}
+
+one_wolf() {   # allow omitting the name while there is only one wolf
+  local given="${1:-}" all count
+  if [ -n "$given" ]; then printf '%s' "$given"; return 0; fi
+  all=$(names); count=$(printf '%s\n' "$all" | grep -c .)
+  if [ "$count" != "1" ]; then
+    printf '%swolfpack:%s which wolf? %s\n' "$RED" "$R" \
+      "$(printf '%s' "$all" | tr '\n' ' ')" >&2
+    return 1
+  fi
+  printf '%s' "$all"
+}
+
+cmd_row() {   # name args description — one aligned row
+  printf '  %s%-9s%s %-17s %s\n' "$CYA" "$1" "$R" "${2:-}" "$3"
+}
+
+usage() {
+  printf '%swolfpack%s — pack control on %s\n\n' "$B" "$R" "$(hostname -s)"
+  printf '  %sUsage: wolfpack <command> [wolf] [options]%s\n\n' "$DIM" "$R"
+
+  printf '  %sMONITOR%s\n' "$B" "$R"
+  cmd_row health  "[--watch|--json]" "host CPU, memory, disk and per-wolf usage"
+  cmd_row status  ""                 "service state, uptime and tmux liveness"
+  cmd_row list    ""                 "wolves on this host and their unit names"
+  printf '\n'
+
+  printf '  %sINSPECT%s\n' "$B" "$R"
+  cmd_row launch  ""                 "pick a wolf from a menu and attach to it"
+  cmd_row logs    "[wolf] [lines]"   "tail journald logs for a wolf (default 50)"
+  cmd_row attach  "[wolf]"           "attach to the live Claude session"
+  cmd_row den     "[wolf]"           "print the path to a den"
+  printf '\n'
+
+  printf '  %sCONTROL%s\n' "$B" "$R"
+  cmd_row add     "[name]"           "build a new wolf on this host — asks first"
+  cmd_row sync    "[wolf|--kb topic]" "wire a den or knowledge folder to the Mac hub"
+  cmd_row restart "[wolf]"           "restart a wolf — asks you to confirm first"
+  cmd_row rename  "<old> <new>"      "rename a wolf everywhere on this host"
+  printf '\n'
+
+  cmd_row help    ""                 "this list"
+  printf '\n'
+
+  printf '  %sThe wolf name may be omitted while this host has exactly one wolf.\n' "$DIM"
+  printf '  Inside an attached session, Ctrl-b then d detaches. Never Ctrl-c —\n'
+  printf '  that kills the agent.%s\n' "$R"
+}
+
+cmd_health() {
+  [ -x "$PROBE" ] || die "health probe not found at $PROBE (run the wolfpack-cli role)"
+  if [ "$(id -u)" = "0" ]; then exec "$PROBE" "$@"; fi
+  # the probe degrades gracefully unprivileged, but tmux/den need root
+  if sudo -n true 2>/dev/null; then exec sudo -E "$PROBE" "$@"; else exec "$PROBE" "$@"; fi
+}
+
+cmd_list() {
+  local rows; rows=$(discover)
+  [ -n "$rows" ] || { echo "no wolves on this host"; return; }
+  printf '%s%-14s %-18s %s%s\n' "$B" NAME UNIT STATE "$R"
+  printf '%s\n' "$rows" | while IFS=$'\t' read -r unit name; do
+    printf '%-14s %-18s %s\n' "$name" "$unit" "$(systemctl is-active "$unit" 2>/dev/null)"
+  done
+}
+
+cmd_status() {
+  local rows; rows=$(discover)
+  [ -n "$rows" ] || { echo "no wolves on this host"; return; }
+  printf '%s\n' "$rows" | while IFS=$'\t' read -r unit name; do
+    local state since tm
+    state=$(systemctl is-active "$unit" 2>/dev/null)
+    since=$(systemctl show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null)
+    if [ "$(id -u)" = "0" ]; then
+      tm=$(sudo -iu "$WOLF_USER" tmux $(tmux_sock "$name") has-session -t "$name" 2>/dev/null && echo up || echo DOWN)
+    else
+      tm="?"
+    fi
+    printf '%s %-12s %-10s tmux:%-5s %s%s%s\n' \
+      "$( [ "$state" = active ] && echo "🟢" || echo "🔴" )" \
+      "$name" "$state" "$tm" "$DIM" "${since:+since $since}" "$R"
+  done
+}
+
+cmd_logs() {
+  local w n unit
+  w=$(one_wolf "${1:-}") || exit 1
+  n="${2:-50}"
+  printf '%s' "$n" | grep -qE '^[0-9]+$' || die "line count must be a number"
+  unit=$(resolve "$w") || exit 1
+  journalctl -u "$unit" -n "$n" --no-pager
+}
+
+cmd_attach() {
+  local w; w=$(one_wolf "${1:-}") || exit 1
+  resolve "$w" >/dev/null || exit 1
+  [ -t 0 ] || die "attach needs a terminal"
+  printf '%sCtrl-b then d to detach. Do not press Ctrl-c — it kills the agent.%s\n' "$YEL" "$R"
+  need_root attach "$w"
+  exec sudo -iu "$WOLF_USER" tmux $(tmux_sock "$w") attach -t "$w"
+}
+
+cmd_launch() {
+  # The interactive face of `attach`: same warning, same root hop, same exec —
+  # this only answers "which wolf?" with a menu instead of an argument.
+  [ -t 0 ] || die "launch needs a terminal (try: wolfpack attach <wolf>)"
+  [ -z "${TMUX:-}" ] || die "already inside tmux — detach first with Ctrl-b then d"
+
+  local rows; rows=$(discover)
+  [ -n "$rows" ] || die "no wolves on this host"
+
+  # The list is printed once, above the prompt. Service state rides along so a
+  # dead wolf is obvious before you pick it.
+  local -a wolves=(); local unit name
+  printf '%sWolves on %s%s\n\n' "$B" "$(hostname -s)" "$R"
+  while IFS=$'\t' read -r unit name; do
+    wolves+=("$name")
+    printf '  %s%d)%s %-14s %s\n' \
+      "$CYA" "${#wolves[@]}" "$R" "$name" "$(systemctl is-active "$unit" 2>/dev/null)"
+  done <<< "$rows"
+
+  local quit=$(( ${#wolves[@]} + 1 )) pick
+  printf '  %s%d)%s Quit\n\n' "$CYA" "$quit" "$R"
+
+  # A read loop, not `select`: select redraws the whole list every time it
+  # re-prompts, which leaves the menu sitting underneath the question.
+  while true; do
+    read -rp "Choose a wolf [1-$quit]: " pick || { printf '\n'; return 0; }
+    case "$pick" in
+      "$quit")     return 0 ;;
+      ''|*[!0-9]*) ;;
+      *)
+        # Index by position — the name is never parsed back out of the label.
+        if [ "$pick" -ge 1 ] && [ "$pick" -le "${#wolves[@]}" ]; then
+          cmd_attach "${wolves[$(( pick - 1 ))]}"
+          return
+        fi
+        ;;
+    esac
+  done
+}
+
+cmd_den() {
+  local w; w=$(one_wolf "${1:-}") || exit 1
+  resolve "$w" >/dev/null || exit 1
+  printf '%s\n' "$(den_path "$w")"
+}
+
+cmd_restart() {
+  local w unit
+  w=$(one_wolf "${1:-}") || exit 1
+  unit=$(resolve "$w") || exit 1
+  need_root restart "$w"
+  cat <<EOF
+${YEL}Restarting '${w}' ends its current session.${R}
+The pack protocol is to DM the wolf first and have it write a checkpoint
+to memory/checkpoints/ so it can resume from where it left off.
+EOF
+  printf "Checkpoint written? [type '%s' to continue] " "$w"
+  read -r c
+  [ "$c" = "$w" ] || { echo "aborted"; exit 1; }
+  systemctl restart "$unit"
+  for _ in $(seq 1 24); do
+    sudo -iu "$WOLF_USER" tmux $(tmux_sock "$w") has-session -t "$w" 2>/dev/null && break
+    sleep 5
+  done
+  systemctl is-active "$unit" >/dev/null && echo "  service: active" || die "service did not come back"
+  sudo -iu "$WOLF_USER" tmux $(tmux_sock "$w") has-session -t "$w" 2>/dev/null \
+    && echo "  tmux:    up" \
+    || echo "  ${RED}!! tmux session not up — wolfpack logs $w${R}"
+}
+
+cmd_add() {
+  local script="$REPO/scripts/add-wolf.sh"
+  [ -x "$script" ] || die "add script not found at $script"
+  [ $# -le 1 ] || die "usage: wolfpack add [name]"
+  need_root add "$@"
+  exec "$script" "$@"
+}
+
+cmd_sync() {
+  # Bare `wolfpack sync` is a read-only status view, so it does not need root
+  # until it actually touches a folder — but the config lives under the wolf
+  # user either way, so hop once and keep it simple.
+  local script="$REPO/scripts/sync-wolf.sh"
+  [ -x "$script" ] || die "sync script not found at $script"
+  need_root sync "$@"
+  exec "$script" "$@"
+}
+
+cmd_rename() {
+  local script="$REPO/scripts/rename-wolf.sh"
+  [ -x "$script" ] || die "rename script not found at $script"
+  [ $# -eq 2 ] || die "usage: wolfpack rename <old> <new>"
+  need_root rename "$@"
+  exec "$script" "$@"
+}
+
+case "${1:-help}" in
+  health|h)         shift; cmd_health "$@" ;;
+  list|ls)          cmd_list ;;
+  status|st)        cmd_status ;;
+  logs|log)         shift; cmd_logs "$@" ;;
+  attach|a)         shift; cmd_attach "$@" ;;
+  launch|pick)      cmd_launch ;;
+  den)              shift; cmd_den "$@" ;;
+  add|new)          shift; cmd_add "$@" ;;
+  sync)             shift; cmd_sync "$@" ;;
+  restart)          shift; cmd_restart "$@" ;;
+  rename)           shift; cmd_rename "$@" ;;
+  help|-h|--help)   usage ;;
+  # bare flags belong to health: `wolfpack --watch` should just work
+  -*)               cmd_health "$@" ;;
+  *)                die "unknown command '$1' (try: wolfpack help)" ;;
+esac

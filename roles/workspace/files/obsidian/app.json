@@ -1,0 +1,9 @@
+{
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "knowledge",
+  "attachmentFolderPath": "attachments",
+  "promptDelete": false,
+  "trashOption": "local",
+  "showUnsupportedFiles": true
+}

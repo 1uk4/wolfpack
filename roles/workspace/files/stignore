@@ -1,4 +1,10 @@
-.obsidian
+// Obsidian vault config travels with the den, but its UI state does not —
+// workspace.json rewrites on every pane move and would sync constantly.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.obsidian/plugins/*/data.json
+
 .DS_Store
 *.tmp
 ~*

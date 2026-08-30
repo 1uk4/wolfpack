@@ -11,3 +11,7 @@ wolfpack ALL=(root) NOPASSWD: /usr/bin/systemctl is-active {{ wn }}.service
 wolfpack ALL=(root) NOPASSWD: /usr/bin/systemctl show {{ wn }}.service --property=ActiveEnterTimestamp --value
 wolfpack ALL=(root) NOPASSWD: /usr/bin/journalctl -u {{ wn }}.service -n [0-9]* --no-pager
 {% endfor %}
+
+# Pack health probe (root-owned binary at /usr/local/bin/wolf-health).
+wolfpack ALL=(root) NOPASSWD: /usr/local/bin/wolf-health --json
+wolfpack ALL=(root) NOPASSWD: /usr/local/bin/wolf-health --json -i [0-9]*

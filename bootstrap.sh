@@ -111,7 +111,7 @@ set +a
 
 missing=()
 [[ "${TAILSCALE_AUTHKEY:-}" == "" || "${TAILSCALE_AUTHKEY:-}" == *REPLACE_ME* ]] && missing+=("TAILSCALE_AUTHKEY")
-[[ "${TELEGRAM_BOT_TOKEN_SCOUT:-}" == "" || "${TELEGRAM_BOT_TOKEN_SCOUT:-}" == *REPLACE_ME* ]] && missing+=("TELEGRAM_BOT_TOKEN_SCOUT")
+[[ "${TELEGRAM_BOT_TOKEN_HAL:-}" == "" || "${TELEGRAM_BOT_TOKEN_HAL:-}" == *REPLACE_ME* ]] && missing+=("TELEGRAM_BOT_TOKEN_HAL")
 [[ "${MAC_SYNCTHING_DEVICE_ID:-}" == "" || "${MAC_SYNCTHING_DEVICE_ID:-}" == *REPLACE_ME* ]] && missing+=("MAC_SYNCTHING_DEVICE_ID")
 
 if (( ${#missing[@]} > 0 )); then
@@ -122,7 +122,7 @@ if (( ${#missing[@]} > 0 )); then
     - TAILSCALE_AUTHKEY
         Get at https://login.tailscale.com/admin/settings/keys
         (Generate auth key → enable "Reusable")
-    - TELEGRAM_BOT_TOKEN_SCOUT
+    - TELEGRAM_BOT_TOKEN_HAL
         DM @BotFather → /newbot → copy the token
     - MAC_SYNCTHING_DEVICE_ID
         Open http://localhost:8384 → top-right menu → "Show ID"

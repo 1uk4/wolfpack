@@ -5,11 +5,47 @@ After=network.target tailscaled.service
 [Service]
 Type=forking
 User={{ wolf_user }}
-WorkingDirectory=/home/{{ wolf_user }}/workspace/den
+{# wolf_den / wolf_config_dir are set by scripts/add-wolf.sh for wolves in the
+   per-wolf layout (/home/<user>/wolves/<name>/). The Ansible path leaves them
+   unset and builds the original single-wolf host exactly as before.
+
+   Those wolves also get their own tmux server (-L <name>). Sharing one server
+   breaks two ways: Type=forking only forks for whichever wolf starts the
+   server first, so every later unit exits immediately and is torn down; and
+   the shared server lives in the first wolf's cgroup, so restarting that wolf
+   would kill every other wolf's session.
+
+   CLAUDE_CONFIG_DIR is set on the command tmux RUNS, not just on the unit. A
+   pane inherits the tmux SERVER's environment, so a unit-level Environment=
+   alone would be dropped and the wolf would read a packmate's token. #}
+{% set own_server  = wolf_config_dir is defined %}
+{% set tmux        = '/usr/bin/tmux -L ' ~ wolf_name if own_server else '/usr/bin/tmux' %}
+{% set launch      = '/usr/bin/env CLAUDE_CONFIG_DIR=' ~ wolf_config_dir ~ ' /usr/bin/claude' if own_server else '/usr/bin/claude' %}
+{% set claude_args = wolf_claude_args | default('--channels plugin:telegram@claude-plugins-official') %}
+WorkingDirectory={{ wolf_den | default('/home/' ~ wolf_user ~ '/workspace/den') }}
 Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/{{ wolf_user }}
-ExecStart=/usr/bin/tmux new-session -d -s {{ wolf_name }} '/usr/bin/claude --channels plugin:telegram@claude-plugins-official'
-ExecStop=/usr/bin/tmux kill-session -t {{ wolf_name }}
+{% if own_server %}
+Environment=CLAUDE_CONFIG_DIR={{ wolf_config_dir }}
+{% endif %}
+{# Git identity is per-wolf, but ~/.gitconfig is per-USER and every wolf on a
+   host shares it. Without these a packmate's name lands on the commit. #}
+Environment=GIT_AUTHOR_NAME={{ wolf_name }}
+Environment=GIT_AUTHOR_EMAIL={{ wolf_name }}@wolfpack.local
+Environment=GIT_COMMITTER_NAME={{ wolf_name }}
+Environment=GIT_COMMITTER_EMAIL={{ wolf_name }}@wolfpack.local
+{# Per-wolf secrets (GH_TOKEN, API keys) live in /etc/wolfpack/<wolf>.env,
+   root-owned 0600. systemd reads it as PID 1 before dropping to the wolf user,
+   so the wolf process inherits the values while the file itself stays
+   unreadable by that user — better than a dotfile in a shared home. The
+   leading '-' makes it optional, so a wolf with no secrets still starts.
+
+   This reaches the pane only for a wolf with its own tmux server, which
+   systemd starts itself. A wolf on the shared server joins a server that
+   predates the unit and keeps that server's environment. #}
+EnvironmentFile=-/etc/wolfpack/{{ wolf_name }}.env
+ExecStart={{ tmux }} new-session -d -s {{ wolf_name }} '{{ launch }}{{ (' ' ~ claude_args) if claude_args else '' }}'
+ExecStop={{ tmux }} kill-session -t {{ wolf_name }}
 Restart=always
 RestartSec=10
 

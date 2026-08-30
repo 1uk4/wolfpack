@@ -5,6 +5,9 @@ Telegram command-center bot for the Wolfpack. Runs /status, /logs, /restart agai
 ## Commands
 
 - `/status` — each wolf's systemd service state + last activation time
+- `/health` — the same reading `wolfpack health` prints on the host: CPU, load, memory, swap, disk and uptime, then the WOLVES table (state, CPU, memory, %host, tasks, restarts, tmux, den size), the SUPPORT units sharing the same vCPU, and the pack total. Shells out to `/usr/local/bin/wolf-health --json` (installed by the `wolfpack-cli` role) via a narrow sudoers grant.
+
+  The layout is a deliberate port of the CLI's, row for row, so the terminal and Telegram never disagree about what the pack looks like. Two differences are forced by the medium: the reply is wrapped in `<pre>` so the columns survive Telegram's proportional font, and the severity that the terminal shows with ANSI colour becomes a 🟢/🟡/🔴 marker at the start of each row. `renderHealth()` in `src/commands/health.ts` is exported so the layout can be diffed against `wolfpack health` without a Telegram round-trip. **If you change one renderer, change the other** — and note that adding a field means adding it to `render_json` in `scripts/wolf-health.sh` first.
 - `/logs <wolf> [lines]` — journalctl tail, default 30, max 200
 - `/restart <wolf>` — 2-step. First call prompts you to DM the wolf and have it write a checkpoint. Confirm with `/restart <wolf> confirm` within 5 minutes.
 

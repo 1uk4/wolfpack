@@ -1,0 +1,33 @@
+---
+# wolfpack-cli role — installs the `wolfpack` command and the health probe
+# it wraps.
+#
+# Both land in /usr/local/bin as root:root 0755 rather than being run from the
+# repo checkout. Root ownership is load-bearing: the cc-bot sudoers drop-in
+# lets the unprivileged 'wolfpack' user run wolf-health as root (needed for the
+# tmux liveness probe and den sizing), and a target writable by that same user
+# would turn the grant into a root escalation.
+
+- name: Install wolf-health probe
+  copy:
+    src: "{{ role_path }}/../../scripts/wolf-health.sh"
+    dest: /usr/local/bin/wolf-health
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install wolfpack CLI
+  copy:
+    src: "{{ role_path }}/../../scripts/wolfpack"
+    dest: /usr/local/bin/wolfpack
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install wolfpack bash completion
+  copy:
+    src: wolfpack.bash-completion
+    dest: /etc/bash_completion.d/wolfpack
+    owner: root
+    group: root
+    mode: "0644"

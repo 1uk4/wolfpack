@@ -1,7 +1,7 @@
 # Active Projects
 
 ## Wolfpack
-- **Status:** bootstrapped, scout operational
+- **Status:** bootstrapped, hal operational
 - **Repo:** ~/Code/wolfpack
 - **What:** Fleet of always-on Claude Code agents reachable via Telegram
 

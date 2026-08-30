@@ -1,0 +1,29 @@
+# bash completion for the wolfpack CLI
+_wolfpack() {
+  local cur prev cmds wolves
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+  cmds="health list status launch logs attach den add sync restart rename help"
+
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
+    return
+  fi
+
+  case "$prev" in
+    logs|attach|den|sync|restart|rename)
+      wolves=$(systemctl show '*.service' --property=Id,Description --no-pager 2>/dev/null \
+        | awk 'BEGIN{RS=""; FS="\n"} {
+            for (i=1; i<=NF; i++)
+              if ($i ~ /^Description=Wolfpack - /) {
+                d = substr($i, 13); sub(/^Wolfpack - /, "", d); print d;
+              }
+          }')
+      COMPREPLY=( $(compgen -W "$wolves" -- "$cur") )
+      ;;
+    health)
+      COMPREPLY=( $(compgen -W "--watch --json -i" -- "$cur") )
+      ;;
+  esac
+}
+complete -F _wolfpack wolfpack

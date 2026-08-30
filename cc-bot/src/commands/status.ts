@@ -1,5 +1,6 @@
 import type { CommandContext, Context } from "grammy";
 import { run } from "../exec.ts";
+import { formatHealth, readHealth } from "../health.ts";
 import { loadWolves } from "../inventory.ts";
 
 export async function statusCommand(
@@ -28,6 +29,7 @@ export async function statusCommand(
     const marker = state === "active" ? "🟢" : "🔴";
     const tsLabel = ts && ts !== "n/a" ? ` since ${ts}` : "";
     lines.push(`${marker} ${wolf.name} — ${state}${tsLabel}`);
+    lines.push(...formatHealth(readHealth(wolf.name)));
   }
 
   await ctx.reply(lines.join("\n"));

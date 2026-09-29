@@ -65,6 +65,11 @@
   # rsync from the control machine's repo checkout so the deployed code
   # matches exactly what's in this Ansible run. Avoids a second git clone
   # with its own auth surface.
+  #
+  # synchronize spawns its own ssh that ignores inventory's IdentityAgent=none
+  # and tries the local SSH agent. If the agent refuses to sign (common with
+  # 1Password/Secretive/confirm-on-use keys), it fails. Emptying SSH_AUTH_SOCK
+  # for this local rsync forces ssh to use the -i key file directly.
   synchronize:
     src: "{{ playbook_dir }}/../"
     dest: /home/wolfpack/wolfpack/
@@ -75,6 +80,8 @@
       - "--exclude=node_modules/"
       - "--exclude=.env"
       - "--chown=wolfpack:wolfpack"
+  environment:
+    SSH_AUTH_SOCK: ""
 
 - name: Install bot dependencies (bun workspace install at repo root)
   # cc-bot imports @wolfpack/core, so install at the workspace root to resolve

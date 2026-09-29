@@ -1,6 +1,5 @@
 import type { CommandContext, Context } from "grammy";
-import { run } from "../exec.ts";
-import { findWolf, loadWolves } from "../inventory.ts";
+import { run, findWolf, loadWolves } from "@wolfpack/core";
 
 const CONFIRM_WINDOW_MS = 5 * 60_000;
 

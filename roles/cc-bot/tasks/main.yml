@@ -76,12 +76,15 @@
       - "--exclude=.env"
       - "--chown=wolfpack:wolfpack"
 
-- name: Install bot dependencies (bun install)
+- name: Install bot dependencies (bun workspace install at repo root)
+  # cc-bot imports @wolfpack/core, so install at the workspace root to resolve
+  # the workspace symlink + shared deps. Not idempotent via `creates` (root
+  # node_modules may exist); bun install is fast and safe to re-run.
   command: /home/wolfpack/.bun/bin/bun install
   args:
-    chdir: /home/wolfpack/wolfpack/cc-bot
-    creates: /home/wolfpack/wolfpack/cc-bot/node_modules
+    chdir: /home/wolfpack/wolfpack
   become_user: wolfpack
+  changed_when: false
 
 - name: Deploy wolfpack-cc.env
   template:

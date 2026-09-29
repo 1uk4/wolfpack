@@ -1,6 +1,5 @@
 import type { CommandContext, Context } from "grammy";
-import { run } from "../exec.ts";
-import { findWolf, loadWolves } from "../inventory.ts";
+import { run, findWolf, loadWolves } from "@wolfpack/core";
 
 const DEFAULT_LINES = 30;
 const MAX_LINES = 200;

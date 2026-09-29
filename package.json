@@ -1,0 +1,14 @@
+{
+  "name": "wolfpack",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core",
+    "cli",
+    "cc-bot"
+  ],
+  "scripts": {
+    "wolfpack": "bun cli/src/index.ts",
+    "typecheck": "bun run --filter '*' typecheck"
+  }
+}

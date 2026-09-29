@@ -1,6 +1,5 @@
 import type { CommandContext, Context } from "grammy";
-import { run } from "../exec.ts";
-import { loadWolves } from "../inventory.ts";
+import { run, loadWolves } from "@wolfpack/core";
 
 export async function statusCommand(
   ctx: CommandContext<Context>,

@@ -320,6 +320,31 @@ wolfpack/
 
 ---
 
+## Mac control CLI (`./wolfpack`)
+
+A bun-based CLI for driving the pack from your Mac. It shares a `core/` library
+with the command-center bot (one source of truth for inventory, SSH, etc.).
+
+```bash
+bun install            # once, at the repo root (installs the workspace)
+./wolfpack list        # every wolf in inventory (claude + pi)
+./wolfpack status      # live health over SSH: service, tmux, uptime
+./wolfpack status forge
+./wolfpack --json ...   # machine-readable output
+```
+
+Requires [bun](https://bun.sh) (`brew install bun`). More commands (`add`, `up`,
+`logs`, `restart`, `attach`) are on the roadmap toward a local control-center
+webapp; the CLI's `core/` becomes that webapp's backend.
+
+Repo layout for the tooling:
+
+```
+core/     shared lib (inventory, ssh, exec, paths)
+cli/      the ./wolfpack CLI
+cc-bot/   Telegram command-center bot (imports core)
+```
+
 ## PI wolves (experimental)
 
 There's a second, parallel agent type that runs the [pi coding agent](https://pi.dev)

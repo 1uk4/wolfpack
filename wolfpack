@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Wolfpack CLI shim — run the bun-based control CLI from the repo root.
+#   ./wolfpack list
+#   ./wolfpack status
+# Requires bun (brew install bun). First run: `bun install` at the repo root.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "wolfpack: bun not found. Install it: brew install bun" >&2
+  exit 1
+fi
+exec bun "$DIR/cli/src/index.ts" "$@"

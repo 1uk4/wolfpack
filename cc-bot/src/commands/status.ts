@@ -26,8 +26,9 @@ export async function statusCommand(
     const state = active.stdout.trim() || "unknown";
     const ts = uptime.stdout.trim();
     const marker = state === "active" ? "🟢" : "🔴";
+    const runtime = wolf.runtime === "pi" ? "🔧pi" : "🤖claude";
     const tsLabel = ts && ts !== "n/a" ? ` since ${ts}` : "";
-    lines.push(`${marker} ${wolf.name} — ${state}${tsLabel}`);
+    lines.push(`${marker} ${wolf.name} [${runtime}] — ${state}${tsLabel}`);
   }
 
   await ctx.reply(lines.join("\n"));

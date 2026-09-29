@@ -1,10 +1,10 @@
 # Wolfpack CC bot — narrow systemctl/journalctl permissions for the
 # 'wolfpack' user against each wolf's service. Regenerate by running
-# the cc-bot role; this file is templated from groups.wolves.
+# the cc-bot role; this file is templated from the wolves + pi_wolves groups.
 #
 # NOPASSWD is required: the bot runs unattended inside systemd with no TTY.
 
-{% for host in groups['wolves'] | default([]) %}
+{% for host in (groups['wolves'] | default([])) + (groups['pi_wolves'] | default([])) %}
 {% set wn = hostvars[host].wolf_name %}
 wolfpack ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ wn }}.service
 wolfpack ALL=(root) NOPASSWD: /usr/bin/systemctl is-active {{ wn }}.service

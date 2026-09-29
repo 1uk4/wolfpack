@@ -5,6 +5,9 @@ keys/
 # Wolf dens are living workspaces synced via Syncthing — not source.
 dens/
 
+# Live agent knowledge bases — synced via Syncthing, not framework source.
+knowledge/
+
 # Bot runtime
 cc-bot/node_modules/
 

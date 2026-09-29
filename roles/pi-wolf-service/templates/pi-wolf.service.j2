@@ -1,0 +1,20 @@
+[Unit]
+Description=Wolfpack (pi) - {{ wolf_name }}
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=forking
+User={{ wolf_user }}
+WorkingDirectory=/home/{{ wolf_user }}/workspace/den
+Environment=HOME=/home/{{ wolf_user }}
+Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/home/{{ wolf_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TELEGRAM_BOT_TOKEN={{ telegram_bot_token }}
+EnvironmentFile=-/home/{{ wolf_user }}/.pi/agent/pi.env
+ExecStart=/home/{{ wolf_user }}/.local/bin/pi-wolf-run.sh
+ExecStop=/usr/bin/tmux kill-session -t {{ wolf_name }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

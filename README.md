@@ -320,6 +320,16 @@ wolfpack/
 
 ---
 
+## PI wolves (experimental)
+
+There's a second, parallel agent type that runs the [pi coding agent](https://pi.dev)
+with the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge
+instead of Claude Code. It reuses all the same infra (Tailscale, Syncthing dens,
+shared library, systemd + tmux) but lives in its own inventory group
+(`pi_wolves`), playbook (`playbooks/pi-wolf.yml`), roles (`pi`, `pi-telegram`,
+`pi-workspace`, `pi-wolf-service`), and bootstrap script (`./bootstrap-pi.sh`).
+It does not touch the Claude wolves. See **[README-PI.md](README-PI.md)**.
+
 ## License
 
 Your own. Not affiliated with Anthropic.

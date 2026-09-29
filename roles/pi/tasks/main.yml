@@ -1,0 +1,99 @@
+---
+# pi role — installs the pi coding agent for the wolf user and configures
+# its global settings + auth. This is the PI equivalent of the claude-code
+# role; it does NOT touch anything the Claude Code wolves use.
+#
+# Auth model:
+#   - Preferred (headless-friendly): set ANTHROPIC_API_KEY in .env. It's
+#     deployed to ~/.pi/agent/pi.env and loaded by the pi-wolf systemd unit.
+#   - Alternative (Claude subscription): leave the key empty and complete a
+#     one-time `pi` + `/login` on the droplet. The playbook pauses with
+#     instructions, mirroring the Claude Code OAuth flow.
+
+- name: Install Node.js 22
+  shell: |
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+  args:
+    creates: /usr/bin/node
+
+- name: Install pi coding agent (global, ignore-scripts per pi docs)
+  npm:
+    name: "@earendil-works/pi-coding-agent"
+    global: true
+    state: present
+    ignore_scripts: true
+
+- name: Create pi config directory (~/.pi/agent)
+  file:
+    path: "/home/{{ wolf_user }}/.pi/agent"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
+- name: Deploy global pi settings.json
+  # defaultProjectTrust=always so the headless TUI never blocks on the
+  # den's project-trust prompt. Points skills discovery at the read-only
+  # shared library synced from the Mac.
+  template:
+    src: settings.json.j2
+    dest: "/home/{{ wolf_user }}/.pi/agent/settings.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+
+- name: Resolve Anthropic API key from environment
+  set_fact:
+    pi_anthropic_api_key: "{{ lookup('env', 'ANTHROPIC_API_KEY') | default('', true) }}"
+
+- name: Deploy pi.env with ANTHROPIC_API_KEY (when provided)
+  template:
+    src: pi.env.j2
+    dest: "/home/{{ wolf_user }}/.pi/agent/pi.env"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+  when: pi_anthropic_api_key | length > 0
+  notify: restart pi-wolf
+
+- name: Check pi auth status (does the wolf have a usable credential?)
+  # pi is authed if an API key env/auth.json entry exists or a subscription
+  # login is stored. We treat "API key present" as authed; otherwise we
+  # look for ~/.pi/agent/auth.json from a prior /login.
+  stat:
+    path: "/home/{{ wolf_user }}/.pi/agent/auth.json"
+  register: pi_auth_file
+
+- name: Determine whether pi has credentials
+  set_fact:
+    pi_authed: "{{ (pi_anthropic_api_key | length > 0) or pi_auth_file.stat.exists }}"
+
+- name: Pause for one-time pi subscription login (only when no credential found)
+  pause:
+    prompt: |
+
+      ================================================================
+        PI LOGIN REQUIRED for pi-wolf '{{ wolf_name }}' ({{ ansible_host }})
+      ================================================================
+
+      No ANTHROPIC_API_KEY was provided and no ~/.pi/agent/auth.json exists.
+      Open a NEW terminal on your laptop and run:
+
+        ssh -i ~/.ssh/wolfpack -o IdentityAgent=none {{ wolf_user }}@{{ ansible_host }}
+        pi
+
+      Inside pi, run:  /login
+      Pick your provider (e.g. Claude Pro/Max) and complete the browser flow.
+      Then type /exit, come back here, and press ENTER to continue.
+
+      (Tip: set ANTHROPIC_API_KEY in .env instead to skip this entirely.)
+      ================================================================
+  when: not pi_authed
+
+- name: pi status
+  debug:
+    msg:
+      - "✅ pi installed for {{ wolf_user }}"
+      - "    auth: {{ 'ANTHROPIC_API_KEY (env file)' if pi_anthropic_api_key | length > 0 else ('subscription/auth.json' if pi_auth_file.stat.exists else 'completed via /login pause') }}"
+      - "    model: {{ pi_model }}"

@@ -23,5 +23,5 @@ export function listCommand(opts: { json?: boolean }): void {
   ]);
 
   console.log(table(["NAME", "RUNTIME", "HOST", "USER", "GROUP"], rows));
-  console.log(c.dim(`\n${wolves.length} wolf${wolves.length === 1 ? "" : "ves"}.`));
+  console.log(c.dim(`\n${wolves.length} ${wolves.length === 1 ? "wolf" : "wolves"}.`));
 }

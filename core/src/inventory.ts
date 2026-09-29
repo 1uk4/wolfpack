@@ -21,6 +21,8 @@ export type Wolf = {
   keyFile?: string;
   /** raw ansible_ssh_extra_args string, if any */
   sshExtraArgs?: string;
+  /** non-default tmux server socket (`tmux -L <socket>`), if the wolf uses one */
+  tmuxSocket?: string;
 };
 
 type HostEntry = Record<string, unknown> & { wolf_name?: string };
@@ -72,6 +74,7 @@ export function loadWolves(path: string = defaultInventoryPath()): Wolf[] {
         user,
         keyFile: keyFileRaw ? expandHome(keyFileRaw) : undefined,
         sshExtraArgs: str(entry.ansible_ssh_extra_args),
+        tmuxSocket: str(entry.tmux_socket),
       });
     }
   }

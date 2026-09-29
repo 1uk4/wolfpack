@@ -1,0 +1,18 @@
+---
+# Provision/update ONLY the command-center bot, without touching the wolves.
+#
+# Use this instead of bootstrap.yml when you've changed inventory (added/removed
+# wolves) or the cc-bot code and want the bot to pick it up. It re-syncs the
+# repo, reinstalls deps at the workspace root, and re-templates the sudoers
+# drop-in from the current wolves + pi_wolves groups.
+#
+#   ansible-playbook playbooks/cc-bot.yml
+#
+# SAFE on a shared droplet: it targets cc_hosts only and never runs the
+# workspace/wolf-service roles that would clobber a hand-customized wolf.
+
+- name: Provision command-center bot
+  hosts: cc_hosts
+  become: true
+  roles:
+    - cc-bot

@@ -12,9 +12,10 @@ type Health = {
 
 // One SSH round-trip per wolf, gathering service + tmux + last-active.
 async function probe(wolf: Wolf): Promise<Health> {
+  const tmux = wolf.tmuxSocket ? `tmux -L ${wolf.tmuxSocket}` : "tmux";
   const remote = [
     `echo "SVC=$(systemctl is-active ${wolf.service} 2>/dev/null)"`,
-    `echo "TMUX=$(tmux has-session -t ${wolf.name} 2>/dev/null && echo yes || echo no)"`,
+    `echo "TMUX=$(${tmux} has-session -t ${wolf.name} 2>/dev/null && echo yes || echo no)"`,
     `echo "SINCE=$(systemctl show ${wolf.service} -p ActiveEnterTimestamp --value 2>/dev/null)"`,
   ].join("; ");
 

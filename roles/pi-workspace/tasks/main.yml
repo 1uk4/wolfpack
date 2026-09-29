@@ -10,7 +10,7 @@
 
 - name: Create den directory structure
   file:
-    path: "/home/{{ wolf_user }}/workspace/den/{{ item }}"
+    path: "{{ pi_den_dir }}/{{ item }}"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -25,7 +25,7 @@
 
 - name: Create shared receive-point directory
   file:
-    path: "/home/{{ wolf_user }}/workspace/shared"
+    path: "{{ pi_shared_dir }}"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -33,7 +33,7 @@
 - name: Deploy AGENTS.md (pi context file — identity, rules, startup)
   template:
     src: AGENTS.md.j2
-    dest: "/home/{{ wolf_user }}/workspace/den/AGENTS.md"
+    dest: "{{ pi_den_dir }}/AGENTS.md"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     force: false
@@ -41,14 +41,14 @@
 - name: Deploy config.yml (wolf metadata)
   template:
     src: config.yml.j2
-    dest: "/home/{{ wolf_user }}/workspace/den/config.yml"
+    dest: "{{ pi_den_dir }}/config.yml"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
 
 - name: Deploy static den files (force:false — never overwrite wolf edits)
   copy:
     src: "{{ item.src }}"
-    dest: "/home/{{ wolf_user }}/workspace/den/{{ item.dest }}"
+    dest: "{{ pi_den_dir }}/{{ item.dest }}"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     force: false
@@ -64,12 +64,17 @@
     - { src: "active.md",    dest: "tasks/active.md" }
     - { src: "done.md",      dest: "tasks/done.md" }
 
-- name: Deploy .stignore in den and shared (Syncthing reads one per folder)
+- name: Deploy .stignore in the den (Syncthing reads one per folder)
   copy:
     src: stignore
-    dest: "/home/{{ wolf_user }}/workspace/{{ item }}/.stignore"
+    dest: "{{ pi_den_dir }}/.stignore"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
-  loop:
-    - den
-    - shared
+
+- name: Deploy .stignore in shared (dedicated only — co-located reuses the host's shared)
+  copy:
+    src: stignore
+    dest: "{{ pi_shared_dir }}/.stignore"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+  when: not (pi_colocated | default(false))

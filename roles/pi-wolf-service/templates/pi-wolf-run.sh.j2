@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
-# pi-wolf startup wrapper — launches pi in a detached tmux session at the den,
-# waits for the TUI to become interactive, then activates the Telegram bridge
+# pi-wolf startup wrapper for {{ wolf_name }} — launches pi in a detached tmux
+# session at the den, waits for the TUI, then activates the Telegram bridge
 # with /telegram-connect. Deployed by the pi-wolf-service role.
 #
-# pi has no headless polling mode (see pi-telegram architecture docs): the
-# bridge can only be owned by a real, explicitly-launched pi process. So we
-# run pi interactively under tmux (exactly like the Claude wolves) and drive
-# the connect command via send-keys.
+# Works for both layouts: dedicated (default tmux socket, ~/.pi/agent) and
+# co-located (a per-wolf `tmux -L {{ wolf_name }}` socket + PI_CODING_AGENT_DIR
+# pointing at this wolf's own config dir), so several wolves can share one user.
 set -u
 
 SESSION="{{ wolf_name }}"
-DEN="/home/{{ wolf_user }}/workspace/den"
+DEN="{{ pi_den_dir }}"
+TMUX="{{ pi_tmux_cmd }}"
 export HOME="/home/{{ wolf_user }}"
+export PI_CODING_AGENT_DIR="{{ pi_config_dir }}"
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-# Load ANTHROPIC_API_KEY (if the API-key auth path is used).
-[ -r "$HOME/.pi/agent/pi.env" ] && set -a && . "$HOME/.pi/agent/pi.env" && set +a
+# Load ANTHROPIC_API_KEY + TELEGRAM_BOT_TOKEN (if the env-file auth path is used).
+[ -r "{{ pi_env_file }}" ] && set -a && . "{{ pi_env_file }}" && set +a
 
 # Start pi detached, with the den as cwd so it loads den/AGENTS.md.
-/usr/bin/tmux new-session -d -s "$SESSION" -c "$DEN" 'pi'
+$TMUX new-session -d -s "$SESSION" -c "$DEN" 'pi'
 
-# Wait for the TUI to render (pane gets content), then send /telegram-connect.
+# Wait for the TUI to render, then send /telegram-connect.
 connected=0
 for _ in $(seq 1 30); do
   sleep 4
-  pane="$(/usr/bin/tmux capture-pane -t "$SESSION" -p -S -100 2>/dev/null || true)"
-  # Skip until pi has drawn its startup header / input footer.
+  pane="$($TMUX capture-pane -t "$SESSION" -p -S -100 2>/dev/null || true)"
   if printf '%s' "$pane" | grep -qiE 'context files|skills|pi v[0-9]|esc|ctrl\+'; then
-    /usr/bin/tmux send-keys -t "$SESSION" '/telegram-connect' Enter
+    $TMUX send-keys -t "$SESSION" '/telegram-connect' Enter
     connected=1
     break
   fi
 done
 
-# Fallback: even if we never matched a banner, try once so the bridge comes up.
+# Fallback: try once even if we never matched a banner.
 if [ "$connected" -eq 0 ]; then
-  /usr/bin/tmux send-keys -t "$SESSION" '/telegram-connect' Enter
+  $TMUX send-keys -t "$SESSION" '/telegram-connect' Enter
 fi
 
 exit 0

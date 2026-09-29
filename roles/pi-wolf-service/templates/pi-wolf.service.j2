@@ -6,13 +6,14 @@ Wants=network-online.target
 [Service]
 Type=forking
 User={{ wolf_user }}
-WorkingDirectory=/home/{{ wolf_user }}/workspace/den
+WorkingDirectory={{ pi_den_dir }}
 Environment=HOME=/home/{{ wolf_user }}
+Environment=PI_CODING_AGENT_DIR={{ pi_config_dir }}
 Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/home/{{ wolf_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TELEGRAM_BOT_TOKEN={{ telegram_bot_token }}
-EnvironmentFile=-/home/{{ wolf_user }}/.pi/agent/pi.env
-ExecStart=/home/{{ wolf_user }}/.local/bin/pi-wolf-run.sh
-ExecStop=/usr/bin/tmux kill-session -t {{ wolf_name }}
+EnvironmentFile=-{{ pi_env_file }}
+ExecStart=/home/{{ wolf_user }}/.local/bin/pi-wolf-run-{{ wolf_name }}.sh
+ExecStop={{ pi_tmux_cmd }} kill-session -t {{ wolf_name }}
 Restart=always
 RestartSec=10
 

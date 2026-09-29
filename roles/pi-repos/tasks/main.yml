@@ -14,7 +14,7 @@
 
 - name: Create repos workspace directory
   file:
-    path: "/home/{{ wolf_user }}/workspace/repos"
+    path: "{{ pi_repos_dir }}"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -24,7 +24,7 @@
   become_user: "{{ wolf_user }}"
   git:
     repo: "{{ item.url }}"
-    dest: "/home/{{ wolf_user }}/workspace/repos/{{ item.name }}"
+    dest: "{{ pi_repos_dir }}/{{ item.name }}"
     version: "{{ item.version | default('HEAD') }}"
     update: "{{ item.update | default(false) }}"
     accept_hostkey: true

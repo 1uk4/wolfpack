@@ -130,24 +130,29 @@ pack's canonical shared knowledge store. The full spec (item format, folder
 conventions, read/propose flows, validation, phased tasks) is in
 **[docs/librarian-spec.md](docs/librarian-spec.md)**.
 
-## Co-location on a shared droplet ⚠️
+## Co-location on a shared droplet
 
-If a pi-wolf shares a droplet with existing wolves:
+Set **`pi_colocated: true`** in inventory. The pi-wolf then runs under the
+shared `wolf` user (the same pattern the Claude wolves use), fully isolated by:
 
-- **Give it a unique `wolf_user`** (e.g. `forge`, not the shared `wolf`) so its
-  home, den, `~/.pi`, tmux session, and `<wolf_name>.service` don't collide.
-- **Syncthing conflicts.** The `syncthing` role runs `syncthing@<wolf_user>` on
-  the default ports (GUI `8384`, sync `22000`). A second user's instance on the
-  same host will clash. Options, easiest first:
-  1. **Own droplet** for the wolf — no conflicts (recommended long-term).
-  2. **Skip Syncthing** — set `pi_enable_syncthing: false` in inventory. The
-     `bootstrap-pi.sh` flow then works on the shared droplet; the den stays
-     local to the droplet (no Mac Obsidian view until you wire sync later).
-  3. **Second Syncthing instance on non-default ports** — needs a GUI/listen
-     address override in the unit; not yet automated.
+- its own den at `/home/wolf/wolves/<name>/den`
+- its own pi config dir at `/home/wolf/wolves/<name>/pi` (via `PI_CODING_AGENT_DIR`)
+- a dedicated `tmux -L <name>` socket
+- its own `<name>.service` unit + startup wrapper
 
-  Always give a co-located wolf a **unique `wolf_user`** regardless of the
-  Syncthing choice.
+Crucially, its den syncs to your Mac through the host's **existing**
+`syncthing@wolf` instance (the `pi-syncthing-folder` role just adds a
+`den-<name>` folder via the REST API) — no port clash, no second Syncthing, and
+you still get the Obsidian view. On the Mac you only accept the new folder; the
+device is already paired.
+
+Modes at a glance:
+
+| Inventory | Layout | Sync |
+|-----------|--------|------|
+| _(default)_ | dedicated: own user, `~/.pi/agent`, own Syncthing instance | its own `den-<name>` folder |
+| `pi_colocated: true` | shared `wolf` user, per-wolf paths + `tmux -L` | via existing `syncthing@wolf` |
+| `pi_enable_syncthing: false` | either layout | no sync (den local to droplet) |
 
 ## Known limitations / next steps
 

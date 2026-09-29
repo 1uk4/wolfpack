@@ -11,10 +11,10 @@
     group: "{{ wolf_user }}"
     mode: "0755"
 
-- name: Deploy pi-wolf startup wrapper
+- name: Deploy pi-wolf startup wrapper (per-wolf, so wolves can share a user)
   template:
     src: pi-wolf-run.sh.j2
-    dest: "/home/{{ wolf_user }}/.local/bin/pi-wolf-run.sh"
+    dest: "/home/{{ wolf_user }}/.local/bin/pi-wolf-run-{{ wolf_name }}.sh"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0755"
@@ -37,7 +37,7 @@
     daemon_reload: true
 
 - name: Wait for tmux session to exist
-  command: sudo -iu {{ wolf_user }} tmux has-session -t {{ wolf_name }}
+  command: sudo -iu {{ wolf_user }} {{ pi_tmux_cmd }} has-session -t {{ wolf_name }}
   register: pi_tmux_check
   retries: 12
   delay: 5
@@ -47,7 +47,7 @@
 
 - name: Capture live pane for a readiness/health peek
   shell: |
-    sudo -iu {{ wolf_user }} tmux capture-pane -t {{ wolf_name }} -p -S -200
+    sudo -iu {{ wolf_user }} {{ pi_tmux_cmd }} capture-pane -t {{ wolf_name }} -p -S -200
   register: pi_pane_capture
   retries: 18
   delay: 5
@@ -72,7 +72,7 @@
   debug:
     msg:
       - "🐺 pi-wolf '{{ wolf_name }}' status: {{ pi_svc_active.stdout }}"
-      - "    Attach to live pi session: sudo -iu {{ wolf_user }} tmux attach -t {{ wolf_name }}"
+      - "    Attach to live pi session: sudo -iu {{ wolf_user }} {{ pi_tmux_cmd }} attach -t {{ wolf_name }}"
       - "    (detach with Ctrl-b then d — do NOT Ctrl-c, that kills pi)"
       - "    If the pane shows a /login prompt, pi has no credential — set"
       - "    ANTHROPIC_API_KEY in .env and re-run, or run /login in the pane."

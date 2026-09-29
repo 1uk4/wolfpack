@@ -8,7 +8,17 @@
 # Owner authorization is pinned here via profiles.default.allowedUserId, so
 # no first-contact `/start` pairing race is possible.
 
+- name: Ensure pi config directory exists
+  file:
+    path: "{{ pi_config_dir }}"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
 - name: Install the pi-telegram bridge package (wolf user)
+  # PI_CODING_AGENT_DIR ensures the bridge registers in THIS wolf's config,
+  # not a shared ~/.pi/agent (critical when wolves share a unix user).
   command: pi install npm:@llblab/pi-telegram
   become_user: "{{ wolf_user }}"
   register: pi_tg_install
@@ -16,14 +26,7 @@
   failed_when: pi_tg_install.rc != 0 and 'already' not in (pi_tg_install.stderr | lower)
   environment:
     PATH: "/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-
-- name: Ensure pi config directory exists
-  file:
-    path: "/home/{{ wolf_user }}/.pi/agent"
-    state: directory
-    owner: "{{ wolf_user }}"
-    group: "{{ wolf_user }}"
-    mode: "0700"
+    PI_CODING_AGENT_DIR: "{{ pi_config_dir }}"
 
 - name: Deploy telegram.json (bot token via env ref + owner allowlist)
   # botToken is stored as an env reference ($TELEGRAM_BOT_TOKEN) rather than
@@ -31,7 +34,7 @@
   # environment. allowedUserId pins the owner so strangers are ignored.
   template:
     src: telegram.json.j2
-    dest: "/home/{{ wolf_user }}/.pi/agent/telegram.json"
+    dest: "{{ pi_config_dir }}/telegram.json"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0600"

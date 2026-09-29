@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
-# Wolfpack CLI shim — run the bun-based control CLI from the repo root.
+# Wolfpack CLI shim — run the bun-based control CLI from anywhere.
 #   ./wolfpack list
-#   ./wolfpack status
+# Or symlink onto your PATH so `wolfpack` works globally:
+#   ln -sf "$PWD/wolfpack" /usr/local/bin/wolfpack   # (or ~/.local/bin)
 # Requires bun (brew install bun). First run: `bun install` at the repo root.
 set -euo pipefail
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve this script's real location even when invoked via a symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
 if ! command -v bun >/dev/null 2>&1; then
   echo "wolfpack: bun not found. Install it: brew install bun" >&2
   exit 1

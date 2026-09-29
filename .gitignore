@@ -8,6 +8,12 @@ dens/
 # Live agent knowledge bases — synced via Syncthing, not framework source.
 knowledge/
 
+# Library — the pack's canonical shared knowledge store + proposals inbox.
+# Living memory, curated by the Librarian; synced, not committed.
+# See docs/librarian-spec.md.
+library/
+library-proposals/
+
 # Bot runtime
 cc-bot/node_modules/
 

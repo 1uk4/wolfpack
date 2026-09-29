@@ -123,6 +123,13 @@ What this gives the wolf:
 **Private repo clone needs the wolf's SSH key on GitHub** (the key the playbook
 prints — add it, then re-run; clone failures are non-fatal).
 
+### First job for the builder wolf
+
+Once `forge` is running, its first assignment is to build the **Library** — the
+pack's canonical shared knowledge store. The full spec (item format, folder
+conventions, read/propose flows, validation, phased tasks) is in
+**[docs/librarian-spec.md](docs/librarian-spec.md)**.
+
 ## Co-location on a shared droplet ⚠️
 
 If a pi-wolf shares a droplet with existing wolves:

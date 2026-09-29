@@ -87,7 +87,11 @@
     - pi-telegram
     - pi-workspace
     - pi-repos
-    - syncthing
+    # Skip on a co-located droplet: a second syncthing@<user> would clash on
+    # ports 8384/22000 with an existing wolf's instance. Set
+    # pi_enable_syncthing: false in inventory for such a host (den stays local).
+    - role: syncthing
+      when: pi_enable_syncthing | default(true)
     - pi-wolf-service
 
   post_tasks:
@@ -101,6 +105,7 @@
       become_user: "{{ wolf_user }}"
       register: final_st_id
       changed_when: false
+      when: pi_enable_syncthing | default(true)
 
     - name: Check pi-wolf service status
       command: systemctl is-active {{ wolf_name }}
@@ -126,12 +131,15 @@
           - "  Syncthing ID:      {{ final_st_id.stdout }}"
           - "  pi-wolf-service:   {{ pi_svc_status.stdout }}"
           - ""
+          - "  Syncthing:         {{ 'enabled' if (pi_enable_syncthing | default(true)) else 'DISABLED (den is local-only on this host)' }}"
+          - ""
           - "  MANUAL STEPS REMAINING:"
           - "  1. Accept the Syncthing folders on your Mac (one-time per wolf):"
-          - "       device '{{ wolf_name }}' (ID: {{ final_st_id.stdout }})"
+          - "       device '{{ wolf_name }}' (ID: {{ final_st_id.stdout | default('n/a — syncthing disabled') }})"
           - "       set Addresses to  tcp://{{ final_ts_ip.stdout }}:22000"
           - "       folder 'den-{{ wolf_name }}'  → ~/Code/wolfpack/dens/{{ wolf_name }}  (Send & Receive)"
           - "       folder 'wolfpack-shared'      → ~/Code/wolfpack/shared            (Send Only)"
+          - "       (SKIP step 1 entirely if Syncthing is DISABLED above.)"
           - "  2. DM the Telegram bot and send /start to verify the bridge."
           - "     (Owner {{ owner_telegram_id }} is pre-allowlisted.)"
           - "  3. If the pane shows a /login prompt, set ANTHROPIC_API_KEY in .env"

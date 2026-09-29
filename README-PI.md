@@ -139,14 +139,15 @@ If a pi-wolf shares a droplet with existing wolves:
 - **Syncthing conflicts.** The `syncthing` role runs `syncthing@<wolf_user>` on
   the default ports (GUI `8384`, sync `22000`). A second user's instance on the
   same host will clash. Options, easiest first:
-  1. **Own droplet** for the builder wolf — no conflicts (recommended).
-  2. **Skip Syncthing** for this wolf (den stays local to the droplet, no Mac
-     Obsidian view) — drop the `syncthing` role from a builder-only playbook.
+  1. **Own droplet** for the wolf — no conflicts (recommended long-term).
+  2. **Skip Syncthing** — set `pi_enable_syncthing: false` in inventory. The
+     `bootstrap-pi.sh` flow then works on the shared droplet; the den stays
+     local to the droplet (no Mac Obsidian view until you wire sync later).
   3. **Second Syncthing instance on non-default ports** — needs a GUI/listen
      address override in the unit; not yet automated.
 
-  Confirm your droplet's user/Syncthing topology before running
-  `bootstrap-pi.sh` against a host that already has live wolves.
+  Always give a co-located wolf a **unique `wolf_user`** regardless of the
+  Syncthing choice.
 
 ## Known limitations / next steps
 

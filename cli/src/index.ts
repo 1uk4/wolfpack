@@ -36,6 +36,40 @@ ${c.dim("On the wolf host itself, /usr/local/bin/wolfpack exposes the full")}
 ${c.dim("command surface including the interactive ones (attach, add, launch).")}
 `;
 
+const KNOWN_COMMANDS = ["list", "status", "logs", "restart", "runtime", "help"];
+
+// Small Levenshtein distance for did-you-mean suggestions on typos like
+// `runtine` -> `runtime`. Not a hot path — one call per unknown command.
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[] = Array(n + 1).fill(0);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0]!;
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j]!;
+      dp[j] = a[i - 1] === b[j - 1]
+        ? prev
+        : 1 + Math.min(prev, dp[j]!, dp[j - 1]!);
+      prev = tmp;
+    }
+  }
+  return dp[n]!;
+}
+
+function suggest(cmd: string): string | undefined {
+  // Threshold of 2 catches single-char typos + transpositions without matching
+  // wildly-different inputs.
+  const scored = KNOWN_COMMANDS
+    .map((k) => ({ k, d: editDistance(cmd, k) }))
+    .filter((x) => x.d <= 2)
+    .sort((a, b) => a.d - b.d);
+  return scored[0]?.k;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const json = argv.includes("--json");
@@ -64,9 +98,17 @@ async function main(): Promise<void> {
     case "-h":
       process.stdout.write(HELP);
       break;
-    default:
-      process.stderr.write(`Unknown command: ${cmd}\n\n${HELP}`);
+    default: {
+      const hint = suggest(cmd);
+      process.stderr.write(`${c.red(`Unknown command: ${cmd}`)}\n`);
+      if (hint) {
+        process.stderr.write(`Did you mean '${c.bold(hint)}'?\n\n`);
+      } else {
+        process.stderr.write("\n");
+      }
+      process.stderr.write(HELP);
       process.exit(1);
+    }
   }
 }
 

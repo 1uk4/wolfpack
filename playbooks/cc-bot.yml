@@ -6,7 +6,11 @@
 # repo, reinstalls deps at the workspace root, and re-templates the sudoers
 # drop-in from the current wolves + pi_wolves groups.
 #
+#   set -a; source .env; set +a      # REQUIRED: loads TELEGRAM_BOT_TOKEN_WOLFPACK_CC etc.
 #   ansible-playbook playbooks/cc-bot.yml
+#
+# (A raw ansible-playbook run does NOT read .env; the templated env file would
+#  get empty secrets. The bootstrap*.sh wrappers source .env for you.)
 #
 # SAFE on a shared droplet: it targets cc_hosts only and never runs the
 # workspace/wolf-service roles that would clobber a hand-customized wolf.

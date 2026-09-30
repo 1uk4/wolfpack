@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # pi-wolf startup wrapper for {{ wolf_name }} — launches pi in a detached tmux
 # session at the den, waits for the TUI, then activates the Telegram bridge
-# with /telegram-connect. Deployed by the pi-wolf-service role.
+# with /telegram-connect. Deployed by the `pi` role.
 #
-# Works for both layouts: dedicated (default tmux socket, ~/.pi/agent) and
-# co-located (a per-wolf `tmux -L {{ wolf_name }}` socket + PI_CODING_AGENT_DIR
-# pointing at this wolf's own config dir), so several wolves can share one user.
+# Works for both layouts: dedicated (default tmux socket) and co-located (a
+# per-wolf `tmux -L {{ wolf_name }}` socket + PI_CODING_AGENT_DIR pointing at
+# this wolf's own config dir), so several wolves can share one user.
 set -u
 
 SESSION="{{ wolf_name }}"
-DEN="{{ pi_den_dir }}"
-TMUX="{{ pi_tmux_cmd }}"
+DEN="{{ pi_den }}"
+TMUX="/usr/bin/tmux -L {{ wolf_name }}"
 export HOME="/home/{{ wolf_user }}"
 export PI_CODING_AGENT_DIR="{{ pi_config_dir }}"
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-# Load ANTHROPIC_API_KEY + TELEGRAM_BOT_TOKEN (if the env-file auth path is used).
-[ -r "{{ pi_env_file }}" ] && set -a && . "{{ pi_env_file }}" && set +a
+# Load ANTHROPIC_API_KEY + TELEGRAM_BOT_TOKEN.
+[ -r "{{ pi_config_dir }}/pi.env" ] && set -a && . "{{ pi_config_dir }}/pi.env" && set +a
 
 # Start pi detached, with the den as cwd so it loads den/AGENTS.md.
 $TMUX new-session -d -s "$SESSION" -c "$DEN" 'pi'

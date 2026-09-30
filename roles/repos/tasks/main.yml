@@ -1,0 +1,59 @@
+---
+# repos role — clones working repos onto a wolf so it can build/manage them
+# (e.g. the wolfpack framework repo itself). Runtime-agnostic: applies to any
+# wolf that declares `wolf_repos` in inventory. No-ops when unset.
+#
+# These clones are the wolf's WORKSPACE, not its memory: they live under
+# {{ wolf_repos_dir }}/ (outside the Syncthing-managed den) and are pushed to
+# GitHub by the wolf, then pulled to your Mac. Keeps framework (git) and
+# memory (den/Syncthing) cleanly separated.
+#
+# Cloning private repos needs the wolf's SSH key on GitHub — that's the
+# one-time manual step the bootstrap play prints. Clone failures are non-fatal
+# so the play finishes; re-run after adding the key to complete the clone.
+
+- name: Resolve wolf_repos_dir default
+  # Co-located wolves (own config dir) get a per-wolf repos path; single-wolf
+  # hosts share /home/<user>/repos. Explicit override in inventory wins.
+  set_fact:
+    wolf_repos_dir: >-
+      {{ wolf_repos_dir
+         | default('/home/' ~ wolf_user ~ '/wolves/' ~ wolf_name ~ '/repos'
+                   if wolf_config_dir is defined
+                   else '/home/' ~ wolf_user ~ '/repos') }}
+  when: wolf_repos | default([]) | length > 0
+
+- name: Create repos workspace directory
+  file:
+    path: "{{ wolf_repos_dir }}"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+  when: wolf_repos | default([]) | length > 0
+
+- name: Clone configured repos (best-effort)
+  become_user: "{{ wolf_user }}"
+  git:
+    repo: "{{ item.url }}"
+    dest: "{{ wolf_repos_dir }}/{{ item.name }}"
+    # 'update'/'version' are only read when the key truly exists; otherwise
+    # item['update'] falls back to the dict's built-in update() method in
+    # ansible-core 2.20's lazy templating.
+    version: "{{ item['version'] if 'version' in item else 'HEAD' }}"
+    update: "{{ item['update'] if 'update' in item else false }}"
+    accept_hostkey: true
+  loop: "{{ wolf_repos | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: wolf_repo_clone
+  failed_when: false
+
+- name: Report repo clone results
+  debug:
+    msg: >-
+      📦 repo '{{ item.item.name }}':
+      {{ 'cloned/updated' if not item.failed else 'FAILED — likely the wolf SSH key is not on GitHub yet. Add it (printed above) and re-run.' }}
+  loop: "{{ wolf_repo_clone.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: wolf_repos | default([]) | length > 0

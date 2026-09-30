@@ -99,11 +99,27 @@
   roles:
     - tailscale
     - bun
-    - claude-code
-    - telegram
     - workspace
     - syncthing
-    - wolf-service
+    # repos: clones anything in inventory's `wolf_repos: [...]` list to
+    # {{ wolf_repos_dir }}/ (outside the den). No-ops when unset.
+    - repos
+    # ---- interaction layer (selected per wolf by `wolf_runtime`) ----------
+    # claude (default): Claude Code CLI + telegram plugin channel
+    # pi              : the pi coding agent + @llblab/pi-telegram bridge
+    - role: claude-code
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime, runtime-claude]
+    - role: telegram
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime, runtime-claude]
+    - role: pi
+      when: wolf_runtime | default('claude') == 'pi'
+      tags: [runtime, runtime-pi]
+    # -----------------------------------------------------------------------
+    - role: wolf-service
+      tags: [runtime, service]
+    - wolfpack-cli
 
   post_tasks:
     - name: Get Tailscale IP for summary
@@ -199,3 +215,4 @@
 
   roles:
     - cc-bot
+    - wolfpack-cli

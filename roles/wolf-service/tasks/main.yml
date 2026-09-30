@@ -1,4 +1,10 @@
 ---
+# Co-located wolves (own config dir) run their own tmux server (-L <name>);
+# the original single-wolf host is on the default socket.
+- name: Compute tmux socket flag
+  set_fact:
+    wolf_tmux: "{{ '-L ' ~ wolf_name if wolf_config_dir is defined else '' }}"
+
 - name: Create systemd service
   template:
     src: wolf.service.j2
@@ -22,7 +28,7 @@
   failed_when: false
 
 - name: Wait for tmux session to exist
-  command: sudo -iu {{ wolf_user }} tmux has-session -t {{ wolf_name }}
+  command: sudo -iu {{ wolf_user }} tmux {{ wolf_tmux }} has-session -t {{ wolf_name }}
   register: tmux_check
   retries: 12
   delay: 5
@@ -33,13 +39,16 @@
 - name: Wait for claude to print the channel listener banner
   # Captures the live tmux pane contents and greps for the banner that
   # only appears once claude has started the telegram MCP server.
+  # Claude-only: the pi runtime uses a full-screen TUI with no such banner,
+  # so its readiness is the tmux session + a live process (checked above).
   shell: |
-    sudo -iu {{ wolf_user }} tmux capture-pane -t {{ wolf_name }} -p -S -200
+    sudo -iu {{ wolf_user }} tmux {{ wolf_tmux }} capture-pane -t {{ wolf_name }} -p -S -200
   register: pane_capture
   retries: 24
   delay: 5
   until: "'Listening for channel messages' in pane_capture.stdout"
   changed_when: false
+  when: wolf_runtime | default('claude') == 'claude'
 
 - name: Smoke test passed
   debug:

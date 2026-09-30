@@ -1,15 +1,73 @@
+{# ============================================================================
+   Wolf systemd unit — runtime-aware.
+
+   A wolf's *interaction layer* is selected by `wolf_runtime`:
+     - claude  : Claude Code CLI + the telegram plugin channel  (default)
+     - pi       : the pi coding agent + the @llblab/pi-telegram bridge
+
+   The den (WorkingDirectory) is runtime-agnostic — both runtimes load
+   AGENTS.md and memory/ from it — so switching runtime keeps a wolf's
+   identity and memory intact; only the wrapper below changes.
+
+   Per-wolf layout vars (set by scripts/add-wolf.sh / the pi role):
+     wolf_config_dir  : CLAUDE_CONFIG_DIR (claude) or PI_CODING_AGENT_DIR (pi)
+     wolf_den         : the Obsidian vault / cwd
+   When unset, the original single-wolf host layout is built exactly as before.
+
+   Co-located wolves (own_server) get their own tmux server (-L <name>) so
+   their lifecycles are independent: Type=forking only forks for whichever
+   wolf starts a shared server first, and a shared server lives in the first
+   wolf's cgroup, so restarting it would kill every packmate's session.
+============================================================================ #}
+{% set wolf_runtime = wolf_runtime | default('claude') %}
+{% set own_server   = wolf_config_dir is defined %}
+{% set tmux         = '/usr/bin/tmux -L ' ~ wolf_name if own_server else '/usr/bin/tmux' %}
 [Unit]
-Description=Wolfpack - {{ wolf_name }}
-After=network.target tailscaled.service
+Description=Wolfpack ({{ wolf_runtime }}) - {{ wolf_name }}
+After=network-online.target tailscaled.service
+Wants=network-online.target
 
 [Service]
 Type=forking
 User={{ wolf_user }}
-WorkingDirectory=/home/{{ wolf_user }}/workspace/den
-Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory={{ wolf_den | default('/home/' ~ wolf_user ~ '/workspace/den') }}
 Environment=HOME=/home/{{ wolf_user }}
-ExecStart=/usr/bin/tmux new-session -d -s {{ wolf_name }} '/usr/bin/claude --channels plugin:telegram@claude-plugins-official'
-ExecStop=/usr/bin/tmux kill-session -t {{ wolf_name }}
+{# Git identity is per-wolf, but ~/.gitconfig is per-USER and every wolf on a
+   host shares it. Without these a packmate's name lands on the commit. #}
+Environment=GIT_AUTHOR_NAME={{ wolf_name }}
+Environment=GIT_AUTHOR_EMAIL={{ wolf_name }}@wolfpack.local
+Environment=GIT_COMMITTER_NAME={{ wolf_name }}
+Environment=GIT_COMMITTER_EMAIL={{ wolf_name }}@wolfpack.local
+{# Per-wolf secrets (GH_TOKEN, API keys) live in /etc/wolfpack/<wolf>.env,
+   root-owned 0600. systemd reads it as PID 1 before dropping to the wolf user,
+   so the wolf process inherits the values while the file stays unreadable by
+   that user. The leading '-' makes it optional. #}
+EnvironmentFile=-/etc/wolfpack/{{ wolf_name }}.env
+{% if wolf_runtime == 'pi' %}
+{# ---- pi runtime -------------------------------------------------------- #}
+{% set pi_dir = wolf_config_dir | default('/home/' ~ wolf_user ~ '/.pi/agent') %}
+Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/home/{{ wolf_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PI_CODING_AGENT_DIR={{ pi_dir }}
+{# Launcher starts pi detached in tmux, waits for the TUI, then sends
+   /telegram-connect. It sources pi.env (ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN)
+   itself so the token reaches the pane regardless of tmux server env. #}
+EnvironmentFile=-{{ pi_dir }}/pi.env
+ExecStart=/home/{{ wolf_user }}/.local/bin/pi-wolf-run-{{ wolf_name }}.sh
+ExecStop={{ tmux }} kill-session -t {{ wolf_name }}
+{% else %}
+{# ---- claude runtime ---------------------------------------------------- #}
+{% set launch      = '/usr/bin/env CLAUDE_CONFIG_DIR=' ~ wolf_config_dir ~ ' /usr/bin/claude' if own_server else '/usr/bin/claude' %}
+{% set claude_args = wolf_claude_args | default('--channels plugin:telegram@claude-plugins-official') %}
+Environment=PATH=/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin
+{% if own_server %}
+{# CLAUDE_CONFIG_DIR is set on the tmux command, not just the unit: a pane
+   inherits the tmux SERVER's env, so a unit-level Environment= alone would be
+   dropped and the wolf would read a packmate's token. #}
+Environment=CLAUDE_CONFIG_DIR={{ wolf_config_dir }}
+{% endif %}
+ExecStart={{ tmux }} new-session -d -s {{ wolf_name }} '{{ launch }}{{ (' ' ~ claude_args) if claude_args else '' }}'
+ExecStop={{ tmux }} kill-session -t {{ wolf_name }}
+{% endif %}
 Restart=always
 RestartSec=10
 

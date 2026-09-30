@@ -1,3 +1,0 @@
-# Completed Tasks
-
-## Done

@@ -1,0 +1,40 @@
+---
+# Redeploy a wolf's interaction layer without a full reprovision.
+#
+# Re-runs only the runtime roles (claude or pi, per `wolf_runtime`) plus
+# wolf-service, which re-renders the systemd unit and restarts the wolf.
+# Use it to switch a wolf between runtimes: flip `wolf_runtime` in
+# inventory/hosts.yml, then:
+#
+#   ansible-playbook playbooks/redeploy.yml --limit <wolf>
+#
+# The den is runtime-agnostic, so the wolf keeps its memory and identity —
+# only the wrapper changes. The first launch on the new runtime picks up
+# AGENTS.md and memory/ exactly as before.
+#
+# Tip: `--limit` accepts a single wolf (forge), a host, or a group (wolves).
+
+- name: Redeploy wolf interaction layer
+  hosts: wolves
+  become: true
+
+  roles:
+    - role: claude-code
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime, runtime-claude]
+    - role: telegram
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime, runtime-claude]
+    - role: pi
+      when: wolf_runtime | default('claude') == 'pi'
+      tags: [runtime, runtime-pi]
+    - role: wolf-service
+      tags: [runtime, service]
+
+  post_tasks:
+    - name: Redeploy summary
+      debug:
+        msg:
+          - "🔁 {{ wolf_name }} redeployed on runtime: {{ wolf_runtime | default('claude') }}"
+          - "    unit: /etc/systemd/system/{{ wolf_name }}.service"
+          - "    verify: DM the bot, or `wolfpack status`"

@@ -23,6 +23,7 @@
     - tasks
     - knowledge
     - reports
+    - templates
 
 - name: Create shared receive-point directory
   file:
@@ -31,9 +32,17 @@
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
 
-- name: Deploy CLAUDE.md (identity, rules, startup)
+- name: Deploy AGENTS.md (identity, rules, startup — read by pi and modern Claude Code)
   template:
-    src: CLAUDE.md.j2
+    src: AGENTS.md.j2
+    dest: "/home/{{ wolf_user }}/workspace/den/AGENTS.md"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    force: false
+
+- name: Deploy CLAUDE.md (same content, kept for older Claude Code versions)
+  template:
+    src: AGENTS.md.j2
     dest: "/home/{{ wolf_user }}/workspace/den/CLAUDE.md"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -64,6 +73,44 @@
     - { src: "inbox.md",     dest: "tasks/inbox.md" }
     - { src: "active.md",    dest: "tasks/active.md" }
     - { src: "done.md",      dest: "tasks/done.md" }
+
+- name: Deploy Obsidian note templates into the den
+  # The den is opened as a self-contained Obsidian vault, so the templates the
+  # Templates plugin points at have to live inside it. shared/templates is the
+  # same content, kept for wolves that read it by the old path.
+  copy:
+    src: "{{ role_path }}/../../shared/templates/{{ item }}"
+    dest: "/home/{{ wolf_user }}/workspace/den/templates/{{ item }}"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    force: false
+  loop:
+    - checkpoint.md
+    - daily-log.md
+    - decision.md
+    - knowledge-note.md
+    - task-report.md
+
+- name: Create .obsidian vault config directory
+  file:
+    path: "/home/{{ wolf_user }}/workspace/den/.obsidian"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+
+- name: Deploy Obsidian vault config (force:false — never clobber vault edits)
+  copy:
+    src: "obsidian/{{ item }}"
+    dest: "/home/{{ wolf_user }}/workspace/den/.obsidian/{{ item }}"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    force: false
+  loop:
+    - app.json
+    - appearance.json
+    - core-plugins.json
+    - templates.json
+    - daily-notes.json
 
 - name: Deploy .stignore in den and shared (Syncthing reads one per folder)
   copy:

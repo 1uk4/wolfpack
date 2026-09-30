@@ -1,9 +1,12 @@
 {
   "defaultProjectTrust": "always",
-  "defaultProvider": "{{ pi_provider }}",
-  "defaultModel": "{{ pi_model }}",
+  "defaultProvider": "anthropic",
+  "defaultModel": "{{ pi_model | default('claude-sonnet-4') }}",
   "quietStartup": false,
   "skills": [
-    "{{ pi_shared_dir }}/skills"
+    "/home/{{ wolf_user }}/workspace/shared/skills"
+  ],
+  "packages": [
+    "npm:@llblab/pi-telegram"
   ]
 }

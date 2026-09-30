@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { ownerOnly } from "./auth.ts";
+import { healthCommand } from "./commands/health.ts";
 import { logsCommand } from "./commands/logs.ts";
 import { restartCommand } from "./commands/restart.ts";
 import { statusCommand } from "./commands/status.ts";
@@ -30,6 +31,7 @@ bot.command("start", async (ctx) => {
       "Wolfpack Command Center",
       "",
       "/status — list wolves and their service state",
+      "/health — host CPU/memory/disk and what each wolf is consuming",
       "/logs <wolf> [lines] — tail a wolf's journald logs (default 30, max 200)",
       "/restart <wolf> — 2-step restart; ask the wolf to checkpoint first, then /restart <wolf> confirm",
     ].join("\n"),
@@ -38,6 +40,10 @@ bot.command("start", async (ctx) => {
 
 bot.command("status", async (ctx) => {
   await statusCommand(ctx, inventoryPath);
+});
+
+bot.command("health", async (ctx) => {
+  await healthCommand(ctx);
 });
 
 bot.command("logs", async (ctx) => {

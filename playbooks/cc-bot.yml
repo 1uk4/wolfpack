@@ -4,7 +4,7 @@
 # Use this instead of bootstrap.yml when you've changed inventory (added/removed
 # wolves) or the cc-bot code and want the bot to pick it up. It re-syncs the
 # repo, reinstalls deps at the workspace root, and re-templates the sudoers
-# drop-in from the current wolves + pi_wolves groups.
+# drop-in from the current wolves group (runtime-agnostic).
 #
 #   set -a; source .env; set +a      # REQUIRED: loads TELEGRAM_BOT_TOKEN_WOLFPACK_CC etc.
 #   ansible-playbook playbooks/cc-bot.yml

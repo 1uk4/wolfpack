@@ -29,12 +29,6 @@ type HostEntry = Record<string, unknown> & { wolf_name?: string };
 type Group = { vars?: Record<string, unknown>; hosts?: Record<string, HostEntry | null> | null };
 type InventoryDoc = { all?: { vars?: Record<string, unknown>; children?: Record<string, Group | undefined> } };
 
-// Inventory groups that hold wolves, and the runtime each group runs.
-const WOLF_GROUPS: { group: string; runtime: WolfRuntime }[] = [
-  { group: "wolves", runtime: "claude" },
-  { group: "pi_wolves", runtime: "pi" },
-];
-
 export function loadInventoryDoc(path: string = defaultInventoryPath()): InventoryDoc {
   return parse(readFileSync(path, "utf8")) as InventoryDoc;
 }
@@ -48,35 +42,44 @@ export function loadWolves(path: string = defaultInventoryPath()): Wolf[] {
   const wolves: Wolf[] = [];
   const seen = new Set<string>();
 
-  for (const { group, runtime } of WOLF_GROUPS) {
-    const g = children[group];
-    const hosts = g?.hosts;
-    if (!hosts) continue;
-    const groupVars = g?.vars ?? {};
+  const group = "wolves";
+  const g = children[group];
+  const hosts = g?.hosts;
+  if (!hosts) return wolves;
+  const groupVars = g?.vars ?? {};
 
-    for (const [hostKey, rawEntry] of Object.entries(hosts)) {
-      const entry = rawEntry ?? {};
-      const name = str(entry.wolf_name);
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
+  for (const [hostKey, rawEntry] of Object.entries(hosts)) {
+    const entry = rawEntry ?? {};
+    const name = str(entry.wolf_name);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
 
-      const user =
-        str(entry.wolf_user) ?? str(groupVars.wolf_user) ?? str(globals.wolf_user) ?? "wolf";
-      const keyFileRaw = str(entry.ansible_ssh_private_key_file);
+    const runtime =
+      (str(entry.wolf_runtime) ??
+        str(groupVars.wolf_runtime) ??
+        str(globals.wolf_runtime) ??
+        "claude") as WolfRuntime;
+    const user =
+      str(entry.wolf_user) ?? str(groupVars.wolf_user) ?? str(globals.wolf_user) ?? "wolf";
+    const keyFileRaw = str(entry.ansible_ssh_private_key_file);
+    // Co-located wolves (own config dir) run `tmux -L <wolf_name>`; single-wolf
+    // hosts share the default socket. Explicit tmux_socket in inventory wins.
+    const tmuxSocket =
+      str(entry.tmux_socket) ??
+      (str(entry.wolf_config_dir) ? name : undefined);
 
-      wolves.push({
-        name,
-        service: `${name}.service`,
-        runtime,
-        group,
-        hostKey,
-        host: str(entry.ansible_host),
-        user,
-        keyFile: keyFileRaw ? expandHome(keyFileRaw) : undefined,
-        sshExtraArgs: str(entry.ansible_ssh_extra_args),
-        tmuxSocket: str(entry.tmux_socket),
-      });
-    }
+    wolves.push({
+      name,
+      service: `${name}.service`,
+      runtime,
+      group,
+      hostKey,
+      host: str(entry.ansible_host),
+      user,
+      keyFile: keyFileRaw ? expandHome(keyFileRaw) : undefined,
+      sshExtraArgs: str(entry.ansible_ssh_extra_args),
+      tmuxSocket,
+    });
   }
 
   return wolves;

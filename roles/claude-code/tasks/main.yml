@@ -4,17 +4,13 @@
 #
 # Config dir resolution:
 #   - Single wolf per host (default): /home/{{ wolf_user }}/.claude
-#   - Co-located packmate  (wolf_config_dir set): that path (e.g.
-#     /home/wolf/wolves/snapjack-bi/claude). The systemd unit sets
-#     CLAUDE_CONFIG_DIR to this so a wolf reads its own auth, not a
-#     packmate's.
+#   - Co-located packmate  (wolf_config_dir set): that path, e.g.
+#     /home/wolf/wolves/snapjack-bi/claude. The systemd unit sets
+#     CLAUDE_CONFIG_DIR to this so each wolf reads its own state.
 #
-# Auth seeding priority (each falls through if the previous is not authed):
-#   1. claude_cfg_dir itself
-#   2. /home/{{ wolf_user }}/.claude   (only when co-located — pull auth
-#      from a packmate that's already logged in, so no per-wolf OAuth)
-#   3. /root/.claude                   (root logs in once for the whole host)
-#   4. Manual login pause              (playbook stops with instructions)
+# Authentication is PER WOLF and never copied between wolves — each wolf runs
+# its own OAuth once. If claude_cfg_dir isn't authed, the playbook pauses with
+# exact SSH instructions and only continues after the operator completes login.
 
 - name: Resolve claude config dir
   set_fact:
@@ -59,126 +55,7 @@
     claude_auth_email: "unknown"
   when: claude_authed is not defined
 
-# ---- Auth-seed path 1: from a packmate's shared /home/<wolf_user>/.claude ---
-# Only when this wolf is co-located AND its own config dir isn't authed.
-- name: Check packmate auth at shared /home/{{ wolf_user }}/.claude
-  command: sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR=/home/{{ wolf_user }}/.claude claude auth status
-  register: shared_auth_status
-  changed_when: false
-  failed_when: false
-  when: not claude_authed and wolf_config_dir is defined
-
-- name: Parse packmate auth status
-  set_fact:
-    shared_authed: "{{ (shared_auth_status.stdout | from_json).loggedIn | default(false) }}"
-  when:
-    - not claude_authed
-    - wolf_config_dir is defined
-    - shared_auth_status.stdout | default('') | trim != ''
-
-- name: Seed co-located claude_cfg_dir from packmate's shared .claude
-  block:
-    - name: Copy .credentials.json from shared to co-located
-      copy:
-        src: "/home/{{ wolf_user }}/.claude/.credentials.json"
-        dest: "{{ claude_cfg_dir }}/.credentials.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-
-    - name: Check if /home/{{ wolf_user }}/.claude.json exists
-      stat:
-        path: "/home/{{ wolf_user }}/.claude.json"
-      register: shared_claude_json
-
-    - name: Copy .claude.json from shared to co-located
-      copy:
-        src: "/home/{{ wolf_user }}/.claude.json"
-        dest: "{{ claude_cfg_dir }}/.claude.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-      when: shared_claude_json.stat.exists
-
-    - name: Re-verify wolf auth after packmate seed
-      command: sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude auth status
-      register: wolf_auth_after_shared_copy
-      changed_when: false
-      failed_when: "(wolf_auth_after_shared_copy.stdout | from_json).loggedIn | default(false) != true"
-
-    - name: Mark wolf as authed after packmate seed
-      set_fact:
-        claude_authed: true
-        claude_auth_email: "{{ (wolf_auth_after_shared_copy.stdout | from_json).email }}"
-  when:
-    - not claude_authed
-    - wolf_config_dir is defined
-    - shared_authed | default(false)
-
-# ---- Auth-seed path 2: from /root/.claude (host-level login) ---------------
-- name: Check Claude authentication status (root user)
-  command: claude auth status
-  register: root_auth_status
-  changed_when: false
-  failed_when: false
-  when: not claude_authed
-
-- name: Parse root Claude auth status
-  set_fact:
-    root_authed: "{{ (root_auth_status.stdout | from_json).loggedIn | default(false) }}"
-  when: not claude_authed and root_auth_status.stdout | default('') | trim != ''
-
-- name: Default root auth to false if parse failed
-  set_fact:
-    root_authed: false
-  when: not claude_authed and root_authed is not defined
-
-- name: Copy Claude credentials from root to wolf (when root is authed)
-  block:
-    - name: Copy /root/.claude/.credentials.json to claude_cfg_dir
-      copy:
-        src: /root/.claude/.credentials.json
-        dest: "{{ claude_cfg_dir }}/.credentials.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-
-    - name: Check if /root/.claude.json exists
-      stat:
-        path: /root/.claude.json
-      register: root_claude_json
-
-    - name: Copy /root/.claude.json to claude_cfg_dir if present
-      copy:
-        src: /root/.claude.json
-        dest: "{{ claude_cfg_dir }}/.claude.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-      when: root_claude_json.stat.exists
-
-    - name: Re-verify wolf auth after root copy
-      command: sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude auth status
-      register: wolf_auth_after_root_copy
-      changed_when: false
-      failed_when: "(wolf_auth_after_root_copy.stdout | from_json).loggedIn | default(false) != true"
-
-    - name: Mark wolf as authed after root copy
-      set_fact:
-        claude_authed: true
-        claude_auth_email: "{{ (wolf_auth_after_root_copy.stdout | from_json).email }}"
-  when: not claude_authed and root_authed | default(false)
-
-- name: Show authentication status
-  debug:
-    msg: "🔐 Claude auth ({{ wolf_user }} @ {{ claude_cfg_dir }}): {{ 'logged in as ' + claude_auth_email if claude_authed else 'NOT logged in' }}"
-
-# ---- Auth-seed path 3: manual login pause ----------------------------------
-- name: Pause for manual Claude login (no seed source authed)
+- name: Pause for wolf-specific /login (never copy auth between wolves)
   pause:
     prompt: |
 
@@ -186,64 +63,30 @@
         CLAUDE LOGIN REQUIRED for wolf '{{ wolf_name }}' ({{ ansible_host }})
       ================================================================
 
-      No usable Claude credentials found at any of:
-        - {{ claude_cfg_dir }}       (this wolf's config dir)
-      {% if wolf_config_dir is defined %}
-        - /home/{{ wolf_user }}/.claude   (packmate shared dir)
-      {% endif %}
-        - /root/.claude              (host-level)
+      Each wolf runs its own auth — never copied from another wolf or root.
+      In a NEW terminal on your laptop:
 
-      Open a NEW terminal on your laptop and run:
+        ssh -i ~/.ssh/wolfpack -o IdentityAgent=none {{ wolf_user }}@{{ ansible_host }}
+        CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude
+        # inside the claude TUI:
+        /login
+        # complete the OAuth flow in your browser, then /exit
 
-        ssh -i ~/.ssh/wolfpack -o IdentityAgent=none root@{{ ansible_host }}
-        claude auth login
-
-      (Log in as root — the playbook will auto-copy credentials to
-      {{ claude_cfg_dir }} on the next step.)
-
-      Complete the OAuth flow in your browser, then come back here and
-      press ENTER to continue.
+      This writes {{ claude_cfg_dir }}/.credentials.json for {{ wolf_name }}
+      alone. When you're done, come back here and press ENTER to continue.
       ================================================================
   when: not claude_authed
 
-- name: Re-check auth after pause and auto-copy from root
-  block:
-    - name: Verify root is now authed
-      command: claude auth status
-      register: root_auth_recheck
-      changed_when: false
-      failed_when: "(root_auth_recheck.stdout | from_json).loggedIn | default(false) != true"
-
-    - name: Copy credentials from root to claude_cfg_dir (post-pause)
-      copy:
-        src: /root/.claude/.credentials.json
-        dest: "{{ claude_cfg_dir }}/.credentials.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-
-    - name: Stat /root/.claude.json (post-pause)
-      stat:
-        path: /root/.claude.json
-      register: root_claude_json_post
-
-    - name: Copy /root/.claude.json to claude_cfg_dir (post-pause)
-      copy:
-        src: /root/.claude.json
-        dest: "{{ claude_cfg_dir }}/.claude.json"
-        owner: "{{ wolf_user }}"
-        group: "{{ wolf_user }}"
-        mode: "0600"
-        remote_src: true
-      when: root_claude_json_post.stat.exists
-
-    - name: Final wolf auth verification (post-pause)
-      command: sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude auth status
-      register: final_wolf_auth
-      changed_when: false
-      failed_when: "(final_wolf_auth.stdout | from_json).loggedIn | default(false) != true"
+- name: Verify wolf auth after pause
+  command: sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude auth status
+  register: post_pause_auth
+  changed_when: false
+  failed_when: "(post_pause_auth.stdout | from_json).loggedIn | default(false) != true"
   when: not claude_authed
+
+- name: Show authentication status
+  debug:
+    msg: "🔐 Claude auth ({{ wolf_user }} @ {{ claude_cfg_dir }}): {{ 'logged in as ' + claude_auth_email if claude_authed else 'logged in (post-pause)' }}"
 
 - name: Deploy Claude Code permission allowlist ({{ claude_cfg_dir }}/settings.json)
   # Sets defaultMode=dontAsk with a generous allow list so Telegram-driven
@@ -279,9 +122,7 @@
 
 - name: Pre-trust den directory in {{ claude_cfg_dir }}/.claude.json
   # wolf-service runs claude with WorkingDirectory=<wolf_den>. Pre-accepting
-  # the folder-trust dialog prevents the first-run tmux hang. Applies to the
-  # co-located config dir when set — workspace's task only handles the shared
-  # /home/<user>/.claude.json.
+  # the folder-trust dialog prevents the first-run tmux hang.
   shell: |
     python3 - <<'PY'
     import json, os

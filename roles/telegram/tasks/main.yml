@@ -1,6 +1,17 @@
 ---
+# telegram role — installs the Telegram channel plugin and writes this wolf's
+# bot token + owner allowlist to <claude_cfg_dir>/channels/telegram/.
+#
+# claude_cfg_dir mirrors the claude-code role's resolution so a co-located
+# wolf writes its channel state inside its OWN config dir, not on top of a
+# packmate's shared one.
+
+- name: Resolve claude config dir
+  set_fact:
+    claude_cfg_dir: "{{ wolf_config_dir | default('/home/' + wolf_user + '/.claude') }}"
+
 - name: Install Telegram plugin
-  command: claude plugin install telegram@claude-plugins-official
+  command: env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude plugin install telegram@claude-plugins-official
   become_user: "{{ wolf_user }}"
   register: plugin_result
   changed_when: "'Successfully installed' in plugin_result.stdout"
@@ -8,7 +19,7 @@
 
 - name: Create Telegram channel directory
   file:
-    path: "/home/{{ wolf_user }}/.claude/channels/telegram"
+    path: "{{ claude_cfg_dir }}/channels/telegram"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -17,7 +28,7 @@
 - name: Configure Telegram bot token
   copy:
     content: "TELEGRAM_BOT_TOKEN={{ telegram_bot_token }}"
-    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/.env"
+    dest: "{{ claude_cfg_dir }}/channels/telegram/.env"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0600"
@@ -31,14 +42,14 @@
         "groups": {},
         "pending": {}
       }
-    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/access.json"
+    dest: "{{ claude_cfg_dir }}/channels/telegram/access.json"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0600"
 
 - name: Create approved sender drop-file
   file:
-    path: "/home/{{ wolf_user }}/.claude/channels/telegram/approved"
+    path: "{{ claude_cfg_dir }}/channels/telegram/approved"
     state: directory
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
@@ -46,14 +57,14 @@
 - name: Write approved sender file
   copy:
     content: "{{ owner_telegram_id }}"
-    dest: "/home/{{ wolf_user }}/.claude/channels/telegram/approved/{{ owner_telegram_id }}"
+    dest: "{{ claude_cfg_dir }}/channels/telegram/approved/{{ owner_telegram_id }}"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
 
 - name: Telegram channel status
   debug:
     msg:
-      - "📨 Telegram plugin installed for {{ wolf_name }}"
+      - "📨 Telegram plugin installed for {{ wolf_name }} at {{ claude_cfg_dir }}/channels/telegram/"
       - "    Bot token: ...{{ telegram_bot_token[-6:] }} (last 6 chars)"
       - "    Owner allowlisted: {{ owner_telegram_id }}"
       - "    ACTION: once wolf-service is up, DM the bot to verify."

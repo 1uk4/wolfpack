@@ -105,6 +105,7 @@ of the working repos under `{{ pi_repos_dir }}/`:
 - Your service/session runs under user `{{ wolf_user }}` on `tmux{{ ' -L ' ~ wolf_name if pi_colocated | default(false) else '' }}`.
 - Pack status: the CC bot (`/status`, `/logs`, `/restart`) is the safe path for
   routine wolf ops — prefer it over raw systemctl when possible.
+{% endif %}
 
 ## Skills
 

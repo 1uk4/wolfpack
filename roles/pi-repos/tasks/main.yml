@@ -25,8 +25,8 @@
   git:
     repo: "{{ item.url }}"
     dest: "{{ pi_repos_dir }}/{{ item.name }}"
-    version: "{{ item.version | default('HEAD') }}"
-    update: "{{ item.update | default(false) }}"
+    version: "{{ item['version'] | default('HEAD') }}"
+    update: "{{ item['update'] | default(false) }}"        # bracket form: 'update' is a dict method, dotted lookup would hit it
     accept_hostkey: true
   loop: "{{ pi_repos | default([]) }}"
   loop_control:

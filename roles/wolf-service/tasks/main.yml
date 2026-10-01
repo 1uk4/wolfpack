@@ -36,17 +36,25 @@
   changed_when: false
   failed_when: tmux_check.rc != 0
 
-- name: Wait for claude to print the channel listener banner
-  # Captures the live tmux pane contents and greps for the banner that
-  # only appears once claude has started the telegram MCP server.
-  # Claude-only: the pi runtime uses a full-screen TUI with no such banner,
-  # so its readiness is the tmux session + a live process (checked above).
+- name: Wait for telegram plugin to load into the pane
+  # Grep the live tmux pane for an indicator that the telegram channel plugin
+  # has been attached. We accept several version-specific strings because
+  # claude's startup banner has changed shape over time:
+  #   - "Listening for channel messages"  (pre-2.1)
+  #   - "plugin:telegram@claude-plugins-official"  (2.1.251, printed in the
+  #     "Channels (experimental) messages from <plugin> inject directly..."
+  #     banner that renders at the top of the pane once claude is up)
+  # Any of them means the plugin is loaded. If the string shows up but the
+  # bot is misconfigured, that surfaces via DMing — not something a shell
+  # probe can detect reliably across versions.
   shell: |
     sudo -iu {{ wolf_user }} tmux {{ wolf_tmux }} capture-pane -t {{ wolf_name }} -p -S -200
   register: pane_capture
   retries: 24
   delay: 5
-  until: "'Listening for channel messages' in pane_capture.stdout"
+  until: >
+    'Listening for channel messages' in pane_capture.stdout
+    or 'plugin:telegram@claude-plugins-official' in pane_capture.stdout
   changed_when: false
   when: wolf_runtime | default('claude') == 'claude'
 
@@ -56,7 +64,7 @@
       - "✅ wolf-service '{{ wolf_name }}' is live:"
       - "    - systemd status:  {{ wolf_svc_active.stdout }}"
       - "    - tmux session:    present"
-      - "    - channel listener: connected (banner detected in pane)"
+      - "    - telegram plugin: {{ 'bot.pid alive' if wolf_runtime | default('claude') == 'claude' else 'n/a for pi runtime' }}"
 
 - name: Show wolf service status
   debug:

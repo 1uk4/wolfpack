@@ -10,6 +10,24 @@
   set_fact:
     claude_cfg_dir: "{{ wolf_config_dir | default('/home/' + wolf_user + '/.claude') }}"
 
+- name: Assert telegram_bot_token is set + non-empty
+  # Inventory does `telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN_<WOLF>') }}"`.
+  # If that env var is unset at ansible-run time the lookup returns "", and the
+  # role used to write an empty token to .env, silently breaking Telegram.
+  # Fail LOUDLY and early instead so the operator sees it immediately.
+  assert:
+    that:
+      - telegram_bot_token is defined
+      - telegram_bot_token | length > 0
+    fail_msg: |
+      telegram_bot_token for {{ wolf_name }} is empty.
+      TELEGRAM_BOT_TOKEN_{{ wolf_name | upper | replace('-', '_') }} is probably
+      unset in the ansible process env. Source .env before running ansible:
+        set -a; source .env; set +a
+        ansible-playbook ...
+      The Mac wolfpack CLI (`./wolfpack runtime <wolf> <target>`) does this
+      automatically.
+
 - name: Install Telegram plugin
   command: env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude plugin install telegram@claude-plugins-official
   become_user: "{{ wolf_user }}"
@@ -26,12 +44,15 @@
     mode: "0700"
 
 - name: Configure Telegram bot token
+  # Token change requires a restart — the plugin reads the token from this .env
+  # at startup, so an on-disk change alone does NOT reach a running wolf.
   copy:
     content: "TELEGRAM_BOT_TOKEN={{ telegram_bot_token }}"
     dest: "{{ claude_cfg_dir }}/channels/telegram/.env"
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0600"
+  notify: restart wolf
 
 - name: Configure Telegram access (pre-paired)
   copy:
@@ -46,6 +67,7 @@
     owner: "{{ wolf_user }}"
     group: "{{ wolf_user }}"
     mode: "0600"
+  notify: restart wolf
 
 - name: Create approved sender drop-file
   file:

@@ -64,16 +64,26 @@
       ================================================================
 
       Each wolf runs its own auth — never copied from another wolf or root.
-      In a NEW terminal on your laptop:
+      In a NEW terminal on your laptop, SSH to the host (as root via your
+      usual alias is fine), then run this ONE command:
 
-        ssh -i ~/.ssh/wolfpack -o IdentityAgent=none {{ wolf_user }}@{{ ansible_host }}
-        CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude
-        # inside the claude TUI:
+        sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR={{ claude_cfg_dir }} claude
+
+      Inside the claude TUI:
         /login
-        # complete the OAuth flow in your browser, then /exit
+        # complete OAuth in browser, then /exit
 
-      This writes {{ claude_cfg_dir }}/.credentials.json for {{ wolf_name }}
-      alone. When you're done, come back here and press ENTER to continue.
+      The `sudo -iu {{ wolf_user }} env CLAUDE_CONFIG_DIR=...` wrapper is
+      important: it makes claude run as {{ wolf_user }} (so credentials land
+      owned by {{ wolf_user }}:{{ wolf_user }}) and writes them into
+      {{ claude_cfg_dir }}/.credentials.json — the dir this wolf's systemd
+      unit reads via CLAUDE_CONFIG_DIR.
+
+      If you ran claude as root by accident, clean up first:
+        sudo rm -rf /root/.claude
+        sudo find {{ claude_cfg_dir }} -not -user {{ wolf_user }} -delete
+
+      When you're done, come back here and press ENTER to continue.
       ================================================================
   when: not claude_authed
 

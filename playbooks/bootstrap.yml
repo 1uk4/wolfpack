@@ -119,7 +119,8 @@
     # -----------------------------------------------------------------------
     - role: wolf-service
       tags: [runtime, service]
-    - wolfpack-cli
+    - role: wolfpack-cli
+      tags: [wolfpack-cli]
 
   post_tasks:
     - name: Get Tailscale IP for summary
@@ -215,4 +216,5 @@
 
   roles:
     - cc-bot
-    - wolfpack-cli
+    - role: wolfpack-cli
+      tags: [wolfpack-cli]

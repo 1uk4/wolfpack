@@ -44,11 +44,13 @@
   #   - "plugin:telegram@claude-plugins-official"  (2.1.251, printed in the
   #     "Channels (experimental) messages from <plugin> inject directly..."
   #     banner that renders at the top of the pane once claude is up)
-  # Any of them means the plugin is loaded. If the string shows up but the
-  # bot is misconfigured, that surfaces via DMing — not something a shell
-  # probe can detect reliably across versions.
+  # Any of them means the plugin is loaded.
+  #
+  # -S - captures the ENTIRE pane history. The banner renders at the top on
+  # startup, so if pairing output or any post-startup activity has pushed it
+  # past a few hundred lines of scrollback, a narrow window would miss it.
   shell: |
-    sudo -iu {{ wolf_user }} tmux {{ wolf_tmux }} capture-pane -t {{ wolf_name }} -p -S -200
+    sudo -iu {{ wolf_user }} tmux {{ wolf_tmux }} capture-pane -t {{ wolf_name }} -p -S -
   register: pane_capture
   retries: 24
   delay: 5

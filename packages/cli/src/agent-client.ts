@@ -63,6 +63,11 @@ export class AgentClient {
     return this.request("PATCH", `/wolves/${encodeURIComponent(nameOrId)}/config`, updates);
   }
 
+  /** Replace a wolf's identity bundle in place (propagate extension updates). */
+  async updateWolfBundle(nameOrId: string, body: unknown): Promise<unknown> {
+    return this.request("PUT", `/wolves/${encodeURIComponent(nameOrId)}/bundle`, body);
+  }
+
   /** Restart wolf */
   async restartWolf(nameOrId: string): Promise<unknown> {
     return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/restart`);

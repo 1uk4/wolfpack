@@ -7,11 +7,12 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
+import esbuild from "esbuild";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import type { HostEntry } from "./config.js";
-import { execSsh, scpToHost } from "./ssh-helper.js";
+import { execSsh, execSshStream, scpToHost } from "./ssh-helper.js";
 import { c } from "./render.js";
 
 /**
@@ -23,21 +24,24 @@ function generateApiKey(): string {
 }
 
 /**
- * Build the agent package (if not already built)
+ * Bundle the agent into a single self-contained file (esbuild).
+ *
+ * The monorepo hoists deps (express, yaml) to the ROOT node_modules, so copying
+ * packages/agent/node_modules alone ships a broken agent. Bundling inlines every
+ * dep into one file \u2014 no node_modules on the box, no hoisting surprises.
  */
-function buildAgent(repoRoot: string): void {
-  const agentDir = path.join(repoRoot, "packages/agent");
-  
-  console.log(c.dim("Building @wolfpack/agent..."));
-  
-  try {
-    execSync("npm run build", {
-      cwd: agentDir,
-      stdio: "inherit",
-    });
-  } catch (err) {
-    throw new Error("Failed to build agent package");
-  }
+async function bundleAgent(repoRoot: string, outFile: string): Promise<void> {
+  const entry = path.join(repoRoot, "packages/agent/src/bin/wolfpack-agent.ts");
+  console.log(c.dim("Bundling @wolfpack/agent..."));
+  await esbuild.build({
+    entryPoints: [entry],
+    outfile: outFile,
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node22",
+    logLevel: "silent",
+  });
 }
 
 /**
@@ -63,6 +67,94 @@ function findRepoRoot(): string | null {
 }
 
 /**
+ * Host prerequisites installed before the agent: Node 22, the pi CLI, Tailscale,
+ * and Syncthing. Idempotent (each step checks before installing). Assumes a
+ * Debian/Ubuntu host with apt. Tailscale/Syncthing are installed + enabled;
+ * authentication (tailscale up / syncthing config) is left to the operator
+ * unless TAILSCALE_AUTHKEY is provided.
+ */
+async function installPrereqs(host: HostEntry): Promise<void> {
+  console.log(c.bold("\n\u25b8 Installing host prerequisites") + c.dim(" (streamed live below)"));
+  const authkey = process.env.TAILSCALE_AUTHKEY ?? "";
+  const script = `#!/usr/bin/env bash
+set -euo pipefail
+step() { printf '\\n\\033[1m  \\u2192 %s\\033[0m\\n' "$1"; }
+
+export DEBIAN_FRONTEND=noninteractive
+
+step "Base tools (curl, rsync, ca-certificates)"
+apt-get update -y -qq
+apt-get install -y -qq curl rsync ca-certificates
+
+step "Node.js 22+ (pi 1.0.x requires it)"
+NODE_OK=0
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJ=$(node -v | sed 's/v//' | cut -d. -f1)
+  [ "\${NODE_MAJ:-0}" -ge 22 ] && NODE_OK=1 && echo "    already node $(node -v)"
+fi
+if [ "$NODE_OK" -ne 1 ]; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
+  apt-get install -y -qq nodejs
+  echo "    installed $(node -v)"
+fi
+
+step "pi coding agent (global)"
+if command -v pi >/dev/null 2>&1; then
+  echo "    already pi $(pi --version 2>/dev/null | head -1)"
+else
+  npm install -g @earendil-works/pi-coding-agent
+  echo "    installed pi $(pi --version 2>/dev/null | head -1)"
+fi
+
+step "Tailscale"
+if ! command -v tailscale >/dev/null 2>&1; then
+  curl -fsSL https://tailscale.com/install.sh | sh
+fi
+systemctl enable --now tailscaled || true
+if [ -n "${authkey}" ]; then
+  tailscale up --authkey "${authkey}" || true
+fi
+echo "    $(tailscale --version 2>/dev/null | head -1)"
+
+step "Syncthing (enable as root)"
+if ! command -v syncthing >/dev/null 2>&1; then
+  apt-get install -y -qq syncthing
+fi
+systemctl enable --now syncthing@root
+for i in $(seq 1 15); do [ -f /root/.local/state/syncthing/config.xml ] && break; sleep 1; done
+echo "    $(syncthing --version 2>/dev/null | head -1) (service: $(systemctl is-active syncthing@root 2>/dev/null))"
+# Bind GUI to localhost only; den mirrors are configured via SSH (host sync).
+true
+
+printf '\\n\\033[32m  \\u2713 prerequisites ready\\033[0m\\n'
+echo "PREREQS_OK"
+`;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-prereq-"));
+  const scriptPath = path.join(tmp, "prereqs.sh");
+  try {
+    fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+    scpToHost(host, scriptPath, "/tmp/wolfpack-prereqs.sh");
+    let output = "";
+    const code = await execSshStream(host, "sudo bash /tmp/wolfpack-prereqs.sh", (chunk) => {
+      output += chunk;
+      process.stdout.write(c.dim(chunk));
+    });
+    if (code !== 0 || !output.includes("PREREQS_OK")) {
+      throw new Error("Prereq install failed (see streamed output above)");
+    }
+    if (!authkey) {
+      console.log(
+        c.dim(
+          "  Note: run `tailscale up` on the host to join the tailnet, and configure Syncthing.",
+        ),
+      );
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
  * Deploy wolfpack-agent to a remote host
  */
 export async function deployAgent(
@@ -71,6 +163,9 @@ export async function deployAgent(
 ): Promise<void> {
   console.log(c.bold(`\nDeploying wolfpack-agent to ${hostName}...`));
 
+  // 0. Host prerequisites (node, pi, tailscale, syncthing).
+  await installPrereqs(host);
+
   // 1. Find and build agent
   const repoRoot = findRepoRoot();
   if (!repoRoot) {
@@ -78,8 +173,6 @@ export async function deployAgent(
       "Could not find wolfpack repo root. Make sure you're running from the wolfpack monorepo.",
     );
   }
-
-  buildAgent(repoRoot);
 
   // 2. Generate API key
   const apiKey = generateApiKey();
@@ -99,38 +192,38 @@ export async function deployAgent(
   try {
     fs.mkdirSync(deployDir, { recursive: true });
 
-    // Copy built files
-    const agentDir = path.join(repoRoot, "packages/agent");
-    fs.cpSync(path.join(agentDir, "dist"), path.join(deployDir, "dist"), {
-      recursive: true,
-    });
-    fs.cpSync(
-      path.join(agentDir, "node_modules"),
-      path.join(deployDir, "node_modules"),
-      { recursive: true },
-    );
-    fs.copyFileSync(
-      path.join(agentDir, "package.json"),
-      path.join(deployDir, "package.json"),
-    );
+    // Bundle the agent into one self-contained file.
+    await bundleAgent(repoRoot, path.join(deployDir, "wolfpack-agent.cjs"));
 
-    // Create systemd service file
+    // Read the host Syncthing API key so the agent's /health can report folder
+    // completion (host status) and so den mirrors can be inspected.
+    const syncApiKey = execSsh(
+      host,
+      "grep -o '<apikey>[^<]*</apikey>' /root/.local/state/syncthing/config.xml 2>/dev/null | sed 's/<[^>]*>//g'",
+    ).stdout.trim();
+
+    // Create systemd service file. The agent runs as root: it manages per-wolf
+    // unix units, which requires privilege.
     const serviceContent = `[Unit]
 Description=Wolfpack Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=${host.ssh.user}
+User=root
 WorkingDirectory=/opt/wolfpack-agent
-ExecStart=/usr/bin/node /opt/wolfpack-agent/dist/bin/wolfpack-agent.js
+ExecStart=/usr/bin/node /opt/wolfpack-agent/wolfpack-agent.cjs
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 Environment="WOLFPACK_AGENT_PORT=${host.port}"
-Environment="WOLFPACK_AGENT_DATA=/home/${host.ssh.user}/wolves"
+Environment="WOLFPACK_AGENT_DATA=/opt/wolfpack"
 Environment="WOLFPACK_AGENT_API_KEY=${apiKey}"
+Environment="SYNCTHING_UNIT=syncthing@root"
+Environment="SYNCTHING_URL=http://127.0.0.1:8384"
+Environment="SYNCTHING_API_KEY=${syncApiKey}"
 
 [Install]
 WantedBy=multi-user.target
@@ -164,7 +257,7 @@ WantedBy=multi-user.target
     console.log(c.dim("Waiting for agent to start..."));
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    const result = execSsh(host, "curl -s http://localhost:3141/ping");
+    const result = execSsh(host, `curl -s http://localhost:${host.port}/ping`);
     if (result.stdout.includes('"status":"ok"')) {
       console.log(c.green("\n✓ Agent deployed and running!"));
     } else {

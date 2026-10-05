@@ -45,6 +45,9 @@ export class RemoteBackend implements WolfBackend {
 
   async status(nameOrId: string): Promise<WolfStatusInfo> {
     const s = (await this.client.wolfStatus(nameOrId)) as Record<string, unknown>;
+    const manifest = s.bundle as
+      | { extensions?: Array<{ key: string; name: string; version: string; hash: string }> }
+      | undefined;
     return {
       id: String(s.id),
       name: String(s.name),
@@ -54,6 +57,7 @@ export class RemoteBackend implements WolfBackend {
       serviceState: String(s.serviceState ?? "unknown"),
       since: s.since as string | undefined,
       error: s.error as string | undefined,
+      bundle: manifest?.extensions,
     };
   }
 

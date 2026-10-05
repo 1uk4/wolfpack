@@ -14,6 +14,8 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { stringify as yamlStringify } from "yaml";
 import { AgentClient } from "../agent-client.js";
+import { buildRemoteBundle } from "../bundle.js";
+import { ensureDenMirror } from "./host-sync.js";
 import { loadConfig, getHost, localWolfDir, sharedDir } from "../config.js";
 import { c } from "../render.js";
 import { multiSelect, prompt } from "../prompts.js";
@@ -203,26 +205,48 @@ async function addRemote(
 
   console.log(c.bold(`Creating wolf '${name}' on ${opts.host}...`));
 
-  const client = new AgentClient(host);
-  const env: Record<string, string> = {};
-  if (choices.telegram?.token) {
-    env[choices.telegram.tokenEnv] = choices.telegram.token;
+  const model = opts.model ?? "claude-sonnet-4-6";
+
+  // Build the portable identity bundle (single source of truth) locally.
+  console.log(c.dim("Building identity bundle (extensions + settings)..."));
+  const built = await buildRemoteBundle({
+    name,
+    role: opts.role ?? name,
+    specialty: opts.specialty,
+    domains: opts.domains ?? [],
+    extensions: choices.extensions,
+  });
+  if (built.missing.length) {
+    console.log(
+      c.yellow(`  ! Skipped (not vendored in repo): ${built.missing.join(", ")}`),
+    );
   }
 
+  // Secrets + runtime env shipped to the agent to write into the wolf's .env.
+  const env: Record<string, string> = {};
+  if (choices.telegram?.token) env[choices.telegram.tokenEnv] = choices.telegram.token;
+  if (choices.telegram?.ownerId) env.TELEGRAM_OWNER_ID = String(choices.telegram.ownerId);
+  const providerKey = process.env.ANTHROPIC_API_KEY;
+  if (providerKey) env.ANTHROPIC_API_KEY = providerKey;
+  env.WOLFPACK_LIBRARIAN = path.join(sharedDir(config), "librarian", "inbox");
+
+  const client = new AgentClient(host);
   try {
     const result = (await client.createWolf({
       name,
       runtime: choices.runtime,
       profile: choices.profile,
-      model: opts.model ?? "claude-sonnet-4-6",
+      model,
       role: opts.role ?? name,
       specialty: opts.specialty,
       domains: opts.domains ?? [],
-      extensions: choices.extensions,
+      extensions: built.included,
       telegram: choices.telegram
         ? { tokenEnv: choices.telegram.tokenEnv, ownerId: choices.telegram.ownerId }
         : undefined,
       env: Object.keys(env).length ? env : undefined,
+      bundle: built.bundleB64,
+      bundleManifest: built.manifest,
     })) as { wolf: { id: string; name: string } };
 
     console.log(c.green(`✓ Wolf created on ${opts.host}`));
@@ -231,9 +255,23 @@ async function addRemote(
     console.log(c.dim(`  Profile: ${choices.profile}`));
     console.log(
       c.dim(
-        `  Exts:    ${choices.extensions.length ? choices.extensions.join(", ") : "(none)"}`,
+        `  Exts:    ${built.manifest.extensions
+          .map((e) => `${e.key}@${e.version}`)
+          .join(", ") || "(none)"}`,
       ),
     );
+
+    // Auto-wire the den backup mirror (best-effort; host must be Syncthing-ready).
+    try {
+      const { macDen } = await ensureDenMirror(opts.host!, host, result.wolf);
+      console.log(c.dim(`  Mirror:  ${macDen}`));
+    } catch (err) {
+      console.log(
+        c.yellow(
+          `  ! Den mirror not wired (${err instanceof Error ? err.message : err}). Run: wolfpack host sync ${opts.host}`,
+        ),
+      );
+    }
   } catch (err) {
     console.error(c.red(`Failed: ${err}`));
     process.exit(1);

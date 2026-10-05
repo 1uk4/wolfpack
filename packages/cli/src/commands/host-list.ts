@@ -2,23 +2,30 @@
  * wolfpack host list — show registered hosts
  */
 
-import { loadConfig } from "../config.js";
+import { loadConfig, LOCAL_HOST } from "../config.js";
 import { c, table } from "../render.js";
 
 export function hostList(): void {
   const config = loadConfig();
   const entries = Object.entries(config.hosts);
 
-  if (entries.length === 0) {
-    console.log("No hosts registered. Run `wolfpack host add <name> --ip <ip>` to add one.");
-    return;
-  }
+  // `local` (this machine) is always a host \u2014 it's where wolves without
+  // --host run. Registered VPS hosts follow.
+  const rows: string[][] = [
+    [`${c.bold(LOCAL_HOST)} ${c.dim("(this machine)")}`, c.dim("\u2014"), c.dim("\u2014"), "pi / terminal"],
+  ];
 
-  const rows = entries.map(([name, host]) => {
+  for (const [name, host] of entries) {
     const isDefault = name === config.defaultHost;
     const label = isDefault ? `${c.bold(name)} ${c.cyan("(default)")}` : name;
-    return [label, host.address, String(host.port)];
-  });
+    rows.push([label, host.address, String(host.port), "agent"]);
+  }
 
-  console.log(table(["HOST", "ADDRESS", "PORT"], rows));
+  console.log(table(["HOST", "ADDRESS", "PORT", "VIA"], rows));
+
+  if (entries.length === 0) {
+    console.log(
+      c.dim("\nNo VPS hosts yet. Add one: wolfpack host add <name> --ip <ip>"),
+    );
+  }
 }

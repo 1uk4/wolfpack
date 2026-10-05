@@ -28,6 +28,14 @@ export interface MemorySnapshot {
   updatedAt: number;
 }
 
+/** Version + content identity of one installed extension. */
+export interface InstalledExtension {
+  key: string;
+  name: string;
+  version: string;
+  hash: string;
+}
+
 export interface WolfStatusInfo {
   id: string;
   name: string;
@@ -41,6 +49,8 @@ export interface WolfStatusInfo {
   error?: string;
   /** Memory sidechannel, if available */
   memory?: MemorySnapshot;
+  /** Installed identity-bundle extensions (remote wolves) for drift checks. */
+  bundle?: InstalledExtension[];
 }
 
 export interface LogOptions {

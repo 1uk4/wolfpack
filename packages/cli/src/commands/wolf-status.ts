@@ -5,6 +5,7 @@
  */
 
 import { resolveBackend } from "../backend/index.js";
+import { stampExtension } from "../bundle.js";
 import { c } from "../render.js";
 
 export async function wolfStatus(
@@ -27,6 +28,27 @@ export async function wolfStatus(
       console.log(
         `  Memory:   ${m.enabled ? c.green("on") : c.dim("off")} · ${m.observations} obs · ${m.poolTokens}/${m.consolidateAt} tok · $${m.totalCostUsd.toFixed(3)} ${c.dim(`(${age}s ago)`)}`,
       );
+    }
+    if (s.bundle && s.bundle.length) {
+      console.log(`  Extensions:`);
+      let drift = 0;
+      for (const ext of s.bundle) {
+        const current = await stampExtension(ext.key);
+        let tag: string;
+        if (!current) {
+          tag = c.dim("(not in repo)");
+        } else if (current.hash === ext.hash) {
+          tag = c.green("up to date");
+        } else {
+          drift++;
+          const bump = current.version !== ext.version ? ` → ${current.version}` : " (content changed)";
+          tag = c.yellow(`out of date${bump}`);
+        }
+        console.log(`    ${ext.key}@${ext.version}  ${tag}`);
+      }
+      if (drift > 0) {
+        console.log(c.yellow(`  ${drift} extension(s) out of date — run: wolfpack sync ${s.name}`));
+      }
     }
     if (s.error) console.log(`  Error:    ${c.red(s.error)}`);
   } catch (err) {

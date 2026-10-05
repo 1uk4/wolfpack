@@ -6,6 +6,8 @@
 import { hostAdd } from "../commands/host-add.js";
 import { hostList } from "../commands/host-list.js";
 import { hostStatus } from "../commands/host-status.js";
+import { hostSync } from "../commands/host-sync.js";
+import { hostRedeploy } from "../commands/host-redeploy.js";
 import { wolfAdd } from "../commands/wolf-add.js";
 import { wolfList } from "../commands/wolf-list.js";
 import { wolfStatus } from "../commands/wolf-status.js";
@@ -13,6 +15,7 @@ import { wolfLogs } from "../commands/wolf-logs.js";
 import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
+import { wolfSync } from "../commands/wolf-sync.js";
 
 const c = {
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
@@ -26,6 +29,8 @@ ${c.bold("HOST")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
+  host sync [name]                Wire Syncthing den mirrors (VPS → ~/wolves)
+  host redeploy [name]            Re-provision + redeploy agent on an existing host
 
 ${c.bold("WOLVES")}
   add wolf <name> [--host <h>]    Create a PI wolf (local or remote, interactive)
@@ -35,6 +40,8 @@ ${c.bold("WOLVES")}
   logs <wolf> [-f] [--lines N]    Tail wolf logs
   restart <wolf> [--host <h>]     Restart wolf
   config <wolf> [--set key=val]   View/update wolf config (interactive if no --set)
+  sync <wolf> [--host <h>]        Rebuild + push identity bundle (propagate exts)
+  sync --all                      Sync every wolf on every host
 
 ${c.bold("ADD WOLF FLAGS")}
   --profile <p>       worker (local) | assistant (24/7 VPS, +telegram)
@@ -61,6 +68,8 @@ function parseArgs(argv: string[]) {
     const arg = argv[i]!;
     if (arg === "--json") {
       flags.json = true;
+    } else if (arg === "--all") {
+      flags.all = true;
     } else if (arg === "-f" || arg === "--follow") {
       flags.follow = true;
     } else if (arg === "--host" && argv[i + 1]) {
@@ -120,8 +129,14 @@ async function main(): Promise<void> {
           case "status":
             await hostStatus(positional[2]);
             break;
+          case "sync":
+            await hostSync(positional[2]);
+            break;
+          case "redeploy":
+            await hostRedeploy(positional[2]);
+            break;
           default:
-            console.error("Usage: wolfpack host <add|list|status>");
+            console.error("Usage: wolfpack host <add|list|status|sync|redeploy>");
             process.exit(1);
         }
         break;
@@ -191,6 +206,13 @@ async function main(): Promise<void> {
         }
         await wolfRestart(positional[1], {
           host: flags.host as string | undefined,
+        });
+        break;
+
+      case "sync":
+        await wolfSync(positional[1], {
+          host: flags.host as string | undefined,
+          all: flags.all as boolean | undefined,
         });
         break;
 

@@ -213,12 +213,20 @@ export function createOrchestrator(
     }
   }
 
-  async function runConsolidation(): Promise<void> {
+  async function runConsolidation(forceAll: boolean = false): Promise<void> {
     const folded = foldLedger(ledgerEvents);
-    const { promote } = selectPromotionOverflow(
-      folded.activeObservations,
-      cfg.poolTargetTokens
-    );
+
+    let promote: typeof folded.activeObservations;
+    if (forceAll) {
+      // Force mode: consolidate everything
+      promote = [...folded.activeObservations];
+    } else {
+      // Normal mode: only promote overflow above target
+      ({ promote } = selectPromotionOverflow(
+        folded.activeObservations,
+        cfg.poolTargetTokens
+      ));
+    }
 
     if (promote.length === 0) return;
 
@@ -300,7 +308,8 @@ export function createOrchestrator(
   }
 
   async function consolidateNow(): Promise<void> {
-    await runConsolidation();
+    // Force mode: promote ALL observations, not just overflow
+    await runConsolidation(true);
   }
 
   async function promoteToWolfMemory(denConfig: DenConfig): Promise<void> {

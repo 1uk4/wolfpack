@@ -2,7 +2,7 @@
  * Prompts for the wolf consolidator's LLM calls.
  * Each prompt maps to a specific pipeline step with a Zod schema output.
  */
-import type { SessionTopic } from "./session-reader.js";
+import type { TopicFile } from "./session/memory.js";
 import type { DenTopic } from "./den.js";
 
 /**
@@ -35,7 +35,7 @@ Respond with valid JSON matching the schema.`;
  * Build the consolidation prompt with session topics and den topics.
  */
 export function buildConsolidatePrompt(
-  sessionTopics: SessionTopic[],
+  sessionTopics: TopicFile[],
   denTopics: DenTopic[]
 ): string {
   const sessionSection = sessionTopics

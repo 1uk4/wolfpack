@@ -1,5 +1,5 @@
 {
-  "name": "@wolfpack/consolidator",
+  "name": "@wolfpack/memory",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",

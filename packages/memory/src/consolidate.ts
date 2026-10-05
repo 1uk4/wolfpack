@@ -19,7 +19,7 @@ import type { Engine, ClaimWorthiness } from "@wolfpack/engine";
 import { ClaimWorthinessSchema, renderClaim, atomicWrite } from "@wolfpack/engine";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { readSessionMemory, type SessionMemory } from "./session-reader.js";
+import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
   readDenTopics,
   readDenJourney,
@@ -98,8 +98,10 @@ export async function consolidateSession(
   ensureDenDirs(den.denRoot);
 
   // Step 1: Read session memory
-  const session = readSessionMemory(memoryRoot, sessionId);
-  if (session.topics.length === 0) {
+  const sessionDir = join(memoryRoot, sessionId);
+  const sessionTopics = readTopics(sessionDir);
+  const sessionJourney = readJourney(sessionDir);
+  if (sessionTopics.length === 0) {
     markSessionConsolidated(den.denRoot, sessionId, 0);
     return {
       sessionId,
@@ -120,7 +122,7 @@ export async function consolidateSession(
     ConsolidationResultSchema,
     {
       system: CONSOLIDATE_SYSTEM,
-      prompt: buildConsolidatePrompt(session.topics, denTopics),
+      prompt: buildConsolidatePrompt(sessionTopics, denTopics),
     }
   );
 
@@ -185,12 +187,12 @@ export async function consolidateSession(
   }
 
   // Step 6: Update journey
-  if (session.journey) {
+  if (sessionJourney) {
     const currentJourney = readDenJourney(den.denRoot);
     const updatedJourney = await updateJourney(
       engine,
       currentJourney,
-      session.journey
+      sessionJourney
     );
     writeDenJourney(den.denRoot, updatedJourney);
   }
@@ -199,11 +201,11 @@ export async function consolidateSession(
   renderDenIndex(den.denRoot);
 
   // Step 8: Mark consolidated
-  markSessionConsolidated(den.denRoot, sessionId, session.topics.length);
+  markSessionConsolidated(den.denRoot, sessionId, sessionTopics.length);
 
   return {
     sessionId,
-    topicsProcessed: session.topics.length,
+    topicsProcessed: sessionTopics.length,
     topicsMerged: merged,
     topicsCreated: created,
     topicsSkipped: skipped,

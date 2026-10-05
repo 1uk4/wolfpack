@@ -16,7 +16,7 @@
  */
 import { createEngine } from "@wolfpack/engine";
 import { consolidateSession } from "./consolidate.js";
-import { listSessions } from "./session-reader.js";
+import { listSessionIds } from "./session/memory.js";
 import { getConsolidatedSessions } from "./den.js";
 import { resolve } from "node:path";
 
@@ -73,14 +73,14 @@ async function main(): Promise<void> {
   if (flags.session) {
     sessionIds = [flags.session];
   } else if (flags.all) {
-    const allSessions = listSessions(resolvedMemory);
+    const allSessions = listSessionIds(resolvedMemory);
     const done = new Set(
       getConsolidatedSessions(resolvedDen).map((s) => s.sessionId)
     );
     sessionIds = allSessions.filter((s) => !done.has(s));
   } else {
     // Default: show available sessions
-    const allSessions = listSessions(resolvedMemory);
+    const allSessions = listSessionIds(resolvedMemory);
     const done = new Set(
       getConsolidatedSessions(resolvedDen).map((s) => s.sessionId)
     );

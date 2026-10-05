@@ -1,0 +1,25 @@
+{
+  "name": "@wolfpack/agent",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "wolfpack-agent": "dist/bin/wolfpack-agent.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/bin/wolfpack-agent.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "yaml": "^2.6.0",
+    "nanoid": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

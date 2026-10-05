@@ -1,17 +1,19 @@
 {
-  "name": "@wolfpack/pi-adapter",
+  "name": "@wolfpack/cli",
   "version": "0.1.0",
   "type": "module",
-  "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "wolfpack": "dist/bin/wolfpack.js"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@wolfpack/engine": "*",
-    "@wolfpack/memory": "*"
+    "yaml": "^2.6.0",
+    "nanoid": "^5.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

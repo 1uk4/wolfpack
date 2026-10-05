@@ -12,6 +12,13 @@ knowledge/
 # JS/TS
 node_modules/
 dist/
+*.tsbuildinfo
+
+# Legacy build artifacts
+legacy/**/*.js
+legacy/**/*.js.map
+legacy/**/*.d.ts
+legacy/**/*.d.ts.map
 
 # Syncthing metadata
 **/.stfolder

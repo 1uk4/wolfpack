@@ -1,154 +1,141 @@
 /**
- * wolfpack host add <name> --ip <ip>
+ * wolfpack host add <name> [--ip <ip>]
  *
- * Bootstraps a VPS over SSH:
- *   1. Install Node.js
- *   2. Create wolfpack agent user + data dir
- *   3. Deploy agent package
- *   4. Generate API key
- *   5. Start agent via systemd
- *   6. Save host config locally
+ * Interactive setup for a VPS host:
+ *   1. Prompts for IP if not provided
+ *   2. Auto-detects SSH keys and lets user select
+ *   3. Tests SSH connectivity
+ *   4. Deploys wolfpack-agent
+ *   5. Saves host config locally
  */
 
-import { randomBytes } from "node:crypto";
-import { sshExec } from "../ssh.js";
+import path from "node:path";
+import os from "node:os";
 import { loadConfig, saveConfig, type HostEntry } from "../config.js";
 import { c } from "../render.js";
+import {
+  detectSshKeys,
+  testSshConnection,
+  type SshConfig,
+} from "../ssh-helper.js";
+import { prompt, select, confirm } from "../prompts.js";
+import { deployAgent } from "../deployer.js";
 
-export async function hostAdd(
-  name: string,
-  opts: { ip: string; port?: number; user?: string },
-): Promise<void> {
+interface HostAddOpts {
+  ip?: string;
+  port?: number;
+  user?: string;
+  key?: string;
+  sshPort?: number;
+}
+
+export async function hostAdd(name: string, opts: HostAddOpts): Promise<void> {
   const config = loadConfig();
-  const port = opts.port ?? 3141;
-  const sshUser = opts.user ?? "root";
 
   if (config.hosts[name]) {
-    console.error(c.red(`Host '${name}' already registered. Remove it first.`));
+    console.error(c.red(`Host '${name}' already registered.`));
+    console.error(c.dim(`Remove it first or choose a different name.`));
     process.exit(1);
   }
 
-  console.log(c.bold(`Setting up host: ${name} (${opts.ip})`));
-  console.log();
+  console.log(c.bold(`\n🐺 Setting up host: ${name}\n`));
 
-  // 1. Test SSH connectivity
-  console.log("  Testing SSH connectivity...");
-  const test = await sshExec(opts.ip, "echo ok", sshUser);
-  if (test.code !== 0) {
-    console.error(c.red(`  SSH failed: ${test.stderr.trim() || "unreachable"}`));
+  // 1. Get IP address
+  const ip = opts.ip || (await prompt("VPS IP address or hostname"));
+  if (!ip) {
+    console.error(c.red("IP address is required"));
     process.exit(1);
   }
-  console.log(c.green("  ✓ SSH connected"));
 
-  // 2. Install Node.js if not present
-  console.log("  Checking Node.js...");
-  const nodeCheck = await sshExec(opts.ip, "node --version 2>/dev/null || echo MISSING", sshUser);
-  if (nodeCheck.stdout.includes("MISSING")) {
-    console.log("  Installing Node.js...");
-    const install = await sshExec(
-      opts.ip,
-      "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs",
-      sshUser,
-      120_000,
-    );
-    if (install.code !== 0) {
-      console.error(c.red(`  Node.js install failed: ${install.stderr.trim()}`));
-      process.exit(1);
-    }
-    console.log(c.green("  ✓ Node.js installed"));
+  // 2. Auto-detect SSH keys
+  const keys = detectSshKeys();
+  if (keys.length === 0) {
+    console.error(c.red("No SSH keys found in ~/.ssh/"));
+    console.error(c.dim("Generate one with: ssh-keygen -t ed25519 -f ~/.ssh/wolfpack"));
+    process.exit(1);
+  }
+
+  console.log(c.dim(`\nFound ${keys.length} SSH key(s)`));
+
+  // 3. Select SSH key
+  let sshKey: string;
+  if (opts.key) {
+    sshKey = opts.key;
+  } else if (keys.length === 1) {
+    sshKey = keys[0]!;
+    console.log(c.dim(`Using: ${sshKey}`));
   } else {
-    console.log(c.green(`  ✓ Node.js ${nodeCheck.stdout.trim()}`));
+    sshKey = await select(
+      "Select SSH key:",
+      keys.map((k) => ({
+        label: k.replace(os.homedir(), "~"),
+        value: k,
+      })),
+    );
   }
 
-  // 3. Create agent user and data dir
-  console.log("  Creating wolfpack agent...");
-  const apiKey = randomBytes(24).toString("base64url");
+  // 4. Get SSH user
+  const sshUser = opts.user || (await prompt("SSH user", "wolf"));
+  const sshPort = opts.sshPort || 22;
 
-  const setupScript = `
-set -e
-# Create agent data dir
-mkdir -p /opt/wolfpack
-
-# Create agent .env
-cat > /opt/wolfpack/.env << 'ENVEOF'
-WOLFPACK_API_KEY=${apiKey}
-WOLFPACK_AGENT_PORT=${port}
-WOLFPACK_AGENT_DATA=/opt/wolfpack
-ENVEOF
-chmod 600 /opt/wolfpack/.env
-
-echo "SETUP_OK"
-`;
-
-  const setup = await sshExec(opts.ip, setupScript, sshUser, 30_000);
-  if (!setup.stdout.includes("SETUP_OK")) {
-    console.error(c.red(`  Setup failed: ${setup.stderr.trim()}`));
-    process.exit(1);
-  }
-  console.log(c.green("  ✓ Agent directory created"));
-
-  // 4. Deploy agent package
-  // TODO: For now, we'll need to rsync the built agent package
-  // In the future, this will install from npm
-  console.log(c.yellow("  ⚠ Agent package deployment: manual step required"));
-  console.log(c.dim("    rsync the built @wolfpack/agent to the host, then:"));
-  console.log(c.dim(`    ssh ${sshUser}@${opts.ip} 'cd /opt/wolfpack/agent && npm install'`));
-
-  // 5. Install systemd service
-  console.log("  Installing systemd service...");
-  const serviceUnit = `[Unit]
-Description=Wolfpack Agent
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/wolfpack/agent
-EnvironmentFile=/opt/wolfpack/.env
-ExecStart=/usr/bin/node /opt/wolfpack/agent/dist/bin/wolfpack-agent.js
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target`;
-
-  const serviceScript = `
-cat > /etc/systemd/system/wolfpack-agent.service << 'SVCEOF'
-${serviceUnit}
-SVCEOF
-systemctl daemon-reload
-systemctl enable wolfpack-agent
-echo "SERVICE_OK"
-`;
-
-  const svcResult = await sshExec(opts.ip, serviceScript, sshUser);
-  if (!svcResult.stdout.includes("SERVICE_OK")) {
-    console.error(c.red(`  Service install failed: ${svcResult.stderr.trim()}`));
-    process.exit(1);
-  }
-  console.log(c.green("  ✓ Systemd service installed"));
-
-  // 6. Save host config locally
-  const hostEntry: HostEntry = {
-    address: opts.ip,
-    port,
-    apiKey,
+  // 5. Test SSH connectivity
+  const sshConfig: SshConfig = {
+    user: sshUser,
+    key: sshKey,
+    port: sshPort,
   };
-  config.hosts[name] = hostEntry;
+
+  console.log(c.dim(`\nTesting SSH to ${sshUser}@${ip}...`));
+  const test = await testSshConnection(ip, sshConfig);
+  if (!test.success) {
+    console.error(c.red(`\n✗ SSH connection failed:`));
+    console.error(c.dim(test.error || "Unknown error"));
+    console.error(c.dim(`\nTry: ssh -i ${sshKey} ${sshUser}@${ip}`));
+    process.exit(1);
+  }
+  console.log(c.green(`✓ SSH connection successful`));
+
+  // 6. Build host entry (apiKey populated during deployment)
+  const host: HostEntry = {
+    address: ip,
+    port: opts.port ?? 3141,
+    apiKey: "",
+    ssh: sshConfig,
+  };
+
+  // 7. Confirm deployment
+  console.log();
+  const shouldDeploy = await confirm(
+    `Deploy wolfpack-agent to ${sshUser}@${ip}?`,
+    true,
+  );
+  if (!shouldDeploy) {
+    console.log(c.yellow("Deployment skipped. Host not saved."));
+    process.exit(0);
+  }
+
+  // 8. Deploy agent
+  try {
+    await deployAgent(name, host);
+  } catch (err) {
+    console.error(c.red(`\n✗ Deployment failed:`));
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  // 9. Save config
+  config.hosts[name] = host;
   if (!config.defaultHost) {
     config.defaultHost = name;
+    console.log(c.dim(`\nSet '${name}' as default host`));
   }
   saveConfig(config);
 
+  console.log(c.green(`\n✓ Host '${name}' registered!`));
+  console.log(c.dim(`  Config: ~/.wolfpack/config.yaml`));
   console.log();
-  console.log(c.green(`✓ Host '${name}' registered`));
-  console.log(c.dim(`  Address: ${opts.ip}:${port}`));
-  console.log(c.dim(`  Config:  ~/.wolfpack/config.yaml`));
-  console.log();
-  console.log(
-    c.yellow(
-      "  Next: deploy the agent package, then run `wolfpack host status " +
-        name +
-        "` to verify.",
-    ),
-  );
+  console.log(c.bold("Next steps:"));
+  console.log(`  ${c.cyan("wolfpack add wolf <name>")}        Create a wolf on ${name}`);
+  console.log(`  ${c.cyan("wolfpack host status")}            Check host health`);
+  console.log(`  ${c.cyan("wolfpack list")}                   List all wolves`);
 }

@@ -1,0 +1,28 @@
+{
+  "defaultProjectTrust": "always",
+  "defaultProvider": "anthropic",
+  "defaultModel": "{{ pi_model | default('claude-sonnet-4-5') }}",
+  "quietStartup": false,
+  "skills": [
+    "/home/{{ wolf_user }}/workspace/shared/skills"
+  ],
+  "packages": [
+    "npm:@llblab/pi-telegram"
+  ],
+  "extensions": [
+    "{{ wolf_config_dir }}/extensions/librarian-kb",
+    "{{ wolf_config_dir }}/extensions/observational-memory",
+    "{{ wolf_config_dir }}/extensions/interactive-subagents"
+  ],
+  "observationalMemory": {
+    "enabled": true,
+    "observer": {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5"
+    },
+    "consolidator": {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5"
+    }
+  }
+}

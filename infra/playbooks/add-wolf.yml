@@ -1,0 +1,143 @@
+---
+# Add a co-located wolf to an existing host.
+#
+# Run this when adding a new wolf to a host that is already bootstrapped
+# (Tailscale, ssh, wolf user all exist). This playbook:
+#
+#   1. Creates the wolf's directory structure (den + runtime config dir)
+#   2. Installs the runtime (pi or claude)
+#   3. Creates and starts the systemd service
+#   4. Creates knowledge/base and librarian sync dirs if needed
+#
+# Usage:
+#   ansible-playbook playbooks/add-wolf.yml --limit <wolf-name>
+#
+# The wolf's den content is synced from the Mac via Syncthing after this runs.
+# Bootstrap the Syncthing folders per docs/syncthing-librarian.md.
+
+- name: Add co-located wolf
+  hosts: wolves
+  become: true
+
+  pre_tasks:
+    - name: Validate co-located layout (wolf_den and wolf_config_dir required)
+      fail:
+        msg: "add-wolf.yml requires wolf_den and wolf_config_dir to be set in inventory."
+      when: wolf_den is not defined or wolf_config_dir is not defined
+
+    - name: Create wolf den directory structure
+      file:
+        path: "{{ wolf_den }}/{{ item }}"
+        state: directory
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0755"
+      loop:
+        - ""
+        - memory
+        - memory/daily
+        - tasks
+        - skills
+        - reports
+
+    - name: Create shared symlink (wolves/ layout points at the shared pack library)
+      file:
+        src: "/home/{{ wolf_user }}/workspace/shared"
+        dest: "{{ wolf_den | dirname }}/shared"
+        state: link
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        force: false
+
+    - name: Create wolf-specific extra dirs (knowledge/base, librarian, etc.)
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ wolf_user }}"
+        group: "{{ wolf_user }}"
+        mode: "0755"
+      loop: "{{ wolf_extra_dirs | default([]) }}"
+
+    - name: Create /etc/wolfpack secrets dir
+      file:
+        path: /etc/wolfpack
+        state: directory
+        mode: "0700"
+
+    - name: Deploy per-wolf secrets env file (root-owned 0600)
+      copy:
+        content: |
+          WOLF_NAME={{ wolf_name }}
+        dest: /etc/wolfpack/{{ wolf_name }}.env
+        owner: root
+        mode: "0600"
+        force: false
+
+  roles:
+    - role: pi
+      when: wolf_runtime | default('claude') == 'pi'
+      tags: [runtime]
+    - role: claude-code
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime]
+    - role: telegram
+      when: wolf_runtime | default('claude') == 'claude'
+      tags: [runtime]
+    - role: wolf-service
+      tags: [service]
+
+  tasks:
+    - name: Install pi extensions for this wolf
+      when:
+        - wolf_runtime | default('claude') == 'pi'
+        - wolf_pi_extensions is defined
+      block:
+        - name: Create extensions directory
+          file:
+            path: "{{ wolf_config_dir }}/extensions"
+            state: directory
+            owner: "{{ wolf_user }}"
+            group: "{{ wolf_user }}"
+
+        - name: Copy extension source to wolf
+          synchronize:
+            src: "{{ lookup('env', 'HOME') }}/.pi/agent/extensions/{{ item }}/"
+            dest: "{{ wolf_config_dir }}/extensions/{{ item }}/"
+            rsync_opts:
+              - "--exclude=node_modules"
+              - "--exclude=.git"
+          loop: "{{ wolf_pi_extensions }}"
+          become: false
+
+        - name: Fix extension ownership (rsync runs as root)
+          file:
+            path: "{{ wolf_config_dir }}/extensions"
+            owner: "{{ wolf_user }}"
+            group: "{{ wolf_user }}"
+            recurse: true
+
+        - name: npm install for each extension
+          command: npm install
+          args:
+            chdir: "{{ wolf_config_dir }}/extensions/{{ item }}"
+          become_user: "{{ wolf_user }}"
+          loop: "{{ wolf_pi_extensions }}"
+          environment:
+            PATH: "/home/{{ wolf_user }}/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+            HOME: "/home/{{ wolf_user }}"
+          register: npm_result
+          changed_when: "'added' in npm_result.stdout"
+          failed_when: npm_result.rc != 0
+
+  post_tasks:
+    - name: Summary
+      debug:
+        msg:
+          - "🐺 {{ wolf_name }} added to {{ inventory_hostname }}"
+          - "    den:     {{ wolf_den }}"
+          - "    runtime: {{ wolf_runtime | default('claude') }}"
+          - ""
+          - "    Next steps:"
+          - "    1. Set up Syncthing — see docs/syncthing-librarian.md"
+          - "    2. Den files will sync from the Mac once Syncthing is configured"
+          - "    3. DM the bot to verify it's alive"

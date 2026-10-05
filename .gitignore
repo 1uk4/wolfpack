@@ -1,24 +1,25 @@
+# Runtime secrets
 keys/
 *.env
 .vault_pass
 
-# Wolf dens are living workspaces synced via Syncthing — not source.
+# Wolf dens — living workspaces synced via Syncthing, not source
 dens/
 
-# Live agent knowledge bases — synced via Syncthing, not framework source.
+# Live knowledge bases — synced, not committed
 knowledge/
 
-# Library — the pack's canonical shared knowledge store + proposals inbox.
-# Living memory, curated by the Librarian; synced, not committed.
-# See docs/librarian-spec.md.
-library/
-library-proposals/
-
-# JS/TS runtime deps (root workspace + packages)
+# JS/TS
 node_modules/
+dist/
 
-# Syncthing metadata anywhere in the tree (including shared/).
+# Syncthing metadata
 **/.stfolder
 **/.stversions/
 **/.stignore
+
+# OS
 .DS_Store
+
+# OM session memory
+.memory/

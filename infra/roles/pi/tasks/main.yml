@@ -1,0 +1,108 @@
+---
+# pi runtime — the pi coding agent + @llblab/pi-telegram bridge.
+#
+# Analogue of the claude-code + telegram roles, selected when
+# `wolf_runtime == 'pi'`. Mirrors the live forge deploy:
+#   PI_CODING_AGENT_DIR holds per-wolf config (settings.json, telegram.json,
+#   pi.env, auth.json); a launcher script starts pi detached in tmux and
+#   sends /telegram-connect once the TUI is up.
+#
+# Per-wolf vars (from inventory or scripts/add-wolf.sh):
+#   pi_config_dir   : PI_CODING_AGENT_DIR (defaults to the co-located layout)
+#   wolf_den        : the vault / cwd
+#   telegram_bot_token : this wolf's BotFather token
+#   anthropic_api_key  : provider key (env ANTHROPIC_API_KEY on the Mac)
+
+- name: Set pi facts
+  # `wolf_config_dir` is the generic per-wolf config-dir/own-server signal the
+  # systemd unit keys on; for a pi wolf it IS the PI_CODING_AGENT_DIR.
+  set_fact:
+    pi_config_dir: "{{ wolf_config_dir | default(pi_config_dir) | default('/home/' ~ wolf_user ~ '/wolves/' ~ wolf_name ~ '/pi') }}"
+    pi_den: "{{ wolf_den | default('/home/' ~ wolf_user ~ '/wolves/' ~ wolf_name ~ '/den') }}"
+
+- name: Install Node.js 22 (pi needs node)
+  shell: |
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+  args:
+    creates: /usr/bin/node
+
+- name: Install the pi coding agent globally
+  npm:
+    name: "@earendil-works/pi-coding-agent"
+    global: true
+    state: present
+
+- name: Create PI_CODING_AGENT_DIR
+  file:
+    path: "{{ pi_config_dir }}"
+    state: directory
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0700"
+
+- name: Deploy pi settings.json
+  template:
+    src: "{{ pi_settings_template | default('settings.json.j2') }}"
+    dest: "{{ pi_config_dir }}/settings.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+  notify: restart wolf
+
+- name: Deploy pi telegram.json (bridge profile)
+  template:
+    src: telegram.json.j2
+    dest: "{{ pi_config_dir }}/telegram.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+  notify: restart wolf
+
+- name: Deploy pi.env (provider key + bot token, sourced by the launcher)
+  template:
+    src: pi.env.j2
+    dest: "{{ pi_config_dir }}/pi.env"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+  notify: restart wolf
+
+- name: Seed empty auth.json (API-key auth path)
+  copy:
+    content: "{}\n"
+    dest: "{{ pi_config_dir }}/auth.json"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0600"
+    force: false
+
+- name: Deploy the pi launcher script
+  template:
+    src: pi-wolf-run.sh.j2
+    dest: "/home/{{ wolf_user }}/.local/bin/pi-wolf-run-{{ wolf_name }}.sh"
+    owner: "{{ wolf_user }}"
+    group: "{{ wolf_user }}"
+    mode: "0755"
+  notify: restart wolf
+
+- name: Install the pi-telegram package into the config dir
+  # pi auto-installs packages listed in settings.json on first launch, but do
+  # it explicitly so the first Telegram connect doesn't race the download.
+  command: pi packages add npm:@llblab/pi-telegram
+  become_user: "{{ wolf_user }}"
+  environment:
+    PI_CODING_AGENT_DIR: "{{ pi_config_dir }}"
+    PATH: "/home/{{ wolf_user }}/.bun/bin:/home/{{ wolf_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+  register: pi_pkg
+  changed_when: "'already' not in pi_pkg.stdout | lower"
+  failed_when: false
+
+- name: pi runtime status
+  debug:
+    msg:
+      - "🤖 pi runtime provisioned for {{ wolf_name }}"
+      - "    PI_CODING_AGENT_DIR: {{ pi_config_dir }}"
+      - "    den (cwd):           {{ pi_den }}"
+      - "    bot token:           ...{{ telegram_bot_token[-6:] }} (last 6)"
+      - "    launcher:            ~/.local/bin/pi-wolf-run-{{ wolf_name }}.sh"

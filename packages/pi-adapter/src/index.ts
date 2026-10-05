@@ -60,8 +60,8 @@ interface WolfConfig {
 }
 
 const DEFAULT_WOLF_CONFIG: Partial<WolfConfig> = {
-  model: "claude-sonnet-4-20250514",
-  fastModel: "claude-haiku-4-5-20250507",
+  model: "claude-sonnet-4-6",
+  fastModel: "claude-haiku-4-5-20251001",
   chunkTokens: 5000,
   consolidateAtPoolTokens: 20000,
   poolTargetTokens: 10000,

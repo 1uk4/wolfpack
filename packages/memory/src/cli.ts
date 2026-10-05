@@ -9,8 +9,8 @@
  *
  * Environment:
  *   ANTHROPIC_API_KEY     — required
- *   WOLFPACK_MODEL        — default model (default: claude-sonnet-4-20250514)
- *   WOLFPACK_FAST_MODEL   — model for cheap steps (default: claude-haiku-4-5-20250507)
+ *   WOLFPACK_MODEL        — default model (default: claude-sonnet-4-6)
+ *   WOLFPACK_FAST_MODEL   — model for cheap steps (default: claude-haiku-4-5-20251001)
  *   WOLFPACK_LIBRARIAN    — path to librarian inbox (enables auto-claims)
  *   WOLFPACK_DOMAIN       — default domain for claims (default: wolfpack)
  */
@@ -49,8 +49,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const defaultModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-20250514";
-  const fastModel = process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20250507";
+  const defaultModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-6";
+  const fastModel = process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20251001";
 
   const engine = createEngine({
     provider: "anthropic",

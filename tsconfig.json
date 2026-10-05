@@ -15,6 +15,6 @@
   },
   "references": [
     { "path": "packages/engine" },
-    { "path": "packages/librarian" }
+    { "path": "packages/consolidator" }
   ]
 }

@@ -1,40 +1,36 @@
 /**
  * wolfpack status <wolf> [--host <host>]
+ *
+ * Works for local and remote wolves via WolfBackend.
  */
 
-import { AgentClient } from "../agent-client.js";
-import { loadConfig, getHost } from "../config.js";
+import { resolveBackend } from "../backend/index.js";
 import { c } from "../render.js";
 
 export async function wolfStatus(
   nameOrId: string,
   opts: { host?: string },
 ): Promise<void> {
-  const config = loadConfig();
-  const host = getHost(config, opts.host);
-
-  if (!host) {
-    console.error(
-      c.red("No host specified and no default host set. Use --host <name>."),
-    );
-    process.exit(1);
-  }
-
-  const client = new AgentClient(host);
-
   try {
-    const status = (await client.wolfStatus(nameOrId)) as Record<string, unknown>;
-    const active = status.active as boolean;
-    const marker = active ? c.green("🟢") : c.red("🔴");
+    const backend = resolveBackend(opts.host);
+    const s = await backend.status(nameOrId);
+    const marker = s.active ? c.green("🟢") : c.red("🔴");
 
-    console.log(`${marker} ${c.bold(status.name as string)} (${status.id})`);
-    console.log(`  Runtime:  ${status.runtime}`);
-    console.log(`  Service:  ${status.serviceState}`);
-    console.log(`  Tmux:     ${status.tmux ? c.green("✓") : c.red("✗")}`);
-    if (status.since) console.log(`  Since:    ${status.since}`);
-    if (status.error) console.log(`  Error:    ${c.red(status.error as string)}`);
+    console.log(`${marker} ${c.bold(s.name)} (${s.id})  ${c.dim(`@${s.host}`)}`);
+    console.log(`  Runtime:  ${s.runtime}`);
+    console.log(`  State:    ${s.serviceState}`);
+    if (s.since) console.log(`  Since:    ${s.since}`);
+
+    if (s.memory) {
+      const m = s.memory;
+      const age = Math.round((Date.now() - m.updatedAt) / 1000);
+      console.log(
+        `  Memory:   ${m.enabled ? c.green("on") : c.dim("off")} · ${m.observations} obs · ${m.poolTokens}/${m.consolidateAt} tok · $${m.totalCostUsd.toFixed(3)} ${c.dim(`(${age}s ago)`)}`,
+      );
+    }
+    if (s.error) console.log(`  Error:    ${c.red(s.error)}`);
   } catch (err) {
-    console.error(c.red(`Failed: ${err}`));
+    console.error(c.red(`Failed: ${err instanceof Error ? err.message : err}`));
     process.exit(1);
   }
 }

@@ -1,43 +1,37 @@
 /**
  * wolfpack logs <wolf> [--follow] [--lines N] [--host <host>]
+ *
+ * Works for local (tail log files) and remote (agent) wolves via WolfBackend.
  */
 
-import { AgentClient } from "../agent-client.js";
-import { loadConfig, getHost } from "../config.js";
+import { resolveBackend } from "../backend/index.js";
 import { c } from "../render.js";
 
 export async function wolfLogs(
   nameOrId: string,
   opts: { host?: string; follow?: boolean; lines?: number },
 ): Promise<void> {
-  const config = loadConfig();
-  const host = getHost(config, opts.host);
-
-  if (!host) {
-    console.error(c.red("No host specified and no default host set."));
-    process.exit(1);
-  }
-
-  const client = new AgentClient(host);
   const lines = opts.lines ?? 100;
 
   try {
-    if (opts.follow) {
+    const backend = resolveBackend(opts.host);
+
+    if (opts.follow && backend.follow) {
       console.log(c.dim(`Streaming logs for ${nameOrId}... (Ctrl-C to stop)`));
-      await client.streamLogs(nameOrId, (line) => {
-        console.log(line);
-      }, lines);
-    } else {
-      const result = (await client.logs(nameOrId, lines)) as {
-        wolf: string;
-        lines: string[];
-      };
-      for (const line of result.lines) {
-        if (line) console.log(line);
-      }
+      await backend.follow(nameOrId, (line) => console.log(line), lines);
+      return;
+    }
+
+    if (opts.follow && !backend.follow) {
+      console.log(c.dim(`(follow not supported for ${backend.host}; showing last ${lines})`));
+    }
+
+    const out = await backend.logs(nameOrId, { lines });
+    for (const line of out) {
+      if (line) console.log(line);
     }
   } catch (err) {
-    console.error(c.red(`Failed: ${err}`));
+    console.error(c.red(`Failed: ${err instanceof Error ? err.message : err}`));
     process.exit(1);
   }
 }

@@ -1,18 +1,12 @@
 /**
- * wolfpack list — show all wolves (local + remote)
+ * wolfpack list — show all wolves across every backend (local + each host).
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { parse as yamlParse } from "yaml";
-import { AgentClient } from "../agent-client.js";
-import { loadConfig } from "../config.js";
+import { allBackends } from "../backend/index.js";
 import { c, table } from "../render.js";
 
 export async function wolfList(opts: { json?: boolean }): Promise<void> {
-  const config = loadConfig();
-
-  type WolfRow = {
+  type Row = {
     name: string;
     id: string;
     host: string;
@@ -20,64 +14,35 @@ export async function wolfList(opts: { json?: boolean }): Promise<void> {
     status: string;
   };
 
-  const rows: WolfRow[] = [];
+  const rows: Row[] = [];
 
-  // Local wolves
-  if (fs.existsSync(config.wolfsDir)) {
-    const dirs = fs.readdirSync(config.wolfsDir, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue;
-      const yamlPath = path.join(config.wolfsDir, dir.name, "wolf.yaml");
-      if (!fs.existsSync(yamlPath)) continue;
-
+  await Promise.all(
+    allBackends().map(async (backend) => {
       try {
-        const raw = fs.readFileSync(yamlPath, "utf8");
-        const wolf = yamlParse(raw) as { id: string; name: string; runtime: string };
-        rows.push({
-          name: wolf.name,
-          id: wolf.id,
-          host: "local",
-          runtime: wolf.runtime,
-          status: c.dim("—"),
-        });
+        const wolves = await backend.list();
+        for (const w of wolves) {
+          rows.push({
+            name: w.name,
+            id: w.id,
+            host: w.host,
+            runtime: w.runtime,
+            status: w.status,
+          });
+        }
       } catch {
-        // Skip malformed configs
+        // Local backend never throws here; a remote host may be unreachable.
+        if (backend.host !== "local") {
+          rows.push({
+            name: c.dim("(unreachable)"),
+            id: "",
+            host: backend.host,
+            runtime: "",
+            status: c.red("agent down"),
+          });
+        }
       }
-    }
-  }
-
-  // Remote wolves from each host
-  for (const [hostName, hostEntry] of Object.entries(config.hosts)) {
-    try {
-      const client = new AgentClient(hostEntry);
-      const result = (await client.listWolves()) as {
-        wolves: Array<{
-          id: string;
-          name: string;
-          runtime: string;
-          active: boolean;
-          serviceState: string;
-        }>;
-      };
-      for (const w of result.wolves) {
-        rows.push({
-          name: w.name,
-          id: w.id,
-          host: hostName,
-          runtime: w.runtime,
-          status: w.active ? c.green("🟢 active") : c.red("🔴 " + w.serviceState),
-        });
-      }
-    } catch {
-      rows.push({
-        name: c.dim("(unreachable)"),
-        id: "",
-        host: hostName,
-        runtime: "",
-        status: c.red("🔴 agent down"),
-      });
-    }
-  }
+    }),
+  );
 
   if (opts.json) {
     process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
@@ -89,12 +54,19 @@ export async function wolfList(opts: { json?: boolean }): Promise<void> {
     return;
   }
 
+  const statusColor = (s: string) =>
+    s === "active" || s === "live"
+      ? c.green(`🟢 ${s}`)
+      : s === "—"
+        ? c.dim(s)
+        : c.red(`🔴 ${s}`);
+
   const tableRows = rows.map((r) => [
     c.bold(r.name),
     c.dim(r.id),
     r.host,
     r.runtime === "pi" ? c.cyan("pi") : r.runtime,
-    r.status,
+    statusColor(r.status),
   ]);
 
   console.log(table(["NAME", "ID", "HOST", "RUNTIME", "STATUS"], tableRows));

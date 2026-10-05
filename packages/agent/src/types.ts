@@ -23,11 +23,28 @@ export interface WolfConfig {
   domains: string[];
   telegram?: TelegramConfig;
   extensions?: string[];
+  /** Manifest of the last identity bundle applied (versions + hashes). */
+  bundle?: BundleManifest;
 }
 
 export type WolfProfile = "worker" | "assistant";
 
-export type WolfRuntime = "pi" | "claude" | "custom";
+/** Wolfpack is PI-only. Kept as a type for forward-compat, single value today. */
+export type WolfRuntime = "pi";
+
+/** Version + content identity of one installed extension (drift detection). */
+export interface ExtensionStamp {
+  key: string;
+  name: string;
+  version: string;
+  hash: string;
+}
+
+/** Manifest of the identity bundle a wolf was last provisioned/synced with. */
+export interface BundleManifest {
+  builtAt: string;
+  extensions: ExtensionStamp[];
+}
 
 export interface TelegramConfig {
   /** Env var name for the token (not the token itself) */
@@ -45,10 +62,10 @@ export interface WolfStatus {
   profile?: WolfProfile;
   /** systemd service state */
   serviceState: string;
-  /** tmux session alive */
-  tmux: boolean;
   /** Uptime string from systemd */
   since?: string;
+  /** Manifest of the installed identity bundle (versions + hashes). */
+  bundle?: BundleManifest;
   /** Error message if probe failed */
   error?: string;
 }
@@ -91,6 +108,18 @@ export interface CreateWolfRequest {
   telegram?: TelegramConfig;
   extensions?: string[];
   env?: Record<string, string>;
+  /** base64(gzip(tar)) of the PI identity `agent/` dir, built by the CLI. */
+  bundle?: string;
+  /** Manifest describing the bundle (versions + hashes). */
+  bundleManifest?: BundleManifest;
+}
+
+/** Request to replace a wolf's identity bundle in place (propagate updates). */
+export interface UpdateBundleRequest {
+  /** base64(gzip(tar)) of the new PI identity `agent/` dir. */
+  bundle: string;
+  /** Manifest describing the new bundle. */
+  manifest: BundleManifest;
 }
 
 /** Request to update wolf config */

@@ -20,16 +20,19 @@ async function main() {
   await manager.init();
 
   const app = express();
-  app.use(express.json());
-  app.use(authMiddleware);
+  // Identity bundles (base64 tar.gz) ride in the request body — raise the limit.
+  app.use(express.json({ limit: "64mb" }));
 
-  app.use("/wolves", wolvesRouter(manager));
-  app.use("/logs", logsRouter(manager));
-  app.use("/health", healthRouter(manager));
-
+  // Public, unauthenticated liveness check (used by the deploy verify).
   app.get("/ping", (_req, res) => {
     res.json({ status: "ok", version: "0.1.0" });
   });
+
+  // Everything below requires the API key.
+  app.use(authMiddleware);
+  app.use("/wolves", wolvesRouter(manager));
+  app.use("/logs", logsRouter(manager));
+  app.use("/health", healthRouter(manager));
 
   app.listen(PORT, () => {
     const count = manager.list().length;

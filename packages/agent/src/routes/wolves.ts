@@ -4,7 +4,11 @@
 
 import { Router, type Request, type Response } from "express";
 import type { WolfManager } from "../wolf-manager.js";
-import type { CreateWolfRequest, UpdateWolfConfigRequest } from "../types.js";
+import type {
+  CreateWolfRequest,
+  UpdateWolfConfigRequest,
+  UpdateBundleRequest,
+} from "../types.js";
 
 export function wolvesRouter(manager: WolfManager): Router {
   const router = Router();
@@ -48,7 +52,32 @@ export function wolvesRouter(manager: WolfManager): Router {
         return;
       }
       const status = await manager.status(config.id);
-      res.json(status);
+      // Include the full config so the CLI can rebuild/propagate bundles.
+      res.json({ ...status, config });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Replace identity bundle in place (propagate extension updates) + restart
+  router.put("/:nameOrId/bundle", async (req: Request, res: Response) => {
+    try {
+      const config = manager.resolve(req.params.nameOrId);
+      if (!config) {
+        res.status(404).json({ error: `Wolf not found: ${req.params.nameOrId}` });
+        return;
+      }
+      const body = req.body as UpdateBundleRequest;
+      if (!body.bundle || !body.manifest) {
+        res.status(400).json({ error: "bundle and manifest are required" });
+        return;
+      }
+      const updated = await manager.updateBundle(
+        config.id,
+        body.bundle,
+        body.manifest,
+      );
+      res.json({ wolf: updated });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
 import type { WolfManager } from "../wolf-manager.js";
+import { checkServices } from "../services.js";
 
 const exec = promisify(execFile);
 
@@ -16,9 +17,10 @@ export function healthRouter(manager: WolfManager): Router {
   router.get("/", async (_req: Request, res: Response) => {
     try {
       const wolves = manager.list();
-      const statuses = await Promise.all(
-        wolves.map((w) => manager.status(w.id)),
-      );
+      const [statuses, services] = await Promise.all([
+        Promise.all(wolves.map((w) => manager.status(w.id))),
+        checkServices(),
+      ]);
 
       // Basic host info
       const cpus = os.cpus();
@@ -70,6 +72,7 @@ export function healthRouter(manager: WolfManager): Router {
           percent: diskPercent,
         },
         wolves: statuses,
+        services,
       });
     } catch (err) {
       res.status(500).json({ error: String(err) });

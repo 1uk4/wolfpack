@@ -37,6 +37,19 @@ export async function hostStatus(name?: string): Promise<void> {
     console.log(`  Memory:   ${mem.percent}%`);
     console.log(`  Disk:     ${disk.percent}%`);
 
+    // Service health (Tailscale, Syncthing)
+    const services =
+      (health.services as Array<Record<string, unknown>>) ?? [];
+    if (services.length) {
+      console.log(`  Services:`);
+      for (const s of services) {
+        const marker = s.ok ? c.green("🟢") : c.red("🔴");
+        console.log(
+          `    ${marker} ${String(s.name).padEnd(10)} ${c.dim(String(s.state))} ${c.dim(String(s.detail))}`,
+        );
+      }
+    }
+
     const wolves = (health.wolves as Array<Record<string, unknown>>) ?? [];
     console.log(`  Wolves:   ${wolves.length}`);
 

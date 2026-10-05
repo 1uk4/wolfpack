@@ -116,13 +116,45 @@ export function createOrchestrator(
     return Math.ceil(text.length / 4);
   }
 
+  /**
+   * Make timestamps unique by appending fractional seconds.
+   * The observer often returns multiple observations with the same
+   * minute-level timestamp. The ledger deduplicates by timestamp,
+   * so we need each one to be unique.
+   */
+  function deduplicateTimestamps(
+    observations: Array<{ timestamp: string; content: string }>
+  ): Array<{ timestamp: string; content: string }> {
+    const used = new Set<string>();
+    // Also include already-known timestamps from the ledger
+    const folded = foldLedger(ledgerEvents);
+    for (const ts of folded.byTimestamp.keys()) used.add(ts);
+
+    return observations.map((o) => {
+      let ts = o.timestamp;
+      if (used.has(ts)) {
+        // Append seconds to make unique: "2026-10-05 04:34" → "2026-10-05T04:34:01"
+        let counter = 1;
+        let candidate = `${ts.replace(" ", "T")}:${String(counter).padStart(2, "0")}`;
+        while (used.has(candidate)) {
+          counter++;
+          candidate = `${ts.replace(" ", "T")}:${String(counter).padStart(2, "0")}`;
+        }
+        ts = candidate;
+      }
+      used.add(ts);
+      return { ...o, timestamp: ts };
+    });
+  }
+
   async function processChunks(chunks: ConversationChunk[]): Promise<void> {
     // Observe each chunk (could parallelize later)
     for (const chunk of chunks) {
       const result = await observe({ engine, chunkText: chunk.text });
 
       if (result.observations.length > 0) {
-        const observations: Observation[] = result.observations.map((o) => ({
+        const uniqueObs = deduplicateTimestamps(result.observations);
+        const observations: Observation[] = uniqueObs.map((o) => ({
           timestamp: o.timestamp,
           content: o.content,
           tokenCount: estimateTokens(o.content),

@@ -13,11 +13,10 @@
     "resolveJsonModule": true,
     "composite": true
   },
-  "exclude": ["legacy/**", "infra/**", "node_modules/**"],
+  "exclude": ["legacy/**", "infra/**", "extensions/**", "node_modules/**"],
   "references": [
     { "path": "packages/engine" },
     { "path": "packages/memory" },
-    { "path": "packages/pi-extension" },
     { "path": "packages/agent" },
     { "path": "packages/cli" }
   ]

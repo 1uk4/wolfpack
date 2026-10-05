@@ -1,0 +1,16 @@
+{
+  "name": "wolfpack-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension for wolfpack memory system — observer, consolidator, den management",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "zod": "^3.24.0",
+    "@wolfpack/engine": "*",
+    "@wolfpack/memory": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

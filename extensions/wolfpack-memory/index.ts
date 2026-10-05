@@ -567,6 +567,34 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
+      // Turning OFF: don't strand un-consolidated observations. Fold them into
+      // session topics first so no context is lost. Ask in the TUI; auto-save
+      // when headless (can't prompt). If the save fails, leave memory ON.
+      if (!next && orchestrator) {
+        const pending = orchestrator.getActiveObservations();
+        if (pending.length > 0) {
+          let save = true;
+          if (ctx.mode === "tui" && ctx.hasUI) {
+            save = await ctx.ui.confirm(
+              "Turn memory off?",
+              `${pending.length} observation(s) aren't saved yet. Consolidate + promote them to the den first so nothing is lost?`,
+            );
+          }
+          if (save) {
+            try {
+              await orchestrator.consolidateNow();
+              await orchestrator.promoteToWolfMemory({ denRoot: wolfDen, wolfName });
+              if (ctx.hasUI)
+                ctx.ui.notify("🐺 consolidated + promoted to den before turning off", "info");
+            } catch (e) {
+              if (ctx.hasUI)
+                ctx.ui.notify(`🐺 save failed — memory left ON: ${String(e)}`, "error");
+              return; // abort the toggle; nothing lost
+            }
+          }
+        }
+      }
+
       enabled = next;
       pi.appendEntry(WP_ENABLED, { enabled: next });
 

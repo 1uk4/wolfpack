@@ -117,30 +117,38 @@ export function createOrchestrator(
   }
 
   /**
-   * Make timestamps unique by appending fractional seconds.
-   * The observer often returns multiple observations with the same
-   * minute-level timestamp. The ledger deduplicates by timestamp,
-   * so we need each one to be unique.
+   * Assign unique timestamps to observations.
+   * Mirrors OM's assignObservationTimestamps: normalizes minute-resolution
+   * model timestamps ("YYYY-MM-DD HH:MM") to second-resolution ids
+   * ("YYYY-MM-DDTHH:MM:00") and appends ".01", ".02" for collisions.
    */
-  function deduplicateTimestamps(
+  function assignUniqueTimestamps(
     observations: Array<{ timestamp: string; content: string }>
   ): Array<{ timestamp: string; content: string }> {
     const used = new Set<string>();
-    // Also include already-known timestamps from the ledger
+    // Seed with already-known timestamps from the ledger
     const folded = foldLedger(ledgerEvents);
     for (const ts of folded.byTimestamp.keys()) used.add(ts);
 
+    const pad = (n: number) => n.toString().padStart(2, "0");
+
+    // Normalize "YYYY-MM-DD HH:MM" → "YYYY-MM-DDTHH:MM:00"
+    function toBase(modelTs: string): string {
+      const m = modelTs.trim().match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/);
+      if (m) return `${m[1]}T${m[2]}:00`;
+      // Already has seconds or is ISO — use as-is
+      return modelTs.replace(" ", "T");
+    }
+
     return observations.map((o) => {
-      let ts = o.timestamp;
+      const base = toBase(o.timestamp);
+      let ts = base;
       if (used.has(ts)) {
-        // Append seconds to make unique: "2026-10-05 04:34" → "2026-10-05T04:34:01"
-        let counter = 1;
-        let candidate = `${ts.replace(" ", "T")}:${String(counter).padStart(2, "0")}`;
-        while (used.has(candidate)) {
-          counter++;
-          candidate = `${ts.replace(" ", "T")}:${String(counter).padStart(2, "0")}`;
-        }
-        ts = candidate;
+        let suffix = 1;
+        do {
+          ts = `${base}.${pad(suffix)}`;
+          suffix++;
+        } while (used.has(ts));
       }
       used.add(ts);
       return { ...o, timestamp: ts };
@@ -153,7 +161,7 @@ export function createOrchestrator(
       const result = await observe({ engine, chunkText: chunk.text });
 
       if (result.observations.length > 0) {
-        const uniqueObs = deduplicateTimestamps(result.observations);
+        const uniqueObs = assignUniqueTimestamps(result.observations);
         const observations: Observation[] = uniqueObs.map((o) => ({
           timestamp: o.timestamp,
           content: o.content,

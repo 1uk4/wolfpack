@@ -367,14 +367,31 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     });
   }
 
-  function refreshStatus(ctx: any): void {
-    if (!ctx.hasUI) return;
-
-    if (!enabled) {
-      ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
-      return;
+  /**
+   * Persist a compact status snapshot to `<den>/status.json` so wolfpack's
+   * LocalBackend / agent can report wolf health without entering PI. Runs in
+   * every mode (headless RPC included), unlike the TUI status bar.
+   */
+  function writeStatusFile(status: MemoryStatus): void {
+    try {
+      const snapshot = {
+        enabled: status.enabled,
+        observations: status.observations,
+        poolTokens: status.poolTokens,
+        consolidateAt: status.consolidateAt,
+        totalCostUsd: status.totalCostUsd,
+        updatedAt: Date.now(),
+      };
+      fs.writeFileSync(
+        path.join(wolfDen, "status.json"),
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // best-effort; never break a turn over status
     }
+  }
 
+  function refreshStatus(ctx: any): void {
     const observations = orchestrator?.getActiveObservations() ?? [];
     const tokens = observations.reduce((s: number, o: Observation) => s + o.tokenCount, 0);
 
@@ -389,6 +406,15 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       totalCostUsd,
     };
 
+    // Always persist the sidechannel (works headless)
+    writeStatusFile(status);
+
+    // TUI status bar only when there's a UI
+    if (!ctx.hasUI) return;
+    if (!enabled) {
+      ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
+      return;
+    }
     ctx.ui.setStatus("wolfpack-memory", renderStatusBar(status));
   }
 

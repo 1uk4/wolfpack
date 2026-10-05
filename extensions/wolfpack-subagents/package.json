@@ -1,0 +1,13 @@
+{
+  "name": "wolfpack-subagents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension providing interactive sub agents — delegate tasks to specialized agents with isolated context windows.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"],
+    "agents": ["./agents/*.md"],
+    "prompts": ["./prompts/*.md"]
+  }
+}

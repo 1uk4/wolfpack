@@ -12,6 +12,7 @@ import { wolfStatus } from "../commands/wolf-status.js";
 import { wolfLogs } from "../commands/wolf-logs.js";
 import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
+import { wolfLaunch } from "../commands/wolf-launch.js";
 
 const c = {
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
@@ -22,17 +23,26 @@ const c = {
 const HELP = `${c.bold("wolfpack")} — manage the pack
 
 ${c.bold("HOST")}
-  host add <name> --ip <ip>       Bootstrap a VPS and install agent
+  host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
 
 ${c.bold("WOLVES")}
-  add wolf <name> [--host <h>]    Create a wolf (local or remote)
+  add wolf <name> [--host <h>]    Create a PI wolf (local or remote, interactive)
+  launch <wolf> [dir]             Run Pi as the wolf in a project dir (default: cwd)
   list [--json]                   Show all wolves across hosts
   status <wolf> [--host <h>]      Wolf service state
   logs <wolf> [-f] [--lines N]    Tail wolf logs
   restart <wolf> [--host <h>]     Restart wolf
-  config <wolf> --set key=value   Update wolf config
+  config <wolf> [--set key=val]   View/update wolf config (interactive if no --set)
+
+${c.bold("ADD WOLF FLAGS")}
+  --profile <p>       worker (local) | assistant (24/7 VPS, +telegram)
+  --ext a,b           Attach these extensions (skip picker)
+  --telegram-token <t>  Telegram bot token (assistant profile)
+  --telegram-owner <id> Telegram owner user id
+  -y, --yes           Non-interactive: accept profile defaults
+  --model <m>         Model id
 
 ${c.bold("FLAGS")}
   --host <name>       Target host (default from config)
@@ -44,6 +54,8 @@ ${c.bold("FLAGS")}
 function parseArgs(argv: string[]) {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  // Collected --set key=value pairs (kept as a list so values may contain commas)
+  const sets: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -59,26 +71,32 @@ function parseArgs(argv: string[]) {
       flags.port = argv[++i]!;
     } else if (arg === "--lines" && argv[i + 1]) {
       flags.lines = argv[++i]!;
-    } else if (arg === "--runtime" && argv[i + 1]) {
-      flags.runtime = argv[++i]!;
     } else if (arg === "--model" && argv[i + 1]) {
       flags.model = argv[++i]!;
+    } else if (arg === "--ext" && argv[i + 1]) {
+      flags.ext = argv[++i]!;
+    } else if (arg === "--profile" && argv[i + 1]) {
+      flags.profile = argv[++i]!;
+    } else if (arg === "--telegram-token" && argv[i + 1]) {
+      flags.telegramToken = argv[++i]!;
+    } else if (arg === "--telegram-owner" && argv[i + 1]) {
+      flags.telegramOwner = argv[++i]!;
+    } else if (arg === "-y" || arg === "--yes") {
+      flags.yes = true;
     } else if (arg === "--role" && argv[i + 1]) {
       flags.role = argv[++i]!;
-    } else if (arg === "--set") {
-      // Collect all --set values
-      if (!flags._sets) flags._sets = "";
-      if (argv[i + 1]) flags._sets += (flags._sets ? "," : "") + argv[++i]!;
+    } else if (arg === "--set" && argv[i + 1]) {
+      sets.push(argv[++i]!);
     } else if (!arg.startsWith("-")) {
       positional.push(arg);
     }
   }
 
-  return { positional, flags };
+  return { positional, flags, sets };
 }
 
 async function main(): Promise<void> {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const { positional, flags, sets } = parseArgs(process.argv.slice(2));
   const cmd = positional[0];
   const sub = positional[1];
 
@@ -87,12 +105,12 @@ async function main(): Promise<void> {
       case "host":
         switch (sub) {
           case "add":
-            if (!positional[2] || !flags.ip) {
-              console.error("Usage: wolfpack host add <name> --ip <ip>");
+            if (!positional[2]) {
+              console.error("Usage: wolfpack host add <name> [--ip <ip>]");
               process.exit(1);
             }
             await hostAdd(positional[2], {
-              ip: flags.ip as string,
+              ip: flags.ip as string | undefined,
               port: flags.port ? parseInt(flags.port as string) : undefined,
             });
             break;
@@ -115,9 +133,28 @@ async function main(): Promise<void> {
         }
         await wolfAdd(positional[2], {
           host: flags.host as string | undefined,
-          runtime: flags.runtime as string | undefined,
           model: flags.model as string | undefined,
           role: flags.role as string | undefined,
+          profile: flags.profile as string | undefined,
+          yes: flags.yes as boolean | undefined,
+          telegramToken: flags.telegramToken as string | undefined,
+          telegramOwner: flags.telegramOwner
+            ? parseInt(flags.telegramOwner as string, 10)
+            : undefined,
+          extensions: flags.ext
+            ? (flags.ext as string).split(",").map((s) => s.trim()).filter(Boolean)
+            : undefined,
+        });
+        break;
+
+      case "launch":
+        if (!positional[1]) {
+          console.error("Usage: wolfpack launch <wolf> [project-dir]");
+          process.exit(1);
+        }
+        await wolfLaunch(positional[1], {
+          host: flags.host as string | undefined,
+          dir: positional[2],
         });
         break;
 
@@ -164,7 +201,7 @@ async function main(): Promise<void> {
         }
         await wolfConfig(positional[1], {
           host: flags.host as string | undefined,
-          set: flags._sets ? (flags._sets as string).split(",") : undefined,
+          set: sets.length ? sets : undefined,
         });
         break;
 

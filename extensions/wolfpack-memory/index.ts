@@ -327,6 +327,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   const CONSOLIDATE_AT = 20000;
   const POOL_TARGET = 10000;
+  // Memory is ON by default; set WOLFPACK_MEMORY_DEFAULT=off to start disabled.
+  // An explicit /wolf:memory off (persisted in the session) always wins.
+  const DEFAULT_ENABLED =
+    (process.env.WOLFPACK_MEMORY_DEFAULT ?? "on").toLowerCase() !== "off";
 
   let runtime: PiRuntime | null = null;
   let orchestrator: MemoryOrchestrator | null = null;
@@ -342,7 +346,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return branch[i].data?.enabled ?? false;
       }
     }
-    return false;
+    // No explicit toggle in this session → fall back to the default.
+    return DEFAULT_ENABLED;
   }
 
   function initOrchestrator(ctx: any): void {

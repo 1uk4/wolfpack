@@ -16,7 +16,7 @@ import { stringify as yamlStringify } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { buildRemoteBundle } from "../bundle.js";
 import { ensureDenMirror } from "./host-sync.js";
-import { loadConfig, getHost, localWolfDir, sharedDir } from "../config.js";
+import { loadConfig, getHost, localWolfDir } from "../config.js";
 import { c } from "../render.js";
 import { multiSelect, prompt } from "../prompts.js";
 import {
@@ -163,15 +163,15 @@ function addLocal(
   }
   fs.writeFileSync(path.join(wolfDir, "wolf.yaml"), yamlStringify(wolfConfig));
 
-  // Write .env — memory extension reads WOLF_DEN; librarian points at shared/.
-  // ANTHROPIC_API_KEY is expected from your shell environment.
+  // Write .env — memory extension reads WOLF_DEN and emits KB contribution
+  // deltas to the librarian-ops inbox (WOLFPACK_KB_OPS). ANTHROPIC_API_KEY is
+  // expected from your shell environment.
   const denPath = path.join(wolfDir, "den");
-  const librarianInbox = path.join(sharedDir(config), "librarian", "inbox");
   const envLines = [
     `WOLF_ID=${id}`,
     `WOLF_NAME=${name}`,
     `WOLF_DEN=${denPath}`,
-    `WOLFPACK_LIBRARIAN=${librarianInbox}`,
+    `WOLFPACK_KB_OPS=${path.join(config.wolvesRoot, "librarian")}`,
   ];
   if (choices.telegram?.token) {
     envLines.push(`${choices.telegram.tokenEnv}=${choices.telegram.token}`);
@@ -228,7 +228,8 @@ async function addRemote(
   if (choices.telegram?.ownerId) env.TELEGRAM_OWNER_ID = String(choices.telegram.ownerId);
   const providerKey = process.env.ANTHROPIC_API_KEY;
   if (providerKey) env.ANTHROPIC_API_KEY = providerKey;
-  env.WOLFPACK_LIBRARIAN = path.join(sharedDir(config), "librarian", "inbox");
+  // KB paths for remote wolves are host-relative (/home/wolf-<id>/...), so the
+  // agent fills WOLFPACK_KB_OPS/KB_BASE when it writes the wolf's .env.
 
   const client = new AgentClient(host);
   try {

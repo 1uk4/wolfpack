@@ -66,6 +66,122 @@ function findRepoRoot(): string | null {
   return null;
 }
 
+/** Embedding model for the librarian's KB engine (pulled by provisionKbEngine). */
+const KB_EMBED_MODEL = "nomic-embed-text";
+
+/** Bundle the @wolfpack/kb CLI into one self-contained file (esbuild). */
+async function bundleKbCli(repoRoot: string, outFile: string): Promise<void> {
+  await esbuild.build({
+    entryPoints: [path.join(repoRoot, "packages", "kb", "src", "cli.ts")],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node22",
+    outfile: outFile,
+  });
+}
+
+/**
+ * Provision the librarian KB engine on a host. LIBRARIAN-ONLY: called from
+ * `wolf sync` only when the synced wolf carries the `kb` extension, so the
+ * Ollama + sweep stack lands solely on hosts that actually run a librarian.
+ *
+ * Installs: Ollama + the embedding model, the `wolfpack-kb` CLI, and a per-wolf
+ * systemd sweep timer that drains the inbox and Telegrams a summary. Idempotent.
+ */
+export async function provisionKbEngine(
+  host: HostEntry,
+  wolf: { id: string; name: string; ownerId?: number },
+): Promise<void> {
+  console.log(
+    c.bold(`\n\u25b8 Provisioning KB engine for librarian '${wolf.name}'`) +
+      c.dim(" (streamed live below)"),
+  );
+
+  const repoRoot = findRepoRoot();
+  if (!repoRoot) throw new Error("Could not find wolfpack repo root for KB CLI bundle.");
+
+  const user = `wolf-${wolf.id}`;
+  const home = `/home/${user}`;
+  const ownerLine = wolf.ownerId
+    ? `Environment=WOLFPACK_OWNER_TELEGRAM_ID=${wolf.ownerId}`
+    : "";
+
+  // 1. Bundle + ship the CLI.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-kb-"));
+  const cliOut = path.join(tmp, "cli.cjs");
+  await bundleKbCli(repoRoot, cliOut);
+  scpToHost(host, cliOut, "/tmp/wolfpack-kb-cli.cjs");
+
+  // 2. Provisioning script (idempotent).
+  const script = `set -e
+step(){ printf '\\n\\033[1m  \\u25b8 %s\\033[0m\\n' "$1"; }
+
+step "Ollama + ${KB_EMBED_MODEL}"
+if ! command -v ollama >/dev/null 2>&1; then curl -fsSL https://ollama.com/install.sh | sh; fi
+systemctl enable --now ollama || true
+for i in $(seq 1 20); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break; sleep 2; done
+ollama list 2>/dev/null | grep -q '${KB_EMBED_MODEL}' || ollama pull ${KB_EMBED_MODEL}
+
+step "wolfpack-kb CLI"
+mkdir -p /opt/wolfpack-kb
+mv /tmp/wolfpack-kb-cli.cjs /opt/wolfpack-kb/cli.cjs
+
+step "KB storage roots + den-local state"
+mkdir -p ${home}/knowledge/base ${home}/librarian
+chown -R ${user}:${user} ${home}/knowledge ${home}/librarian
+# den-local ledger/vectors live outside the (user-owned, synced) den because the
+# sweep runs as root (consistent with root-owned Syncthing writes into the KB dirs).
+mkdir -p /var/lib/wolfpack-kb/${wolf.id}
+
+step "let the wolf trigger the sweep on demand (/kb:sweep)"
+echo '${user} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${user}-kb-sweep.service' > /etc/sudoers.d/${user}-kb-sweep
+chmod 440 /etc/sudoers.d/${user}-kb-sweep
+
+step "sweep service + timer"
+cat > /etc/systemd/system/${user}-kb-sweep.service <<UNIT
+[Unit]
+Description=Wolfpack KB sweep - ${wolf.name}
+After=network-online.target ollama.service
+Wants=network-online.target
+[Service]
+# Runs as root so it can process root-owned Syncthing writes in the KB dirs and
+# write entries that Syncthing (also root) mirrors back out.
+Type=oneshot
+User=root
+Environment=HOME=${home}
+Environment=KB_BASE=${home}/knowledge/base
+Environment=KB_OPS=${home}/librarian
+Environment=KB_DEN_LOCAL=/var/lib/wolfpack-kb/${wolf.id}
+Environment=WOLFPACK_EMBED_URL=http://127.0.0.1:11434
+${ownerLine}
+EnvironmentFile=-${home}/.env
+ExecStart=/usr/bin/node /opt/wolfpack-kb/cli.cjs sweep
+UNIT
+cat > /etc/systemd/system/${user}-kb-sweep.timer <<UNIT
+[Unit]
+Description=Wolfpack KB sweep timer - ${wolf.name}
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=${user}-kb-sweep.service
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now ${user}-kb-sweep.timer
+printf '\\n\\033[32m  \\u2713 KB engine ready (ollama + ${KB_EMBED_MODEL} + sweep timer)\\033[0m\\n'
+`;
+
+  const scriptPath = path.join(tmp, "kb-provision.sh");
+  fs.writeFileSync(scriptPath, script);
+  scpToHost(host, scriptPath, "/tmp/wolfpack-kb-provision.sh");
+  const code = await execSshStream(host, "sudo bash /tmp/wolfpack-kb-provision.sh", (chunk) => {
+    process.stdout.write(chunk);
+  });
+  if (code !== 0) throw new Error("KB engine provisioning failed (see output above)");
+}
+
 /**
  * Host prerequisites installed before the agent: Node 22, the pi CLI, Tailscale,
  * and Syncthing. Idempotent (each step checks before installing). Assumes a

@@ -27,6 +27,8 @@ export interface WolfExtension {
   dir: string;
   /** Needs a TelegramConfig (token env + owner id) to function */
   requiresTelegram?: boolean;
+  /** Librarian capability: triggers host KB-engine provisioning (Ollama + sweep). */
+  librarian?: boolean;
 }
 
 export type WolfProfile = "worker" | "assistant";
@@ -65,6 +67,14 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     dir: "wolfpack-telegram",
     requiresTelegram: true,
   },
+  {
+    key: "kb",
+    label: "Librarian (KB engine)",
+    description:
+      "Shared knowledge-base curation: inbox sweep, embeddings, /kb:sweep (wolfpack-librarian)",
+    dir: "wolfpack-librarian",
+    librarian: true,
+  },
 ];
 
 /** Extension keys bundled into each profile. */
@@ -102,6 +112,11 @@ export function getExtension(key: string): WolfExtension | undefined {
 /** Does this set of extension keys include one that needs Telegram config? */
 export function needsTelegram(keys: string[]): boolean {
   return keys.some((k) => getExtension(k)?.requiresTelegram);
+}
+
+/** Is this a librarian wolf? (carries a KB-engine extension) */
+export function isLibrarian(keys: string[]): boolean {
+  return keys.some((k) => getExtension(k)?.librarian);
 }
 
 /**

@@ -13,6 +13,8 @@
 import { AgentClient } from "../agent-client.js";
 import { buildRemoteBundle } from "../bundle.js";
 import { loadConfig, getHost, type CliConfig, type HostEntry } from "../config.js";
+import { isLibrarian } from "../extensions.js";
+import { provisionKbEngine } from "../deployer.js";
 import { c } from "../render.js";
 
 interface SyncOpts {
@@ -30,6 +32,7 @@ interface RemoteWolf {
     specialty?: string;
     domains?: string[];
     extensions?: string[];
+    telegram?: { ownerId?: number };
   };
 }
 
@@ -113,6 +116,21 @@ async function syncOne(
   } catch (err) {
     console.error(c.red(`Sync failed: ${err}`));
     process.exit(1);
+  }
+
+  // Librarian-only: stand up / refresh the host KB engine (Ollama + sweep timer).
+  // Gated on the `kb` extension so it only touches hosts running a librarian.
+  if (isLibrarian(cfg.extensions ?? [])) {
+    try {
+      await provisionKbEngine(host, {
+        id: wolf.id,
+        name: cfg.name,
+        ownerId: cfg.telegram?.ownerId,
+      });
+    } catch (err) {
+      console.error(c.red(`KB engine provisioning failed: ${err}`));
+      process.exit(1);
+    }
   }
 }
 

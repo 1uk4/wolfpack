@@ -151,6 +151,9 @@ export class WolfManager {
       `WOLF_NAME=${req.name}`,
       `WOLF_DEN=${path.join(home, "den")}`,
       `WOLF_MODEL=${req.model}`,
+      // KB paths for the memory extension's emit/read (host-relative layout).
+      `WOLFPACK_KB_OPS=${path.join(home, "librarian")}`,
+      `KB_BASE=${path.join(home, "knowledge", "base")}`,
     ];
     for (const [k, v] of Object.entries(req.env ?? {})) {
       lines.push(`${k}=${v}`);

@@ -50,8 +50,9 @@ interface MemoryStatus {
   consolidateAt: number;
   observerActive: boolean;
   consolidatorActive: boolean;
-  /** Seconds elapsed in the current consolidation (for live progress). */
-  consolidatorElapsedS?: number;
+  promoterActive?: boolean;
+  /** Seconds elapsed in the current long op (consolidate/promote). */
+  activityElapsedS?: number;
   totalCostUsd: number;
 }
 
@@ -65,13 +66,14 @@ function renderStatusBar(status: MemoryStatus): string {
   const oActive = status.observerActive ? "\x1b[33m" : "";
   const oReset = status.observerActive ? "\x1b[0m" : "";
 
-  // C indicator \u2014 live spinner + elapsed while consolidating, dim otherwise.
+  // Activity indicator \u2014 spinner + elapsed while consolidating (C) or promoting (P).
   let cLabel: string;
-  if (status.consolidatorActive) {
+  if (status.consolidatorActive || status.promoterActive) {
     const frames = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f";
-    const e = status.consolidatorElapsedS ?? 0;
+    const e = status.activityElapsedS ?? 0;
     const spin = frames[e % frames.length];
-    cLabel = `\x1b[33m${spin} C ${e}s\x1b[0m`;
+    const label = status.promoterActive ? "P" : "C";
+    cLabel = `\x1b[33m${spin} ${label} ${e}s\x1b[0m`;
   } else {
     cLabel = "\x1b[2mC\x1b[0m";
   }
@@ -348,25 +350,31 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   let enabled = false;
   let observerPending = false;
   let consolidatorPending = false;
-  let consolidatorStartMs = 0;
-  let consolidatorTimer: ReturnType<typeof setInterval> | null = null;
+  let promoterPending = false;
+  let activityStartMs = 0;
+  let activityTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Start/stop a 1s heartbeat so the status bar shows live consolidation
-  // progress (spinner + elapsed) instead of a static yellow C.
-  function beginConsolidate(ctx: any): void {
-    consolidatorPending = true;
-    consolidatorStartMs = Date.now();
-    if (ctx.hasUI && !consolidatorTimer) {
-      consolidatorTimer = setInterval(() => refreshStatus(ctx), 1000);
+  // 1s heartbeat so the status bar shows live progress (spinner + elapsed) for
+  // long memory ops \u2014 consolidate (C) and promote (P) \u2014 so it's clear work is in
+  // flight and you shouldn't quit.
+  function beginActivity(ctx: any, kind: "consolidate" | "promote"): void {
+    if (kind === "promote") promoterPending = true;
+    else consolidatorPending = true;
+    activityStartMs = Date.now();
+    if (ctx.hasUI && !activityTimer) {
+      activityTimer = setInterval(() => refreshStatus(ctx), 1000);
     }
     refreshStatus(ctx);
   }
-  function endConsolidate(ctx: any): void {
-    consolidatorPending = false;
-    consolidatorStartMs = 0;
-    if (consolidatorTimer) {
-      clearInterval(consolidatorTimer);
-      consolidatorTimer = null;
+  function endActivity(ctx: any, kind: "consolidate" | "promote"): void {
+    if (kind === "promote") promoterPending = false;
+    else consolidatorPending = false;
+    if (!consolidatorPending && !promoterPending) {
+      activityStartMs = 0;
+      if (activityTimer) {
+        clearInterval(activityTimer);
+        activityTimer = null;
+      }
     }
     refreshStatus(ctx);
   }
@@ -442,8 +450,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       consolidateAt: CONSOLIDATE_AT,
       observerActive: observerPending,
       consolidatorActive: consolidatorPending,
-      consolidatorElapsedS: consolidatorStartMs
-        ? Math.round((Date.now() - consolidatorStartMs) / 1000)
+      promoterActive: promoterPending,
+      activityElapsedS: activityStartMs
+        ? Math.round((Date.now() - activityStartMs) / 1000)
         : 0,
       totalCostUsd,
     };
@@ -618,7 +627,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
             );
           }
           if (save) {
-            beginConsolidate(ctx);
+            beginActivity(ctx, "consolidate");
             try {
               await orchestrator.consolidateNow();
               await orchestrator.promoteToWolfMemory({ denRoot: wolfDen, wolfName });
@@ -629,7 +638,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
                 ctx.ui.notify(`🐺 save failed — memory left ON: ${String(e)}`, "error");
               return; // abort the toggle; nothing lost
             } finally {
-              endConsolidate(ctx);
+              endActivity(ctx, "consolidate");
             }
           }
         }
@@ -694,7 +703,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         `   memory root: ${memRoot}`,
         "info"
       );
-      beginConsolidate(ctx);
+      beginActivity(ctx, "consolidate");
 
       try {
         await orchestrator.consolidateNow();
@@ -714,7 +723,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         const msg = err instanceof Error ? err.message : String(err);
         if (ctx.hasUI) ctx.ui.notify(`🐺 consolidation failed: ${msg}`, "error");
       } finally {
-        endConsolidate(ctx);
+        endActivity(ctx, "consolidate");
       }
     },
   });
@@ -731,21 +740,22 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       const obs = orchestrator.getActiveObservations();
       if (obs.length > 0) {
         if (ctx.hasUI) ctx.ui.notify(`🐺 consolidating ${obs.length} observations first...`, "info");
-        beginConsolidate(ctx);
+        beginActivity(ctx, "consolidate");
         try {
           await orchestrator.consolidateNow();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (ctx.hasUI) ctx.ui.notify(`🐺 consolidation failed: ${msg}`, "error");
-          endConsolidate(ctx);
+          endActivity(ctx, "consolidate");
           return;
         }
-        endConsolidate(ctx);
+        endActivity(ctx, "consolidate");
       }
 
       // Step 2: Promote session topics to wolf den
       if (ctx.hasUI) ctx.ui.notify("🐺 promoting session to den...", "info");
 
+      beginActivity(ctx, "promote");
       try {
         const denConfig: DenConfig = { denRoot: wolfDen, wolfName: wolfName };
         await orchestrator.promoteToWolfMemory(denConfig);
@@ -772,7 +782,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         const msg = err instanceof Error ? err.message : String(err);
         if (ctx.hasUI) ctx.ui.notify(`🐺 promote failed: ${msg}`, "error");
       } finally {
-        refreshStatus(ctx);
+        endActivity(ctx, "promote");
       }
     },
   });
@@ -785,18 +795,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         const obs = orchestrator.getActiveObservations();
         if (obs.length > 0) {
           if (ctx.hasUI) ctx.ui.notify(`🐺 consolidating ${obs.length} observations...`, "info");
-          beginConsolidate(ctx);
+          beginActivity(ctx, "consolidate");
           try {
             await orchestrator.consolidateNow();
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             if (ctx.hasUI) ctx.ui.notify(`🐺 consolidation failed: ${msg}`, "warning");
           } finally {
-            endConsolidate(ctx);
+            endActivity(ctx, "consolidate");
           }
         }
 
         if (ctx.hasUI) ctx.ui.notify("🐺 promoting to den...", "info");
+        beginActivity(ctx, "promote");
         try {
           const denConfig: DenConfig = { denRoot: wolfDen, wolfName: wolfName };
           await orchestrator.promoteToWolfMemory(denConfig);
@@ -804,6 +815,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (ctx.hasUI) ctx.ui.notify(`🐺 promote failed: ${msg}`, "warning");
+        } finally {
+          endActivity(ctx, "promote");
         }
       }
 

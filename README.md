@@ -2,9 +2,7 @@
 
 A framework for running personalized AI agents with persistent, shared knowledge.
 
-> **Setting up or rebuilding from scratch?** See **[docs/SETUP.md](docs/SETUP.md)** —
-> the full clone → VPS → running-pack walkthrough. This README is the reference
-> for architecture and commands.
+> _Setup & architecture docs are being rewritten._
 
 ## Architecture
 
@@ -69,9 +67,7 @@ extensions/
   wolfpack-subagents/ # Pi extension: interactive sub agents (delegate to isolated agents)
   wolfpack-telegram/  # Pi extension: Telegram bot channel (vendor your own here)
 
-infra/             # Ansible roles, playbooks, inventory (reference)
-legacy/            # Old CLI, core, cc-bot (reference)
-docs/planning/     # Architecture docs and design notes
+infra/             # Ansible roles, playbooks, inventory (legacy)
 ```
 
 ## Packages
@@ -269,8 +265,6 @@ cd wolfpack
 
 This verifies Node 22+, installs dependencies, builds all packages, links the
 `wolfpack` CLI globally, installs the `pi` runtime, and scaffolds `~/.wolfpack/`.
-**See [docs/SETUP.md](docs/SETUP.md) for the complete walkthrough** (secrets, VPS
-host, wolves, and disaster recovery).
 
 ## Development
 

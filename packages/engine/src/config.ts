@@ -11,11 +11,9 @@
  *     defaultModel: "claude-sonnet-4-20250514",
  *     steps: {
  *       classify:    { model: "claude-haiku-4-5-20250507" },   // cheap + fast
- *       assess:      { model: "claude-sonnet-4-20250514" },    // needs judgment
- *       produce:     { model: "claude-sonnet-4-20250514" },    // needs writing quality
- *       link:        { model: "claude-haiku-4-5-20250507" },   // structured, simple
  *       consolidate: { model: "claude-sonnet-4-20250514" },    // needs judgment
- *       claimCheck:  { model: "claude-haiku-4-5-20250507" },   // yes/no decision
+ *       produce:     { model: "claude-sonnet-4-20250514" },    // needs writing quality
+ *       contradict:  { model: "claude-haiku-4-5-20250507" },   // fast yes/no
  *     },
  *   };
  */
@@ -30,18 +28,18 @@ export interface ModelConfig {
 }
 
 export interface StepConfigs {
-  /** Classify observations (knowledge vs work item) */
+  /** Memory: classify observations during the observer pass */
   classify?: ModelConfig;
-  /** Assess claims (create/merge/supersede/reject) */
-  assess?: ModelConfig;
-  /** Produce curated entries from claims */
-  produce?: ModelConfig;
-  /** Detect links between entries */
-  link?: ModelConfig;
-  /** Consolidate observations into topic files */
+  /** Memory: consolidate observations into topic files */
   consolidate?: ModelConfig;
-  /** Evaluate whether something is claim-worthy */
-  claimCheck?: ModelConfig;
+  /** KB: produce a curated entry from a contribution (needs writing quality) */
+  produce?: ModelConfig;
+  /** KB: detect contradiction between a contribution and an existing entry (fast) */
+  contradict?: ModelConfig;
+  /** KB: classify an unroutable contribution into domain/type/subcategory (fast) */
+  classifyEntry?: ModelConfig;
+  /** KB: label a crystallized cluster with a canonical topic name (fast, deferrable) */
+  labelTopic?: ModelConfig;
 }
 
 export interface EngineConfig {

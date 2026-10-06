@@ -1,0 +1,155 @@
+/**
+ * Ledger — append-only truth + pure projections.
+ *
+ * Stored as JSONL at den-local ledger/events.jsonl (never synced). Dewey's
+ * entire brain (registry, clusters, aliases, subscriptions) is derived from
+ * this log via the fold functions below — mirroring foldLedger in the memory
+ * package. Replayable: delete vectors/clusters caches and rebuild from here.
+ */
+import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { dirname } from "node:path";
+import {
+  KbEventSchema,
+  type KbEvent,
+  type KbRoots,
+  type Registry,
+  type RegistryTopic,
+  ledgerFile,
+  now,
+} from "../shared/index.js";
+
+// ── persistence ──────────────────────────────────────────────────────────────
+
+export function readLedger(roots: KbRoots): KbEvent[] {
+  const file = ledgerFile(roots);
+  if (!existsSync(file)) return [];
+  const out: KbEvent[] = [];
+  for (const line of readFileSync(file, "utf-8").split("\n")) {
+    if (!line.trim()) continue;
+    const parsed = KbEventSchema.safeParse(JSON.parse(line));
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+export function appendLedger(roots: KbRoots, events: KbEvent[]): void {
+  if (events.length === 0) return;
+  const file = ledgerFile(roots);
+  mkdirSync(dirname(file), { recursive: true });
+  appendFileSync(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+}
+
+// ── projections (pure) ─────────────────────────────────────────────────────
+
+/** Every content hash ever ingested — idempotency guard. */
+export function seenHashes(events: KbEvent[]): Set<string> {
+  const s = new Set<string>();
+  for (const e of events) if (e.t === "contribution") s.add(e.hash);
+  return s;
+}
+
+/** The registry: canonical topics ↔ entries ↔ aliases ↔ subscribers. */
+export function foldRegistry(events: KbEvent[]): Registry {
+  const reg: Registry = new Map();
+  const ensure = (canonicalId: string): RegistryTopic => {
+    let t = reg.get(canonicalId);
+    if (!t) {
+      t = {
+        canonicalId,
+        domain: "",
+        subcategory: "",
+        crystallized: false,
+        entries: [],
+        aliases: [],
+        subscribers: [],
+        updated: now(),
+      };
+      reg.set(canonicalId, t);
+    }
+    return t;
+  };
+
+  for (const e of events) {
+    switch (e.t) {
+      case "entry_written": {
+        const t = ensure(e.canonicalId);
+        if (!t.entries.includes(e.entryId)) t.entries.push(e.entryId);
+        t.updated = e.at;
+        break;
+      }
+      case "aliased": {
+        const t = ensure(e.canonicalId);
+        const existing = t.aliases.find(
+          (a) => a.wolf === e.wolf && a.denTopicId === e.denTopicId
+        );
+        if (existing) {
+          existing.lastHash = e.hash;
+          existing.lastSeen = e.at;
+        } else {
+          t.aliases.push({
+            wolf: e.wolf,
+            denTopicId: e.denTopicId,
+            lastHash: e.hash,
+            lastSeen: e.at,
+          });
+        }
+        // Contributing implies implicit subscription.
+        if (!t.subscribers.includes(e.wolf)) t.subscribers.push(e.wolf);
+        break;
+      }
+      case "crystallized": {
+        const t = ensure(e.canonicalId);
+        t.domain = e.domain;
+        t.subcategory = e.subcategory;
+        t.crystallized = true;
+        t.updated = e.at;
+        break;
+      }
+      case "subscribed": {
+        const t = ensure(e.canonicalId);
+        if (!t.subscribers.includes(e.wolf)) t.subscribers.push(e.wolf);
+        break;
+      }
+    }
+  }
+  return reg;
+}
+
+export interface ClusterState {
+  clusterId: string;
+  /** canonicalId this cluster has crystallized into, if any. */
+  canonicalId: string | null;
+  members: string[]; // contribution event ids
+  wolves: Set<string>;
+}
+
+/** Cluster membership — pre-crystallization relevance groupings. */
+export function foldClusters(events: KbEvent[]): Map<string, ClusterState> {
+  const clusters = new Map<string, ClusterState>();
+  // Map contribution id → wolf, to attribute cluster membership.
+  const contribWolf = new Map<string, string>();
+  for (const e of events) {
+    if (e.t === "contribution") contribWolf.set(e.id, e.from);
+  }
+  for (const e of events) {
+    if (e.t === "clustered") {
+      let c = clusters.get(e.clusterId);
+      if (!c) {
+        c = {
+          clusterId: e.clusterId,
+          canonicalId: null,
+          members: [],
+          wolves: new Set(),
+        };
+        clusters.set(e.clusterId, c);
+      }
+      c.members.push(e.contribution);
+      const w = contribWolf.get(e.contribution);
+      if (w) c.wolves.add(w);
+    } else if (e.t === "crystallized") {
+      const c = clusters.get(e.clusterId);
+      if (c) c.canonicalId = e.canonicalId;
+    }
+  }
+  return clusters;
+}

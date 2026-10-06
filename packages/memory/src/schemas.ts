@@ -16,10 +16,12 @@ export const TopicActionSchema = z.object({
     .object({
       id: z.string().describe("Topic ID (slug, kebab-case)"),
       title: z.string(),
+      // Soft limit: clip rather than reject, so a slightly-long summary never
+      // fails (and retries) an expensive consolidation.
       summary: z
         .string()
-        .max(140)
-        .describe("One line, what this topic covers — shown in the index"),
+        .describe("One line (\u2264140 chars), what this topic covers — shown in the index")
+        .transform((s) => (s.length > 140 ? s.slice(0, 139) + "\u2026" : s)),
       body: z.string().describe("Full topic content, current-state prose"),
     })
     .nullable()

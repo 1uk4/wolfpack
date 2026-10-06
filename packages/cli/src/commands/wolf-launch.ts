@@ -53,11 +53,19 @@ export async function wolfLaunch(
 ): Promise<void> {
   const config = loadConfig();
 
-  // Remote wolves are not launched from the CLI.
-  const hostName = opts.host ?? config.defaultHost;
-  if (hostName && hostName !== "local") {
-    const host = getHost(config, hostName);
-    if (host) {
+  const wolfDir = localWolfDir(config, name);
+  const yamlPath = path.join(wolfDir, "wolf.yaml");
+  const existsLocally = fs.existsSync(yamlPath);
+
+  // A wolf is "remote" only when it doesn't live locally. The default host is
+  // irrelevant for launching a wolf that exists on this machine — it's the
+  // host for *remote* operations, not a reason to reject a local wolf.
+  // Only reject if the user explicitly targeted a remote host, or the wolf
+  // can't be found locally and a remote host is configured.
+  const explicitHost = opts.host && opts.host !== "local";
+  if (!existsLocally) {
+    const hostName = opts.host ?? config.defaultHost;
+    if (hostName && hostName !== "local" && getHost(config, hostName)) {
       console.error(
         c.yellow(
           `'${name}' is on ${hostName}. Remote wolves run 24/7 on their host and are reached via Telegram, not launched from the CLI.`,
@@ -65,13 +73,18 @@ export async function wolfLaunch(
       );
       process.exit(1);
     }
-  }
-
-  const wolfDir = localWolfDir(config, name);
-  const yamlPath = path.join(wolfDir, "wolf.yaml");
-  if (!fs.existsSync(yamlPath)) {
     console.error(c.red(`Local wolf not found: ${wolfDir}`));
     console.error(c.dim(`  create it with: wolfpack add wolf ${name}`));
+    process.exit(1);
+  }
+
+  // Guard against explicitly asking to launch a wolf *on* a remote host.
+  if (explicitHost && getHost(config, opts.host)) {
+    console.error(
+      c.yellow(
+        `'${name}' was requested on ${opts.host}. Remote wolves run 24/7 on their host and are reached via Telegram, not launched from the CLI.`,
+      ),
+    );
     process.exit(1);
   }
 

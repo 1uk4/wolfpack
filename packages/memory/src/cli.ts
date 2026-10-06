@@ -15,9 +15,11 @@
  *   WOLFPACK_DOMAIN       — default domain for claims (default: wolfpack)
  */
 import { createEngine } from "@wolfpack/engine";
+import type { KbRoots } from "@wolfpack/kb/shared";
+import { emitDelta } from "@wolfpack/kb/client";
 import { consolidateSession } from "./consolidate.js";
 import { listSessionIds } from "./session/memory.js";
-import { getConsolidatedSessions } from "./den.js";
+import { getConsolidatedSessions, readDenTopics } from "./den.js";
 import { resolve } from "node:path";
 
 async function main(): Promise<void> {
@@ -25,12 +27,13 @@ async function main(): Promise<void> {
 
   // Parse args
   const flags: Record<string, string> = {};
+  const booleanFlags = new Set(["--all", "--dry-run", "--emit-den"]);
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--") && i + 1 < args.length) {
+    if (booleanFlags.has(args[i])) {
+      flags[args[i].slice(2)] = "true";
+    } else if (args[i].startsWith("--") && i + 1 < args.length) {
       flags[args[i].slice(2)] = args[i + 1];
       i++;
-    } else if (args[i] === "--all" || args[i] === "--dry-run") {
-      flags[args[i].slice(2)] = "true";
     }
   }
 
@@ -58,14 +61,53 @@ async function main(): Promise<void> {
     defaultModel,
     steps: {
       consolidate: { model: defaultModel },
-      claimCheck: { model: fastModel },
     },
   });
 
   const resolvedDen = resolve(denRoot);
   const resolvedMemory = resolve(memoryRoot);
-  const librarianInbox = process.env.WOLFPACK_LIBRARIAN;
+  // KB roots: emitting deltas requires at least the ops root (librarian-ops).
+  const kbOps = process.env.WOLFPACK_KB_OPS;
+  const kbBase = process.env.KB_BASE;
+  const kbRoots: KbRoots | undefined = kbOps
+    ? {
+        kbBase: kbBase ? resolve(kbBase) : "",
+        opsRoot: resolve(kbOps),
+        denLocal: resolve(resolvedDen, "kb"),
+      }
+    : undefined;
   const defaultDomain = process.env.WOLFPACK_DOMAIN ?? "wolfpack";
+
+  // Backfill: emit a contribution delta for EVERY existing den topic (not just
+  // ones changed this session). Seeds the KB with a wolf's accumulated memory.
+  // Deterministic, no LLM. Idempotent (hash-named files overwrite).
+  if (flags["emit-den"]) {
+    if (!kbRoots) {
+      console.error("--emit-den requires WOLFPACK_KB_OPS (librarian-ops root)");
+      process.exit(1);
+    }
+    const topics = readDenTopics(resolvedDen);
+    let emitted = 0;
+    for (const t of topics) {
+      const d = emitDelta({
+        roots: kbRoots,
+        wolf: wolfName,
+        denTopicId: t.id,
+        change: "create",
+        domainHint: defaultDomain,
+        summary: t.summary,
+        body: t.body,
+      });
+      if (d) {
+        emitted++;
+        console.log(`  emitted: ${t.id}`);
+      }
+    }
+    console.log(
+      `emit-den: ${emitted}/${topics.length} deltas \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}`
+    );
+    return;
+  }
 
   // Determine which sessions to consolidate
   let sessionIds: string[];
@@ -123,9 +165,9 @@ async function main(): Promise<void> {
       den: { denRoot: resolvedDen, wolfName },
       memoryRoot: resolvedMemory,
       sessionId,
-      librarianInbox: librarianInbox ? resolve(librarianInbox) : undefined,
+      kbRoots,
       defaultDomain,
-      skipClaims: !librarianInbox,
+      skipClaims: !kbRoots,
     });
 
     console.log(

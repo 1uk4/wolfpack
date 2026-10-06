@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@wolfpack/engine": "*",
+    "@wolfpack/kb": "*",
     "zod": "^3.24.0"
   },
   "devDependencies": {

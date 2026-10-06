@@ -69,43 +69,6 @@ export function buildConsolidatePrompt(
 }
 
 /**
- * System prompt for the CLAIM CHECK step.
- * Evaluate whether consolidated knowledge is worth sharing with the pack.
- */
-export const CLAIM_CHECK_SYSTEM = `You are evaluating whether knowledge from a wolf's session should be shared with the entire pack via the Librarian.
-
-Pack-worthy knowledge is:
-- Facts about projects that other wolves would benefit from knowing
-- Decisions that affect how the system works
-- Discovered bugs, architecture patterns, or process changes
-- NOT personal preferences, session-specific debugging, or transient state
-
-Be selective. The Librarian curates strictly — only submit what genuinely helps other wolves.
-
-Respond with valid JSON matching the schema.`;
-
-/**
- * Build the claim check prompt.
- */
-export function buildClaimCheckPrompt(
-  topicTitle: string,
-  topicBody: string,
-  wolfName: string,
-  domain: string
-): string {
-  return [
-    `Wolf: ${wolfName}`,
-    `Domain: ${domain}`,
-    "",
-    `Topic: ${topicTitle}`,
-    "",
-    topicBody,
-    "",
-    "Is this worth sharing with the pack as a claim to the Librarian?",
-  ].join("\n");
-}
-
-/**
  * System prompt for the JOURNEY UPDATE step.
  * Append to the wolf's running history.
  */

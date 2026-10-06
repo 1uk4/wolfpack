@@ -8,7 +8,8 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "zod": "^3.24.0",
     "@wolfpack/engine": "*",
-    "@wolfpack/memory": "*"
+    "@wolfpack/memory": "*",
+    "@wolfpack/kb": "*"
   },
   "pi": {
     "extensions": ["./index.ts"]

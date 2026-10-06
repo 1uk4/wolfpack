@@ -27,6 +27,7 @@ import {
 } from "./session/memory.js";
 import { consolidateSession } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
+import type { KbRoots } from "@wolfpack/kb/shared";
 
 export interface OrchestratorConfig {
   /** Tokens per observer chunk */
@@ -37,6 +38,10 @@ export interface OrchestratorConfig {
   poolTargetTokens: number;
   /** Max parallel observers */
   observerConcurrency: number;
+  /** KB roots; when set, promotion emits contribution deltas to the librarian. */
+  kbRoots?: KbRoots;
+  /** Default domain hint for emitted deltas (default: "wolfpack"). */
+  defaultDomain?: string;
 }
 
 export const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -320,7 +325,9 @@ export function createOrchestrator(
       den: denConfig,
       memoryRoot: sessionMemoryRoot(runtime.cwd, ""),
       sessionId: runtime.sessionId,
-      skipClaims: false, // Default to checking for claims
+      kbRoots: cfg.kbRoots,
+      defaultDomain: cfg.defaultDomain,
+      skipClaims: false,
     });
 
     runtime.notify?.("memory: session promoted to wolf memory", "info");

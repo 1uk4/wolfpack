@@ -32,6 +32,8 @@ import {
   type LedgerEvent,
   type DenConfig,
 } from "@wolfpack/memory";
+import { drainFeed } from "@wolfpack/kb/client";
+import type { KbRoots } from "@wolfpack/kb/shared";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -333,8 +335,17 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   const model     = process.env.WOLFPACK_MODEL      ?? "claude-sonnet-4-6";
   const fastModel = process.env.WOLFPACK_FAST_MODEL  ?? "claude-haiku-4-5-20251001";
-  const librarianInbox = process.env.WOLFPACK_LIBRARIAN
-    ?? path.join(path.dirname(wolfDen), "..", "..", "librarian", "inbox");
+  // KB roots. Default layout: <root>/<scope>/<wolf>/den → <root>/librarian and
+  // <root>/knowledge/base (works for both Mac hub and VPS wolves).
+  const kbOps = process.env.WOLFPACK_KB_OPS
+    ?? path.join(path.dirname(wolfDen), "..", "..", "librarian");
+  const kbBaseDir = process.env.KB_BASE
+    ?? path.join(path.dirname(wolfDen), "..", "..", "knowledge", "base");
+  const kbRoots: KbRoots = {
+    kbBase: kbBaseDir,
+    opsRoot: kbOps,
+    denLocal: path.join(wolfDen, "kb"),
+  };
   const defaultDomain  = process.env.WOLFPACK_DOMAIN ?? "wolfpack";
 
   const CONSOLIDATE_AT = 20000;
@@ -399,7 +410,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       defaultModel: model,
       steps: {
         classify:    { model: fastModel },
-        claimCheck:  { model: fastModel },
         // Large pools produce large action lists; give the output real headroom
         // so the JSON isn't truncated (the default 4096 is far too small).
         consolidate: { model, maxTokens: 16000 },
@@ -411,6 +421,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       consolidateAtPoolTokens: CONSOLIDATE_AT,
       poolTargetTokens: POOL_TARGET,
       observerConcurrency: 4,
+      kbRoots,
+      defaultDomain,
     });
   }
 
@@ -518,18 +530,41 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   }
 
+  // Shared-KB read path: drain this wolf's kb-feed notices (pointer + summary)
+  // and surface them so the wolf knows what changed in the shared KB. The full
+  // entry is resolved on demand from the local kb-base mirror. Consumes the
+  // notices (one-time injection).
+  function renderKbUpdates(): string | null {
+    try {
+      const notices = drainFeed(kbRoots, wolfName!);
+      if (notices.length === 0) return null;
+      const lines = [
+        `Shared knowledge-base updates (${notices.length}) since your last session.`,
+        "Read the entry from the KB (knowledge/base) when you need the detail.",
+        "",
+        ...notices.map(
+          (n) =>
+            `- ${n.yourAlias ?? n.canonicalId}: ${n.change} by ${n.by} \u2014 ${n.summary} [${n.entryId}]`
+        ),
+      ];
+      return lines.join("\n");
+    } catch {
+      return null;
+    }
+  }
+
   pi.on("before_agent_start", (event: any, _ctx: any) => {
+    const parts: string[] = [];
+
     const denContext = renderDenContext();
-    if (!denContext) return;
+    if (denContext) parts.push("<wolf_memory>", denContext, "</wolf_memory>");
 
-    const injection = [
-      "",
-      "<wolf_memory>",
-      denContext,
-      "</wolf_memory>",
-      "",
-    ].join("\n");
+    const kbUpdates = renderKbUpdates();
+    if (kbUpdates) parts.push("<kb_updates>", kbUpdates, "</kb_updates>");
 
+    if (parts.length === 0) return;
+
+    const injection = "\n" + parts.join("\n") + "\n";
     return {
       systemPrompt: event.systemPrompt + injection,
     };

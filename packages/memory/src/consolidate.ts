@@ -15,10 +15,10 @@
  *   8. Regenerate den index
  *   9. Mark session as consolidated
  */
-import type { Engine, ClaimWorthiness } from "@wolfpack/engine";
-import { ClaimWorthinessSchema, renderClaim, atomicWrite } from "@wolfpack/engine";
+import type { Engine } from "@wolfpack/engine";
+import { emitDelta } from "@wolfpack/kb/client";
+import type { KbRoots } from "@wolfpack/kb/shared";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
 import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
   readDenTopics,
@@ -32,10 +32,8 @@ import {
 } from "./den.js";
 import {
   CONSOLIDATE_SYSTEM,
-  CLAIM_CHECK_SYSTEM,
   JOURNEY_SYSTEM,
   buildConsolidatePrompt,
-  buildClaimCheckPrompt,
 } from "./prompts.js";
 import { ConsolidationResultSchema, type ConsolidationResult } from "./schemas.js";
 import { renderDenIndex } from "./den-index.js";
@@ -49,11 +47,11 @@ export interface ConsolidateOptions {
   memoryRoot: string;
   /** Session ID to consolidate */
   sessionId: string;
-  /** Path to Librarian inbox root (e.g. ~/wolves/librarian/inbox/) */
-  librarianInbox?: string;
-  /** Domain for auto-claims (e.g. "snapjack", "wolfpack") */
+  /** KB storage roots; enables emitting contribution deltas to the librarian. */
+  kbRoots?: KbRoots;
+  /** Default domain hint for emitted deltas (e.g. "snapjack", "wolfpack"). */
   defaultDomain?: string;
-  /** Skip claim checking */
+  /** Skip emitting deltas to the KB. */
   skipClaims?: boolean;
 }
 
@@ -77,7 +75,7 @@ export async function consolidateSession(
     den,
     memoryRoot,
     sessionId,
-    librarianInbox,
+    kbRoots,
     defaultDomain = "wolfpack",
     skipClaims = false,
   } = options;
@@ -130,7 +128,13 @@ export async function consolidateSession(
   let merged = 0;
   let created = 0;
   let skipped = 0;
-  const updatedTopics: Array<{ id: string; title: string; body: string }> = [];
+  const updatedTopics: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    body: string;
+    change: "create" | "merge";
+  }> = [];
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
 
@@ -149,40 +153,32 @@ export async function consolidateSession(
     };
 
     writeDenTopic(den.denRoot, topic);
-    updatedTopics.push(topic);
+    const change = action.action === "merge" ? "merge" : "create";
+    updatedTopics.push({ ...topic, change });
 
-    if (action.action === "merge") merged++;
+    if (change === "merge") merged++;
     else created++;
   }
 
-  // Step 5: Auto-claim check
+  // Step 5: Emit contribution deltas to the KB (deterministic, NO LLM).
+  // The wolf just reports what changed about each den topic; Dewey's sweep
+  // decides whether/where it lands. Hash-guarded, so unchanged re-promotes
+  // are no-ops.
   let claimsSubmitted = 0;
 
-  if (!skipClaims && librarianInbox && updatedTopics.length > 0) {
+  if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     for (const topic of updatedTopics) {
-      const worthiness = await engine.call(
-        "claimCheck",
-        ClaimWorthinessSchema,
-        {
-          system: CLAIM_CHECK_SYSTEM,
-          prompt: buildClaimCheckPrompt(
-            topic.title,
-            topic.body,
-            den.wolfName,
-            defaultDomain
-          ),
-        }
-      );
-
-      if (worthiness.worthy && worthiness.title && worthiness.claim) {
-        submitClaim(
-          librarianInbox,
-          den.wolfName,
-          worthiness,
-          defaultDomain
-        );
-        claimsSubmitted++;
-      }
+      const emitted = emitDelta({
+        roots: kbRoots,
+        wolf: den.wolfName,
+        denTopicId: topic.id,
+        change: topic.change,
+        domainHint: defaultDomain,
+        summary: topic.summary,
+        body: topic.body,
+        session: sessionId,
+      });
+      if (emitted) claimsSubmitted++;
     }
   }
 
@@ -214,37 +210,6 @@ export async function consolidateSession(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function submitClaim(
-  inboxRoot: string,
-  wolfName: string,
-  worthiness: ClaimWorthiness,
-  domain: string
-): void {
-  const wolfInbox = join(inboxRoot, wolfName);
-  mkdirSync(wolfInbox, { recursive: true });
-
-  const slug = (worthiness.title ?? "claim")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
-  const date = new Date().toISOString().split("T")[0];
-  const filename = `${date}-${slug}.md`;
-
-  const claim = renderClaim({
-    from: wolfName,
-    domain: worthiness.domain ?? domain,
-    origin: "auto",
-    submitted: new Date().toISOString().replace("T", " ").slice(0, 16),
-    title: worthiness.title!,
-    claim: worthiness.claim!,
-    evidence: worthiness.evidence ?? "Auto-extracted from wolf session memory",
-    sources: [],
-  });
-
-  atomicWrite(join(wolfInbox, filename), claim);
-}
 
 async function updateJourney(
   engine: Engine,

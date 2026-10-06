@@ -11,7 +11,7 @@ export const TopicActionSchema = z.object({
   action: z.enum(["merge", "create", "skip"]),
   /** If merge: which den topic to merge into */
   mergeTargetId: z.string().nullable().optional(),
-  /** The resulting topic content (for merge and create) */
+  /** The resulting topic content (for merge and create; null/absent for skip) */
   result: z
     .object({
       id: z.string().describe("Topic ID (slug, kebab-case)"),
@@ -22,6 +22,7 @@ export const TopicActionSchema = z.object({
         .describe("One line, what this topic covers — shown in the index"),
       body: z.string().describe("Full topic content, current-state prose"),
     })
+    .nullable()
     .optional(),
   reasoning: z.string(),
 });

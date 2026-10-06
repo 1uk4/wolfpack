@@ -1,0 +1,10 @@
+{
+  "name": "wolfpack-librarian",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Librarian KB engine control — /kb:sweep for the pack librarian (Dewey)",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

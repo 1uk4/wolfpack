@@ -228,4 +228,5 @@ for (const e of entries) {
 }
 renderDomainDigest(roots, DOMAIN);
 console.log(`APPLIED: wrote _sections.json (${allSections.length} sections), stamped ${stamped} entries, regenerated digest.`);
-console.log("Review + commit:  git -C \"$KB_BASE\" add -A && git -C \"$KB_BASE\" commit -m 'kb v2: backfill wolfpack section tree'");
+console.log("Changes are on disk under KB_BASE; they propagate to the KB authority via Syncthing.");
+console.log("(Only run git here if KB_BASE is its own repository \u2014 do NOT commit a parent/home repo.)");

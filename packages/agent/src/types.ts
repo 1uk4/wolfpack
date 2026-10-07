@@ -66,6 +66,8 @@ export interface WolfStatus {
   since?: string;
   /** Manifest of the installed identity bundle (versions + hashes). */
   bundle?: BundleManifest;
+  /** KB domains this wolf subscribes to (from wolf.yaml). */
+  domains?: string[];
   /** Error message if probe failed */
   error?: string;
 }

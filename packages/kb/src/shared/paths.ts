@@ -21,6 +21,15 @@ export const entriesDir = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "entries");
 export const domainIndex = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "INDEX.md");
+/** Per-domain feed folder \u2014 lives INSIDE the domain so it mirrors to subscribers
+ *  automatically (access-scoped). Dewey drops "what changed" notices here. */
+export const domainFeedDir = (r: KbRoots, domain: string) =>
+  join(r.kbBase, "domains", domain, "_feed");
+/** Quarantine for contributions that fit no declared domain. Dewey-only; never
+ *  inside a domain folder, so it is never mirrored to any wolf. */
+export const unclassifiedDir = (r: KbRoots) => join(r.kbBase, "_unclassified");
+/** Deployed copy of the declared-domain registry (CLI writes; Dewey reads). */
+export const domainsRegistryFile = (r: KbRoots) => join(r.kbBase, "domains.yaml");
 export const registryFile = (r: KbRoots) =>
   join(r.kbBase, "registry", "topics.md");
 export const globalIndex = (r: KbRoots) => join(r.kbBase, "registry", "INDEX.md");

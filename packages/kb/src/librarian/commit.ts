@@ -12,6 +12,7 @@ import {
   entriesDir,
   receiptsDir,
   rejectedDir,
+  unclassifiedDir,
   now,
 } from "../shared/index.js";
 
@@ -61,6 +62,35 @@ export function markProcessed(c: ParsedContribution): void {
   const dir = join(dirname(c.filePath), "_processed");
   mkdirSync(dir, { recursive: true });
   renameSync(c.filePath, join(dir, basename(c.filePath)));
+}
+
+/**
+ * Quarantine a contribution that fits no declared domain. Entry-first still
+ * holds (committed immediately) but into a Dewey-only holding area that is NEVER
+ * mirrored — pending a human `wolfpack domain add`. Records the suggested name.
+ */
+export function quarantine(
+  roots: KbRoots,
+  c: ParsedContribution,
+  suggestedDomain: string,
+): void {
+  const dir = unclassifiedDir(roots);
+  mkdirSync(dir, { recursive: true });
+  const body = [
+    "---",
+    `from: ${c.from}`,
+    `den_topic_id: ${c.denTopicId}`,
+    `suggested_domain: ${suggestedDomain}`,
+    `content_hash: ${c.contentHash}`,
+    `quarantined: ${now()}`,
+    "---",
+    "",
+    c.summary,
+    "",
+    c.body,
+    "",
+  ].join("\n");
+  atomicWrite(join(dir, `${c.denTopicId}-${c.contentHash.slice(7, 17)}.md`), body);
 }
 
 /** Never silently drop a rejected contribution — archive it for audit. */

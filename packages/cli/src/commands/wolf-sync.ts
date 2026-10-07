@@ -10,11 +10,23 @@
  * current — `sync` is a no-op for them (reported as such).
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { buildRemoteBundle } from "../bundle.js";
-import { loadConfig, getHost, type CliConfig, type HostEntry } from "../config.js";
-import { isLibrarian } from "../extensions.js";
+import {
+  loadConfig,
+  getHost,
+  localWolfDir,
+  kbBaseDir,
+  librarianDir,
+  type CliConfig,
+  type HostEntry,
+} from "../config.js";
+import { isLibrarian, writePiSettings } from "../extensions.js";
 import { provisionKbEngine } from "../deployer.js";
+import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 
 interface SyncOpts {
@@ -52,19 +64,67 @@ export async function wolfSync(
     process.exit(1);
   }
 
+  // A local wolf (no --host) reconciles from config even when a default remote
+  // host is set — otherwise it'd be mistaken for a remote wolf.
+  const localExists = fs.existsSync(path.join(localWolfDir(config, name), "wolf.yaml"));
+  if (!opts.host && localExists) {
+    syncLocal(config, name);
+    return;
+  }
+
   const host = getHost(config, opts.host);
   if (!host) {
-    // No host → local wolf.
-    console.log(
-      c.dim(
-        `'${name}' is local — extensions load from the repo directly, always current. Nothing to sync.`,
-      ),
-    );
-    return;
+    console.error(c.red(`'${name}' not found locally and no host specified.`));
+    process.exit(1);
   }
 
   const hostName = opts.host ?? config.defaultHost!;
   await syncOne(host, hostName, name);
+}
+
+/**
+ * Reconcile a LOCAL wolf from its wolf.yaml: regenerate the managed .env keys
+ * (WOLF_*, KB_BASE, KB_OPS) preserving any secrets already present, and rewrite
+ * .pi/settings.json from the declared extensions. Local wolves ride the Mac hub
+ * for KB, so there is no per-wolf Syncthing to wire here.
+ */
+function syncLocal(config: CliConfig, name: string): void {
+  const dir = localWolfDir(config, name);
+  const yamlPath = path.join(dir, "wolf.yaml");
+  if (!fs.existsSync(yamlPath)) {
+    console.error(c.red(`Local wolf not found: ${name}`));
+    process.exit(1);
+  }
+  const wolf = yamlParse(fs.readFileSync(yamlPath, "utf8")) as {
+    id: string; name: string; extensions?: string[];
+  };
+
+  // Managed env keys (regenerated from config); everything else is preserved.
+  const managed: Record<string, string> = {
+    WOLF_ID: wolf.id,
+    WOLF_NAME: wolf.name,
+    WOLF_DEN: path.join(dir, "den"),
+    KB_BASE: kbBaseDir(config),
+    KB_OPS: librarianDir(config),
+  };
+  const envPath = path.join(dir, ".env");
+  const existing: string[] = fs.existsSync(envPath)
+    ? fs.readFileSync(envPath, "utf8").split("\n").filter(Boolean)
+    : [];
+  const kept = existing.filter((l) => {
+    const k = l.slice(0, l.indexOf("="));
+    return k && !(k in managed);
+  });
+  const lines = [...Object.entries(managed).map(([k, v]) => `${k}=${v}`), ...kept];
+  fs.writeFileSync(envPath, lines.join("\n") + "\n", { mode: 0o600 });
+
+  const missing = writePiSettings(dir, wolf.extensions ?? []);
+  console.log(c.green(`\u2713 Reconciled local wolf ${wolf.name} from config`));
+  console.log(c.dim(`  .env:    ${Object.keys(managed).join(", ")} (+${kept.length} preserved)`));
+  console.log(c.dim(`  Exts:    ${wolf.extensions?.length ? wolf.extensions.join(", ") : "(none)"}`));
+  if (missing.length) {
+    console.log(c.yellow(`  ! Not installed: ${missing.join(", ")}`));
+  }
 }
 
 /** Rebuild + push the bundle for one wolf on one host. */
@@ -131,6 +191,13 @@ async function syncOne(
       console.error(c.red(`KB engine provisioning failed: ${err}`));
       process.exit(1);
     }
+    // Deploy the declared-domain registry so the sweep's gate is current.
+    const reg = await deployDomainsRegistry();
+    console.log(
+      reg.ok
+        ? c.green(`\u2713 Declared-domain registry deployed (${reg.note})`)
+        : c.dim(`  \u00b7 Domain registry not deployed: ${reg.note}`),
+    );
   }
 }
 

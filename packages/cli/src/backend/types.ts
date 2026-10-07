@@ -13,6 +13,8 @@ export interface WolfSummary {
   host: string;
   runtime: string;
   profile?: string;
+  /** KB domains this wolf subscribes to (from wolf.yaml). */
+  domains?: string[];
   /** Live-ish state label for the list view */
   status: string;
 }
@@ -51,6 +53,8 @@ export interface WolfStatusInfo {
   memory?: MemorySnapshot;
   /** Installed identity-bundle extensions (remote wolves) for drift checks. */
   bundle?: InstalledExtension[];
+  /** KB domains this wolf subscribes to (from wolf.yaml). */
+  domains?: string[];
 }
 
 export interface LogOptions {

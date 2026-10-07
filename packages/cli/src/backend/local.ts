@@ -29,6 +29,7 @@ interface LocalWolf {
   name: string;
   runtime: string;
   profile?: string;
+  domains?: string[];
 }
 
 /** Freshness window: a status.json newer than this is considered "live". */
@@ -50,8 +51,9 @@ export class LocalBackend implements WolfBackend {
         name: string;
         runtime: string;
         profile?: string;
+        domains?: string[];
       };
-      return { dir, id: w.id, name: w.name, runtime: w.runtime, profile: w.profile };
+      return { dir, id: w.id, name: w.name, runtime: w.runtime, profile: w.profile, domains: w.domains };
     } catch {
       return null;
     }
@@ -109,6 +111,7 @@ export class LocalBackend implements WolfBackend {
         host: LOCAL_HOST,
         runtime: w.runtime,
         profile: w.profile,
+        domains: w.domains,
         status: live ? "live" : "—",
       });
     }
@@ -129,6 +132,7 @@ export class LocalBackend implements WolfBackend {
       active,
       serviceState: tmux ? "tmux" : live ? "live" : "external",
       memory: mem,
+      domains: w.domains,
     };
   }
 

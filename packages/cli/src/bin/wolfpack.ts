@@ -16,6 +16,9 @@ import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
+import { domainCmd } from "../commands/domain.js";
+import { meshCmd } from "../commands/mesh.js";
+import { setupCmd } from "../commands/setup.js";
 
 const c = {
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
@@ -24,6 +27,9 @@ const c = {
 };
 
 const HELP = `${c.bold("wolfpack")} — manage the pack
+
+${c.bold("SETUP")}
+  setup                           Establish the hub + librarian (required roles)
 
 ${c.bold("HOST")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
@@ -43,7 +49,22 @@ ${c.bold("WOLVES")}
   sync <wolf> [--host <h>]        Rebuild + push identity bundle (propagate exts)
   sync --all                      Sync every wolf on every host
 
+${c.bold("DOMAINS")}
+  domain list                     Declared domains + subscribers + entry counts
+  domain add <name>               Declare a new domain (--label, --description)
+  domain show <name>              Domain metadata + subscribers
+  domain rm <name>                Remove a domain declaration (guarded)
+  domain subscribe <wolf> <name>    Attach a domain to a wolf
+  domain subscribe <name>           Pick wolves to (un)subscribe (existing domain)
+  domain wolves <name>              Same picker \u2014 manage a domain's subscribers
+  domain unsubscribe <wolf> <name>  Detach a domain from a wolf
+
+${c.bold("MESH")}
+  mesh                            Reconcile Syncthing fabric to match config
+  mesh --check                    Report mesh drift (missing/stale) \u2014 no change
+
 ${c.bold("ADD WOLF FLAGS")}
+  --domains a,b       Subscribe the new wolf to these domains (skip picker)
   --profile <p>       worker (local) | assistant (24/7 VPS, +telegram)
   --ext a,b           Attach these extensions (skip picker)
   --telegram-token <t>  Telegram bot token (assistant profile)
@@ -70,6 +91,8 @@ function parseArgs(argv: string[]) {
       flags.json = true;
     } else if (arg === "--all") {
       flags.all = true;
+    } else if (arg === "--check") {
+      flags.check = true;
     } else if (arg === "-f" || arg === "--follow") {
       flags.follow = true;
     } else if (arg === "--host" && argv[i + 1]) {
@@ -94,6 +117,12 @@ function parseArgs(argv: string[]) {
       flags.yes = true;
     } else if (arg === "--role" && argv[i + 1]) {
       flags.role = argv[++i]!;
+    } else if (arg === "--label" && argv[i + 1]) {
+      flags.label = argv[++i]!;
+    } else if (arg === "--description" && argv[i + 1]) {
+      flags.description = argv[++i]!;
+    } else if (arg === "--domains" && argv[i + 1]) {
+      flags.domains = argv[++i]!;
     } else if (arg === "--set" && argv[i + 1]) {
       sets.push(argv[++i]!);
     } else if (!arg.startsWith("-")) {
@@ -141,6 +170,25 @@ async function main(): Promise<void> {
         }
         break;
 
+      case "setup":
+        await setupCmd({ yes: flags.yes as boolean | undefined });
+        break;
+
+      case "mesh":
+        await meshCmd({
+          check: flags.check as boolean | undefined,
+          yes: flags.yes as boolean | undefined,
+        });
+        break;
+
+      case "domain":
+        await domainCmd(positional.slice(1), {
+          label: flags.label as string | undefined,
+          description: flags.description as string | undefined,
+          yes: flags.yes as boolean | undefined,
+        });
+        break;
+
       case "add":
         if (sub !== "wolf" || !positional[2]) {
           console.error("Usage: wolfpack add wolf <name> [--host <host>]");
@@ -158,6 +206,9 @@ async function main(): Promise<void> {
             : undefined,
           extensions: flags.ext
             ? (flags.ext as string).split(",").map((s) => s.trim()).filter(Boolean)
+            : undefined,
+          domains: flags.domains
+            ? (flags.domains as string).split(",").map((s) => s.trim()).filter(Boolean)
             : undefined,
         });
         break;

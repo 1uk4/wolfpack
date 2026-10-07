@@ -16,7 +16,13 @@ import {
 const CONTRADICT_SYSTEM =
   "You compare a NEW knowledge contribution against an EXISTING KB entry. " +
   "Decide only whether they factually conflict, and if so which should win. " +
-  "Base 'winner' on recency and specificity of evidence. Output JSON only.";
+  "Base 'winner' on recency and specificity of evidence, using the supplied " +
+  "dates. IMPORTANT: if the NEW contribution is marked currency=archived and its " +
+  "date is older than the existing entry, prefer 'existing' and treat the new " +
+  "material as historical context, NOT a correction. Also: origin=crawl means the " +
+  "NEW material was bulk-ingested from old documents (a wolf acting as a scribe), " +
+  "not lived/curated knowledge — do not let it overwrite a current entry unless it " +
+  "is clearly more recent AND more specific. Output JSON only.";
 
 const CLASSIFY_SYSTEM =
   "You classify a single knowledge contribution into a domain, type, and a " +
@@ -30,11 +36,21 @@ export function createOracles(engine: Engine) {
   return {
     async contradict(
       newText: string,
-      existingText: string
+      existingText: string,
+      dates?: {
+        newDate?: string;
+        newCurrency?: string;
+        existingDate?: string;
+        newOrigin?: string;
+      }
     ): Promise<ContradictResult> {
+      const header = dates
+        ? `NEW date: ${dates.newDate ?? "unknown"} (currency: ${dates.newCurrency ?? "live"}, origin: ${dates.newOrigin ?? "wolf"})\n` +
+          `EXISTING date: ${dates.existingDate ?? "unknown"}\n\n`
+        : "";
       return engine.call("contradict", ContradictResultSchema, {
         system: CONTRADICT_SYSTEM,
-        prompt: `NEW:\n${newText}\n\nEXISTING:\n${existingText}`,
+        prompt: `${header}NEW:\n${newText}\n\nEXISTING:\n${existingText}`,
       });
     },
 

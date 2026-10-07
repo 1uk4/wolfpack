@@ -16,7 +16,8 @@ import { stringify as yamlStringify } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { buildRemoteBundle } from "../bundle.js";
 import { ensureDenMirror } from "./host-sync.js";
-import { loadConfig, getHost, localWolfDir } from "../config.js";
+import { loadConfig, getHost, localWolfDir, kbBaseDir, librarianDir } from "../config.js";
+import { loadRegistry, listDomainNames, unknownDomains } from "../domains.js";
 import { c } from "../render.js";
 import { multiSelect, prompt } from "../prompts.js";
 import {
@@ -58,6 +59,7 @@ interface ResolvedChoices {
   runtime: string;
   profile: WolfProfile;
   extensions: string[];
+  domains: string[];
   telegram?: TelegramChoice;
 }
 
@@ -109,7 +111,33 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     };
   }
 
-  return { runtime, profile, extensions, telegram };
+  // Domains \u2014 subscribe the wolf to declared KB domains (like the ext picker).
+  const reg = loadRegistry();
+  const declared = listDomainNames(reg);
+  let domains: string[];
+  if (opts.domains) {
+    const unknown = unknownDomains(reg, opts.domains);
+    if (unknown.length) {
+      console.error(
+        c.red(`Unknown domain(s): ${unknown.join(", ")}. Declare them first: wolfpack domain add <name>`),
+      );
+      process.exit(1);
+    }
+    domains = opts.domains;
+  } else if (interactive && declared.length) {
+    domains = await multiSelect<string>(
+      "Subscribe to KB domains",
+      declared.map((d) => ({
+        label: `${d} \u2014 ${reg.domains[d]!.label}`,
+        value: d,
+        selected: false,
+      })),
+    );
+  } else {
+    domains = [];
+  }
+
+  return { runtime, profile, extensions, domains, telegram };
 }
 
 export async function wolfAdd(name: string, opts: AddWolfOpts): Promise<void> {
@@ -152,7 +180,7 @@ function addLocal(
     model: opts.model ?? "claude-sonnet-4-6",
     role: opts.role ?? name,
     specialty: opts.specialty,
-    domains: opts.domains ?? [],
+    domains: choices.domains,
     extensions: choices.extensions,
   };
   if (choices.telegram) {
@@ -164,14 +192,16 @@ function addLocal(
   fs.writeFileSync(path.join(wolfDir, "wolf.yaml"), yamlStringify(wolfConfig));
 
   // Write .env — memory extension reads WOLF_DEN and emits KB contribution
-  // deltas to the librarian-ops inbox (WOLFPACK_KB_OPS). ANTHROPIC_API_KEY is
-  // expected from your shell environment.
+  // deltas to the librarian-ops inbox (KB_OPS), and resolves curated entries
+  // from the KB base mirror (KB_BASE). ANTHROPIC_API_KEY is expected from your
+  // shell environment.
   const denPath = path.join(wolfDir, "den");
   const envLines = [
     `WOLF_ID=${id}`,
     `WOLF_NAME=${name}`,
     `WOLF_DEN=${denPath}`,
-    `WOLFPACK_KB_OPS=${path.join(config.wolvesRoot, "librarian")}`,
+    `KB_BASE=${kbBaseDir(config)}`,
+    `KB_OPS=${librarianDir(config)}`,
   ];
   if (choices.telegram?.token) {
     envLines.push(`${choices.telegram.tokenEnv}=${choices.telegram.token}`);
@@ -213,7 +243,7 @@ async function addRemote(
     name,
     role: opts.role ?? name,
     specialty: opts.specialty,
-    domains: opts.domains ?? [],
+    domains: choices.domains,
     extensions: choices.extensions,
   });
   if (built.missing.length) {
@@ -229,7 +259,7 @@ async function addRemote(
   const providerKey = process.env.ANTHROPIC_API_KEY;
   if (providerKey) env.ANTHROPIC_API_KEY = providerKey;
   // KB paths for remote wolves are host-relative (/home/wolf-<id>/...), so the
-  // agent fills WOLFPACK_KB_OPS/KB_BASE when it writes the wolf's .env.
+  // agent fills KB_OPS/KB_BASE when it writes the wolf's .env.
 
   const client = new AgentClient(host);
   try {
@@ -240,7 +270,7 @@ async function addRemote(
       model,
       role: opts.role ?? name,
       specialty: opts.specialty,
-      domains: opts.domains ?? [],
+      domains: choices.domains,
       extensions: built.included,
       telegram: choices.telegram
         ? { tokenEnv: choices.telegram.tokenEnv, ownerId: choices.telegram.ownerId }

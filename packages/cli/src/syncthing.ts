@@ -123,4 +123,33 @@ export class SyncthingRest {
   async putFolder(folder: ReturnType<typeof buildFolder>): Promise<void> {
     await this.req("PUT", `/rest/config/folders/${folder.id}`, folder);
   }
+
+  async listFolders(): Promise<Array<{ id: string }>> {
+    return (await this.req("GET", "/rest/config/folders")) as Array<{ id: string }>;
+  }
+
+  async listDevices(): Promise<Array<{ deviceID: string }>> {
+    return (await this.req("GET", "/rest/config/devices")) as Array<{ deviceID: string }>;
+  }
+
+  async deleteFolder(id: string): Promise<void> {
+    await this.req("DELETE", `/rest/config/folders/${id}`);
+  }
+
+  /**
+   * Harden an instance for the tailnet-only star: explicit addresses only, no
+   * discovery/relays/NAT. Optionally pin the sync listen port. Merged via PATCH
+   * so unrelated option fields are preserved.
+   */
+  async hardenOptions(listenTcpPort?: number): Promise<void> {
+    const patch: Record<string, unknown> = {
+      globalAnnounceEnabled: false,
+      localAnnounceEnabled: false,
+      relaysEnabled: false,
+      natEnabled: false,
+      startBrowser: false,
+    };
+    if (listenTcpPort) patch.listenAddresses = [`tcp://0.0.0.0:${listenTcpPort}`];
+    await this.req("PATCH", "/rest/config/options", patch);
+  }
 }

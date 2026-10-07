@@ -8,6 +8,7 @@
  * it never gates reachability. High-quality knowledge is never left homeless.
  */
 import type { Engine } from "@wolfpack/engine";
+import { parseFrontmatter } from "@wolfpack/engine";
 import {
   type KbRoots,
   type KbEvent,
@@ -47,6 +48,8 @@ import {
 } from "./commit.js";
 import { renderRegistry } from "./registry.js";
 import { emitFeed } from "./feed.js";
+import { readDeclaredDomains, isDeclared, renderDomainIndex } from "./domains.js";
+import { quarantine } from "./commit.js";
 
 export interface SweepContext {
   engine: Engine;
@@ -66,6 +69,10 @@ export interface SweepResult {
   crystallized: number;
   fed: number;
   errors: number;
+  /** Contributions quarantined because they fit no declared domain. */
+  unclassified: number;
+  /** Distinct domain names the classifier suggested for quarantined items. */
+  suggestedDomains: string[];
 }
 
 export async function sweep(ctx: SweepContext): Promise<SweepResult> {
@@ -88,7 +95,14 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     crystallized: 0,
     fed: 0,
     errors: 0,
+    unclassified: 0,
+    suggestedDomains: [],
   };
+
+  // Declared-domain gate + bookkeeping for INDEX regen and recommendations.
+  const declared = readDeclaredDomains(roots);
+  const touchedDomains = new Set<string>();
+  const suggested = new Set<string>();
 
   // ── 1. INTAKE ───────────────────────────────────────────────────── [code]
   const contributions = drainInbox(roots);
@@ -118,19 +132,53 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         c.domainHint || "wolfpack",
         route.target
       );
-      const verdict = await oracles.contradict(c.body, existing ?? "");
-      if (verdict.conflicts && verdict.winner === "existing") {
-        reject = `superseded-by-existing: ${verdict.reason}`;
+      const existingDate = existing
+        ? String(parseFrontmatter(existing).fields.updated ?? "")
+        : "";
+
+      // Archive-safety [code]: an archived contribution OLDER than a live entry
+      // must never supersede it. Reject deterministically before the oracle —
+      // back-filling history can never overwrite current truth.
+      if (
+        c.currency === "archived" &&
+        c.sourceUpdated &&
+        existingDate &&
+        c.sourceUpdated < existingDate
+      ) {
+        reject = `archived-older-than-existing: ${c.sourceUpdated} < ${existingDate}`;
+      } else {
+        const verdict = await oracles.contradict(c.body, existing ?? "", {
+          newDate: c.sourceUpdated,
+          newCurrency: c.currency,
+          existingDate,
+          newOrigin: c.origin,
+        });
+        if (verdict.conflicts && verdict.winner === "existing") {
+          reject = `superseded-by-existing: ${verdict.reason}`;
+        }
+        // else: fall through and merge/supersede in produce()
       }
-      // else: fall through and merge/supersede in produce()
     }
 
     let domain = c.domainHint || "wolfpack";
     let subcategory = "";
-    if (route.kind === "unclassified") {
+    if (route.kind === "unclassified" || !isDeclared(declared, domain)) {
       const klass = await oracles.classify(c.body);
       domain = klass.domain;
       subcategory = klass.subcategory;
+    }
+
+    // ── declared-domain gate — quarantine anything that fits no declared
+    //    domain (never commit into an unmirrored, unreviewed domain) ── [code]
+    if (!isDeclared(declared, domain)) {
+      quarantine(roots, c, domain);
+      writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
+      markProcessed(c);
+      const ce = ev.contribution(toContribEvent(c));
+      batch.push(ce);
+      result.unclassified++;
+      suggested.add(domain);
+      continue;
     }
 
     // ── reject path — never silently dropped ────────────────────── [code]
@@ -169,6 +217,22 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     markProcessed(c);
     if (produced.action === "create") result.created++;
     else result.merged++;
+
+    // ── fan-out via the mirror: drop a notice INSIDE the domain folder so
+    //    Syncthing delivers it to that domain's subscribers (no subscriber
+    //    list needed; non-subscribers never receive it) ───────────── [code]
+    touchedDomains.add(domain);
+    emitFeed(roots, domain, {
+      canonicalId: produced.canonicalId,
+      entryId: produced.entry.frontmatter.id,
+      yourAlias: null,
+      change: produced.action === "create" ? "created" : "updated",
+      by: c.from,
+      summary: c.summary,
+      updated: now(),
+    });
+    batch.push(ev.fed(c.from, produced.canonicalId, produced.entry.frontmatter.id));
+    result.fed++;
     } catch (err) {
       // Isolate failures: one bad contribution must not crash the batch or lose
       // the ledger. Leave its file in the inbox so a later sweep retries it.
@@ -197,31 +261,12 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     result.crystallized++;
   }
 
-  // ── 8. FAN-OUT — implicit subscription ──────────────────────────── [code]
-  const finalReg = foldRegistry([...log, ...batch]);
-  for (const e of batch) {
-    if (e.t !== "entry_written") continue;
-    const topic = finalReg.get(e.canonicalId);
-    if (!topic) continue;
-    // Don't notify the sole owner of their own change (no self-feed noise).
-    const soleOwner = topic.aliases.length === 1 ? topic.aliases[0].wolf : null;
-    for (const wolf of topic.subscribers) {
-      if (wolf === soleOwner) continue;
-      const alias = topic.aliases.find((a) => a.wolf === wolf);
-      const notice: FeedNotice = {
-        canonicalId: e.canonicalId,
-        entryId: e.entryId,
-        yourAlias: alias?.denTopicId ?? null,
-        change: e.action === "create" ? "created" : "updated",
-        by: topic.aliases[0]?.wolf ?? "",
-        summary: topic.entries.length ? "" : "",
-        updated: now(),
-      };
-      emitFeed(roots, wolf, notice);
-      batch.push(ev.fed(wolf, e.canonicalId, e.entryId));
-      result.fed++;
-    }
-  }
+  // ── 8. INDEX — regenerate each touched domain's catalog (discovery) ─ [code]
+  //    The per-domain INDEX.md mirrors with the domain, so subscribers can find
+  //    entries in sections they never contributed to. (Fan-out already happened
+  //    inline via the domain _feed above — mirror-delivered, access-scoped.)
+  for (const domain of touchedDomains) renderDomainIndex(roots, domain);
+  result.suggestedDomains = [...suggested];
 
   // ── 9. PERSIST ──────────────────────────────────────────────────── [code]
   // Only touch the ledger/registry/git when something actually changed — an

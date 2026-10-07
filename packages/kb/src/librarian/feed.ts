@@ -5,14 +5,16 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
-import { type FeedNotice, type KbRoots, feedDir, now } from "../shared/index.js";
+import { type FeedNotice, type KbRoots, domainFeedDir, now } from "../shared/index.js";
 
+// Notices are written INSIDE the domain folder so Syncthing delivers them only
+// to that domain's subscribers \u2014 Dewey needs no subscriber list.
 export function emitFeed(
   roots: KbRoots,
-  wolf: string,
+  domain: string,
   notice: FeedNotice
 ): void {
-  const dir = feedDir(roots, wolf);
+  const dir = domainFeedDir(roots, domain);
   mkdirSync(dir, { recursive: true });
   const body = [
     "---",

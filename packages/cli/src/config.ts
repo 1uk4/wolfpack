@@ -29,11 +29,19 @@ export interface CliConfig {
   defaultHost?: string;
   /**
    * Root of the host-first wolves tree: <root>/<host>/<wolf>/.
-   *   <root>/local/<wolf>   — wolves running on this machine (authoritative)
+   *   <root>/local/<wolf>     — wolves running on this machine (authoritative)
    *   <root>/<vpshost>/<wolf> — read-only backup mirror of a VPS wolf's den
-   *   <root>/shared/        — cross-wolf shared memory (librarian; added later)
+   *   <root>/knowledge/base   — shared KB, Syncthing-mirrored (Dewey writes, wolves read)
+   *   <root>/librarian        — librarian-ops lanes (inbox/kb-feed/receipts/rejected)
+   *   <root>/_archive         — retired trees pending migration
    */
   wolvesRoot: string;
+  /**
+   * The pack librarian (required for the memory/KB system). Records which wolf
+   * curates the shared KB and where it runs. host = "local" means it runs on
+   * this hub machine (launchd sweep); otherwise it's a registered host name.
+   */
+  librarian?: { name: string; id?: string; host: string };
   /** Registered hosts */
   hosts: Record<string, HostEntry>;
 }
@@ -80,9 +88,14 @@ export function localHostDir(config: CliConfig): string {
   return path.join(config.wolvesRoot, LOCAL_HOST);
 }
 
-/** Shared cross-wolf memory root: <root>/shared/ (librarian lives here later). */
-export function sharedDir(config: CliConfig): string {
-  return path.join(config.wolvesRoot, "shared");
+/** Shared knowledge-base root: <root>/knowledge/base (Dewey writes, wolves read). */
+export function kbBaseDir(config: CliConfig): string {
+  return path.join(config.wolvesRoot, "knowledge", "base");
+}
+
+/** Librarian-ops root: <root>/librarian (inbox/kb-feed/receipts/rejected per wolf). */
+export function librarianDir(config: CliConfig): string {
+  return path.join(config.wolvesRoot, "librarian");
 }
 
 export function saveConfig(config: CliConfig): void {

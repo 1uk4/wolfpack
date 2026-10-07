@@ -152,7 +152,7 @@ export class WolfManager {
       `WOLF_DEN=${path.join(home, "den")}`,
       `WOLF_MODEL=${req.model}`,
       // KB paths for the memory extension's emit/read (host-relative layout).
-      `WOLFPACK_KB_OPS=${path.join(home, "librarian")}`,
+      `KB_OPS=${path.join(home, "librarian")}`,
       `KB_BASE=${path.join(home, "knowledge", "base")}`,
     ];
     for (const [k, v] of Object.entries(req.env ?? {})) {
@@ -318,6 +318,7 @@ WantedBy=multi-user.target
         serviceState,
         since,
         bundle: config.bundle,
+        domains: config.domains,
       };
     } catch {
       return {
@@ -328,6 +329,7 @@ WantedBy=multi-user.target
         profile: config.profile,
         serviceState: "unknown",
         bundle: config.bundle,
+        domains: config.domains,
         error: "Failed to probe status",
       };
     }

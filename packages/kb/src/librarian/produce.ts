@@ -72,6 +72,9 @@ export async function produce(
       sources: draft.frontmatter.sources ?? [],
       created: existing ? draft.frontmatter.created : timestamp,
       updated: timestamp,
+      // Temporal provenance from the contribution (crawl/historical ingestion).
+      asOf: c.sourceUpdated ?? draft.frontmatter.asOf,
+      historical: c.currency === "archived" ? true : draft.frontmatter.historical ?? false,
     },
   };
 

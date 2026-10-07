@@ -30,6 +30,32 @@ export const ContributionSchema = z.object({
   submitted: z.string(),
   /** The den topic body (the knowledge itself). */
   body: z.string(),
+
+  // ── Temporal provenance (crawl / historical ingestion) ──────────────────
+  // All optional: live wolf promotions omit them and are unaffected. They let
+  // Dewey judge recency by fact and treat archived history as append-only.
+  /** Earliest source date folded into this contribution (ISO). */
+  sourceCreated: z.string().optional(),
+  /** Latest source date folded into this contribution (ISO). */
+  sourceUpdated: z.string().optional(),
+  /** How the source date was recovered (trust basis). */
+  dateBasis: z
+    .enum(["frontmatter", "git", "filename", "content", "mtime", "none"])
+    .optional(),
+  /** Confidence in the source date. */
+  dateConfidence: z.enum(["high", "medium", "low", "none"]).optional(),
+  /** Whether this is current, a point-in-time snapshot, or historical. */
+  currency: z.enum(["live", "snapshot", "archived"]).optional(),
+  /** Originating source path (provenance). */
+  sourcePath: z.string().optional(),
+  /**
+   * How this contribution was produced:
+   *   "wolf"  — a wolf's lived/promoted memory (default).
+   *   "crawl" — bulk-ingested from a document corpus (the wolf acted as a SCRIBE).
+   * Dewey uses this to distinguish curated lived knowledge from ingested history;
+   * combined with `currency`, a crawl is historical reference, not lived truth.
+   */
+  origin: z.enum(["wolf", "crawl"]).optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

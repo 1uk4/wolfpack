@@ -46,3 +46,9 @@ export {
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";
 export { emitFeed } from "./feed.js";
+export {
+  readDeclaredDomains,
+  isDeclared,
+  renderDomainIndex,
+} from "./domains.js";
+export { quarantine } from "./commit.js";

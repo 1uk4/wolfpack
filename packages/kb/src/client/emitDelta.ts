@@ -25,6 +25,14 @@ export interface EmitDeltaInput {
   summary: string;
   body: string;
   session?: string;
+  // Temporal provenance (crawl ingestion). All optional.
+  sourceCreated?: string;
+  sourceUpdated?: string;
+  dateBasis?: Contribution["dateBasis"];
+  dateConfidence?: Contribution["dateConfidence"];
+  currency?: Contribution["currency"];
+  sourcePath?: string;
+  origin?: Contribution["origin"];
 }
 
 /**
@@ -53,6 +61,13 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     session: input.session,
     submitted: now(),
     body: input.body,
+    sourceCreated: input.sourceCreated,
+    sourceUpdated: input.sourceUpdated,
+    dateBasis: input.dateBasis,
+    dateConfidence: input.dateConfidence,
+    currency: input.currency,
+    sourcePath: input.sourcePath,
+    origin: input.origin,
   };
 
   const file = join(dir, `${input.denTopicId}-${hash.slice(7, 17)}.md`);
@@ -79,6 +94,13 @@ function render(c: Contribution): string {
     `prev_hash: ${c.prevHash ?? "null"}`,
     `domain_hint: ${c.domainHint}`,
     c.session ? `session: ${c.session}` : null,
+    c.sourceCreated ? `source_created: ${c.sourceCreated}` : null,
+    c.sourceUpdated ? `source_updated: ${c.sourceUpdated}` : null,
+    c.dateBasis ? `date_basis: ${c.dateBasis}` : null,
+    c.dateConfidence ? `date_confidence: ${c.dateConfidence}` : null,
+    c.currency ? `currency: ${c.currency}` : null,
+    c.sourcePath ? `source_path: ${c.sourcePath}` : null,
+    c.origin ? `origin: ${c.origin}` : null,
     `submitted: ${c.submitted}`,
     "---",
   ]

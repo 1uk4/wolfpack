@@ -56,6 +56,21 @@ function parseContribution(filePath: string): ParsedContribution | null {
         ? String(fields.prev_hash)
         : null,
     domainHint: fields.domain_hint ? String(fields.domain_hint) : "",
+    sourceCreated: fields.source_created ? String(fields.source_created) : undefined,
+    sourceUpdated: fields.source_updated ? String(fields.source_updated) : undefined,
+    dateBasis: fields.date_basis
+      ? (String(fields.date_basis) as ParsedContribution["dateBasis"])
+      : undefined,
+    dateConfidence: fields.date_confidence
+      ? (String(fields.date_confidence) as ParsedContribution["dateConfidence"])
+      : undefined,
+    currency: fields.currency
+      ? (String(fields.currency) as ParsedContribution["currency"])
+      : undefined,
+    sourcePath: fields.source_path ? String(fields.source_path) : undefined,
+    origin: fields.origin
+      ? (String(fields.origin) as ParsedContribution["origin"])
+      : undefined,
     summary: content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",

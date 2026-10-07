@@ -58,6 +58,7 @@ export class RemoteBackend implements WolfBackend {
       since: s.since as string | undefined,
       error: s.error as string | undefined,
       bundle: manifest?.extensions,
+      domains: s.domains as string[] | undefined,
     };
   }
 

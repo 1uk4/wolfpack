@@ -22,6 +22,10 @@ export const EntryFrontmatterSchema = z.object({
   created: z.string(),
   updated: z.string(),
   expires: z.string().optional(),
+  /** The source date this entry's knowledge is current as of (crawl/historical). */
+  asOf: z.string().optional(),
+  /** True when the entry is historical (archived crawl); readers treat as past. */
+  historical: z.boolean().default(false),
 });
 
 export type EntryFrontmatter = z.infer<typeof EntryFrontmatterSchema>;

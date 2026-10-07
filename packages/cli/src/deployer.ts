@@ -47,7 +47,7 @@ async function bundleAgent(repoRoot: string, outFile: string): Promise<void> {
 /**
  * Find the wolfpack repo root
  */
-function findRepoRoot(): string | null {
+export function findRepoRoot(): string | null {
   // Try to find package.json with @wolfpack/cli
   let current = __dirname;
   
@@ -67,10 +67,10 @@ function findRepoRoot(): string | null {
 }
 
 /** Embedding model for the librarian's KB engine (pulled by provisionKbEngine). */
-const KB_EMBED_MODEL = "nomic-embed-text";
+export const KB_EMBED_MODEL = "nomic-embed-text";
 
 /** Bundle the @wolfpack/kb CLI into one self-contained file (esbuild). */
-async function bundleKbCli(repoRoot: string, outFile: string): Promise<void> {
+export async function bundleKbCli(repoRoot: string, outFile: string): Promise<void> {
   await esbuild.build({
     entryPoints: [path.join(repoRoot, "packages", "kb", "src", "cli.ts")],
     bundle: true,
@@ -232,15 +232,18 @@ if [ -n "${authkey}" ]; then
 fi
 echo "    $(tailscale --version 2>/dev/null | head -1)"
 
-step "Syncthing (enable as root)"
+step "Syncthing (binary only \u2014 per-wolf instances run under each wolf)"
 if ! command -v syncthing >/dev/null 2>&1; then
   apt-get install -y -qq syncthing
 fi
-systemctl enable --now syncthing@root
-for i in $(seq 1 15); do [ -f /root/.local/state/syncthing/config.xml ] && break; sleep 1; done
-echo "    $(syncthing --version 2>/dev/null | head -1) (service: $(systemctl is-active syncthing@root 2>/dev/null))"
-# Bind GUI to localhost only; den mirrors are configured via SSH (host sync).
-true
+# Per-wolf model (Option 2): each wolf runs its OWN syncthing (wolf-<id>-syncthing
+# .service, provisioned by wolfpack mesh). We do NOT run a host-level
+# syncthing@root \u2014 it would collide on 8384/22000 with the first per-wolf
+# instance. Retire any pre-existing one so ports are free.
+if systemctl is-enabled syncthing@root >/dev/null 2>&1 || systemctl is-active syncthing@root >/dev/null 2>&1; then
+  systemctl disable --now syncthing@root 2>/dev/null || true
+fi
+echo "    $(syncthing --version 2>/dev/null | head -1) (per-wolf; no host-level daemon)"
 
 printf '\\n\\033[32m  \\u2713 prerequisites ready\\033[0m\\n'
 echo "PREREQS_OK"
@@ -311,11 +314,11 @@ export async function deployAgent(
     // Bundle the agent into one self-contained file.
     await bundleAgent(repoRoot, path.join(deployDir, "wolfpack-agent.cjs"));
 
-    // Read the host Syncthing API key so the agent's /health can report folder
-    // completion (host status) and so den mirrors can be inspected.
+    // Per-wolf Syncthing model: there is no host-level syncthing@root. Host
+    // folder health is reported per wolf instead, so this is best-effort/empty.
     const syncApiKey = execSsh(
       host,
-      "grep -o '<apikey>[^<]*</apikey>' /root/.local/state/syncthing/config.xml 2>/dev/null | sed 's/<[^>]*>//g'",
+      "grep -o '<apikey>[^<]*</apikey>' /root/.local/state/syncthing/config.xml 2>/dev/null | sed 's/<[^>]*>//g' || true",
     ).stdout.trim();
 
     // Create systemd service file. The agent runs as root: it manages per-wolf
@@ -337,7 +340,7 @@ StandardError=journal
 Environment="WOLFPACK_AGENT_PORT=${host.port}"
 Environment="WOLFPACK_AGENT_DATA=/opt/wolfpack"
 Environment="WOLFPACK_AGENT_API_KEY=${apiKey}"
-Environment="SYNCTHING_UNIT=syncthing@root"
+Environment="SYNCTHING_UNIT="
 Environment="SYNCTHING_URL=http://127.0.0.1:8384"
 Environment="SYNCTHING_API_KEY=${syncApiKey}"
 

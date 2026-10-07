@@ -34,9 +34,23 @@ import {
 function resolveRoots(): KbRoots {
   const home = homedir();
   const denRoot = process.env.WOLF_DEN ?? join(home, "wolves", "den");
+  // KB_BASE/KB_OPS MUST be explicit. The librarian writes curated entries to
+  // KB_BASE and wolves read from the same mirror \u2014 a wrong default here is
+  // exactly the drift that silently stranded 29 committed entries (sweep wrote
+  // ~/knowledge/base while wolves read ~/wolves/knowledge/base). Fail loudly
+  // rather than diverge.
+  const kbBase = process.env.KB_BASE;
+  const opsRoot = process.env.KB_OPS;
+  if (!kbBase || !opsRoot) {
+    console.error(
+      "KB_BASE and KB_OPS are required (set in the wolf .env / sweep unit). " +
+        "Refusing to run against ambiguous default paths."
+    );
+    process.exit(1);
+  }
   return {
-    kbBase: resolve(process.env.KB_BASE ?? join(home, "knowledge", "base")),
-    opsRoot: resolve(process.env.KB_OPS ?? join(home, "librarian")),
+    kbBase: resolve(kbBase),
+    opsRoot: resolve(opsRoot),
     // den-local KB state (ledger/vectors). Overridable so it can live outside
     // the (user-owned, synced) den when the sweep runs as root.
     denLocal: resolve(process.env.KB_DEN_LOCAL ?? join(denRoot, "kb")),
@@ -127,8 +141,15 @@ async function cmdSweep(): Promise<void> {
 
   console.log(
     `done: ${result.processed} processed · ${result.created}c ${result.merged}m ` +
-      `${result.rejected}r · ${result.crystallized} crystallized · ${result.fed} fed`
+      `${result.rejected}r · ${result.unclassified} unclassified · ` +
+      `${result.crystallized} crystallized · ${result.fed} fed`
   );
+  if (result.suggestedDomains.length) {
+    console.log(
+      `recommend new domain(s): ${result.suggestedDomains.join(", ")} ` +
+        `(declare with: wolfpack domain add <name>)`
+    );
+  }
   console.log(engine.usage.summarize());
 
   if (result.processed > 0) {
@@ -139,8 +160,13 @@ async function cmdSweep(): Promise<void> {
         `\u2022 processed: ${result.processed}`,
         `\u2022 created: ${result.created}  merged: ${result.merged}  rejected: ${result.rejected}  errors: ${result.errors}`,
         `\u2022 crystallized: ${result.crystallized}  fed: ${result.fed}`,
+        result.unclassified > 0
+          ? `\u2022 \u26a0 unclassified: ${result.unclassified} \u2014 recommend domain(s): ${result.suggestedDomains.join(", ") || "?"}`
+          : null,
         `\u2022 tokens: ${u.totalTokens}`,
-      ].join("\n")
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
   }
 }

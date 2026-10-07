@@ -50,6 +50,11 @@ export async function wolfStatus(
         console.log(c.yellow(`  ${drift} extension(s) out of date — run: wolfpack sync ${s.name}`));
       }
     }
+    if (s.domains !== undefined) {
+      console.log(
+        `  Domains:  ${s.domains.length ? s.domains.join(", ") : c.dim("none")}`,
+      );
+    }
     if (s.error) console.log(`  Error:    ${c.red(s.error)}`);
   } catch (err) {
     console.error(c.red(`Failed: ${err instanceof Error ? err.message : err}`));

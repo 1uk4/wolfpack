@@ -25,6 +25,7 @@ import type { KbRoots } from "./shared/index.js";
 import { vectorsDir } from "./shared/index.js";
 import {
   sweep,
+  sweepV2,
   readLedger,
   foldRegistry,
   createEmbedder,
@@ -131,7 +132,11 @@ async function cmdSweep(): Promise<void> {
     );
   }
 
-  const result = await sweep({
+  // KB_V2=1 selects the hierarchical section-tree sweep; unset = legacy sweep.
+  const useV2 = process.env.KB_V2 === "1";
+  if (useV2) console.log("kb: KB_V2=1 \u2014 using hierarchical section-tree sweep (sweepV2)");
+  const runSweep = useV2 ? sweepV2 : sweep;
+  const result = await runSweep({
     engine,
     roots,
     loadEntryVectors: () =>

@@ -55,8 +55,8 @@ describe("renderDomainIndex", () => {
     renderDomainIndex(roots, "wolfpack");
     const idx = readFileSync(domainIndex(roots, "wolfpack"), "utf-8");
     expect(idx).toContain("2 entries");
-    expect(idx).toContain("**Alpha** _(core)_ — first thing `[kb-wolfpack-aaa]`");
-    expect(idx).toContain("**Beta** — second thing `[kb-wolfpack-bbb]`");
+    expect(idx).toContain("- [[kb-wolfpack-aaa|Alpha]] _(core)_ — first thing");
+    expect(idx).toContain("- [[kb-wolfpack-bbb|Beta]] — second thing");
   });
 });
 

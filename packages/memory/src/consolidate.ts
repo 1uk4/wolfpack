@@ -30,11 +30,8 @@ import {
   ensureDenDirs,
   type DenConfig,
 } from "./den.js";
-import {
-  CONSOLIDATE_SYSTEM,
-  JOURNEY_SYSTEM,
-  buildConsolidatePrompt,
-} from "./prompts.js";
+import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
+import { buildConsolidatePrompt } from "./prompts.js";
 import { ConsolidationResultSchema, type ConsolidationResult } from "./schemas.js";
 import { renderDenIndex } from "./den-index.js";
 

@@ -40,6 +40,12 @@ export interface StepConfigs {
   classifyEntry?: ModelConfig;
   /** KB: label a crystallized cluster with a canonical topic name (fast, deferrable) */
   labelTopic?: ModelConfig;
+  /** KB: route a contribution to a section from a closed enum (fast, Phase 3a) */
+  classifyToSection?: ModelConfig;
+  /** KB: summarize a section from child summaries (fast, Phase 3b) */
+  sectionSummary?: ModelConfig;
+  /** KB: name a section with a short title from its summary (fast) */
+  labelSection?: ModelConfig;
 }
 
 export interface EngineConfig {

@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --build --noEmit",
+    "typecheck": "tsc --build",
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
     "install:cli": "npm run build && cd packages/cli && npm link"

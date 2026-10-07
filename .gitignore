@@ -33,3 +33,15 @@ legacy/**/*.d.ts.map
 
 # Ephemeral/persistent visual-tools renders (never commit)
 viz/
+
+# compiled test artifacts accidentally emitted into src by ad-hoc tsc
+packages/*/src/**/*.test.js
+packages/*/src/**/*.test.d.ts
+packages/*/src/**/*.test.js.map
+packages/*/src/**/*.test.d.ts.map
+
+.claude/
+*.bak
+vitest.config.js
+vitest.config.d.ts
+vitest.config.*.map

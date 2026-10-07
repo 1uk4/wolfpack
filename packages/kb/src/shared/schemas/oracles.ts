@@ -3,6 +3,7 @@
  * Everything else in the sweep is deterministic code.
  */
 import { z } from "zod";
+import { EntryTypeSchema } from "@wolfpack/engine";
 
 /** contradict — only fires on high similarity + content diff. */
 export const ContradictResultSchema = z.object({
@@ -15,7 +16,10 @@ export type ContradictResult = z.infer<typeof ContradictResultSchema>;
 /** classifyEntry — only fires for an unroutable singleton with a weak hint. */
 export const ClassifyResultSchema = z.object({
   domain: z.string(),
-  type: z.enum(["fact", "decision", "process", "reference"]),
+  // Unified with the entry schema's controlled vocabulary (single source of truth).
+  type: EntryTypeSchema,
+  /** Set when type='other' (or to refine the type): preferred kebab-case word. */
+  tag: z.string().optional(),
   subcategory: z.string(),
   reasoning: z.string(),
 });
@@ -28,3 +32,24 @@ export const LabelTopicResultSchema = z.object({
   reasoning: z.string(),
 });
 export type LabelTopicResult = z.infer<typeof LabelTopicResultSchema>;
+
+/** sectionPick — route a contribution to ONE section or NEW. */
+export const SectionPickSchema = z.object({
+  /** A provided section id from the digest enum, or the literal string "NEW". */
+  section: z.string(),
+  confidence: z.enum(["low", "medium", "high"]),
+});
+export type SectionPick = z.infer<typeof SectionPickSchema>;
+
+/** sectionSummary — summarize a bounded set of child summaries. */
+export const SectionSummarySchema = z.object({
+  /** One paragraph describing what the section is about. */
+  summary: z.string(),
+});
+export type SectionSummary = z.infer<typeof SectionSummarySchema>;
+
+export const LabelSectionSchema = z.object({
+  /** A short, specific section title (2–6 words). */
+  title: z.string(),
+});
+export type LabelSection = z.infer<typeof LabelSectionSchema>;

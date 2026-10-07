@@ -70,4 +70,33 @@ export const ev = {
     canonicalId,
     entryId,
   }),
+
+  sectionCreated: (f: {
+    sectionId: string;
+    domain: string;
+    parent: string | null;
+    label: string;
+  }): KbEvent => ({ t: "section_created", ...stamp(), ...f }),
+
+  sectionSplit: (sectionId: string, parentId: string, childIds: string[]): KbEvent => ({
+    t: "section_split",
+    ...stamp(),
+    sectionId,
+    parentId,
+    childIds,
+  }),
+
+  entryPlaced: (f: {
+    entryId: string;
+    sectionId: string;
+    basis: "routed" | "curator-pinned" | "crystallized" | "declared";
+    fit: number;
+  }): KbEvent => ({ t: "entry_placed", ...stamp(), ...f }),
+
+  crystallizedV2: (f: {
+    sectionId: string;
+    parentId: string;
+    entryIds: string[];
+    cohesion: number;
+  }): KbEvent => ({ t: "crystallized_v2", ...stamp(), ...f }),
 };

@@ -8,4 +8,4 @@ export {
   parseEntryFrontmatter,
   readEntryFile,
 } from "./parse.js";
-export { atomicWrite, renderEntry } from "./commit.js";
+export { atomicWrite, renderEntry, renderFrontmatter } from "./commit.js";

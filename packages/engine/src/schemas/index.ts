@@ -7,6 +7,9 @@
 export {
   EntryFrontmatterSchema,
   EntrySchema,
+  EntryTypeSchema,
+  ENTRY_TYPES,
   type EntryFrontmatter,
   type Entry,
+  type EntryType,
 } from "./entry.js";

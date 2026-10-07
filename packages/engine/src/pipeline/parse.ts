@@ -10,6 +10,26 @@ import {
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
 /**
+ * Normalize a scalar frontmatter value for the in-memory model: strip wrapping
+ * quotes and Obsidian wikilink brackets so links round-trip to bare ids.
+ * On disk link fields are stored as `"[[kb-...]]"` (Obsidian-native, navigable);
+ * in memory the pipeline only ever sees the bare `kb-...` id.
+ */
+export function unwrapScalar(value: string): string {
+  let v = value.trim();
+  if (
+    (v.startsWith('"') && v.endsWith('"')) ||
+    (v.startsWith("'") && v.endsWith("'"))
+  ) {
+    v = v.slice(1, -1).trim();
+  }
+  if (v.startsWith("[[") && v.endsWith("]]")) {
+    v = v.slice(2, -2).trim();
+  }
+  return v;
+}
+
+/**
  * Parse YAML-ish frontmatter. Intentionally minimal — supports flat key: value
  * and array fields (both inline [a, b] and multi-line - item). No YAML dep.
  */
@@ -27,7 +47,7 @@ export function parseFrontmatter(
   for (const line of lines) {
     // Multi-line array item
     if (line.match(/^\s+-\s+/) && currentKey && currentArray) {
-      currentArray.push(line.replace(/^\s+-\s+/, "").trim());
+      currentArray.push(unwrapScalar(line.replace(/^\s+-\s+/, "")));
       continue;
     }
 
@@ -52,12 +72,16 @@ export function parseFrontmatter(
       value = value.slice(1, -1);
     }
 
-    // Inline array: [a, b, c]
-    if (value.startsWith("[") && value.endsWith("]")) {
+    // Inline array: [a, b, c]  (but NOT a wikilink like [[id]])
+    if (
+      value.startsWith("[") &&
+      value.endsWith("]") &&
+      !value.startsWith("[[")
+    ) {
       fields[key] = value
         .slice(1, -1)
         .split(",")
-        .map((s) => s.trim())
+        .map((s) => unwrapScalar(s))
         .filter(Boolean);
       continue;
     }
@@ -69,7 +93,7 @@ export function parseFrontmatter(
       continue;
     }
 
-    fields[key] = value;
+    fields[key] = unwrapScalar(value);
   }
 
   // Flush final pending array

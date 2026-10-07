@@ -88,6 +88,37 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     canonicalId: z.string(),
     entryId: z.string(),
   }),
+  z.object({
+    ...base,
+    t: z.literal("section_created"),
+    sectionId: z.string(),
+    domain: z.string(),
+    parent: z.string().nullable(),
+    label: z.string(),
+  }),
+  z.object({
+    ...base,
+    t: z.literal("section_split"),
+    sectionId: z.string(),
+    parentId: z.string(),
+    childIds: z.array(z.string()),
+  }),
+  z.object({
+    ...base,
+    t: z.literal("entry_placed"),
+    entryId: z.string(),
+    sectionId: z.string(),
+    basis: z.enum(["routed", "curator-pinned", "crystallized", "declared"]),
+    fit: z.number(),
+  }),
+  z.object({
+    ...base,
+    t: z.literal("crystallized_v2"),
+    sectionId: z.string(),
+    parentId: z.string(),
+    entryIds: z.array(z.string()),
+    cohesion: z.number(),
+  }),
 ]);
 
 export type KbEvent = z.infer<typeof KbEventSchema>;

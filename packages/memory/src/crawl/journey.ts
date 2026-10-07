@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
+import { CRAWL_JOURNEY_SYSTEM } from "@wolfpack/engine";
 import { normalizeDate } from "./dates.js";
 import type { CrawlTopic, CrawlEvent } from "./consolidate.js";
 import type { CrawlPlan } from "./schemas.js";
@@ -22,19 +23,8 @@ export const JourneyResultSchema = z.object({
   journey: z.string().describe("The full, updated markdown journey (chronological)"),
 });
 
-export const CRAWL_JOURNEY_SYSTEM = `You reconstruct a domain's HISTORY — a short, purely descriptive, past-tense narrative of how it evolved, built from dated EVENTS (decisions and changes) extracted from historical documents.
-
-You receive the CURRENT journey draft and a CHRONOLOGICAL batch of dated events (oldest first). Extend the journey.
-
-Hard rules:
-- Group events by period (month, or quarter/year when the dates are coarser). Write 2–4 sentences PER PERIOD describing what HAPPENED or CHANGED.
-- NARRATE, do not catalog. Do NOT enumerate specifications, schema fields, parameters, API routes, configuration values, or tier tables — those live in the topic entries, not the history. Refer to them in aggregate ("the full API surface and data model were documented", "the tier ladder was defined").
-- Past tense. Only what happened — no recommendations, next steps, or present-tense current-state description.
-- Preserve names, version numbers, commit hashes, and dates verbatim where they identify an event.
-- Respect date granularity (a month is a month; mark a genuinely approximate placement with "~"). NEVER invent a precise date.
-- Keep strict chronological order. If the journey grows long, COMPRESS the OLDEST periods into tighter summaries while keeping recent periods detailed.
-
-Respond with JSON matching the schema: the full updated markdown journey.`;
+// Re-export from @wolfpack/engine
+export { CRAWL_JOURNEY_SYSTEM };
 
 export function buildJourneyPrompt(
   domain: string,

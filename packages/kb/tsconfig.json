@@ -5,6 +5,7 @@
     "outDir": "dist"
   },
   "include": ["src"],
+  "exclude": ["**/*.test.ts"],
   "references": [
     { "path": "../engine" }
   ]

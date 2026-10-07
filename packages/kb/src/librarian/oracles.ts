@@ -4,6 +4,7 @@
  * is deferrable. Everything else in the sweep is deterministic code.
  */
 import type { Engine } from "@wolfpack/engine";
+import { CONTRADICT_SYSTEM, CLASSIFY_SYSTEM, LABEL_SYSTEM, SECTION_PICK_SYSTEM } from "@wolfpack/engine";
 import {
   ContradictResultSchema,
   type ContradictResult,
@@ -11,26 +12,9 @@ import {
   type ClassifyResult,
   LabelTopicResultSchema,
   type LabelTopicResult,
+  SectionPickSchema,
+  type SectionPick,
 } from "../shared/index.js";
-
-const CONTRADICT_SYSTEM =
-  "You compare a NEW knowledge contribution against an EXISTING KB entry. " +
-  "Decide only whether they factually conflict, and if so which should win. " +
-  "Base 'winner' on recency and specificity of evidence, using the supplied " +
-  "dates. IMPORTANT: if the NEW contribution is marked currency=archived and its " +
-  "date is older than the existing entry, prefer 'existing' and treat the new " +
-  "material as historical context, NOT a correction. Also: origin=crawl means the " +
-  "NEW material was bulk-ingested from old documents (a wolf acting as a scribe), " +
-  "not lived/curated knowledge — do not let it overwrite a current entry unless it " +
-  "is clearly more recent AND more specific. Output JSON only.";
-
-const CLASSIFY_SYSTEM =
-  "You classify a single knowledge contribution into a domain, type, and a " +
-  "short subcategory slug. Output JSON only.";
-
-const LABEL_SYSTEM =
-  "You name a cluster of related knowledge entries with a concise human topic " +
-  "label and a kebab-case slug. Output JSON only.";
 
 export function createOracles(engine: Engine) {
   return {
@@ -66,6 +50,44 @@ export function createOracles(engine: Engine) {
         system: LABEL_SYSTEM,
         prompt: memberSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n"),
       });
+    },
+
+    /**
+     * classifyToSection — route a contribution to a section from a closed set.
+     * 
+     * Input: contribution text + candidate sections (array of {sectionId, title, summary}).
+     * Output: {section: sectionId | "NEW", confidence}.
+     * 
+     * CONFINEMENT: validates that the returned section is either "NEW" or one of the
+     * provided sectionIds. If the model returns an id not in the set, coerces to "NEW".
+     */
+    async classifyToSection(
+      contributionText: string,
+      sections: Array<{ sectionId: string; title: string; summary: string }>
+    ): Promise<SectionPick> {
+      // Build the section enum for the prompt
+      const sectionList = sections
+        .map((s) => `- ${s.sectionId}: ${s.title}\n  ${s.summary}`)
+        .join("\n\n");
+
+      const prompt = `CONTRIBUTION:\n${contributionText}\n\nSECTIONS (pick one id or return "NEW"):\n${sectionList}`;
+
+      const result = await engine.call("classifyToSection", SectionPickSchema, {
+        system: SECTION_PICK_SYSTEM,
+        prompt,
+      });
+
+      // FIREWALL: validate the returned section is in the provided set or "NEW"
+      const validSectionIds = new Set(sections.map((s) => s.sectionId));
+      if (result.section !== "NEW" && !validSectionIds.has(result.section)) {
+        // Model returned an invalid id — coerce to "NEW"
+        return {
+          section: "NEW",
+          confidence: result.confidence,
+        };
+      }
+
+      return result;
     },
   };
 }

@@ -1,42 +1,47 @@
 /**
  * Prompts for the wolf consolidator's LLM calls.
- * Each prompt maps to a specific pipeline step with a Zod schema output.
+ * System prompts are imported from @wolfpack/engine.
+ * This file provides the dynamic prompt builders.
  */
 import type { TopicFile } from "./session/memory.js";
 import type { DenTopic } from "./den.js";
+import { CONSOLIDATE_SYSTEM, JOURNEY_SYSTEM } from "@wolfpack/engine";
+import type { ContextDigest, DigestSection } from "@wolfpack/kb/shared";
+import { DIGEST } from "@wolfpack/engine";
+
+// Re-export for backward compatibility
+export { CONSOLIDATE_SYSTEM, JOURNEY_SYSTEM };
 
 /**
- * System prompt for the CONSOLIDATE step.
- * Given session topics and existing den topics, produce merge instructions.
+ * Render a "PACK ALREADY KNOWS" block from digest sections.
+ * Keeps it lean: sectionId, title, summary only (no bodies).
+ * Respects DIGEST.maxPrimedTopics cap from engine tuning.
  */
-export const CONSOLIDATE_SYSTEM = `You are a knowledge consolidator for a coding agent's persistent memory.
-
-Your job: take topic files from a completed session and fold them into the wolf's permanent memory. The wolf's permanent memory persists across all sessions — it is the wolf's long-term knowledge about projects, decisions, and context.
-
-You receive:
-1. SESSION TOPICS — knowledge captured during one session (the new input)
-2. DEN TOPICS — the wolf's existing permanent memory (what it already knows)
-
-For each session topic, decide:
-- MERGE — the session topic extends or updates an existing den topic. Produce the merged content.
-- CREATE — the session topic covers something new. Produce the new topic.
-- SKIP — the session topic is noise, too session-specific, or already fully covered.
-
-Rules:
-- Write current-state prose, not a changelog. If new info supersedes old info, REWRITE to reflect the new truth.
-- Preserve distinguishing detail: file paths, identifiers, names, error codes, exact numbers.
-- Keep prose tight and skimmable. Headings and short paragraphs are fine.
-- The summary field is load-bearing — it's the ONLY thing the wolf sees until it opens the file. Make it specific and current.
-- Strip session-specific context (timestamps, "today we", "just now"). This is permanent memory.
-
-Respond with valid JSON matching the schema.`;
+function renderPackKnows(sections: DigestSection[]): string {
+  const capped = sections.slice(0, DIGEST.maxPrimedTopics);
+  if (capped.length === 0) return "";
+  
+  const lines = capped.map(
+    (s) => `- ${s.sectionId} — ${s.title}\n  ${s.summary}`
+  );
+  return [
+    "",
+    "===== PACK ALREADY KNOWS (shared KB context) =====",
+    lines.join("\n\n"),
+    "===== END PACK ALREADY KNOWS =====",
+    "",
+  ].join("\n");
+}
 
 /**
  * Build the consolidation prompt with session topics and den topics.
+ * Uses CONSOLIDATE_SYSTEM from @wolfpack/engine.
+ * Optionally primes with a subset of the shared KB digest.
  */
 export function buildConsolidatePrompt(
   sessionTopics: TopicFile[],
-  denTopics: DenTopic[]
+  denTopics: DenTopic[],
+  digest?: ContextDigest | DigestSection[]
 ): string {
   const sessionSection = sessionTopics
     .map(
@@ -55,6 +60,14 @@ export function buildConsolidatePrompt(
           .join("\n\n---\n\n")
       : "(empty — no existing memory)";
 
+  // Extract sections from digest if provided (handle both full digest and sections array)
+  const sections = digest
+    ? Array.isArray(digest)
+      ? digest
+      : digest.sections
+    : [];
+  const packKnowsBlock = renderPackKnows(sections);
+
   return [
     "===== SESSION TOPICS (new input from this session) =====",
     sessionSection,
@@ -63,19 +76,7 @@ export function buildConsolidatePrompt(
     "===== DEN TOPICS (existing permanent memory) =====",
     denSection,
     "===== END DEN TOPICS =====",
-    "",
+    packKnowsBlock,
     "Fold the session topics into permanent memory. For each session topic, decide MERGE, CREATE, or SKIP.",
   ].join("\n");
 }
-
-/**
- * System prompt for the JOURNEY UPDATE step.
- * Append to the wolf's running history.
- */
-export const JOURNEY_SYSTEM = `You maintain a wolf's running project history — a short, purely descriptive narrative of how work has progressed across sessions.
-
-You receive the current journey and a summary of what happened in the latest session. Append a short dated segment (2-5 sentences) describing the arc of this session. Do NOT include recommendations, next steps, or advice. Write only what happened, past tense.
-
-If the journey would exceed the token budget, compress the OLDEST segments into a tighter summary, keeping recent history detailed.
-
-Respond with the complete updated journey text (not JSON — plain markdown).`;

@@ -4,6 +4,7 @@
  * CLI). Imports @wolfpack/engine. Never imported by the wolf client.
  */
 export { sweep, type SweepContext, type SweepResult } from "./sweep.js";
+export { sweepV2 } from "./sweep-v2.js";
 export {
   readLedger,
   appendLedger,

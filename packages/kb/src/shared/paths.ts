@@ -21,6 +21,8 @@ export const entriesDir = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "entries");
 export const domainIndex = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "INDEX.md");
+export const domainDigest = (r: KbRoots, domain: string) =>
+  join(r.kbBase, "domains", domain, "_digest.json");
 /** Per-domain feed folder \u2014 lives INSIDE the domain so it mirrors to subscribers
  *  automatically (access-scoped). Dewey drops "what changed" notices here. */
 export const domainFeedDir = (r: KbRoots, domain: string) =>

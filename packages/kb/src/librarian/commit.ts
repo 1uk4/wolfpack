@@ -15,6 +15,7 @@ import {
   unclassifiedDir,
   now,
 } from "../shared/index.js";
+import type { Entry as EntryV2 } from "../schema/knowledge.js";
 
 /** Write (or overwrite) a curated entry, flat under its domain. */
 export function commitEntry(roots: KbRoots, entry: Entry): void {
@@ -119,4 +120,100 @@ export function gitCommit(roots: KbRoots, message: string): void {
   } catch {
     /* not a git repo or nothing to commit — fine for scaffold */
   }
+}
+
+// ============================================================================
+// V2 PATH — Section-aware frontmatter (section, placement, typed relations)
+// ============================================================================
+
+/**
+ * Render v2 entry frontmatter + body. Writes section, placement, and typed relations.
+ */
+function renderEntryV2(entry: EntryV2): string {
+  const lines: string[] = ["---"];
+
+  // Core identity
+  lines.push(`id: ${entry.id}`);
+  lines.push(`title: ${entry.title}`);
+  lines.push(`domain: ${entry.domain}`);
+
+  // Section placement (v2)
+  lines.push(`section: ${entry.section}`);
+  lines.push(`placement:`);
+  lines.push(`  basis: ${entry.placement.basis}`);
+  lines.push(`  fit: ${entry.placement.fit.toFixed(3)}`);
+
+  // Kind (discriminated union)
+  if (entry.kind.type === "other") {
+    lines.push(`kind:`);
+    lines.push(`  type: other`);
+    lines.push(`  tag: ${entry.kind.tag}`);
+  } else {
+    lines.push(`kind: ${entry.kind.type}`);
+  }
+
+  // Lifecycle
+  lines.push(`maturity: ${entry.maturity}`);
+  lines.push(`authority: ${entry.authority}`);
+  lines.push(`confidence: ${entry.confidence}`);
+  lines.push(`currency: ${entry.currency}`);
+  if (entry.verified) lines.push(`verified: true`);
+
+  // Typed relations (v2)
+  if (entry.relations.length > 0) {
+    lines.push(`relations:`);
+    for (const rel of entry.relations) {
+      lines.push(`  - kind: ${rel.kind}`);
+      lines.push(`    target: ${rel.target}`);
+      lines.push(`    source: ${rel.source}`);
+      if (rel.weight !== undefined) {
+        lines.push(`    weight: ${rel.weight.toFixed(3)}`);
+      }
+    }
+  }
+
+  // Facets
+  if (Object.keys(entry.facets).length > 0) {
+    lines.push(`facets:`);
+    for (const [key, value] of Object.entries(entry.facets)) {
+      lines.push(`  ${key}: ${value}`);
+    }
+  }
+
+  // Dates
+  lines.push(`created: ${entry.created}`);
+  lines.push(`updated: ${entry.updated}`);
+  if (entry.asOf) lines.push(`asOf: ${entry.asOf}`);
+  if (entry.expires) lines.push(`expires: ${entry.expires}`);
+
+  // Content hash (integrity)
+  lines.push(`contentHash: ${entry.contentHash}`);
+
+  lines.push("---");
+  lines.push("");
+  lines.push(`# ${entry.title}`);
+  lines.push("");
+  lines.push(entry.summary);
+  lines.push("");
+  lines.push("## Detail");
+  lines.push("");
+  lines.push(entry.detail);
+
+  if (entry.context) {
+    lines.push("");
+    lines.push("## Context");
+    lines.push("");
+    lines.push(entry.context);
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * V2: Write a section-aware entry with typed relations.
+ */
+export function commitEntryV2(roots: KbRoots, entry: EntryV2): void {
+  const dir = entriesDir(roots, entry.domain);
+  mkdirSync(dir, { recursive: true });
+  atomicWrite(join(dir, `${entry.id}.md`), renderEntryV2(entry));
 }

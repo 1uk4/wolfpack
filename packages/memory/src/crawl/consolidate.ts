@@ -9,12 +9,13 @@
  */
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
-import { atomicWrite } from "@wolfpack/engine";
+import { CRAWL_CONSOLIDATE_SYSTEM, atomicWrite, DIGEST } from "@wolfpack/engine";
 import { join } from "node:path";
 import { ordersJourney } from "./dates.js";
 import type { CrawlObservation } from "./extract.js";
 import type { CrawlPlan, DatedFile, Currency, DateInfo } from "./schemas.js";
 import type { CrawlSink } from "./sink.js";
+import type { ContextDigest, DigestSection, RunningDigest } from "@wolfpack/kb/shared";
 
 // ── LLM contract ──────────────────────────────────────────────────────────────
 
@@ -38,50 +39,101 @@ export const CrawlTopicSchema = z.object({
 });
 export type CrawlTopic = z.infer<typeof CrawlTopicSchema>;
 
-export const CRAWL_CONSOLIDATE_SYSTEM = `You are a knowledge consolidator for a shared knowledge base.
+// Re-export from @wolfpack/engine
+export { CRAWL_CONSOLIDATE_SYSTEM };
 
-You receive timestamped observations that ALL belong to ONE topic, extracted from
-historical documents. Fold them into ONE current-state knowledge entry. You may
-also receive the EXISTING entry for this topic (from a previous pass) — extend it.
+// ── Running digest (crawl-specific) ──────────────────────────────────────────
 
-Produce: a title, a load-bearing one-line summary, a current-state body, and a
-list of dated events.
+/**
+ * Render a "PACK ALREADY KNOWS" block from digest sections for crawl prompts.
+ * Keeps it lean: sectionId, title, summary only (no bodies).
+ * Respects DIGEST.maxPrimedTopics cap from engine tuning.
+ */
+function renderPackKnows(sections: DigestSection[]): string {
+  const capped = sections.slice(0, DIGEST.maxPrimedTopics);
+  if (capped.length === 0) return "";
+  
+  const lines = capped.map(
+    (s) => `- ${s.sectionId} — ${s.title}\n  ${s.summary}`
+  );
+  return [
+    "",
+    "===== PACK ALREADY KNOWS (running digest) =====",
+    lines.join("\n\n"),
+    "===== END PACK ALREADY KNOWS =====",
+    "",
+  ].join("\n");
+}
 
-BODY rules (what is true NOW):
-- Write current-state prose. When a later observation supersedes an earlier one,
-  REWRITE to the new truth and DELETE the obsolete statement. No "was X, now Y".
-- Do NOT include a timeline, changelog, or chronological narrative in the body —
-  that is built separately from the events list below. The body describes the
-  present state only.
-- Preserve distinguishing detail verbatim: file paths, identifiers, API routes,
-  names, error codes, exact numbers with units, version numbers.
-- Keep facts atomic and skimmable. Short sections and bullets. No preamble.
-- Flag contradictions rather than resolving them silently (e.g. "CONFLICT — …").
-- Undated facts that describe current state: just state them. If a fact cannot be
-  placed, keep it under a brief "## Undated" note. NEVER invent a date.
-
-EVENTS rules (how it changed — the raw material for the project history):
-- Emit one event for each DECISION or CHANGE the observations record: adoptions,
-  renames, launches, migrations, deletions, parameter/scope changes, commits.
-- Each event: a one-line, past-tense, factual "change", plus its "date" (YYYY-MM-DD,
-  or YYYY-MM / YYYY when coarser). Omit "date" only when truly unknown.
-- Events are NOT specifications. Do NOT emit an event for every schema field,
-  parameter, or API route — those belong in the body. An event is something that
-  HAPPENED, not something that merely IS.
-- Preserve identifiers and numbers verbatim in events too.
-
-The summary is the ONLY thing seen before the entry is opened — make it specific
-and current. Respond with valid JSON matching the schema.`;
+/**
+ * Merge a published digest with sections produced so far in this crawl run.
+ * Union sections by sectionId (fallback: entryIds intersection check).
+ * `produced` wins (it is fresher within the run).
+ * Returns a RunningDigest.
+ */
+export function mergeRunningDigest(
+  published: ContextDigest,
+  produced: DigestSection[]
+): RunningDigest {
+  // Build a map of produced sections by sectionId
+  const producedMap = new Map<string, DigestSection>();
+  for (const section of produced) {
+    producedMap.set(section.sectionId, section);
+  }
+  
+  // Flatten all sections from published (depth-first)
+  function flattenSections(sections: DigestSection[]): DigestSection[] {
+    const result: DigestSection[] = [];
+    for (const section of sections) {
+      result.push(section);
+      if (section.children.length > 0) {
+        result.push(...flattenSections(section.children));
+      }
+    }
+    return result;
+  }
+  
+  const publishedFlat = flattenSections(published.sections);
+  
+  // Merge: produced sections + non-overlapping published sections
+  const mergedSections: DigestSection[] = [...produced];
+  for (const pubSection of publishedFlat) {
+    if (!producedMap.has(pubSection.sectionId)) {
+      // Check for entryId overlap as fallback (shouldn't usually happen but be safe)
+      const hasEntryOverlap = pubSection.entryIds.some(entryId =>
+        produced.some(p => p.entryIds.includes(entryId))
+      );
+      if (!hasEntryOverlap) {
+        mergedSections.push(pubSection);
+      }
+    }
+  }
+  
+  return {
+    ...published,
+    sections: mergedSections,
+  };
+}
 
 export function buildCrawlConsolidatePrompt(
   topic: string,
   currency: Currency,
   observations: CrawlObservation[],
-  existing?: string
+  existing?: string,
+  digest?: RunningDigest | DigestSection[]
 ): string {
   const obsLines = observations
     .map((o) => `${o.timestamp && o.timestamp.trim() ? o.timestamp : "undated"}  ${o.content}`)
     .join("\n");
+  
+  // Extract sections from digest if provided (handle both RunningDigest and sections array)
+  const sections = digest
+    ? Array.isArray(digest)
+      ? digest
+      : digest.sections
+    : [];
+  const packKnowsBlock = renderPackKnows(sections);
+  
   return [
     `TOPIC: ${topic}`,
     `CURRENCY: ${currency}  (archived/snapshot = historical; present as of its dates)`,
@@ -93,7 +145,7 @@ export function buildCrawlConsolidatePrompt(
     existing
       ? `===== EXISTING ENTRY (extend this) =====\n${existing}\n===== END EXISTING =====\n`
       : "(no existing entry — create fresh)",
-    "",
+    packKnowsBlock,
     "Fold the observations into ONE current-state entry. Respond with JSON.",
   ].join("\n");
 }
@@ -105,6 +157,7 @@ export async function consolidateBatch(
     currency: Currency;
     observations: CrawlObservation[];
     existing?: string;
+    digest?: RunningDigest | DigestSection[];
   }
 ): Promise<CrawlTopic> {
   return engine.call("consolidate", CrawlTopicSchema, {
@@ -113,7 +166,8 @@ export async function consolidateBatch(
       args.topic,
       args.currency,
       args.observations,
-      args.existing
+      args.existing,
+      args.digest
     ),
   });
 }
@@ -205,9 +259,12 @@ export async function consolidateCrawl(
   plan: CrawlPlan,
   observationsByBatch: Map<string, CrawlObservation[]>,
   datedByPath: Map<string, DatedFile>,
-  sink: CrawlSink
+  sink: CrawlSink,
+  publishedDigest?: ContextDigest
 ): Promise<Map<string, CrawlTopic>> {
   const result = new Map<string, CrawlTopic>();
+  const producedSections: DigestSection[] = [];
+  
   for (const b of plan.batches) {
     const obs = observationsByBatch.get(b.topic) ?? [];
     if (obs.length === 0) {
@@ -215,9 +272,20 @@ export async function consolidateCrawl(
       continue;
     }
     const currency = b.currency ?? plan.currency;
+    
+    // Build running digest for this batch: published + produced sections from batches 1..N-1
+    const runningDigest = publishedDigest
+      ? mergeRunningDigest(publishedDigest, producedSections)
+      : undefined;
+    
     const topic = await sink.heartbeat(
       `consolidating ${b.topic} (${obs.length} obs)`,
-      () => consolidateBatch(engine, { topic: b.topic, currency, observations: obs })
+      () => consolidateBatch(engine, { 
+        topic: b.topic, 
+        currency, 
+        observations: obs,
+        digest: runningDigest 
+      })
     );
 
     const files = b.files
@@ -233,6 +301,16 @@ export async function consolidateCrawl(
         `[${temporal.sourceCreated ?? "?"}..${temporal.sourceUpdated ?? "?"} ${temporal.dateBasis}/${temporal.dateConfidence}]`
     );
     result.set(b.topic, topic);
+    
+    // Add this batch's topic to produced sections for the next batch's running digest
+    producedSections.push({
+      sectionId: batchId,
+      title: topic.title,
+      summary: topic.summary,
+      currency: currency === "live" ? "live" : currency === "snapshot" ? "snapshot" : "archived",
+      entryIds: [batchId],
+      children: [],
+    });
   }
   return result;
 }

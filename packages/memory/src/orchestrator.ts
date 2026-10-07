@@ -12,6 +12,7 @@
  * agent-specific code. The runtime feeds it events and content.
  */
 import type { Engine } from "@wolfpack/engine";
+import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
 import type { AgentRuntime, ConversationChunk } from "./runtime.js";
 import { observe } from "./observer/observe.js";
 import type { RawObservation } from "./observer/schemas.js";
@@ -251,7 +252,6 @@ export function createOrchestrator(
 
     // Use engine to consolidate (reuse consolidation logic)
     const { ConsolidationResultSchema } = await import("./schemas.js");
-    const { CONSOLIDATE_SYSTEM } = await import("./prompts.js");
 
     const existingSection =
       existingTopics.length > 0

@@ -4,12 +4,9 @@
  * call stays bounded and cheap (don't re-generate unchanged prose).
  */
 import type { Engine } from "@wolfpack/engine";
-import { z } from "zod";
-import { PRODUCE_SYSTEM, EntrySchema, ENTRY_TYPES, type Entry } from "@wolfpack/engine";
+import { PRODUCE_SYSTEM } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
-import { entryId as mkEntryId, topicId as mkTopicId, now } from "../shared/index.js";
-import type { RouteDecision } from "./route.js";
-import { normalizeEntry } from "./normalize.js";
+import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
   type Entry as EntryV2,
   LlmOpinion,
@@ -24,84 +21,6 @@ import {
   IsoDate,
 } from "../schema/knowledge.js";
 import { contentHash as hashContent } from "../shared/hash.js";
-
-export interface ProduceResult {
-  entry: Entry;
-  canonicalId: string;
-  action: "create" | "merge" | "supersede";
-}
-
-/**
- * Produce the entry for a routed contribution.
- * `existing` is the current entry markdown when merging/superseding.
- */
-export async function produce(
-  engine: Engine,
-  c: ParsedContribution,
-  route: RouteDecision,
-  domain: string,
-  subcategory: string,
-  existing?: { id: string; markdown: string },
-  knownIds?: Set<string>
-): Promise<ProduceResult> {
-  const merging = route.kind === "merge_known" || route.kind === "merge_near";
-  const action: ProduceResult["action"] = merging ? "merge" : "create";
-
-  const prompt = [
-    `DOMAIN: ${domain}`,
-    `SUBCATEGORY: ${subcategory}`,
-    `CONTRIBUTION (from ${c.from}):`,
-    c.summary,
-    "",
-    c.body,
-    existing ? `\nEXISTING ENTRY (${existing.id}):\n${existing.markdown}` : "",
-    `\nACTION: ${action}`,
-  ].join("\n");
-
-  const draft = await engine.call("produce", EntrySchema, {
-    system: PRODUCE_SYSTEM,
-    prompt,
-  });
-
-  const id = existing?.id ?? mkEntryId(domain);
-  const canonicalId = route.canonicalId ?? mkTopicId();
-  const timestamp = now().slice(0, 10);
-
-  // Enforce invariants the model shouldn't own.
-  const entry: Entry = {
-    ...draft,
-    frontmatter: {
-      ...draft.frontmatter,
-      id,
-      domain,
-      subcategory,
-      status: draft.frontmatter.status ?? "active",
-      authority: "curated",
-      confidence: draft.frontmatter.confidence ?? "medium",
-      related: draft.frontmatter.related ?? [],
-      supersedes: draft.frontmatter.supersedes ?? [],
-      sources: draft.frontmatter.sources ?? [],
-      created: existing ? draft.frontmatter.created : timestamp,
-      updated: timestamp,
-      // Temporal provenance from the contribution (crawl/historical ingestion).
-      asOf: c.sourceUpdated ?? draft.frontmatter.asOf,
-      historical: c.currency === "archived" ? true : draft.frontmatter.historical ?? false,
-    },
-  };
-
-  // Deterministic guardrails: the LLM cannot own frontmatter integrity.
-  // A new entry's own (just-generated) id is legitimately not yet in knownIds;
-  // include it so a self-link check still fires correctly.
-  const ids = knownIds ? new Set([...knownIds, id]) : undefined;
-  const { entry: normalized, warnings } = normalizeEntry(entry, domain, ids);
-  if (warnings.length > 0) {
-    for (const w of warnings) {
-      console.warn(`[kb:normalize] ${normalized.frontmatter.id}: ${w}`);
-    }
-  }
-
-  return { entry: normalized, canonicalId, action };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // V2 PATH — assemble-based produce (LlmOpinion ⊕ DerivedFacts ⊕ Curator)

@@ -1,8 +1,7 @@
 /**
  * sweep-v2 — the KB v2 sweep: hierarchical section-tree placement.
  *
- * Selected when KB_V2=1 (see the dispatcher at the bottom of sweep.ts / the CLI).
- * The legacy `sweep` in sweep.ts is left UNTOUCHED for KB_V2 off.
+ * The one and only KB sweep (v1 retired).
  *
  * First-cut bring-up pipeline (entry-first, reachability never gated):
  *   intake → embed → routeByTree → (classifyToSection fallback) → produceEntry
@@ -18,7 +17,7 @@ import { type KbEvent, ev, now } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes } from "./ledger.js";
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput } from "./embed.js";
-import { routeByTree } from "./route.js";
+import { routeByTree, type EntryVector } from "./route.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
 import {
@@ -40,7 +39,28 @@ import {
   type Placement,
   type RelationResolver,
 } from "../schema/knowledge.js";
-import type { SweepContext, SweepResult } from "./sweep.js";
+import type { Engine } from "@wolfpack/engine";
+import type { KbRoots } from "../shared/index.js";
+
+export interface SweepContext {
+  engine: Engine;
+  roots: KbRoots;
+  /** Load current entry vectors (from cache). Injected for testability. */
+  loadEntryVectors: () => Promise<EntryVector[]>;
+  notify?: (msg: string) => void;
+}
+
+export interface SweepResult {
+  processed: number;
+  created: number;
+  merged: number;
+  rejected: number;
+  crystallized: number;
+  fed: number;
+  errors: number;
+  unclassified: number;
+  suggestedDomains: string[];
+}
 
 /** Generate a fresh SectionId: sec-<domain>-<6 alphanumerics>. */
 function mkSectionId(domain: string): SectionId {
@@ -52,8 +72,7 @@ function mkSectionId(domain: string): SectionId {
 }
 
 /**
- * The v2 sweep. Same SweepContext as the legacy sweep so the CLI can dispatch
- * on KB_V2 without changing its call site.
+ * The KB sweep: hierarchical section-tree placement.
  */
 export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;

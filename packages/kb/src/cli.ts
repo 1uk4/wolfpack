@@ -24,7 +24,6 @@ import { createEngine } from "@wolfpack/engine";
 import type { KbRoots } from "./shared/index.js";
 import { vectorsDir } from "./shared/index.js";
 import {
-  sweep,
   sweepV2,
   readLedger,
   foldRegistry,
@@ -76,8 +75,9 @@ function makeEngine() {
       // and breaks JSON extraction (same lesson as the memory consolidator).
       produce: { model: defaultModel, maxTokens: 16000 },
       contradict: { model: fastModel },
-      classifyEntry: { model: fastModel },
-      labelTopic: { model: fastModel },
+      classifyToSection: { model: fastModel },
+      sectionSummary: { model: fastModel },
+      labelSection: { model: fastModel },
     },
   });
 }
@@ -132,11 +132,7 @@ async function cmdSweep(): Promise<void> {
     );
   }
 
-  // KB_V2=1 selects the hierarchical section-tree sweep; unset = legacy sweep.
-  const useV2 = process.env.KB_V2 === "1";
-  if (useV2) console.log("kb: KB_V2=1 \u2014 using hierarchical section-tree sweep (sweepV2)");
-  const runSweep = useV2 ? sweepV2 : sweep;
-  const result = await runSweep({
+  const result = await sweepV2({
     engine,
     roots,
     loadEntryVectors: () =>

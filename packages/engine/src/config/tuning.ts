@@ -81,14 +81,3 @@ export const DIGEST = {
   includeGaps: false,
 } as const;
 
-/**
- * Routing / dedup at intake (sweep). The near-dup band where a contribution
- * should MERGE into an existing entry rather than create a new one.
- * TODO(recalibrate): thresholds need recalibration for tree-descent routing.
- */
-export const ROUTE = {
-  /** cosine ≥ this to a known entry → treat as same topic (merge). */
-  mergeKnown: 0.86,
-  /** cosine in [mergeNear, mergeKnown) → likely related; produce may merge. */
-  mergeNear: 0.78,
-} as const;

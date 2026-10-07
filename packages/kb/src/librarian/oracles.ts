@@ -4,14 +4,10 @@
  * is deferrable. Everything else in the sweep is deterministic code.
  */
 import type { Engine } from "@wolfpack/engine";
-import { CONTRADICT_SYSTEM, CLASSIFY_SYSTEM, LABEL_SYSTEM, SECTION_PICK_SYSTEM } from "@wolfpack/engine";
+import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM } from "@wolfpack/engine";
 import {
   ContradictResultSchema,
   type ContradictResult,
-  ClassifyResultSchema,
-  type ClassifyResult,
-  LabelTopicResultSchema,
-  type LabelTopicResult,
   SectionPickSchema,
   type SectionPick,
 } from "../shared/index.js";
@@ -35,20 +31,6 @@ export function createOracles(engine: Engine) {
       return engine.call("contradict", ContradictResultSchema, {
         system: CONTRADICT_SYSTEM,
         prompt: `${header}NEW:\n${newText}\n\nEXISTING:\n${existingText}`,
-      });
-    },
-
-    async classify(text: string): Promise<ClassifyResult> {
-      return engine.call("classifyEntry", ClassifyResultSchema, {
-        system: CLASSIFY_SYSTEM,
-        prompt: text,
-      });
-    },
-
-    async labelTopic(memberSummaries: string[]): Promise<LabelTopicResult> {
-      return engine.call("labelTopic", LabelTopicResultSchema, {
-        system: LABEL_SYSTEM,
-        prompt: memberSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n"),
       });
     },
 

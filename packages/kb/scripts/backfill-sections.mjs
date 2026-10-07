@@ -34,8 +34,44 @@ import {
 import { computeCentroid, maybeSplit } from "../dist/librarian/hierarchy.js";
 import { writeSections } from "../dist/librarian/sections.js";
 import { sectionSummary, labelSection } from "../dist/librarian/summarize.js";
-import { createEmbedder, embedInput } from "../dist/librarian/embed.js";
+import { createEmbedder, embedInput, cosine } from "../dist/librarian/embed.js";
 import { renderDomainDigest } from "../dist/librarian/domains.js";
+import { contentHash } from "../dist/shared/hash.js";
+
+const ENTRY_KINDS = new Set([
+  "architecture", "reference", "overview", "api", "changelog", "decision",
+  "process", "fact", "policy", "product", "incident",
+]);
+
+/** Build v2 frontmatter from a (possibly v1) entry. Deterministic; body kept
+ *  verbatim. Mirrors renderEntryV2's field order so sweep + migration agree. */
+function v2Frontmatter(e, section, fit) {
+  const f = e.fields;
+  const type = String(f.type ?? f.kind ?? "reference");
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = [
+    "---",
+    `id: ${f.id}`,
+    `title: ${f.title}`,
+    `domain: ${f.domain ?? DOMAIN}`,
+    `section: ${section}`,
+    `placement:`,
+    `  basis: crystallized`,
+    `  fit: ${fit.toFixed(3)}`,
+    ENTRY_KINDS.has(type) ? `kind: ${type}` : `kind:\n  type: other\n  tag: ${type}`,
+    `maturity: ${f.status === "deprecated" ? "deprecated" : "active"}`,
+    `authority: ${f.authority ?? "curated"}`,
+    `confidence: ${f.confidence ?? "medium"}`,
+    `currency: ${f.historical ? "archived" : "live"}`,
+    `relations: []`,
+    `created: ${f.created ?? today}`,
+    `updated: ${today}`,
+  ];
+  if (f.asOf) lines.push(`asOf: ${f.asOf}`);
+  lines.push(`contentHash: ${contentHash(e.body)}`);
+  lines.push("---");
+  return lines.join("\n");
+}
 
 const APPLY = process.argv.includes("--apply");
 const DOMAIN = process.env.BACKFILL_DOMAIN || "wolfpack";
@@ -217,16 +253,19 @@ if (!APPLY) {
 
 console.log("\nAPPLYING …");
 writeSections(roots, allSections);
+const vecById = new Map(members.map((m) => [m.entryId, m.vector]));
 let stamped = 0;
 for (const e of entries) {
   const section = entryToSection.get(e.id);
   if (!section) continue;
-  const fields = { ...e.fields, section };
-  const next = `${renderFrontmatter(fields)}\n${e.body}`;
+  const sec = byId.get(section);
+  const fit = sec ? cosine(vecById.get(e.id), sec.centroid) : 0;
+  // Write CONSISTENT v2 frontmatter (converts any v1 entry), body verbatim.
+  const next = `${v2Frontmatter(e, section, fit)}\n${e.body}`;
   writeFileSync(e.path, next, "utf-8");
   stamped++;
 }
 renderDomainDigest(roots, DOMAIN);
-console.log(`APPLIED: wrote _sections.json (${allSections.length} sections), stamped ${stamped} entries, regenerated digest.`);
+console.log(`APPLIED: wrote _sections.json (${allSections.length} sections), stamped ${stamped} entries in v2 format, regenerated digest.`);
 console.log("Changes are on disk under KB_BASE; they propagate to the KB authority via Syncthing.");
 console.log("(Only run git here if KB_BASE is its own repository \u2014 do NOT commit a parent/home repo.)");

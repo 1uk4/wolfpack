@@ -14,9 +14,11 @@
  */
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, ev, now } from "../shared/index.js";
-import { readLedger, appendLedger, seenHashes } from "./ledger.js";
+import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox } from "./intake.js";
-import { createEmbedder, embedInput } from "./embed.js";
+import { createEmbedder, embedInput, cosine } from "./embed.js";
+import { renderRegistry } from "./registry.js";
+import { emitFeed } from "./feed.js";
 import { routeByTree, type EntryVector } from "./route.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
@@ -82,6 +84,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   const oracles = createOracles(engine);
 
   const log = readLedger(roots);
+  let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
   const seen = seenHashes(log);
   const entryVectors = await ctx.loadEntryVectors();
   // Section tree, folded from the ledger / _sections.json.
@@ -145,64 +148,97 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
         c.contentHash
       );
 
-      // ── ROUTE (deterministic tree descent) ──────────────────────────────
-      const decision = routeByTree(vec, domain, sections, entryVectors);
-      let sectionId: SectionId;
-      let placement: Placement;
+      // ── IDENTITY (deterministic registry) ───────────────────────────────
+      // A re-promote of a known den topic UPDATES its entry (never duplicates).
+      // 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
+      // content-similarity to the nearest entry (seeds the alias on commit).
+      let targetId: string | undefined;
+      for (const topic of reg.values()) {
+        const alias = topic.aliases.find(
+          (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
+        );
+        if (alias) {
+          targetId = topic.entries[0];
+          break;
+        }
+      }
+      if (!targetId) {
+        let near: { id: string; score: number } | null = null;
+        for (const e of entryVectors) {
+          if (e.domain !== domain) continue;
+          const s = cosine(vec, e.vector);
+          if (!near || s > near.score) near = { id: e.entryId, score: s };
+        }
+        if (near && near.score >= SWEEP.mergeSim) targetId = near.id;
+      }
 
-      if (decision.section !== "_unplaced") {
-        sectionId = decision.section;
-        placement = { basis: "routed", fit: decision.fit };
-      } else {
-        // ── CLASSIFY FALLBACK (LLM section-pick, confined) ────────────────
-        const candidates = sections
-          .filter((s) => s.domain === domain)
-          .map((s) => ({ sectionId: s.id, title: s.title, summary: s.summary }));
-        const pick = await oracles.classifyToSection(c.body, candidates);
+      let sectionId: SectionId | undefined;
+      let placement: Placement | undefined;
 
-        if (pick.section !== "NEW") {
-          sectionId = SectionId.parse(pick.section);
-          placement = { basis: "routed", fit: decision.fit };
-        } else {
-          // NEW → create a singleton section under the domain (crystallize/merge
-          // reorganizes later). Entry-first: the entry still gets a real home.
-          sectionId = mkSectionId(domain);
-          const nowIso = IsoDate.parse(now().slice(0, 10));
-          const slug =
-            (c.summary || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
-            "section";
-          const newSection: Section = {
-            id: sectionId,
-            domain: DomainId.parse(domain),
-            parent: null,
-            depth: 0,
-            label: Slug.parse(slug),
-            title: c.summary.slice(0, 80) || "New section",
-            centroid: vec,
-            memberCount: 0,
-            childIds: [],
-            summary: c.summary || "(pending summary)",
-            summaryHash: "",
-            dirty: true,
-            created: nowIso,
-            updated: nowIso,
-          };
-          sections = [...sections, newSection];
-          batch.push(
-            ev.sectionCreated({
-              sectionId,
-              domain,
-              parent: null,
-              label: String(newSection.label),
-            })
-          );
-          placement = { basis: "crystallized", fit: decision.fit };
+      // Updating a known entry → keep its existing section (identity stable).
+      if (targetId) {
+        const md = readEntryMarkdown(roots, domain, targetId);
+        const sec = md ? String(parseFrontmatter(md).fields.section ?? "") : "";
+        try {
+          sectionId = SectionId.parse(sec);
+          placement = { basis: "routed", fit: 1 };
+        } catch {
+          targetId = undefined; // couldn't resolve its section → place fresh
         }
       }
 
+      // Otherwise place a NEW entry by deterministic tree descent.
+      if (!sectionId) {
+        const decision = routeByTree(vec, domain, sections, entryVectors);
+        if (decision.section !== "_unplaced") {
+          sectionId = decision.section;
+          placement = { basis: "routed", fit: decision.fit };
+        } else {
+          // ── CLASSIFY FALLBACK (LLM section-pick, confined) ──────────────
+          const candidates = sections
+            .filter((s) => s.domain === domain)
+            .map((s) => ({ sectionId: s.id, title: s.title, summary: s.summary }));
+          const pick = await oracles.classifyToSection(c.body, candidates);
+          if (pick.section !== "NEW" && sections.some((s) => s.id === pick.section)) {
+            sectionId = SectionId.parse(pick.section);
+            placement = { basis: "routed", fit: decision.fit };
+          } else {
+            // NEW → singleton section under the domain (reorganized later).
+            sectionId = mkSectionId(domain);
+            const nowIso = IsoDate.parse(now().slice(0, 10));
+            const slug =
+              (c.summary || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
+              "section";
+            const newSection: Section = {
+              id: sectionId,
+              domain: DomainId.parse(domain),
+              parent: null,
+              depth: 0,
+              label: Slug.parse(slug),
+              title: c.summary.slice(0, 80) || "New section",
+              centroid: vec,
+              memberCount: 0,
+              childIds: [],
+              summary: c.summary || "(pending summary)",
+              summaryHash: "",
+              dirty: true,
+              created: nowIso,
+              updated: nowIso,
+            };
+            sections = [...sections, newSection];
+            batch.push(
+              ev.sectionCreated({ sectionId, domain, parent: null, label: String(newSection.label) })
+            );
+            placement = { basis: "crystallized", fit: decision.fit };
+          }
+        }
+      }
+
+      if (!sectionId || !placement) throw new Error("unrouted contribution");
+
       // ── PRODUCE (LLM → opinion only; code assembles) ────────────────────
-      const existingMarkdown = decision.target
-        ? readEntryMarkdown(roots, domain, decision.target) ?? undefined
+      const existingMarkdown = targetId
+        ? readEntryMarkdown(roots, domain, targetId) ?? undefined
         : undefined;
 
       const { entry, action } = await produceEntry(engine, {
@@ -210,7 +246,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
         domain,
         section: sectionId,
         placement,
-        entryId: decision.target,
+        entryId: targetId,
         existingMarkdown,
         resolve,
       });
@@ -232,6 +268,22 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
         basis: placement.basis,
         fit: placement.fit,
       }));
+      // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
+      // by alias and update in place. Re-fold so later items in THIS batch see it.
+      batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      reg = foldRegistry([...log, ...batch]);
+      // Publish the canonical id back to the wolf's flow via the domain feed.
+      emitFeed(roots, domain, {
+        canonicalId: entry.id,
+        entryId: entry.id,
+        yourAlias: c.denTopicId,
+        change: action === "create" ? "created" : "updated",
+        by: c.from,
+        summary: c.summary,
+        updated: now(),
+      });
+      batch.push(ev.fed(c.from, entry.id, entry.id));
+      result.fed++;
 
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);
@@ -256,6 +308,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   // ── PERSIST ────────────────────────────────────────────────────────────────
   if (batch.length > 0) {
     appendLedger(roots, batch);
+    renderRegistry(roots, foldRegistry([...log, ...batch]));
     gitCommit(roots, `sweep-v2: ${result.created}c ${result.merged}m ${result.rejected}r`);
   }
 

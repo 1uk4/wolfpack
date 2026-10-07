@@ -32,6 +32,14 @@ export const EMBED = {
  */
 export const SWEEP = {
   batchSize: 25,
+  /** cosine \u2265 this to an existing entry \u2192 same topic: UPDATE it (and seed its
+   *  registry alias) rather than create a duplicate. The ALIAS is the primary
+   *  deterministic identity; this similarity seed only matters for entries that
+   *  have no alias yet (e.g. migrated ones on first re-promote).
+   *  TODO(calibrate): nomic-embed has a COMPRESSED range \u2014 0.85 was too high (a
+   *  real re-promote scored below it and duplicated). Calibrate against real
+   *  re-promotes on Dewey; the old v1 estimate was ~0.75 for "same topic". */
+  mergeSim: 0.72,
 } as const;
 
 export const HIERARCHY = {

@@ -11,7 +11,8 @@
  *   ANTHROPIC_API_KEY     — required
  *   WOLFPACK_MODEL        — default model (default: claude-sonnet-4-6)
  *   WOLFPACK_FAST_MODEL   — model for cheap steps (default: claude-haiku-4-5-20251001)
- *   WOLFPACK_LIBRARIAN    — path to librarian inbox (enables auto-claims)
+ *   KB_OPS                — librarian-ops root (enables emit of KB deltas)
+ *   KB_BASE               — knowledge-base root (resolve curated entries)
  *   WOLFPACK_DOMAIN       — default domain for claims (default: wolfpack)
  */
 import { createEngine } from "@wolfpack/engine";
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
   const resolvedDen = resolve(denRoot);
   const resolvedMemory = resolve(memoryRoot);
   // KB roots: emitting deltas requires at least the ops root (librarian-ops).
-  const kbOps = process.env.WOLFPACK_KB_OPS;
+  const kbOps = process.env.KB_OPS;
   const kbBase = process.env.KB_BASE;
   const kbRoots: KbRoots | undefined = kbOps
     ? {
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
   // Deterministic, no LLM. Idempotent (hash-named files overwrite).
   if (flags["emit-den"]) {
     if (!kbRoots) {
-      console.error("--emit-den requires WOLFPACK_KB_OPS (librarian-ops root)");
+      console.error("--emit-den requires KB_OPS (librarian-ops root)");
       process.exit(1);
     }
     const topics = readDenTopics(resolvedDen);

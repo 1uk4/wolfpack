@@ -61,6 +61,12 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     dir: "wolfpack-subagents",
   },
   {
+    key: "ask",
+    label: "Ask user question",
+    description: "Pause and ask the user a question (drives the crawl questionnaire)",
+    dir: "ask-user-question",
+  },
+  {
     key: "telegram",
     label: "Telegram",
     description: "Reach the wolf via a Telegram bot (per-wolf token, owner-gated)",
@@ -85,12 +91,12 @@ export const PROFILES: Record<
   worker: {
     label: "Worker",
     description: "Local, keyboard-driven working agent",
-    extensions: ["memory", "subagents"],
+    extensions: ["memory", "subagents", "ask"],
   },
   assistant: {
     label: "Assistant",
     description: "24/7 VPS assistant reachable via Telegram",
-    extensions: ["memory", "subagents", "telegram"],
+    extensions: ["memory", "subagents", "telegram", "ask"],
   },
 };
 

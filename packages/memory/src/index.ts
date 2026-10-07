@@ -98,3 +98,6 @@ export {
   type ConsolidationResult,
   type TopicAction,
 } from "./schemas.js";
+
+// Crawl — deterministic corpus ingestion (reproduce the pipeline across time).
+export * from "./crawl/index.js";

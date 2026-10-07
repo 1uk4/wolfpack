@@ -55,9 +55,10 @@ export async function select<T>(
  */
 export async function multiSelect<T>(
   question: string,
-  options: Array<{ label: string; value: T; selected?: boolean }>,
+  options: Array<{ label: string; value: T; selected?: boolean; disabled?: boolean }>,
 ): Promise<T[]> {
   const selected = options.map((o) => !!o.selected);
+  const disabled = options.map((o) => !!o.disabled);
 
   if (!process.stdin.isTTY) {
     return options.filter((_, i) => selected[i]).map((o) => o.value);
@@ -78,11 +79,22 @@ export async function multiSelect<T>(
       // Move cursor up over the previously drawn option lines
       stdout.write(`\x1b[${options.length}A`);
     }
+    // Keep every option on a single physical line: wrapping would desync the
+    // cursor-up math (we only move up options.length lines) and corrupt the UI.
+    const cols = stdout.columns || 80;
+    const maxLabel = Math.max(10, cols - 6); // " " + pointer + " " + box + " " = 5, plus margin
     for (let i = 0; i < options.length; i++) {
       const isCursor = i === cursor;
-      const box = selected[i] ? green("\u25c9") : "\u25ef";
+      const box = disabled[i]
+        ? dim("\u25c9")
+        : selected[i]
+          ? green("\u25c9")
+          : "\u25ef";
       const pointer = isCursor ? cyan("\u276f") : " ";
-      const label = isCursor ? cyan(options[i]!.label) : options[i]!.label;
+      const raw = options[i]!.label;
+      const text =
+        raw.length > maxLabel ? `${raw.slice(0, maxLabel - 1)}\u2026` : raw;
+      const label = disabled[i] ? dim(text) : isCursor ? cyan(text) : text;
       stdout.write(`\x1b[2K ${pointer} ${box} ${label}\n`);
     }
   }
@@ -120,14 +132,15 @@ export async function multiSelect<T>(
           cursor = (cursor + 1) % options.length;
           render(false);
           break;
-        case " ": // toggle
-          selected[cursor] = !selected[cursor];
+        case " ": // toggle (disabled rows are fixed)
+          if (!disabled[cursor]) selected[cursor] = !selected[cursor];
           render(false);
           break;
         case "a": {
-          // toggle all: if any unselected, select all; else clear all
-          const target = selected.some((s) => !s);
-          for (let i = 0; i < selected.length; i++) selected[i] = target;
+          // toggle all togglable rows: select all if any unselected, else clear
+          const togglable = selected.filter((_, i) => !disabled[i]);
+          const target = togglable.some((s) => !s);
+          for (let i = 0; i < selected.length; i++) if (!disabled[i]) selected[i] = target;
           render(false);
           break;
         }
@@ -149,6 +162,8 @@ export async function multiSelect<T>(
 }
 
 export async function confirm(question: string, defaultYes = true): Promise<boolean> {
+  // Non-interactive: return the default rather than hang on a dead stdin.
+  if (!process.stdin.isTTY) return defaultYes;
   const hint = defaultYes ? "[Y/n]" : "[y/N]";
   const rl = createRl();
   return new Promise((resolve) => {

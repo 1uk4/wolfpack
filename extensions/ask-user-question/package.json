@@ -1,0 +1,11 @@
+{
+  "name": "ask-user-question",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension: ask_user_question tool — pause and ask the user a single question (text, single-select, multi-select) with an interactive TUI prompt.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

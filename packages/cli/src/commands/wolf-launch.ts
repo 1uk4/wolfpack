@@ -135,7 +135,29 @@ export async function wolfLaunch(
     stdio: "inherit",
   });
 
+  // Restore the terminal to a sane state. Pi normally does this itself on a
+  // clean exit, but if it crashes, is killed by a signal, or exits uncleanly
+  // (e.g. a broken `/end`), it leaves mouse tracking and the kitty keyboard
+  // protocol enabled — the terminal then echoes escape sequences and input
+  // looks broken. These sequences are idempotent, so running them after a
+  // clean exit is a harmless no-op.
+  let restored = false;
+  const restoreTerminal = (): void => {
+    if (restored) return;
+    restored = true;
+    if (!process.stdout.isTTY) return;
+    process.stdout.write(
+      // leave alt screen, show cursor, disable bracketed paste
+      "\x1b[?1049l\x1b[?25h\x1b[?2004l" +
+        // disable mouse reporting (normal, button, any, SGR)
+        "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" +
+        // pop kitty keyboard protocol flags + legacy disable
+        "\x1b[<u\x1b[=0u",
+    );
+  };
+
   child.on("error", (err: NodeJS.ErrnoException) => {
+    restoreTerminal();
     if (err.code === "ENOENT") {
       console.error(c.red("`pi` not found on PATH. Install the PI coding agent."));
     } else {
@@ -144,7 +166,25 @@ export async function wolfLaunch(
     process.exit(1);
   });
 
-  child.on("exit", (code) => {
+  // Forward termination signals to the child so it can try its own cleanup,
+  // then restore the terminal ourselves as a backstop.
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      try {
+        child.kill(sig);
+      } catch {
+        /* child already gone */
+      }
+    });
+  }
+
+  child.on("exit", (code, signal) => {
+    restoreTerminal();
+    if (signal) {
+      // Re-raise so our exit status reflects the signal.
+      process.kill(process.pid, signal);
+      return;
+    }
     process.exit(code ?? 0);
   });
 }

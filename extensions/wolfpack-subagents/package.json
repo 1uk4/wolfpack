@@ -1,10 +1,15 @@
 {
   "name": "wolfpack-subagents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Pi extension providing interactive sub agents — delegate tasks to specialized agents with isolated context windows.",
-  "keywords": ["pi-package"],
+  "description": "Interactive async subagents for wolfpack — spawn agents in visible multiplexer panes (Herdr on macOS, tmux on Linux, configurable per wolf), with a live widget and results steered back. Ported from amosblomqvist/pi-interactive-subagents.",
+  "keywords": ["pi-package", "wolfpack"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
   "pi": {
     "extensions": ["./index.ts"],
     "agents": ["./agents/*.md"],

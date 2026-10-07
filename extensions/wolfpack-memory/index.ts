@@ -1325,13 +1325,23 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     // Always persist the sidechannel (works headless)
     writeStatusFile(status);
 
-    // TUI status bar only when there's a UI
-    if (!ctx.hasUI) return;
-    if (!enabled) {
-      ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
-      return;
+    // TUI status bar only when there's a UI. A captured ctx can go stale after
+    // session shutdown/replacement — notably in `pi -p` subagent children, where
+    // a background observer's finally{} calls refreshStatus AFTER the process has
+    // begun tearing down. Reading ctx.hasUI then throws "stale ctx"; left
+    // unhandled it rejects the observer task and crashes the child (which the
+    // subagent tool surfaces as "(no output)"). The headless sidechannel was
+    // already written above, so never let the UI refresh crash the process.
+    try {
+      if (!ctx.hasUI) return;
+      if (!enabled) {
+        ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
+        return;
+      }
+      ctx.ui.setStatus("wolfpack-memory", renderStatusBar(status));
+    } catch {
+      // stale ctx (post-shutdown/replacement) — safe to ignore
     }
-    ctx.ui.setStatus("wolfpack-memory", renderStatusBar(status));
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────

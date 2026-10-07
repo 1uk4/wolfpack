@@ -1,177 +1,104 @@
-# Subagent Example
+# wolfpack-subagents
 
-Delegate tasks to specialized subagents with isolated context windows.
+Interactive **async** subagents for wolfpack. `subagent()` returns immediately;
+the sub-agent runs in its own **visible multiplexer pane**, a live widget tracks
+every running sub-agent, and each result is steered back into the main session
+as a new turn when it finishes.
 
-## Features
+Ported from [amosblomqvist/pi-interactive-subagents](https://github.com/amosblomqvist/pi-interactive-subagents)
+and adapted to earendil pi 1.0.x, with a pluggable **MuxBackend** so the pane
+multiplexer is chosen per wolf.
 
-- **Isolated context**: Each subagent runs in a separate `pi` process
-- **Streaming output**: See tool calls and progress as they happen
-- **Parallel streaming**: All parallel tasks stream updates simultaneously
-- **Markdown rendering**: Final output rendered with proper formatting (expanded view)
-- **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
-- **Abort support**: Ctrl+C propagates to kill subagent processes
+## Per-wolf multiplexer (Herdr or tmux)
 
-## Structure
+The pane backend is selected by `WOLFPACK_SUBAGENT_MUX`:
 
-```
-subagent/
-├── README.md            # This file
-├── index.ts             # The extension (entry point)
-├── agents.ts            # Agent discovery logic
-├── agents/              # Sample agent definitions
-│   ├── scout.md         # Fast recon, returns compressed context
-│   ├── planner.md       # Creates implementation plans
-│   ├── reviewer.md      # Code review
-│   └── worker.md        # General-purpose (full capabilities)
-└── prompts/             # Workflow presets (prompt templates)
-    ├── implement.md     # scout -> planner -> worker
-    ├── scout-and-plan.md    # scout -> planner (no implementation)
-    └── implement-and-review.md  # worker -> reviewer -> worker
-```
+| Value   | Behavior |
+| ------- | -------- |
+| `auto`  | **default** — Herdr if `HERDR_ENV=1`, else tmux if `$TMUX`, else headless |
+| `herdr` | force Herdr (`herdr pane split/run/read/close`) |
+| `tmux`  | force tmux (`split-window` / `send-keys` / `capture-pane`) |
+| `none`  | headless — panes disabled; `subagent` reports the mux is unavailable |
 
-## Installation
-
-From the repository root, symlink the files:
+`auto` already does the right thing (macOS wolf under Herdr → herdr; Linux wolf
+under tmux → tmux). To pin it, add to the wolf's `.env` (merged by `wolf launch`):
 
 ```bash
-# Symlink the extension (must be in a subdirectory with index.ts)
-mkdir -p ~/.pi/agent/extensions/subagent
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/index.ts" ~/.pi/agent/extensions/subagent/index.ts
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" ~/.pi/agent/extensions/subagent/agents.ts
-
-# Symlink agents
-mkdir -p ~/.pi/agent/agents
-for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
-done
-
-# Symlink workflow prompts
-mkdir -p ~/.pi/agent/prompts
-for f in packages/coding-agent/examples/extensions/subagent/prompts/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
-done
+# <wolfDir>/.env
+WOLFPACK_SUBAGENT_MUX=herdr   # mac wolf
+WOLFPACK_SUBAGENT_MUX=tmux    # linux wolf
 ```
 
-## Security Model
+Adding a backend is one file in `mux/` implementing the `MuxBackend` interface
+(`createSurface`, `sendCommand`, `readScreen`, `closeSurface`, …); the ~5k-line
+engine only ever talks to `mux/index.ts`.
 
-This tool executes a separate `pi` subprocess with a delegated system prompt and tool/model configuration.
+## Tools
 
-**Project-local agents** (`.pi/agents/*.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
+| Tool | Description |
+| --- | --- |
+| `subagent` | Spawn a sub-agent in a dedicated pane (async; result steered back) |
+| `subagent_message` | Message a sub-agent by name — steers it if running, resumes its session if finished |
+| `subagents_list` | List available agent definitions |
+| `ask_question` | *(sub-agent sessions only)* Ask the orchestrator and wait for a reply |
 
-**Default behavior:** Only loads **user-level agents** from `~/.pi/agent/agents`.
-
-To enable project-local agents, pass `agentScope: "both"` (or `"project"`). Only do this for repositories you trust.
-
-When running interactively, the tool prompts for confirmation before running project-local agents in untrusted projects. Trusted projects skip the additional prompt. Set `confirmProjectAgents: false` to disable confirmation.
-
-## Usage
-
-### Single agent
-```
-Use scout to find all authentication code
+```json
+{ "agent": "scout", "task": "Analyze the auth module" }
 ```
 
-### Parallel execution
-```
-Run 2 scouts in parallel: one to find models, one to find providers
-```
+Fan out by emitting several `subagent` calls in one turn. Completion detection
+is file-based (`.exit` sidecar + activity file) with a terminal sentinel
+fallback, so it is backend-independent.
 
-### Chained workflow
-```
-Use a chain: first have scout find the read tool, then have planner suggest improvements
-```
+## Agents
 
-### Workflow prompts
-```
-/implement add Redis caching to the session store
-/scout-and-plan refactor auth to support OAuth
-/implement-and-review add input validation to API endpoints
-```
+Discovered from (priority: project > global > package):
 
-## Tool Modes
+- **project** — `<cwd>/.pi/agents/*.md`
+- **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (e.g. the visual makers)
+- **package** — this extension's bundled `agents/` (`worker`, `scout`, `planner`, `reviewer`)
 
-| Mode | Parameter | Description |
-|------|-----------|-------------|
-| Single | `{ agent, task }` | One agent, one task |
-| Parallel | `{ tasks: [...] }` | Multiple agents run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential with `{previous}` placeholder |
+Autonomous agents should set `auto-exit: true` so they exit when done and their
+result steers back; `system-prompt: append` passes the body as the child's
+appended system prompt. Key frontmatter: `name`, `description`, `model`,
+`tools` (strict allowlist), `thinking`, `auto-exit`, `system-prompt`,
+`subagent_agents` (grant + restrict nested spawning), `cwd`, `session-mode`.
 
-## Output Display
+## Custom tools in subagents (bridge)
 
-**Collapsed view** (default):
-- Status icon (✓/✗/⏳) and agent name
-- Last 5-10 items (tool calls and text)
-- Usage stats: `3 turns ↑input ↓output RcacheRead WcacheWrite $cost ctx:contextTokens model`
+Children launch default-deny: `--no-extensions` + `--tools <allowlist>` +
+one `-e <ext>` per tool. Built-ins (`read`, `write`, `edit`, `bash`, `grep`,
+`find`, `ls`) need nothing. Any other tool must be mapped to its backing
+extension file. Other extensions register theirs at `session_start` via the
+bridge this extension exposes:
 
-**Expanded view** (Ctrl+O):
-- Full task text
-- All tool calls with formatted arguments
-- Final output rendered as Markdown
-- Per-task usage (for chain/parallel)
-
-**Parallel mode streaming**:
-- Shows all tasks with live status (⏳ running, ✓ done, ✗ failed)
-- Updates as each task makes progress
-- Shows "2/3 done, 1 running" status
-- Returns each completed task's final output to the parent model, capped at 50 KB per task
-- Returns failure diagnostics from stderr/error messages when a child exits before producing output
-
-**Tool call formatting** (mimics built-in tools):
-- `$ command` for bash
-- `read ~/path:1-10` for read
-- `grep /pattern/ in ~/path` for grep
-- etc.
-
-## Agent Definitions
-
-Agents are markdown files with YAML frontmatter:
-
-```markdown
----
-name: my-agent
-description: What this agent does
-tools: read, grep, find, ls
-model: claude-haiku-4-5
----
-
-System prompt for the agent goes here.
+```ts
+(globalThis as any).__pi_interactive_subagents?.registerToolExtension(
+  "write_mermaid",
+  "/abs/path/to/tools/mermaid_tools.ts",
+);
 ```
 
-When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level.
+`wolfpack-visual-tools` uses exactly this to make `write/edit/render_mermaid`
+and `write/edit/render_svg` available to the `mermaid-maker` / `svg-maker`
+sub-agents.
 
-**Locations:**
-- `~/.pi/agent/agents/*.md` - User-level (always loaded)
-- `.pi/agents/*.md` - Project-level (only with `agentScope: "project"` or `"both"`)
+## Layout
 
-Project agents override user agents with the same name when `agentScope: "both"`.
-
-## Sample Agents
-
-| Agent | Purpose | Model | Tools |
-|-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General-purpose | Sonnet | (all default) |
-
-## Workflow Prompts
-
-| Prompt | Flow |
-|--------|------|
-| `/implement <query>` | scout → planner → worker |
-| `/scout-and-plan <query>` | scout → planner |
-| `/implement-and-review <query>` | worker → reviewer → worker |
-
-## Error Handling
-
-- **Exit code != 0**: Tool returns error with stderr/output
-- **stopReason "error"**: LLM error propagated with error message
-- **stopReason "aborted"**: User abort (Ctrl+C) kills subprocess, throws error
-- **Chain mode**: Stops at first failing step, reports which step failed
-
-## Limitations
-
-- Output truncated to last 10 items in collapsed view (expand to see all)
-- Parallel model-visible output is capped at 50 KB per task; full results remain in tool details
-- Agents discovered fresh on each invocation (allows editing mid-session)
-- Parallel mode limited to 8 tasks, 4 concurrent
+```
+wolfpack-subagents/
+├── index.ts            # engine (tool registration, launch, widget, steer-back)
+├── session.ts          # session seeding, loadout snapshots, stats
+├── status.ts           # live status classification + config.json
+├── activity.ts         # child activity recorder + reader
+├── subagent-done.ts    # child-side: auto-exit + ask_question
+├── mux/
+│   ├── index.ts        # backend selection + the surface API the engine imports
+│   ├── shared.ts       # MuxBackend contract, shellEscape, pollForExit
+│   ├── tmux.ts         # tmux backend
+│   └── herdr.ts        # Herdr backend (herdr pane verbs)
+├── tools/safe-bash.ts  # bash with dangerous-command blocking (loaded on demand)
+├── agents/             # bundled agent definitions
+├── prompts/            # workflow presets
+└── config.json.example # status widget config
+```

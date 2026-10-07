@@ -1,0 +1,19 @@
+{
+  "name": "wolfpack-visual-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi extension: Mermaid + SVG authoring tools (write/edit/render) for the visualization subagents (mermaid-maker, svg-maker). Ported from amosblomqvist/learn to run under wolfpack-subagents.",
+  "keywords": ["pi-package", "wolfpack"],
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^11.4.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"],
+    "agents": ["./agents/*.md"]
+  }
+}

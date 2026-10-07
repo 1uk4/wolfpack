@@ -30,3 +30,6 @@ legacy/**/*.d.ts.map
 
 # OM session memory
 .memory/
+
+# Ephemeral/persistent visual-tools renders (never commit)
+viz/

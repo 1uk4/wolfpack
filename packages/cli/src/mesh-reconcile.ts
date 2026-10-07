@@ -132,6 +132,11 @@ async function applyHub(mac: SyncthingRest, plan: InstancePlan): Promise<void> {
   for (const f of plan.folders) {
     const devIds = resolveFolderDeviceIds(f, plan, "hub");
     fs.mkdirSync(f.path, { recursive: true });
+    // Syncthing refuses to scan/advertise a folder whose `.stfolder` marker is
+    // missing ("folder marker missing" \u2192 0 files offered). It only auto-creates
+    // the marker for an empty, self-owned dir \u2014 so a domain dir that was already
+    // populated (e.g. by Dewey's sweep) stays stuck forever. Create it ourselves.
+    fs.mkdirSync(path.join(f.path, ".stfolder"), { recursive: true });
     await mac.putFolder(buildFolder(f.id, f.path, f.type, devIds));
   }
 }
@@ -161,7 +166,12 @@ function applyRemote(
       .map((id) => `{"deviceID":"${id}"}`)
       .join(",");
     return (
-      `mkdir -p "${f.path}"\n` +
+      // Create the path AND the `.stfolder` marker, then normalize ownership to
+      // the wolf user. The sweep runs as root and can pre-create a domain dir
+      // (root-owned, no marker) before mesh runs; without this the wolf's
+      // Syncthing errors "folder marker missing" and advertises 0 files.
+      `mkdir -p "${f.path}/.stfolder"\n` +
+      `chown -R wolf-${instanceKey}:wolf-${instanceKey} "${f.path}"\n` +
       putJson(
         `folders/${f.id}`,
         `{"id":"${f.id}","label":"${f.id}","path":"${f.path}","type":"${f.type}","fsWatcherEnabled":true,"rescanIntervalS":3600,"devices":[${devIds}]}`,

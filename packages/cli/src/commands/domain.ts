@@ -341,6 +341,10 @@ function scaffoldDomainFolder(name: string, entry: DomainEntry): void {
   const base = kbBaseDir(loadConfig());
   const domainDir = path.join(base, "domains", name);
   fs.mkdirSync(path.join(domainDir, "entries"), { recursive: true });
+  // Syncthing marker: without `.stfolder` the mirror errors "folder marker
+  // missing" and syncs nothing. Scaffold it now so the domain is sync-ready the
+  // moment `wolfpack mesh` wires the folder (mesh also ensures this, belt-and-braces).
+  fs.mkdirSync(path.join(domainDir, ".stfolder"), { recursive: true });
   const metaPath = path.join(domainDir, "meta.yaml");
   if (!fs.existsSync(metaPath)) fs.writeFileSync(metaPath, renderDomainMeta(name, entry));
   const indexPath = path.join(domainDir, "INDEX.md");

@@ -143,7 +143,8 @@ async function cmdSweep(): Promise<void> {
   console.log(
     `done: ${result.processed} processed · ${result.created}c ${result.merged}m ` +
       `${result.rejected}r · ${result.unclassified} unclassified · ` +
-      `${result.crystallized} crystallized · ${result.fed} fed`
+      `${result.crystallized} crystallized · ${result.fed} fed` +
+      (result.remaining > 0 ? ` · ${result.remaining} queued for next tick` : "")
   );
   if (result.suggestedDomains.length) {
     console.log(

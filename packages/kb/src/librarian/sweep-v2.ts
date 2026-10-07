@@ -12,7 +12,7 @@
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
  * reachability. See docs/kb-v2-implementation.md §Phase 5.
  */
-import { parseFrontmatter } from "@wolfpack/engine";
+import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, ev, now } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes } from "./ledger.js";
 import { drainInbox } from "./intake.js";
@@ -60,6 +60,8 @@ export interface SweepResult {
   errors: number;
   unclassified: number;
   suggestedDomains: string[];
+  /** Contributions left in the inbox after this batched run (await next tick). */
+  remaining: number;
 }
 
 /** Generate a fresh SectionId: sec-<domain>-<6 alphanumerics>. */
@@ -96,6 +98,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
     errors: 0,
     unclassified: 0,
     suggestedDomains: [],
+    remaining: 0,
   };
 
   const declared = readDeclaredDomains(roots);
@@ -107,7 +110,15 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   // follow-up; dropping is safe (never invents an id). See §Phase 3b.
   const resolve: RelationResolver = () => null;
 
-  const contributions = drainInbox(roots);
+  // Batch: process at most `batchSize` contributions per run (oldest first), so
+  // a large multi-wolf inbox never makes one run exhaust the server. The rest
+  // wait for the next timer tick. Oldest-first keeps it fair by arrival time.
+  const batchSize = Number(process.env.KB_SWEEP_BATCH) || SWEEP.batchSize;
+  const pending = drainInbox(roots).sort((a, b) =>
+    (a.submitted || "").localeCompare(b.submitted || "")
+  );
+  const contributions = pending.slice(0, batchSize);
+  result.remaining = Math.max(0, pending.length - contributions.length);
 
   for (const c of contributions) {
     if (seen.has(c.contentHash)) {
@@ -249,7 +260,8 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   }
 
   ctx.notify?.(
-    `kb-v2 sweep: ${result.processed} contributions → ${result.created}c ${result.merged}m`
+    `kb-v2 sweep: ${result.processed} contributions → ${result.created}c ${result.merged}m` +
+      (result.remaining > 0 ? ` · ${result.remaining} queued for next tick` : "")
   );
   return result;
 }

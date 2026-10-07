@@ -23,6 +23,17 @@ export const EMBED = {
  * into the single-parent section backbone, when sections split on overflow, and
  * when novel clusters crystallize into new sections from _unplaced.
  */
+/**
+ * Sweep batching. The sweep timer fires on a schedule (every 15 min on the VPS);
+ * each run processes at most `batchSize` contributions (oldest first) so a large
+ * multi-wolf inbox can never make a single run exhaust the server (LLM calls,
+ * memory, runtime, rate limits). The remainder waits for the next tick and the
+ * backlog drains steadily. Override per host with the KB_SWEEP_BATCH env var.
+ */
+export const SWEEP = {
+  batchSize: 25,
+} as const;
+
 export const HIERARCHY = {
   /** Below this cosine to any child centroid → park in _unplaced. */
   fitThreshold: 0.78,

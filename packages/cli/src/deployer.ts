@@ -156,6 +156,9 @@ Environment=KB_DEN_LOCAL=/var/lib/wolfpack-kb/${wolf.id}
 Environment=WOLFPACK_EMBED_URL=http://127.0.0.1:11434
 ${ownerLine}
 EnvironmentFile=-${home}/.env
+# Resource guard: a single run is bounded by SWEEP.batchSize contributions; this
+# timeout kills a hung/runaway sweep before the next tick rather than piling up.
+TimeoutStartSec=900
 ExecStart=/usr/bin/node /opt/wolfpack-kb/cli.cjs sweep
 UNIT
 cat > /etc/systemd/system/${user}-kb-sweep.timer <<UNIT

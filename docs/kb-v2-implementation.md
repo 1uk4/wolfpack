@@ -8,20 +8,17 @@
 Status: **build complete (local), pending Dewey bring-up** · Target packages:
 `@wolfpack/engine`, `@wolfpack/kb` (Factory deferred to a new package).
 
-## Build status (all local gates green: `npm run typecheck` + `npm test` = 147 passing)
-- ✅ Phase 0 control surface · ✅ 1 schema · ✅ 2 placement brain · ✅ 3 section-pick/produce→assemble/summarize · ✅ 4 digest producer + consumer · ✅ 5a graph deleted + v2 tree-health · ✅ 5b `sweepV2` wired behind `KB_V2` · ✅ 6 `backfill-sections.mjs` (dry-run) built
-- Legacy path unchanged (`KB_V2` unset = old sweep). Confinement audited (GO).
-- First-cut TODOs for Dewey bring-up: `sweepV2` relation resolver returns null (relations[] starts empty — safe, never invents); live split/crystallize reorganization runs via the backfill / a maintenance pass, not yet inline in `sweepV2`.
-
-## Dewey bring-up runbook (where vectors + authority live)
-1. Deploy: `wolfpack sync dewey` (ships code), then build on Dewey (`npm run build`).
-2. **Backfill dry-run** (on Dewey, env: KB_BASE/KB_OPS/ANTHROPIC_API_KEY/embedder):
-   `node packages/kb/scripts/backfill-sections.mjs`  → review the proposed wolfpack tree.
-3. **Apply:** `node packages/kb/scripts/backfill-sections.mjs --apply` → writes `_sections.json`, stamps entries' `section`, regenerates `_digest.json`. Then git-commit.
-4. **Delete snapjack:** `rm -rf "$KB_BASE/domains/snapjack"` (re-crawled fresh later).
-5. **Health check:** `node packages/kb/scripts/kb-health.mjs` → tree metrics.
-6. **Cutover:** set `KB_V2=1` on the sweep unit; the next sweep routes into the tree.
-7. Re-crawl snapjack through the v2 pipeline as the end-to-end test.
+## Status: v2 is LIVE on Dewey (sfo-01)
+- ✅ Phases 0–6 shipped. v1 retired — `sweepV2` is the only sweep (no `KB_V2` flag).
+- ✅ **Migration complete on Dewey:** 17 wolfpack entries converted to v2 format
+  (section tree + `placement`/`kind`/`maturity`/`currency`/`contentHash`, titles
+  YAML-quoted); snapjack cleared to an empty shell for a fresh re-crawl.
+- ✅ Deterministic registry + content-similarity identity + feed are live in the sweep.
+- The one-shot `backfill-sections.mjs` migration script has been **removed** (its job
+  is done; recover from git history if a new domain ever needs the same bootstrap —
+  the proper home is a `kb backfill` CLI subcommand, see followups).
+- Open followups: calibrate `SWEEP.mergeSim` against real re-promotes; add a
+  `kb backfill` CLI command; implement the relation resolver (relations[] still empty).
 
 ---
 

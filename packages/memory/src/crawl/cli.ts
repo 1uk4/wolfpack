@@ -4,7 +4,7 @@
  * observability tree to /tmp (spec §4). No LLM, no KB writes — this is the
  * stage we can watch before any model runs.
  */
-import { statSync, readFileSync } from "node:fs";
+import { statSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   discoverSources,
@@ -494,8 +494,21 @@ async function consolidateAndJourney(
   smartModel: string
 ): Promise<void> {
   const { consolidateCrawl } = await import("./consolidate.js");
-  sink.log(`consolidate: ${plan.batches.length} batch(es) on ${smartModel}`);
-  const topics = await consolidateCrawl(engine, plan, obs, byPath, sink);
+  // Digest priming: brief the crawl with what the pack already knows (the
+  // "PACK ALREADY KNOWS" block). Absent for a fresh domain, so just skip it.
+  let publishedDigest: any;
+  const kbBase = process.env.KB_BASE;
+  if (kbBase) {
+    const dp = join(kbBase, "domains", plan.domain, "_digest.json");
+    if (existsSync(dp)) {
+      try { publishedDigest = JSON.parse(readFileSync(dp, "utf-8")); } catch { /* ignore */ }
+    }
+  }
+  sink.log(
+    `consolidate: ${plan.batches.length} batch(es) on ${smartModel}` +
+      (publishedDigest ? ` (digest-primed)` : "")
+  );
+  const topics = await consolidateCrawl(engine, plan, obs, byPath, sink, publishedDigest);
   sink.log(`consolidate done: ${topics.size} topic(s) → topics/`);
   await journeyTail(engine, plan, topics, sink, smartModel);
 }

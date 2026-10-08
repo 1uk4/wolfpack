@@ -172,6 +172,26 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
         if (near && near.score >= SWEEP.mergeSim) targetId = near.id;
       }
 
+      // ── ARCHIVE-SAFETY ──────────────────────────────────────────────────
+      // An ARCHIVED contribution (e.g. a historical crawl) must never supersede
+      // a NEWER LIVE entry: back-filled history cannot overwrite current truth.
+      // Skip it (receipt + processed), leaving the live entry intact.
+      if (targetId && c.currency === "archived" && c.sourceUpdated) {
+        const md = readEntryMarkdown(roots, domain, targetId);
+        const ef = md ? parseFrontmatter(md).fields : null;
+        const existingLive = ef ? String(ef.currency ?? "live") !== "archived" : false;
+        const existingUpdated = ef ? String(ef.updated ?? "") : "";
+        if (existingLive && existingUpdated && c.sourceUpdated < existingUpdated) {
+          writeReceipt(
+            roots, c.from, c, "reject",
+            `archived-older-than-live: ${c.sourceUpdated} < ${existingUpdated}`
+          );
+          markProcessed(c);
+          result.rejected++;
+          continue;
+        }
+      }
+
       let sectionId: SectionId | undefined;
       let placement: Placement | undefined;
 

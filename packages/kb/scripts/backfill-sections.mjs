@@ -45,6 +45,9 @@ const ENTRY_KINDS = new Set([
 
 /** Build v2 frontmatter from a (possibly v1) entry. Deterministic; body kept
  *  verbatim. Mirrors renderEntryV2's field order so sweep + migration agree. */
+function yamlStr(s) {
+  return `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
 function v2Frontmatter(e, section, fit) {
   const f = e.fields;
   const type = String(f.type ?? f.kind ?? "reference");
@@ -52,7 +55,7 @@ function v2Frontmatter(e, section, fit) {
   const lines = [
     "---",
     `id: ${f.id}`,
-    `title: ${f.title}`,
+    `title: ${yamlStr(f.title)}`,
     `domain: ${f.domain ?? DOMAIN}`,
     `section: ${section}`,
     `placement:`,

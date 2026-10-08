@@ -126,6 +126,12 @@ export function gitCommit(roots: KbRoots, message: string): void {
 // V2 PATH — Section-aware frontmatter (section, placement, typed relations)
 // ============================================================================
 
+/** YAML-safe double-quoted scalar. Titles contain ': ' (colon-space) which YAML
+ *  would read as a nested key, so always quote to keep frontmatter valid. */
+function yamlStr(s: string): string {
+  return `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 /**
  * Render v2 entry frontmatter + body. Writes section, placement, and typed relations.
  */
@@ -134,7 +140,7 @@ function renderEntryV2(entry: EntryV2): string {
 
   // Core identity
   lines.push(`id: ${entry.id}`);
-  lines.push(`title: ${entry.title}`);
+  lines.push(`title: ${yamlStr(entry.title)}`);
   lines.push(`domain: ${entry.domain}`);
 
   // Section placement (v2)

@@ -50,12 +50,26 @@ import {
 import {
   sweep,
   readLedger,
+  appendLedger,
   foldRegistry,
   renderRegistry,
   renderDomainIndex,
   createEmbedder,
   buildEntryVectors,
+  cosine,
 } from "./librarian/index.js";
+import { readSections, writeSections } from "./librarian/sections.js";
+import {
+  maybeSplit,
+  shouldMerge,
+  crystallizeUnplaced,
+  type EntryWithVector,
+} from "./librarian/hierarchy.js";
+import { renderDomainDigest } from "./librarian/domains.js";
+import { labelSection, sectionSummary } from "./librarian/summarize.js";
+import { ev, type KbEvent } from "./shared/index.js";
+import type { Section, SectionId, DomainId } from "./schema/knowledge.js";
+import { parseFrontmatter } from "@wolfpack/engine";
 
 function resolveRoots(): KbRoots {
   const home = homedir();
@@ -498,6 +512,319 @@ async function cmdRebuildVectors(): Promise<void> {
   console.log(`re-embedded ${vectors.length} entries`);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// reorg — the missing maintenance pass (split / merge / crystallize / re-label)
+// ════════════════════════════════════════════════════════════════════════════
+
+async function cmdReorg(): Promise<void> {
+  const roots = resolveRoots();
+  const argv = process.argv.slice(2);
+  const domainFilter = argv.find((a) => !a.startsWith("--") && a !== "reorg") ?? null;
+  const dryRun = argv.includes("--dry-run");
+
+  const domainsRoot = join(roots.kbBase, "domains");
+  if (!existsSync(domainsRoot)) {
+    console.error("no domains/ found under KB_BASE");
+    process.exit(1);
+  }
+  const allDomains = readdirSync(domainsRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  const domains = domainFilter ? allDomains.filter((d) => d === domainFilter) : allDomains;
+  if (domains.length === 0) {
+    console.error(domainFilter ? `domain "${domainFilter}" not found` : "no domains");
+    process.exit(1);
+  }
+
+  // Build entry vectors and read sections
+  const reg = foldRegistry(readLedger(roots));
+  const embedder = createEmbedder(roots);
+  const allVectors = await buildEntryVectors(roots, reg, embedder);
+  let sections = readSections(roots);
+  const engine = makeEngine();
+  const events: KbEvent[] = [];
+
+  for (const domain of domains) {
+    console.log(`\n─── reorg: ${domain} ───`);
+    const domainVectors = allVectors.filter((v) => v.domain === domain);
+    const eDir = join(domainsRoot, domain, "entries");
+
+    // Build entry→section map from frontmatter
+    const entrySectionMap = new Map<string, string>();
+    if (existsSync(eDir)) {
+      for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+        const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+        const eid = String(fields.id ?? f.replace(/\.md$/, ""));
+        const sec = String(fields.section ?? "");
+        if (sec) entrySectionMap.set(eid, sec);
+      }
+    }
+
+    // ── 1. Reconcile memberCount ─────────────────────────────────────────
+    const sectionMembers = new Map<string, EntryWithVector[]>();
+    const unplaced: EntryWithVector[] = [];
+    for (const v of domainVectors) {
+      const sec = entrySectionMap.get(v.entryId);
+      if (sec) {
+        if (!sectionMembers.has(sec)) sectionMembers.set(sec, []);
+        sectionMembers.get(sec)!.push({
+          entryId: v.entryId,
+          sectionId: sec as SectionId,
+          vector: v.vector,
+        });
+      } else {
+        unplaced.push({
+          entryId: v.entryId,
+          sectionId: "_unplaced" as SectionId,
+          vector: v.vector,
+        });
+      }
+    }
+
+    let memberCountFixes = 0;
+    for (const s of sections.filter((s) => s.domain === domain)) {
+      const actual = sectionMembers.get(s.id)?.length ?? 0;
+      if (s.memberCount !== actual) {
+        console.log(`  memberCount fix: ${s.id} ${s.memberCount} → ${actual}`);
+        s.memberCount = actual;
+        s.dirty = true;
+        memberCountFixes++;
+      }
+    }
+    if (memberCountFixes) console.log(`  fixed ${memberCountFixes} stale memberCount(s)`);
+
+    // ── 2. Split overflow sections ───────────────────────────────────────
+    const domainSections = sections.filter((s) => s.domain === domain);
+    const toSplit = domainSections.filter(
+      (s) => (sectionMembers.get(s.id)?.length ?? 0) > 8
+    );
+    for (const sec of toSplit) {
+      const members = sectionMembers.get(sec.id) ?? [];
+      const result = maybeSplit(sec, members);
+      if (!result) {
+        console.log(`  skip split: ${sec.id} (k-means didn't find a clean cut)`);
+        continue;
+      }
+      console.log(
+        `  split: ${sec.id} (${members.length} entries) → ` +
+          result.children.map((c) => `${c.id}(${result.reassignment.size > 0 ? [...result.reassignment.values()].filter((v) => v === c.id).length : "?"})`).join(" + ")
+      );
+      if (!dryRun) {
+        // Add children to section tree
+        sec.childIds.push(...result.children.map((c) => c.id));
+        sec.dirty = true;
+        sections = [...sections, ...result.children];
+
+        events.push(
+          ev.sectionSplit(sec.id, sec.parent ?? "", result.children.map((c) => c.id))
+        );
+        for (const child of result.children) {
+          events.push(
+            ev.sectionCreated({
+              sectionId: child.id,
+              domain,
+              parent: sec.id,
+              label: String(child.label),
+            })
+          );
+        }
+
+        // Update entry section in frontmatter
+        for (const [entryId, newSecId] of result.reassignment) {
+          const file = join(eDir, `${entryId}.md`);
+          if (existsSync(file)) {
+            let content = readFileSync(file, "utf-8");
+            content = content.replace(
+              /^section: .+$/m,
+              `section: ${newSecId}`
+            );
+            content = content.replace(
+              /^(placement:)\n(  basis: ).+$/m,
+              `$1\n$2routed`
+            );
+            writeFileSync(file, content);
+          }
+          events.push(
+            ev.entryPlaced({
+              entryId,
+              sectionId: newSecId,
+              basis: "routed",
+              fit: 1,
+            })
+          );
+        }
+
+        // Update sectionMembers map for merge check
+        sectionMembers.delete(sec.id);
+        for (const child of result.children) {
+          const childMembers = members.filter(
+            (m) => result.reassignment.get(m.entryId) === child.id
+          );
+          sectionMembers.set(child.id, childMembers.map((m) => ({
+            ...m,
+            sectionId: child.id,
+          })));
+        }
+      }
+    }
+
+    // ── 3. Merge underfull sections ──────────────────────────────────────
+    let merged = 0;
+    for (const sec of [...sections].filter((s) => s.domain === domain)) {
+      const parentId = shouldMerge(sec);
+      if (!parentId) continue;
+      const parent = sections.find((s) => s.id === parentId);
+      if (!parent) continue;
+      const members = sectionMembers.get(sec.id) ?? [];
+      console.log(
+        `  merge: ${sec.id} (${members.length} entries) → parent ${parentId}`
+      );
+      if (!dryRun) {
+        // Move entries to parent
+        for (const m of members) {
+          const file = join(eDir, `${m.entryId}.md`);
+          if (existsSync(file)) {
+            let content = readFileSync(file, "utf-8");
+            content = content.replace(/^section: .+$/m, `section: ${parentId}`);
+            writeFileSync(file, content);
+          }
+          events.push(
+            ev.entryPlaced({ entryId: m.entryId, sectionId: parentId, basis: "routed", fit: 1 })
+          );
+        }
+        // Transfer member list
+        const parentMembers = sectionMembers.get(parentId) ?? [];
+        sectionMembers.set(parentId, [
+          ...parentMembers,
+          ...members.map((m) => ({ ...m, sectionId: parentId as SectionId })),
+        ]);
+        sectionMembers.delete(sec.id);
+        parent.memberCount += members.length;
+        parent.childIds = parent.childIds.filter((c) => c !== sec.id);
+        parent.dirty = true;
+        sections = sections.filter((s) => s.id !== sec.id);
+        merged++;
+      }
+    }
+    if (merged) console.log(`  merged ${merged} underfull section(s)`);
+
+    // ── 4. Crystallize unplaced entries ──────────────────────────────────
+    if (unplaced.length > 0) {
+      const domSections = sections.filter((s) => s.domain === domain);
+      const candidates = crystallizeUnplaced(unplaced, domSections, domain as DomainId);
+      for (const c of candidates) {
+        console.log(
+          `  crystallize: ${c.section.id} (${c.entryIds.length} entries, cohesion=${c.cohesion.toFixed(3)})`
+        );
+        if (!dryRun) {
+          sections = [...sections, c.section];
+          events.push(
+            ev.sectionCreated({
+              sectionId: c.section.id,
+              domain,
+              parent: c.section.parent,
+              label: String(c.section.label),
+            })
+          );
+          events.push(
+            ev.sectionCrystallized({
+              sectionId: c.section.id,
+              parentId: c.section.parent ?? "",
+              entryIds: c.entryIds,
+              cohesion: c.cohesion,
+            })
+          );
+          for (const eid of c.entryIds) {
+            const file = join(eDir, `${eid}.md`);
+            if (existsSync(file)) {
+              let content = readFileSync(file, "utf-8");
+              content = content.replace(
+                /^section: .+$/m,
+                `section: ${c.section.id}`
+              );
+              writeFileSync(file, content);
+            }
+            events.push(
+              ev.entryPlaced({ entryId: eid, sectionId: c.section.id, basis: "crystallized", fit: 1 })
+            );
+          }
+        }
+      }
+      if (candidates.length === 0) {
+        console.log(`  ${unplaced.length} unplaced entry(s) — not cohesive enough to crystallize`);
+      }
+    }
+
+    // ── 5. Refresh dirty section titles ──────────────────────────────────
+    const dirty = sections.filter((s) => s.domain === domain && s.dirty);
+    if (dirty.length > 0) {
+      console.log(`  labeling ${dirty.length} dirty section(s)…`);
+      for (const sec of dirty) {
+        const members = sectionMembers.get(sec.id) ?? [];
+        const entryTitles: string[] = [];
+        for (const m of members) {
+          const file = join(eDir, `${m.entryId}.md`);
+          if (existsSync(file)) {
+            const { fields } = parseFrontmatter(readFileSync(file, "utf-8"));
+            entryTitles.push(String(fields.title ?? m.entryId));
+          }
+        }
+        // Compute summary from member titles
+        if (entryTitles.length > 0 && !dryRun) {
+          try {
+            sec.summary = await sectionSummary(engine, entryTitles);
+            const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
+            const siblings = sections
+              .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
+              .map((s) => s.summary);
+            const oldTitle = sec.title;
+            sec.title = await labelSection(engine, sec.summary, {
+              sampleTitles: entryTitles,
+              parentTitle: parent?.title,
+              siblingSummaries: siblings,
+            });
+            sec.dirty = false;
+            sec.updated = new Date().toISOString().split("T")[0] as any;
+            console.log(`    ${sec.id}: "${oldTitle}" → "${sec.title}"`);
+          } catch (e) {
+            console.error(`    ${sec.id}: label failed: ${e}`);
+          }
+        } else if (dryRun) {
+          console.log(`    ${sec.id}: would re-label (${entryTitles.length} member titles)`);
+        }
+      }
+    }
+  }
+
+  // ── Persist ──────────────────────────────────────────────────────────────
+  if (dryRun) {
+    console.log(`\n[dry-run] ${events.length} event(s) would be emitted. No writes.`);
+    return;
+  }
+
+  if (events.length > 0) {
+    appendLedger(roots, events);
+    console.log(`\nappended ${events.length} event(s) to ledger`);
+  }
+  writeSections(roots, sections);
+
+  // Re-render digest + index for each touched domain
+  for (const domain of domains) {
+    renderDomainDigest(roots, domain);
+    renderDomainIndex(roots, domain);
+  }
+  console.log(`re-rendered digest + index for ${domains.length} domain(s)`);
+
+  // Notify
+  const splitCount = events.filter((e) => e.t === "section_split").length;
+  const crystalCount = events.filter((e) => e.t === "section_crystallized").length;
+  const placeCount = events.filter((e) => e.t === "entry_placed").length;
+  await tg(
+    `\u{1f4d0} reorg complete: ${splitCount} split(s), ${crystalCount} crystallized, ` +
+      `${placeCount} entry placement(s) across ${domains.length} domain(s)`
+  );
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0] ?? "sweep";
@@ -516,9 +843,12 @@ async function main(): Promise<void> {
     case "reindex":
       await cmdReindex();
       break;
+    case "reorg":
+      await cmdReorg();
+      break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors`
+        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run]`
       );
       process.exit(1);
   }

@@ -151,7 +151,13 @@ export function parseStatusConfig(rawConfig: unknown, source = "config.json"): S
   };
 }
 
-function readStatusConfigFile(configPath: string, examplePath: string): { sourcePath: string; rawConfig: string } {
+/** Read config.json, else config.json.example. Returns null when NEITHER exists
+ *  so the caller can fall back to defaults — a missing optional status config
+ *  must never be fatal (see loadStatusConfig). Real read errors still throw. */
+function readStatusConfigFile(
+  configPath: string,
+  examplePath: string,
+): { sourcePath: string; rawConfig: string } | null {
   try {
     return { sourcePath: configPath, rawConfig: readFileSync(configPath, "utf8") };
   } catch (error) {
@@ -163,20 +169,29 @@ function readStatusConfigFile(configPath: string, examplePath: string): { source
     return { sourcePath: examplePath, rawConfig: readFileSync(examplePath, "utf8") };
   } catch (error) {
     const errno = error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") {
-      throw new Error(
-        `Missing subagent status config. Expected ${configPath} or ${examplePath}.`,
-      );
-    }
+    if (errno.code === "ENOENT") return null; // neither file present → use defaults
     throw error;
   }
 }
+
+/** Built-in default when no config file is deployed. Mirrors the shipped
+ *  config.json.example so a bundle that omits it behaves identically. */
+export const DEFAULT_STATUS_CONFIG: StatusConfig = {
+  enabled: true,
+  lineLimit: DEFAULT_STATUS_LINE_LIMIT,
+};
 
 export function loadStatusConfig(
   configPath = DEFAULT_STATUS_CONFIG_PATH,
   examplePath = STATUS_CONFIG_EXAMPLE_PATH,
 ): StatusConfig {
-  const { sourcePath, rawConfig } = readStatusConfigFile(configPath, examplePath);
+  const found = readStatusConfigFile(configPath, examplePath);
+  // A missing status config is NOT fatal: it is an optional UI nicety, and
+  // throwing here fails the whole extension — which exits pi and drops the
+  // agent (and its Telegram bridge) into a systemd crash-loop. The bundler does
+  // not ship config.json.example, so deployed wolves hit exactly this path.
+  if (!found) return { ...DEFAULT_STATUS_CONFIG };
+  const { sourcePath, rawConfig } = found;
 
   let parsed: unknown;
   try {

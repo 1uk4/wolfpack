@@ -39,6 +39,12 @@ export interface EmitCrawlOptions {
    */
   wolf?: string;
   sinkBase?: string;
+  /**
+   * Suppress the stderr dev-microscope echo and the stdout summary line.
+   * The run.log file is still written. TUI callers set this so they can render
+   * their own clean closeout instead of leaking raw pipeline output.
+   */
+  quiet?: boolean;
 }
 
 /** One contribution that emit would (or did) hand to the inbox. */
@@ -73,7 +79,7 @@ export function emitCrawl(
 ): EmitCrawlResult {
   const wolf = opts.wolf ?? process.env.WOLF_NAME ?? "scribe";
   const plan = readPlan(join(runDir, "plan.yaml"));
-  const sink = createSink(`emit-${Date.now()}`, opts.sinkBase);
+  const sink = createSink(`emit-${Date.now()}`, opts.sinkBase, opts.quiet);
   sink.log(`emit start: src=${runDir} domain=${plan.domain} dryRun=${!!opts.dryRun}`);
 
   // Resolve the inbox target. Dry-run writes into the sink so you can inspect
@@ -202,9 +208,11 @@ export function emitCrawl(
 
   const dest = `${opsRoot}/inbox/${wolf}`;
   sink.log(`emit done: ${emitted} emitted, ${skipped} unchanged → ${dest}`);
-  console.log(
-    `\n${emitted} contribution(s) ${opts.dryRun ? "rendered (dry-run)" : "emitted"} → ${dest}` +
-      `\nLog: ${sink.dir}`
-  );
+  if (!opts.quiet) {
+    console.log(
+      `\n${emitted} contribution(s) ${opts.dryRun ? "rendered (dry-run)" : "emitted"} → ${dest}` +
+        `\nLog: ${sink.dir}`
+    );
+  }
   return { emitted, skipped, dest, dir: sink.dir, contributions };
 }

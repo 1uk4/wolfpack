@@ -23,7 +23,11 @@ export interface CrawlSink {
  *  is a per-user /var/folders path) so the dev microscope is where you expect. */
 export const DEFAULT_SINK_BASE = "/tmp/wolfpack-crawl";
 
-export function createSink(sessionId: string, base?: string): CrawlSink {
+export function createSink(
+  sessionId: string,
+  base?: string,
+  quiet = false
+): CrawlSink {
   const dir = join(base ?? DEFAULT_SINK_BASE, sessionId);
   mkdirSync(dir, { recursive: true });
   const logPath = join(dir, "run.log");
@@ -33,7 +37,10 @@ export function createSink(sessionId: string, base?: string): CrawlSink {
     log(msg: string): void {
       const line = `${new Date().toISOString()}  ${msg}\n`;
       appendFileSync(logPath, line);
-      process.stderr.write(`[crawl] ${msg}\n`);
+      // The run.log file is the permanent record; the stderr echo is the dev
+      // microscope. Quiet mode keeps the file but silences the echo so a TUI
+      // caller (e.g. /wolf:crawl-release) can present its own clean closeout.
+      if (!quiet) process.stderr.write(`[crawl] ${msg}\n`);
     },
     file(relPath: string, content: string): void {
       const p = join(dir, relPath);
@@ -49,7 +56,7 @@ export function createSink(sessionId: string, base?: string): CrawlSink {
       const t0 = Date.now();
       const id = setInterval(() => {
         const s = Math.round((Date.now() - t0) / 1000);
-        process.stderr.write(`[crawl]   … ${label} (${s}s)\n`);
+        if (!quiet) process.stderr.write(`[crawl]   … ${label} (${s}s)\n`);
       }, everyMs);
       try {
         return await op();

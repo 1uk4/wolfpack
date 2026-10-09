@@ -268,7 +268,7 @@ export async function runCrawl(
     apiKey,
     defaultModel: smartModel,
     steps: {
-      classify: { model: fastModel },
+      classify: { model: fastModel, maxTokens: 8192 },
       consolidate: { model: smartModel, maxTokens: 16000 },
     },
   });
@@ -540,7 +540,7 @@ export async function resumeCrawl(
     apiKey,
     defaultModel: smartModel,
     steps: {
-      classify: { model: fastModel },
+      classify: { model: fastModel, maxTokens: 8192 },
       consolidate: { model: smartModel, maxTokens: 16000 },
     },
   });

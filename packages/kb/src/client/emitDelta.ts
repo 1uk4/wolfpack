@@ -15,6 +15,24 @@ import {
   type KbRoots,
 } from "../shared/index.js";
 
+/** Wolf-local map denTopicId → last-emitted content hash. Lives in the wolf's
+ *  non-synced den/kb so dedup survives inbox drain (the sweep moves inbox files
+ *  to _processed, so the inbox itself can't be the dedup source). */
+function emittedMapPath(roots: KbRoots): string {
+  return join(roots.denLocal, "emitted.json");
+}
+
+function readEmittedMap(roots: KbRoots): Record<string, string> {
+  const p = emittedMapPath(roots);
+  if (!existsSync(p)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(p, "utf-8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export interface EmitDeltaInput {
   roots: KbRoots;
   wolf: string;
@@ -46,7 +64,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   mkdirSync(dir, { recursive: true });
 
   const hash = contentHash(input.body);
-  const prevHash = readLastHash(dir, input.denTopicId);
+  const emitted = readEmittedMap(roots);
+  const prevHash = emitted[input.denTopicId] ?? null;
   if (prevHash === hash) return null; // unchanged re-promotion → no-op
 
   const contribution: Contribution = {
@@ -72,15 +91,19 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
 
   const file = join(dir, `${input.denTopicId}-${hash.slice(7, 17)}.md`);
   atomicWrite(file, render(contribution));
-  return contribution;
-}
 
-/** Find the most recent hash emitted for a topic (scan inbox filenames/bodies). */
-function readLastHash(dir: string, denTopicId: string): string | null {
-  // TODO: maintain a per-wolf local hash map (den/kb/emitted.json) rather than
-  // scanning, so dedup survives inbox drain. Scaffold reads nothing for now.
-  if (!existsSync(dir)) return null;
-  return null;
+  // Record what we emitted so a later unchanged re-promote is a true no-op
+  // (no inbox churn for the sweep to hash-skip). Best-effort: the inbox file is
+  // the source of truth; the map is just the dedup accelerator.
+  try {
+    mkdirSync(roots.denLocal, { recursive: true });
+    emitted[input.denTopicId] = hash;
+    atomicWrite(emittedMapPath(roots), JSON.stringify(emitted, null, 2) + "\n");
+  } catch {
+    /* dedup map is an optimization — never fail an emit over it */
+  }
+
+  return contribution;
 }
 
 function render(c: Contribution): string {

@@ -17,6 +17,11 @@ export function entryId(domain: string): string {
   return `kb-${domain}-${shortId()}`;
 }
 
+/** WorkItem id: work-<domain>-<shortId>. The Factory counterpart of entryId. */
+export function workId(domain: string): string {
+  return `work-${domain}-${shortId()}`;
+}
+
 /** Canonical topic id: topic-<shortId>. */
 export function topicId(): string {
   return `topic-${shortId()}`;

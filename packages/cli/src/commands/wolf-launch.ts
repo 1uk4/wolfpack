@@ -47,6 +47,20 @@ function parseEnvFile(file: string): Record<string, string> {
   return out;
 }
 
+/** True when the wolf's agent dir holds a Claude subscription OAuth login
+ *  (auth.json → anthropic.type === "oauth"), i.e. it runs on the bridge and must
+ *  not be handed a billable ANTHROPIC_API_KEY. */
+function hasSubscriptionOAuth(agentDirPath: string): boolean {
+  try {
+    const auth = JSON.parse(
+      fs.readFileSync(path.join(agentDirPath, "auth.json"), "utf8"),
+    );
+    return auth?.anthropic?.type === "oauth";
+  } catch {
+    return false;
+  }
+}
+
 export async function wolfLaunch(
   name: string,
   opts: { host?: string; dir?: string },
@@ -114,14 +128,26 @@ export async function wolfLaunch(
     PI_CODING_AGENT_DIR: agentDir(wolfDir),
   };
 
-  if (!env.ANTHROPIC_API_KEY) {
+  // When a local wolf is logged into the Claude subscription (OAuth in its
+  // auth.json), it runs on the subscription bridge — the main agent via the
+  // bridge provider, and memory/subagents over the same transport. A raw
+  // ANTHROPIC_API_KEY in the env would override that and silently bill the API,
+  // so strip it here. The key stays in ~/.wolfpack/.env purely so VPS
+  // provisioning (`wolfpack add wolf --host …`, which reads your shell env) can
+  // ship it to remote wolves — the local agent never uses it.
+  if (hasSubscriptionOAuth(agentDir(wolfDir))) {
+    delete env.ANTHROPIC_API_KEY;
+    console.log(
+      c.dim("Local wolf on Claude subscription (OAuth) — API key withheld."),
+    );
+  } else if (!env.ANTHROPIC_API_KEY) {
     console.error(
       c.yellow(
-        "⚠ ANTHROPIC_API_KEY not set — memory/subagents will be degraded.",
+        "⚠ No subscription login and no ANTHROPIC_API_KEY — the agent has no credentials.",
       ),
     );
     console.error(
-      c.dim("  Set it in your shell, or add it to ~/.wolfpack/.env (shared secret)."),
+      c.dim("  Run `/login` inside pi for the subscription, or add ANTHROPIC_API_KEY to ~/.wolfpack/.env."),
     );
   }
 

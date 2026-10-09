@@ -1684,7 +1684,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       beginActivity(ctx, "promote");
       try {
         const denConfig: DenConfig = { denRoot: wolfDen, wolfName: wolfName };
-        await orchestrator.promoteToWolfMemory(denConfig);
+        const result = await orchestrator.promoteToWolfMemory(denConfig);
         if (engine) {
           const usage = engine.usage.summarize();
           totalCostUsd = estimateCost(usage);
@@ -1698,12 +1698,21 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
           denTopicCount = readdirSync(denTopicsDir).filter((f: string) => f.endsWith(".md")).length;
         } catch {}
 
-        if (ctx.hasUI) ctx.ui.notify(
-          `🐺 promoted to den\n` +
-          `   Den: ${wolfDen}/memory/\n` +
-          `   Topics: ${denTopicCount}`,
-          "info"
-        );
+        if (ctx.hasUI) {
+          const { topicsProcessed, topicsCreated, topicsMerged, topicsSkipped, claimsSubmitted, details } = result;
+          if (topicsProcessed === 0) {
+            ctx.ui.notify(`🐺 nothing new to promote (den has ${denTopicCount} topic(s))`, "info");
+          } else {
+            const lines = [
+              `🐺 promoted to den — ${topicsCreated} created, ${topicsMerged} updated` +
+                (topicsSkipped ? `, ${topicsSkipped} skipped` : ``),
+              ...details.map((d) => `   ${d.change === "merge" ? "⤵ updated" : "✦ created"}: ${d.title}`),
+              `   KB deltas emitted: ${claimsSubmitted} (sweep merges → registry)`,
+              `   Den: ${wolfDen}/memory/ (${denTopicCount} topic(s) total)`,
+            ];
+            ctx.ui.notify(lines.join("\n"), "info");
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (ctx.hasUI) ctx.ui.notify(`🐺 promote failed: ${msg}`, "error");

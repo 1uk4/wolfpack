@@ -156,7 +156,11 @@ export function markSessionConsolidated(
   topicsProcessed: number
 ): void {
   ensureDenDirs(denRoot);
-  const records = getConsolidatedSessions(denRoot);
+  const records = getConsolidatedSessions(denRoot).filter(
+    (r) => r.sessionId !== sessionId
+  );
+  // Upsert: a session can be promoted many times as it grows; keep one record
+  // per session (the latest), not a duplicate per promote.
   records.push({
     sessionId,
     consolidatedAt: new Date().toISOString(),

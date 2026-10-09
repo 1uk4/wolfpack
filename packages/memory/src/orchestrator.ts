@@ -26,7 +26,7 @@ import {
   writeJourney,
   renderIndex,
 } from "./session/memory.js";
-import { consolidateSession } from "./consolidate.js";
+import { consolidateSession, type ConsolidateResult } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
@@ -76,8 +76,9 @@ export interface MemoryOrchestrator {
 
   /**
    * Promote session memory to wolf den. Call on session end.
+   * Resolves with the consolidation result (counts + per-topic details).
    */
-  promoteToWolfMemory(denConfig: DenConfig): Promise<void>;
+  promoteToWolfMemory(denConfig: DenConfig): Promise<ConsolidateResult>;
 
   /**
    * Get the current observation buffer for context injection.
@@ -317,10 +318,12 @@ export function createOrchestrator(
     await runConsolidation(true);
   }
 
-  async function promoteToWolfMemory(denConfig: DenConfig): Promise<void> {
+  async function promoteToWolfMemory(
+    denConfig: DenConfig
+  ): Promise<ConsolidateResult> {
     runtime.notify?.("memory: promoting session to wolf memory", "info");
 
-    await consolidateSession({
+    const result = await consolidateSession({
       engine,
       den: denConfig,
       memoryRoot: sessionMemoryRoot(runtime.cwd, ""),
@@ -328,9 +331,11 @@ export function createOrchestrator(
       kbRoots: cfg.kbRoots,
       defaultDomain: cfg.defaultDomain,
       skipClaims: false,
+      onProgress: (msg) => runtime.notify?.(`memory: ${msg}`, "info"),
     });
 
     runtime.notify?.("memory: session promoted to wolf memory", "info");
+    return result;
   }
 
   function getActiveObservations(): Observation[] {

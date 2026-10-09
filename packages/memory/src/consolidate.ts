@@ -1,38 +1,36 @@
 /**
  * Wolf consolidator — the core pipeline.
  *
- * Takes a session's OM memory and folds it into the wolf's den.
- * Optionally auto-submits claims to the Librarian.
+ * Takes a session's OM memory and promotes it into the wolf's den, then emits
+ * contribution deltas to the shared KB. Deterministic — no LLM in this stage.
+ *
+ * The den is PRIVATE working memory; the KB (Dewey's sweep) is the curated truth
+ * and owns merging/clustering/relations. So we do NOT read the whole den or run
+ * a model to merge against it here. We upsert session topics by stable slug id
+ * and let the KB registry do the scalable merge.
  *
  * Flow:
- *   1. Read session topics (OM output)
- *   2. Read existing den topics
- *   3. LLM: consolidate (merge/create/skip for each session topic)
- *   4. Write updated den topics
- *   5. LLM: check if anything is claim-worthy
- *   6. Write claims to Librarian inbox
- *   7. Update den journey
- *   8. Regenerate den index
- *   9. Mark session as consolidated
+ *   1. Read session topics (OM output); bail if none / already consolidated
+ *   2. Upsert each session topic into the den by id (create or update)
+ *   3. emitDelta each to the Librarian inbox (hash-guarded, no LLM)
+ *   4. Update den journey
+ *   5. Regenerate den index
+ *   6. Mark session as consolidated
  */
 import type { Engine } from "@wolfpack/engine";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
-  readDenTopics,
   readDenJourney,
   writeDenTopic,
   writeDenJourney,
   markSessionConsolidated,
-  getConsolidatedSessions,
   ensureDenDirs,
   type DenConfig,
 } from "./den.js";
-import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
-import { buildConsolidatePrompt } from "./prompts.js";
-import { ConsolidationResultSchema, type ConsolidationResult } from "./schemas.js";
 import { renderDenIndex } from "./den-index.js";
 
 export interface ConsolidateOptions {
@@ -50,6 +48,9 @@ export interface ConsolidateOptions {
   defaultDomain?: string;
   /** Skip emitting deltas to the KB. */
   skipClaims?: boolean;
+  /** Optional progress sink — called with human-readable status lines as the
+   *  pipeline advances, so a UI can show what is actually being processed. */
+  onProgress?: (msg: string) => void;
 }
 
 export interface ConsolidateResult {
@@ -59,6 +60,8 @@ export interface ConsolidateResult {
   topicsCreated: number;
   topicsSkipped: number;
   claimsSubmitted: number;
+  /** Per-topic outcomes for the topics that were written (create/merge). */
+  details: Array<{ title: string; change: "create" | "merge" }>;
 }
 
 /**
@@ -75,21 +78,16 @@ export async function consolidateSession(
     kbRoots,
     defaultDomain = "wolfpack",
     skipClaims = false,
+    onProgress,
   } = options;
 
-  // Check if already consolidated
-  const consolidated = getConsolidatedSessions(den.denRoot);
-  if (consolidated.some((s) => s.sessionId === sessionId)) {
-    return {
-      sessionId,
-      topicsProcessed: 0,
-      topicsMerged: 0,
-      topicsCreated: 0,
-      topicsSkipped: 0,
-      claimsSubmitted: 0,
-    };
-  }
-
+  // NOTE: we intentionally do NOT bail when this session was promoted before.
+  // Promotion is now a cheap, idempotent upsert (deterministic den write +
+  // hash-guarded emitDelta), so re-promoting a long-lived session must pick up
+  // whatever Stage-1 has consolidated SINCE the last promote. The old
+  // session-level "already consolidated" guard existed only to avoid re-running
+  // the expensive O(den) LLM merge, which no longer exists — and it silently
+  // stranded every topic created after the first promote.
   ensureDenDirs(den.denRoot);
 
   // Step 1: Read session memory
@@ -97,6 +95,7 @@ export async function consolidateSession(
   const sessionTopics = readTopics(sessionDir);
   const sessionJourney = readJourney(sessionDir);
   if (sessionTopics.length === 0) {
+    onProgress?.("no session topics to promote — nothing to do");
     markSessionConsolidated(den.denRoot, sessionId, 0);
     return {
       sessionId,
@@ -105,26 +104,30 @@ export async function consolidateSession(
       topicsCreated: 0,
       topicsSkipped: 0,
       claimsSubmitted: 0,
+      details: [],
     };
   }
 
-  // Step 2: Read existing den topics
-  const denTopics = readDenTopics(den.denRoot);
+  // Step 2+3: Promote session topics into the den — DETERMINISTIC, no LLM.
+  //
+  // Architecture note: the den is this wolf's PRIVATE working copy; the shared
+  // KB (Dewey's sweep) is the curated source of truth and already owns the real
+  // work — clustering related topics, deriving relations (embeddings), and
+  // maintaining the per-domain registry that maps each den topic → a canonical
+  // topic. So promote no longer reads the whole den or asks a model to merge
+  // against it (that was O(den) and unbounded). It upserts each session topic by
+  // its stable slug id and emits a delta to the KB. Merging happens there, where
+  // it scales. This makes promote O(session topics) and flat as the den grows.
+  //
+  // No data is lost by not merging den-side: emitDelta records every body as a
+  // hash-chained contribution in the librarian inbox, so the KB retains full
+  // history and produces the merged canonical entry.
+  const topicsDir = join(den.denRoot, "memory", "topics");
+  onProgress?.(`promoting ${sessionTopics.length} session topic(s) to den:`);
 
-  // Step 3: LLM — consolidate
-  const consolidation = await engine.call(
-    "consolidate",
-    ConsolidationResultSchema,
-    {
-      system: CONSOLIDATE_SYSTEM,
-      prompt: buildConsolidatePrompt(sessionTopics, denTopics),
-    }
-  );
-
-  // Step 4: Write results to den
   let merged = 0;
   let created = 0;
-  let skipped = 0;
+  const skipped = 0;
   const updatedTopics: Array<{
     id: string;
     title: string;
@@ -135,23 +138,22 @@ export async function consolidateSession(
 
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
 
-  for (const action of consolidation.actions) {
-    if (action.action === "skip" || !action.result) {
-      skipped++;
-      continue;
-    }
-
+  for (const t of sessionTopics) {
+    // "merge" = updating an existing den topic with the same id; "create" = new.
+    const change: "create" | "merge" = existsSync(join(topicsDir, `${t.id}.md`))
+      ? "merge"
+      : "create";
     const topic = {
-      id: action.result.id,
-      title: action.result.title,
-      summary: action.result.summary,
+      id: t.id,
+      title: t.title,
+      summary: t.summary,
       updated: now,
-      body: action.result.body,
+      body: t.body,
     };
 
     writeDenTopic(den.denRoot, topic);
-    const change = action.action === "merge" ? "merge" : "create";
     updatedTopics.push({ ...topic, change });
+    onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${t.title}`);
 
     if (change === "merge") merged++;
     else created++;
@@ -203,6 +205,7 @@ export async function consolidateSession(
     topicsCreated: created,
     topicsSkipped: skipped,
     claimsSubmitted,
+    details: updatedTopics.map((t) => ({ title: t.title, change: t.change })),
   };
 }
 

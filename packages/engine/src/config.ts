@@ -51,6 +51,10 @@ export interface EngineConfig {
   apiKey: string;
   /** Base URL override (for proxies, local models, etc.) */
   baseUrl?: string;
+  /** Per-request timeout in ms (passed to the SDK client). Bounds how long a
+   *  single call can hang before failing — without it a wedged produce can
+   *  block on the SDK default (~10m) and stall a whole sweep. */
+  requestTimeoutMs?: number;
   /** Default model — used when a step doesn't specify its own */
   defaultModel: string;
   /** Default temperature */

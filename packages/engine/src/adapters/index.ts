@@ -17,6 +17,7 @@ const registry: Record<string, AdapterFactory> = {
     new AnthropicAdapter({
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      timeoutMs: config.requestTimeoutMs,
     }),
 
   // ── Add new providers here ──────────────────────────────────────────────

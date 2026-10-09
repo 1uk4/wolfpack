@@ -385,6 +385,17 @@ FRONTMATTER RULES (the entry is machine-read — be disciplined):
   otherwise unless it genuinely refines the type.
 - related/supersedes: use ONLY real entry ids of the form kb-<domain>-<id>.
   Never invent slugs, never reference this entry itself. If unsure, leave empty.
+- facets: an OPTIONAL controlled classification map. The ONLY allowed keys are:
+  subsystem, surface, layer, lifecycle. Each value is ONE lower-kebab slug
+  (e.g. {"subsystem": "auth", "lifecycle": "archived"}). Facets CLASSIFY the
+  entry on these four axes — they are NOT for capturing arbitrary properties.
+  Omit any axis you are unsure about; leave facets empty ({}) when none apply.
+- properties: an OPTIONAL open map for concrete structured ATTRIBUTES the source
+  carries that are NOT classification axes — e.g. {"host": "sfo01", "region":
+  "sfo1", "provider": "digitalocean", "test-count": "42"}. Use this (not facets)
+  for host/provider/region/version/counts/thresholds and similar specifics.
+  Keys: short, descriptive. Values: a single string (stringify numbers). Omit
+  prose or anything already in the body; leave empty ({}) when nothing fits.
 - Do NOT set id, domain, subcategory, created, updated, authority — those are
   owned by the pipeline and will be overwritten.
 - In the body, wrap hex color codes and other '#'-prefixed literals in backticks

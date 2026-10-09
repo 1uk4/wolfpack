@@ -19,6 +19,8 @@ import type {
 export interface AnthropicAdapterOptions {
   apiKey: string;
   baseUrl?: string;
+  /** Per-request timeout in ms. Bounds a single hanging call. */
+  timeoutMs?: number;
 }
 
 export class AnthropicAdapter implements KnowledgeAdapter {
@@ -28,6 +30,7 @@ export class AnthropicAdapter implements KnowledgeAdapter {
     this.client = new Anthropic({
       apiKey: options.apiKey,
       ...(options.baseUrl ? { baseURL: options.baseUrl } : {}),
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
     });
   }
 

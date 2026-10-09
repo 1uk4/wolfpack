@@ -33,7 +33,7 @@ import {
   type LedgerEvent,
   type DenConfig,
 } from "@wolfpack/memory";
-import { drainFeed } from "@wolfpack/kb/client";
+import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import {
@@ -43,6 +43,7 @@ import {
   renderPlanSummary,
   readPlan,
   writePlan,
+  readDenTopics,
   discoverSources,
   gatePlan,
   DEFAULT_CRAWL_CONCURRENCY,
@@ -1393,29 +1394,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   }
 
-  // Shared-KB read path: drain this wolf's kb-feed notices (pointer + summary)
-  // and surface them so the wolf knows what changed in the shared KB. The full
-  // entry is resolved on demand from the local kb-base mirror. Consumes the
-  // notices (one-time injection).
-  function renderKbUpdates(): string | null {
-    try {
-      if (!kbEnabled) return null;
-      const notices = drainFeed(kbRoots);
-      if (notices.length === 0) return null;
-      const lines = [
-        `Shared knowledge-base updates (${notices.length}) since your last session.`,
-        "Read the entry from the KB (knowledge/base) when you need the detail.",
-        "",
-        ...notices.map(
-          (n) =>
-            `- ${n.yourAlias ?? n.canonicalId}: ${n.change} by ${n.by} \u2014 ${n.summary} [${n.entryId}]`
-        ),
-      ];
-      return lines.join("\n");
-    } catch {
-      return null;
-    }
-  }
 
   // Lightweight discovery header: list the KB domains this wolf can see (its
   // mirrored domain folders) and point at each INDEX.md. Lets a wolf find
@@ -1450,8 +1428,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     const kbAccess = renderKbAccess();
     if (kbAccess) parts.push("<kb_access>", kbAccess, "</kb_access>");
 
-    const kbUpdates = renderKbUpdates();
-    if (kbUpdates) parts.push("<kb_updates>", kbUpdates, "</kb_updates>");
 
     if (parts.length === 0) return;
 
@@ -2099,6 +2075,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         dryRun: true,
         wolf: wolfName,
         sinkBase: crawlHome,
+        quiet: true,
       }).contributions;
     } catch (e) {
       if (ctx.hasUI)
@@ -2114,7 +2091,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     // Headless (no TUI to review/confirm in): emit directly and report.
     if (!ctx.hasUI || !ctx.ui?.custom) {
       try {
-        const r = emitCrawl(runDir, { dryRun: false, wolf: wolfName, sinkBase: crawlHome });
+        const r = emitCrawl(runDir, { dryRun: false, wolf: wolfName, sinkBase: crawlHome, quiet: true });
         markEmitted(runDir, r.emitted, r.dest);
         ctx.ui?.notify?.(`🐺 released ${r.emitted} contribution(s) -> ${r.dest}`, "info");
       } catch (e) {
@@ -2234,6 +2211,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
           dryRun: false,
           wolf: wolfName,
           sinkBase: crawlHome,
+          quiet: true,
         });
         markEmitted(runDir, r.emitted, r.dest);
         ctx.ui.notify(
@@ -2551,6 +2529,134 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       });
       if (ctx.hasUI)
         ctx.ui.notify(`🐺 ${all.length} crawl(s):\n${lines.join("\n")}`, "info");
+    },
+  });
+
+  // Full re-send: the wolf is the durable source of truth, so a complete KB
+  // rebuild = wipe Dewey, then every wolf re-emits its entire contribution set.
+  // Rare + expensive by design, hence an explicit confirmation. Single-wolf
+  // scope for now (re-emits THIS wolf only).
+  pi.registerCommand("wolf:resend-all", {
+    description:
+      "Re-emit THIS wolf's ENTIRE contribution set (all den topics + completed crawls) to the Librarian. Rare + expensive — for rebuilding Dewey from scratch.",
+    handler: async (args: string, ctx: any) => {
+      if (!kbEnabled) {
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            "\ud83d\udc3a KB_OPS not set \u2014 no Librarian inbox to emit to.",
+            "error"
+          );
+        return;
+      }
+
+      // 1) Every den memory topic (the wolf's accumulated knowledge).
+      let denTopics: { id: string; summary: string; body: string }[] = [];
+      try {
+        denTopics = readDenTopics(wolfDen);
+      } catch {
+        denTopics = [];
+      }
+
+      // 2) Every COMPLETED crawl run (has history.json → re-emittable), deduped
+      //    by (domain, source) keeping the newest — a crawl run twice re-sends
+      //    once, not duplicated.
+      const finished = listCrawls(crawlBases).filter((e) =>
+        ["complete", "released", "curated"].includes(e.status)
+      );
+      const newestBySource = new Map<string, (typeof finished)[number]>();
+      for (const e of finished) {
+        const key = `${e.domain}\u0000${e.source}`;
+        const prev = newestBySource.get(key);
+        if (!prev || e.createdAt > prev.createdAt) newestBySource.set(key, e);
+      }
+      const crawlRuns = [...newestBySource.values()];
+      const crawlTopicTotal = crawlRuns.reduce((n, e) => n + (e.topics || 0), 0);
+
+      if (denTopics.length === 0 && crawlRuns.length === 0) {
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            "\ud83d\udc3a nothing to re-send \u2014 no den topics or completed crawls found",
+            "info"
+          );
+        return;
+      }
+
+      // Confirm — rare, expensive, outward-facing (re-floods Dewey's inbox).
+      const force = /\s(--force|--yes)\b/.test(` ${args ?? ""}`);
+      const detail =
+        `Re-emit ${wolfName}'s ENTIRE contribution set to the Librarian inbox:\n` +
+        `  \u2022 ${denTopics.length} den topic(s) \u2192 domain "${defaultDomain}"\n` +
+        `  \u2022 ${crawlRuns.length} completed crawl(s), ${crawlTopicTotal} topics:\n` +
+        crawlRuns
+          .map((e) => `      - ${e.domain} \u00b7 ${e.topics} topics \u00b7 ${e.source}`)
+          .join("\n") +
+        `\n\nDewey reprocesses everything from scratch \u2014 this is for a full KB ` +
+        `rebuild (expensive, rarely needed). Proceed?`;
+
+      if (!force) {
+        if (!ctx.hasUI || !ctx.ui.confirm) {
+          ctx.ui?.notify?.(
+            "\ud83d\udc3a resend-all needs interactive confirmation (or pass --force).",
+            "error"
+          );
+          return;
+        }
+        const ok = await ctx.ui.confirm(
+          "\ud83d\udc3a Re-send ALL contributions to Dewey?",
+          detail
+        );
+        if (!ok) {
+          ctx.ui.notify("\ud83d\udc3a resend-all cancelled \u2014 nothing emitted", "info");
+          return;
+        }
+      }
+
+      // Emit den topics.
+      let denEmitted = 0;
+      for (const t of denTopics) {
+        try {
+          const d = emitDelta({
+            roots: kbRoots,
+            wolf: wolfName,
+            denTopicId: t.id,
+            change: "create",
+            domainHint: defaultDomain,
+            summary: t.summary,
+            body: t.body,
+          });
+          if (d) denEmitted++;
+        } catch (e) {
+          ctx.ui?.notify?.(`\ud83d\udc3a den topic ${t.id} failed: ${String(e)}`, "warning");
+        }
+      }
+
+      // Emit crawl runs.
+      let crawlEmitted = 0;
+      let crawlRunsOk = 0;
+      for (const e of crawlRuns) {
+        try {
+          const r = emitCrawl(e.dir, {
+            dryRun: false,
+            wolf: wolfName,
+            sinkBase: crawlHome,
+            quiet: true,
+          });
+          crawlEmitted += r.emitted;
+          crawlRunsOk++;
+        } catch (err) {
+          ctx.ui?.notify?.(`\ud83d\udc3a crawl ${e.dir} failed: ${String(err)}`, "warning");
+        }
+      }
+
+      refreshStatus(ctx);
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `\ud83d\udc3a re-sent \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}:\n` +
+            `   ${denEmitted}/${denTopics.length} den topic(s)\n` +
+            `   ${crawlEmitted} crawl contribution(s) from ${crawlRunsOk}/${crawlRuns.length} run(s)\n` +
+            `Dewey's sweep will rebuild the KB from these.`,
+          crawlRunsOk < crawlRuns.length ? "warning" : "info"
+        );
     },
   });
 

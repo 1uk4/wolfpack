@@ -68,6 +68,26 @@ not just for you — write real markdown, use `[[wikilinks]]` between notes,
 and keep frontmatter on anything you file under `knowledge/` or `reports/`.
 Note shapes live in `templates/`.
 
+## The Shared Knowledge Base
+
+Separate from your private den, the pack shares a **librarian-curated knowledge
+base** — the source of truth for shared, cross-wolf knowledge. It lives at
+`knowledge/base/domains/<domain>/` as a **read-only mirror** kept current by the
+librarian (Dewey). Your den is private working memory; the KB is shared truth.
+
+Before you answer a question about a domain — or contribute knowledge to it —
+consult the KB and **read it fresh** (it syncs continuously and may have changed
+since earlier in your session):
+
+1. `knowledge/base/domains/<domain>/_registry.md` — the topic map: what topics
+   exist and how mature they are. Check it before writing so you extend an
+   existing topic instead of duplicating it.
+2. `knowledge/base/domains/<domain>/INDEX.md` — the entry list (titles → files).
+3. the entry files under `.../entries/` for the detail.
+
+Never answer a shared-domain question from your den or a cached view — re-read
+the registry and index at the moment you need them.
+
 {% if wolf_repos is defined and wolf_repos | length > 0 %}
 ## Repos
 

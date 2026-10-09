@@ -222,8 +222,28 @@ function renderPersona(cfg: BundleWolfConfig): string {
   }
   lines.push(
     "## Memory",
-    "- Your den (`$WOLF_DEN`) is your persistent memory across sessions.",
+    "- Your den (`$WOLF_DEN`) is your PRIVATE working memory across sessions.",
     "- Read `$WOLF_DEN/tasks/` at startup for active work.",
+    "",
+  );
+  lines.push(
+    "## Shared Knowledge Base",
+    "Separate from your private den, the pack shares a librarian-curated knowledge",
+    "base — the source of truth for shared knowledge. It lives at",
+    "`knowledge/base/domains/<domain>/` as a read-only mirror kept current by the",
+    "librarian (Dewey). Your den is private; the KB is shared truth.",
+    "",
+    "Before answering a question about a domain — or contributing knowledge to it —",
+    "consult the KB and READ IT FRESH (it syncs continuously and may have changed",
+    "since earlier in your session):",
+    "- `knowledge/base/domains/<domain>/_registry.md` — the topic map: what topics",
+    "  exist and how mature they are. Check it before writing, to extend an existing",
+    "  topic instead of duplicating it.",
+    "- `knowledge/base/domains/<domain>/INDEX.md` — the entry list (titles → files).",
+    "- the entry files under `.../entries/` for detail.",
+    "",
+    "Never answer a shared-domain question from your den or a cached view — re-read",
+    "the registry and index at the moment you need them.",
     "",
   );
   return lines.join("\n");

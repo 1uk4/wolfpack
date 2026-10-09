@@ -9,8 +9,14 @@
 import type { KnowledgeAdapter } from "../adapter.js";
 import type { EngineConfig } from "../config.js";
 import { AnthropicAdapter } from "./anthropic.js";
+import { ClaudeAgentSdkAdapter } from "./claude-agent-sdk.js";
 
 type AdapterFactory = (config: EngineConfig) => KnowledgeAdapter;
+
+const claudeAgentSdkFactory: AdapterFactory = (config) =>
+  new ClaudeAgentSdkAdapter({
+    pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,
+  });
 
 const registry: Record<string, AdapterFactory> = {
   anthropic: (config) =>
@@ -19,6 +25,12 @@ const registry: Record<string, AdapterFactory> = {
       baseUrl: config.baseUrl,
       timeoutMs: config.requestTimeoutMs,
     }),
+
+  // Route through the local `claude` binary (Claude Agent SDK) — uses the
+  // user's Claude subscription (MAX/Pro) instead of an API key. "claude-bridge"
+  // is an alias matching the pi provider name.
+  "claude-agent-sdk": claudeAgentSdkFactory,
+  "claude-bridge": claudeAgentSdkFactory,
 
   // ── Add new providers here ──────────────────────────────────────────────
   // openai: (config) => new OpenAIAdapter({ apiKey: config.apiKey }),

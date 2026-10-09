@@ -1115,8 +1115,18 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Soft fail if not configured — extension is invisible
   if (!wolfName || !wolfDen) return;
 
-  const model     = process.env.WOLFPACK_MODEL      ?? "claude-sonnet-4-6";
-  const fastModel = process.env.WOLFPACK_FAST_MODEL  ?? "claude-haiku-4-5-20251001";
+  // Transport for memory LLM calls. Default to the Claude Agent SDK bridge so
+  // consolidation/promote run on the user's Claude subscription (MAX/Pro OAuth)
+  // instead of a raw ANTHROPIC_API_KEY — no per-token billing and no key to
+  // expire. Set WOLFPACK_MEMORY_PROVIDER=anthropic to force the API path.
+  const memProvider = (process.env.WOLFPACK_MEMORY_PROVIDER ?? "claude-agent-sdk").toLowerCase();
+  const useBridge = memProvider === "claude-agent-sdk" || memProvider === "claude-bridge";
+  // The bridge speaks Claude Code model aliases (undated); the API path wants
+  // dated ids. Pick defaults to match whichever transport is active.
+  const model     = process.env.WOLFPACK_MODEL      ?? (useBridge ? "claude-sonnet-4-5" : "claude-sonnet-4-6");
+  const fastModel = process.env.WOLFPACK_FAST_MODEL  ?? (useBridge ? "claude-haiku-4-5" : "claude-haiku-4-5-20251001");
+  // Credentials are satisfied either by the bridge (no key) or an API key.
+  const credsOk = useBridge || !!apiKey;
   // KB roots come from the environment — set explicitly in each wolf's .env by
   // the CLI (KB_BASE/KB_OPS). No path math: the old `../../` derivation silently
   // broke whenever the den layout changed (old ~/wolves/dens vs new host-first
@@ -1256,11 +1266,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   }
 
   function initOrchestrator(ctx: any): void {
-    if (!runtime || !apiKey) return;
+    if (!runtime || !credsOk) return;
 
     engine = createEngine({
-      provider: "anthropic",
-      apiKey,
+      provider: useBridge ? "claude-agent-sdk" : "anthropic",
+      ...(useBridge ? {} : { apiKey }),
       defaultModel: model,
       steps: {
         classify:    { model: fastModel },
@@ -1514,7 +1524,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   pi.registerCommand("wolf:memory", {
     description: "Toggle wolfpack memory (/wolf:memory on, /wolf:memory off)",
     handler: async (args: string, ctx: any) => {
-      if (!apiKey) {
+      if (!credsOk) {
         if (ctx.hasUI) ctx.ui.notify("🐺 ANTHROPIC_API_KEY not set — cannot enable memory", "error");
         return;
       }
@@ -1581,7 +1591,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         `Wolf: ${wolfName}`,
         `Memory: ${enabled ? "ON" : "OFF"}`,
         `Den: ${wolfDen}`,
-        `API key: ${apiKey ? "set" : "MISSING"}`,
+        `Transport: ${useBridge ? "claude-bridge (subscription)" : "anthropic api"}`,
+        `Model: ${model}`,
+        `API key: ${useBridge ? "n/a (bridge)" : apiKey ? "set" : "MISSING"}`,
       ];
 
       if (enabled && orchestrator) {

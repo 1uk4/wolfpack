@@ -47,10 +47,14 @@ export interface StepConfigs {
 export interface EngineConfig {
   /** Provider name — determines which adapter is used */
   provider: string;
-  /** API key for the provider */
-  apiKey: string;
+  /** API key for the provider. Not required by subscription-backed providers
+   *  (e.g. claude-agent-sdk / claude-bridge), which authenticate via OAuth. */
+  apiKey?: string;
   /** Base URL override (for proxies, local models, etc.) */
   baseUrl?: string;
+  /** Absolute path to the `claude` executable, for the Claude Agent SDK
+   *  provider. Omit to let the SDK resolve it from its own package. */
+  pathToClaudeCodeExecutable?: string;
   /** Per-request timeout in ms (passed to the SDK client). Bounds how long a
    *  single call can hang before failing — without it a wedged produce can
    *  block on the SDK default (~10m) and stall a whole sweep. */

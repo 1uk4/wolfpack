@@ -76,7 +76,7 @@ export const Slug = z
 export type Slug = z.infer<typeof Slug>;
 
 // ════════════════════════════════════════════════════════════════════════════
-// 2a · SECTION TREE — the hard single-parent backbone (v2)
+// 2a · SECTION TREE — the hard single-parent backbone
 // ════════════════════════════════════════════════════════════════════════════
 
 /** A section tree node — emergent, created by routing/split/crystallize. */
@@ -173,6 +173,75 @@ export type EdgeSource = z.infer<typeof EdgeSource>;
 export const FACET_KEYS = ["subsystem", "surface", "layer", "lifecycle"] as const;
 export type FacetKey = (typeof FACET_KEYS)[number];
 
+/**
+ * Coerce a raw facets object down to the controlled vocabulary: keep only keys
+ * in FACET_KEYS whose value is a valid Slug, and silently DROP everything else
+ * (unknown keys, non-slug values). This mirrors the drop-don't-fail rule used
+ * for proposedRelations — a stray or mistyped facet from the model must never
+ * fail the whole produce call and strand an otherwise-good entry. The closed
+ * vocabulary is still enforced; we just discard the noise instead of throwing.
+ */
+export function coerceFacets(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if ((FACET_KEYS as readonly string[]).includes(k) && Slug.safeParse(v).success) {
+      out[k] = v as string;
+    }
+  }
+  return out;
+}
+
+/**
+ * PROPERTIES — the OPEN counterpart to facets. Facets are a closed navigation
+ * vocabulary (classify on 4 axes); properties are free-form structured
+ * attributes the source genuinely carries but that are not classification axes
+ * (host, region, test-count, export-surfaces, …). Keys are normalized to
+ * lower-kebab; values are coerced to a single string (numbers/bools stringified,
+ * arrays of primitives joined, nested objects dropped). Bounded + drop-don't-
+ * fail, so a messy attribute bag never strands the entry. As recurring keys
+ * emerge here, promote them into a controlled FacetRegistry (option 3).
+ */
+function slugifyKey(k: string): string {
+  return k
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2") // split camelCase word boundaries
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function coercePropertyValue(v: unknown): string | null {
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t ? t.slice(0, 300) : null;
+  }
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) {
+    const parts = v
+      .filter((x) => ["string", "number", "boolean"].includes(typeof x))
+      .map((x) => String(x).trim())
+      .filter(Boolean);
+    return parts.length ? parts.join(", ").slice(0, 300) : null;
+  }
+  return null; // objects / null / undefined are dropped
+}
+
+export function coerceProperties(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (n >= 30) break; // bound the bag
+    const key = slugifyKey(k);
+    if (!key) continue;
+    const val = coercePropertyValue(v);
+    if (val == null) continue;
+    out[key] = val;
+    n++;
+  }
+  return out;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 3 · DISCRIMINATED UNIONS  — the "make illegal states unrepresentable" core
 // ════════════════════════════════════════════════════════════════════════════
@@ -211,8 +280,18 @@ export const LlmOpinion = z.object({
   detail: z.string().min(1), // body
   context: z.string().optional(),
   confidence: Confidence,
-  /** Controlled facet values the model is confident about (code validates keys). */
-  facets: z.record(z.enum(FACET_KEYS), Slug).default({}),
+  /** Controlled facet values the model is confident about. Unknown keys and
+   *  non-slug values are stripped (coerceFacets) rather than failing the parse,
+   *  so a bad facet never strands the entry. */
+  facets: z
+    .preprocess(coerceFacets, z.record(z.enum(FACET_KEYS), Slug))
+    .default({}),
+  /** Open structured attributes from the source that are NOT classification
+   *  axes (host, region, test-count, …). Keys normalized, values stringified,
+   *  bag bounded; junk is dropped rather than failing the parse. */
+  properties: z
+    .preprocess(coerceProperties, z.record(z.string(), z.string()))
+    .default({}),
   /** Candidate semantic relations as (kind, free-text target hint). Code resolves
    *  the hint to a real EntryId via embeddings; unresolved hints are DROPPED. */
   proposedRelations: z
@@ -278,6 +357,7 @@ export const Entry = z.object({
   context: z.string().optional(),
   confidence: Confidence,
   facets: z.record(z.enum(FACET_KEYS), Slug),
+  properties: z.record(z.string(), z.string()).default({}),
   // structure (derived)
   relations: z.array(Relation),
   section: SectionId,
@@ -359,6 +439,7 @@ export function assembleEntry(input: {
     context: opinion.context,
     confidence: opinion.confidence,
     facets: opinion.facets,
+    properties: opinion.properties,
     relations,
     section,
     placement,

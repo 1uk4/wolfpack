@@ -42,7 +42,7 @@ function mockContribution(overrides: Partial<ParsedContribution> = {}): ParsedCo
   } as ParsedContribution;
 }
 
-describe("produceEntry (v2 assemble-based path)", () => {
+describe("produceEntry", () => {
   it("produces a create entry with deterministic DerivedFacts", async () => {
     const engine = mockEngine();
     const contribution = mockContribution();

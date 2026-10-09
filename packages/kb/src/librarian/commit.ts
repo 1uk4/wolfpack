@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, mkdirSync, renameSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { execFileSync } from "node:child_process";
-import { atomicWrite, renderEntry, type Entry } from "@wolfpack/engine";
+import { atomicWrite } from "@wolfpack/engine";
 import {
   type KbRoots,
   type ParsedContribution,
@@ -15,14 +15,7 @@ import {
   unclassifiedDir,
   now,
 } from "../shared/index.js";
-import type { Entry as EntryV2 } from "../schema/knowledge.js";
-
-/** Write (or overwrite) a curated entry, flat under its domain. */
-export function commitEntry(roots: KbRoots, entry: Entry): void {
-  const dir = entriesDir(roots, entry.frontmatter.domain);
-  mkdirSync(dir, { recursive: true });
-  atomicWrite(join(dir, `${entry.frontmatter.id}.md`), renderEntry(entry));
-}
+import type { Entry } from "../schema/knowledge.js";
 
 /** Read an existing entry's raw markdown for merge input. */
 export function readEntryMarkdown(
@@ -123,7 +116,7 @@ export function gitCommit(roots: KbRoots, message: string): void {
 }
 
 // ============================================================================
-// V2 PATH — Section-aware frontmatter (section, placement, typed relations)
+// Section-aware frontmatter (section, placement, typed relations)
 // ============================================================================
 
 /** YAML-safe double-quoted scalar. Titles contain ': ' (colon-space) which YAML
@@ -133,9 +126,9 @@ function yamlStr(s: string): string {
 }
 
 /**
- * Render v2 entry frontmatter + body. Writes section, placement, and typed relations.
+ * Render entry frontmatter + body. Writes section, placement, and typed relations.
  */
-function renderEntryV2(entry: EntryV2): string {
+function renderEntry(entry: Entry): string {
   const lines: string[] = ["---"];
 
   // Core identity
@@ -143,7 +136,7 @@ function renderEntryV2(entry: EntryV2): string {
   lines.push(`title: ${yamlStr(entry.title)}`);
   lines.push(`domain: ${entry.domain}`);
 
-  // Section placement (v2)
+  // Section placement
   lines.push(`section: ${entry.section}`);
   lines.push(`placement:`);
   lines.push(`  basis: ${entry.placement.basis}`);
@@ -165,7 +158,7 @@ function renderEntryV2(entry: EntryV2): string {
   lines.push(`currency: ${entry.currency}`);
   if (entry.verified) lines.push(`verified: true`);
 
-  // Typed relations (v2)
+  // Typed relations
   if (entry.relations.length > 0) {
     lines.push(`relations:`);
     for (const rel of entry.relations) {
@@ -178,11 +171,20 @@ function renderEntryV2(entry: EntryV2): string {
     }
   }
 
-  // Facets
+  // Facets (controlled vocabulary — bareword slug values)
   if (Object.keys(entry.facets).length > 0) {
     lines.push(`facets:`);
     for (const [key, value] of Object.entries(entry.facets)) {
       lines.push(`  ${key}: ${value}`);
+    }
+  }
+
+  // Properties (open attribute bag — quote values so free-form strings with
+  // colons/#/quotes stay valid YAML and round-trip through the reader).
+  if (entry.properties && Object.keys(entry.properties).length > 0) {
+    lines.push(`properties:`);
+    for (const [key, value] of Object.entries(entry.properties)) {
+      lines.push(`  ${key}: ${yamlStr(value)}`);
     }
   }
 
@@ -216,10 +218,10 @@ function renderEntryV2(entry: EntryV2): string {
 }
 
 /**
- * V2: Write a section-aware entry with typed relations.
+ * Write a section-aware entry with typed relations.
  */
-export function commitEntryV2(roots: KbRoots, entry: EntryV2): void {
+export function commitEntry(roots: KbRoots, entry: Entry): void {
   const dir = entriesDir(roots, entry.domain);
   mkdirSync(dir, { recursive: true });
-  atomicWrite(join(dir, `${entry.id}.md`), renderEntryV2(entry));
+  atomicWrite(join(dir, `${entry.id}.md`), renderEntry(entry));
 }

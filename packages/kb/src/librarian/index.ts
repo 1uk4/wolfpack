@@ -3,7 +3,7 @@
  * registry, embeddings. Runs ONLY where Dewey runs (wolfpack-librarian ext + kb
  * CLI). Imports @wolfpack/engine. Never imported by the wolf client.
  */
-export { sweepV2, type SweepContext, type SweepResult } from "./sweep-v2.js";
+export { sweep, type SweepContext, type SweepResult } from "./sweep.js";
 export {
   readLedger,
   appendLedger,
@@ -31,7 +31,6 @@ export {
   gitCommit,
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";
-export { emitFeed } from "./feed.js";
 export {
   readDeclaredDomains,
   isDeclared,

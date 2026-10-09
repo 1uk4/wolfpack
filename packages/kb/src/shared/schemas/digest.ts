@@ -37,7 +37,7 @@
  * WHY: raises INPUT quality for the whole KB on both paths. Categorizing with
  * context at the source means Dewey's sweep does less LLM re-work → less variance.
  *
- * BUILD ORDER: implement AFTER the v2 typed Entry + assembler land. Wiring points:
+ * BUILD ORDER: implement AFTER the typed Entry + assembler land. Wiring points:
  *   1. kb/librarian: `renderDomainDigest(roots, domain)` — write _digest.json each
  *      sweep (mirror-safe, deterministic), alongside renderDomainIndex.
  *   2a. memory/consolidate  (live): inject the primed subset into buildConsolidatePrompt.

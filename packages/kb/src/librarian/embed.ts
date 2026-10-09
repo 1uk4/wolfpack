@@ -49,12 +49,17 @@ export function resolveEmbedConfig(): EmbedConfig {
 
 // ── cosine (pure) ────────────────────────────────────────────────────────────
 
-/** Cosine similarity. Vectors are stored normalized → this is a dot product. */
+/** Cosine similarity. Vectors are stored normalized → this is a dot product.
+ *  Clamp to the mathematical [-1, 1] range: floating-point rounding on
+ *  near-identical unit vectors can yield 1.0000000002, which overflows a
+ *  placement fit score bounded to [0, 1] and (pre-clamp) hard-failed the whole
+ *  contribution. The clamp only removes FP noise — for true unit vectors the
+ *  dot product is already in range. */
 export function cosine(a: Vector, b: Vector): number {
   if (a.length === 0 || a.length !== b.length) return 0;
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-  return dot;
+  return dot < -1 ? -1 : dot > 1 ? 1 : dot;
 }
 
 function normalize(v: Vector): Vector {

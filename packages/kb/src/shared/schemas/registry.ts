@@ -3,7 +3,7 @@
  * kb-base/registry/topics.md (read-only to wolves).
  *
  * Connects three node types: wolves ↔ den topics (aliases) ↔ KB entries,
- * plus the subscriber set that powers kb-feed fan-out.
+ * plus the subscriber set (wolves that have contributed).
  */
 import { z } from "zod";
 
@@ -26,7 +26,7 @@ export const RegistryTopicSchema = z.object({
   entries: z.array(z.string()),
   /** Per-wolf local-topic linkages. */
   aliases: z.array(AliasSchema),
-  /** Wolves that receive kb-feed notices (implicit subscription). */
+  /** Wolves that have contributed to this topic (implicit subscription). */
   subscribers: z.array(z.string()),
   updated: z.string(),
 });

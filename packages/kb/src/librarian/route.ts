@@ -15,7 +15,7 @@ export interface EntryVector {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Tree-descent routing (Phase 2 — KB v2)
+// Tree-descent routing (hierarchical section placement)
 // ════════════════════════════════════════════════════════════════════════════
 
 export interface TreeRouteDecision {

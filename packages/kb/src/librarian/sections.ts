@@ -95,7 +95,7 @@ export function foldSections(events: KbEvent[]): Section[] {
         }
         break;
       }
-      case "crystallized_v2": {
+      case "section_crystallized": {
         const section = sections.get(e.sectionId);
         if (section) {
           section.memberCount = e.entryIds.length;

@@ -63,13 +63,6 @@ export const ev = {
     canonicalId,
   }),
 
-  fed: (wolf: string, canonicalId: string, entryId: string): KbEvent => ({
-    t: "fed",
-    ...stamp(),
-    wolf,
-    canonicalId,
-    entryId,
-  }),
 
   sectionCreated: (f: {
     sectionId: string;
@@ -93,10 +86,10 @@ export const ev = {
     fit: number;
   }): KbEvent => ({ t: "entry_placed", ...stamp(), ...f }),
 
-  crystallizedV2: (f: {
+  sectionCrystallized: (f: {
     sectionId: string;
     parentId: string;
     entryIds: string[];
     cohesion: number;
-  }): KbEvent => ({ t: "crystallized_v2", ...stamp(), ...f }),
+  }): KbEvent => ({ t: "section_crystallized", ...stamp(), ...f }),
 };

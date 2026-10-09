@@ -81,6 +81,7 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     wolf: z.string(),
     canonicalId: z.string(),
   }),
+  // legacy: the feed was removed; kept so historical ledgers still parse.
   z.object({
     ...base,
     t: z.literal("fed"),
@@ -113,7 +114,7 @@ export const KbEventSchema = z.discriminatedUnion("t", [
   }),
   z.object({
     ...base,
-    t: z.literal("crystallized_v2"),
+    t: z.literal("section_crystallized"),
     sectionId: z.string(),
     parentId: z.string(),
     entryIds: z.array(z.string()),

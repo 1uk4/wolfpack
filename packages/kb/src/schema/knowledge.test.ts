@@ -12,6 +12,8 @@ import {
   CuratorOverrides,
   Placement,
   assembleEntry,
+  coerceFacets,
+  coerceProperties,
   type RelationResolver,
 } from "./knowledge.js";
 
@@ -166,6 +168,90 @@ describe("Entry schema with section placement", () => {
     expect((entry as any).centrality).toBeUndefined();
     expect((entry as any).role).toBeUndefined();
     expect((entry as any).integration).toBeUndefined();
+  });
+});
+
+describe("LlmOpinion.facets leniency (drop-don't-fail)", () => {
+  const base = {
+    title: "Test Entry",
+    kind: { type: "overview" as const },
+    summary: "x",
+    detail: "y",
+    confidence: "high" as const,
+  };
+
+  it("strips unknown facet keys and non-slug values instead of throwing", () => {
+    // The exact payload that hard-failed the sweep (sfo01 deploy + kb-package).
+    const r = LlmOpinion.safeParse({
+      ...base,
+      facets: {
+        host: "sfo01", provider: "DigitalOcean", region: "SFO1",
+        testCount: 42, routeThresholds: { a: 1 }, exportSurfaces: ["cli"],
+        subsystem: "auth",       // valid key + slug  -> keep
+        lifecycle: "Archived",   // valid key, bad slug -> drop
+        surface: "admin-portal", // valid -> keep
+      },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.facets).toEqual({ subsystem: "auth", surface: "admin-portal" });
+    }
+  });
+
+  it("defaults to {} when facets are absent", () => {
+    const r = LlmOpinion.parse(base);
+    expect(r.facets).toEqual({});
+  });
+
+  it("coerceFacets keeps only controlled keys with valid slugs", () => {
+    expect(coerceFacets({ layer: "core", bogus: "x", surface: "UPPER" })).toEqual({
+      layer: "core",
+    });
+    expect(coerceFacets(null)).toEqual({});
+    expect(coerceFacets("nope")).toEqual({});
+  });
+});
+
+describe("LlmOpinion.properties (open attribute bag)", () => {
+  const base = {
+    title: "Test Entry",
+    kind: { type: "overview" as const },
+    summary: "x",
+    detail: "y",
+    confidence: "high" as const,
+  };
+
+  it("captures structured attributes facets reject, normalizing keys/values", () => {
+    const r = LlmOpinion.parse({
+      ...base,
+      facets: { subsystem: "infra", host: "sfo01" }, // host dropped from facets
+      properties: {
+        host: "sfo01", provider: "DigitalOcean", public_ip: "1.2.3.4",
+        testCount: 42, exportSurfaces: ["cli", "mcp"],
+        routeThresholds: { a: 1 }, // nested object -> dropped
+      },
+    });
+    expect(r.facets).toEqual({ subsystem: "infra" });
+    expect(r.properties).toEqual({
+      host: "sfo01",
+      provider: "DigitalOcean",
+      "public-ip": "1.2.3.4",
+      "test-count": "42",
+      "export-surfaces": "cli, mcp",
+    });
+  });
+
+  it("defaults to {} when properties are absent", () => {
+    expect(LlmOpinion.parse(base).properties).toEqual({});
+  });
+
+  it("coerceProperties bounds the bag and drops non-coercible values", () => {
+    expect(coerceProperties({ a: "x", b: 2, c: true, d: null, e: { z: 1 } })).toEqual({
+      a: "x", b: "2", c: "true",
+    });
+    expect(coerceProperties(null)).toEqual({});
+    const big = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, "v"]));
+    expect(Object.keys(coerceProperties(big)).length).toBe(30);
   });
 });
 

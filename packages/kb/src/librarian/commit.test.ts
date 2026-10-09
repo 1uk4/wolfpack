@@ -2,22 +2,22 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { commitEntryV2 } from "./commit.js";
+import { commitEntry } from "./commit.js";
 import type { KbRoots } from "../shared/index.js";
 import {
-  type Entry as EntryV2,
+  type Entry as Entry,
   EntryId,
   DomainId,
   SectionId,
   IsoDate,
 } from "../schema/knowledge.js";
 
-describe("commitEntryV2 (section-aware frontmatter)", () => {
+describe("commitEntry (section-aware frontmatter)", () => {
   let tmpDir: string;
   let roots: KbRoots;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "kb-commit-v2-test-"));
+    tmpDir = mkdtempSync(join(tmpdir(), "kb-commit-test-"));
     roots = { kbBase: tmpDir, opsRoot: join(tmpDir, "ops"), denLocal: join(tmpDir, "den") };
   });
 
@@ -25,8 +25,8 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("writes v2 frontmatter with section and placement", () => {
-    const entry: EntryV2 = {
+  it("writes frontmatter with section and placement", () => {
+    const entry: Entry = {
       id: EntryId.parse("kb-wolfpack-abc1234"),
       domain: DomainId.parse("wolfpack"),
       title: "Test Entry",
@@ -47,12 +47,12 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
       contentHash: "abc123hash",
     };
 
-    commitEntryV2(roots, entry);
+    commitEntry(roots, entry);
 
     const filePath = join(tmpDir, "domains", "wolfpack", "entries", "kb-wolfpack-abc1234.md");
     const content = readFileSync(filePath, "utf-8");
 
-    // Check for v2 frontmatter fields
+    // Check for frontmatter fields
     expect(content).toContain("section: sec-wolfpack-abc123");
     expect(content).toContain("placement:");
     expect(content).toContain("  basis: routed");
@@ -60,7 +60,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
   });
 
   it("writes typed relations array", () => {
-    const entry: EntryV2 = {
+    const entry: Entry = {
       id: EntryId.parse("kb-wolfpack-abc1234"),
       domain: DomainId.parse("wolfpack"),
       title: "Test Entry",
@@ -93,7 +93,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
       contentHash: "abc123hash",
     };
 
-    commitEntryV2(roots, entry);
+    commitEntry(roots, entry);
 
     const filePath = join(tmpDir, "domains", "wolfpack", "entries", "kb-wolfpack-abc1234.md");
     const content = readFileSync(filePath, "utf-8");
@@ -109,7 +109,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
   });
 
   it("writes discriminated union kind (type=other with tag)", () => {
-    const entry: EntryV2 = {
+    const entry: Entry = {
       id: EntryId.parse("kb-wolfpack-abc1234"),
       domain: DomainId.parse("wolfpack"),
       title: "Test Entry",
@@ -130,7 +130,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
       contentHash: "abc123hash",
     };
 
-    commitEntryV2(roots, entry);
+    commitEntry(roots, entry);
 
     const filePath = join(tmpDir, "domains", "wolfpack", "entries", "kb-wolfpack-abc1234.md");
     const content = readFileSync(filePath, "utf-8");
@@ -141,7 +141,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
   });
 
   it("writes facets when present", () => {
-    const entry: EntryV2 = {
+    const entry: Entry = {
       id: EntryId.parse("kb-wolfpack-abc1234"),
       domain: DomainId.parse("wolfpack"),
       title: "Test Entry",
@@ -162,7 +162,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
       contentHash: "abc123hash",
     };
 
-    commitEntryV2(roots, entry);
+    commitEntry(roots, entry);
 
     const filePath = join(tmpDir, "domains", "wolfpack", "entries", "kb-wolfpack-abc1234.md");
     const content = readFileSync(filePath, "utf-8");
@@ -173,7 +173,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
   });
 
   it("includes contentHash for integrity", () => {
-    const entry: EntryV2 = {
+    const entry: Entry = {
       id: EntryId.parse("kb-wolfpack-abc1234"),
       domain: DomainId.parse("wolfpack"),
       title: "Test Entry",
@@ -194,7 +194,7 @@ describe("commitEntryV2 (section-aware frontmatter)", () => {
       contentHash: "sha256-abc123def456",
     };
 
-    commitEntryV2(roots, entry);
+    commitEntry(roots, entry);
 
     const filePath = join(tmpDir, "domains", "wolfpack", "entries", "kb-wolfpack-abc1234.md");
     const content = readFileSync(filePath, "utf-8");

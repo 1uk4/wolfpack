@@ -1,16 +1,16 @@
 /**
- * sweep-v2 — the KB v2 sweep: hierarchical section-tree placement.
+ * sweep — the KB sweep: hierarchical section-tree placement.
  *
  * The one and only KB sweep (v1 retired).
  *
  * First-cut bring-up pipeline (entry-first, reachability never gated):
  *   intake → embed → routeByTree → (classifyToSection fallback) → produceEntry
- *          → commitEntryV2 → record events → renderDomainDigest → persist
+ *          → commitEntry → record events → renderDomainDigest → persist
  *
  * Tree REORGANIZATION (maybeSplit / crystallizeUnplaced / shouldMerge) runs as a
  * separate maintenance pass and inside the migration backfill, where per-section
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
- * reachability. See docs/kb-v2-implementation.md §Phase 5.
+ * reachability. See docs/kb-implementation.md §Phase 5.
  */
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, ev, now } from "../shared/index.js";
@@ -18,12 +18,11 @@ import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js"
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, cosine } from "./embed.js";
 import { renderRegistry } from "./registry.js";
-import { emitFeed } from "./feed.js";
 import { routeByTree, type EntryVector } from "./route.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
 import {
-  commitEntryV2,
+  commitEntry,
   readEntryMarkdown,
   writeReceipt,
   markProcessed,
@@ -52,18 +51,55 @@ export interface SweepContext {
   notify?: (msg: string) => void;
 }
 
+/** One contribution the sweep could not commit, with a human-readable reason. */
+export interface SweepFailure {
+  from: string;
+  denTopicId: string;
+  reason: string;
+}
+
 export interface SweepResult {
   processed: number;
   created: number;
   merged: number;
   rejected: number;
   crystallized: number;
-  fed: number;
   errors: number;
   unclassified: number;
   suggestedDomains: string[];
+  /** Per-contribution failures (concise reasons), so callers can surface them
+   *  instead of leaving them buried in notify() log lines. */
+  failures: SweepFailure[];
   /** Contributions left in the inbox after this batched run (await next tick). */
   remaining: number;
+}
+
+/** Turn a thrown error — especially a ZodError — into a short, readable reason.
+ *  Raw ZodError messages are multi-line JSON blobs; collapse them to a compact
+ *  `path: message` list so a skip is legible at a glance. */
+export function cleanError(err: unknown): string {
+  const issuesOf = (v: unknown): string | null => {
+    const arr = (v as { issues?: unknown })?.issues ?? v;
+    if (!Array.isArray(arr)) return null;
+    return arr
+      .map((i: { path?: unknown[]; message?: string }) =>
+        `${(i.path ?? []).join(".") || "(root)"}: ${i.message ?? "invalid"}`
+      )
+      .join("; ");
+  };
+  // ZodError instance, or an Error whose .message is a JSON issues array.
+  const direct = issuesOf(err);
+  if (direct) return direct.slice(0, 240);
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.trim().startsWith("[")) {
+    try {
+      const parsed = issuesOf(JSON.parse(msg));
+      if (parsed) return parsed.slice(0, 240);
+    } catch {
+      /* not JSON — fall through */
+    }
+  }
+  return msg.split("\n")[0].slice(0, 240);
 }
 
 /** Generate a fresh SectionId: sec-<domain>-<6 alphanumerics>. */
@@ -75,10 +111,17 @@ function mkSectionId(domain: string): SectionId {
   return SectionId.parse(`sec-${domain}-${tail}`);
 }
 
+/** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
+ *  cosine FP overshoot (>1) or a reused _unplaced score (<0) hard-failing the
+ *  whole contribution at schema-parse time. */
+function clampFit(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
 /**
  * The KB sweep: hierarchical section-tree placement.
  */
-export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
+export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
   const embedder = createEmbedder(roots);
   const oracles = createOracles(engine);
@@ -97,10 +140,10 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
     merged: 0,
     rejected: 0,
     crystallized: 0,
-    fed: 0,
     errors: 0,
     unclassified: 0,
     suggestedDomains: [],
+    failures: [],
     remaining: 0,
   };
 
@@ -212,7 +255,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
         const decision = routeByTree(vec, domain, sections, entryVectors);
         if (decision.section !== "_unplaced") {
           sectionId = decision.section;
-          placement = { basis: "routed", fit: decision.fit };
+          placement = { basis: "routed", fit: clampFit(decision.fit) };
         } else {
           // ── CLASSIFY FALLBACK (LLM section-pick, confined) ──────────────
           const candidates = sections
@@ -221,7 +264,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
           const pick = await oracles.classifyToSection(c.body, candidates);
           if (pick.section !== "NEW" && sections.some((s) => s.id === pick.section)) {
             sectionId = SectionId.parse(pick.section);
-            placement = { basis: "routed", fit: decision.fit };
+            placement = { basis: "routed", fit: clampFit(decision.fit) };
           } else {
             // NEW → singleton section under the domain (reorganized later).
             sectionId = mkSectionId(domain);
@@ -249,7 +292,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
             batch.push(
               ev.sectionCreated({ sectionId, domain, parent: null, label: String(newSection.label) })
             );
-            placement = { basis: "crystallized", fit: decision.fit };
+            placement = { basis: "crystallized", fit: clampFit(decision.fit) };
           }
         }
       }
@@ -272,7 +315,7 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
       });
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
-      commitEntryV2(roots, entry);
+      commitEntry(roots, entry);
 
       batch.push(ev.contribution({
         from: c.from,
@@ -292,18 +335,6 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
       // by alias and update in place. Re-fold so later items in THIS batch see it.
       batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
       reg = foldRegistry([...log, ...batch]);
-      // Publish the canonical id back to the wolf's flow via the domain feed.
-      emitFeed(roots, domain, {
-        canonicalId: entry.id,
-        entryId: entry.id,
-        yourAlias: c.denTopicId,
-        change: action === "create" ? "created" : "updated",
-        by: c.from,
-        summary: c.summary,
-        updated: now(),
-      });
-      batch.push(ev.fed(c.from, entry.id, entry.id));
-      result.fed++;
 
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);
@@ -311,8 +342,9 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
       if (action === "create") result.created++;
       else result.merged++;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.notify?.(`kb-v2: skipped ${c.from}/${c.denTopicId} — ${msg}`);
+      const reason = cleanError(err);
+      ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} — ${reason}`);
+      result.failures.push({ from: c.from, denTopicId: c.denTopicId, reason });
       result.processed--;
       result.errors++;
     }
@@ -329,11 +361,11 @@ export async function sweepV2(ctx: SweepContext): Promise<SweepResult> {
   if (batch.length > 0) {
     appendLedger(roots, batch);
     renderRegistry(roots, foldRegistry([...log, ...batch]));
-    gitCommit(roots, `sweep-v2: ${result.created}c ${result.merged}m ${result.rejected}r`);
+    gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
   }
 
   ctx.notify?.(
-    `kb-v2 sweep: ${result.processed} contributions → ${result.created}c ${result.merged}m` +
+    `sweep: ${result.processed} contributions → ${result.created}c ${result.merged}m` +
       (result.remaining > 0 ? ` · ${result.remaining} queued for next tick` : "")
   );
   return result;

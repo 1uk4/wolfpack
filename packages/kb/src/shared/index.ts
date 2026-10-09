@@ -5,7 +5,6 @@
 export * from "./schemas/contribution.js";
 export * from "./schemas/events.js";
 export * from "./schemas/registry.js";
-export * from "./schemas/feed.js";
 export * from "./schemas/oracles.js";
 export * from "./schemas/digest.js";
 export * from "./hash.js";

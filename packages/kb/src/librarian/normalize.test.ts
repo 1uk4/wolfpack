@@ -1,162 +1,191 @@
 import { describe, it, expect } from "vitest";
-import { renderFrontmatter, parseFrontmatter, type Entry } from "@wolfpack/engine";
 import { normalizeEntry } from "./normalize.js";
+import type { Entry as Entry } from "../schema/knowledge.js";
+import { EntryId, DomainId, SectionId, IsoDate } from "../schema/knowledge.js";
 
-function fm(overrides: Record<string, unknown> = {}): Entry {
+function makeEntry(overrides: Partial<Entry> = {}): Entry {
   return {
-    frontmatter: {
-      id: "kb-wolfpack-ABC1234",
-      title: "T",
-      type: "architecture",
-      domain: "wolfpack",
-      status: "active",
-      authority: "curated",
-      confidence: "high",
-      related: [],
-      supersedes: [],
-      sources: [],
-      created: "2026-10-06",
-      updated: "2026-10-06",
-      historical: false,
-      ...overrides,
-    },
-    summary: "s",
-    detail: "d",
-  } as unknown as Entry;
+    id: EntryId.parse("kb-wolfpack-abc1234"),
+    domain: DomainId.parse("wolfpack"),
+    title: "Test Entry",
+    kind: { type: "architecture" },
+    summary: "Test summary",
+    detail: "Test detail",
+    confidence: "high",
+    facets: {},
+    section: SectionId.parse("sec-wolfpack-sec001"),
+    placement: { basis: "routed", fit: 0.85 },
+    relations: [],
+    authority: "curated",
+    maturity: "active",
+    currency: "live",
+    verified: false,
+    created: IsoDate.parse("2026-01-01"),
+    updated: IsoDate.parse("2026-01-02"),
+    contentHash: "abc123",
+    ...overrides,
+  };
 }
 
 describe("normalizeEntry", () => {
-  it("drops self-references and malformed/duplicate related ids", () => {
-    const { entry, warnings } = normalizeEntry(
-      fm({
-        related: [
-          "kb-wolfpack-ABC1234", // self
-          "kb-snapjack-rating-system", // malformed (not 7-char id)
-          "kb-wolfpack-XYZ7890",
-          "kb-wolfpack-XYZ7890", // dup
-        ],
-      }),
-      "wolfpack"
-    );
-    expect(entry.frontmatter.related).toEqual(["kb-wolfpack-XYZ7890"]);
-    expect(warnings.length).toBe(3);
-  });
+  it("validates section exists in known sections", () => {
+    const entry = makeEntry({
+      section: SectionId.parse("sec-wolfpack-miss01"),
+    });
 
-  it("drops an expires that is on/before created", () => {
-    const { entry } = normalizeEntry(
-      fm({ created: "2026-10-06", expires: "2026-01-10" }),
-      "wolfpack"
-    );
-    expect(entry.frontmatter.expires).toBeUndefined();
-  });
+    const knownSections = new Set(["sec-wolfpack-sec001", "sec-wolfpack-sec002"]);
+    const knownEntries = new Set<string>();
 
-  it("flags an id whose prefix disagrees with the domain", () => {
-    const { warnings } = normalizeEntry(
-      fm({ id: "kb-snapjack-azlIF4j" }),
-      "wolfpack"
-    );
-    expect(warnings.some((w) => w.includes("prefix mismatch"))).toBe(true);
-  });
+    const { warnings } = normalizeEntry(entry, knownSections, knownEntries);
 
-  it("coerces an out-of-vocab type to other + tag", () => {
-    const { entry } = normalizeEntry(fm({ type: "RandomKind" }), "wolfpack");
-    expect(entry.frontmatter.type).toBe("other");
-    expect(entry.frontmatter.tag).toBe("randomkind");
-  });
-
-  it("collapses empty subcategory to undefined", () => {
-    const { entry } = normalizeEntry(fm({ subcategory: "   " }), "wolfpack");
-    expect(entry.frontmatter.subcategory).toBeUndefined();
-  });
-});
-
-describe("renderFrontmatter determinism", () => {
-  it("emits keys in canonical order regardless of insertion order", () => {
-    // subcategory inserted LAST (the historical drift case) must still land
-    // after `domain`, not at the bottom.
-    const out = renderFrontmatter({
-      updated: "2026-10-06",
-      created: "2026-10-06",
-      domain: "wolfpack",
-      id: "kb-wolfpack-ABC1234",
-      title: "T",
-      type: "architecture",
-      subcategory: "runtime",
-      status: "active",
-      authority: "curated",
-      confidence: "high",
-      related: [],
-      supersedes: [],
-      sources: [],
-    } as never);
-    const keys = out
-      .split("\n")
-      .filter((l) => /^[a-zA-Z]/.test(l))
-      .map((l) => l.split(":")[0]);
-    expect(keys).toEqual([
-      "id",
-      "title",
-      "type",
-      "domain",
-      "subcategory",
-      "status",
-      "authority",
-      "confidence",
-      "related",
-      "supersedes",
-      "sources",
-      "created",
-      "updated",
+    expect(warnings).toEqual([
+      "section: sec-wolfpack-miss01 not in known sections (orphaned entry)",
     ]);
   });
 
-  it("writes related/supersedes as Obsidian wikilinks that round-trip to bare ids", () => {
-    const out = renderFrontmatter({
-      id: "kb-wolfpack-ABC1234",
-      title: "T",
-      type: "architecture",
-      domain: "wolfpack",
-      status: "active",
-      authority: "curated",
-      confidence: "high",
-      related: ["kb-wolfpack-XYZ7890"],
-      supersedes: ["kb-wolfpack-OLD4321"],
-      sources: ["commit:abc"],
-      created: "2026-10-06",
-      updated: "2026-10-06",
-    } as never);
-    // On disk: quoted wikilinks (clickable + graph) for link fields only.
-    expect(out).toContain('  - "[[kb-wolfpack-XYZ7890]]"');
-    expect(out).toContain('  - "[[kb-wolfpack-OLD4321]]"');
-    // sources stay plain (not vault entries).
-    expect(out).toContain("  - commit:abc");
-    // In memory: parser strips brackets back to bare ids.
-    const { fields } = parseFrontmatter(`${out}\n# T\nbody\n`);
-    expect(fields.related).toEqual(["kb-wolfpack-XYZ7890"]);
-    expect(fields.supersedes).toEqual(["kb-wolfpack-OLD4321"]);
-    expect(fields.sources).toEqual(["commit:abc"]);
+  it("passes validation when section is known", () => {
+    const entry = makeEntry();
+
+    const knownSections = new Set(["sec-wolfpack-sec001"]);
+    const knownEntries = new Set<string>();
+
+    const { warnings } = normalizeEntry(entry, knownSections, knownEntries);
+
+    expect(warnings).toEqual([]);
   });
 
-  it("omits empty optionals and historical:false", () => {
-    const out = renderFrontmatter({
-      id: "kb-wolfpack-ABC1234",
-      title: "T",
-      type: "architecture",
-      domain: "wolfpack",
-      subcategory: "",
-      tag: "",
-      status: "active",
-      authority: "curated",
-      confidence: "high",
-      related: [],
-      supersedes: [],
-      sources: [],
-      created: "2026-10-06",
-      updated: "2026-10-06",
-      historical: false,
-    } as never);
-    expect(out).not.toContain("subcategory:");
-    expect(out).not.toContain("tag:");
-    expect(out).not.toContain("historical:");
+  it("drops relations with unknown targets (referential integrity)", () => {
+    const entry = makeEntry({
+      relations: [
+        {
+          kind: "refines",
+          target: EntryId.parse("kb-wolfpack-exists1"),
+          source: "llm",
+        },
+        {
+          kind: "depends_on",
+          target: EntryId.parse("kb-wolfpack-missing"),
+          source: "llm",
+        },
+        {
+          kind: "see_also",
+          target: EntryId.parse("kb-wolfpack-exists2"),
+          source: "embedding",
+          weight: 0.92,
+        },
+      ],
+    });
+
+    const knownSections = new Set(["sec-wolfpack-sec001"]);
+    const knownEntries = new Set(["kb-wolfpack-exists1", "kb-wolfpack-exists2"]);
+
+    const { entry: normalized, warnings } = normalizeEntry(
+      entry,
+      knownSections,
+      knownEntries
+    );
+
+    // Only relations with known targets should remain
+    expect(normalized.relations).toHaveLength(2);
+    expect(normalized.relations[0].target).toBe("kb-wolfpack-exists1");
+    expect(normalized.relations[1].target).toBe("kb-wolfpack-exists2");
+
+    expect(warnings).toEqual([
+      "relation: dropped dangling depends_on → kb-wolfpack-missing (no such entry)",
+    ]);
+  });
+
+  it("drops self-referential relations", () => {
+    const entry = makeEntry({
+      relations: [
+        {
+          kind: "refines",
+          target: EntryId.parse("kb-wolfpack-abc1234"), // self-reference
+          source: "llm",
+        },
+        {
+          kind: "depends_on",
+          target: EntryId.parse("kb-wolfpack-other12"),
+          source: "llm",
+        },
+      ],
+    });
+
+    const knownSections = new Set(["sec-wolfpack-sec001"]);
+    const knownEntries = new Set([
+      "kb-wolfpack-abc1234",
+      "kb-wolfpack-other12",
+    ]);
+
+    const { entry: normalized, warnings } = normalizeEntry(
+      entry,
+      knownSections,
+      knownEntries
+    );
+
+    // Self-reference should be dropped
+    expect(normalized.relations).toHaveLength(1);
+    expect(normalized.relations[0].target).toBe("kb-wolfpack-other12");
+
+    expect(warnings).toEqual([
+      "relation: dropped self-reference (refines → kb-wolfpack-abc1234)",
+    ]);
+  });
+
+  it("preserves all valid relations", () => {
+    const entry = makeEntry({
+      relations: [
+        {
+          kind: "refines",
+          target: EntryId.parse("kb-wolfpack-target1"),
+          source: "llm",
+        },
+        {
+          kind: "see_also",
+          target: EntryId.parse("kb-wolfpack-target2"),
+          source: "embedding",
+          weight: 0.88,
+        },
+        {
+          kind: "depends_on",
+          target: EntryId.parse("kb-wolfpack-target3"),
+          source: "human",
+        },
+      ],
+    });
+
+    const knownSections = new Set(["sec-wolfpack-sec001"]);
+    const knownEntries = new Set([
+      "kb-wolfpack-abc1234",
+      "kb-wolfpack-target1",
+      "kb-wolfpack-target2",
+      "kb-wolfpack-target3",
+    ]);
+
+    const { entry: normalized, warnings } = normalizeEntry(
+      entry,
+      knownSections,
+      knownEntries
+    );
+
+    // All relations should be preserved
+    expect(normalized.relations).toHaveLength(3);
+    expect(warnings).toEqual([]);
+  });
+
+  it("handles entries with no relations", () => {
+    const entry = makeEntry({ relations: [] });
+
+    const knownSections = new Set(["sec-wolfpack-sec001"]);
+    const knownEntries = new Set<string>();
+
+    const { entry: normalized, warnings } = normalizeEntry(
+      entry,
+      knownSections,
+      knownEntries
+    );
+
+    expect(normalized.relations).toEqual([]);
+    expect(warnings).toEqual([]);
   });
 });

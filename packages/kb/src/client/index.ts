@@ -5,5 +5,4 @@
  * structural guarantee that wolves carry no pipeline, no embeddings, no LLM.
  */
 export { emitDelta, type EmitDeltaInput } from "./emitDelta.js";
-export { drainFeed } from "./drainFeed.js";
 export { resolveEntry, listEntries, type ResolvedEntry } from "./resolve.js";

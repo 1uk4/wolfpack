@@ -3,10 +3,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KbRoots } from "../shared/index.js";
-import { entriesDir, domainIndex, domainFeedDir, unclassifiedDir } from "../shared/index.js";
+import { entriesDir, domainIndex, unclassifiedDir } from "../shared/index.js";
 import { readDeclaredDomains, isDeclared, renderDomainIndex } from "./domains.js";
-import { emitFeed } from "./feed.js";
-import { drainFeed } from "../client/drainFeed.js";
 
 let root: string;
 let roots: KbRoots;
@@ -57,58 +55,6 @@ describe("renderDomainIndex", () => {
     expect(idx).toContain("2 entries");
     expect(idx).toContain("- [[kb-wolfpack-aaa|Alpha]] _(core)_ — first thing");
     expect(idx).toContain("- [[kb-wolfpack-bbb|Beta]] — second thing");
-  });
-});
-
-describe("per-domain feed round-trip (fan-out via mirror)", () => {
-  it("emits into the domain folder and drains once, access-scoped", () => {
-    emitFeed(roots, "wolfpack", {
-      canonicalId: "topic-1",
-      entryId: "kb-wolfpack-aaa",
-      yourAlias: null,
-      change: "created",
-      by: "hal",
-      summary: "a new thing",
-      updated: "2026-10-06 10:00",
-    });
-    // Notice lives INSIDE the domain folder (mirrors only to subscribers).
-    expect(existsSync(join(domainFeedDir(roots, "wolfpack"), "kb-wolfpack-aaa.md"))).toBe(true);
-
-    const first = drainFeed(roots);
-    expect(first).toHaveLength(1);
-    expect(first[0]!.by).toBe("hal");
-    expect(first[0]!.entryId).toBe("kb-wolfpack-aaa");
-
-    // Seen is tracked locally (receiveonly mirror can't delete) → not resurfaced.
-    expect(drainFeed(roots)).toHaveLength(0);
-  });
-
-  it("resurfaces when the same entry is updated (new timestamp)", () => {
-    const base = {
-      canonicalId: "topic-1",
-      entryId: "kb-wolfpack-aaa",
-      yourAlias: null,
-      by: "hal",
-      summary: "x",
-    };
-    emitFeed(roots, "wolfpack", { ...base, change: "created", updated: "2026-10-06 10:00" });
-    expect(drainFeed(roots)).toHaveLength(1);
-    // update overwrites the same notice file with a newer timestamp
-    emitFeed(roots, "wolfpack", { ...base, change: "updated", updated: "2026-10-06 12:00" });
-    const again = drainFeed(roots);
-    expect(again).toHaveLength(1);
-    expect(again[0]!.change).toBe("updated");
-  });
-
-  it("only drains domains the wolf has (access scoping)", () => {
-    // wolf has wolfpack but NOT personal (no folder present)
-    emitFeed(roots, "wolfpack", {
-      canonicalId: "t", entryId: "e1", yourAlias: null, change: "created",
-      by: "a", summary: "s", updated: "t1",
-    });
-    // simulate a personal notice that never mirrored to this wolf: absent folder
-    expect(existsSync(domainFeedDir(roots, "personal"))).toBe(false);
-    expect(drainFeed(roots).map((n) => n.entryId)).toEqual(["e1"]);
   });
 });
 

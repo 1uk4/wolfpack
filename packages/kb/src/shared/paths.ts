@@ -2,7 +2,7 @@
  * Path resolution — the three storage tiers.
  *
  *   kbBase   — Syncthing: Dewey writes, read-only mirror to all wolves
- *   opsRoot  — Syncthing: bidirectional per-wolf lanes (inbox/feed/receipts/rejected)
+ *   opsRoot  — Syncthing: bidirectional per-wolf lanes (inbox/receipts/rejected)
  *   denLocal — Dewey-local, never synced (ledger/vectors/clusters) — Dewey's brain
  */
 import { join } from "node:path";
@@ -23,24 +23,20 @@ export const domainIndex = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "INDEX.md");
 export const domainDigest = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "_digest.json");
-/** Per-domain feed folder \u2014 lives INSIDE the domain so it mirrors to subscribers
- *  automatically (access-scoped). Dewey drops "what changed" notices here. */
-export const domainFeedDir = (r: KbRoots, domain: string) =>
-  join(r.kbBase, "domains", domain, "_feed");
 /** Quarantine for contributions that fit no declared domain. Dewey-only; never
  *  inside a domain folder, so it is never mirrored to any wolf. */
 export const unclassifiedDir = (r: KbRoots) => join(r.kbBase, "_unclassified");
-/** Deployed copy of the declared-domain registry (CLI writes; Dewey reads). */
+/** Deployed copy of the declared-domain list (CLI writes; Dewey reads). */
 export const domainsRegistryFile = (r: KbRoots) => join(r.kbBase, "domains.yaml");
-export const registryFile = (r: KbRoots) =>
-  join(r.kbBase, "registry", "topics.md");
-export const globalIndex = (r: KbRoots) => join(r.kbBase, "registry", "INDEX.md");
+/** Per-domain topic registry. Lives INSIDE the domain folder so it rides that
+ *  domain's Syncthing share to subscribed wolves — the registry is their route
+ *  (and coverage map) into the KB. No separate global registry. */
+export const domainRegistryFile = (r: KbRoots, domain: string) =>
+  join(r.kbBase, "domains", domain, "_registry.md");
 
 // ── librarian-ops (per-wolf lanes) ──────────────────────────────────────────
 export const inboxDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "inbox", wolf);
-export const feedDir = (r: KbRoots, wolf: string) =>
-  join(r.opsRoot, "kb-feed", wolf);
 export const receiptsDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "receipts", wolf);
 export const rejectedDir = (r: KbRoots, wolf: string) =>

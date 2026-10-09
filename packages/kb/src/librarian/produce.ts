@@ -8,7 +8,7 @@ import { PRODUCE_SYSTEM } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
-  type Entry as EntryV2,
+  type Entry,
   LlmOpinion,
   type DerivedFacts,
   type CuratorOverrides,
@@ -23,7 +23,7 @@ import {
 import { contentHash as hashContent } from "../shared/hash.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// V2 PATH — assemble-based produce (LlmOpinion ⊕ DerivedFacts ⊕ Curator)
+// assemble-based produce (LlmOpinion ⊕ DerivedFacts ⊕ Curator)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface ProduceEntryInput {
@@ -45,12 +45,12 @@ export interface ProduceEntryInput {
 }
 
 export interface ProduceEntryResult {
-  entry: EntryV2;
+  entry: Entry;
   action: "create" | "merge";
 }
 
 /**
- * V2: Produce an entry using the three-layer architecture.
+ * Produce an entry using the three-layer architecture.
  * The LLM returns ONLY an LlmOpinion (prose + classification + relation hints).
  * Code builds DerivedFacts deterministically, resolves relations, and assembles.
  */

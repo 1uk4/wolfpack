@@ -16,9 +16,11 @@
  * refuses rather than racing (stale locks are auto-reclaimed).
  *
  * Environment:
- *   ANTHROPIC_API_KEY     — required (the oracles + produce call)
- *   WOLFPACK_MODEL        — smart model for produce (default: claude-sonnet-4-6)
- *   WOLFPACK_FAST_MODEL   — fast model for oracles (default: claude-haiku-4-5-20251001)
+ *   WOLFPACK_KB_PROVIDER  — "claude-agent-sdk" (default; Claude subscription
+ *                           bridge, no API key) or "anthropic" (ANTHROPIC_API_KEY)
+ *   ANTHROPIC_API_KEY     — required only when WOLFPACK_KB_PROVIDER=anthropic
+ *   WOLFPACK_MODEL        — smart model for produce (default: sonnet-4-5 bridge / sonnet-4-6 api)
+ *   WOLFPACK_FAST_MODEL   — fast model for oracles (default: haiku-4-5 bridge / dated on api)
  *   KB_BASE               — knowledge/base root (default: ~/knowledge/base)
  *   KB_OPS                — librarian-ops root (default: ~/librarian)
  *   WOLF_DEN              — den root; den-local KB state lives at $WOLF_DEN/kb
@@ -82,22 +84,34 @@ function resolveRoots(): KbRoots {
 }
 
 function makeEngine() {
+  // Transport. Default to the Claude Agent SDK bridge (user's Claude
+  // subscription via the local `claude` binary) so sweeps don't need an API key.
+  // On wolf-01 / systemd where the subscription OAuth isn't available, set
+  // WOLFPACK_KB_PROVIDER=anthropic to use ANTHROPIC_API_KEY instead.
+  const provider = (process.env.WOLFPACK_KB_PROVIDER ?? "claude-agent-sdk").toLowerCase();
+  const useBridge = provider === "claude-agent-sdk" || provider === "claude-bridge";
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.error("ANTHROPIC_API_KEY is required");
+  if (!useBridge && !apiKey) {
+    console.error(
+      "ANTHROPIC_API_KEY is required (or set WOLFPACK_KB_PROVIDER=claude-agent-sdk " +
+        "to use the Claude subscription bridge)"
+    );
     process.exit(1);
   }
-  const defaultModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-6";
+  // The bridge speaks Claude Code model aliases (undated); the API path wants
+  // dated ids. Pick defaults to match whichever transport is active.
+  const defaultModel =
+    process.env.WOLFPACK_MODEL ?? (useBridge ? "claude-sonnet-4-5" : "claude-sonnet-4-6");
   const fastModel =
-    process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20251001";
-  // Bound a single hanging call. Default 10m is generous enough for a large
-  // 16k-token produce but still caps a wedged request (overnight stalls came
-  // from calls hanging on the SDK default across retries). Tunable per run.
+    process.env.WOLFPACK_FAST_MODEL ?? (useBridge ? "claude-haiku-4-5" : "claude-haiku-4-5-20251001");
+  // Bound a single hanging call (anthropic path only; the bridge has no API
+  // timeout and ignores this). Default 10m is generous enough for a large
+  // 16k-token produce but still caps a wedged request. Tunable per run.
   const requestTimeoutMs =
     Number(process.env.WOLFPACK_REQUEST_TIMEOUT_MS) || 600_000;
   return createEngine({
-    provider: "anthropic",
-    apiKey,
+    provider: useBridge ? "claude-agent-sdk" : "anthropic",
+    ...(useBridge ? {} : { apiKey }),
     defaultModel,
     requestTimeoutMs,
     steps: {

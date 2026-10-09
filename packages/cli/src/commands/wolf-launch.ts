@@ -47,18 +47,29 @@ function parseEnvFile(file: string): Record<string, string> {
   return out;
 }
 
-/** True when the wolf's agent dir holds a Claude subscription OAuth login
- *  (auth.json → anthropic.type === "oauth"), i.e. it runs on the bridge and must
- *  not be handed a billable ANTHROPIC_API_KEY. */
+/** True when the wolf runs on a Claude subscription (OAuth or bridge) and must
+ *  not be handed a billable ANTHROPIC_API_KEY. Checks two signals:
+ *  1. auth.json → anthropic.type === "oauth" (direct subscription login)
+ *  2. settings.json → defaultProvider === "claude-bridge" (bridge extension)
+ *  Either means the wolf is subscription-backed. */
 function hasSubscriptionOAuth(agentDirPath: string): boolean {
   try {
     const auth = JSON.parse(
       fs.readFileSync(path.join(agentDirPath, "auth.json"), "utf8"),
     );
-    return auth?.anthropic?.type === "oauth";
+    if (auth?.anthropic?.type === "oauth") return true;
   } catch {
-    return false;
+    /* no auth.json or unreadable */
   }
+  try {
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(agentDirPath, "settings.json"), "utf8"),
+    );
+    if (settings?.defaultProvider === "claude-bridge") return true;
+  } catch {
+    /* no settings.json or unreadable */
+  }
+  return false;
 }
 
 export async function wolfLaunch(

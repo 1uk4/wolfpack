@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveShipPolicy, shouldConfirmShip } from "./ship-policy.js";
 import { detectTransition } from "./stage-detection.js";
+import { parentReadyToShip } from "./graduate.js";
 import type { WorkItem } from "@wolfpack/kb/client";
 
 describe("ship policy", () => {
@@ -37,5 +38,24 @@ describe("detectTransition (in_build)", () => {
     const feature = { kind: "feature", stage: "in_build", title: "f" } as WorkItem;
     expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 2 }))?.to).toBe("shipped");
     expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 1 }))).toBeNull();
+  });
+});
+
+describe("parentReadyToShip", () => {
+  const item = (kind: string, stage: string) => ({ kind, stage, title: kind }) as WorkItem;
+  const done = item("task", "shipped");
+  const open = item("task", "in_build");
+
+  it("is ready when the last child of an unshipped feature/initiative ships", () => {
+    expect(parentReadyToShip(item("feature", "in_build"), [done, done])).toBe(true);
+    expect(parentReadyToShip(item("initiative", "plan"), [done])).toBe(true);
+  });
+
+  it("is not ready while a child is open, or when there is nothing to ship", () => {
+    expect(parentReadyToShip(item("feature", "in_build"), [done, open])).toBe(false);
+    expect(parentReadyToShip(item("feature", "in_build"), [])).toBe(false);
+    expect(parentReadyToShip(item("feature", "shipped"), [done])).toBe(false); // already shipped
+    expect(parentReadyToShip(item("task", "in_build"), [done])).toBe(false); // tasks don't graduate
+    expect(parentReadyToShip(undefined, [done])).toBe(false); // no parent
   });
 });

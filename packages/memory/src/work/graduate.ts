@@ -18,6 +18,24 @@ import { isComplete, type WorkItem, type WorkId } from "@wolfpack/kb/client";
 const GRADUATABLE_KINDS = ["feature", "initiative"];
 
 /**
+ * After a child ships: is its parent a feature/initiative whose children are
+ * now ALL complete, but which has not shipped itself yet? Then it is ready to
+ * ship — and shipping it graduates it into the KB.
+ */
+export function parentReadyToShip(
+  parent: WorkItem | undefined,
+  children: WorkItem[]
+): parent is WorkItem {
+  return (
+    !!parent &&
+    GRADUATABLE_KINDS.includes(parent.kind) &&
+    !isComplete(parent) &&
+    children.length > 0 &&
+    children.every(isComplete)
+  );
+}
+
+/**
  * Check if a work item is eligible for graduation
  */
 export function canGraduate(item: WorkItem): boolean {

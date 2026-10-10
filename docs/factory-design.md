@@ -117,11 +117,15 @@ work.bound · work.unbound · work.summarized
 1. **Task ships** → the LLM summarizes it (`TASK_SUMMARY_SYSTEM`) from its working
    document and the notes logged while it was bound; the summary is appended to the
    parent's `## Implementation Log`.
-2. **Feature graduates** (`g` in the dashboard, once shipped) → a contribution is
+2. **Last task ships** → if its parent feature (or initiative) now has every child
+   complete, `task_done` asks *"All tasks under 'X' are done. Ship the feature?"*
+   (same ship policy: `auto` or no UI ships without asking). On yes it waits for the
+   last task's summary, ships the parent, and graduates it.
+3. **Feature graduates** (on that ship, or `g` in the dashboard) → a contribution is
    written to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`) and the item records
-   `graduatedTo`. An **initiative** graduates automatically once all its features
-   have.
-3. **Dewey's sweep** turns the contribution into a curated entry like any other.
+   `graduatedTo`. An **initiative** ships and graduates automatically once all its
+   features have graduated (no prompt).
+4. **Dewey's sweep** turns the contribution into a curated entry like any other.
 
 ---
 

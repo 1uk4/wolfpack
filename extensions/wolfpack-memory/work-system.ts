@@ -48,6 +48,7 @@ import {
   extractTransitionContext,
   resolveShipPolicy,
   shouldConfirmShip,
+  parentReadyToShip,
 } from "@wolfpack/memory";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1085,10 +1086,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           return { content: [{ type: "text" as const, text: `Failed to ship: ${e.message}` }], isError: true };
         }
 
-        // Call completion callback for summarization (fire and forget)
-        if (config.onTaskComplete) {
-          config.onTaskComplete(activeTask.workId, shipped).catch(() => {});
-        }
+        // Summarize the task into its parent. Not awaited here — unless the
+        // parent ships below, in which case its summary must land first.
+        const summarized = config.onTaskComplete
+          ? config.onTaskComplete(activeTask.workId, shipped).catch(() => {})
+          : Promise.resolve();
 
         // Find the next unfinished sibling
         try {
@@ -1104,11 +1106,36 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             resultText += `\n→ Next: ${nextItem.title} [${nextItem.stage}]`;
           } else {
             unbindTask(ctx);
-            const parentTitle = shipped.partOf ? (queryWork(roots, {}) ?? []).find(i => i.id === shipped.partOf)?.title : null;
-            if (parentTitle) resultText += `\n🎯 All tasks under **${parentTitle}** complete`;
           }
         } catch {
           // Ignore sibling binding errors
+        }
+
+        // Last open task under a feature/initiative → offer to ship it, which
+        // graduates it into the KB. Same ship policy as the task itself.
+        try {
+          const parent = shipped.partOf ? loadWorkState(roots).get(shipped.partOf as WorkId) : undefined;
+          const children = parent ? queryWork(roots, { partOf: parent.id as string }) ?? [] : [];
+          if (parentReadyToShip(parent, children)) {
+            const ok =
+              !shouldConfirmShip(resolveShipPolicy(), !!ctx?.hasUI) ||
+              (await ctx.ui.confirm(
+                `📦 All tasks under "${parent.title}" are done. Ship the ${parent.kind}?`,
+                "Shipping it graduates it into the knowledge base."
+              ));
+            if (ok) {
+              if (ctx?.hasUI) ctx.ui.notify(`Summarizing "${shipped.title}" into ${parent.kind} before graduating…`, "info");
+              await summarized;
+              const { item: shippedParent } = stageWork(roots, parent.id, "shipped");
+              noteWork(roots, parent.id, "Shipped: all child tasks complete.");
+              await config.onReadyToGraduate?.(shippedParent);
+              resultText += `\n📦 Shipped ${parent.kind} "${parent.title}" and sent it to the knowledge base`;
+            } else {
+              resultText += `\n🎯 All tasks under "${parent.title}" are complete; it stays ${parent.stage}. Ship it from /task when ready.`;
+            }
+          }
+        } catch (e: any) {
+          resultText += `\n⚠ Could not ship the parent: ${e.message}`;
         }
 
         return { content: [{ type: "text" as const, text: resultText }] };

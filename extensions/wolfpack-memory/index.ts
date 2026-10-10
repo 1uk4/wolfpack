@@ -1605,8 +1605,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
             );
             commitWorkItem(kbRoots, parent, updatedBody);
 
-            // Note: Auto-ship removed - stage detection prompts user instead
-            // When all children complete, the turn_end handler will detect and prompt
+            // Shipping the parent once its last task ships is task_done's job
+            // (work-system.ts): it awaits this summary before graduating.
           }
         }
       } catch (e: any) {

@@ -52,7 +52,8 @@ import {
   extractTransitionContext,
   resolveShipPolicy,
   shouldConfirmShip,
-  parentReadyToShip,
+  readyToGraduate,
+  graduationCascade,
   initialState,
   reduce,
   leftRows,
@@ -517,18 +518,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           // Show transition prompt
           const confirm = await ctx.ui.confirm(signal.prompt, signal.reason ?? "");
           if (confirm) {
-            const { item: updated } = stageWork(roots, activeTask.workId, signal.to);
+            stageWork(roots, activeTask.workId, signal.to);
             noteWork(roots, activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
             refreshActiveItem();
             updateWidget(ctx);
             ctx.ui.notify(`Advanced to ${signal.to}`, "info");
-            
-            // Trigger graduation for features/initiatives when shipped
-            if (signal.to === "shipped" && (updated.kind === "feature" || updated.kind === "initiative")) {
-              if (config.onReadyToGraduate) {
-                config.onReadyToGraduate(updated).catch(() => {});
-              }
-            }
           }
         }
       } catch {
@@ -673,8 +667,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "x") return done({ type: "delete", id: focused.id as string });
             if (data === "D") return done({ type: "depend", id: focused.id as string });
             if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
-            if (data === "g" && (focused.kind === "feature" || focused.kind === "initiative") &&
-                focused.stage === "shipped" && !focused.container && !(focused.graduatedTo?.length)) {
+            if (data === "g" && readyToGraduate(focused, items)) {
               return done({ type: "graduate", id: focused.id as string });
             }
           }
@@ -711,7 +704,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const open = item.id === sel.openId;
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;
-              const stage = item.container ? "" : ` ${STAGE_ICONS[item.stage] ?? ""}`;
+              const stage = item.container ? ""
+                : readyToGraduate(item, items) ? theme.fg("success", " \ud83c\udf93 ready") : ` ${STAGE_ICONS[item.stage] ?? ""}`;
               out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${extraMark(extra)}${relationMark(item.id as string)}`);
             });
             return out;
@@ -723,6 +717,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const { done: d, total } = progress(ws, items);
             const out = [`${theme.bold(ws.title)}${total ? theme.fg("dim", ` ${d}/${total}`) : ""}`];
             if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
+            if (readyToGraduate(ws, items)) {
+              const parent = graduationCascade(ws, items);
+              out.push(theme.fg("success", `\ud83c\udf93 All tasks done: press g to graduate${parent ? ` (${parent.title} graduates too)` : ""}`));
+            }
             out.push("");
             const tree = rightTree(items, sel.openId);
             if (tree.length === 0) out.push(theme.fg("dim", "No tasks yet"));
@@ -850,24 +848,34 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify(e.message, "error");
         }
       } else if (typeof action === "object" && action?.type === "graduate") {
-        // Graduate shipped feature/initiative to KB
-        const item = (queryWork(roots, {}) ?? []).find(i => i.id === action.id);
-        if (!item) {
-          ctx.ui.notify("Work item not found.", "error");
+        // Graduate a ready feature/initiative: ship it, then send it to the KB.
+        const all = queryWork(roots, {}) ?? [];
+        const item = all.find((i) => i.id === action.id);
+        if (!readyToGraduate(item, all)) {
+          ctx.ui.notify("Not ready to graduate.", "warning");
           return;
         }
-        const confirm = await ctx.ui.confirm(
-          `Graduate "${item.title}" to KB?`,
-          "This will create a knowledge base entry from this ${item.kind}."
-        );
-        if (!confirm) return;
-        // Trigger graduation callback
-        if (config.onReadyToGraduate) {
-          ctx.ui.notify(`Graduating ${item.title}...`, "info");
-          await config.onReadyToGraduate(item);
-          ctx.ui.notify(`${item.kind} graduated to KB.`, "info");
-        } else {
+        if (!config.onReadyToGraduate) {
           ctx.ui.notify("Graduation not configured.", "warning");
+          return;
+        }
+        const parent = item.kind === "feature" ? graduationCascade(item, all) : undefined;
+        const what = item.kind === "feature"
+          ? "Ships the feature and sends it to Dewey as a knowledge base entry."
+          : "Ships the initiative and sends it to Dewey as a knowledge base entry.";
+        const cascade = parent
+          ? ` It is the last feature in "${parent.title}" to graduate, so that initiative ships and graduates too.`
+          : "";
+        const ok = await ctx.ui.confirm(`🎓 Graduate "${item.title}" to the knowledge base?`, what + cascade);
+        if (!ok) return;
+        try {
+          const shippedItem = isComplete(item) ? item : stageWork(roots, item.id, "shipped").item;
+          if (!isComplete(item)) noteWork(roots, item.id, "Shipped for graduation: all tasks complete.");
+          ctx.ui.notify(`Graduating ${item.title}…`, "info");
+          await config.onReadyToGraduate(shippedItem);
+          ctx.ui.notify(`🎓 ${item.title} graduated${parent ? `, and so did ${parent.title}` : ""}.`, "info");
+        } catch (e: any) {
+          ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
         }
       } else if (typeof action === "object" && action?.type === "move") {
         const all = queryWork(roots, {}) ?? [];
@@ -1128,11 +1136,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           return { content: [{ type: "text" as const, text: `Failed to ship: ${e.message}` }], isError: true };
         }
 
-        // Summarize the task into its parent. Not awaited here — unless the
-        // parent ships below, in which case its summary must land first.
-        const summarized = config.onTaskComplete
-          ? config.onTaskComplete(activeTask.workId, shipped).catch(() => {})
-          : Promise.resolve();
+        // Summarize the task into its feature (fire and forget)
+        if (config.onTaskComplete) {
+          config.onTaskComplete(activeTask.workId, shipped).catch(() => {});
+        }
 
         // Find the next unfinished sibling
         try {
@@ -1153,31 +1160,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           // Ignore sibling binding errors
         }
 
-        // Last open task under a feature/initiative → offer to ship it, which
-        // graduates it into the KB. Same ship policy as the task itself.
+        // Last task done → the feature is ready to graduate. Never automatic:
+        // the user graduates it with `g` in /task.
         try {
-          const parent = shipped.partOf ? loadWorkState(roots).get(shipped.partOf as WorkId) : undefined;
-          const children = parent ? queryWork(roots, { partOf: parent.id as string }) ?? [] : [];
-          if (parentReadyToShip(parent, children)) {
-            const ok =
-              !shouldConfirmShip(resolveShipPolicy(), !!ctx?.hasUI) ||
-              (await ctx.ui.confirm(
-                `📦 All tasks under "${parent.title}" are done. Ship the ${parent.kind}?`,
-                "Shipping it graduates it into the knowledge base."
-              ));
-            if (ok) {
-              if (ctx?.hasUI) ctx.ui.notify(`Summarizing "${shipped.title}" into ${parent.kind} before graduating…`, "info");
-              await summarized;
-              const { item: shippedParent } = stageWork(roots, parent.id, "shipped");
-              noteWork(roots, parent.id, "Shipped: all child tasks complete.");
-              await config.onReadyToGraduate?.(shippedParent);
-              resultText += `\n📦 Shipped ${parent.kind} "${parent.title}" and sent it to the knowledge base`;
-            } else {
-              resultText += `\n🎯 All tasks under "${parent.title}" are complete; it stays ${parent.stage}. Ship it from /task when ready.`;
-            }
+          const all = queryWork(roots, {}) ?? [];
+          const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
+          if (readyToGraduate(feature, all)) {
+            resultText += `\n🎓 All tasks under "${feature.title}" are done. It is ready to graduate: press g on it in /task.`;
           }
-        } catch (e: any) {
-          resultText += `\n⚠ Could not ship the parent: ${e.message}`;
+        } catch {
+          // Ignore readiness check errors
         }
 
         return { content: [{ type: "text" as const, text: resultText }] };

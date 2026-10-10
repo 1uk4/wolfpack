@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveShipPolicy, shouldConfirmShip } from "./ship-policy.js";
 import { detectTransition } from "./stage-detection.js";
-import { parentReadyToShip } from "./graduate.js";
+import { readyToGraduate, graduationCascade } from "./graduate.js";
 import type { WorkItem } from "@wolfpack/kb/client";
 
 describe("ship policy", () => {
@@ -34,28 +34,43 @@ describe("detectTransition (in_build)", () => {
     expect(detectTransition(task, ctx())).toBeNull();
   });
 
-  it("still offers to ship a feature once every child task is complete", () => {
+  it("never offers to ship a feature or initiative (graduation is g in /task)", () => {
     const feature = { kind: "feature", stage: "in_build", title: "f" } as WorkItem;
-    expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 2 }))?.to).toBe("shipped");
-    expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 1 }))).toBeNull();
+    expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 2 }))).toBeNull();
   });
+
 });
 
-describe("parentReadyToShip", () => {
-  const item = (kind: string, stage: string) => ({ kind, stage, title: kind }) as WorkItem;
-  const done = item("task", "shipped");
-  const open = item("task", "in_build");
+describe("readyToGraduate / graduationCascade", () => {
+  let n = 0;
+  const w = (kind: string, stage: string, partOf?: string, extra: Partial<WorkItem> = {}) =>
+    ({ id: `w${++n}`, kind, stage, partOf: partOf ?? null, title: `${kind}${n}`, graduatedTo: [], container: false, ...extra }) as unknown as WorkItem;
 
-  it("is ready when the last child of an unshipped feature/initiative ships", () => {
-    expect(parentReadyToShip(item("feature", "in_build"), [done, done])).toBe(true);
-    expect(parentReadyToShip(item("initiative", "plan"), [done])).toBe(true);
+  it("a feature is ready once all its tasks are done, whatever its own stage", () => {
+    const f = w("feature", "in_build");
+    const [a, b] = [w("task", "shipped", f.id), w("task", "plan", f.id)];
+    expect(readyToGraduate(f, [f, a, b])).toBe(false);
+    expect(readyToGraduate(f, [f, a, { ...b, stage: "shipped" } as WorkItem])).toBe(true);
+    expect(readyToGraduate(w("feature", "in_build"), [])).toBe(false); // no tasks
   });
 
-  it("is not ready while a child is open, or when there is nothing to ship", () => {
-    expect(parentReadyToShip(item("feature", "in_build"), [done, open])).toBe(false);
-    expect(parentReadyToShip(item("feature", "in_build"), [])).toBe(false);
-    expect(parentReadyToShip(item("feature", "shipped"), [done])).toBe(false); // already shipped
-    expect(parentReadyToShip(item("task", "in_build"), [done])).toBe(false); // tasks don't graduate
-    expect(parentReadyToShip(undefined, [done])).toBe(false); // no parent
+  it("graduated features, the Inbox and tasks are never ready", () => {
+    const f = w("feature", "shipped", undefined, { graduatedTo: ["kb-wp-aaaaaaa"] } as any);
+    const inbox = w("feature", "in_build", undefined, { container: true });
+    const t = w("task", "shipped", f.id);
+    expect(readyToGraduate(f, [f, t])).toBe(false);
+    expect(readyToGraduate(inbox, [inbox, w("task", "shipped", inbox.id)])).toBe(false);
+    expect(readyToGraduate(t, [t])).toBe(false);
+  });
+
+  it("an initiative is ready when all its features graduated; the last feature cascades", () => {
+    const i = w("initiative", "in_build");
+    const done = w("feature", "shipped", i.id, { graduatedTo: ["kb-wp-bbbbbbb"] } as any);
+    const last = w("feature", "in_build", i.id);
+    expect(readyToGraduate(i, [i, done, last])).toBe(false);
+    expect(graduationCascade(last, [i, done, last])?.id).toBe(i.id);
+    expect(graduationCascade(last, [i, done, last, w("feature", "plan", i.id)])).toBeUndefined();
+    expect(readyToGraduate(i, [i, done, { ...last, graduatedTo: ["kb-wp-ccccccc"] } as any])).toBe(true);
+    expect(graduationCascade(w("feature", "in_build"), [])).toBeUndefined(); // standalone
   });
 });

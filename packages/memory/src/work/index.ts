@@ -57,7 +57,8 @@ export {
 // Graduation
 export {
   canGraduate,
-  parentReadyToShip,
+  readyToGraduate,
+  graduationCascade,
   needsParentFirst,
   buildContribution,
   graduateWorkItem,

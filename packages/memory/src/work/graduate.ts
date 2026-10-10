@@ -18,22 +18,31 @@ import { isComplete, type WorkItem, type WorkId } from "@wolfpack/kb/client";
 const GRADUATABLE_KINDS = ["feature", "initiative"];
 
 /**
- * After a child ships: is its parent a feature/initiative whose children are
- * now ALL complete, but which has not shipped itself yet? Then it is ready to
- * ship — and shipping it graduates it into the KB.
+ * Ready to graduate (shown in /task, triggered with `g` — never automatic):
+ *   feature     all its tasks are complete (at least one), not graduated yet
+ *   initiative  all its features have graduated, not graduated yet
+ * Holding containers (the Inbox) never graduate.
  */
-export function parentReadyToShip(
-  parent: WorkItem | undefined,
-  children: WorkItem[]
-): parent is WorkItem {
-  return (
-    !!parent &&
-    !parent.container &&
-    GRADUATABLE_KINDS.includes(parent.kind) &&
-    !isComplete(parent) &&
-    children.length > 0 &&
-    children.every(isComplete)
-  );
+export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): item is WorkItem {
+  if (!item || item.container || (item.graduatedTo ?? []).length > 0) return false;
+  const kids = all.filter((i) => i.partOf === item.id);
+  if (item.kind === "feature") return kids.length > 0 && kids.every(isComplete);
+  if (item.kind === "initiative") {
+    const features = kids.filter((i) => i.kind === "feature");
+    return features.length > 0 && features.every((f) => (f.graduatedTo ?? []).length > 0);
+  }
+  return false;
+}
+
+/**
+ * The initiative that will graduate along with `feature`, because it is the
+ * last of the initiative's features still to graduate — or undefined.
+ */
+export function graduationCascade(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
+  const parent = feature.partOf ? all.find((i) => i.id === feature.partOf) : undefined;
+  if (!parent || parent.kind !== "initiative" || (parent.graduatedTo ?? []).length > 0) return undefined;
+  const others = all.filter((i) => i.partOf === parent.id && i.kind === "feature" && i.id !== feature.id);
+  return others.every((f) => (f.graduatedTo ?? []).length > 0) ? parent : undefined;
 }
 
 /**

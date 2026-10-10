@@ -1605,8 +1605,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
             );
             commitWorkItem(kbRoots, parent, updatedBody);
 
-            // Shipping the parent once its last task ships is task_done's job
-            // (work-system.ts): it awaits this summary before graduating.
+            // Graduating the feature is manual: `g` in /task once all its
+            // tasks are done (work-system.ts).
           }
         }
       } catch (e: any) {

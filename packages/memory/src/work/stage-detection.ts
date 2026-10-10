@@ -147,18 +147,7 @@ export function detectTransition(
       // Tasks are shipped through task_done, which asks first (see
       // work/ship-policy.ts) — no keyword guessing here.
 
-      // For features/initiatives: all children complete
-      if ((item.kind === "feature" || item.kind === "initiative") && childCount > 0) {
-        if (completedChildCount === childCount) {
-          return {
-            from: "in_build",
-            to: "shipped",
-            confidence: "high",
-            reason: "All child items complete",
-            prompt: `📦 All tasks under "${item.title}" are done. Ship the ${item.kind}?`,
-          };
-        }
-      }
+      // Features/initiatives are never bound; finishing them is `g` in /task.
       break;
     }
 

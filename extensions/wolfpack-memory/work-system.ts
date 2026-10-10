@@ -311,6 +311,7 @@ async function wizardNew(
  * and discusses the plan on the next turn.
  */
 async function promptTaskIteration(
+  pi: ExtensionAPI,
   ctx: any,
   roots: KbRoots,
   item: WorkItem,
@@ -354,10 +355,16 @@ async function promptTaskIteration(
   }
 
   if (next === "Review and update the plan") {
-    ctx.ui.pasteToEditor(
+    // Start the review turn right away, rather than leaving a draft to send.
+    const review =
       `Review the working document for "${item.title}" (shown in <active_task>). ` +
-      `Discuss what should change, then use task_update to write the updated plan.`
-    );
+      `Discuss what should change, then use task_update to write the updated plan.`;
+    try {
+      pi.sendUserMessage(review);
+    } catch {
+      // sendUserMessage throws while the agent is busy: fall back to a draft.
+      ctx.ui.pasteToEditor(review);
+    }
   }
 }
 
@@ -763,13 +770,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         const result = await wizardNew(ctx, roots, wolfName);
         if (result && bindToTask(result.item, ctx)) {
           // Kick off iteration on the new item
-          await promptTaskIteration(ctx, roots, result.item);
+          await promptTaskIteration(pi, ctx, roots, result.item);
           refreshActiveItem();
           updateWidget(ctx);
         }
       } else if (action === "bind" && activeItem) {
         // Show current state and offer iteration
-        await promptTaskIteration(ctx, roots, activeItem);
+        await promptTaskIteration(pi, ctx, roots, activeItem);
         refreshActiveItem();
         updateWidget(ctx);
       } else if (typeof action === "object" && action?.type === "delete") {

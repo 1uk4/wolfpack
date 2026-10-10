@@ -397,9 +397,10 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       }
 
       // ── PRODUCE (LLM → opinion only; code assembles) ────────────────────
-      // A hub is regenerated from the full list of delivered features each
-      // time, so it never needs the previous hub as input.
-      const existingMarkdown = targetId && c.graduation !== "hub"
+      // A graduation is regenerated from its full dossier each time (a hub from
+      // the full list of delivered features), never from its previous text:
+      // the old entry would carry forward anything the dossier has corrected.
+      const existingMarkdown = targetId && !c.graduation
         ? readEntryMarkdown(roots, domain, targetId) ?? undefined
         : undefined;
       // For a hub: what Dewey actually recorded for each delivered feature.

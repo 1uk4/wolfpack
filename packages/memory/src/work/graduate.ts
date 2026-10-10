@@ -105,14 +105,24 @@ export function featureDossier(
   if (tasks.length) {
     lines.push("## What was built (final state; wins over the plan below)", "");
     for (const t of tasks) {
-      lines.push(`### ${t.title}`);
-      if (t.successCriteria) lines.push(`Done when: ${t.successCriteria}`);
       const notes = (t.log ?? []).map((l) => l.text).filter((n) => !PROCESS_NOTE.test(n)).slice(-3);
+      if (!notes.length) continue;
+      lines.push(`### ${t.title}`);
       for (const n of notes) lines.push(`- ${n}`);
       lines.push("");
     }
   }
-  if (doc) lines.push("## Original plan (may be outdated; later notes win)", "", doc, "");
+  // Done-when lines are targets written before the work: plan, not outcome.
+  const targets = tasks.filter((t) => t.successCriteria);
+  if (doc || targets.length) {
+    lines.push("## Original plan (may be outdated; later notes win)", "");
+    if (doc) lines.push(doc, "");
+    if (targets.length) {
+      lines.push("### Task targets (set before the work)", "");
+      for (const t of targets) lines.push(`- ${t.title}: ${t.successCriteria}`);
+      lines.push("");
+    }
+  }
   const out = lines.join("\n").replace(WORK_ID, "").trim();
   return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
 }

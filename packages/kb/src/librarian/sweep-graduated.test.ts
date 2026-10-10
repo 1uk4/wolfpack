@@ -91,7 +91,8 @@ describe("sweep: graduated work creates its own entry", () => {
     drop("work-wp-Feat001", "h2", "graduated again", featureGrad("kb-wp-Feat001"));
     const second = await run();
     expect(second).toMatchObject({ created: 0, merged: 1 });
-    expect(prompts[1]).toContain("EXISTING ENTRY (kb-wp-Feat001)");
+    // Regenerated from the dossier, never from its previous text.
+    expect(prompts[1]).not.toContain("EXISTING ENTRY");
     expect(readFileSync(join(entries(), "kb-wp-BIGBIG1.md"), "utf8")).toContain("huge catch-all");
   });
 

@@ -23,7 +23,9 @@ describe("graduation contributions", () => {
     expect(d).toContain("Goal: panel works");
     expect(d).toContain("Use two panes.");
     expect(d).toContain("### Build the panel");
-    expect(d).toContain("Done when: panel renders");
+    expect(d).toContain("- Build the panel: panel renders");
+    // Targets are plan: they come after what was built.
+    expect(d.indexOf("added selector.ts")).toBeLessThan(d.indexOf("- Build the panel: panel renders"));
     expect(d).toContain("added selector.ts");
     expect(d).not.toMatch(/work-wp-|Stage: |Completed\.|_Completed/);
     // Final state first; the plan follows, labelled as possibly outdated.

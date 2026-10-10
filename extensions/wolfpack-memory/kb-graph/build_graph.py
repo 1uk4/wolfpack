@@ -125,7 +125,8 @@ def load_entries(domain_dir: Path) -> dict:
 
 
 def load_work_items(domain_dir: Path) -> dict:
-    """workId -> {id, title, kind, stage, partOf, body, ...}."""
+    """workId -> {id, title, kind, stage, partOf, body, ...}. Archived work
+    (graduated, or otherwise retired) has left the Factory, so it is skipped."""
     items = {}
     wdir = domain_dir / "work"
     if not wdir.is_dir():
@@ -134,7 +135,7 @@ def load_work_items(domain_dir: Path) -> dict:
         text = md.read_text(encoding="utf-8", errors="replace")
         fm, body = split_frontmatter(text)
         meta = parse_frontmatter(fm)
-        if meta.get("nodeType") != "work":
+        if meta.get("nodeType") != "work" or scalar(meta.get("stage", "")) == "archived":
             continue
         wid = meta.get("id") or md.stem
         items[wid] = {

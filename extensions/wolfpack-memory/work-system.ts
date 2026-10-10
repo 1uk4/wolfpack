@@ -203,11 +203,12 @@ function writeActiveTask(wolfDen: string, state: ActiveTaskState | null): void {
  *   ● <task title>  plan · <workspace> 3/8
  *     ✓ <done when>
  */
-function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: number; total: number }): string[] {
+function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: number; total: number }, autoShip = false): string[] {
   const stageColor = STAGE_COLORS[item.stage] ?? "";
   const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
   const ws = workspace ? ` \x1b[2m· ${clip(workspace.title, 40)} ${workspace.done}/${workspace.total}\x1b[0m` : "";
-  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${stageLabel(item.stage)}\x1b[0m${ws}`];
+  const auto = autoShip ? `  \x1b[33m⚡ auto-ship\x1b[0m` : "";
+  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${stageLabel(item.stage)}\x1b[0m${ws}${auto}`];
   if (item.successCriteria) lines.push(`  \x1b[2m✓ ${clip(item.successCriteria, 100)}\x1b[0m`);
   return lines;
 }
@@ -407,6 +408,25 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */
   let workspaceId: string | null = null;
+  /** Session override for the ship policy: null = WOLFPACK_TASK_SHIP default.
+   *  Toggled with `/task auto` or `a` in the /task panel. Tasks only: features
+   *  always need a manual g. */
+  let autoShipOverride: boolean | null = null;
+  const shipPolicy = () =>
+    autoShipOverride === null ? resolveShipPolicy() : autoShipOverride ? "auto" : "confirm";
+  function toggleAutoShip(ctx: any): void {
+    autoShipOverride = shipPolicy() !== "auto";
+    refreshActiveItem();
+    updateWidget(ctx);
+    if (ctx?.hasUI) {
+      ctx.ui.notify(
+        autoShipOverride
+          ? "⚡ Auto-ship ON: the agent ships tasks without asking (features still need g)."
+          : "Auto-ship OFF: task_done asks before shipping.",
+        "info"
+      );
+    }
+  }
 
   function refreshActiveItem(): WorkItem | null {
     if (!activeTask) { activeItem = null; return null; }
@@ -434,7 +454,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       const all = queryWork(roots, {}) ?? [];
       const feature = activeItem.partOf ? all.find((i) => i.id === activeItem!.partOf) : undefined;
       const workspace = feature ? { title: feature.title, ...progress(feature, all) } : undefined;
-      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace), {
+      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace, shipPolicy() === "auto"), {
         placement: "aboveEditor",
       });
       ctx.ui.setStatus("wolfpack-task", renderStatusBarCompact(activeItem));
@@ -595,6 +615,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
     parts.push("");
     parts.push("This is your working document for this task. Use task_update to write/update the plan, notes, or findings. Use task_note to log progress. Use task_stage to advance when done.");
+    if (shipPolicy() === "auto") {
+      parts.push("AUTO-SHIP IS ON: when done_when is met and verified, log a task_note and call task_done yourself (no confirmation). It binds the next task in this feature; keep going until none are left. Do not graduate the feature: that stays a manual g by the user.");
+    }
     parts.push("</active_task>");
 
     return {
@@ -623,7 +646,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   pi.registerCommand("task", {
     description: "Open the task dashboard — view, select, and create work items",
-    handler: async (_rawArgs: string, ctx: any) => {
+    handler: async (rawArgs: string, ctx: any) => {
+      if ((rawArgs ?? "").trim().toLowerCase() === "auto") return toggleAutoShip(ctx);
       lastCtx = ctx;
 
       const action = await ctx.ui.custom<PanelAction>(
@@ -679,6 +703,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               return;
             }
             if (matchesKey(data, Key.escape)) return done(null);
+            if (data === "a") {
+              toggleAutoShip(ctx);
+              return refresh();
+            }
             if (data === "n") return done("new");
             const focused = focusedItem();
             if (!focused) return;
@@ -787,7 +815,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const add = (s: string) => lines.push(truncateToWidth(s, width));
 
             add(theme.fg("accent", "\u2500".repeat(width)));
-            add(` ${theme.fg("toolTitle", theme.bold("\ud83d\udce5 Tasks"))} ${theme.fg("dim", `\u00b7 ${wolfName}`)}`);
+            add(` ${theme.fg("toolTitle", theme.bold("\ud83d\udce5 Tasks"))} ${theme.fg("dim", `\u00b7 ${wolfName}`)}` +
+              (shipPolicy() === "auto" ? `  ${theme.fg("warning", "\u26a1 auto-ship on")}` : ""));
             add(activeTask && activeItem
               ? ` ${theme.fg("success", "\u25b6")} ${theme.fg("accent", activeItem.title)} ${theme.fg("dim", stageLabel(activeItem.stage))}`
               : ` ${theme.fg("dim", "No task bound \u2014 open a feature, then Space on a task")}`);
@@ -804,7 +833,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             }
 
             add("");
-            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "m move", "D depend", "x delete", "g graduate", "Esc close"];
+            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "m move", "D depend", "x delete", "g graduate", "a auto-ship", "Esc close"];
             add(` ${theme.fg("dim", hints.join(" \u00b7 "))}`);
             add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -1149,7 +1178,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
 
         // Human gate (default) vs. agent loops (auto / no UI attached).
-        if (shouldConfirmShip(resolveShipPolicy(), !!ctx?.hasUI)) {
+        if (shouldConfirmShip(shipPolicy(), !!ctx?.hasUI)) {
           const ok = await ctx.ui.confirm(
             `📦 Mark "${activeItem.title}" as shipped?`,
             activeItem.successCriteria ? `Done when: ${activeItem.successCriteria}` : ""

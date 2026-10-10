@@ -140,7 +140,10 @@ work.bound · work.unbound · work.summarized
   success criteria) before shipping; **No** leaves the task where it is and tells
   the agent to ask what's missing. A wolf with `WOLFPACK_TASK_SHIP=auto` in its
   `.env`, or a session with no UI attached, ships without asking, so agent loops
-  can finish tasks on their own (`memory/src/work/ship-policy.ts`).
+  can finish tasks on their own (`memory/src/work/ship-policy.ts`). **`/task auto`**
+  (or `a` in the panel) toggles this for the session: the widget shows
+  ⚡ auto-ship, and the agent is told to ship each task itself and continue with
+  the next one in the feature. Graduating the feature always stays a manual `g`.
 - **Stage detection** suggests other transitions at the end of each turn, e.g. a
   feature whose child tasks are all done. Tasks are not guessed done from their
   notes; that is `task_done`'s job.

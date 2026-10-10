@@ -10,7 +10,9 @@
     "typecheck": "tsc --build",
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
-    "install:cli": "npm run build && cd packages/cli && npm link"
+    "install:cli": "npm run build && cd packages/cli && npm link",
+    "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js",
+    "posttypecheck": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

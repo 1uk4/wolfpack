@@ -34,9 +34,19 @@ export function readLedger(roots: KbRoots): KbEvent[] {
 
 export function appendLedger(roots: KbRoots, events: KbEvent[]): void {
   if (events.length === 0) return;
+  // Validate all before writing any: readLedger skips bad lines silently, so a
+  // bad write would otherwise vanish from every projection.
+  const valid = events.map((e) => {
+    const r = KbEventSchema.safeParse(e);
+    if (!r.success) {
+      const issues = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      throw new Error(`Invalid ${(e as { t?: string }).t ?? "?"} ledger event — ${issues}`);
+    }
+    return r.data;
+  });
   const file = ledgerFile(roots);
   mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  appendFileSync(file, valid.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
 // ── projections (pure) ─────────────────────────────────────────────────────

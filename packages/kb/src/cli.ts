@@ -558,6 +558,21 @@ async function cmdRebuildVectors(): Promise<void> {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function cmdReorg(): Promise<void> {
+  // A real reorg rewrites sections and the ledger: it must not overlap a sweep.
+  const roots = resolveRoots();
+  const dryRun = process.argv.includes("--dry-run");
+  if (!dryRun && !acquireLock(roots)) {
+    console.error("a sweep is running (sweep.lock held); retry when it finishes");
+    process.exit(1);
+  }
+  try {
+    await reorg();
+  } finally {
+    if (!dryRun) releaseLock(roots);
+  }
+}
+
+async function reorg(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(2);
   const domainFilter = argv.find((a) => !a.startsWith("--") && a !== "reorg") ?? null;
@@ -837,7 +852,9 @@ async function cmdReorg(): Promise<void> {
           } catch (e) {
             console.error(`    ${sec.id}: label failed: ${e}`);
           }
-        } else if (dryRun) {
+        } else if (memberInfo.length === 0) {
+          console.log(`    ${sec.id}: skip re-label (0 members) "${sec.title}"`);
+        } else {
           console.log(`    ${sec.id}: would re-label (${memberInfo.length} member(s)) "${sec.title}"`);
         }
       }

@@ -124,7 +124,7 @@
  *   └──────────────────────────────────────────────────────────┘
  */
 
-import { ENTRY_TYPES } from "./schemas/index.js";
+import { ENTRY_KINDS } from "./config/vocab.js";
 export {
   OBSERVER_SYSTEM,
   CONSOLIDATE_SYSTEM,
@@ -277,14 +277,14 @@ export const CONTRADICT_SYSTEM = `You compare a NEW knowledge contribution again
  * stage: produce (KB sweep) · model: smart · in: contribution + existing (if merge) · out: entry
  *
  * Write a curated KB entry from a contribution, integrating with existing if merging.
- * PRODUCE_SYSTEM is built from the array pattern in produce.ts with ENTRY_TYPES interpolated.
+ * Entry types are ENTRY_KINDS from config/vocab.ts plus "other" (which requires a `tag`).
  */
 export const PRODUCE_SYSTEM = `You write a single curated knowledge-base entry from a wolf's contribution.
 Be precise and sourced. On merge, integrate the new information into the
 existing entry, changing only what the contribution affects.
 
 FRONTMATTER RULES (the entry is machine-read — be disciplined):
-- type MUST be exactly one of: ${ENTRY_TYPES.join(", ")}.
+- type MUST be exactly one of: ${[...ENTRY_KINDS, "other"].join(", ")}.
   Pick the single best fit. Prefer a precise type over a generic one
   (e.g. an API surface is 'api', a timeline/changelog is 'changelog',
   a settled choice is 'decision', a runbook is 'process', terms/privacy is

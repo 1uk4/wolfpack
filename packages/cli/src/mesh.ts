@@ -51,10 +51,6 @@ export const SYNC_PORT_SPAN = 100; // 22000–22099 / 8384–8483
 const REGISTRY_DIR = path.join(os.homedir(), ".wolfpack");
 const REGISTRY_FILE = path.join(REGISTRY_DIR, "devices.yaml");
 
-export function devicesPath(): string {
-  return REGISTRY_FILE;
-}
-
 export function loadDevices(): DeviceRegistry {
   try {
     const parsed = (yamlParse(fs.readFileSync(REGISTRY_FILE, "utf8")) ?? {}) as Partial<DeviceRegistry>;

@@ -3,7 +3,6 @@ export {
   readTopics,
   readJourney,
   writeTopic,
-  writeJourney,
   renderIndex,
   listSessionIds,
   type TopicFile,

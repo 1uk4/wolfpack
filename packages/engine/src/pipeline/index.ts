@@ -3,9 +3,5 @@
  * Frontmatter parsing + atomic markdown writes. No LLM.
  */
 
-export {
-  parseFrontmatter,
-  parseEntryFrontmatter,
-  readEntryFile,
-} from "./parse.js";
-export { atomicWrite, renderEntry, renderFrontmatter } from "./commit.js";
+export { parseFrontmatter } from "./parse.js";
+export { atomicWrite } from "./commit.js";

@@ -11,7 +11,6 @@ import {
   type ParsedContribution,
   entriesDir,
   receiptsDir,
-  rejectedDir,
   unclassifiedDir,
   now,
 } from "../shared/index.js";
@@ -85,22 +84,6 @@ export function quarantine(
     "",
   ].join("\n");
   atomicWrite(join(dir, `${c.denTopicId}-${c.contentHash.slice(7, 17)}.md`), body);
-}
-
-/** Never silently drop a rejected contribution — archive it for audit. */
-export function archiveRejected(
-  roots: KbRoots,
-  wolf: string,
-  c: ParsedContribution
-): void {
-  const dir = rejectedDir(roots, wolf);
-  mkdirSync(dir, { recursive: true });
-  if (existsSync(c.filePath)) {
-    atomicWrite(
-      join(dir, `${c.denTopicId}-${c.contentHash.slice(7, 17)}.md`),
-      readFileSync(c.filePath, "utf-8")
-    );
-  }
 }
 
 /** Single commit per sweep. Best-effort; no-op if not a git repo. */

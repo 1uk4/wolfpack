@@ -126,17 +126,3 @@ export async function installLocalLibrarian(
   return { notes };
 }
 
-/** Run one sweep now (manual trigger for a local librarian). */
-export function runLocalSweepNow(config: CliConfig, wolfName: string): void {
-  const node = process.execPath;
-  const denLocal = path.join(config.wolvesRoot, "local", wolfName, "den", "kb");
-  const env = {
-    ...process.env,
-    KB_BASE: kbBaseDir(config),
-    KB_OPS: librarianDir(config),
-    KB_DEN_LOCAL: denLocal,
-    WOLF_DEN: path.join(config.wolvesRoot, "local", wolfName, "den"),
-    WOLFPACK_EMBED_URL: process.env.WOLFPACK_EMBED_URL ?? "http://127.0.0.1:11434",
-  };
-  execFileSync(node, [kbCliPath(), "sweep"], { stdio: "inherit", env });
-}

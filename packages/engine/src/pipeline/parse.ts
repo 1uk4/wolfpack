@@ -1,11 +1,6 @@
 /**
- * Parse — read frontmatter + entry files from disk. Pure code, no LLM.
+ * Parse — split markdown into YAML frontmatter fields + body. Pure code, no LLM.
  */
-import { readFileSync, existsSync } from "node:fs";
-import {
-  EntryFrontmatterSchema,
-  type EntryFrontmatter,
-} from "../schemas/entry.js";
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
@@ -104,19 +99,3 @@ export function parseFrontmatter(
   return { fields, body: match[2] };
 }
 
-/** Parse entry frontmatter from a KB entry file. */
-export function parseEntryFrontmatter(filePath: string): EntryFrontmatter {
-  const raw = readFileSync(filePath, "utf-8");
-  const { fields } = parseFrontmatter(raw);
-  return EntryFrontmatterSchema.parse(fields);
-}
-
-/** Read a full entry file — frontmatter + body. */
-export function readEntryFile(
-  filePath: string
-): { frontmatter: Record<string, unknown>; body: string } | null {
-  if (!existsSync(filePath)) return null;
-  const raw = readFileSync(filePath, "utf-8");
-  const { fields, body } = parseFrontmatter(raw);
-  return { frontmatter: fields, body };
-}

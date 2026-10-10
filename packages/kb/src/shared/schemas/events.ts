@@ -2,7 +2,7 @@
  * Ledger events — the single append-only source of truth.
  *
  * Clusters, the registry, aliases, and subscriptions are ALL pure projections
- * of this log (see librarian/ledger.ts foldRegistry / foldClusters). This
+ * of this log (see librarian/ledger.ts foldRegistry). This
  * mirrors the memory package's observation ledger + foldLedger pattern.
  */
 import { z } from "zod";

@@ -22,11 +22,6 @@ export function workId(domain: string): string {
   return `work-${domain}-${shortId()}`;
 }
 
-/** Canonical topic id: topic-<shortId>. */
-export function topicId(): string {
-  return `topic-${shortId()}`;
-}
-
 /** Ledger event id: ev-<shortId>. */
 export function eventId(): string {
   return `ev-${shortId(10)}`;

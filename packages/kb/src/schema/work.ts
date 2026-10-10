@@ -8,8 +8,7 @@
  *     code. Unlike an Entry, a WorkItem needs NO LLM to exist; it is
  *     human/agent-authored prose + typed state.
  *   • Event-sourced — a WorkItem's state is a pure `fold` over an append-only
- *     event log (the shared `EventLog` primitive, whose header already names
- *     "the new factory (WorkItem stage machine)" as its intended consumer).
+ *     event log (work-events.jsonl, read and written by client/work-store.ts).
  *
  *   events (append-only JSONL)                 foldWork → live state
  *     work.created ─┐
@@ -132,7 +131,7 @@ export const WorkEvent = z.discriminatedUnion("type", [
 export type WorkEvent = z.infer<typeof WorkEvent>;
 
 /** Parse one raw ledger line into a WorkEvent, or null to skip (forward-compat).
- *  Pass this to createEventLog({ parse }). */
+ *  Used by readWorkLedger. */
 export function parseWorkEvent(raw: unknown): WorkEvent | null {
   const r = WorkEvent.safeParse(raw);
   return r.success ? r.data : null;

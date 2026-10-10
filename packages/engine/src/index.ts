@@ -19,17 +19,11 @@ export {
   resolveModel,
 } from "./config.js";
 
-// Schemas — the contracts
-export * from "./schemas/index.js";
-
 // Prompts — central registry of all system prompts
 export * from "./prompts.js";
 
 // Config — the editable control surface (vocabularies + numeric knobs)
 export * from "./config/index.js";
-
-// Ledger — the shared event-sourcing primitive (the "database")
-export * from "./ledger/index.js";
 
 // Adapter — the LLM interface
 export type { KnowledgeAdapter, ExtractOptions, UsageRecord } from "./adapter.js";

@@ -4,7 +4,7 @@
  * The fix for "Dewey should help produce better observations & consolidations."
  * A wolf (live) or a scribe (crawl) otherwise works BLIND to what the pack
  * already knows — even though the curated entries are in the Syncthing mirror and
- * the client can read them (resolveEntry/listEntries). This contract is how Dewey
+ * wolves can read them. This contract is how Dewey
  * *briefs the researcher before they write*, on BOTH ingestion paths.
  *
  *   Dewey sweep ──(regenerates per domain, like INDEX)──▶ domains/<d>/_digest.json

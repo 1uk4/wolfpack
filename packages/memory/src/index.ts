@@ -32,7 +32,6 @@ export {
 // Observer
 export {
   observe,
-  observeParallel,
   buildObserverPrompt,
   ObserverResultSchema,
   RawObservationSchema,
@@ -62,7 +61,6 @@ export {
   readTopics,
   readJourney,
   writeTopic,
-  writeJourney,
   renderIndex,
   listSessionIds,
   type TopicFile,

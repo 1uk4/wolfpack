@@ -57,7 +57,6 @@ export {
 } from "./cli.js";
 export {
   extractBatch,
-  extractCrawl,
   chunkText,
   type CrawlObservation,
   type ExtractOptions,

@@ -25,7 +25,6 @@ import {
   readTopics,
   readJourney,
   writeTopic,
-  writeJourney,
   renderIndex,
 } from "./session/memory.js";
 import { consolidateSession, type ConsolidateResult } from "./consolidate.js";

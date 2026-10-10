@@ -94,14 +94,6 @@ export function writeTopic(
 }
 
 /**
- * Write the journey file.
- */
-export function writeJourney(root: string, content: string): void {
-  mkdirSync(root, { recursive: true });
-  atomicWrite(join(root, "JOURNEY.md"), content);
-}
-
-/**
  * Render and write INDEX.md from topic frontmatter.
  */
 export function renderIndex(root: string): void {

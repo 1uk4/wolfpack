@@ -27,7 +27,6 @@ export {
   commitEntry,
   readEntryMarkdown,
   writeReceipt,
-  archiveRejected,
   gitCommit,
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";

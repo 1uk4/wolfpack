@@ -59,10 +59,6 @@ export function registryPath(): string {
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const RESERVED = new Set(["_unclassified", "entries", "registry", "domains"]);
 
-export function isValidDomainName(name: string): boolean {
-  return NAME_RE.test(name) && !RESERVED.has(name);
-}
-
 export function assertValidDomainName(name: string): void {
   if (!NAME_RE.test(name)) {
     throw new Error(
@@ -73,11 +69,6 @@ export function assertValidDomainName(name: string): void {
   if (RESERVED.has(name)) {
     throw new Error(`"${name}" is a reserved name and cannot be a domain.`);
   }
-}
-
-/** The Syncthing folder id for a domain. Stable + globally unique. */
-export function domainFolderId(name: string): string {
-  return `kb-${name}`;
 }
 
 /** Load the registry (empty if none exists yet). */

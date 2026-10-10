@@ -41,8 +41,6 @@ export const inboxDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "inbox", wolf);
 export const receiptsDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "receipts", wolf);
-export const rejectedDir = (r: KbRoots, wolf: string) =>
-  join(r.opsRoot, "rejected", wolf);
 
 // ── den-local (Dewey's brain, never synced) ─────────────────────────────────
 export const ledgerFile = (r: KbRoots) =>

@@ -6,7 +6,6 @@
  * memory's observer.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import { observe } from "../observer/index.js";
 import { ordersJourney } from "./dates.js";
@@ -112,22 +111,3 @@ export async function extractBatch(
   return out;
 }
 
-/** Map a plan's batches to their DatedFiles (by relPath) and extract each. */
-export async function extractCrawl(
-  engine: Engine,
-  plan: CrawlPlan,
-  dated: DatedFile[],
-  sink: CrawlSink,
-  opts: ExtractOptions = {}
-): Promise<Map<string, CrawlObservation[]>> {
-  const byPath = new Map(dated.map((f) => [f.relPath, f]));
-  const result = new Map<string, CrawlObservation[]>();
-  for (const b of plan.batches) {
-    const files = b.files
-      .map((rel) => byPath.get(rel))
-      .filter((f): f is DatedFile => !!f);
-    sink.log(`extract batch: ${b.topic} (${files.length} files)`);
-    result.set(b.topic, await extractBatch(engine, plan, b.topic, files, sink, opts));
-  }
-  return result;
-}

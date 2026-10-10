@@ -133,6 +133,7 @@ export {
   CRAWL_CONSOLIDATE_SYSTEM,
   CRAWL_JOURNEY_SYSTEM,
 } from "./config/prompts/memory.js";
+export { GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "./config/prompts/graduation.js";
 
 
 // ═══════════════════════════════════════════════════════════════════════════

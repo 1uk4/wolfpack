@@ -9,6 +9,7 @@
  * 2. Graduate feature with reference to initiative entry
  * 3. Dewey processes and places appropriately
  */
+import { createHash } from "node:crypto";
 import { isComplete, type WorkItem, type WorkId } from "@wolfpack/kb/client";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -176,6 +177,95 @@ function cleanBodyForKB(body: string, item: WorkItem): string {
   }
   
   return cleaned.trim();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 2b · GRADUATION CONTRIBUTIONS (what the wolf sends Dewey)
+// ════════════════════════════════════════════════════════════════════════════
+
+/** The KB entry a graduated work item owns: kb-<domain>-<its 7-char id>. */
+export function graduationEntryId(item: Pick<WorkItem, "id" | "domain">): string {
+  return `kb-${item.domain}-${String(item.id).split("-").pop()}`;
+}
+
+/** Work item ids never reach the KB. */
+const WORK_ID = /\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g;
+const PROCESS_NOTE = /^(Completed\.|Stage: |Shipped( for graduation)?: )/;
+
+/** Max dossier size, so one graduation stays well inside the sweep's budget. */
+const MAX_DOSSIER_CHARS = 24_000;
+
+/**
+ * The raw material Dewey turns into a past-tense feature entry: the feature's
+ * document and, per task, its done-when and latest notes. Work ids and
+ * completion stamps are stripped; the graduation prompt removes the rest.
+ */
+export function featureDossier(
+  feature: WorkItem,
+  body: string,
+  tasks: WorkItem[]
+): string {
+  const lines = [`# ${feature.title}`, ""];
+  if (feature.successCriteria) lines.push(`Goal: ${feature.successCriteria}`, "");
+  const doc = body
+    .replace(/^#\s+.*\n+/, "") // the document repeats the title
+    .replace(/_Completed \d{4}-\d{2}-\d{2}_\n?/g, "")
+    .trim();
+  if (doc) lines.push("## Feature document", "", doc, "");
+  if (tasks.length) {
+    lines.push("## What the tasks built", "");
+    for (const t of tasks) {
+      lines.push(`### ${t.title}`);
+      if (t.successCriteria) lines.push(`Done when: ${t.successCriteria}`);
+      const notes = (t.log ?? []).map((l) => l.text).filter((n) => !PROCESS_NOTE.test(n)).slice(-3);
+      for (const n of notes) lines.push(`- ${n}`);
+      lines.push("");
+    }
+  }
+  const out = lines.join("\n").replace(WORK_ID, "").trim();
+  return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
+}
+
+export interface GraduationFile {
+  /** File name for the wolf's ops inbox. */
+  name: string;
+  content: string;
+}
+
+/**
+ * Render a graduation contribution for the ops inbox. It names the entry it
+ * owns (entry_id), so the KB never needs to interpret work ids.
+ */
+export function graduationFile(opts: {
+  from: string;
+  item: Pick<WorkItem, "id" | "domain">;
+  graduation: "feature" | "hub";
+  body: string;
+  final?: boolean;
+  submitted: Date;
+}): GraduationFile {
+  const { from, item, graduation, body, final, submitted } = opts;
+  const hash = createHash("sha256").update(body).digest("hex").slice(0, 16);
+  const fm = [
+    "---",
+    `from: ${from}`,
+    `den_topic_id: ${item.id}`,
+    `change: create`,
+    `content_hash: ${hash}`,
+    `prev_hash: null`,
+    `domain_hint: ${item.domain}`,
+    `origin: wolf`,
+    `currency: live`,
+    `graduation: ${graduation}`,
+    `entry_id: ${graduationEntryId(item)}`,
+    ...(final ? ["final: true"] : []),
+    `submitted: ${submitted.toISOString()}`,
+    "---",
+  ];
+  return {
+    name: `grad-${graduation}-${item.id}-${submitted.getTime()}.md`,
+    content: `${fm.join("\n")}\n\n${body}\n`,
+  };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

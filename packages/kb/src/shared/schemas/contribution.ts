@@ -56,6 +56,16 @@ export const ContributionSchema = z.object({
    * combined with `currency`, a crawl is historical reference, not lived truth.
    */
   origin: z.enum(["wolf", "crawl"]).optional(),
+
+  // ── Graduation (finished Factory work → past-tense knowledge) ───────────
+  /** Set when this contribution is graduated work: a feature, or an
+   *  initiative's hub. The sweep writes it with the graduation prompt. */
+  graduation: z.enum(["feature", "hub"]).optional(),
+  /** The entry this graduation owns (created first time, updated after).
+   *  Named by the sender, so the KB never interprets work ids. */
+  entryId: z.string().optional(),
+  /** Hub only: the initiative is complete (adds an outcome summary). */
+  final: z.boolean().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

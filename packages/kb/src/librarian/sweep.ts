@@ -13,7 +13,7 @@
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
-import { type KbEvent, ev, now } from "../shared/index.js";
+import { type KbEvent, type ParsedContribution, ev, now } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, cosine } from "./embed.js";
@@ -35,6 +35,7 @@ import { withBudget, BudgetExceeded, recordFailure, clearAttempts, park } from "
 import { writeCurrent, clearCurrent } from "./progress.js";
 import {
   DomainId,
+  EntryId,
   SectionId,
   Slug,
   IsoDate,
@@ -116,12 +117,16 @@ function mkSectionId(domain: string): SectionId {
 }
 
 /**
- * The entry a graduated work item owns: `work-<domain>-<7id>` → `kb-<domain>-<7id>`
- * (the same id graduation records as graduatedTo). Null for other contributions.
+ * The entry a graduation contribution owns, as named by its sender
+ * (`entry_id`). It must be a valid entry id in the contribution's domain.
  */
-export function graduatedEntryId(denTopicId: string, domain: string): string | null {
-  const m = /^work-[a-z0-9-]+-([0-9A-Za-z]{7})$/.exec(denTopicId);
-  return m ? `kb-${domain}-${m[1]}` : null;
+export function graduationEntryId(c: Pick<ParsedContribution, "graduation" | "entryId">, domain: string): string | null {
+  if (!c.graduation) return null;
+  const id = c.entryId ?? "";
+  if (!EntryId.safeParse(id).success || !id.startsWith(`kb-${domain}-`)) {
+    throw new Error(`graduation contribution needs entry_id kb-${domain}-<7id> (got "${id}")`);
+  }
+  return id;
 }
 
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
@@ -244,9 +249,9 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       // 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
       // content-similarity to the nearest entry (seeds the alias on commit).
       let targetId: string | undefined;
-      // Graduated work owns exactly one entry, keyed by its work id: update it
-      // if it exists, otherwise create it. Never similarity-merged into another.
-      const ownId = graduatedEntryId(c.denTopicId, domain);
+      // Graduated work owns exactly one entry, named in the contribution: update
+      // it if it exists, otherwise create it. Never similarity-merged.
+      const ownId = graduationEntryId(c, domain);
       if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
       for (const topic of ownId ? [] : reg.values()) {
         const alias = topic.aliases.find(
@@ -271,7 +276,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       // Never merge into an oversized entry (alias or similarity match): the
       // merge rewrites the whole entry. Create a new one instead; its alias is
       // re-pointed on commit.
-      if (targetId) {
+      if (targetId && targetId !== ownId) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         const limit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || SWEEP.maxMergeTargetChars;
         if (size > limit) {
@@ -406,8 +411,12 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       }));
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
-      batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
-      reg = foldRegistry([...log, ...batch]);
+      // Graduations are found by entry_id instead, so the registry never
+      // records a work item id.
+      if (!c.graduation) {
+        batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+        reg = foldRegistry([...log, ...batch]);
+      }
 
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);

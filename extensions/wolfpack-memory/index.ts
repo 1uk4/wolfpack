@@ -44,6 +44,9 @@ import {
   areAllChildrenComplete,
   canGraduate,
   buildContribution,
+  graduationEntryId,
+  featureDossier,
+  graduationFile,
   getWorkSession,
   getFileSession,
   summarizeFileChanges,
@@ -1636,15 +1639,18 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         fs.mkdirSync(inboxDir, { recursive: true });
 
         if (item.kind === "feature") {
-          // Feature: create standalone KB entry
-          const contribution = buildContribution(item, body);
-          const featureEntryId = `kb-${contribution.domain}-${item.id.split("-").pop()}`;
-
-          const contentHash = require("crypto").createHash("sha256").update(contribution.body).digest("hex").slice(0, 16);
-          const mdContent = `---\nfrom: ${wolfName}\nden_topic_id: ${item.id}\nchange: create\ncontent_hash: ${contentHash}\nprev_hash: null\ndomain_hint: ${contribution.domain}\norigin: wolf\ncurrency: live\nsubmitted: ${new Date().toISOString()}\n---\n\n${contribution.body}`;
-
-          const filename = `work-${item.id}-${Date.now()}.md`;
-          fs.writeFileSync(path.join(inboxDir, filename), mdContent);
+          // Feature: a past-tense entry of its own (Dewey writes it from this
+          // dossier with the graduation prompt).
+          const tasks = (queryWork(kbRoots, { partOf: item.id as string }) ?? []).filter((t) => t.kind !== "feature");
+          const file = graduationFile({
+            from: wolfName,
+            item,
+            graduation: "feature",
+            body: featureDossier(item, body, tasks),
+            submitted: new Date(),
+          });
+          fs.writeFileSync(path.join(inboxDir, file.name), file.content);
+          const featureEntryId = graduationEntryId(item);
           linkWork(kbRoots, item.id as any, "graduated_to", featureEntryId);
 
           // Update parent initiative with link to this feature

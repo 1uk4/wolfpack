@@ -9,7 +9,7 @@
  */
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
-import { CRAWL_CONSOLIDATE_SYSTEM, atomicWrite, DIGEST } from "@wolfpack/engine";
+import { CRAWL_CONSOLIDATE_SYSTEM, DIGEST } from "@wolfpack/engine";
 import {
   PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE,
   CRAWL_CONSOLIDATION_USER_PROMPT,
@@ -145,28 +145,6 @@ export function buildCrawlConsolidatePrompt(
   });
 }
 
-export async function consolidateBatch(
-  engine: Engine,
-  args: {
-    topic: string;
-    currency: Currency;
-    observations: CrawlObservation[];
-    existing?: string;
-    digest?: RunningDigest | DigestSection[];
-  }
-): Promise<CrawlTopic> {
-  return engine.call("consolidate", CrawlTopicSchema, {
-    system: CRAWL_CONSOLIDATE_SYSTEM,
-    prompt: buildCrawlConsolidatePrompt(
-      args.topic,
-      args.currency,
-      args.observations,
-      args.existing,
-      args.digest
-    ),
-  });
-}
-
 // ── Temporal stamping (code owns dates) ─────────────────────────────────────
 
 export interface TopicTemporal {
@@ -248,64 +226,74 @@ export function renderTopicDoc(
   return `${fm}\n\n${topic.body}${renderDecisions(topic.events ?? [])}\n`;
 }
 
-/** Consolidate every batch (oldest→newest) and write /tmp/topics/<batch>.md. */
-export async function consolidateCrawl(
+/**
+ * Running digest for one crawl: the published domain digest (what the pack
+ * already knows) plus the topics this crawl has produced so far, so later
+ * batches extend earlier ones instead of restating them. With parallel
+ * batches, "so far" means batches that have already finished.
+ */
+export function createRunningDigest(domain: string, published?: ContextDigest) {
+  const base: ContextDigest = published ?? {
+    domain,
+    generated: "",
+    vocabulary: { kinds: [], facetKeys: [], relationKinds: [] },
+    sections: [],
+    gaps: [],
+  };
+  const produced: DigestSection[] = [];
+  return {
+    /** Snapshot to prime the next batch; undefined when there is nothing yet. */
+    current(): RunningDigest | undefined {
+      return published || produced.length ? mergeRunningDigest(base, produced) : undefined;
+    },
+    /** Record a finished batch; a rerun of the same batch replaces its section. */
+    add(batchId: string, topic: CrawlTopic, currency: Currency): void {
+      const i = produced.findIndex((s) => s.sectionId === batchId);
+      if (i >= 0) produced.splice(i, 1);
+      produced.push({
+        sectionId: batchId,
+        title: topic.title,
+        summary: topic.summary,
+        currency,
+        entryIds: [batchId],
+        children: [],
+      });
+    },
+  };
+}
+export type RunningDigestState = ReturnType<typeof createRunningDigest>;
+
+/**
+ * Consolidate ONE batch into its topic: digest-primed LLM fold, then stamp
+ * dates and write topics/<topic>.md. The single implementation shared by
+ * `run` (parallel, per batch) and `resume` (from saved observations).
+ */
+export async function consolidateTopic(
   engine: Engine,
-  plan: CrawlPlan,
-  observationsByBatch: Map<string, CrawlObservation[]>,
-  datedByPath: Map<string, DatedFile>,
-  sink: CrawlSink,
-  publishedDigest?: ContextDigest
-): Promise<Map<string, CrawlTopic>> {
-  const result = new Map<string, CrawlTopic>();
-  const producedSections: DigestSection[] = [];
-  
-  for (const b of plan.batches) {
-    const obs = observationsByBatch.get(b.topic) ?? [];
-    if (obs.length === 0) {
-      sink.log(`consolidate: ${b.topic} — 0 observations, skipped`);
-      continue;
-    }
-    const currency = b.currency ?? plan.currency;
-    
-    // Build running digest for this batch: published + produced sections from batches 1..N-1
-    const runningDigest = publishedDigest
-      ? mergeRunningDigest(publishedDigest, producedSections)
-      : undefined;
-    
-    const topic = await sink.heartbeat(
-      `consolidating ${b.topic} (${obs.length} obs)`,
-      () => consolidateBatch(engine, { 
-        topic: b.topic, 
-        currency, 
-        observations: obs,
-        digest: runningDigest 
-      })
-    );
-
-    const files = b.files
-      .map((rel) => datedByPath.get(rel))
-      .filter((f): f is DatedFile => !!f);
-    const temporal = computeTemporal(files);
-    const batchId = `crawl-${plan.domain}-${b.topic}`;
-    const doc = renderTopicDoc(batchId, topic, temporal, currency, plan.source);
-
-    sink.file(join("topics", `${b.topic}.md`), doc);
-    sink.log(
-      `consolidate: ${b.topic} — ${obs.length} obs → topic "${topic.title}" ` +
-        `[${temporal.sourceCreated ?? "?"}..${temporal.sourceUpdated ?? "?"} ${temporal.dateBasis}/${temporal.dateConfidence}]`
-    );
-    result.set(b.topic, topic);
-    
-    // Add this batch's topic to produced sections for the next batch's running digest
-    producedSections.push({
-      sectionId: batchId,
-      title: topic.title,
-      summary: topic.summary,
-      currency: currency === "live" ? "live" : currency === "snapshot" ? "snapshot" : "archived",
-      entryIds: [batchId],
-      children: [],
-    });
+  args: {
+    plan: CrawlPlan;
+    topic: string;
+    currency: Currency;
+    observations: CrawlObservation[];
+    files: DatedFile[];
+    sink: CrawlSink;
+    digest?: RunningDigestState;
   }
-  return result;
+): Promise<CrawlTopic> {
+  const { plan, topic: name, currency, observations, files, sink, digest } = args;
+  const topic = await sink.heartbeat(`consolidating ${name} (${observations.length} obs)`, () =>
+    engine.call("consolidate", CrawlTopicSchema, {
+      system: CRAWL_CONSOLIDATE_SYSTEM,
+      prompt: buildCrawlConsolidatePrompt(name, currency, observations, undefined, digest?.current()),
+    })
+  );
+  const temporal = computeTemporal(files);
+  const batchId = `crawl-${plan.domain}-${name}`;
+  sink.file(join("topics", `${name}.md`), renderTopicDoc(batchId, topic, temporal, currency, plan.source));
+  sink.log(
+    `consolidate: ${name} — ${observations.length} obs → topic "${topic.title}" ` +
+      `[${temporal.sourceCreated ?? "?"}..${temporal.sourceUpdated ?? "?"} ${temporal.dateBasis}/${temporal.dateConfidence}]`
+  );
+  digest?.add(batchId, topic, currency);
+  return topic;
 }

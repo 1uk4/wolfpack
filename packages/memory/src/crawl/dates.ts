@@ -8,7 +8,7 @@
  * by content. A confidently-wrong date corrupts the arc — wrong is worse than
  * unknown. (In-content dates are recovered later, by the observer; see spec §7.)
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, basename } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";

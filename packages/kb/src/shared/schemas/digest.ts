@@ -21,7 +21,7 @@
  *
  * ── PATH B · CRAWL (scribe, historical/batch) ────────────────────────────────
  *   Same two priming points, plus three crawl-specific behaviors:
- *     1. EXTEND-THE-REAL-ENTRY: crawl/consolidateBatch(existing) resolves
+ *     1. EXTEND-THE-REAL-ENTRY (not wired): buildCrawlConsolidatePrompt(existing) resolves
  *        `existing` from digest.topics[match] (Dewey's canonical entry) — the
  *        crawl extends kb-<d>-… instead of spawning a near-duplicate.
  *     2. CURRENCY-AWARE: digest topics carry `currency`; a crawl batch is

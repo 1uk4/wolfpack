@@ -40,21 +40,19 @@ export {
   type GateContext,
 } from "./plan.js";
 export { createSink, DEFAULT_SINK_BASE, type CrawlSink } from "./sink.js";
+export { planCrawl, type PlanCrawlOptions, type PlanCrawlResult } from "./plan.js";
 export {
-  planCrawl,
   runCrawl,
   mapWithConcurrencyLimit,
   DEFAULT_CRAWL_CONCURRENCY,
-  type PlanCrawlOptions,
-  type PlanCrawlResult,
-  resumeCrawl,
   type RunCrawlOptions,
   type RunCrawlResult,
   type CrawlProgress,
   type CrawlBatchProgress,
   type CrawlBatchStage,
   type CrawlUsageStats,
-} from "./cli.js";
+} from "./run.js";
+export { resumeCrawl } from "./resume.js";
 export {
   extractBatch,
   chunkText,
@@ -62,8 +60,8 @@ export {
   type ExtractOptions,
 } from "./extract.js";
 export {
-  consolidateBatch,
-  consolidateCrawl,
+  consolidateTopic,
+  createRunningDigest,
   computeTemporal,
   renderTopicDoc,
   renderDecisions,

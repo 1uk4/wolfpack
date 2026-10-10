@@ -17,7 +17,7 @@ import { CRAWL_JOURNEY_SYSTEM } from "@wolfpack/engine";
 import { CRAWL_JOURNEY_USER_PROMPT } from "../config/prompts/consolidations.js";
 import { fillPromptTemplate } from "../config/prompts/template.js";
 import { normalizeDate } from "./dates.js";
-import type { CrawlTopic, CrawlEvent } from "./consolidate.js";
+import type { CrawlTopic } from "./consolidate.js";
 import type { CrawlPlan } from "./schemas.js";
 import type { CrawlSink } from "./sink.js";
 

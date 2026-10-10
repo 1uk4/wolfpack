@@ -1,8 +1,19 @@
 /**
  * Tests for crawl consolidation with running digest support.
  */
-import { describe, it, expect } from "vitest";
-import { mergeRunningDigest, buildCrawlConsolidatePrompt } from "./consolidate.js";
+import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { Engine } from "@wolfpack/engine";
+import {
+  mergeRunningDigest,
+  buildCrawlConsolidatePrompt,
+  createRunningDigest,
+  consolidateTopic,
+} from "./consolidate.js";
+import { createSink } from "./sink.js";
+import type { CrawlPlan, DatedFile } from "./schemas.js";
 import type { ContextDigest, DigestSection } from "@wolfpack/kb/shared";
 import type { CrawlObservation } from "./extract.js";
 
@@ -328,5 +339,60 @@ describe("buildCrawlConsolidatePrompt", () => {
     );
 
     expect(prompt).not.toContain("PACK ALREADY KNOWS");
+  });
+});
+
+describe("createRunningDigest", () => {
+  const topic = (title: string) => ({ title, summary: `${title} summary`, body: "b" });
+
+  it("is empty for a fresh domain until a batch finishes", () => {
+    const d = createRunningDigest("wp");
+    expect(d.current()).toBeUndefined();
+    d.add("crawl-wp-a", topic("A"), "archived");
+    expect(d.current()?.sections.map((s) => s.title)).toEqual(["A"]);
+  });
+
+  it("primes with the published digest and replaces a rerun batch", () => {
+    const published = {
+      domain: "wp",
+      generated: "",
+      vocabulary: { kinds: [], facetKeys: [], relationKinds: [] },
+      sections: [{ sectionId: "sec-1", title: "Pub", summary: "p", currency: "live", entryIds: ["kb-wp-aaaaaaa"], children: [] }],
+      gaps: [],
+    } as unknown as ContextDigest;
+    const d = createRunningDigest("wp", published);
+    expect(d.current()?.sections.map((s) => s.title)).toEqual(["Pub"]);
+
+    d.add("crawl-wp-a", topic("A1"), "snapshot");
+    d.add("crawl-wp-a", topic("A2"), "snapshot");
+    expect(d.current()?.sections.map((s) => s.title)).toEqual(["A2", "Pub"]);
+  });
+});
+
+describe("consolidateTopic", () => {
+  it("primes the prompt with the running digest, writes the topic doc, and records it", async () => {
+    const base = mkdtempSync(join(tmpdir(), "crawl-topic-"));
+    const sink = createSink("t", base, true);
+    const prompts: string[] = [];
+    const engine = {
+      call: vi.fn(async (_step: string, schema: { parse: (v: unknown) => unknown }, req: { prompt: string }) => {
+        prompts.push(req.prompt);
+        return schema.parse({ title: `Topic ${prompts.length}`, summary: "s", body: "current state" });
+      }),
+    } as unknown as Engine;
+    const plan = { domain: "wp", source: "/src", currency: "archived", batches: [] } as unknown as CrawlPlan;
+    const files = [{ relPath: "a.md", dateInfo: { date: "2026-01-02", basis: "frontmatter", confidence: "high" } }] as unknown as DatedFile[];
+    const digest = createRunningDigest("wp");
+    const obs: CrawlObservation[] = [{ batch: "x", relPath: "a.md", sourceDate: "2026-01-02", timestamp: "2026-01-02", content: "fact" }];
+
+    const first = await consolidateTopic(engine, { plan, topic: "alpha", currency: "archived", observations: obs, files, sink, digest });
+    await consolidateTopic(engine, { plan, topic: "beta", currency: "archived", observations: obs, files, sink, digest });
+
+    expect(first.title).toBe("Topic 1");
+    expect(engine.call).toHaveBeenCalledWith("consolidate", expect.anything(), expect.objectContaining({ system: expect.any(String) }));
+    expect(prompts[0]).not.toContain("PACK ALREADY KNOWS");
+    expect(prompts[1]).toContain("PACK ALREADY KNOWS");
+    expect(prompts[1]).toContain("crawl-wp-alpha — Topic 1");
+    expect(readFileSync(join(sink.dir, "topics", "alpha.md"), "utf-8")).toContain("current state");
   });
 });

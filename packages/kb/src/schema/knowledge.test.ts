@@ -93,6 +93,7 @@ describe("Entry schema with section placement", () => {
     detail: "Test detail content",
     confidence: "high" as const,
     facets: {},
+    properties: {},
     proposedRelations: [],
   };
 

@@ -20,6 +20,7 @@ function mockEngine(opinion: Partial<LlmOpinion> = {}): Engine {
     detail: "Test detail content",
     confidence: "high",
     facets: {},
+    properties: {},
     proposedRelations: [],
     ...opinion,
   };

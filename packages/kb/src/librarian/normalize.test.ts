@@ -13,6 +13,7 @@ function makeEntry(overrides: Partial<Entry> = {}): Entry {
     detail: "Test detail",
     confidence: "high",
     facets: {},
+    properties: {},
     section: SectionId.parse("sec-wolfpack-sec001"),
     placement: { basis: "routed", fit: 0.85 },
     relations: [],

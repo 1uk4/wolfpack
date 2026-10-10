@@ -25,9 +25,6 @@ export const JourneyResultSchema = z.object({
   journey: z.string().describe("The full, updated markdown journey (chronological)"),
 });
 
-// Re-export from @wolfpack/engine
-export { CRAWL_JOURNEY_SYSTEM };
-
 export function buildJourneyPrompt(
   domain: string,
   current: string,

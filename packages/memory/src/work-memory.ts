@@ -18,8 +18,6 @@ import {
 } from "./config/prompts/tasks.js";
 import { fillPromptTemplate } from "./config/prompts/template.js";
 
-export { STAGE_CONTEXT, TASK_SUMMARY_SYSTEM };
-
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · WORK SESSION TRACKING
 // ════════════════════════════════════════════════════════════════════════════

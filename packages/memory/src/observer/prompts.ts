@@ -1,18 +1,14 @@
 /**
  * Observer prompts — extracted from OM, agent-agnostic.
- * System prompts are imported from @wolfpack/engine.
+ * System prompts (OBSERVER_SYSTEM, CRAWL_OBSERVER_SYSTEM) live in @wolfpack/engine.
  * This file provides the dynamic prompt builders for live and document modes.
  */
 
-import { OBSERVER_SYSTEM, CRAWL_OBSERVER_SYSTEM } from "@wolfpack/engine";
 import {
   LIVE_OBSERVER_USER_PROMPT,
   CRAWL_OBSERVER_USER_PROMPT,
 } from "../config/prompts/observations.js";
 import { fillPromptTemplate } from "../config/prompts/template.js";
-
-// Re-export for backward compatibility
-export { OBSERVER_SYSTEM, CRAWL_OBSERVER_SYSTEM };
 
 /**
  * Build the observation extraction prompt for a conversation chunk.

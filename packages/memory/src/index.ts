@@ -33,7 +33,6 @@ export {
 export {
   observe,
   observeParallel,
-  OBSERVER_SYSTEM,
   buildObserverPrompt,
   ObserverResultSchema,
   RawObservationSchema,

@@ -5,9 +5,6 @@
  * is appropriate, then prompts the user for confirmation.
  */
 import type { WorkItem } from "@wolfpack/kb/client";
-import { BREAKDOWN_SUGGESTION_SYSTEM } from "../config/prompts/tasks.js";
-
-export { BREAKDOWN_SUGGESTION_SYSTEM };
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · TRANSITION DETECTION RULES

@@ -13,7 +13,6 @@
 export {
   detectTransition,
   extractTransitionContext,
-  BREAKDOWN_SUGGESTION_SYSTEM,
   type TransitionSignal,
   type BreakdownSuggestion,
 } from "./stage-detection.js";
@@ -44,9 +43,8 @@ export {
   type GraduationContext,
 } from "./graduate.js";
 
-// Re-export from work-memory (session tracking, summarization)
+// Session tracking + summarization (prompt text lives in config/prompts/tasks.ts)
 export {
-  STAGE_CONTEXT,
   getStageContext,
   onWorkBound,
   onWorkUnbound,
@@ -59,7 +57,6 @@ export {
   areAllChildrenComplete,
   isComplete,
   processWorkEvent,
-  TASK_SUMMARY_SYSTEM,
   type WorkSession,
   type SummarizeTaskInput,
   type SummarizeTaskResult,

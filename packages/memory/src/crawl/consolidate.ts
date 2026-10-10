@@ -44,9 +44,6 @@ export const CrawlTopicSchema = z.object({
 });
 export type CrawlTopic = z.infer<typeof CrawlTopicSchema>;
 
-// Re-export from @wolfpack/engine
-export { CRAWL_CONSOLIDATE_SYSTEM };
-
 // ── Running digest (crawl-specific) ──────────────────────────────────────────
 
 /**

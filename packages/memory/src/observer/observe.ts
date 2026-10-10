@@ -3,12 +3,8 @@
  * Agent-agnostic: takes an Engine and chunk text, returns observations.
  */
 import type { Engine } from "@wolfpack/engine";
-import {
-  OBSERVER_SYSTEM,
-  buildObserverPrompt,
-  CRAWL_OBSERVER_SYSTEM,
-  buildCrawlObserverPrompt,
-} from "./prompts.js";
+import { OBSERVER_SYSTEM, CRAWL_OBSERVER_SYSTEM } from "@wolfpack/engine";
+import { buildObserverPrompt, buildCrawlObserverPrompt } from "./prompts.js";
 import { ObserverResultSchema, type RawObservation } from "./schemas.js";
 
 export interface ObserveOptions {

@@ -60,12 +60,11 @@ const DEFAULT_CONFIG: CliConfig = {
 export function loadConfig(): CliConfig {
   try {
     const raw = fs.readFileSync(CONFIG_FILE, "utf8");
-    const parsed = yamlParse(raw) as Partial<CliConfig> & { wolfsDir?: string };
+    const parsed = yamlParse(raw) as Partial<CliConfig>;
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
-      // Back-compat: old configs used `wolfsDir`
-      wolvesRoot: parsed.wolvesRoot ?? parsed.wolfsDir ?? DEFAULT_CONFIG.wolvesRoot,
+      wolvesRoot: parsed.wolvesRoot ?? DEFAULT_CONFIG.wolvesRoot,
       hosts: { ...DEFAULT_CONFIG.hosts, ...parsed.hosts },
     };
   } catch {

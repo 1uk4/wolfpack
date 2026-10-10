@@ -77,6 +77,7 @@ function parseContribution(filePath: string): ParsedContribution | null {
         : undefined,
     entryId: fields.entry_id ? String(fields.entry_id) : undefined,
     final: fields.final === true || fields.final === "true" ? true : undefined,
+    partOf: fields.part_of ? String(fields.part_of) : undefined,
     summary: content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",

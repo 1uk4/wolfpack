@@ -164,7 +164,7 @@ export const RelationKind = z.enum([
 export type RelationKind = z.infer<typeof RelationKind>;
 
 /** Provenance of a relation — so we always know who asserted an edge. */
-export const EdgeSource = z.enum(["embedding", "llm", "human"]);
+export const EdgeSource = z.enum(["embedding", "llm", "human", "code"]);
 export type EdgeSource = z.infer<typeof EdgeSource>;
 
 /** Controlled facets replace the free-text `subcategory`. Open map of

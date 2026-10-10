@@ -15,6 +15,7 @@ import {
   type SectionId,
   type Placement,
   type RelationResolver,
+  type Relation,
   assembleEntry,
   DomainId,
   EntryId,
@@ -69,6 +70,13 @@ export function scrubGraduation(opinion: LlmOpinion, graduation: "feature" | "hu
     detail: strip(opinion.detail),
     ...(graduation === "hub" ? { kind: { type: "overview" } } : {}),
   });
+}
+
+/** The part_of edge a graduated feature carries to its initiative's hub. */
+export function graduationRelations(c: Pick<ParsedContribution, "graduation" | "partOf">): Relation[] {
+  if (c.graduation !== "feature" || !c.partOf) return [];
+  const target = EntryId.safeParse(c.partOf);
+  return target.success ? [{ kind: "part_of", target: target.data, source: "code", weight: 1 }] : [];
 }
 
 /**
@@ -127,7 +135,9 @@ export async function produceEntry(
     contentHash: contentHashValue,
     currency: contribution.currency === "archived" ? "archived" : "live",
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
-    relations: [], // Embedding-derived see_also relations would go here (Phase 2 integration)
+    // Structural links the sender named (a graduated feature → its hub). Code
+    // writes them; the hub's id is fixed, so it may not exist yet.
+    relations: graduationRelations(contribution),
     section,
     placement,
   };

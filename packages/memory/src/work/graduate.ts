@@ -154,9 +154,11 @@ export function graduationFile(opts: {
   graduation: "feature" | "hub";
   body: string;
   final?: boolean;
+  /** Feature under an initiative: the initiative, whose hub it is part_of. */
+  initiative?: Pick<WorkItem, "id" | "domain">;
   submitted: Date;
 }): GraduationFile {
-  const { from, item, graduation, body, final, submitted } = opts;
+  const { from, item, graduation, body, final, initiative, submitted } = opts;
   // The sweep skips content it has seen: a final hub can have the same body as
   // the last update, so "final" is part of what is hashed.
   const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${body}`).digest("hex").slice(0, 16);
@@ -173,6 +175,7 @@ export function graduationFile(opts: {
     `graduation: ${graduation}`,
     `entry_id: ${graduationEntryId(item)}`,
     ...(final ? ["final: true"] : []),
+    ...(initiative ? [`part_of: ${graduationEntryId(initiative)}`] : []),
     `submitted: ${submitted.toISOString()}`,
     "---",
   ];
@@ -214,13 +217,20 @@ export function graduationFiles(opts: {
   if (item.kind === "initiative") return [hub(item, true, 0)];
 
   const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
+  const parent = hubOf(item, all);
   const files = [
-    graduationFile({ from, item, graduation: "feature", body: featureDossier(item, bodyOf(item), tasks), submitted: at(0) }),
+    graduationFile({
+      from,
+      item,
+      graduation: "feature",
+      body: featureDossier(item, bodyOf(item), tasks),
+      initiative: parent,
+      submitted: at(0),
+    }),
   ];
-  const parent = item.partOf ? all.find((p) => p.id === item.partOf) : undefined;
   // The hub is sent after the feature, so Dewey has written the feature entry
   // (and can read its summary) by the time it writes the hub.
-  if (parent?.kind === "initiative") files.push(hub(parent, false, 1));
+  if (parent) files.push(hub(parent, false, 1));
   return files;
 }
 

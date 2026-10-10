@@ -35,6 +35,8 @@ describe("graduationFiles", () => {
     const [feat, hub] = files(f2);
     expect(feat.content).toMatch(/graduation: feature\nentry_id: kb-wp-/);
     expect(feat.content).toContain("added Dockerfile");
+    expect(feat.content).toContain(`part_of: kb-wp-${init.id.split("-").pop()}`);
+    expect(hub.content).not.toContain("part_of:");
     expect(hub.content).toMatch(new RegExp(`graduation: hub\\nentry_id: kb-wp-${init.id.split("-").pop()}`));
     expect(hub.content).toContain(`[[kb-wp-${f1.id.split("-").pop()}]] Base image`);
     expect(hub.content).toContain(`[[kb-wp-${f2.id.split("-").pop()}]] Compose`);
@@ -45,6 +47,7 @@ describe("graduationFiles", () => {
 
   it("a standalone feature sends only its entry; an initiative sends its final hub", () => {
     expect(files(solo)).toHaveLength(1);
+    expect(files(solo)[0].content).not.toContain("part_of:");
     const [hub] = files(init);
     expect(hub.content).toContain("final: true");
   });
@@ -119,6 +122,13 @@ describe("graduation flow through the real sweep", () => {
     const f2g = { ...f2, graduated: "2026-10-10" } as WorkItem;
     expect(await graduate(init, [init, f1g, f2g])).toMatchObject({ created: 0, merged: 1 });
     expect(calls[0].prompt).toContain("THE INITIATIVE IS COMPLETE");
+
+    // Each feature entry is part_of the hub (code-written); the hub links nothing.
+    const hubId = `kb-wp-${init.id.split("-").pop()}`;
+    for (const f of [f1, f2]) {
+      expect(readFileSync(entry(f.id), "utf8")).toContain(`  - kind: part_of\n    target: ${hubId}\n    source: code`);
+    }
+    expect(readFileSync(entry(init.id), "utf8")).not.toMatch(/^relations:/m);
 
     // Nothing in the KB names a work item.
     for (const id of [f1.id, f2.id, init.id]) expect(readFileSync(entry(id), "utf8")).not.toMatch(/work-wp-/);

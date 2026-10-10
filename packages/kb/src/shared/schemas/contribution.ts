@@ -66,6 +66,9 @@ export const ContributionSchema = z.object({
   entryId: z.string().optional(),
   /** Hub only: the initiative is complete (adds an outcome summary). */
   final: z.boolean().optional(),
+  /** Feature only: the hub entry it belongs to (its initiative's), linked
+   *  part_of by code. Named by the sender, like entryId. */
+  partOf: z.string().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

@@ -54,6 +54,7 @@ import {
   shouldConfirmShip,
   readyToGraduate,
   graduationCascade,
+  workspaceHeader,
   initialState,
   reduce,
   leftRows,
@@ -403,6 +404,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   let activeTask: ActiveTaskState | null = readActiveTask(wolfDen);
   let activeItem: WorkItem | null = null;
+  /** The feature this session works in. Kept when a task is unbound, so new
+   *  tasks still land there; set by binding a task or opening a feature in /task. */
+  let workspaceId: string | null = null;
 
   function refreshActiveItem(): WorkItem | null {
     if (!activeTask) { activeItem = null; return null; }
@@ -415,6 +419,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       activeTask = null;
       writeActiveTask(wolfDen, null);
     }
+    if (activeItem?.partOf && !workspaceId) workspaceId = activeItem.partOf as string;
     return activeItem;
   }
 
@@ -454,6 +459,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       boundAt: new Date().toISOString(),
     };
     writeActiveTask(wolfDen, activeTask);
+    if (item.partOf) workspaceId = item.partOf as string;
 
     // Start tracking
     startFileTracking(item.id);
@@ -535,7 +541,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   pi.on("before_agent_start", (event: any, _ctx: any) => {
     refreshActiveItem();
-    if (!activeItem || !activeTask) return;
+    const all = queryWork(roots, {}) ?? [];
+    if (!activeItem || !activeTask) {
+      // No task bound: still tell the agent which workspace new tasks go to.
+      const header = workspaceHeader(workspaceId, all, null);
+      if (!header) return;
+      return {
+        systemPrompt: event.systemPrompt + "\n<workspace>\n" + header +
+          "\nNo task is bound. New tasks created with task_create go into this feature unless partOf is given.\n</workspace>\n",
+      };
+    }
 
     // Read the working document body
     const resolved = resolveWorkItem(roots, activeTask.domain, activeTask.workId);
@@ -548,8 +563,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     if (activeItem.successCriteria) {
       parts.push(`done_when: ${activeItem.successCriteria}`);
     }
-    if (activeItem.partOf) {
-      parts.push(`part_of: ${activeItem.partOf}`);
+    const header = workspaceHeader(activeItem.partOf as string | null, all, activeItem.id as string);
+    if (header) {
+      parts.push("");
+      parts.push(header);
     }
 
     // The working document — the agent reads and writes this
@@ -656,6 +673,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (nav) {
               const { state, effect } = reduce(sel, nav, items, activeTask?.workId ?? null);
               sel = state;
+              if (sel.openId) workspaceId = sel.openId;
               apply(effect);
               refresh();
               return;
@@ -1069,7 +1087,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_create",
-      description: "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. A task/issue/spike with no partOf goes into the bound task's feature, or the domain's Inbox if none is bound. Features may be standalone or under an initiative.",
+      description: "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. A task/issue/spike with no partOf goes into the current workspace (the bound task's feature, or the last feature worked in this session), else the domain's Inbox. Features may be standalone or under an initiative.",
       parameters: Type.Object({
         kind: Type.String({ description: "idea | initiative | feature | task | issue | spike" }),
         domain: Type.String({ description: "Domain: snapjack | wolfpack | personal" }),
@@ -1089,7 +1107,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           successCriteria: params.successCriteria,
           // Work units default to the bound task's workspace (its feature);
           // createWork files them in the Inbox when there is none.
-          partOf: params.partOf ?? (isBindable({ kind: params.kind as any }) ? activeItem?.partOf : null),
+          partOf: params.partOf ?? (isBindable({ kind: params.kind as any }) ? activeItem?.partOf ?? workspaceId : null),
         };
         try {
           const result = createWork(roots, input);

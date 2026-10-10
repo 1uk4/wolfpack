@@ -40,6 +40,9 @@ export {
   type Pane,
 } from "./selector.js";
 
+// Workspace context for the agent
+export { workspaceHeader } from "./workspace.js";
+
 // File observation
 export {
   startFileTracking,

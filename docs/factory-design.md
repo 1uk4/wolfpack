@@ -125,8 +125,13 @@ work.bound · work.unbound · work.summarized
   (wizard), `m` move, `D` depend (valid targets only; picking an existing one
   removes it), `x` delete, `g` graduate a shipped feature.
 - **Binding** a task injects an `<active_task>` block into the system prompt
-  (title, stage, `done_when`, working document, recent log, stage guidance) and
-  advances its ancestors to `in_build`. File changes are tracked while bound.
+  (title, stage, `done_when`, a read-only **workspace** header — feature, its
+  initiative, its done-when, progress and open tasks — then the working
+  document, recent log and stage guidance) and advances its ancestors to
+  `in_build`. File changes are tracked while bound.
+- **The session workspace** (the bound task's feature, or the last feature opened
+  in `/task`) survives unbinding: a `<workspace>` block stays in the prompt and
+  `task_create` still files new tasks there.
 - **Agent tools:** `task_create` (a work unit defaults into the bound task's
   feature, else the Inbox), `task_query`, `task_update` (working document),
   `task_note`, `task_stage`, `task_link`, `task_unlink`, `task_move`, `task_done` (ship the bound

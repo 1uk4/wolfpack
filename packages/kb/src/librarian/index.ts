@@ -30,6 +30,7 @@ export {
   gitCommit,
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";
+export { withBudget, BudgetExceeded, park, unpark, listParked } from "./park.js";
 export {
   readDeclaredDomains,
   isDeclared,

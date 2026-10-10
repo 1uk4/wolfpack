@@ -68,6 +68,7 @@ import {
 import { renderDomainDigest } from "./librarian/domains.js";
 import { labelSection, sectionSummary, type SectionMember } from "./librarian/summarize.js";
 import { retireEntries } from "./librarian/retire.js";
+import { unpark, listParked } from "./librarian/park.js";
 import { ev, type KbEvent } from "./shared/index.js";
 import type { Section, SectionId, DomainId } from "./schema/knowledge.js";
 import { parseFrontmatter } from "@wolfpack/engine";
@@ -269,6 +270,7 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
     };
     const suggested = new Set<string>();
     const failures: { from: string; denTopicId: string; reason: string }[] = [];
+    const parked: { from: string; denTopicId: string; reason: string }[] = [];
     let pass = 0;
     let stillPending = pending.total;
 
@@ -291,6 +293,7 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
       tot.errors += r.errors;
       for (const d of r.suggestedDomains) suggested.add(d);
       for (const f of r.failures) failures.push(f);
+      for (const p of r.parked) parked.push(p);
 
       console.log(
         `pass ${pass}: ${r.processed} processed · ${r.created}c ${r.merged}m ` +
@@ -331,11 +334,23 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
         list.push(`${f.from}/${f.denTopicId}`);
         byReason.set(f.reason, list);
       }
-      console.log(`\n⚠ ${failures.length} contribution(s) skipped (still in inbox):`);
+      console.log(`\n⚠ ${failures.length} contribution(s) skipped (still in inbox, will retry):`);
       for (const [reason, items] of byReason) {
         console.log(`  • ${reason}`);
         for (const it of items) console.log(`      - ${it}`);
       }
+    }
+
+    if (parked.length) {
+      console.log(`\n⛔ ${parked.length} contribution(s) parked (run \`wolfpack-kb unpark\` to retry):`);
+      for (const p of parked) console.log(`  • ${p.from}/${p.denTopicId} — ${p.reason}`);
+      await tg(
+        [
+          `\u26d4 *Dewey KB sweep* parked ${parked.length} contribution(s)`,
+          ...parked.map((p) => `\u2022 ${p.from}/${p.denTopicId}: ${p.reason}`),
+          `Retry with \`wolfpack-kb unpark\` once fixed.`,
+        ].join("\n")
+      );
     }
 
     console.log(engine.usage.summarize());
@@ -868,6 +883,25 @@ async function cmdRetire(): Promise<void> {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// unpark — send parked contributions back to the inbox for the next sweep
+// ════════════════════════════════════════════════════════════════════════════
+
+async function cmdUnpark(): Promise<void> {
+  const roots = resolveRoots();
+  const arg = process.argv.slice(3).find((a) => !a.startsWith("--"));
+  if (process.argv.includes("--list") || (!arg && !process.argv.includes("--all"))) {
+    const items = listParked(roots);
+    if (!items.length) console.log("nothing parked");
+    for (const p of items) console.log(`${p.wolf}/${p.file}`);
+    if (items.length) console.log(`\nunpark one with: unpark <wolf>/<file>  ·  all with: unpark --all`);
+    return;
+  }
+  const moved = unpark(roots, arg);
+  for (const p of moved) console.log(`unparked ${p.wolf}/${p.file}`);
+  console.log(moved.length ? `${moved.length} back in the inbox; the next sweep retries them` : `no parked item matches ${arg}`);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0] ?? "sweep";
@@ -892,9 +926,12 @@ async function main(): Promise<void> {
     case "retire":
       await cmdRetire();
       break;
+    case "unpark":
+      await cmdUnpark();
+      break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run]`
+        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run] | unpark [<wolf>/<file> | <wolf> | --all | --list]`
       );
       process.exit(1);
   }

@@ -31,6 +31,7 @@ import {
 } from "./commit.js";
 import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, isDeclared } from "./domains.js";
 import { readSections, writeSections } from "./sections.js";
+import { withBudget, BudgetExceeded, recordFailure, clearAttempts, park } from "./park.js";
 import {
   DomainId,
   SectionId,
@@ -68,8 +69,10 @@ export interface SweepResult {
   unclassified: number;
   suggestedDomains: string[];
   /** Per-contribution failures (concise reasons), so callers can surface them
-   *  instead of leaving them buried in notify() log lines. */
+   *  instead of leaving them buried in notify() log lines. Still in the inbox. */
   failures: SweepFailure[];
+  /** Contributions moved to parked/ this run (over budget or out of attempts). */
+  parked: SweepFailure[];
   /** Contributions left in the inbox after this batched run (await next tick). */
   remaining: number;
 }
@@ -124,7 +127,9 @@ function clampFit(x: number): number {
 export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
   const embedder = createEmbedder(roots);
-  const oracles = createOracles(engine);
+  const startedAt = Date.now();
+  const itemBudgetMs = Number(process.env.KB_SWEEP_ITEM_BUDGET_MS) || SWEEP.itemBudgetMs;
+  const runBudgetMs = Number(process.env.KB_SWEEP_RUN_BUDGET_MS) || SWEEP.runBudgetMs;
 
   const log = readLedger(roots);
   let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
@@ -144,6 +149,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     unclassified: 0,
     suggestedDomains: [],
     failures: [],
+    parked: [],
     remaining: 0,
   };
 
@@ -166,14 +172,27 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   const contributions = pending.slice(0, batchSize);
   result.remaining = Math.max(0, pending.length - contributions.length);
 
-  for (const c of contributions) {
+  for (const [i, c] of contributions.entries()) {
     if (seen.has(c.contentHash)) {
       markProcessed(c);
       continue;
     }
+    if (Date.now() - startedAt > runBudgetMs) {
+      // Leave the rest for the next tick; this run still persists what it did.
+      result.remaining += contributions.length - i;
+      ctx.notify?.(`sweep: run budget reached, ${contributions.length - i} left for the next tick`);
+      break;
+    }
     result.processed++;
 
     try {
+      await withBudget(itemBudgetMs, async (signal) => {
+      // Every LLM call for this contribution is cancelled when its budget ends.
+      const itemEngine: Engine = {
+        ...engine,
+        call: (step, schema, opts) => engine.call(step, schema, { ...opts, signal }),
+      };
+      const oracles = createOracles(itemEngine);
       const domain = c.domainHint || "wolfpack";
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
@@ -182,7 +201,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
         markProcessed(c);
         result.unclassified++;
-        continue;
+        return;
       }
 
       // ── EMBED ───────────────────────────────────────────────────────────
@@ -231,7 +250,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
           );
           markProcessed(c);
           result.rejected++;
-          continue;
+          return;
         }
       }
 
@@ -304,7 +323,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         ? readEntryMarkdown(roots, domain, targetId) ?? undefined
         : undefined;
 
-      const { entry, action } = await produceEntry(engine, {
+      const { entry, action } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
         section: sectionId,
@@ -341,12 +360,23 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       touchedDomains.add(domain);
       if (action === "create") result.created++;
       else result.merged++;
+      });
+      clearAttempts(roots, c.contentHash);
     } catch (err) {
       const reason = cleanError(err);
-      ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} — ${reason}`);
-      result.failures.push({ from: c.from, denTopicId: c.denTopicId, reason });
       result.processed--;
       result.errors++;
+      const attempts = err instanceof BudgetExceeded ? SWEEP.maxAttempts : recordFailure(roots, c, reason);
+      if (attempts >= SWEEP.maxAttempts) {
+        // Over budget (expensive and likely to repeat) or out of attempts: park it.
+        const why = err instanceof BudgetExceeded ? reason : `failed ${attempts} times: ${reason}`;
+        park(roots, c, why);
+        ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
+        result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });
+      } else {
+        ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} (attempt ${attempts}/${SWEEP.maxAttempts}) — ${reason}`);
+        result.failures.push({ from: c.from, denTopicId: c.denTopicId, reason });
+      }
     }
   }
 

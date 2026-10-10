@@ -49,6 +49,7 @@ export class AnthropicAdapter implements KnowledgeAdapter {
     const systemWithSchema = buildSystemWithSchema(options.system, schema);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      options.signal?.throwIfAborted();
       const messages: Anthropic.MessageParam[] = [];
 
       if (attempt === 0) {
@@ -72,13 +73,16 @@ export class AnthropicAdapter implements KnowledgeAdapter {
         });
       }
 
-      const response = await this.client.messages.create({
-        model: options.model,
-        max_tokens: options.maxTokens ?? 4096,
-        temperature: options.temperature ?? 0,
-        system: systemWithSchema,
-        messages,
-      });
+      const response = await this.client.messages.create(
+        {
+          model: options.model,
+          max_tokens: options.maxTokens ?? 4096,
+          temperature: options.temperature ?? 0,
+          system: systemWithSchema,
+          messages,
+        },
+        options.signal ? { signal: options.signal } : undefined
+      );
 
       // Track usage
       totalInput += response.usage.input_tokens;

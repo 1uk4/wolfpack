@@ -45,7 +45,7 @@ export interface Engine {
   call<T>(
     step: PipelineStep,
     schema: z.ZodType<T>,
-    options: { system: string; prompt: string }
+    options: { system: string; prompt: string; signal?: AbortSignal }
   ): Promise<T>;
 }
 
@@ -59,7 +59,7 @@ export function createEngine(config: EngineConfig): Engine {
   async function call<T>(
     step: PipelineStep,
     schema: z.ZodType<T>,
-    options: { system: string; prompt: string }
+    options: { system: string; prompt: string; signal?: AbortSignal }
   ): Promise<T> {
     const modelConfig = resolveModel(config, step);
 
@@ -69,6 +69,7 @@ export function createEngine(config: EngineConfig): Engine {
       model: modelConfig.model,
       temperature: modelConfig.temperature,
       maxTokens: modelConfig.maxTokens,
+      signal: options.signal,
     });
 
     // Tag the usage record with the step name

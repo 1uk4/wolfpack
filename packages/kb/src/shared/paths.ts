@@ -41,6 +41,9 @@ export const inboxDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "inbox", wolf);
 export const receiptsDir = (r: KbRoots, wolf: string) =>
   join(r.opsRoot, "receipts", wolf);
+/** Contributions the sweep gave up on (over budget / repeated failures). Not synced. */
+export const parkedDir = (r: KbRoots, wolf: string) =>
+  join(r.opsRoot, "parked", wolf);
 
 // ── den-local (Dewey's brain, never synced) ─────────────────────────────────
 export const ledgerFile = (r: KbRoots) =>

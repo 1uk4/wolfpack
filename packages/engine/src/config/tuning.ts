@@ -40,6 +40,13 @@ export const SWEEP = {
    *  real re-promote scored below it and duplicated). Calibrate against real
    *  re-promotes on Dewey; the old v1 estimate was ~0.75 for "same topic". */
   mergeSim: 0.72,
+  /** Max time one contribution may take (embed + LLM calls). Over it → parked. */
+  itemBudgetMs: 180_000,
+  /** Failed attempts (across ticks) before a contribution is parked. */
+  maxAttempts: 3,
+  /** Stop starting new contributions after this long, so a run always ends
+   *  (and writes its ledger) well inside systemd's 15-minute limit. */
+  runBudgetMs: 600_000,
 } as const;
 
 export const HIERARCHY = {

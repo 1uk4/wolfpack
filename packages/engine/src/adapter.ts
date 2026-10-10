@@ -22,6 +22,8 @@ export interface ExtractOptions {
   maxTokens?: number;
   /** Max retries on validation failure (default: 2) */
   maxRetries?: number;
+  /** Cancels the request (and any retries) when aborted. */
+  signal?: AbortSignal;
 }
 
 /**

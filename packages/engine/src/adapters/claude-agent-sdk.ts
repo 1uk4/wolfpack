@@ -92,6 +92,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     let totalOutput = 0;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      options.signal?.throwIfAborted();
       const prompt =
         attempt === 0
           ? options.prompt
@@ -163,9 +164,17 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     outputTokens: number;
     resultError?: string;
   }> {
+    // Tie the SDK's own controller to the caller's signal, so aborting stops
+    // the claude subprocess rather than leaving it running.
+    const abortController = new AbortController();
+    const onAbort = () => abortController.abort(options.signal?.reason);
+    if (options.signal?.aborted) onAbort();
+    else options.signal?.addEventListener("abort", onAbort, { once: true });
+
     const sdkQuery = query({
       prompt,
       options: {
+        abortController,
         cwd: process.cwd(),
         env: { ...process.env, ...CC_CHILD_ENV },
         // A plain string systemPrompt is a *custom* prompt — no coding-agent
@@ -191,6 +200,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     let inputTokens = 0;
     let outputTokens = 0;
 
+    try {
     for await (const message of sdkQuery) {
       if (message.type === "assistant") {
         for (const block of message.message?.content ?? []) {
@@ -212,6 +222,10 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
         }
       }
     }
+    } finally {
+      options.signal?.removeEventListener("abort", onAbort);
+    }
+    options.signal?.throwIfAborted();
 
     return {
       text: finalText || assistantText,

@@ -96,6 +96,9 @@ export const DIGEST = {
   /** Max topics actually injected into a single consolidation prompt (the
    *  relevant subset for the topics being consolidated). */
   maxPrimedTopics: 8,
+  /** Max top-level section titles listed per domain in a wolf's <kb_access>
+   *  pointer (titles only — the wolf reads INDEX.md for detail). */
+  maxPointerSections: 12,
   /** Include the gap list once the health loop lands. */
   includeGaps: false,
 } as const;

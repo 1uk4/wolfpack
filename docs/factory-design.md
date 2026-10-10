@@ -156,8 +156,9 @@ work.bound · work.unbound · work.summarized
    🎓 *ready* (left pane, and a banner in its task pane), and `task_done` says so.
    Nothing graduates automatically.
 3. **Graduate with `g`** → confirms first, explaining what happens; then ships the
-   feature, writes a contribution to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`)
-   and records `graduatedTo`. If it is the last feature of its **initiative** to
+   feature, writes a contribution to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`),
+   records `graduatedTo`, and **archives** the feature and its tasks (they leave
+   `/task`; the ledger keeps their history). Nothing is archived if graduation fails. If it is the last feature of its **initiative** to
    graduate, the confirmation says so and the initiative ships and graduates too.
 4. **Dewey's sweep** turns the contribution into a curated entry like any other.
 

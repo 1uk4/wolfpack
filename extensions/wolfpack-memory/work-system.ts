@@ -54,6 +54,7 @@ import {
   shouldConfirmShip,
   readyToGraduate,
   graduationCascade,
+  archiveSet,
   workspaceHeader,
   initialState,
   reduce,
@@ -930,9 +931,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           return;
         }
         const parent = item.kind === "feature" ? graduationCascade(item, all) : undefined;
-        const what = item.kind === "feature"
+        const archived = archiveSet(item, all);
+        const tasks = archived.length - 1;
+        const what = (item.kind === "feature"
           ? "Ships the feature and sends it to Dewey as a knowledge base entry."
-          : "Ships the initiative and sends it to Dewey as a knowledge base entry.";
+          : "Ships the initiative and sends it to Dewey as a knowledge base entry.") +
+          ` Then archives it${tasks ? ` and its ${tasks} remaining item(s)` : ""}: they leave /task (history is kept).`;
         const cascade = parent
           ? ` It is the last feature in "${parent.title}" to graduate, so that initiative ships and graduates too.`
           : "";
@@ -943,7 +947,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           if (!isComplete(item)) noteWork(roots, item.id, "Shipped for graduation: all tasks complete.");
           ctx.ui.notify(`Graduating ${item.title}…`, "info");
           await config.onReadyToGraduate(shippedItem);
-          ctx.ui.notify(`🎓 ${item.title} graduated${parent ? `, and so did ${parent.title}` : ""}.`, "info");
+          // Graduated work is past tense: archive it and what it contained.
+          for (const a of archived) stageWork(roots, a.id, "archived");
+          noteWork(roots, item.id, `Archived on graduation${tasks ? ` with ${tasks} item(s)` : ""}.`);
+          if (activeTask && archived.some((a) => a.id === activeTask!.workId)) unbindTask(ctx);
+          refreshActiveItem();
+          updateWidget(ctx);
+          ctx.ui.notify(`🎓 ${item.title} graduated and archived${parent ? `, and so did ${parent.title}` : ""}.`, "info");
         } catch (e: any) {
           ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
         }

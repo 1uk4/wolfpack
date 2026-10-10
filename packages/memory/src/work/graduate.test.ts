@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { WorkItem } from "@wolfpack/kb/client";
-import { featureDossier, graduationFile, graduationEntryId } from "./graduate.js";
+import { featureDossier, graduationFile, graduationEntryId, archiveSet } from "./graduate.js";
 
 const item = (over: Partial<WorkItem>) =>
   ({ id: "work-wp-Feat001", kind: "feature", domain: "wp", title: "Feat", successCriteria: null, log: [], ...over }) as unknown as WorkItem;
@@ -33,5 +33,17 @@ describe("graduation contributions", () => {
     expect(f.name).toBe("grad-hub-work-wp-Feat001-0.md");
     expect(f.content).toMatch(/graduation: hub\nentry_id: kb-wp-Feat001\nfinal: true\n/);
     expect(f.content).toContain("den_topic_id: work-wp-Feat001");
+  });
+});
+
+describe("archiveSet", () => {
+  it("is the item plus everything under it not already archived", () => {
+    const init = item({ id: "work-wp-Init001", kind: "initiative", stage: "in_build" } as any);
+    const f = item({ id: "work-wp-Feat001", partOf: init.id, stage: "shipped" } as any);
+    const t1 = item({ id: "work-wp-Task001", kind: "task", partOf: f.id, stage: "shipped" } as any);
+    const t2 = item({ id: "work-wp-Task002", kind: "task", partOf: f.id, stage: "archived" } as any);
+    const all = [init, f, t1, t2];
+    expect(archiveSet(f, all).map((i) => i.id)).toEqual([f.id, t1.id]);
+    expect(archiveSet(init, all).map((i) => i.id)).toEqual([init.id, f.id, t1.id]);
   });
 });

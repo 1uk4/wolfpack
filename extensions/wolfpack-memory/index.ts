@@ -1622,13 +1622,15 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     },
 
     // Handle feature/initiative ready to graduate
+    // Throws on failure, so the caller (g in /task) only archives work that
+    // actually reached the inbox.
     onReadyToGraduate: async (item) => {
       if (!kbEnabled) {
-        return;
+        throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
       }
 
       if (!canGraduate(item)) {
-        return;
+        throw new Error(`${item.title} is not eligible to graduate (stage ${item.stage})`);
       }
 
       try {
@@ -1695,6 +1697,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         
       } catch (e: any) {
         console.error(`[work] Failed to graduate: ${e.message}`);
+        throw e;
       }
     },
   };

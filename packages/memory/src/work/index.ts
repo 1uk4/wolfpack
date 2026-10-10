@@ -65,6 +65,7 @@ export {
   needsParentFirst,
   buildContribution,
   graduationEntryId,
+  archiveSet,
   featureDossier,
   graduationFile,
   type GraduationFile,

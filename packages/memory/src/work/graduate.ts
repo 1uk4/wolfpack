@@ -183,6 +183,21 @@ function cleanBodyForKB(body: string, item: WorkItem): string {
 // 2b · GRADUATION CONTRIBUTIONS (what the wolf sends Dewey)
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * What graduating `item` archives: the item and everything under it that is
+ * not archived yet (a feature's tasks; an initiative's remaining children).
+ * Archived work leaves /task; its ledger history stays.
+ */
+export function archiveSet(item: WorkItem, all: WorkItem[]): WorkItem[] {
+  const out: WorkItem[] = [];
+  const walk = (i: WorkItem) => {
+    if (i.stage !== "archived") out.push(i);
+    for (const child of all.filter((c) => c.partOf === i.id)) walk(child);
+  };
+  walk(item);
+  return out;
+}
+
 /** The KB entry a graduated work item owns: kb-<domain>-<its 7-char id>. */
 export function graduationEntryId(item: Pick<WorkItem, "id" | "domain">): string {
   return `kb-${item.domain}-${String(item.id).split("-").pop()}`;

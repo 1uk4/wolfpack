@@ -81,3 +81,49 @@ describe("sweep: graduated work creates its own entry", () => {
     expect(prompts[0]).toContain("EXISTING ENTRY (kb-wp-BIGBIG1)");
   });
 });
+
+describe("sweep: never merges into oversized entries", () => {
+  let base: string;
+  let roots: KbRoots;
+  const notes: string[] = [];
+  const inbox = () => join(roots.opsRoot, "inbox", "w1");
+  const entries = () => join(roots.kbBase, "domains", "wp", "entries");
+  const engine = {
+    call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }) =>
+      step === "classifyToSection"
+        ? schema.parse({ section: "NEW", confidence: "low" })
+        : schema.parse({ title: "Topic", kind: { type: "fact" }, summary: "s", detail: "d", confidence: "high", facets: {}, properties: {}, proposedRelations: [] })),
+    usage: { summarize: () => ({}) },
+  } as unknown as Engine;
+
+  beforeEach(() => {
+    notes.length = 0;
+    base = mkdtempSync(join(tmpdir(), "kb-size-"));
+    roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    mkdirSync(inbox(), { recursive: true });
+    mkdirSync(entries(), { recursive: true });
+    vi.stubEnv("KB_MAX_MERGE_TARGET_CHARS", "500");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
+    writeFileSync(join(inbox(), "t.md"), "---\nfrom: w1\nden_topic_id: some-topic\ncontent_hash: hx\nprev_hash: null\ndomain_hint: wp\n---\n\n# t\n\nbody\n");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  const run = () =>
+    sweep({ engine, roots, notify: (m) => notes.push(m),
+      loadEntryVectors: async () => [{ entryId: "kb-wp-TARGET1", domain: "wp", vector: [1, 0, 0] } as any] });
+
+  it("creates a new entry when the best match is over the limit", async () => {
+    writeFileSync(join(entries(), "kb-wp-TARGET1.md"), "---\nid: kb-wp-TARGET1\nsection: sec-wp-aaaaaa\n---\n" + "x".repeat(600));
+    expect(await run()).toMatchObject({ created: 1, merged: 0 });
+    expect(notes.some((n) => n.includes("not merged into kb-wp-TARGET1"))).toBe(true);
+  });
+
+  it("still merges into a match under the limit", async () => {
+    writeFileSync(join(entries(), "kb-wp-TARGET1.md"), "---\nid: kb-wp-TARGET1\nsection: sec-wp-aaaaaa\n---\nsmall");
+    expect(await run()).toMatchObject({ created: 0, merged: 1 });
+  });
+});

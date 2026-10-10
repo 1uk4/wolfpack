@@ -40,6 +40,9 @@ export const SWEEP = {
    *  real re-promote scored below it and duplicated). Calibrate against real
    *  re-promotes on Dewey; the old v1 estimate was ~0.75 for "same topic". */
   mergeSim: 0.72,
+  /** Entries larger than this (markdown chars) are never merge targets: merging
+   *  rewrites the whole entry, so cost and latency grow with its size. */
+  maxMergeTargetChars: 16_000,
   /** Max time one contribution may take (embed + LLM calls). Over it → parked. */
   itemBudgetMs: 180_000,
   /** Failed attempts (across ticks) before a contribution is parked. */

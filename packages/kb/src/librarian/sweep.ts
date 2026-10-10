@@ -247,6 +247,19 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         if (near && near.score >= SWEEP.mergeSim) targetId = near.id;
       }
 
+      // ── SIZE GUARD ──────────────────────────────────────────────────────
+      // Never merge into an oversized entry (alias or similarity match): the
+      // merge rewrites the whole entry. Create a new one instead; its alias is
+      // re-pointed on commit.
+      if (targetId) {
+        const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
+        const limit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || SWEEP.maxMergeTargetChars;
+        if (size > limit) {
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry, not merged into ${targetId} (${size} chars > ${limit})`);
+          targetId = undefined;
+        }
+      }
+
       // ── ARCHIVE-SAFETY ──────────────────────────────────────────────────
       // An ARCHIVED contribution (e.g. a historical crawl) must never supersede
       // a NEWER LIVE entry: back-filled history cannot overwrite current truth.

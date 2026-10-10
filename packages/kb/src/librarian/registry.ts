@@ -42,10 +42,11 @@ function renderTopic(t: RegistryTopic): string[] {
 
 /**
  * Render one `_registry.md` per domain from the folded registry. Returns the
- * list of domains written.
+ * list of domains written. `alsoDomains` are written even with no topics left
+ * (otherwise a domain emptied by retirement keeps its stale registry).
  */
-export function renderRegistry(roots: KbRoots, reg: Registry): string[] {
-  const byDomain = new Map<string, RegistryTopic[]>();
+export function renderRegistry(roots: KbRoots, reg: Registry, alsoDomains: string[] = []): string[] {
+  const byDomain = new Map<string, RegistryTopic[]>(alsoDomains.map((d) => [d, []]));
   for (const t of reg.values()) {
     const d = topicDomain(t);
     if (!d) continue;

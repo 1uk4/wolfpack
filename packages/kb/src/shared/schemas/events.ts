@@ -46,6 +46,14 @@ export const KbEventSchema = z.discriminatedUnion("t", [
     canonicalId: z.string(),
     action: EntryActionSchema,
   }),
+  /** An entry was removed from the KB on purpose. Drops it from its registry
+   *  topic; a topic left with no entries is dropped with its aliases. */
+  z.object({
+    ...base,
+    t: z.literal("entry_retired"),
+    entryId: z.string(),
+    reason: z.string().optional(),
+  }),
   z.object({
     ...base,
     t: z.literal("rejected"),

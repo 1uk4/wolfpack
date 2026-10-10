@@ -67,6 +67,7 @@ import {
 } from "./librarian/hierarchy.js";
 import { renderDomainDigest } from "./librarian/domains.js";
 import { labelSection, sectionSummary, type SectionMember } from "./librarian/summarize.js";
+import { retireEntries } from "./librarian/retire.js";
 import { ev, type KbEvent } from "./shared/index.js";
 import type { Section, SectionId, DomainId } from "./schema/knowledge.js";
 import { parseFrontmatter } from "@wolfpack/engine";
@@ -832,6 +833,41 @@ async function cmdReorg(): Promise<void> {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// retire — remove entries on the librarian (wolf mirrors are receive-only)
+// ════════════════════════════════════════════════════════════════════════════
+
+async function cmdRetire(): Promise<void> {
+  const roots = resolveRoots();
+  const argv = process.argv.slice(3);
+  const ids = argv.filter((a) => !a.startsWith("--"));
+  const dryRun = argv.includes("--dry-run");
+  const reason = argv.find((a) => a.startsWith("--reason="))?.slice("--reason=".length) || undefined;
+  if (ids.length === 0) {
+    console.error("usage: retire <entryId...> [--reason=<text>] [--dry-run]");
+    process.exit(1);
+  }
+  if (!dryRun && !acquireLock(roots)) {
+    console.error("a sweep is running (sweep.lock held); retry when it finishes");
+    process.exit(1);
+  }
+  try {
+    const r = retireEntries(roots, ids, { reason, dryRun });
+    for (const e of r.retired) {
+      console.log(`${dryRun ? "would retire" : "retired"} ${e.entryId}${e.hadFile ? "" : " (file already gone; registry only)"}`);
+    }
+    for (const id of r.notFound) console.log(`not found: ${id} (no file, not in registry)`);
+    if (dryRun) {
+      console.log(`[dry-run] no writes.`);
+    } else if (r.retired.length) {
+      console.log(`re-rendered registry, INDEX, and digest for: ${r.domains.join(", ")}`);
+      console.log(`section member counts refresh on the next \`reorg\`.`);
+    }
+  } finally {
+    if (!dryRun) releaseLock(roots);
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0] ?? "sweep";
@@ -853,9 +889,12 @@ async function main(): Promise<void> {
     case "reorg":
       await cmdReorg();
       break;
+    case "retire":
+      await cmdRetire();
+      break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]`
+        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run]`
       );
       process.exit(1);
   }

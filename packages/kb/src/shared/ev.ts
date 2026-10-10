@@ -29,6 +29,13 @@ export const ev = {
     action: EntryAction
   ): KbEvent => ({ t: "entry_written", ...stamp(), entryId, canonicalId, action }),
 
+  entryRetired: (entryId: string, reason?: string): KbEvent => ({
+    t: "entry_retired",
+    ...stamp(),
+    entryId,
+    ...(reason ? { reason } : {}),
+  }),
+
   rejected: (contribution: string, reason: string): KbEvent => ({
     t: "rejected",
     ...stamp(),

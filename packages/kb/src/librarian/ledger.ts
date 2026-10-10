@@ -110,6 +110,17 @@ export function foldRegistry(events: KbEvent[]): Registry {
         if (!t.subscribers.includes(e.wolf)) t.subscribers.push(e.wolf);
         break;
       }
+      case "entry_retired": {
+        for (const [id, t] of reg) {
+          if (!t.entries.includes(e.entryId)) continue;
+          t.entries = t.entries.filter((x) => x !== e.entryId);
+          t.updated = e.at;
+          // Nothing left to know: drop the topic and its aliases, so a later
+          // re-contribution starts a fresh topic instead of an empty one.
+          if (t.entries.length === 0) reg.delete(id);
+        }
+        break;
+      }
     }
   }
   return reg;

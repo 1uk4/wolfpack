@@ -85,9 +85,11 @@ const PROCESS_NOTE = /^(Completed\.|Stage: |Shipped( for graduation)?: )/;
 const MAX_DOSSIER_CHARS = 24_000;
 
 /**
- * The raw material Dewey turns into a past-tense feature entry: the feature's
- * document and, per task, its done-when and latest notes. Work ids and
- * completion stamps are stripped; the graduation prompt removes the rest.
+ * The raw material Dewey turns into a past-tense feature entry: what the tasks
+ * built (their done-when and latest notes) first, then the feature document
+ * labelled as the original plan, since later work often replaced parts of it.
+ * Work ids and completion stamps are stripped; the graduation prompt removes
+ * the rest.
  */
 export function featureDossier(
   feature: WorkItem,
@@ -100,9 +102,8 @@ export function featureDossier(
     .replace(/^#\s+.*\n+/, "") // the document repeats the title
     .replace(/_Completed \d{4}-\d{2}-\d{2}_\n?/g, "")
     .trim();
-  if (doc) lines.push("## Feature document", "", doc, "");
   if (tasks.length) {
-    lines.push("## What the tasks built", "");
+    lines.push("## What was built (final state; wins over the plan below)", "");
     for (const t of tasks) {
       lines.push(`### ${t.title}`);
       if (t.successCriteria) lines.push(`Done when: ${t.successCriteria}`);
@@ -111,6 +112,7 @@ export function featureDossier(
       lines.push("");
     }
   }
+  if (doc) lines.push("## Original plan (may be outdated; later notes win)", "", doc, "");
   const out = lines.join("\n").replace(WORK_ID, "").trim();
   return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
 }

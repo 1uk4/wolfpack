@@ -26,6 +26,9 @@ describe("graduation contributions", () => {
     expect(d).toContain("Done when: panel renders");
     expect(d).toContain("added selector.ts");
     expect(d).not.toMatch(/work-wp-|Stage: |Completed\.|_Completed/);
+    // Final state first; the plan follows, labelled as possibly outdated.
+    expect(d.indexOf("added selector.ts")).toBeLessThan(d.indexOf("Use two panes."));
+    expect(d).toMatch(/## Original plan \(may be outdated; later notes win\)\n\n## Plan\nUse two panes\./);
   });
 
   it("file names its entry and graduation kind", () => {

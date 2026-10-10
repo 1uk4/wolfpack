@@ -17,10 +17,17 @@ const NO_FACTORY_TRACE = `NEVER INCLUDE (these belong to the task system, not th
  * stage: produce (graduation · feature) · in: feature dossier · out: past-tense entry
  */
 export const GRADUATE_FEATURE_RULES = `GRADUATION — FEATURE ENTRY
-The contribution is a dossier for a FINISHED feature: its plan document and the
-notes of the tasks that built it. Write the knowledge that remains now that the
-work is done. Past tense for what was built and decided; present tense for how
-it works today.
+The contribution is a dossier for a FINISHED feature: the notes of the tasks
+that built it, then its original plan. Write the knowledge that remains now that
+the work is done. Past tense for what was built and decided; present tense for
+how it works today.
+
+FINAL STATE ONLY: the plan was written first and later work often changed it.
+When the task notes and the plan disagree, the notes win. Describe only how
+things work at the end; leave out any behaviour that was later removed or
+replaced (at most, mention it as a rejected or superseded option under
+decisions, in the past tense). Never copy example data from mock-ups, such as
+progress counts or "(bound)" markers in a sketched layout.
 
 The detail covers, as applicable:
 - What exists: the capability, in one or two sentences.

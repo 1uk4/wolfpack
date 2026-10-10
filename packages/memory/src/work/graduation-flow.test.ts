@@ -64,7 +64,7 @@ describe("graduation flow through the real sweep", () => {
       const hub = opts.system.includes("INITIATIVE HUB");
       const title = hub ? "Dockerize hub" : (opts.prompt.match(/^# (.+)$/m)?.[1] ?? "Feature");
       return schema.parse({
-        title, kind: { type: "architecture" }, summary: `${title} summary`, detail: "d",
+        title, kind: { type: "architecture" }, summary: `${title} summary`, detail: hub ? "d" : "## How it works\n\nd",
         confidence: "high", facets: {}, properties: {}, proposedRelations: [],
       });
     }),
@@ -129,6 +129,11 @@ describe("graduation flow through the real sweep", () => {
       expect(readFileSync(entry(f.id), "utf8")).toContain(`  - kind: part_of\n    target: ${hubId}\n    source: code`);
     }
     expect(readFileSync(entry(init.id), "utf8")).not.toMatch(/^relations:/m);
+
+    // Detail with its own sections gets no empty "## Detail" wrapper; plain detail does.
+    expect(readFileSync(entry(f1.id), "utf8")).not.toContain("## Detail");
+    expect(readFileSync(entry(f1.id), "utf8")).toContain("## How it works");
+    expect(readFileSync(entry(init.id), "utf8")).toContain("## Detail\n\nd");
 
     // Nothing in the KB names a work item.
     for (const id of [f1.id, f2.id, init.id]) expect(readFileSync(entry(id), "utf8")).not.toMatch(/work-wp-/);

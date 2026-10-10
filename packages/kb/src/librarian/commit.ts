@@ -186,8 +186,12 @@ function renderEntry(entry: Entry): string {
   lines.push("");
   lines.push(entry.summary);
   lines.push("");
-  lines.push("## Detail");
-  lines.push("");
+  // Detail that brings its own sections needs no "## Detail" wrapper (it would
+  // sit empty above the first one).
+  if (!/^\s*#{1,6} /.test(entry.detail)) {
+    lines.push("## Detail");
+    lines.push("");
+  }
   lines.push(entry.detail);
 
   if (entry.context) {

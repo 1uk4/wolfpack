@@ -314,6 +314,11 @@ Test entry 3`;
       });
     }
     writeSections(roots, sections);
+    // One entry per section, so the cap (not empty-section pruning) is what limits it.
+    const entriesDir = join(roots.kbBase, "domains", "test-domain", "entries");
+    for (const s of sections) {
+      writeFileSync(join(entriesDir, `kb-test-${s.id.slice(-6)}0.md`), `---\nsection: ${s.id}\n---\nx`);
+    }
 
     renderDomainDigest(roots, "test-domain");
 
@@ -321,6 +326,41 @@ Test entry 3`;
     const digest = JSON.parse(readFileSync(digestPath, "utf-8"));
 
     // Should have capped the number of sections
-    expect(digest.sections.length).toBeLessThanOrEqual(maxTopics);
+    expect(digest.sections.length).toBe(maxTopics);
+  });
+
+  it("omits sections with no entries anywhere in their subtree", () => {
+    const mk = (id: string, parent: string | null, childIds: string[]): Section => ({
+      id: id as SectionId,
+      domain: "test-domain" as DomainId,
+      parent: parent as SectionId | null,
+      depth: parent ? 1 : 0,
+      label: id as any,
+      title: id,
+      centroid: new Array(768).fill(0),
+      memberCount: 0,
+      childIds: childIds as SectionId[],
+      summary: id,
+      summaryHash: "",
+      dirty: false,
+      created: "2024-01-01" as any,
+      updated: "2024-01-01" as any,
+    });
+    writeSections(roots, [
+      mk("sec-test-empty1", null, []), // no entries → dropped
+      mk("sec-test-parent", null, ["sec-test-child1", "sec-test-child2"]), // kept via child1
+      mk("sec-test-child1", "sec-test-parent", []),
+      mk("sec-test-child2", "sec-test-parent", []), // empty child → dropped
+    ]);
+    const entriesDir = join(roots.kbBase, "domains", "test-domain", "entries");
+    writeFileSync(join(entriesDir, "kb-test-aaa1111.md"), "---\nsection: sec-test-child1\n---\nx");
+
+    renderDomainDigest(roots, "test-domain");
+    const digest = JSON.parse(
+      readFileSync(join(roots.kbBase, "domains", "test-domain", "_digest.json"), "utf-8")
+    );
+
+    expect(digest.sections.map((s: any) => s.sectionId)).toEqual(["sec-test-parent"]);
+    expect(digest.sections[0].children.map((s: any) => s.sectionId)).toEqual(["sec-test-child1"]);
   });
 });

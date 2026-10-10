@@ -154,8 +154,18 @@ export function renderDomainDigest(roots: KbRoots, domain: string): void {
     };
   };
 
-  // Build the digest sections from the root sections
-  let digestSections = domainRoots.map(buildDigestSection);
+  // Build the digest sections from the root sections, dropping empty subtrees:
+  // a section whose entries all moved away (and has no non-empty child) carries
+  // nothing to know, and reorg never re-summarizes it, so it would otherwise
+  // linger in the digest and in wolves' <kb_access> forever.
+  const prune = (s: DigestSection): DigestSection | null => {
+    const children = s.children.map(prune).filter((c): c is DigestSection => c !== null);
+    return s.entryIds.length > 0 || children.length > 0 ? { ...s, children } : null;
+  };
+  let digestSections = domainRoots
+    .map(buildDigestSection)
+    .map(prune)
+    .filter((s): s is DigestSection => s !== null);
 
   // Respect maxTopics cap (count total sections in the tree)
   const countSections = (section: DigestSection): number => {

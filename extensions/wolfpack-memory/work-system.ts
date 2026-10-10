@@ -30,6 +30,8 @@ import {
   isComplete,
   isBindable,
   placementError,
+  dependencyError,
+  unlinkWork,
   moveWork,
   ensureInbox,
   type CreateWorkInput,
@@ -55,6 +57,8 @@ import {
   reduce,
   leftRows,
   rightRows,
+  rightTree,
+  relatedTo,
   firstTask,
   progress,
   isBlocked,
@@ -683,11 +687,22 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             return active ? theme.fg("accent", "\u25cf") : theme.fg("dim", "\u25cb");
           }
 
+          /** "└▸ " under a prerequisite (indented per level), "+N" for more prerequisites. */
+          const chainPrefix = (chain: number) => (chain ? theme.fg("dim", `${"  ".repeat(chain - 1)}\u2514\u25b8 `) : "");
+          const extraMark = (extra: number) => (extra ? theme.fg("dim", ` +${extra}`) : "");
+          /** ▲ prerequisite / ▼ waits on the focused item. */
+          function relationMark(id: string): string {
+            const { prereqs, dependents } = relatedTo(focusedItem(), items);
+            if (prereqs.has(id)) return theme.fg("warning", " \u25b2");
+            if (dependents.has(id)) return theme.fg("accent", " \u25bc");
+            return "";
+          }
+
           function renderLeft(): string[] {
             const out = [theme.fg("dim", theme.bold("WORKSPACES"))];
             const rows = leftRows(items, sel.expanded);
             if (rows.length === 0) out.push(theme.fg("dim", "No workspaces yet \u2014 n to create"));
-            rows.forEach(({ item, depth }, i) => {
+            rows.forEach(({ item, depth, chain, extra }, i) => {
               const cursor = sel.pane === "left" && i === sel.leftIdx;
               const fold = item.kind === "initiative" ? (sel.expanded.includes(item.id as string) ? "\u25be " : "\u25b8 ") : "  ";
               const icon = item.container ? "\ud83d\udce5" : kindIcon(item);
@@ -697,7 +712,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;
               const stage = item.container ? "" : ` ${STAGE_ICONS[item.stage] ?? ""}`;
-              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${icon} ${title}${count}${stage}`);
+              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${extraMark(extra)}${relationMark(item.id as string)}`);
             });
             return out;
           }
@@ -709,14 +724,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const out = [`${theme.bold(ws.title)}${total ? theme.fg("dim", ` ${d}/${total}`) : ""}`];
             if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
             out.push("");
-            const tasks = rightRows(items, sel.openId);
-            if (tasks.length === 0) out.push(theme.fg("dim", "No tasks yet"));
-            tasks.forEach((t, i) => {
+            const tree = rightTree(items, sel.openId);
+            if (tree.length === 0) out.push(theme.fg("dim", "No tasks yet"));
+            tree.forEach(({ item: t, chain, extra }, i) => {
               const cursor = sel.pane === "right" && i === sel.rightIdx;
               const bound = t.id === activeTask?.workId;
               const title = isComplete(t) ? theme.fg("dim", t.title) : cursor ? theme.fg("accent", t.title) : t.title;
               const kind = t.kind === "task" ? "" : theme.fg("dim", ` (${t.kind})`);
-              out.push(`${cursor ? theme.fg("accent", "\u25b6") : " "} ${statusIcon(t)} ${title}${kind}${bound ? theme.fg("success", "  \u25c0 bound") : ""}`);
+              out.push(`${cursor ? theme.fg("accent", "\u25b6") : " "} ${chainPrefix(chain)}${statusIcon(t)} ${title}${kind}${extraMark(extra)}${relationMark(t.id as string)}${bound ? theme.fg("success", "  \u25c0 bound") : ""}`);
               if (cursor && t.successCriteria) out.push(theme.fg("dim", `     done when: ${t.successCriteria}`));
               if (cursor && isBlocked(t, items)) {
                 const waiting = (t.dependsOn ?? []).map((id) => items.find((i) => i.id === id))
@@ -805,23 +820,35 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         }
         ctx.ui.notify(`Deleted ${deleted.items.length} work item(s).`, "info");
       } else if (typeof action === "object" && action?.type === "depend") {
-        // Show picker for dependency target
-        const allItems = (queryWork(roots, { assignee: wolfName }) ?? [])
-          .filter((i) => i.id !== action.id && !(i.dependsOn ?? []).includes(action.id as any));
-        if (allItems.length === 0) {
-          ctx.ui.notify("No other work items to depend on.", "warning");
+        // Valid prerequisites only (same feature / same initiative, no cycles).
+        // Picking one the item already depends on removes it.
+        const all = queryWork(roots, {}) ?? [];
+        const item = all.find((i) => i.id === action.id);
+        if (!item) return;
+        const current = new Set((item.dependsOn ?? []).map(String));
+        const choices = all.filter((t) =>
+          t.id !== item.id && !t.container && (current.has(t.id as string) || (!isComplete(t) && !dependencyError(item, t, all)))
+        );
+        if (choices.length === 0) {
+          const scope = isBindable(item) ? "other open tasks in this feature" : item.kind === "feature" ? "other features under this initiative" : "valid targets";
+          ctx.ui.notify(`${item.title}: no ${scope} to depend on.`, "warning");
           return;
         }
-        const target = await ctx.ui.select(
-          "This item depends on:",
-          allItems.map((i) => `${kindIcon(i)} ${i.title} [${i.stage}]`),
-        );
+        const labels = choices.map((t) => `${current.has(t.id as string) ? "\u2713 remove: " : ""}${kindIcon(t)} ${t.title} ${STAGE_ICONS[t.stage] ?? ""}`);
+        const picked = await ctx.ui.select(`"${item.title}" depends on:`, labels);
+        const target = choices[labels.indexOf(picked)];
         if (!target) return;
-        const idx = allItems.findIndex((i) => target.includes(i.title));
-        if (idx < 0) return;
-        const depTarget = allItems[idx];
-        linkWork(roots, action.id, "depends_on", depTarget.id as string);
-        ctx.ui.notify(`Added dependency: → ${depTarget.title}`, "info");
+        try {
+          if (current.has(target.id as string)) {
+            unlinkWork(roots, item.id, "depends_on", target.id as string);
+            ctx.ui.notify(`Removed dependency: ${item.title} no longer waits on ${target.title}`, "info");
+          } else {
+            linkWork(roots, item.id, "depends_on", target.id as string);
+            ctx.ui.notify(`Added dependency: ${item.title} waits on ${target.title}`, "info");
+          }
+        } catch (e: any) {
+          ctx.ui.notify(e.message, "error");
+        }
       } else if (typeof action === "object" && action?.type === "graduate") {
         // Graduate shipped feature/initiative to KB
         const item = (queryWork(roots, {}) ?? []).find(i => i.id === action.id);
@@ -936,7 +963,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_link",
-      description: "Link the active work item to a KB entry or another work item.",
+      description: "Link the active work item to a KB entry or another work item. depends_on/blocks: a task only to tasks in the same feature, a feature only to features under the same initiative; never across initiatives or in a cycle.",
       parameters: Type.Object({
         rel: Type.String({ description: "Relation: references | depends_on | blocks | graduated_to" }),
         target: Type.String({ description: "Target id (kb-* for entries, work-* for work items)" }),
@@ -944,10 +971,32 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          const { item } = linkWork(roots, activeTask.workId, params.rel, params.target);
-          activeItem = item;
+          linkWork(roots, activeTask.workId, params.rel, params.target);
+          refreshActiveItem();
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `Linked: ${params.rel} → ${params.target}` }] };
+        } catch (e: any) {
+          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+        }
+      },
+    })
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "task_unlink",
+      description: "Remove a link from the active work item (e.g. a depends_on dependency).",
+      parameters: Type.Object({
+        rel: Type.String({ description: "Relation: references | depends_on | blocks | graduated_to" }),
+        target: Type.String({ description: "Target id to unlink" }),
+      }),
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
+        try {
+          const { event } = unlinkWork(roots, activeTask.workId, params.rel, params.target);
+          refreshActiveItem();
+          updateWidget(ctx);
+          return { content: [{ type: "text" as const, text: event ? `Unlinked: ${params.rel} → ${params.target}` : "No such link." }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }

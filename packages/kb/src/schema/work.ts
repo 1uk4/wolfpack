@@ -126,6 +126,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("work.deleted"), id: WorkId, at: z.string() }),
   z.object({ type: z.literal("work.noted"), id: WorkId, at: z.string(), text: z.string().min(1) }),
   z.object({ type: z.literal("work.linked"), id: WorkId, at: z.string(), rel: LinkRel, target: z.string() }),
+  /** Remove a link added by work.linked. */
+  z.object({ type: z.literal("work.unlinked"), id: WorkId, at: z.string(), rel: LinkRel, target: z.string() }),
   /** Wolf binds to this work item (starts active work session) */
   z.object({ type: z.literal("work.bound"), id: WorkId, at: z.string(), wolf: WolfId }),
   /** Wolf unbinds from this work item (ends active work session) */
@@ -241,6 +243,14 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.moved":
         next.partOf = e.partOf;
         break;
+      case "work.unlinked": {
+        const drop = <T>(arr: readonly T[]) => arr.filter((x) => (x as unknown as string) !== e.target);
+        if (e.rel === "references") next.references = drop(cur.references);
+        if (e.rel === "graduated_to") next.graduatedTo = drop(cur.graduatedTo);
+        if (e.rel === "depends_on") next.dependsOn = drop(cur.dependsOn);
+        if (e.rel === "blocks") next.blocks = drop(cur.blocks);
+        break;
+      }
     }
     items.set(e.id, next);
   }
@@ -344,4 +354,40 @@ export function placementError(
       if (parent.kind === "feature") return null;
       return `${an(child.kind)} can only sit under a feature (not ${an(parent.kind)})`;
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 7 · DEPENDENCIES  — same-scope only, acyclic
+// ════════════════════════════════════════════════════════════════════════════
+//
+//   task · issue · spike → a work unit in the SAME feature
+//   feature              → a feature under the SAME initiative (standalone: none)
+//   initiative · idea    → none          never across initiatives, never cyclic
+
+type DepNode = Pick<WorkItem, "id" | "kind" | "partOf" | "title" | "dependsOn">;
+
+/** Why `item` may not depend on `target`, or null if it may. */
+export function dependencyError(item: DepNode, target: DepNode, all: DepNode[]): string | null {
+  if (item.id === target.id) return "an item cannot depend on itself";
+  if (isBindable(item)) {
+    if (!isBindable(target)) return `a ${item.kind} can only depend on a task, issue or spike`;
+    if (!item.partOf || item.partOf !== target.partOf) return "tasks can only depend on tasks in the same feature";
+  } else if (item.kind === "feature") {
+    if (target.kind !== "feature") return "a feature can only depend on another feature";
+    if (!item.partOf || item.partOf !== target.partOf) return "features can only depend on features under the same initiative";
+  } else {
+    return `${an(item.kind)} cannot have dependencies`;
+  }
+  // Cycle: does target already (transitively) depend on item?
+  const byId = new Map(all.map((n) => [n.id as string, n]));
+  const seen = new Set<string>();
+  const stack = [target.id as string];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur === item.id) return `"${target.title}" already depends on "${item.title}" (that would be a cycle)`;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const d of byId.get(cur)?.dependsOn ?? []) stack.push(d as string);
+  }
+  return null;
 }

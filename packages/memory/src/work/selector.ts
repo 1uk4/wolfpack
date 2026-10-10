@@ -29,6 +29,16 @@ export interface SelectorState {
 export interface LeftRow {
   item: WorkItem;
   depth: 0 | 1;
+  /** Dependency-chain indent: shown under its first prerequisite. */
+  chain: number;
+  /** Prerequisites in the same list beyond the one it is shown under. */
+  extra: number;
+}
+
+export interface TaskRow {
+  item: WorkItem;
+  chain: number;
+  extra: number;
 }
 
 export type SelectorKey = "up" | "down" | "left" | "right" | "enter" | "space";
@@ -42,6 +52,37 @@ const STAGE_RANK = ["in_build", "approved", "feasibility", "plan", "idea", "ship
 const byStage = (a: WorkItem, b: WorkItem) => STAGE_RANK.indexOf(a.stage) - STAGE_RANK.indexOf(b.stage);
 
 const isWorkspace = (i: WorkItem) => i.kind === "feature" || i.kind === "initiative";
+
+/**
+ * Order a list by its internal dependencies and nest each item under its first
+ * prerequisite in the list (keeping the incoming order otherwise). Items whose
+ * prerequisites are elsewhere or done sit at the top level.
+ */
+export function dependencyTree(list: WorkItem[]): TaskRow[] {
+  const ids = new Set(list.map((i) => i.id as string));
+  const inList = (i: WorkItem) => (i.dependsOn ?? []).filter((d) => ids.has(d as string));
+  const children = new Map<string, WorkItem[]>();
+  const roots: WorkItem[] = [];
+  for (const item of list) {
+    const parent = inList(item)[0];
+    if (parent) {
+      const kids = children.get(parent as string) ?? [];
+      kids.push(item);
+      children.set(parent as string, kids);
+    } else roots.push(item);
+  }
+  const out: TaskRow[] = [];
+  const seen = new Set<string>();
+  const walk = (item: WorkItem, chain: number) => {
+    if (seen.has(item.id as string)) return; // guards bad data (cycles)
+    seen.add(item.id as string);
+    out.push({ item, chain, extra: Math.max(0, inList(item).length - 1) });
+    for (const kid of children.get(item.id as string) ?? []) walk(kid, chain + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  for (const item of list) walk(item, 0); // anything left (cycle members)
+  return out;
+}
 
 /** True when a dependency of `item` is not complete yet. */
 export function isBlocked(item: WorkItem, all: WorkItem[]): boolean {
@@ -59,26 +100,40 @@ export function isBlocked(item: WorkItem, all: WorkItem[]): boolean {
 export function leftRows(all: WorkItem[], expanded: string[]): LeftRow[] {
   const live = all.filter((i) => i.stage !== "archived");
   const rows: LeftRow[] = [];
-  for (const inbox of live.filter((i) => i.container)) rows.push({ item: inbox, depth: 0 });
+  for (const inbox of live.filter((i) => i.container)) rows.push({ item: inbox, depth: 0, chain: 0, extra: 0 });
   const tops = live
     .filter((i) => !i.container && !i.partOf && (isWorkspace(i) || i.kind === "idea"))
     .sort(byStage);
   for (const top of tops) {
-    rows.push({ item: top, depth: 0 });
+    rows.push({ item: top, depth: 0, chain: 0, extra: 0 });
     if (top.kind === "initiative" && expanded.includes(top.id as string)) {
-      for (const f of live.filter((i) => i.partOf === top.id && i.kind === "feature").sort(byStage)) {
-        rows.push({ item: f, depth: 1 });
-      }
+      const features = live.filter((i) => i.partOf === top.id && i.kind === "feature").sort(byStage);
+      for (const r of dependencyTree(features)) rows.push({ ...r, depth: 1 });
     }
   }
   return rows;
 }
 
-/** Right pane rows: the open feature's work units, open ones first. */
-export function rightRows(all: WorkItem[], openId: string | null): WorkItem[] {
+/** Right pane rows with chain info: open tasks in dependency order, shipped last. */
+export function rightTree(all: WorkItem[], openId: string | null): TaskRow[] {
   if (!openId) return [];
   const units = all.filter((i) => i.partOf === openId && isBindable(i) && i.stage !== "archived");
-  return [...units.filter((i) => !isComplete(i)).sort(byStage), ...units.filter(isComplete)];
+  const shipped = units.filter(isComplete).map((item) => ({ item, chain: 0, extra: 0 }));
+  return [...dependencyTree(units.filter((i) => !isComplete(i)).sort(byStage)), ...shipped];
+}
+
+/** Right pane items, in the same order as rightTree. */
+export function rightRows(all: WorkItem[], openId: string | null): WorkItem[] {
+  return rightTree(all, openId).map((r) => r.item);
+}
+
+/** For a focused item: its direct prerequisites (▲) and direct dependents (▼). */
+export function relatedTo(focused: WorkItem | undefined, all: WorkItem[]): { prereqs: Set<string>; dependents: Set<string> } {
+  const prereqs = new Set<string>((focused?.dependsOn ?? []).map(String));
+  const dependents = new Set<string>(
+    focused ? all.filter((i) => (i.dependsOn ?? []).includes(focused.id)).map((i) => i.id as string) : []
+  );
+  return { prereqs, dependents };
 }
 
 /** First open, unblocked task (fallback: first open task), or undefined. */

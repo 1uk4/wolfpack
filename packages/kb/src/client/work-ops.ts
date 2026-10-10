@@ -17,6 +17,7 @@ import {
   assertAdvanceable,
   isBindable,
   placementError,
+  dependencyError,
   INBOX_TITLE,
 } from "../schema/work.js";
 import { type DomainId, type Slug, type IsoDate } from "../schema/knowledge.js";
@@ -223,26 +224,65 @@ export function noteWork(
 
 // ── link ────────────────────────────────────────────────────────────────────
 
+/**
+ * Add a link. depends_on / blocks are validated by dependencyError (same scope,
+ * no cycles); `A blocks B` is recorded as `B depends_on A`, so dependsOn is the
+ * single source of truth for ordering and blocking.
+ */
 export function linkWork(
   roots: KbRoots,
   id: string,
   rel: string,
   target: string,
-): { event: WorkEvent; item: WorkItem } {
+): { event: WorkEvent | null; item: WorkItem } {
   const items = loadWorkState(roots);
   const item = items.get(id as WorkId);
   if (!item) throw new Error(`work item ${id} not found`);
 
+  let from = item;
+  let to = target;
+  let relation = rel as LinkRel;
+  if (rel === "depends_on" || rel === "blocks") {
+    const other = items.get(target as WorkId);
+    if (!other) throw new Error(`work item ${target} not found`);
+    if (rel === "blocks") [from, to, relation] = [other, item.id as string, "depends_on"];
+    const prereq = items.get(to as WorkId)!;
+    if ((from.dependsOn ?? []).includes(prereq.id)) return { event: null, item };
+    const err = dependencyError(from, prereq, [...items.values()]);
+    if (err) throw new Error(`Cannot add dependency: ${err}`);
+  }
+
   const event: WorkEvent = {
     type: "work.linked",
-    id: id as WorkId,
+    id: from.id,
     at: now(),
-    rel: rel as LinkRel,
-    target,
+    rel: relation,
+    target: to,
   };
 
   appendWorkLedger(roots, [event]);
-  const updated = loadWorkState(roots).get(id as WorkId)!;
+  const updated = loadWorkState(roots).get(from.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, from.domain as string, from.id)?.body);
+  return { event, item: updated };
+}
+
+/** Remove a link (no-op if it is not there). */
+export function unlinkWork(
+  roots: KbRoots,
+  id: string,
+  rel: string,
+  target: string,
+): { event: WorkEvent | null; item: WorkItem } {
+  const item = loadWorkState(roots).get(id as WorkId);
+  if (!item) throw new Error(`work item ${id} not found`);
+  const field = { references: "references", graduated_to: "graduatedTo", depends_on: "dependsOn", blocks: "blocks" }[rel] as
+    | "references" | "graduatedTo" | "dependsOn" | "blocks" | undefined;
+  if (!field) throw new Error(`unknown relation ${rel}`);
+  if (!(item[field] as readonly string[]).includes(target)) return { event: null, item };
+
+  const event: WorkEvent = { type: "work.unlinked", id: item.id, at: now(), rel: rel as LinkRel, target };
+  appendWorkLedger(roots, [event]);
+  const updated = loadWorkState(roots).get(item.id)!;
   commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
   return { event, item: updated };
 }

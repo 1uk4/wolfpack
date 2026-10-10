@@ -26,6 +26,9 @@ export {
   reduce,
   leftRows,
   rightRows,
+  rightTree,
+  dependencyTree,
+  relatedTo,
   firstTask,
   progress,
   isBlocked,
@@ -33,6 +36,7 @@ export {
   type SelectorKey,
   type SelectorEffect,
   type LeftRow,
+  type TaskRow,
   type Pane,
 } from "./selector.js";
 

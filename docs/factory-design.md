@@ -33,6 +33,10 @@
    feature flagged `container: true`, created on first use, that never ships or
    graduates. **Moving** (`work.moved`, `moveWork`, the `task_move` tool, `m` in
    `/task`) re-parents an item under the same rules — that is how Inbox triage works.
+   **Dependencies** (`dependsOn`, `dependencyError`) stay in scope: a task may depend
+   only on a task in the same feature, a feature only on a feature under the same
+   initiative; never across initiatives, never cyclic. `A blocks B` is stored as
+   `B depends_on A`; `work.unlinked` removes a link.
 2. **Area** — a field: *horizontal* grouping within a domain (`marketing`,
    `engineering`, …).
 
@@ -115,14 +119,17 @@ work.bound · work.unbound · work.summarized
   `l`/`Enter` on a feature lists its tasks on the right (open first) and moves
   focus there; `j`/`k` move, `h` goes back. **`Space` binds** the focused task;
   opening an `in_build` feature auto-binds its first open, unblocked task only when
-  nothing is bound. Also `n` new (wizard), `m` move, `D` depend, `x` delete,
-  `g` graduate a shipped feature.
+  nothing is bound. Tasks (and an initiative's features) are ordered by dependency,
+  each waiting item drawn under its prerequisite (`└▸`, `+N` for more); with the
+  cursor on an item its prerequisites show ▲ and dependents ▼. Also `n` new
+  (wizard), `m` move, `D` depend (valid targets only; picking an existing one
+  removes it), `x` delete, `g` graduate a shipped feature.
 - **Binding** a task injects an `<active_task>` block into the system prompt
   (title, stage, `done_when`, working document, recent log, stage guidance) and
   advances its ancestors to `in_build`. File changes are tracked while bound.
 - **Agent tools:** `task_create` (a work unit defaults into the bound task's
   feature, else the Inbox), `task_query`, `task_update` (working document),
-  `task_note`, `task_stage`, `task_link`, `task_move`, `task_done` (ship the bound
+  `task_note`, `task_stage`, `task_link`, `task_unlink`, `task_move`, `task_done` (ship the bound
   task and bind the next open task in the same feature).
 - **Ship policy:** `task_done` asks *"📦 Mark '…' as shipped?"* (showing the
   success criteria) before shipping; **No** leaves the task where it is and tells

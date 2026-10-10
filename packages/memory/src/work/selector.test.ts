@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { WorkItem } from "@wolfpack/kb/client";
-import { initialState, reduce, leftRows, rightRows, firstTask, progress, type SelectorState } from "./selector.js";
+import { initialState, reduce, leftRows, rightRows, rightTree, dependencyTree, relatedTo, firstTask, progress, type SelectorState } from "./selector.js";
 
 let n = 0;
 const w = (kind: string, stage: string, partOf: string | null = null, extra: Partial<WorkItem> = {}) =>
@@ -98,5 +98,48 @@ describe("selector keys", () => {
     const s = initialState(all, t2.id);
     expect(s).toMatchObject({ pane: "right", openId: fa.id, expanded: [init.id] });
     expect(rightRows(all, s.openId)[s.rightIdx].id).toBe(t2.id);
+  });
+});
+
+describe("dependency tree", () => {
+  const f = w("feature", "in_build");
+  const a = w("task", "plan", f.id);
+  const b = w("task", "plan", f.id, { dependsOn: [] });
+  const c = w("task", "plan", f.id);
+  const d = w("task", "shipped", f.id);
+  // c waits on a and b; b waits on a  →  a, └▸ b, └▸ └▸ c (+1), then shipped d
+  (b as any).dependsOn = [a.id];
+  (c as any).dependsOn = [b.id, a.id];
+  const set = [f, c, b, a, d];
+
+  it("nests each task under its first in-list prerequisite, shipped last", () => {
+    expect(rightTree(set, f.id).map((r) => [r.item.id, r.chain, r.extra])).toEqual([
+      [a.id, 0, 0], [b.id, 1, 0], [c.id, 2, 1], [d.id, 0, 0],
+    ]);
+    expect(rightRows(set, f.id).map((t) => t.id)).toEqual([a.id, b.id, c.id, d.id]);
+  });
+
+  it("first task is the unblocked prerequisite", () => {
+    expect(firstTask(rightRows(set, f.id), set)?.id).toBe(a.id);
+  });
+
+  it("orders an initiative's features by dependency in the left pane", () => {
+    const i = w("initiative", "plan");
+    const f1 = w("feature", "plan", i.id);
+    const f2 = w("feature", "plan", i.id, { dependsOn: [f1.id] });
+    const rows = leftRows([i, f2, f1], [i.id]);
+    expect(rows.map((r) => [r.item.id, r.depth, r.chain])).toEqual([[i.id, 0, 0], [f1.id, 1, 0], [f2.id, 1, 1]]);
+  });
+
+  it("survives a cycle in bad data", () => {
+    const x = w("task", "plan", f.id);
+    const y = w("task", "plan", f.id, { dependsOn: [x.id] });
+    (x as any).dependsOn = [y.id];
+    expect(dependencyTree([x, y]).map((r) => r.item.id).sort()).toEqual([x.id, y.id].sort());
+  });
+
+  it("relatedTo marks prerequisites and dependents of the focused item", () => {
+    expect([...relatedTo(b, set).prereqs]).toEqual([a.id]);
+    expect([...relatedTo(b, set).dependents]).toEqual([c.id]);
   });
 });

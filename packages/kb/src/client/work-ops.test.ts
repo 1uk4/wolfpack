@@ -16,6 +16,7 @@ import {
   getWorkTree,
   ensureInbox,
   moveWork,
+  unlinkWork,
 } from "./work-ops.js";
 import { loadWorkState, readWorkLedger, resolveWorkItem, commitWorkItem } from "./work-store.js";
 
@@ -336,6 +337,57 @@ describe("work-ops", () => {
       const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "1uk4" }).item;
       expect(moveWork(roots, feat.id, init.id).item.partOf).toBe(init.id);
       expect(moveWork(roots, feat.id, null).item.partOf).toBeNull();
+    });
+  });
+
+  describe("dependencies", () => {
+    const mk = (kind: string, partOf?: string) =>
+      createWork(roots, { kind: kind as any, domain: "wolfpack", title: `${kind}-${Math.random().toString(36).slice(2, 6)}`, assignee: "1uk4", partOf }).item;
+
+    it("allows tasks in the same feature and features under the same initiative", () => {
+      const init = mk("initiative");
+      const [f1, f2] = [mk("feature", init.id), mk("feature", init.id)];
+      const [a, b] = [mk("task", f1.id), mk("task", f1.id)];
+      expect(linkWork(roots, b.id, "depends_on", a.id).item.dependsOn).toEqual([a.id]);
+      expect(linkWork(roots, f2.id, "depends_on", f1.id).item.dependsOn).toEqual([f1.id]);
+      expect(linkWork(roots, b.id, "depends_on", a.id).event).toBeNull(); // already there
+    });
+
+    it("refuses cross-feature, cross-initiative, standalone-feature, mixed-kind and initiative links", () => {
+      const [i1, i2] = [mk("initiative"), mk("initiative")];
+      const [f1, f2, g1] = [mk("feature", i1.id), mk("feature", i1.id), mk("feature", i2.id)];
+      const solo = mk("feature");
+      const [t1, t2] = [mk("task", f1.id), mk("task", f2.id)];
+      const before = readWorkLedger(roots).length;
+      expect(() => linkWork(roots, t1.id, "depends_on", t2.id)).toThrow(/same feature/);
+      expect(() => linkWork(roots, f1.id, "depends_on", g1.id)).toThrow(/same initiative/);
+      expect(() => linkWork(roots, solo.id, "depends_on", f1.id)).toThrow(/same initiative/);
+      expect(() => linkWork(roots, t1.id, "depends_on", f1.id)).toThrow(/only depend on a task/);
+      expect(() => linkWork(roots, f1.id, "depends_on", t1.id)).toThrow(/another feature/);
+      expect(() => linkWork(roots, i1.id, "depends_on", i2.id)).toThrow(/cannot have dependencies/);
+      expect(() => linkWork(roots, t1.id, "depends_on", t1.id)).toThrow(/itself/);
+      expect(readWorkLedger(roots)).toHaveLength(before);
+    });
+
+    it("refuses cycles, direct and transitive", () => {
+      const f = mk("feature");
+      const [a, b, c] = [mk("task", f.id), mk("task", f.id), mk("task", f.id)];
+      linkWork(roots, b.id, "depends_on", a.id);
+      linkWork(roots, c.id, "depends_on", b.id);
+      expect(() => linkWork(roots, a.id, "depends_on", b.id)).toThrow(/cycle/);
+      expect(() => linkWork(roots, a.id, "depends_on", c.id)).toThrow(/cycle/);
+    });
+
+    it("records `A blocks B` as `B depends_on A`, and unlinks", () => {
+      const f = mk("feature");
+      const [a, b] = [mk("task", f.id), mk("task", f.id)];
+      linkWork(roots, a.id, "blocks", b.id);
+      const state = () => loadWorkState(roots);
+      expect(state().get(b.id)!.dependsOn).toEqual([a.id]);
+      expect(state().get(a.id)!.blocks).toEqual([]);
+      expect(unlinkWork(roots, b.id, "depends_on", a.id).item.dependsOn).toEqual([]);
+      expect(unlinkWork(roots, b.id, "depends_on", a.id).event).toBeNull();
+      expect(readWorkLedger(roots).at(-1)).toMatchObject({ type: "work.unlinked", rel: "depends_on", target: a.id });
     });
   });
 });

@@ -25,8 +25,6 @@ import {
   loadWorkState,
   commitWorkItem,
   resolveWorkItem,
-  retitleWork,
-  setCriteria,
   deleteWork,
   STAGE_ORDER,
   isComplete,
@@ -340,33 +338,26 @@ async function promptTaskIteration(
   const next = await ctx.ui.select("What do you want to do?", [
     "Start working",
     "Review and update the plan",
-    "Change title or success criteria",
   ]);
-
   if (!next) return;
 
-  switch (next) {
-    case "Start working":
-      // Just proceed — the task is bound, agent sees it in the prompt
-      break;
-    case "Review and update the plan":
-      ctx.ui.pasteToEditor(
-        `Review the working document for "${item.title}" (shown in <active_task>). ` +
-        `Discuss what should change, then use task_update to write the updated plan.`
-      );
-      break;
-    case "Change title or success criteria": {
-      const newTitle = await ctx.ui.input("Title", item.title);
-      if (newTitle && newTitle !== item.title) {
-        retitleWork(roots, item.id as string, newTitle);
-      }
-      const newCriteria = await ctx.ui.input("Done when?", item.successCriteria ?? "");
-      if (newCriteria && newCriteria !== item.successCriteria) {
-        setCriteria(roots, item.id as string, newCriteria);
-      }
-      ctx.ui.notify("Updated.", "info");
-      break;
+  // Each choice also sets the stage, moving forward only: reviewing the plan of
+  // a task that is already being built does not send it back to plan.
+  const target = next === "Start working" ? "in_build" : "plan";
+  if (STAGE_ORDER.indexOf(item.stage as any) < STAGE_ORDER.indexOf(target as any)) {
+    try {
+      stageWork(roots, item.id as string, target);
+    } catch (e: any) {
+      // e.g. a task needs success criteria before it leaves plan
+      ctx.ui.notify(`Stayed in ${item.stage}: ${e.message}`, "warning");
     }
+  }
+
+  if (next === "Review and update the plan") {
+    ctx.ui.pasteToEditor(
+      `Review the working document for "${item.title}" (shown in <active_task>). ` +
+      `Discuss what should change, then use task_update to write the updated plan.`
+    );
   }
 }
 
@@ -773,10 +764,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         if (result && bindToTask(result.item, ctx)) {
           // Kick off iteration on the new item
           await promptTaskIteration(ctx, roots, result.item);
+          refreshActiveItem();
+          updateWidget(ctx);
         }
       } else if (action === "bind" && activeItem) {
         // Show current state and offer iteration
         await promptTaskIteration(ctx, roots, activeItem);
+        refreshActiveItem();
+        updateWidget(ctx);
       } else if (typeof action === "object" && action?.type === "delete") {
         const tree = getWorkTree(roots, action.id);
         const target = tree[0];

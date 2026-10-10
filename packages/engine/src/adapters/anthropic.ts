@@ -23,6 +23,8 @@ export interface AnthropicAdapterOptions {
   baseUrl?: string;
   /** Per-request timeout in ms. Bounds a single hanging call. */
   timeoutMs?: number;
+  /** Custom fetch (tests). */
+  fetch?: typeof fetch;
 }
 
 export class AnthropicAdapter implements KnowledgeAdapter {
@@ -33,6 +35,7 @@ export class AnthropicAdapter implements KnowledgeAdapter {
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
       ...(options.baseUrl ? { baseURL: options.baseUrl } : {}),
       ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
+      ...(options.fetch ? { fetch: options.fetch } : {}),
     });
   }
 
@@ -73,16 +76,20 @@ export class AnthropicAdapter implements KnowledgeAdapter {
         });
       }
 
-      const response = await this.client.messages.create(
-        {
-          model: options.model,
-          max_tokens: options.maxTokens ?? 4096,
-          temperature: options.temperature ?? 0,
-          system: systemWithSchema,
-          messages,
-        },
-        options.signal ? { signal: options.signal } : undefined
-      );
+      // Streamed: a long reply (e.g. a large merge) arrives as it is written
+      // instead of one silent request, and aborting the signal stops it.
+      const response = await this.client.messages
+        .stream(
+          {
+            model: options.model,
+            max_tokens: options.maxTokens ?? 4096,
+            temperature: options.temperature ?? 0,
+            system: systemWithSchema,
+            messages,
+          },
+          options.signal ? { signal: options.signal } : undefined
+        )
+        .finalMessage();
 
       // Track usage
       totalInput += response.usage.input_tokens;

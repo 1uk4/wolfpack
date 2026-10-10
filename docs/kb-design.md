@@ -1,162 +1,136 @@
-# Wolfpack Knowledge Base — Design & Implementation Spec
+# Wolfpack Knowledge Base — Architecture
 
-> Canonical spec for the v2 typed knowledge base. Written to be implemented in a
-> fresh session. Visual companion: `~/wolves/knowledge/base/maps/graph/show-me-kb-design.html`.
+> How the shared knowledge base works **today**. Design history (the v1 graph,
+> the phased v2 rebuild plan) lives in git: see `docs/kb-v2-implementation.md`
+> at commit `d5a9439`. Crawl ingestion: `packages/memory/docs/crawl-spec.md`.
+> The work layer (Factory): `docs/factory-design.md`.
 
-## Principles (after typesafe.ai/manifesto)
-1. **Make illegal states unrepresentable.** The TypeScript type system is the single
-   source of truth for a node's shape.
-2. **The LLM is an opinion tool.** It returns a narrow, enum-constrained `LlmOpinion` —
-   never a finished node. Its surface shrinks as fields move to deterministic derivation.
-3. **Determinism at the core, nondeterminism at the edges.** Ids, dates, hashes,
-   embeddings, clusters, centrality, link resolution, validation = code.
-4. **Behavior lives in editable config**, not scattered in logic: prompts, vocabularies,
-   numeric knobs — all in one place, tuned by hand as the system grows.
-5. **One typed substrate, two layers:** Library (durable context) + Factory (live work).
-
-## Goal
-An agent subscribed to a domain gets its WorkItem and follows `references` straight into
-the Library — gathering all needed context in one hop. Lived sessions and shipped work
-graduate back into the Library, so the system compounds.
+## Principles
+1. **Make illegal states unrepresentable.** Zod schemas are the single source of
+   truth for every node's shape; branded ids, closed enums, discriminated kinds.
+2. **The LLM is an opinion tool.** Each call returns a narrow, schema-validated
+   result. It never emits an id, a date, a section, or a resolved link — code owns
+   those, so a wrong answer cannot make the KB invalid.
+3. **Determinism at the core.** Ids, dates, hashes, embeddings, centroids, tree
+   placement, link resolution and validation are code.
+4. **Behavior lives in editable config:** prompts, vocabularies, numeric knobs.
+5. **One substrate, two layers:** the Library (durable entries) and the Factory
+   (live work items, `docs/factory-design.md`).
 
 ---
 
-## Status legend
-- ✅ built & compiling  · 🟡 designed/typed but inert (not wired) · ⬜ to build
+## Where it runs
+- **Authority:** Dewey, the librarian wolf, on **sfo-01** (wolf id `W1hOrJ`).
+  KB at `/home/wolf-W1hOrJ/knowledge/base`; den-local state (ledger, sections,
+  vectors) at `/var/lib/wolfpack-kb/W1hOrJ`. A systemd timer runs the sweep every
+  15 minutes; the CLI is bundled to `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
+- **Mirrors:** every other wolf gets each `domains/<domain>/` folder as a
+  **receive-only** Syncthing share. Edits or deletions on a mirror never reach
+  Dewey — change the KB on sfo-01 (e.g. `kb retire`), never by editing the mirror.
+- **Contributions** flow wolf → `opsRoot/inbox/<wolf>/` → sweep. Wolves produce
+  them by promoting den topics (`emitDelta`), crawling documents, or graduating
+  shipped work.
 
-## File map (current)
+## Layout
+```
+knowledge/base/domains/<domain>/
+  entries/<kb-id>.md    curated entries (YAML frontmatter + body)
+  INDEX.md              entry list (title + summary), rendered each sweep
+  _registry.md          topic registry (aliases, subscribers), from the ledger
+  _digest.json          section tree projection ("what the pack knows")
+  work/<work-id>.md     Factory work items (see factory-design.md)
+<denLocal>/
+  ledger/events.jsonl   KB event log (append-only source of truth)
+  sections/_sections.json   section tree snapshot
+  vectors/              embedding cache (never synced)
+```
+
+## Code map
 ```
 packages/engine/src/
-  prompts.ts                 ✅ all 10 system prompts (centralized, dataflow-commented)
-  config/vocab.ts            ✅ controlled vocabularies (NODE_TYPES, ENTRY_KINDS, WORK_KINDS,
-                                STAGES, RELATION_KINDS, CONFIDENCE, MATURITY, CURRENCY, …)
-  config/tuning.ts           ✅ numeric knobs (EMBED, GRAPH, RELATIONS, ROUTE, DIGEST, MATURITY_RULES)
-  config/index.ts            ✅ control-surface barrel
-  ledger/event-log.ts        ✅ createEventLog<E> — append-only JSONL + fold (the "database")
-  schemas/entry.ts           ✅ LIVE v1 frontmatter schema (still used by the running pipeline)
-
+  prompts.ts                  KB system prompts (SECTION_PICK, SECTION_SUMMARY,
+                              LABEL_SECTION, CONTRADICT, PRODUCE) + dataflow diagram
+  config/prompts/memory.ts    memory + crawl system prompts (re-exported by prompts.ts)
+  config/vocab.ts             closed vocabularies (ENTRY_KINDS, WORK_KINDS, STAGES,
+                              RELATION_KINDS, FACET_KEYS)
+  config/tuning.ts            numeric knobs (EMBED, SWEEP, HIERARCHY, DIGEST)
 packages/kb/src/
-  schema/knowledge.ts        🟡 v2 typed node: branded ids, discriminated Kind, LlmOpinion ⊕
-                                DerivedFacts ⊕ CuratorOverrides → assembleEntry(). NOT wired.
-  shared/schemas/digest.ts   🟡 ContextDigest contract (live + crawl paths). NOT wired.
-  librarian/produce.ts       ✅ v1 produce (LLM) → normalizeEntry → commit. To be replaced by assemble.
-  librarian/normalize.ts     ✅ v1 deterministic guardrails (link hygiene, dates, id↔domain)
-  librarian/domains.ts       ✅ renderDomainIndex (INDEX.md with [[wikilinks]])
-  client/resolve.ts          ✅ resolveEntry / listEntries (wolf reads its KB mirror)
-
+  schema/knowledge.ts         Entry, Section, LlmOpinion ⊕ DerivedFacts ⊕ CuratorOverrides
+                              → assembleEntry()
+  schema/work.ts              WorkItem + work events (Factory)
+  shared/                     contribution/event/registry/digest schemas, ids, paths
+  client/                     wolf side: emitDelta, work-store, work-ops (no LLM)
+  librarian/                  Dewey side: sweep, route, hierarchy, sections, oracles,
+                              produce, commit, domains (INDEX + digest), registry,
+                              ledger, summarize, embed, intake, retire, observability
+  cli.ts                      wolfpack-kb: status | sweep | reindex | rebuild-vectors
+                              | reorg | retire
 packages/kb/scripts/
-  kb-graph.mjs               ✅ similarity graph → Louvain + PageRank → GEXF/JSON/HTML + MOC notes
-  kb-health.mjs              ✅ health report (modularity, giant-component, silhouette, gaps, dups)
-  normalize-kb.mjs           ✅ one-shot frontmatter migration (dry-run default, --apply)
-
-artifacts (in the Obsidian vault, maps/):
-  maps/_KB-MAP.md, community-*.md       auto MOC notes
-  maps/graph/kb-graph.{html,gexf,json}  interactive map + Gephi export
-  maps/graph/kb-health.{json}, KB-HEALTH.md
-  maps/graph/show-me-kb-design.html     this design, visual
+  kb-health.mjs               section-tree health (balance, cohesion, summaries)
+  backfill-sections.mjs       per-domain section-tree builder for a new domain
 ```
 
 ---
 
-## Architecture
-
-### Control surface (editable)
-- `prompts.ts` — HOW the LLM is asked. 10 prompts, each `// stage · model · in · out`.
-- `config/vocab.ts` — WHAT it may categorize into (closed sets; grow deliberately).
-- `config/tuning.ts` — HOW MUCH (thresholds, graph params, digest size, merge bands).
-
-### Substrate (shared)
-`EventLog` (append-only + fold) · embeddings (cosine, nomic-embed-text) · typed `relations`
-· domains (subscription + Syncthing mirror).
-
-### Two layers (one `KnowledgeNode` base, discriminated by `nodeType`)
-- **Library** `nodeType:"reference"` → **Entry**. Durable. Lifecycle: maturity/currency.
-  Derived: Louvain `cluster`, PageRank `role`. Links: `see_also` + `part_of/refines`.
-- **Factory** `nodeType:"work"` → **WorkItem**. Live. Lifecycle: **stage machine**
-  (event-sourced). Owns assignee/project/status. Links: `references`→Library, `blocks`.
-- Cross-layer: `references` (work→context), `graduated_from` (entry←shipped work).
-
-### The typed core (assembly)
+## The typed entry
 ```
-LlmOpinion  ⊕  DerivedFacts  ⊕  CuratorOverrides  →  assembleEntry (pure)  →  KnowledgeNode
-(title·kind·    (id·dates·cluster·  (authority·        resolves link hints to      (always valid)
- prose·conf·     centrality·role·    maturity·pins)     real ids, drops the rest,
- link HINTS)     relations·integration)                 validates)
+LlmOpinion  ⊕  DerivedFacts  ⊕  CuratorOverrides  →  assembleEntry (pure)  →  Entry
+(title·kind·    (id·dates·section·   (authority·          resolves link hints to real
+ prose·facets·   placement·hash·      pins·verified)        ids, drops the rest,
+ link HINTS)     currency·relations)                        validates)
 ```
-The LLM never emits a node. Code re-derives ids and resolves every proposed link against
-the real id set. The LLM can be wrong; it cannot make the KB invalid.
+`kind` is one of `ENTRY_KINDS`, or `other` with a required `tag`. `facets` is a
+controlled map over `FACET_KEYS`; `properties` is an open string map for concrete
+attributes (host, region, counts).
 
-### What the linking analysis said to ADD (all derived, not LLM)
-`cluster` (Louvain) · `centrality`+`role` (PageRank) · typed `relations[]` (two-layer) ·
-`integration` (gap signal) · `maturity` (lifecycle). Hierarchy (`part_of` backbone) fixes
-**connectivity**; **coverage** is fixed by reclassification + authoring (orthogonal).
+## The sweep (`librarian/sweep.ts`)
+Per contribution, in order:
+1. **Embed** the contribution (Ollama, `nomic-embed-text`).
+2. **Identity:** a known alias (wolf + den topic) updates its existing entry; else a
+   cosine ≥ `SWEEP.mergeSim` match does.
+3. **Archive-safety:** an archived contribution older than a live entry never
+   supersedes it (receipt + skip).
+4. **Route:** descend the section tree by centroid cosine. When nothing fits,
+   **`SECTION_PICK_SYSTEM`** picks a provided section id or `NEW` (a new section).
+5. **Contradict** (conditional) → **Produce** (`PRODUCE_SYSTEM`, opinion only) →
+   **assemble** → **commit**.
+6. Re-render `INDEX.md`, `_digest.json` and `_registry.md` for touched domains.
+
+A single-writer `sweep.lock` prevents concurrent sweeps.
+
+## The section tree
+Every entry belongs to exactly one section; sections nest (single parent). Knobs
+live in `tuning.ts → HIERARCHY` (`fitThreshold`, `splitAt`, `mergeBelow`,
+`crystallizeAt`, `minCohesion`, `maxDepth`). **`wolfpack-kb reorg [domain]`**
+maintains it: fixes member counts, splits/merges/crystallizes, and re-summarizes
++ re-labels dirty sections (`SECTION_SUMMARY_SYSTEM`: one line ≤140 chars;
+`LABEL_SECTION_SYSTEM`: 2–6 word title). `--resummarize-all` regenerates every
+section after a prompt change; `--dry-run` previews.
+
+## The digest (`_digest.json`)
+A deterministic, hash-guarded projection of a domain's section tree: section
+ids, titles, one-line summaries, currency, entry ids. Sections with no entries
+in their subtree are omitted. Consumers:
+- **Crawl consolidation** primes every batch with it ("PACK ALREADY KNOWS"),
+  plus a running digest of the crawl's own finished batches.
+- **Wolves' `<kb_access>` pointer** lists each domain's entry count and
+  top-level section titles, so a wolf can tell when a domain is relevant.
+- **Live memory is not primed.** Den promotion is a deterministic upsert (no LLM);
+  merging across wolves is the sweep's job.
+
+## Removing entries
+`wolfpack-kb retire <entryId...> [--reason=…] [--dry-run]` on sfo-01 deletes the
+entry files, records `entry_retired` in the ledger (the registry drops the entry,
+and a topic left empty), and re-renders the registry, INDEX and digest. Run
+`reorg <domain>` afterwards to refresh section member counts.
 
 ---
 
-## Ingestion — both paths, Dewey-primed by the digest
-
-Dewey publishes `domains/<d>/_digest.json` each sweep (like INDEX): canonical topics +
-summaries + vocabulary + gaps + journey. Rides the Syncthing mirror. Both paths consume it.
-
-**Live** (`memory/consolidate`): inject the relevant subset into `buildConsolidatePrompt`
-as a "PACK ALREADY KNOWS" block → KB-aware delta (merge vs restate, correct kind at
-source, real `references` ids).
-
-**Crawl** (`memory/crawl/consolidate`): same, plus three crawl-specific behaviors —
-1. **Extend the real entry**: `existing` resolves from `digest.topics[match]` (Dewey's
-   canonical entry), not a parallel one.
-2. **Currency-aware**: digest topics carry `currency`; an archived crawl batch layers dated
-   history UNDER a live topic, never overwrites it (archived-vs-live guard at source).
-3. **Running digest**: `runningDigest(batchN) = published ⊕ topics produced by batches 1..N-1`
-   (crawl outruns the sweep timer; prevents intra-crawl dups). Oldest→newest.
-4. **Journey continuation**: `digest.journey` feeds CRAWL_JOURNEY so it extends the narrative.
-
-Information-granularity ladder: `utterance/doc → observation → den/crawl topic →
-contribution(delta) → Entry`.
-
----
-
-## Factory flow (stage machine)
-`IDEA → PLAN → FEASIBILITY → [APPROVED*] → IN_BUILD → PR → [MERGE master*] = shipped → LIVE → graduate → Entry`
-Every transition is an `EventLog` event; live state is a fold (history + time-travel free).
-`*` gates are config flags → shrink toward zero as confidence grows ("self-sustaining agent").
-Stages + legal transitions live in factory config (per project).
-
----
-
-## Implementation roadmap (in order)
-
-1. ⬜ **Wire `produce → assembleEntry`** (the v2 foundation).
-   - Move `knowledge.ts` vocab imports onto `engine/config/vocab.ts` (single source).
-   - Promote `KnowledgeNode` base (engine) so Entry + WorkItem share it.
-   - `produce` returns only `LlmOpinion`; new deterministic derivers build `DerivedFacts`:
-     - `cluster`/`role` from the embedding graph (reuse kb-graph core — factor
-       `scripts/lib/graph-core.mjs` or port into `librarian/graph.ts`).
-     - two-layer `relations`: embedding `see_also` (RELATIONS knobs) + resolved LLM edges
-       (RelationResolver = nearest-neighbor id lookup) + `part_of` to cluster/topic.
-   - `assembleEntry` (already in knowledge.ts) → `commit`. Update renderer for v2 fields
-     (keep `[[wikilink]]` relations; canonical key order already in engine commit.ts).
-2. ⬜ **Digest producer**: `librarian/renderDomainDigest(roots, domain)` → `_digest.json`
-   each sweep, alongside `renderDomainIndex`. Topics from entries (+currency), vocab from
-   config, journey from crawl journey if present.
-3. ⬜ **Digest consumers**:
-   - live: feed subset into `buildConsolidatePrompt`; update `CONSOLIDATE_SYSTEM`.
-   - crawl: feed `existing`+`currency`+running-digest into `crawl/consolidate`; update
-     `CRAWL_CONSOLIDATE_SYSTEM`; feed `journey` into `crawl/journey`.
-4. ⬜ **Migrate `wolfpack` domain only** to v2 (snapjack will be RE-CRAWLED fresh — no
-   snapjack migration). Then re-crawl snapjack through v2 + digest = the end-to-end test.
-5. ⬜ **`@wolfpack/factory` package**: WorkItem events + stage-machine config on
-   `EventLog`. `factory → engine (+ kb)`. Deterministic transitions; LLM drafts content.
-6. ⬜ (deferred) **Feedback loop**: emit `kb-health.json` each sweep; gap-directed capture.
-7. ⬜ (opportunistic) refactor kb + memory ledgers onto `engine` `EventLog` (pays down
-   the existing duplication the extraction was based on).
-
-## Notes / decisions already made
-- KB authority is **sfo-01** (`/home/wolf-W1hOrJ/knowledge/base`); Mac is a Syncthing
-  mirror. Deploy code via `wolfpack sync dewey`. Vectors are den-local to Dewey
-  (`/var/lib/wolfpack-kb/W1hOrJ/vectors`), never synced.
-- Prompts were centralized by the `prompt-cartographer` subagent (verbatim; build green).
-- `engine/src/config.ts` (model/runtime config) is a DIFFERENT concern from `config/`
-  (knowledge control surface) — rename later if confusing.
-- Current KB health baseline: 82/100 (B) — strong structure (modularity 0.46, small-world),
-  weak on connectivity (one orphan) and coverage (3/12 kinds — fixed by v2 reclassification).
+## Known gaps
+- **Relations are never filled.** The sweep's relation resolver is a stub that
+  returns `null`, so `assembleEntry` drops every proposed link.
+- **`SWEEP.mergeSim`** (0.72) still needs calibrating against real re-promotes.
+- **Work items are written into the receive-only mirror** on wolves
+  (`domains/<d>/work/`), so they never reach sfo-01.
+- Open cleanup tasks: `reorg` should take `sweep.lock`; KB `appendLedger` should
+  validate events before writing; `reorg --dry-run` overstates relabels.

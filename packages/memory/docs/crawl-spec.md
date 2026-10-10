@@ -26,10 +26,10 @@ Dewey — is the template, unchanged except doc-mode framing and date sourcing.
 
 ## 2. Two outputs, not one
 
-| Artifact | Template prompt | Meaning | Crawl behaviour |
+| Artifact | Prompt | Meaning | Crawl behaviour |
 |---|---|---|---|
-| **Topics** | `CONSOLIDATE_SYSTEM` | *what is true now* | current-state prose; supersede & delete obsolete freely |
-| **Journey** | `JOURNEY_SYSTEM` | *how it got here* | dated, chronological arc; append + compress oldest |
+| **Topics** | `CRAWL_CONSOLIDATE_SYSTEM` | *what is true now* | current-state prose; supersede & delete obsolete freely |
+| **Journey** | `CRAWL_JOURNEY_SYSTEM` | *how it got here* | dated, chronological arc; append + compress oldest |
 
 This split resolves the supersession tension: topics stay pure current-state; the
 historical detail current-state consolidation discards is exactly what the
@@ -103,11 +103,15 @@ packages/memory/src/crawl/
   discover.ts     [pure]  walk + include/exclude globs → SourceFile[]
   dates.ts        [det]   resolve each file's date + confidence via the trust chain
   group.ts        [pure]  strategies → CrawlPlan (+ chronological ordering)
-  plan.ts         [IO]    CrawlPlan read/write YAML + render + validate (run gate)
+  plan.ts         [IO]    planCrawl + CrawlPlan read/write YAML + render + validate (run gate)
   sink.ts         [IO]    the /tmp observability writer (§4)
-  scribe.ts       [IO]    ScribeRuntime (AgentRuntime impl)
-  run.ts          [IO]    driver: plan → observe → consolidate(per batch) → journey → emit
-  cli.ts          [IO]    headless `crawl plan|run` for dev + automation
+  extract.ts      [LLM]   doc-mode observe per batch → observations.jsonl (§7)
+  consolidate.ts  [LLM]   consolidateTopic (per batch) + running digest + topic docs (§8)
+  journey.ts      [LLM]   the reconstructed arc from topics' dated events (§9)
+  run.ts          [IO]    runCrawl: gate → extract → consolidate per batch (parallel) → journey
+  resume.ts       [IO]    resumeCrawl: redo consolidate + journey from saved artifacts
+  emit.ts         [IO]    release staged topics + history to the inbox (§10)
+  cli.ts          [IO]    headless `crawl plan|run|resume|emit` for dev + automation
 
 packages/memory/src/observer/prompts.ts   + CRAWL_OBSERVER_SYSTEM, buildCrawlObserverPrompt
 packages/memory/src/observer/observe.ts   + mode: "conversation" | "document", sourceDate
@@ -216,18 +220,24 @@ observe({ engine, chunkText, mode: "document", sourceDate })
 - Same output contract (single-line prose, split compound, identifiers/numbers
   verbatim). It is fine to emit zero.
 
-Runs parallel across a batch's chunks (`observeParallel`, concurrency 4). Weak
-model (haiku) by design — the prescriptive prompt is what makes it near-
+Within a batch, files and chunks are observed in order; batches run in parallel
+(up to `DEFAULT_CRAWL_CONCURRENCY` = 5). Weak model (haiku) by design — the prescriptive prompt is what makes it near-
 deterministic, exactly as live memory's observer already is.
 
 ## 8. Consolidation — per-batch rolling topic `[LLM + code]`
 
 The difference from live memory: live *discovers* topics (MERGE/CREATE); a crawl
 *pre-declares* them as batches. So consolidation is called **per batch, scoped to
-one target topic** — reusing `CONSOLIDATE_SYSTEM` unchanged. The result is the
-template's own rolling current-state document (the "rolling summary", for free).
+one target topic** (`consolidateTopic`) with `CRAWL_CONSOLIDATE_SYSTEM` — the
+precision of `CONSOLIDATE_SYSTEM` plus temporal currency and a dated events list.
+The result is the template's own rolling current-state document.
 
-- Process batches **oldest→newest** so newer facts supersede older ones correctly.
+- Within a batch, observations are fed **oldest→newest** so newer facts supersede
+  older ones correctly.
+- **Digest-primed:** each batch sees a "PACK ALREADY KNOWS" block built from the
+  domain's published `_digest.json` plus the topics this crawl's already-finished
+  batches produced (the running digest), so it extends existing knowledge instead
+  of restating it. Batches run in parallel, so "finished" depends on timing.
 - After the LLM writes the body, **code stamps** the temporal frontmatter from the
   batch's resolved dates (agent owns content, code owns dates).
 - **Undated observations** (confidence none): consolidation places them by
@@ -237,7 +247,7 @@ template's own rolling current-state document (the "rolling summary", for free).
 
 ## 9. Journey — the reconstructed arc `[LLM + code]`
 
-`JOURNEY_SYSTEM`, re-pointed across time:
+`CRAWL_JOURNEY_SYSTEM`, built from every topic's dated events (not raw observations):
 - Segments are **ordered by recovered document date** and **stamped with that
   date**, not crawl-time.
 - Approximate placements are marked approximate (`~2026`, "circa", "undated") —
@@ -304,7 +314,7 @@ blocks ingestion bypass during plan mode. Headless CLI mirrors: `crawl plan` /
 | discover | pure | glob walk |
 | dates | deterministic | trust chain + confidence; git IO but reproducible; mtime never orders |
 | group / plan / order | pure | strategies + chronological sort; unit-testable |
-| **observe** | **LLM** | doc-mode, parallel; timestamp = recovered date; never invents dates |
+| **observe** | **LLM** | doc-mode; batches in parallel; timestamp = recovered date; never invents dates |
 | **consolidate** | **LLM + code** | per-batch rolling topic; code stamps dates; places undated by content |
 | **journey** | **LLM + code** | date-ordered arc; marks approximate; append+compress |
 | emit | deterministic | /tmp first; hash-dedup; `from: scribe`; temporal block |
@@ -315,7 +325,8 @@ call. Everything else is code; the plan fully bounds what each LLM call sees.
 
 ## 12a. Status (implemented)
 
-All stages built, observable via `/tmp/wolfpack-crawl/<session>/`, 23 crawl tests.
+All stages built, observable via `/tmp/wolfpack-crawl/<session>/`, unit-tested
+(`crawl.test.ts`, `consolidate.test.ts`).
 
 - **Deterministic CLI** (`crawl.../cli.js`): `plan` → `run` → `emit`, plus `resume`
   (reuse saved artifacts: `--from observations` re-does consolidate+journey;
@@ -348,9 +359,9 @@ The wolf PLANS; the scribe EXECUTES; `emit` RELEASES — three reviewed steps.
    writes the `/tmp` tree — observe discovery + dates + plan before any LLM.**
 3. `CRAWL_OBSERVER_SYSTEM` + `observe({ mode, sourceDate })`; dump
    `observations.jsonl` to `/tmp`.
-4. `scribe.ts` + per-batch consolidate; dump `topics/` to `/tmp`.
+4. Per-batch consolidate (under the scribe identity); dump `topics/` to `/tmp`.
 5. Journey (date-ordered) → `/tmp/journey.md` + history contribution.
-6. `run.ts` emit (still `/tmp` only) → `contributions/`; then enable inbox copy.
+6. `emit.ts` (still `/tmp` only) → `contributions/`; then enable inbox copy.
 7. Dewey: dated contradict + append-history + entry `as_of`/`historical`.
 8. Plan mode tools + `/wolf:crawl` / `/wolf:crawl-run`.
 9. Deferred: `auto` strategy; first-class `_history` surface.

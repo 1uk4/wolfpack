@@ -44,26 +44,26 @@ These hold across every phase — they are the fixed points the roadmap builds a
 
 ---
 
-## Phase 1 — Factory (task system), on the current pi CLI ⬜ · **start here**
+## Phase 1 — Factory (task system), on the current pi CLI ✅
 
-Deliver a usable task system **now**, file-first, before any container or service work.
-Full spec: `docs/factory-design.md`.
+A usable task system, file-first, before any container or service work.
+Spec (as built): `docs/factory-design.md`.
 
-- Wire the **WorkItem** node (the KB's designed-but-unbuilt "Factory" layer) on the
-  existing shared `EventLog` primitive (which already names the WorkItem stage machine as
-  its intended consumer).
-- Two orthogonal axes: a **work tree** (`part_of`: initiative → feature → task) and an
-  **area** field (marketing, analysis, …) within a domain.
-- Add **`success_criteria`** to each item; **`assignee`** is a wolf id (`1uk4`, `hal`, …).
-- A **`/task` pi extension**: bind a session to a WorkItem, render it into the system
-  prompt, advance stage, append progress, link KB entries used.
-- **Graduation**: shipped work flows into Library entries via the existing
-  promote → inbox → sweep path; `area` → the entry's `subsystem` facet.
-- **Storage:** `knowledge/base/domains/<domain>/work/<id>.md` (parallel to `entries/`),
-  Obsidian-viewable; stage history in the event ledger.
+- **WorkItem** node in `kb/schema/work.ts`, event-sourced on its own work ledger
+  (`<den>/kb/ledger/work-events.jsonl`); items render to
+  `knowledge/base/domains/<domain>/work/<id>.md`.
+- Two orthogonal axes: a **work tree** (`partOf`: initiative → feature → task) and an
+  **area** field within a domain.
+- **`successCriteria`** (required before a task leaves `plan`); **`assignee`** is a wolf id.
+- **`/task` dashboard + agent tools** (`task_create`, `task_stage`, `task_done`, …):
+  bind a session to an item, render it into the system prompt, advance stages, log
+  progress, link KB entries.
+- **Graduation**: shipped tasks summarize into their parent; shipped features (and,
+  once all features have, initiatives) graduate into Library entries via the ops
+  inbox → sweep path.
 
-*Milestone:* `/task use <id>` in your dev session → you work → the item updates and feeds
-the KB. No Docker, no API required.
+Open gaps (area inheritance, area → `subsystem` facet, work files written into the
+receive-only mirror) are listed in `docs/factory-design.md`.
 
 ---
 
@@ -75,8 +75,8 @@ Make the KB authoritative on the VPS and reachable over Tailscale.
   **+ WorkItem CRUD** endpoints.
 - **Ollama** sidecar (embeddings for search + routing); automated **sweep** on a timer;
   **token auth** (Dewey = write, others = read).
-- **KB client pi extension** — API calls replace direct file reads (`client/resolve.ts`).
-  This is the piece your own dev env needs first.
+- **KB client pi extension** — API calls replace wolves reading the Syncthing mirror
+  directly. This is the piece your own dev env needs first.
 - **Syncthing** shrinks from a per-wolf star to a single **cold-backup** pipe VPS → Mac.
 
 *Milestone:* your pi CLI dev wolf reads/writes the authoritative VPS KB live; the Factory

@@ -1,223 +1,131 @@
-# Wolfpack Factory — Task System Design (Phase 1)
+# Wolfpack Factory — Task System
 
 > The **Factory** is the live-work layer of the knowledge base: typed **WorkItems**
-> organized into projects/features/tasks, assigned to wolves, that update as you work and
-> **graduate into the Library** (durable KB entries). This spec is file-first and runs in
-> the pi coding-agent CLI today. Roadmap context: `docs/roadmap.md`. KB substrate:
-> `docs/kb-design.md`.
+> organized into initiatives, features and tasks, assigned to wolves, updated as you
+> work, and **graduated into the Library** (curated KB entries) when they ship.
+> It runs in the pi coding-agent CLI through the `wolfpack-memory` extension.
+> Roadmap: `docs/roadmap.md`. KB substrate: `docs/kb-design.md`. The `/task new`
+> flow: `docs/factory-wizard-design.md`.
 
-## Status legend
-- ✅ built · 🟡 vocab/primitive exists, node to build · ⬜ to build
-
-## What already exists (we are wiring the layer it was designed for)
-
-- ✅ **Vocabularies** in `packages/engine/src/config/vocab.ts`:
-  - `NODE_TYPES = ["reference", "work"]` — Library vs Factory.
-  - `WORK_KINDS = ["idea","initiative","feature","task","issue","spike"]`.
-  - `STAGES = ["idea","plan","feasibility","approved","in_build","shipped","live","archived"]`.
-  - `RELATION_KINDS` includes the Factory edges: `references` (work→context),
-    `graduated_from` (entry←work), `blocks` (work→work), plus `part_of`, `depends_on`.
-- ✅ **Event store** `packages/engine/.../ledger/event-log.ts` — its header already names
-  *"the new factory (WorkItem stage machine)"* as an intended consumer. Append-only JSONL
-  + pure `fold` → live state. This is the stage machine's backbone.
-- ✅ **Library side** fully typed/wired: `Entry`, `assembleEntry`, routing, sweep.
-- ✅ **Id + path conventions**: `ids.ts` (`kb-<domain>-<shortId>`, `shortId`, `now`),
-  `paths.ts` (`entriesDir = kbBase/domains/<domain>/entries`).
-- 🟡 **WorkItem node type** — only the vocab exists; the typed node, storage, assembler,
-  and commands are **to build**.
+## Principles
+1. **One substrate, two layers.** Library entries (durable) and Factory work items
+   (live, staged) share domains, ids and event sourcing.
+2. **Determinism at the core.** Ids, dates and stage transitions are code. A work
+   item is human/agent-authored prose plus typed state; no LLM is needed to make one.
+3. **Optional depth.** The same type holds a three-level dev feature or a one-line
+   personal todo; add structure only when it helps.
+4. **Make illegal states unrepresentable.** Branded ids, enum stages and kinds;
+   every ledger event is validated before it is written.
 
 ---
 
-## Principles (inherited from the KB)
-
-1. **One substrate, two layers.** Library (`reference`) = durable context. Factory
-   (`work`) = live, staged. Same storage, same event-sourcing, same propagation.
-2. **Determinism at the core.** Ids, dates, stage transitions, hashes, link resolution =
-   code. The WorkItem is *human/agent-authored prose + typed state* — no LLM is required
-   to produce one (unlike an Entry).
-3. **Built around how 1uk4 works, with optional depth.** The same type handles a 3-level
-   dev feature and a one-line personal todo. You add structure only when you want it.
-4. **Make illegal states unrepresentable.** Branded ids, enum stages, a discriminated
-   kind — the compiler is the source of truth for a WorkItem's shape.
-
----
-
-## The two orthogonal axes
-
-The core design decision: **work decomposition and project-area are independent.**
-
-1. **Work tree** — the `part_of` relation. *Vertical* decomposition:
-   `initiative → feature → task`. How work breaks down.
-2. **Area** — a field. *Horizontal* grouping within a domain: `marketing`, `analysis`,
-   `engineering`. Which system it belongs to.
+## Two orthogonal axes
+1. **Work tree** — `partOf`: *vertical* decomposition, `initiative → feature → task`.
+2. **Area** — a field: *horizontal* grouping within a domain (`marketing`,
+   `engineering`, …).
 
 ```
 domain: snapjack                 ← hard boundary (vs personal, wolfpack)
 ├─ area: marketing
-│   └ initiative "Q2 launch push"          (part_of tree)
+│   └ initiative "Q2 launch push"
 │       └ feature  "referral program"
-│           └ task "wire referral codes"   success_criteria: "code redeems → credit applied"
-├─ area: analysis
-│   └ initiative "retention model v2"
-│       └ task "pull cohort export"        assignee: 1uk4
+│           └ task "wire referral codes"   successCriteria: "code redeems → credit applied"
 └─ area: engineering
-    └ task "upgrade push-notif SDK"        assignee: hal (1uk4 physically does it)
+    └ task "upgrade push-notif SDK"
 
 domain: personal                 ← no areas; bare tasks
-└─ task "call dentist"           assignee: hal
+└─ task "call dentist"
 ```
 
-- **Domain** = the hard boundary (`personal` | `snapjack` | `wolfpack` | …). Maps to a KB
-  domain, so propagation and read-access already flow per-domain.
-- **Area inherits from the parent.** Set it once on the initiative; children inherit;
-  override only when needed. You never re-type "marketing" on every task.
-- **Personal/light work** simply sets no area and stays a flat list of bare `task`s.
-
-### Continuity to the Library
-`area` is deliberately the Factory counterpart of the Library's `subsystem` facet
-(`FACET_KEYS = ["subsystem","surface","layer","lifecycle"]`). When a WorkItem **graduates**
-to an Entry, its `area` becomes the entry's `subsystem` facet — the grouping survives the
-jump from Factory to Library. Marketing *work* files into marketing *knowledge*.
+- **Domain** is the hard boundary and maps to a KB domain.
+- **Area** is set on create; personal work usually leaves it unset.
 
 ---
 
-## The WorkItem (typed node to build)
-
-Lives at `packages/kb/src/schema/work.ts` (sibling of `knowledge.ts`).
-
+## The WorkItem (`packages/kb/src/schema/work.ts`)
 ```ts
-WorkId          work-<domain>-<shortId>     // branded, mirrors EntryId
+WorkId           work-<domain>-<7id>
 WorkItem {
-  id            WorkId
-  nodeType      "work"
-  kind          "idea" | "initiative" | "feature" | "task" | "issue" | "spike"
-  domain        DomainId                    // personal | snapjack | wolfpack   (hard boundary)
-  area          Slug | null                 // marketing | analysis | …  (inherits from part_of parent)
-  title         string
-  stage         Stage                       // idea → … → archived  (event-sourced)
-  assignee      WolfId                       // 1uk4 | hal | <autonomous wolf>
-  success_criteria  string | null           // the done-condition (NEW; required for kind:"task")
-  part_of       WorkId | null               // the work tree (nullable = root)
-  references    EntryId[]                    // work → Library context it used
-  depends_on    WorkId[]                     // work → work
-  blocks        WorkId[]                     // work → work
-  graduated_to  EntryId[]                    // entries born from this work
-  created       IsoDate
-  updated       IsoDate
-  // body (markdown file): plan (iterable) + notes + append-only activity log
+  id, nodeType: "work"
+  kind            "idea" | "initiative" | "feature" | "task" | "issue" | "spike"
+  domain          DomainId
+  area            Slug | null
+  title           string
+  summary         string | null      // ≤140 chars; set on task completion / graduation
+  stage           Stage              // idea → plan → feasibility → approved → in_build
+                                     //   → shipped → live → archived
+  assignee        WolfId             // 1uk4 | hal | <autonomous wolf>
+  successCriteria string | null      // required before a task leaves "plan"
+  partOf          WorkId | null      // the work tree (null = root)
+  references      EntryId[]          // work → Library context
+  dependsOn       WorkId[]           // work → work
+  blocks          WorkId[]
+  graduatedTo     EntryId[]          // entries born from this work
+  log             { at, text }[]
+  created, updated
 }
 ```
+The plan/notes prose lives in the markdown body; frontmatter holds the state.
+`isComplete(item)` (shipped, live or archived) is the shared "done" check.
 
-Notes:
-- `success_criteria` is the one genuinely new field. **Required when `kind === "task"`**
-  (every job has a done-condition); optional on higher-level items.
-- `stage` is a superset. Dev features walk the full machine; personal items live in a
-  subset (`plan → in_build → shipped`). One enum, used to the depth needed.
-- `assignee` semantics differ by wolf (see below) — the field is the same.
-
----
-
-## Stage machine (event-sourced)
-
-State is a **fold over an append-only event log**, reusing `event-log.ts`. Transitions are
-new events, never in-place mutation — replayable, auditable, and ready to move behind the
-Phase 2 API unchanged.
+## Event sourcing
+State is a pure fold (`foldWork`) over an append-only ledger. Each op in
+`client/work-ops.ts` builds an event, `appendWorkLedger` validates it (nothing is
+written if it is invalid), and the item's `.md` file is re-rendered.
 
 ```
-events (append-only JSONL)                  fold → live WorkItem state
-  work.created   { id, kind, domain, ... }
-  work.staged    { id, from, to }           stage transitions
-  work.assigned  { id, assignee }
-  work.noted     { id, text }               activity log entries
-  work.linked    { id, entryId, rel }       references / graduated_to
-  work.criteria  { id, success_criteria }
+work.created · work.staged · work.assigned · work.criteria · work.area
+work.retitled · work.deleted · work.noted · work.linked
+work.bound · work.unbound · work.summarized
 ```
 
-Stage path (dev): `idea → plan → feasibility → approved → in_build → shipped → live → archived`.
-Stage path (personal/light): `plan → in_build → shipped`.
-
----
-
-## Assignment & the wolf queue
-
-`assignee` is a wolf id, and it means subtly different things per wolf — the model honors
-all three:
-
-- **`1uk4`** — hands-on development. Items you pull up in your pi CLI session.
-- **`hal`** — things you must *physically do*. Hal does not execute them; he is your
-  **mobile KB relay**: when you are away he surfaces what is assigned to him (over
-  Telegram), reminds/tracks, and reads/writes the KB on your behalf. `assignee: hal` =
-  "real-world action Hal tracks," not "Hal runs code."
-- **autonomous wolves (future)** — a wolf's **queue** is simply
-  `WorkItems where assignee == me AND stage is actionable` (`approved` | `in_build`).
-  "Wolves in loops" drain that queue, advancing stages until empty.
-
-This generalizes the den's current flat `tasks/inbox.md → active.md → done.md`: the Factory
-is the structured, typed, propagating version of those lists.
-
----
-
-## Session binding — the `/task` pi extension (file-first)
-
-A small pi extension provides the hands-on surface:
-
-- `/task new` — create a WorkItem (kind, domain, area, title, success_criteria, part_of).
-- `/task use <id>` — **bind this session** to a WorkItem. It renders into the system
-  prompt as a section: *"Active: `<title>` — success: `<criteria>` — stage: `in_build`"* so
-  the agent always knows the current job and its done-condition.
-- `/task plan` — open/iterate the plan body (stays in `plan`; each revision logged).
-- `/task break` — spawn `task` children (`part_of`), each prompting for `success_criteria`.
-- `/task stage <next>` — advance the stage machine.
-- `/task note <text>` — append to the activity log.
-- `/task ls [--mine] [--area <a>] [--tree <id>]` — view by queue, area, or tree.
-- `/task done <id>` — advance to `shipped` and trigger graduation.
-
-As a bound session runs, progress appends to the item and KB entries it touches are linked
-via `references`.
-
----
-
-## Graduation → the Library (propagation)
-
-When work ships, its learnings flow into durable KB entries through the **existing**
-promote → inbox → sweep pipeline — no new ingestion path:
-
-1. `/task done` (or stage → `shipped`) emits the WorkItem's summary + notes as a
-   contribution into the wolf's **ops inbox** (`opsRoot/inbox/<wolf>`), tagged with the
-   work's `domain` and `area`.
-2. Dewey's automated **sweep** routes/produces it into an `Entry` as today.
-3. The resulting entry links back via `graduated_from`; the WorkItem records
-   `graduated_to`. The work's `area` becomes the entry's `subsystem` facet.
-
-The Factory feeds the Library; the Library compounds. This is the loop the KB design
-named as its goal: *"Lived sessions and shipped work graduate back into the Library."*
-
----
-
-## File layout (file-first; moves behind the Phase 2 API unchanged)
-
+## Storage
 ```
-knowledge/base/domains/<domain>/
-  entries/        ✅ Library entries (reference)
-  work/           ⬜ Factory WorkItems (one <WorkId>.md each; frontmatter + body)
-  _registry.md    ✅ topic registry (rides the domain's Syncthing share)
-  INDEX.md        ✅ entry index
-<den-local>/kb/ledger/events.jsonl   ✅ event store (stage transitions appended here)
+<den>/kb/ledger/work-events.jsonl           work ledger (source of truth)
+<kbBase>/domains/<domain>/work/<WorkId>.md  rendered item (frontmatter + body)
+<den>/factory/active-task.json              this wolf's bound task
 ```
 
-A WorkItem file is Obsidian-native: YAML frontmatter for structured state, a markdown body
-with `## Plan`, `## Notes`, and an append-only `## Log`. The local pi CLI reads/writes these
-directly today; Phase 2 puts the identical files behind `resolve`/`contribute`-style
-endpoints with no data-model change.
+---
+
+## Assignment
+`assignee` is a wolf id with per-wolf meaning:
+- **`1uk4`** — hands-on development in the pi CLI.
+- **`hal`** — things you physically do; Hal tracks and reminds over Telegram.
+- **autonomous wolves (future)** — a queue of items assigned to them in an
+  actionable stage (`approved`, `in_build`).
+
+## The pi surface (`extensions/wolfpack-memory/work-system.ts`)
+- **`/task`** opens the dashboard: the work tree with stages, plus create (the
+  wizard), bind, edit, stage, delete, and `g` to graduate a shipped feature.
+- **Binding** a task injects an `<active_task>` block into the system prompt
+  (title, stage, `done_when`, working document, recent log, stage guidance) and
+  advances its ancestors to `in_build`. File changes are tracked while bound.
+- **Agent tools:** `task_create`, `task_query`, `task_update` (working document),
+  `task_note`, `task_stage`, `task_link`, `task_done` (ship the bound task and bind
+  the next unfinished sibling).
+- **Stage detection** suggests transitions (e.g. "looks done — mark shipped?").
+
+## Completion and graduation
+1. **Task ships** → the LLM summarizes it (`TASK_SUMMARY_SYSTEM`) from its working
+   document and the notes logged while it was bound; the summary is appended to the
+   parent's `## Implementation Log`.
+2. **Feature graduates** (`g` in the dashboard, once shipped) → a contribution is
+   written to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`) and the item records
+   `graduatedTo`. An **initiative** graduates automatically once all its features
+   have.
+3. **Dewey's sweep** turns the contribution into a curated entry like any other.
 
 ---
 
-## Build order (Phase 1)
-
-1. ⬜ `schema/work.ts` — `WorkId`, `WorkItem`, the event union, a pure `foldWork` reducer.
-2. ⬜ Storage — `work/` read/write + ledger append, mirroring `client/resolve.ts` style.
-3. ⬜ CLI/engine ops — create / stage / assign / note / link / list (pure functions over
-   the event log).
-4. ⬜ `/task` pi extension — session binding + system-prompt section + the commands above.
-5. ⬜ Graduation hook — emit contribution to the ops inbox on `shipped`.
-6. ⬜ Seed 1uk4's real projects (snapjack areas, wolfpack, personal) and start using it.
+## Known gaps
+- **Area is not inherited or carried over.** Children don't inherit the parent's
+  area (the schema comment says they should), and graduation doesn't set the
+  entry's `subsystem` facet from it.
+- **Task summaries ignore observations.** Work sessions have an observations
+  list, but nothing feeds it (`addWorkObservation` has no caller).
+- **Work files land in the receive-only mirror** on wolves, so they never reach
+  sfo-01 (the ledger in the den is unaffected).
+- **No re-parenting.** There is no event to change `partOf` after creation.
+- Several helpers in `memory/src/work/` (`processWorkEvent`,
+  `processGraduationQueue`, file-pattern detection) are written but not wired.

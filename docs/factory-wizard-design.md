@@ -1,81 +1,48 @@
-# Factory Wizard — `/task new` Conversational Flow
+# Factory Wizard — `/task` → create
 
-> Design doc for the ask_user_question-driven task creation wizard.
+> The guided flow for creating a work item from the `/task` dashboard
+> (`wizardNew` in `extensions/wolfpack-memory/work-system.ts`). The agent's
+> equivalent is the `task_create` tool. Work item model: `docs/factory-design.md`.
 
 ## Principle
+No upfront kind selection by jargon. The wizard asks what you want to do and
+classifies it from plain-language choices.
 
-No upfront kind selection. The wizard asks questions to understand what the user
-wants, classifies it, and creates the right work structure. Each classification
-has rules the wizard follows.
-
-## Conversation Flow
-
+## Flow (as built)
 ```
-/task new
-  ↓
-Q1: "What do you want to do?"
-    → free-text: user describes the idea/problem/task
-  ↓
-Q2: "Which domain does this belong to?"
-    → select from discovered domains (snapjack, wolfpack, personal…)
-  ↓
-Q3: "What's the scope?" (agent classifies, but confirms with user)
-    → One-off action (task)         — "I need to do X"
-    → Something to investigate (spike) — "I need to figure out X"
-    → A problem to fix (issue)       — "X is broken / wrong"
-    → A capability to build (feature) — "I want to add X"
-    → A larger effort (initiative)   — "I want to achieve X" (multiple features)
-  ↓
-  Based on classification:
+1. "What do you want to do?"      free text → description
+2. "Which domain?"                discovered KB domains + personal
+                                  (skipped when there is only one)
+3. "What best describes this?"
+     A one-off action I need to do         → task
+     Something to investigate or research  → spike
+     A problem or bug to fix               → issue
+     A capability to build                 → feature
+     A larger effort with multiple parts   → initiative
+4. "Title"                        defaults to the description
+→ creates one work item (assignee = this wolf) with a starter body
+```
 
-  TASK:
-    Q: "What does done look like?" → success_criteria (required)
-    Q: "Area?" (optional, e.g. engineering, marketing)
-    → creates 1 work item (kind: task)
+Starter bodies by kind:
 
-  SPIKE:
-    Q: "What question are you trying to answer?"
-    Q: "Time box?" (optional)
-    → creates 1 work item (kind: spike, success_criteria = question to answer)
+| Kind | Body sections |
+|---|---|
+| task | `## Plan` (description), `## Done when` |
+| spike | `## Question` (description), `## Findings` |
+| issue | `## Problem` (description), `## Expected behavior`, `## Fix` |
+| feature | `## Overview` (description), `## Plan`, `## Done when` |
+| initiative | `## Goal` (description), `## Features`, `## Plan` |
 
-  ISSUE:
-    Q: "What's the expected behavior?"
-    Q: "What's happening instead?"
-    → creates 1 work item (kind: issue, success_criteria = expected behavior)
+Binding an item then offers: **Start working**, **Review and update the plan**
+(the wolf reviews the working document with you), or **Change title or success
+criteria**. A task needs `successCriteria` before it can leave `plan`.
 
-  FEATURE:
-    Q: "What does done look like?"
-    Q: "Area?"
-    Q: "Want to break this into tasks now?" (optional)
-      → if yes: loop creating child tasks (each with success_criteria)
-    → creates 1+ work items (feature + child tasks)
-
-  INITIATIVE:
-    Q: "What's the goal?"
-    Q: "Area?"
-    Q: "What are the major pieces?" → creates child features
-      → for each feature: "Break into tasks?" → child tasks
-    → creates a work tree (initiative → features → tasks)
-
-## Classification Rules (for agent-driven creation too)
-
-Each kind has a prompt template stored in the work item body that guides
-the agent when working on it:
-
-- **task**: "Do X. Done when: {criteria}."
-- **spike**: "Investigate: {question}. Time box: {timebox}. Deliver findings."
-- **issue**: "Fix: {description}. Expected: {expected}. Actual: {actual}."
-- **feature**: "Build: {description}. Done when: {criteria}. Tasks: {children}."
-- **initiative**: "Goal: {goal}. Features: {children}."
-
-## File Layout
-
-Each work item gets its own .md file at `domains/<domain>/work/<WorkId>.md`.
-Breaking down creates new files — the parent links via `partOf`.
-
-## Future: Agent-Driven Classification
-
-The wizard is the manual path. The `task_create` tool lets the agent create
-work items directly when it has enough context (e.g. from a conversation where
-the user described what they want). The agent should follow the same
-classification rules.
+## Not built yet (original design)
+- **Per-kind follow-ups:** task → "What does done look like?" (sets
+  `successCriteria`) and "Area?"; spike → the question + a time box; issue →
+  expected vs. actual behavior.
+- **Breakdown loops:** feature → "Break this into tasks now?"; initiative → "What
+  are the major pieces?" creating child features, each optionally broken into
+  tasks.
+- **Agent-driven classification** following the same rules from conversation
+  context (today the agent picks `kind` itself when calling `task_create`).

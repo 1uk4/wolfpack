@@ -36,6 +36,8 @@ export interface ProduceEntryInput {
   placement: Placement;
   /** Entry id when merging/updating, or null for create */
   entryId?: string;
+  /** Id to give a NEW entry (instead of a random one), e.g. derived from a work id */
+  newEntryId?: string;
   /** Existing entry markdown for merge context */
   existingMarkdown?: string;
   /** Resolver for proposed relations (embedding NN + id lookup) */
@@ -58,7 +60,7 @@ export async function produceEntry(
   engine: Engine,
   input: ProduceEntryInput
 ): Promise<ProduceEntryResult> {
-  const { contribution, domain, section, placement, entryId, existingMarkdown, resolve, overrides } = input;
+  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, resolve, overrides } = input;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
 
   // Build LLM prompt (bounded, context-aware)
@@ -83,7 +85,7 @@ export async function produceEntry(
   );
 
   // Build DerivedFacts deterministically
-  const id = entryId ? EntryId.parse(entryId) : EntryId.parse(mkEntryId(domain));
+  const id = EntryId.parse(entryId ?? newEntryId ?? mkEntryId(domain));
   const timestamp = IsoDate.parse(now().slice(0, 10));
   
   // Compute content hash from the opinion prose

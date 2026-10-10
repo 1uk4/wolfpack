@@ -114,6 +114,15 @@ function mkSectionId(domain: string): SectionId {
   return SectionId.parse(`sec-${domain}-${tail}`);
 }
 
+/**
+ * The entry a graduated work item owns: `work-<domain>-<7id>` → `kb-<domain>-<7id>`
+ * (the same id graduation records as graduatedTo). Null for other contributions.
+ */
+export function graduatedEntryId(denTopicId: string, domain: string): string | null {
+  const m = /^work-[a-z0-9-]+-([0-9A-Za-z]{7})$/.exec(denTopicId);
+  return m ? `kb-${domain}-${m[1]}` : null;
+}
+
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
  *  cosine FP overshoot (>1) or a reused _unplaced score (<0) hard-failing the
  *  whole contribution at schema-parse time. */
@@ -215,7 +224,11 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       // 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
       // content-similarity to the nearest entry (seeds the alias on commit).
       let targetId: string | undefined;
-      for (const topic of reg.values()) {
+      // Graduated work owns exactly one entry, keyed by its work id: update it
+      // if it exists, otherwise create it. Never similarity-merged into another.
+      const ownId = graduatedEntryId(c.denTopicId, domain);
+      if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
+      for (const topic of ownId ? [] : reg.values()) {
         const alias = topic.aliases.find(
           (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
         );
@@ -224,7 +237,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
           break;
         }
       }
-      if (!targetId) {
+      if (!targetId && !ownId) {
         let near: { id: string; score: number } | null = null;
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
@@ -329,6 +342,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         section: sectionId,
         placement,
         entryId: targetId,
+        newEntryId: ownId ?? undefined,
         existingMarkdown,
         resolve,
       });

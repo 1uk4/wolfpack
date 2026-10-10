@@ -20,6 +20,22 @@ export {
 // Ship policy (confirm vs. auto for agent loops)
 export { resolveShipPolicy, shouldConfirmShip, type ShipPolicy } from "./ship-policy.js";
 
+// /task workspace browser (pure state + key reducer)
+export {
+  initialState,
+  reduce,
+  leftRows,
+  rightRows,
+  firstTask,
+  progress,
+  isBlocked,
+  type SelectorState,
+  type SelectorKey,
+  type SelectorEffect,
+  type LeftRow,
+  type Pane,
+} from "./selector.js";
+
 // File observation
 export {
   startFileTracking,

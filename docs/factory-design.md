@@ -109,8 +109,14 @@ work.bound · work.unbound · work.summarized
   actionable stage (`approved`, `in_build`).
 
 ## The pi surface (`extensions/wolfpack-memory/work-system.ts`)
-- **`/task`** opens the dashboard: the work tree with stages, plus create (the
-  wizard), bind, edit, stage, delete, and `g` to graduate a shipped feature.
+- **`/task`** opens a two-pane workspace browser (`memory/src/work/selector.ts`
+  holds the pure navigation reducer). Left: the Inbox, initiatives (collapsed;
+  `l`/`Enter` expands, `h` collapses) with their features, standalone features.
+  `l`/`Enter` on a feature lists its tasks on the right (open first) and moves
+  focus there; `j`/`k` move, `h` goes back. **`Space` binds** the focused task;
+  opening an `in_build` feature auto-binds its first open, unblocked task only when
+  nothing is bound. Also `n` new (wizard), `m` move, `D` depend, `x` delete,
+  `g` graduate a shipped feature.
 - **Binding** a task injects an `<active_task>` block into the system prompt
   (title, stage, `done_when`, working document, recent log, stage guidance) and
   advances its ancestors to `in_build`. File changes are tracked while bound.

@@ -14,7 +14,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
-import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import {
   createWork,
   stageWork,
@@ -53,6 +53,16 @@ import {
   resolveShipPolicy,
   shouldConfirmShip,
   parentReadyToShip,
+  initialState,
+  reduce,
+  leftRows,
+  rightRows,
+  firstTask,
+  progress,
+  isBlocked,
+  type SelectorState,
+  type SelectorKey,
+  type SelectorEffect,
 } from "@wolfpack/memory";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -618,20 +628,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   type PanelAction = "bind" | "new" | "unbind" | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | null;
 
-  // Check if a work item is blocked (has incomplete dependencies)
-  function isBlocked(item: WorkItem, allItems: WorkItem[]): boolean {
-    const deps = item.dependsOn ?? [];
-    if (deps.length === 0) return false;
-    const itemMap = new Map(allItems.map(i => [i.id, i]));
-    for (const depId of deps) {
-      const dep = itemMap.get(depId as any);
-      if (!dep || dep.stage !== "shipped" && dep.stage !== "live" && dep.stage !== "archived") {
-        return true; // Dependency not complete
-      }
-    }
-    return false;
-  }
-
   /** Valid new parents for an item (current parent excluded), plus Inbox/standalone. */
   function moveTargets(item: WorkItem, all: WorkItem[]): { label: string; id: string | null; inbox?: boolean }[] {
     const out: { label: string; id: string | null; inbox?: boolean }[] = [];
@@ -653,121 +649,117 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
       const action = await ctx.ui.custom<PanelAction>(
         (tui: any, theme: any, _kb: any, done: (result: PanelAction) => void) => {
-          let cursor = 0;
-          const items = (queryWork(roots, { assignee: wolfName }) ?? [])
-            .filter((i) => !["archived"].includes(i.stage))
-            .sort((a, b) => {
-              const order = ["in_build","plan","approved","feasibility","idea","shipped","live"];
-              return order.indexOf(a.stage) - order.indexOf(b.stage);
-            });
-
-          // Build hierarchical display order
-          const itemIds = new Set(items.map(i => i.id));
-          const childrenOf = new Map<string, WorkItem[]>();
-          const rootItems: WorkItem[] = [];
-          for (const item of items) {
-            if (item.partOf && itemIds.has(item.partOf as string)) {
-              const siblings = childrenOf.get(item.partOf as string) ?? [];
-              siblings.push(item);
-              childrenOf.set(item.partOf as string, siblings);
-            } else {
-              rootItems.push(item);
-            }
-          }
-          const displayOrder: { item: WorkItem; depth: number }[] = [];
-          const collectDisplayOrder = (item: WorkItem, depth: number) => {
-            displayOrder.push({ item, depth });
-            const children = childrenOf.get(item.id as string) ?? [];
-            for (const child of children) {
-              // Skip task children if parent feature is graduated
-              const parentGraduated = item.graduatedTo && item.graduatedTo.length > 0;
-              if (parentGraduated && child.kind === "task") continue;
-              collectDisplayOrder(child, depth + 1);
-            }
+          // Two-pane workspace browser. Navigation is the pure reducer in
+          // @wolfpack/memory (work/selector.ts); this only renders + applies effects.
+          let items: WorkItem[] = [];
+          const reload = () => {
+            items = (queryWork(roots, { assignee: wolfName }) ?? []).filter((i) => i.stage !== "archived");
           };
-          for (const item of rootItems) {
-            collectDisplayOrder(item, 0);
-          }
+          reload();
+          let sel: SelectorState = initialState(items, activeTask?.workId ?? null);
 
           let cachedLines: string[] | undefined;
           let cachedWidth = -1;
 
           function refresh() { cachedLines = undefined; tui.requestRender(); }
 
+          /** The item under the cursor in the focused pane. */
+          function focusedItem(): WorkItem | undefined {
+            if (sel.pane === "right") return rightRows(items, sel.openId)[sel.rightIdx];
+            return leftRows(items, sel.expanded)[sel.leftIdx]?.item;
+          }
+
+          function apply(effect: SelectorEffect | undefined): void {
+            if (!effect) return;
+            if (effect.type === "unbind") unbindTask(ctx);
+            else {
+              const target = items.find((i) => i.id === effect.id);
+              if (!target || !bindToTask(target, ctx)) return;
+              if (effect.type === "open") return done("bind");
+            }
+            reload();
+          }
+
+          const KEYS: Array<[(d: string) => boolean, SelectorKey]> = [
+            [(d) => d === "k" || matchesKey(d, Key.up), "up"],
+            [(d) => d === "j" || matchesKey(d, Key.down), "down"],
+            [(d) => d === "h" || matchesKey(d, Key.left), "left"],
+            [(d) => d === "l" || matchesKey(d, Key.right), "right"],
+            [(d) => matchesKey(d, Key.enter), "enter"],
+            [(d) => matchesKey(d, Key.space), "space"],
+          ];
+
           function handleInput(data: string) {
-            // j/k + arrow navigation
-            if (matchesKey(data, Key.up) || data === "k") {
-              cursor = Math.max(0, cursor - 1);
+            const nav = KEYS.find(([match]) => match(data))?.[1];
+            if (nav) {
+              const { state, effect } = reduce(sel, nav, items, activeTask?.workId ?? null);
+              sel = state;
+              apply(effect);
               refresh();
               return;
             }
-            if (matchesKey(data, Key.down) || data === "j") {
-              cursor = Math.min(displayOrder.length, cursor + 1);
-              refresh();
-              return;
+            if (matchesKey(data, Key.escape)) return done(null);
+            if (data === "n") return done("new");
+            const focused = focusedItem();
+            if (!focused) return;
+            if (data === "x") return done({ type: "delete", id: focused.id as string });
+            if (data === "D") return done({ type: "depend", id: focused.id as string });
+            if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
+            if (data === "g" && (focused.kind === "feature" || focused.kind === "initiative") &&
+                focused.stage === "shipped" && !focused.container && !(focused.graduatedTo?.length)) {
+              return done({ type: "graduate", id: focused.id as string });
             }
-            // Space: toggle bind on the focused item
-            if (matchesKey(data, Key.space) && cursor < displayOrder.length) {
-              const selected = displayOrder[cursor].item;
-              if (activeTask?.workId === selected.id) {
-                // Unbind
-                unbindTask(ctx);
-              } else {
-                // Check if blocked
-                if (isBlocked(selected, items)) {
-                  return; // Can't bind blocked item
-                }
-                // Bind (replaces any current binding)
-                bindToTask(selected, ctx);
+          }
+
+          /** ○ todo · ● in progress · ✔ shipped · ⛔ blocked */
+          function statusIcon(t: WorkItem): string {
+            if (isComplete(t)) return theme.fg("success", "\u2714");
+            if (isBlocked(t, items)) return theme.fg("error", "\u26d4");
+            const active = t.id === activeTask?.workId || !["plan", "idea"].includes(t.stage);
+            return active ? theme.fg("accent", "\u25cf") : theme.fg("dim", "\u25cb");
+          }
+
+          function renderLeft(): string[] {
+            const out = [theme.fg("dim", theme.bold("WORKSPACES"))];
+            const rows = leftRows(items, sel.expanded);
+            if (rows.length === 0) out.push(theme.fg("dim", "No workspaces yet \u2014 n to create"));
+            rows.forEach(({ item, depth }, i) => {
+              const cursor = sel.pane === "left" && i === sel.leftIdx;
+              const fold = item.kind === "initiative" ? (sel.expanded.includes(item.id as string) ? "\u25be " : "\u25b8 ") : "  ";
+              const icon = item.container ? "\ud83d\udce5" : kindIcon(item);
+              const { done: d, total } = progress(item, items);
+              const count = total ? theme.fg("dim", ` ${d}/${total}`) : "";
+              const open = item.id === sel.openId;
+              const title = isComplete(item) ? theme.fg("dim", item.title)
+                : cursor || open ? theme.fg("accent", item.title) : item.title;
+              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${icon} ${title}${count}`);
+            });
+            return out;
+          }
+
+          function renderRight(): string[] {
+            const ws = items.find((i) => i.id === sel.openId);
+            if (!ws) return [theme.fg("dim", "l / Enter on a feature to see its tasks")];
+            const { done: d, total } = progress(ws, items);
+            const out = [`${theme.bold(ws.title)}${total ? theme.fg("dim", ` ${d}/${total}`) : ""}`];
+            if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
+            out.push("");
+            const tasks = rightRows(items, sel.openId);
+            if (tasks.length === 0) out.push(theme.fg("dim", "No tasks yet"));
+            tasks.forEach((t, i) => {
+              const cursor = sel.pane === "right" && i === sel.rightIdx;
+              const bound = t.id === activeTask?.workId;
+              const title = isComplete(t) ? theme.fg("dim", t.title) : cursor ? theme.fg("accent", t.title) : t.title;
+              const kind = t.kind === "task" ? "" : theme.fg("dim", ` (${t.kind})`);
+              out.push(`${cursor ? theme.fg("accent", "\u25b6") : " "} ${statusIcon(t)} ${title}${kind}${bound ? theme.fg("success", "  \u25c0 bound") : ""}`);
+              if (cursor && t.successCriteria) out.push(theme.fg("dim", `     done when: ${t.successCriteria}`));
+              if (cursor && isBlocked(t, items)) {
+                const waiting = (t.dependsOn ?? []).map((id) => items.find((i) => i.id === id))
+                  .filter((x): x is WorkItem => !!x && !isComplete(x)).map((x) => x.title).join(", ");
+                out.push(theme.fg("error", `     \u26d4 waiting on: ${waiting}`));
               }
-              refresh();
-              return;
-            }
-            // x: delete selected item after confirmation in the command handler
-            if (data === "x" && cursor < displayOrder.length) {
-              const selected = displayOrder[cursor].item;
-              done({ type: "delete", id: selected.id as string });
-              return;
-            }
-            // D: add dependency to selected item
-            if (data === "D" && cursor < displayOrder.length) {
-              const selected = displayOrder[cursor].item;
-              done({ type: "depend", id: selected.id as string });
-              return;
-            }
-            // g: graduate shipped feature/initiative to KB
-            if (data === "g" && cursor < displayOrder.length) {
-              const selected = displayOrder[cursor].item;
-              if ((selected.kind === "feature" || selected.kind === "initiative") && 
-                  selected.stage === "shipped" &&
-                  (!selected.graduatedTo || selected.graduatedTo.length === 0)) {
-                done({ type: "graduate", id: selected.id as string });
-              }
-              return;
-            }
-            // Enter: bind + open for iteration, or create new
-            if (matchesKey(data, Key.enter)) {
-              if (cursor === displayOrder.length) {
-                done("new");
-              } else {
-                const selected = displayOrder[cursor].item;
-                // Check if blocked
-                if (isBlocked(selected, items)) {
-                  return; // Can't bind blocked item
-                }
-                if (bindToTask(selected, ctx)) done("bind");
-              }
-              return;
-            }
-            // m: move the selected item under another parent
-            if (data === "m" && cursor < displayOrder.length) {
-              const selected = displayOrder[cursor].item;
-              if (!selected.container) done({ type: "move", id: selected.id as string });
-              return;
-            }
-            if (matchesKey(data, Key.escape)) {
-              done(null);
-            }
+            });
+            return out;
           }
 
           function render(width: number): string[] {
@@ -776,75 +768,24 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const add = (s: string) => lines.push(truncateToWidth(s, width));
 
             add(theme.fg("accent", "\u2500".repeat(width)));
-            add(` ${theme.fg("toolTitle", theme.bold("\ud83d\udce5 Task Queue"))} ${theme.fg("dim", `\u00b7 ${wolfName} \u00b7 ${items.length} items`)}`);
-
-            if (activeTask && activeItem) {
-              const icon = kindIcon(activeItem);
-              add(` ${theme.fg("success", "\u25b6")} ${icon} ${theme.fg("accent", activeItem.title)} ${theme.fg("dim", `[${activeItem.stage}]`)}`);
-            } else {
-              add(` ${theme.fg("dim", "No task bound to this session")}`);
-            }
+            add(` ${theme.fg("toolTitle", theme.bold("\ud83d\udce5 Tasks"))} ${theme.fg("dim", `\u00b7 ${wolfName}`)}`);
+            add(activeTask && activeItem
+              ? ` ${theme.fg("success", "\u25b6")} ${theme.fg("accent", activeItem.title)} ${theme.fg("dim", `[${activeItem.stage}]`)}`
+              : ` ${theme.fg("dim", "No task bound \u2014 open a feature, then Space on a task")}`);
             add("");
 
-            if (displayOrder.length === 0) {
-              add(` ${theme.fg("dim", "No work items yet.")}`);
-            } else {
-              // Render using pre-built hierarchical display order
-              let lastStage = "";
-              for (let i = 0; i < displayOrder.length; i++) {
-                const { item, depth } = displayOrder[i];
-                const focused = i === cursor;
-                const isBound = activeTask?.workId === item.id;
-                const indent = "   ".repeat(depth);
-                const treeChar = depth > 0 ? "├─ " : "";
-
-                // Stage header for root items
-                if (depth === 0 && item.stage !== lastStage) {
-                  if (lastStage) add("");
-                  const stageIcon = STAGE_ICONS[item.stage] ?? "\u25cb";
-                  add(` ${theme.fg("dim", `${stageIcon} ${item.stage.toUpperCase()}`)}`);
-                  lastStage = item.stage;
-                }
-
-                const prefix = focused ? theme.fg("accent", indent + "\u203a ") : indent + " ";
-                const boundMark = isBound ? theme.fg("success", " \u25c0") : "";
-                const blocked = isBlocked(item, items);
-                const blockedMark = blocked ? theme.fg("error", " \u26d4") : "";
-                const done = isComplete(item);
-                const isGraduated = item.graduatedTo && item.graduatedTo.length > 0;
-                const icon = isGraduated ? "📚" : done ? "\u2714" : kindIcon(item);  // 📚 graduated, ✔ complete
-                const titleStyle = done
-                  ? theme.fg("dim", item.title)  // dim completed items
-                  : blocked
-                    ? theme.fg("dim", item.title)
-                    : focused ? theme.fg("accent", item.title) : theme.fg("text", item.title);
-                const completeMark = done ? theme.fg("success", " \u2713") : "";  // green checkmark
-                const meta = theme.fg("dim", ` (${item.kind}) ${item.domain}${item.area ? "/" + item.area : ""}`);
-
-                add(`${prefix}${treeChar}${icon} ${titleStyle}${meta}${blockedMark}${completeMark}${boundMark}`);
-
-                if (focused && item.successCriteria) {
-                  add(`${indent}     ${theme.fg("dim", `\u2713 ${item.successCriteria}`)}`);
-                }
-                if (focused && blocked) {
-                  const waitingOn = (item.dependsOn ?? [])
-                    .map(d => items.find(i => i.id === d))
-                    .filter(d => d && d.stage !== "shipped" && d.stage !== "live" && d.stage !== "archived")
-                    .map(d => d!.title.slice(0, 30))
-                    .join(", ");
-                  add(`${indent}     ${theme.fg("error", `\u26d4 waiting: ${waitingOn}`)}`);
-                }
-              }
+            const leftW = Math.max(24, Math.min(46, Math.floor(width * 0.4)));
+            const rightW = Math.max(10, width - leftW - 3);
+            const L = renderLeft();
+            const R = renderRight();
+            for (let i = 0; i < Math.max(L.length, R.length); i++) {
+              const l = truncateToWidth(L[i] ?? "", leftW);
+              const pad = " ".repeat(Math.max(0, leftW - visibleWidth(l)));
+              add(`${l}${pad} ${theme.fg("dim", "\u2502")} ${truncateToWidth(R[i] ?? "", rightW)}`);
             }
 
             add("");
-            const newFocused = cursor === displayOrder.length;
-            const newPrefix = newFocused ? theme.fg("accent", " \u203a ") : "   ";
-            const newLabel = newFocused ? theme.fg("accent", "+ New work item") : theme.fg("dim", "+ New work item");
-            add(`${newPrefix}${newLabel}`);
-
-            add("");
-            const hints = ["j/k navigate", "Space bind", "Enter open", "m move", "D depend", "x delete", "Esc close"];
+            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "m move", "D depend", "x delete", "g graduate", "Esc close"];
             add(` ${theme.fg("dim", hints.join(" \u00b7 "))}`);
             add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -1179,9 +1120,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           let nextItem: WorkItem | null = null;
           if (shipped.partOf) {
-            const allSiblings = queryWork(roots, { partOf: shipped.partOf as string }) ?? [];
-            const siblings = allSiblings.filter((i) => i.id !== shipped.id && isBindable(i) && !isComplete(i));
-            if (siblings.length > 0) nextItem = siblings[0];
+            // Same pick as the selector: first open, unblocked task, in progress first.
+            const all = queryWork(roots, {}) ?? [];
+            nextItem = firstTask(rightRows(all, shipped.partOf as string), all) ?? null;
           }
 
           if (nextItem) {

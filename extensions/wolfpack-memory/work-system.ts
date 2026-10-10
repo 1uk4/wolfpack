@@ -69,17 +69,6 @@ import * as path from "node:path";
 
 // ── Stage display ───────────────────────────────────────────────────────────
 
-const STAGE_ICONS: Record<string, string> = {
-  idea: "💡",
-  plan: "📋",
-  feasibility: "🔍",
-  approved: "✅",
-  in_build: "🔨",
-  shipped: "📦",
-  live: "🟢",
-  archived: "📁",
-};
-
 const STAGE_COLORS: Record<string, string> = {
   idea: "\x1b[2m",
   plan: "\x1b[36m",
@@ -104,18 +93,6 @@ function kindIcon(item: WorkItem): string {
   // Show 📚 for graduated items
   if (item.graduatedTo && item.graduatedTo.length > 0) return "📚";
   return KIND_ICONS[item.kind] ?? "◇";
-}
-
-function renderStagePipeline(current: string): string {
-  const stages = ["plan", "in_build", "shipped", "live"];
-  return stages.map((s) => {
-    const idx = stages.indexOf(s);
-    const curIdx = stages.indexOf(current);
-    const icon = STAGE_ICONS[s] ?? "○";
-    if (s === current) return `\x1b[1m${icon}\x1b[0m`;
-    if (curIdx >= 0 && idx < curIdx) return `\x1b[32m●\x1b[0m`;
-    return `\x1b[2m○\x1b[0m`;
-  }).join(" → ");
 }
 
 // ── Domain discovery ────────────────────────────────────────────────────────
@@ -203,46 +180,17 @@ function writeActiveTask(wolfDen: string, state: ActiveTaskState | null): void {
 
 // ── Widget rendering ────────────────────────────────────────────────────────
 
-function renderTaskWidget(item: WorkItem): string[] {
+/**
+ * The bound-task widget above the editor: two lines.
+ *   ● <task title>  plan · <workspace> 3/8
+ *     ✓ <done when>
+ */
+function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: number; total: number }): string[] {
   const stageColor = STAGE_COLORS[item.stage] ?? "";
-  const icon = kindIcon(item);
-  const lines: string[] = [];
-
-  // Line 1: task identity + stage
-  lines.push(
-    `\x1b[2m┌─\x1b[0m ${icon} \x1b[1m${item.title}\x1b[0m ${stageColor}[${item.stage}]\x1b[0m`
-  );
-
-  // Line 2: stage pipeline visualization
-  lines.push(
-    `\x1b[2m│\x1b[0m  ${renderStagePipeline(item.stage)}`
-  );
-
-  // Line 3: meta (domain, area, assignee, kind)
-  const parts: string[] = [];
-  parts.push(`\x1b[2m${item.domain}\x1b[0m`);
-  if (item.area) parts.push(`\x1b[36m${item.area}\x1b[0m`);
-  parts.push(`\x1b[2m→\x1b[0m ${item.assignee}`);
-  parts.push(`\x1b[2m(${item.kind})\x1b[0m`);
-  lines.push(`\x1b[2m│\x1b[0m  ${parts.join(" \x1b[2m·\x1b[0m ")}`);
-
-  // Line 4: success criteria (if set)
-  if (item.successCriteria) {
-    const maxLen = 70;
-    const criteria = item.successCriteria.length > maxLen
-      ? item.successCriteria.slice(0, maxLen) + "…"
-      : item.successCriteria;
-    lines.push(`\x1b[2m│\x1b[0m  \x1b[32m✓\x1b[0m ${criteria}`);
-  }
-
-  // Line 5: last log entry (if any)
-  if (item.log.length > 0) {
-    const last = item.log[item.log.length - 1];
-    const text = last.text.length > 60 ? last.text.slice(0, 60) + "…" : last.text;
-    lines.push(`\x1b[2m│\x1b[0m  \x1b[2m${last.at}:\x1b[0m ${text}`);
-  }
-
-  lines.push(`\x1b[2m└─\x1b[0m`);
+  const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+  const ws = workspace ? ` \x1b[2m· ${clip(workspace.title, 40)} ${workspace.done}/${workspace.total}\x1b[0m` : "";
+  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${item.stage}\x1b[0m${ws}`];
+  if (item.successCriteria) lines.push(`  \x1b[2m✓ ${clip(item.successCriteria, 100)}\x1b[0m`);
   return lines;
 }
 
@@ -460,7 +408,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         ctx.ui.setStatus("wolfpack-task", undefined);
         return;
       }
-      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem), {
+      const all = queryWork(roots, {}) ?? [];
+      const feature = activeItem.partOf ? all.find((i) => i.id === activeItem!.partOf) : undefined;
+      const workspace = feature ? { title: feature.title, ...progress(feature, all) } : undefined;
+      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace), {
         placement: "aboveEditor",
       });
       ctx.ui.setStatus("wolfpack-task", renderStatusBarCompact(activeItem));

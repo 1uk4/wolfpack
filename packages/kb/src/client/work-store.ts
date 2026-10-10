@@ -15,8 +15,8 @@ import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
 import { type KbRoots, workDir, workLedgerFile } from "../shared/index.js";
 import {
   type WorkItem,
-  type WorkEvent,
   type WorkId,
+  WorkEvent,
   parseWorkEvent,
   foldWork,
 } from "../schema/work.js";
@@ -189,11 +189,24 @@ export function readWorkLedger(roots: KbRoots): WorkEvent[] {
   return out;
 }
 
+/**
+ * Append events to the work ledger. Every event is validated first and nothing
+ * is written if any fails — the reader silently skips invalid lines, so an
+ * unvalidated write would leave an orphan event that never folds.
+ */
 export function appendWorkLedger(roots: KbRoots, events: WorkEvent[]): void {
   if (events.length === 0) return;
+  const valid = events.map((e) => {
+    const r = WorkEvent.safeParse(e);
+    if (!r.success) {
+      const issues = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      throw new Error(`Invalid ${e.type} event for ${e.id} — ${issues}`);
+    }
+    return r.data;
+  });
   const file = workLedgerFile(roots);
   mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  appendFileSync(file, valid.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
 export function loadWorkState(roots: KbRoots): Map<WorkId, WorkItem> {

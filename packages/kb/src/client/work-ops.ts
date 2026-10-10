@@ -63,7 +63,8 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
     title: input.title,
     assignee: input.assignee as WolfId,
     area: slugifyArea(input.area),
-    partOf: (input.partOf as WorkId) ?? null,
+    // Blank means "no parent" — "" would fail WorkId validation.
+    partOf: (input.partOf?.trim() || null) as WorkId | null,
     successCriteria: input.successCriteria ?? null,
     stage: (input.stage ?? "plan") as WorkItem["stage"],
   };

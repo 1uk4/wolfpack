@@ -53,6 +53,39 @@ describe("work-ops", () => {
     expect(state.size).toBe(1);
   });
 
+  it("createWork treats a blank partOf as a root item", () => {
+    for (const partOf of ["", "  "]) {
+      const { item } = createWork(roots, {
+        kind: "feature",
+        domain: "wolfpack",
+        title: `root ${JSON.stringify(partOf)}`,
+        assignee: "1uk4",
+        partOf,
+      });
+      expect(item.partOf).toBeNull();
+    }
+    expect(loadWorkState(roots).size).toBe(2);
+  });
+
+  it("createWork rejects an invalid event without touching the ledger", () => {
+    createWork(roots, { kind: "task", domain: "wolfpack", title: "ok", assignee: "1uk4" });
+
+    expect(() =>
+      createWork(roots, { kind: "task", domain: "wolfpack", title: "bad", assignee: "1uk4", partOf: "not-a-work-id" })
+    ).toThrow(/Invalid work\.created event.*partOf/);
+    expect(() =>
+      createWork(roots, { kind: "task", domain: "wolfpack", title: "", assignee: "1uk4" })
+    ).toThrow(/title/);
+
+    expect(readWorkLedger(roots)).toHaveLength(1);
+  });
+
+  it("noteWork rejects empty text without touching the ledger", () => {
+    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" });
+    expect(() => noteWork(roots, id, "")).toThrow(/Invalid work\.noted event/);
+    expect(readWorkLedger(roots)).toHaveLength(1);
+  });
+
   it("stageWork advances the stage", () => {
     const { id } = createWork(roots, {
       kind: "task",

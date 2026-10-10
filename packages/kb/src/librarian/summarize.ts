@@ -5,24 +5,33 @@ import type { Engine } from "@wolfpack/engine";
 import { SECTION_SUMMARY_SYSTEM, LABEL_SECTION_SYSTEM, HIERARCHY } from "@wolfpack/engine";
 import { SectionSummarySchema, LabelSectionSchema } from "../shared/index.js";
 
+/** One member entry of a section, as fed to sectionSummary. */
+export interface SectionMember {
+  title: string;
+  summary?: string;
+}
+
 /**
- * Produce a one-paragraph summary of a section from its child summaries.
- * Bounded input (caps child summaries to HIERARCHY.maxChildSummaries).
- * Used by crystallize + digest; no ids/dates/structure emitted.
+ * Produce a one-line (≤140 chars) summary of a section from its member
+ * entries' titles and summaries. Bounded input (caps members to
+ * HIERARCHY.maxChildSummaries, and each member's summary to 200 chars).
+ * Used by reorg; no ids/dates/structure emitted.
  */
 export async function sectionSummary(
   engine: Engine,
-  childSummaries: string[]
+  members: SectionMember[]
 ): Promise<string> {
-  // Cap input to prevent unbounded context
-  const bounded = childSummaries.slice(0, HIERARCHY.maxChildSummaries);
-  
+  const bounded = members.slice(0, HIERARCHY.maxChildSummaries);
+
   const prompt = [
-    "Summarize this section based on its child entries:",
+    "Entries in this section:",
     "",
-    ...bounded.map((s, i) => `${i + 1}. ${s}`),
+    ...bounded.map((m, i) => {
+      const summary = m.summary?.trim().slice(0, 200);
+      return `${i + 1}. ${m.title}${summary ? ` — ${summary}` : ""}`;
+    }),
     "",
-    "Write one concise paragraph (2-4 sentences) that captures the common theme.",
+    "Write the section's one-line summary (one sentence, at most 140 characters).",
   ].join("\n");
 
   const result = await engine.call("sectionSummary", SectionSummarySchema, {

@@ -43,8 +43,12 @@ export type SectionPick = z.infer<typeof SectionPickSchema>;
 
 /** sectionSummary — summarize a bounded set of child summaries. */
 export const SectionSummarySchema = z.object({
-  /** One paragraph describing what the section is about. */
-  summary: z.string(),
+  /** One line (≤140 chars) naming what the section's entries are about.
+   *  Clipped rather than rejected, like entry and topic summaries. */
+  summary: z
+    .string()
+    .transform((s) => s.trim())
+    .transform((s) => (s.length > 140 ? s.slice(0, 139) + "…" : s)),
 });
 export type SectionSummary = z.infer<typeof SectionSummarySchema>;
 

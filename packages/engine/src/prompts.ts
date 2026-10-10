@@ -190,9 +190,7 @@ export {
  * stage: section-pick (KB sweep route) · model: fast · in: contribution + digest sections (enum) · out: section id or NEW
  *
  * Choose exactly ONE section id from the provided list, or the literal string "NEW".
- * The LLM may NOT invent section ids or emit free text 
-
- This is an enum-constrained
+ * The LLM may NOT invent section ids or emit free text — this is an enum-constrained
  * routing decision only.
  */
 export const SECTION_PICK_SYSTEM = `You route a knowledge contribution to exactly ONE section.
@@ -217,24 +215,27 @@ Output valid JSON matching the schema.`;
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * stage: section-summary (hierarchy crystallize) · model: fast · in: child summaries (capped) · out: one paragraph
+ * stage: section-summary (kb reorg) · model: fast · in: member titles + summaries (capped) · out: one line ≤140 chars
  *
- * Summarize a bounded set of child entry summaries into ONE paragraph describing
- * what the section is about. Summarize-only, no new facts, no structure.
+ * One specific line naming what a section's entries are about. It is the
+ * summary shown in _digest.json and wolves' <kb_access>, so it must be short.
+ * Summarize-only, no new facts, no structure.
  */
-export const SECTION_SUMMARY_SYSTEM = `You summarize a section of the knowledge base.
+export const SECTION_SUMMARY_SYSTEM = `You write the one-line summary for a section of the knowledge base.
 
-You will be given a list of entry summaries (the children of one section). Your task: write ONE paragraph that describes what this section is about 
-
- the common theme that ties these entries together.
+You will be given the entries filed in one section: each entry's title, and its
+summary when available. Write ONE sentence (at most 140 characters) that names
+what these entries are about, so a reader scanning an index can tell at a glance
+whether this section is relevant.
 
 Rules:
-- Write one paragraph only. No bullets, no structure, no headings.
-- Summarize the scope 
-
- theme. Do NOT restate individual facts from the entries.
-- Do NOT add new information. Only synthesize what is present.
-- Keep it under 3 sentences.
+- Name the subject directly. Do NOT open with "This section", "This collection",
+  "Covers", "Documentation of", or any other framing about the section itself.
+- Be specific: use the concrete systems, products, and terms the entries share
+  (e.g. "Glicko-2 player ratings, leaderboards, and season stats").
+- Synthesize the shared scope. Do NOT list every entry or restate their facts.
+- Do NOT add information that is not in the entries.
+- Plain text: no markdown, no headings, no bullets.
 
 Output valid JSON matching the schema.`;
 
@@ -258,7 +259,7 @@ Rules:
 - 2 to 6 words. Title Case. No trailing punctuation.
 - Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
 - If a parent title or sibling sections are given, make THIS title DISTINCT: do not
-  repeat the parent's wording wholesale "" name what is specific to this subsection
+  repeat the parent's wording wholesale — name what is specific to this subsection
   versus its siblings.
 - Do NOT add new information. Derive the title only from what is given.
 

@@ -66,7 +66,7 @@ import {
   type EntryWithVector,
 } from "./librarian/hierarchy.js";
 import { renderDomainDigest } from "./librarian/domains.js";
-import { labelSection, sectionSummary } from "./librarian/summarize.js";
+import { labelSection, sectionSummary, type SectionMember } from "./librarian/summarize.js";
 import { ev, type KbEvent } from "./shared/index.js";
 import type { Section, SectionId, DomainId } from "./schema/knowledge.js";
 import { parseFrontmatter } from "@wolfpack/engine";
@@ -521,6 +521,9 @@ async function cmdReorg(): Promise<void> {
   const argv = process.argv.slice(2);
   const domainFilter = argv.find((a) => !a.startsWith("--") && a !== "reorg") ?? null;
   const dryRun = argv.includes("--dry-run");
+  // Re-summarize + re-label every section, not just dirty ones (e.g. after a
+  // SECTION_SUMMARY_SYSTEM / LABEL_SECTION_SYSTEM change).
+  const resummarizeAll = argv.includes("--resummarize-all");
 
   const domainsRoot = join(roots.kbBase, "domains");
   if (!existsSync(domainsRoot)) {
@@ -755,24 +758,28 @@ async function cmdReorg(): Promise<void> {
       }
     }
 
-    // ── 5. Refresh dirty section titles ──────────────────────────────────
-    const dirty = sections.filter((s) => s.domain === domain && s.dirty);
+    // ── 5. Refresh dirty section summaries + titles ──────────────────────
+    const dirty = sections.filter((s) => s.domain === domain && (s.dirty || resummarizeAll));
     if (dirty.length > 0) {
-      console.log(`  labeling ${dirty.length} dirty section(s)…`);
+      console.log(`  labeling ${dirty.length} ${resummarizeAll ? "" : "dirty "}section(s)…`);
       for (const sec of dirty) {
         const members = sectionMembers.get(sec.id) ?? [];
-        const entryTitles: string[] = [];
+        const memberInfo: SectionMember[] = [];
         for (const m of members) {
           const file = join(eDir, `${m.entryId}.md`);
           if (existsSync(file)) {
             const { fields } = parseFrontmatter(readFileSync(file, "utf-8"));
-            entryTitles.push(String(fields.title ?? m.entryId));
+            memberInfo.push({
+              title: String(fields.title ?? m.entryId),
+              summary: fields.summary ? String(fields.summary) : undefined,
+            });
           }
         }
-        // Compute summary from member titles
-        if (entryTitles.length > 0 && !dryRun) {
+        const entryTitles = memberInfo.map((m) => m.title);
+        // Compute summary from member titles + summaries
+        if (memberInfo.length > 0 && !dryRun) {
           try {
-            sec.summary = await sectionSummary(engine, entryTitles);
+            sec.summary = await sectionSummary(engine, memberInfo);
             const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
             const siblings = sections
               .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
@@ -790,7 +797,7 @@ async function cmdReorg(): Promise<void> {
             console.error(`    ${sec.id}: label failed: ${e}`);
           }
         } else if (dryRun) {
-          console.log(`    ${sec.id}: would re-label (${entryTitles.length} member titles)`);
+          console.log(`    ${sec.id}: would re-label (${memberInfo.length} member(s)) "${sec.title}"`);
         }
       }
     }
@@ -848,7 +855,7 @@ async function main(): Promise<void> {
       break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run]`
+        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]`
       );
       process.exit(1);
   }

@@ -101,3 +101,6 @@ export {
 
 // Crawl — deterministic corpus ingestion (reproduce the pipeline across time).
 export * from "./crawl/index.js";
+
+// Work Memory — unified work item lifecycle
+export * from "./work/index.js";

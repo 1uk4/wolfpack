@@ -105,6 +105,7 @@ describe("assertAdvanceable", () => {
     domain: dom("snapjack"),
     area: Slug.parse("marketing"),
     title: "x",
+    summary: null,
     stage: "plan",
     assignee: wolf("1uk4"),
     successCriteria: null,

@@ -66,6 +66,9 @@ export const WorkItem = z.object({
    *  entry's `subsystem` facet on graduation. */
   area: Slug.nullable().default(null),
   title: z.string().min(1).max(200),
+  /** One-line summary (≤140 chars) for registry/index display. Auto-generated
+   *  on graduation if not set. */
+  summary: z.string().max(140).nullable().default(null),
   stage: Stage, // event-sourced lifecycle
   assignee: WolfId,
   /** The done-condition. Required for kind:"task" before it may leave `plan`
@@ -116,8 +119,15 @@ export const WorkEvent = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("work.area"), id: WorkId, at: z.string(), area: Slug.nullable() }),
   z.object({ type: z.literal("work.retitled"), id: WorkId, at: z.string(), title: z.string().min(1).max(200) }),
+  z.object({ type: z.literal("work.deleted"), id: WorkId, at: z.string() }),
   z.object({ type: z.literal("work.noted"), id: WorkId, at: z.string(), text: z.string().min(1) }),
   z.object({ type: z.literal("work.linked"), id: WorkId, at: z.string(), rel: LinkRel, target: z.string() }),
+  /** Wolf binds to this work item (starts active work session) */
+  z.object({ type: z.literal("work.bound"), id: WorkId, at: z.string(), wolf: WolfId }),
+  /** Wolf unbinds from this work item (ends active work session) */
+  z.object({ type: z.literal("work.unbound"), id: WorkId, at: z.string(), wolf: WolfId }),
+  /** Summary generated (typically on completion or graduation) */
+  z.object({ type: z.literal("work.summarized"), id: WorkId, at: z.string(), summary: z.string().max(140) }),
 ]);
 export type WorkEvent = z.infer<typeof WorkEvent>;
 
@@ -156,6 +166,7 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
           domain: e.domain,
           area: e.area ?? null,
           title: e.title,
+          summary: null,
           stage: e.stage ?? "plan",
           assignee: e.assignee,
           successCriteria: e.successCriteria ?? null,
@@ -192,6 +203,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.retitled":
         next.title = e.title;
         break;
+      case "work.deleted":
+        items.delete(e.id);
+        continue;
       case "work.noted":
         next.log = [...cur.log, { at: e.at, text: e.text }];
         break;
@@ -210,6 +224,14 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
             next.blocks = pushUnique(cur.blocks, WorkId.parse(e.target));
             break;
         }
+        break;
+      case "work.bound":
+      case "work.unbound":
+        // Informational events for work memory - no state change needed
+        // The work memory system listens for these to track active sessions
+        break;
+      case "work.summarized":
+        next.summary = e.summary;
         break;
     }
     items.set(e.id, next);

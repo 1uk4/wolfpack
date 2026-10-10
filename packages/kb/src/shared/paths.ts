@@ -19,6 +19,8 @@ export interface KbRoots {
 // ── kb-base (shared, read-only to wolves) ───────────────────────────────────
 export const entriesDir = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "entries");
+export const workDir = (r: KbRoots, domain: string) =>
+  join(r.kbBase, "domains", domain, "work");
 export const domainIndex = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "INDEX.md");
 export const domainDigest = (r: KbRoots, domain: string) =>
@@ -45,4 +47,6 @@ export const rejectedDir = (r: KbRoots, wolf: string) =>
 // ── den-local (Dewey's brain, never synced) ─────────────────────────────────
 export const ledgerFile = (r: KbRoots) =>
   join(r.denLocal, "ledger", "events.jsonl");
+export const workLedgerFile = (r: KbRoots) =>
+  join(r.denLocal, "ledger", "work-events.jsonl");
 export const vectorsDir = (r: KbRoots) => join(r.denLocal, "vectors");

@@ -6,3 +6,43 @@
  */
 export { emitDelta, type EmitDeltaInput } from "./emitDelta.js";
 export { resolveEntry, listEntries, type ResolvedEntry } from "./resolve.js";
+export {
+  resolveWorkItem,
+  listWorkItems,
+  commitWorkItem,
+  deleteWorkItemFile,
+  readWorkLedger,
+  appendWorkLedger,
+  loadWorkState,
+  type ResolvedWorkItem,
+} from "./work-store.js";
+export {
+  createWork,
+  stageWork,
+  assignWork,
+  noteWork,
+  linkWork,
+  setCriteria,
+  retitleWork,
+  deleteWork,
+  queryWork,
+  getWorkTree,
+  type CreateWorkInput,
+  type CreateWorkResult,
+  type DeleteWorkResult,
+  type WorkQuery,
+} from "./work-ops.js";
+export {
+  type WorkItem,
+  type WorkId,
+  type WolfId,
+  type WorkEvent,
+  type LinkRel,
+  assertAdvanceable,
+  STAGE_ORDER,
+  foldWork,
+  projectWork,
+  parseWorkEvent,
+  WorkId as WorkIdSchema,
+  WolfId as WolfIdSchema,
+} from "../schema/work.js";

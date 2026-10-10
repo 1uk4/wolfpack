@@ -36,6 +36,19 @@ import {
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
+import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
+import {
+  getStageContext,
+  summarizeTask,
+  embedTaskInParent,
+  areAllChildrenComplete,
+  canGraduate,
+  buildContribution,
+  getWorkSession,
+  getFileSession,
+  summarizeFileChanges,
+  type WorkSession,
+} from "@wolfpack/memory";
 import {
   planCrawl,
   runCrawl,
@@ -1519,6 +1532,143 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     return { compaction: { summary, tokensBefore } };
   });
 
+  // ── Work System (Factory merged into Memory) ─────────────────────────────
+
+  const workConfig: WorkSystemConfig = {
+    // Inject stage-specific prompts when bound to a task
+    getStageContext: (item) => getStageContext(item),
+
+    // Handle task completion: summarize and embed in parent
+    onTaskComplete: async (taskId, item) => {
+      if (!engine) {
+        console.log(`[work] Task completed (no engine): ${item.title}`);
+        return;
+      }
+
+      try {
+        // Get task body for summarization context
+        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork } = await import("@wolfpack/kb/client");
+        const resolved = resolveWorkItem(kbRoots, item.domain as string, taskId);
+        const taskBody = resolved?.body ?? "";
+
+        // Get work session (observations, notes, files during this task)
+        const workSession = getWorkSession(taskId as any);
+        const fileSession = getFileSession(taskId);
+        
+        // Add file changes to task body context if available
+        let fullTaskBody = taskBody;
+        if (fileSession && fileSession.files.length > 0) {
+          fullTaskBody += "\n\n## Files Changed\n" + summarizeFileChanges(fileSession);
+        }
+
+        // Summarize the task
+        const summary = await summarizeTask(engine, {
+          task: item,
+          taskBody: fullTaskBody,
+          session: workSession || null,
+        });
+
+        // Embed in parent feature if exists
+        if (item.partOf) {
+          const state = loadWorkState(kbRoots);
+          const parent = state.get(item.partOf as any);
+          if (parent) {
+            const parentResolved = resolveWorkItem(kbRoots, parent.domain as string, parent.id as string);
+            const parentBody = parentResolved?.body ?? "";
+            const updatedBody = embedTaskInParent(
+              parentBody,
+              item.title,
+              summary,
+              new Date().toISOString().split("T")[0]
+            );
+            commitWorkItem(kbRoots, parent, updatedBody);
+
+            // Note: Auto-ship removed - stage detection prompts user instead
+            // When all children complete, the turn_end handler will detect and prompt
+          }
+        }
+      } catch (e: any) {
+        console.error(`[work] Failed to summarize task: ${e.message}`);
+      }
+    },
+
+    // Handle feature/initiative ready to graduate
+    onReadyToGraduate: async (item) => {
+      if (!kbEnabled) {
+        return;
+      }
+
+      if (!canGraduate(item)) {
+        return;
+      }
+
+      try {
+        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork, stageWork, linkWork } = await import("@wolfpack/kb/client");
+        const resolved = resolveWorkItem(kbRoots, item.domain as string, item.id as string);
+        const body = resolved?.body ?? "";
+        const inboxDir = path.join(kbRoots.opsRoot, "inbox", wolfName);
+        fs.mkdirSync(inboxDir, { recursive: true });
+
+        if (item.kind === "feature") {
+          // Feature: create standalone KB entry
+          const contribution = buildContribution(item, body);
+          const featureEntryId = `kb-${contribution.domain}-${item.id.split("-").pop()}`;
+
+          const contentHash = require("crypto").createHash("sha256").update(contribution.body).digest("hex").slice(0, 16);
+          const mdContent = `---\nfrom: ${wolfName}\nden_topic_id: ${item.id}\nchange: create\ncontent_hash: ${contentHash}\nprev_hash: null\ndomain_hint: ${contribution.domain}\norigin: wolf\ncurrency: live\nsubmitted: ${new Date().toISOString()}\n---\n\n${contribution.body}`;
+
+          const filename = `work-${item.id}-${Date.now()}.md`;
+          fs.writeFileSync(path.join(inboxDir, filename), mdContent);
+          linkWork(kbRoots, item.id as any, "graduated_to", featureEntryId);
+
+          // Update parent initiative with link to this feature
+          if (item.partOf) {
+            const state = loadWorkState(kbRoots);
+            const parent = state.get(item.partOf as any);
+            if (parent && parent.kind === "initiative") {
+              const parentResolved = resolveWorkItem(kbRoots, parent.domain as string, parent.id as string);
+              let parentBody = parentResolved?.body ?? "";
+              
+              // Add feature link to initiative's Features section
+              const featureLink = `- [[${featureEntryId}]] ${item.title}`;
+              if (parentBody.includes("## Features")) {
+                parentBody = parentBody.replace("## Features", `## Features\n${featureLink}`);
+              } else {
+                parentBody += `\n\n## Features\n${featureLink}`;
+              }
+              commitWorkItem(kbRoots, parent, parentBody);
+
+              // Check if all features graduated → ship + graduate initiative
+              const siblings = queryWork(kbRoots, { partOf: item.partOf as string }) ?? [];
+              const allGraduated = siblings.every(s => s.graduatedTo && s.graduatedTo.length > 0);
+              if (allGraduated && siblings.length > 0) {
+                const { item: shippedInit } = stageWork(kbRoots, parent.id as any, "shipped");
+                await workConfig.onReadyToGraduate?.(shippedInit);
+              }
+            }
+          }
+        } else if (item.kind === "initiative") {
+          // Initiative: create KB entry with summary + links to features
+          const contribution = buildContribution(item, body);
+
+          const contentHash = require("crypto").createHash("sha256").update(contribution.body).digest("hex").slice(0, 16);
+          const mdContent = `---\nfrom: ${wolfName}\nden_topic_id: ${item.id}\nchange: create\ncontent_hash: ${contentHash}\nprev_hash: null\ndomain_hint: ${contribution.domain}\norigin: wolf\ncurrency: live\nsubmitted: ${new Date().toISOString()}\n---\n\n${contribution.body}`;
+
+          const filename = `work-${item.id}-${Date.now()}.md`;
+          fs.writeFileSync(path.join(inboxDir, filename), mdContent);
+
+          const entryId = `kb-${contribution.domain}-${item.id.split("-").pop()}`;
+          linkWork(kbRoots, item.id as any, "graduated_to", entryId);
+        }
+        
+      } catch (e: any) {
+        console.error(`[work] Failed to graduate: ${e.message}`);
+      }
+    },
+  };
+
+  initWorkSystem(pi, workConfig);
+
   // ── Commands ────────────────────────────────────────────────────────────
 
   pi.registerCommand("wolf:memory", {
@@ -1609,13 +1759,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("wolf:open-kb", {
+  pi.registerCommand("kb", {
     description:
-      "Build the KB knowledge-graph viewer and print a browser link (/wolf:open-kb [kb-root])",
+      "Open the KB knowledge-graph in your browser (/kb [kb-root])",
     handler: async (args: string, ctx: any) => {
       const { execFile } = require("node:child_process");
       const home = process.env.HOME ?? "";
-      const script = path.join(home, ".agents", "skills", "kb-graph", "build_graph.py");
+      const script = path.join(home, ".local", "share", "wolfpack", "kb-graph", "build_graph.py");
       if (!fs.existsSync(script)) {
         if (ctx.hasUI)
           ctx.ui.notify(

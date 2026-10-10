@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { WorkItem } from "@wolfpack/kb/client";
-import { featureDossier, graduationFile, graduationEntryId, archiveSet } from "./graduate.js";
+import { featureDossier, graduationFile, graduationEntryId, archiveSet, hubDossier } from "./graduate.js";
 
 const item = (over: Partial<WorkItem>) =>
   ({ id: "work-wp-Feat001", kind: "feature", domain: "wp", title: "Feat", successCriteria: null, log: [], ...over }) as unknown as WorkItem;
@@ -45,5 +45,18 @@ describe("archiveSet", () => {
     const all = [init, f, t1, t2];
     expect(archiveSet(f, all).map((i) => i.id)).toEqual([f.id, t1.id]);
     expect(archiveSet(init, all).map((i) => i.id)).toEqual([init.id, f.id, t1.id]);
+  });
+});
+
+describe("hubDossier", () => {
+  it("keeps the initiative's goal and document but not its implementation log", () => {
+    const init = item({ id: "work-wp-Init001", kind: "initiative", title: "Init", successCriteria: "ship it" } as any);
+    const f = item({ id: "work-wp-Feat001", title: "Feat A", successCriteria: "A works" } as any);
+    const d = hubDossier(init, "# Init\n\n## Plan\nDo things.\n\n## Implementation Log\n\n### Old task\nship-policy details\n\n## Notes\nkeep me\n", [f]);
+    expect(d).toContain("Goal: ship it");
+    expect(d).toContain("Do things.");
+    expect(d).toContain("keep me");
+    expect(d).not.toContain("ship-policy details");
+    expect(d).toContain("- [[kb-wp-Feat001]] Feat A — A works");
   });
 });

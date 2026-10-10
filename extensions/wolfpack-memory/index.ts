@@ -43,10 +43,7 @@ import {
   embedTaskInParent,
   areAllChildrenComplete,
   canGraduate,
-  buildContribution,
-  graduationEntryId,
-  featureDossier,
-  graduationFile,
+  graduationFiles,
   getWorkSession,
   getFileSession,
   summarizeFileChanges,
@@ -1634,60 +1631,22 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       try {
-        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork, graduateWork } = await import("@wolfpack/kb/client");
-        const resolved = resolveWorkItem(kbRoots, item.domain as string, item.id as string);
-        const body = resolved?.body ?? "";
+        const { resolveWorkItem, queryWork, graduateWork } = await import("@wolfpack/kb/client");
         const inboxDir = path.join(kbRoots.opsRoot, "inbox", wolfName);
         fs.mkdirSync(inboxDir, { recursive: true });
 
-        if (item.kind === "feature") {
-          // Feature: a past-tense entry of its own (Dewey writes it from this
-          // dossier with the graduation prompt).
-          const tasks = (queryWork(kbRoots, { partOf: item.id as string }) ?? []).filter((t) => t.kind !== "feature");
-          const file = graduationFile({
-            from: wolfName,
-            item,
-            graduation: "feature",
-            body: featureDossier(item, body, tasks),
-            submitted: new Date(),
-          });
-          fs.writeFileSync(path.join(inboxDir, file.name), file.content);
-          const featureEntryId = graduationEntryId(item);
-          graduateWork(kbRoots, item.id as string);
-
-          // Update parent initiative with link to this feature
-          if (item.partOf) {
-            const state = loadWorkState(kbRoots);
-            const parent = state.get(item.partOf as any);
-            if (parent && parent.kind === "initiative") {
-              const parentResolved = resolveWorkItem(kbRoots, parent.domain as string, parent.id as string);
-              let parentBody = parentResolved?.body ?? "";
-              
-              // Add feature link to initiative's Features section
-              const featureLink = `- [[${featureEntryId}]] ${item.title}`;
-              if (parentBody.includes("## Features")) {
-                parentBody = parentBody.replace("## Features", `## Features\n${featureLink}`);
-              } else {
-                parentBody += `\n\n## Features\n${featureLink}`;
-              }
-              commitWorkItem(kbRoots, parent, parentBody);
-              // The initiative stays active (features can still be added); it
-              // completes only via g on it.
-            }
-          }
-        } else if (item.kind === "initiative") {
-          // Initiative: create KB entry with summary + links to features
-          const contribution = buildContribution(item, body);
-
-          const contentHash = require("crypto").createHash("sha256").update(contribution.body).digest("hex").slice(0, 16);
-          const mdContent = `---\nfrom: ${wolfName}\nden_topic_id: ${item.id}\nchange: create\ncontent_hash: ${contentHash}\nprev_hash: null\ndomain_hint: ${contribution.domain}\norigin: wolf\ncurrency: live\nsubmitted: ${new Date().toISOString()}\n---\n\n${contribution.body}`;
-
-          const filename = `work-${item.id}-${Date.now()}.md`;
-          fs.writeFileSync(path.join(inboxDir, filename), mdContent);
-
-          graduateWork(kbRoots, item.id as string);
-        }
-        
+        // Feature → its past-tense entry, plus its initiative's hub (created on
+        // the first feature, updated after). Initiative → its final hub.
+        // Nothing is written back into the work items except the date.
+        const files = graduationFiles({
+          item,
+          all: queryWork(kbRoots, {}) ?? [],
+          bodyOf: (w) => resolveWorkItem(kbRoots, w.domain as string, w.id as string)?.body ?? "",
+          from: wolfName,
+          now: new Date(),
+        });
+        for (const f of files) fs.writeFileSync(path.join(inboxDir, f.name), f.content);
+        graduateWork(kbRoots, item.id as string);
       } catch (e: any) {
         console.error(`[work] Failed to graduate: ${e.message}`);
         throw e;

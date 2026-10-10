@@ -54,91 +54,7 @@ export function canGraduate(item: WorkItem): boolean {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 2 · CONTRIBUTION BUILDING
-// ════════════════════════════════════════════════════════════════════════════
-
-export interface GraduationContribution {
-  /** Work item id (used as denTopicId for contribution) */
-  workId: string;
-  /** Domain hint for KB routing */
-  domain: string;
-  /** Title for the KB entry */
-  title: string;
-  /** Summary line (≤140 chars) */
-  summary: string;
-  /** Full body content */
-  body: string;
-
-}
-
-/**
- * Build a contribution from a completed work item
- */
-export function buildContribution(item: WorkItem, body: string): GraduationContribution {
-  return {
-    workId: item.id,
-    domain: item.domain,
-    title: item.title,
-    summary: item.summary || deriveSummary(item, body),
-    body: cleanBodyForKB(body, item),
-  };
-}
-
-/**
- * Derive a summary from the work item if not set
- */
-function deriveSummary(item: WorkItem, body: string): string {
-  // Try to extract first meaningful line from body
-  const lines = body.split("\n").filter(l => 
-    l.trim() && 
-    !l.startsWith("#") && 
-    !l.startsWith("-") &&
-    l.length > 20
-  );
-  
-  if (lines.length > 0) {
-    const first = lines[0].trim();
-    return first.length > 140 ? first.slice(0, 137) + "..." : first;
-  }
-  
-  // Fall back to title + kind
-  return `${item.kind}: ${item.title}`.slice(0, 140);
-}
-
-/**
- * Clean up work item body for KB entry
- * Remove temporal language, in-progress markers, etc.
- */
-function cleanBodyForKB(body: string, item: WorkItem): string {
-  let cleaned = body;
-  
-  // TODO: Use LLM to rewrite body for KB (clean prose, no work IDs)
-  // For now, basic cleanup only
-  
-  // Remove "## Implementation Log" header (content stays)
-  cleaned = cleaned.replace(/^## Implementation Log\s*\n/gm, "## Implementation\n");
-  
-  // Remove task completion timestamps (keep content)
-  cleaned = cleaned.replace(/_Completed \d{4}-\d{2}-\d{2}_\n/g, "");
-  
-  // Add metadata header if not present
-  if (!cleaned.startsWith("#")) {
-    cleaned = `# ${item.title}\n\n${cleaned}`;
-  }
-  
-  // Add success criteria if present
-  if (item.successCriteria && !cleaned.includes(item.successCriteria)) {
-    cleaned = cleaned.replace(
-      /^(# .+\n)/,
-      `$1\n**Criteria:** ${item.successCriteria}\n`
-    );
-  }
-  
-  return cleaned.trim();
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// 2b · GRADUATION CONTRIBUTIONS (what the wolf sends Dewey)
+// 2 · GRADUATION CONTRIBUTIONS (what the wolf sends Dewey)
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -199,6 +115,29 @@ export function featureDossier(
   return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
 }
 
+/**
+ * The raw material for an initiative's hub entry: its goal and document, and
+ * the features delivered so far, each with the entry id it graduated to. Only
+ * graduated features are listed, never remaining ones (more may be added).
+ */
+export function hubDossier(initiative: WorkItem, body: string, delivered: WorkItem[]): string {
+  const lines = [`# ${initiative.title}`, ""];
+  if (initiative.successCriteria) lines.push(`Goal: ${initiative.successCriteria}`, "");
+  // Implementation detail belongs to the features' entries, not the hub: drop
+  // any "## Implementation Log" the initiative document collected.
+  const doc = body
+    .replace(/^#\s+.*\n+/, "")
+    .replace(/(^|\n)## Implementation Log\n[\s\S]*?(?=\n## |$)/, "$1")
+    .trim();
+  if (doc) lines.push("## Initiative document", "", doc, "");
+  lines.push("## Delivered features", "");
+  for (const f of delivered) {
+    lines.push(`- [[${graduationEntryId(f)}]] ${f.title}${f.successCriteria ? ` — ${f.successCriteria}` : ""}`);
+  }
+  const out = lines.join("\n").replace(WORK_ID, "").trim();
+  return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
+}
+
 export interface GraduationFile {
   /** File name for the wolf's ops inbox. */
   name: string;
@@ -218,7 +157,9 @@ export function graduationFile(opts: {
   submitted: Date;
 }): GraduationFile {
   const { from, item, graduation, body, final, submitted } = opts;
-  const hash = createHash("sha256").update(body).digest("hex").slice(0, 16);
+  // The sweep skips content it has seen: a final hub can have the same body as
+  // the last update, so "final" is part of what is hashed.
+  const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${body}`).digest("hex").slice(0, 16);
   const fm = [
     "---",
     `from: ${from}`,
@@ -239,4 +180,52 @@ export function graduationFile(opts: {
     name: `grad-${graduation}-${item.id}-${submitted.getTime()}.md`,
     content: `${fm.join("\n")}\n\n${body}\n`,
   };
+}
+
+/**
+ * The contributions graduating `item` sends, in order:
+ *   feature under an initiative → its entry, then the initiative's hub (updated
+ *                                 to list it; created on the first feature)
+ *   standalone feature          → its entry
+ *   initiative (completing it)  → its hub, marked final
+ * `item` is treated as graduated (it is being graduated now).
+ */
+export function graduationFiles(opts: {
+  item: WorkItem;
+  all: WorkItem[];
+  bodyOf: (item: WorkItem) => string;
+  from: string;
+  now: Date;
+}): GraduationFile[] {
+  const { item, all, bodyOf, from, now } = opts;
+  const at = (ms: number) => new Date(now.getTime() + ms);
+  const delivered = (initiative: WorkItem) =>
+    all.filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id));
+  const hub = (initiative: WorkItem, final: boolean, ms: number) =>
+    graduationFile({
+      from,
+      item: initiative,
+      graduation: "hub",
+      body: hubDossier(initiative, bodyOf(initiative), delivered(initiative)),
+      final,
+      submitted: at(ms),
+    });
+
+  if (item.kind === "initiative") return [hub(item, true, 0)];
+
+  const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
+  const files = [
+    graduationFile({ from, item, graduation: "feature", body: featureDossier(item, bodyOf(item), tasks), submitted: at(0) }),
+  ];
+  const parent = item.partOf ? all.find((p) => p.id === item.partOf) : undefined;
+  // The hub is sent after the feature, so Dewey has written the feature entry
+  // (and can read its summary) by the time it writes the hub.
+  if (parent?.kind === "initiative") files.push(hub(parent, false, 1));
+  return files;
+}
+
+/** The initiative whose hub a feature's graduation updates, if any. */
+export function hubOf(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
+  const parent = feature.partOf ? all.find((p) => p.id === feature.partOf) : undefined;
+  return parent?.kind === "initiative" ? parent : undefined;
 }

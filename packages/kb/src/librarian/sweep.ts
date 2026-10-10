@@ -129,6 +129,12 @@ export function graduationEntryId(c: Pick<ParsedContribution, "graduation" | "en
   return id;
 }
 
+/** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
+export function listedEntryIds(body: string): string[] {
+  const ids = [...body.matchAll(/\[\[(kb-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\]\]/g)].map((m) => m[1]);
+  return [...new Set(ids)];
+}
+
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
  *  cosine FP overshoot (>1) or a reused _unplaced score (<0) hard-failing the
  *  whole contribution at schema-parse time. */
@@ -321,6 +327,20 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
+      // A new initiative hub goes where its first delivered feature landed.
+      const hubFeatures = c.graduation === "hub" ? listedEntryIds(c.body) : [];
+      if (!sectionId && hubFeatures.length) {
+        for (const fid of hubFeatures) {
+          const md = readEntryMarkdown(roots, domain, fid);
+          const sec = md ? String(parseFrontmatter(md).fields.section ?? "") : "";
+          if (SectionId.safeParse(sec).success) {
+            sectionId = SectionId.parse(sec);
+            placement = { basis: "routed", fit: 1 };
+            break;
+          }
+        }
+      }
+
       // Otherwise place a NEW entry by deterministic tree descent.
       if (!sectionId) {
         const decision = routeByTree(vec, domain, sections, entryVectors);
@@ -377,9 +397,22 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       }
 
       // ── PRODUCE (LLM → opinion only; code assembles) ────────────────────
-      const existingMarkdown = targetId
+      // A hub is regenerated from the full list of delivered features each
+      // time, so it never needs the previous hub as input.
+      const existingMarkdown = targetId && c.graduation !== "hub"
         ? readEntryMarkdown(roots, domain, targetId) ?? undefined
         : undefined;
+      // For a hub: what Dewey actually recorded for each delivered feature.
+      const recorded = hubFeatures
+        .map((fid) => {
+          const md = readEntryMarkdown(roots, domain, fid);
+          if (!md) return null;
+          const f = parseFrontmatter(md).fields;
+          const summary = md.split("\n---\n")[1]?.trim().split("\n\n")[1] ?? "";
+          return `- [[${fid}]] ${String(f.title ?? fid)}${summary ? ` — ${summary.slice(0, 300)}` : ""}`;
+        })
+        .filter(Boolean);
+      const context = recorded.length ? `RECORDED FEATURE ENTRIES (what the KB holds for each):\n${recorded.join("\n")}` : undefined;
 
       const { entry, action } = await produceEntry(itemEngine, {
         contribution: c,
@@ -389,6 +422,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         entryId: targetId,
         newEntryId: ownId ?? undefined,
         existingMarkdown,
+        context,
         resolve,
       });
 

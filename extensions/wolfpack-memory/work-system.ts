@@ -54,6 +54,7 @@ import {
   shouldConfirmShip,
   readyToGraduate,
   archiveSet,
+  hubOf,
   workspaceHeader,
   initialState,
   reduce,
@@ -930,11 +931,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         }
         const archived = archiveSet(item, all);
         const tasks = archived.length - 1;
+        const hub = item.kind === "feature" ? hubOf(item, all) : undefined;
         const what = (item.kind === "feature"
-          ? "Ships the feature and sends it to Dewey as a knowledge base entry."
-          : "Ships the initiative and sends it to Dewey as a knowledge base entry.") +
+          ? "Ships the feature and sends it to Dewey as its own knowledge base entry" +
+            (hub ? `, and adds it to the "${hub.title}" initiative's hub entry (the initiative stays open).` : ".")
+          : "Completes the initiative: its hub entry gets a final outcome summary.") +
           ` Then archives it${tasks ? ` and its ${tasks} remaining item(s)` : ""}: they leave /task (history is kept).`;
-        const ok = await ctx.ui.confirm(`🎓 Graduate "${item.title}" to the knowledge base?`, what);
+        const ok = await ctx.ui.confirm(
+          item.kind === "initiative" ? `🎓 Complete "${item.title}"?` : `🎓 Graduate "${item.title}" to the knowledge base?`,
+          what
+        );
         if (!ok) return;
         try {
           const shippedItem = isComplete(item) ? item : stageWork(roots, item.id, "shipped").item;

@@ -7,6 +7,8 @@ import {
   parseWorkEvent,
   assertAdvanceable,
   isComplete,
+  placementError,
+  isBindable,
   type WorkEvent,
   type WorkItem,
 } from "./work.js";
@@ -33,6 +35,7 @@ const events: WorkEvent[] = [
     partOf: null,
     successCriteria: null,
     stage: "plan",
+    container: false,
   },
   {
     type: "work.created",
@@ -46,6 +49,7 @@ const events: WorkEvent[] = [
     partOf: feature,
     successCriteria: "code redeems → credit applied",
     stage: "plan",
+    container: false,
   },
   { type: "work.staged", id: task, at: "2026-10-09 11:00", to: "in_build" },
   { type: "work.noted", id: task, at: "2026-10-09 11:30", text: "codes generate; redemption WIP" },
@@ -115,6 +119,7 @@ describe("assertAdvanceable", () => {
     dependsOn: [],
     blocks: [],
     graduatedTo: [],
+    container: false,
     log: [],
     created: "2026-10-09" as never,
     updated: "2026-10-09" as never,
@@ -140,5 +145,29 @@ describe("isComplete", () => {
     const at = (stage: string) => isComplete({ stage } as Pick<WorkItem, "stage">);
     expect(["shipped", "live", "archived"].map(at)).toEqual([true, true, true]);
     expect(["idea", "plan", "feasibility", "approved", "in_build"].map(at)).toEqual([false, false, false, false, false]);
+  });
+});
+
+describe("placementError / isBindable", () => {
+  const p = (kind: string, domain = "wp", container = false) =>
+    ({ id: "work-wp-aaaaaaa", kind, domain, title: kind, container }) as any;
+  const c = (kind: string, domain = "wp") => ({ kind, domain }) as any;
+
+  it("encodes initiative → feature → task/issue/spike; ideas standalone", () => {
+    expect(placementError(c("feature"), p("initiative"))).toBeNull();
+    expect(placementError(c("feature"), null)).toBeNull();
+    for (const k of ["task", "issue", "spike"]) {
+      expect(placementError(c(k), p("feature"))).toBeNull();
+      expect(placementError(c(k), p("initiative"))).toMatch(/only sit under a feature/);
+      expect(placementError(c(k), null)).toMatch(/needs a feature/);
+    }
+    expect(placementError(c("initiative"), p("initiative"))).toMatch(/cannot have a parent/);
+    expect(placementError(c("idea"), p("feature"))).toMatch(/cannot have a parent/);
+    expect(placementError(c("task", "other"), p("feature"))).toMatch(/domain/);
+  });
+
+  it("only tasks, issues and spikes are bindable", () => {
+    expect(["task", "issue", "spike", "feature", "initiative", "idea"].map((k) => isBindable({ kind: k } as any)))
+      .toEqual([true, true, true, false, false, false]);
   });
 });

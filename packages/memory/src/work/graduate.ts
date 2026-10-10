@@ -28,6 +28,7 @@ export function parentReadyToShip(
 ): parent is WorkItem {
   return (
     !!parent &&
+    !parent.container &&
     GRADUATABLE_KINDS.includes(parent.kind) &&
     !isComplete(parent) &&
     children.length > 0 &&
@@ -39,6 +40,9 @@ export function parentReadyToShip(
  * Check if a work item is eligible for graduation
  */
 export function canGraduate(item: WorkItem): boolean {
+  // Holding containers (the Inbox) never graduate
+  if (item.container) return false;
+
   // Must be complete
   if (!isComplete(item)) return false;
   

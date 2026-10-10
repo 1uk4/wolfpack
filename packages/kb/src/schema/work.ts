@@ -78,6 +78,8 @@ export const WorkItem = z.object({
   dependsOn: z.array(WorkId).default([]), // work → work
   blocks: z.array(WorkId).default([]), // work → work
   graduatedTo: z.array(EntryId).default([]), // entries born from this work
+  /** A holding container (the per-domain Inbox): never ships or graduates. */
+  container: z.boolean().default(false),
   log: z.array(WorkLogEntry).default([]),
   created: IsoDate,
   updated: IsoDate,
@@ -107,7 +109,10 @@ export const WorkEvent = z.discriminatedUnion("type", [
     partOf: WorkId.nullable().default(null),
     successCriteria: z.string().nullable().default(null),
     stage: Stage.default("plan"),
+    container: z.boolean().default(false),
   }),
+  /** Re-parent an item (validated against the hierarchy by moveWork). */
+  z.object({ type: z.literal("work.moved"), id: WorkId, at: z.string(), partOf: WorkId.nullable() }),
   z.object({ type: z.literal("work.staged"), id: WorkId, at: z.string(), to: Stage }),
   z.object({ type: z.literal("work.assigned"), id: WorkId, at: z.string(), assignee: WolfId }),
   z.object({
@@ -174,6 +179,7 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
           dependsOn: [],
           blocks: [],
           graduatedTo: [],
+          container: e.container ?? false,
           log: [],
           created: dateOf(e.at),
           updated: dateOf(e.at),
@@ -232,6 +238,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.summarized":
         next.summary = e.summary;
         break;
+      case "work.moved":
+        next.partOf = e.partOf;
+        break;
     }
     items.set(e.id, next);
   }
@@ -275,9 +284,64 @@ export function isComplete(item: Pick<WorkItem, "stage">): boolean {
  * error string, or null when the transition is allowed.
  */
 export function assertAdvanceable(item: WorkItem, to: Stage): string | null {
+  if (item.container && COMPLETE_STAGES.includes(to)) {
+    return `${item.title} is a holding container and never ships`;
+  }
   const past = (s: Stage) => STAGE_ORDER.indexOf(to) > STAGE_ORDER.indexOf(s);
   if (item.kind === "task" && past("plan") && !item.successCriteria?.trim()) {
     return `task ${item.id} needs a success_criteria before advancing past "plan"`;
   }
   return null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6 · HIERARCHY  — what may contain what, and what an agent may bind to
+// ════════════════════════════════════════════════════════════════════════════
+//
+//   initiative            → contains only features         (parent: none)
+//   feature               → contains task / issue / spike   (parent: initiative or none)
+//   task · issue · spike  → bindable work units             (parent: a feature)
+//   idea                  → standalone, not bindable
+
+/** Kinds an agent session can bind to. Features and initiatives are workspaces. */
+export const BINDABLE_KINDS: readonly WorkItem["kind"][] = ["task", "issue", "spike"];
+
+export function isBindable(item: Pick<WorkItem, "kind">): boolean {
+  return BINDABLE_KINDS.includes(item.kind);
+}
+
+/** Title of the per-domain holding container for strays. */
+export const INBOX_TITLE = "Inbox";
+
+type ParentLike = Pick<WorkItem, "id" | "kind" | "domain" | "title" | "container">;
+
+/** "a task", "an initiative". */
+const an = (word: string) => (/^[aeiou]/.test(word) ? `an ${word}` : `a ${word}`);
+
+/**
+ * Why `kind` may not sit under `parent` (null = no parent), or null if it may.
+ * Pure: the ops layer enforces it on create and move.
+ */
+export function placementError(
+  child: Pick<WorkItem, "kind" | "domain"> & { container?: boolean },
+  parent: ParentLike | null
+): string | null {
+  if (parent && parent.domain !== child.domain) {
+    return `${parent.title} is in domain ${parent.domain}, not ${child.domain}`;
+  }
+  switch (child.kind) {
+    case "initiative":
+    case "idea":
+      return parent ? `${an(child.kind)} cannot have a parent` : null;
+    case "feature":
+      if (child.container && parent) return "the Inbox cannot have a parent";
+      if (!parent || parent.kind === "initiative") return null;
+      return `a feature can only sit under an initiative (not ${an(parent.kind)})`;
+    case "task":
+    case "issue":
+    case "spike":
+      if (!parent) return `${an(child.kind)} needs a feature (or the Inbox) as its parent`;
+      if (parent.kind === "feature") return null;
+      return `${an(child.kind)} can only sit under a feature (not ${an(parent.kind)})`;
+  }
 }

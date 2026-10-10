@@ -14,8 +14,10 @@ import {
   deleteWork,
   queryWork,
   getWorkTree,
+  ensureInbox,
+  moveWork,
 } from "./work-ops.js";
-import { loadWorkState, readWorkLedger, resolveWorkItem } from "./work-store.js";
+import { loadWorkState, readWorkLedger, resolveWorkItem, commitWorkItem } from "./work-store.js";
 
 function makeRoots(): KbRoots {
   const base = mkdtempSync(join(tmpdir(), "kb-ops-test-"));
@@ -45,12 +47,12 @@ describe("work-ops", () => {
     expect(result.item.stage).toBe("plan");
     expect(result.item.assignee).toBe("1uk4");
 
+    // A parentless task is filed in the domain's Inbox (created on first use).
     const events = readWorkLedger(roots);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("work.created");
-
-    const state = loadWorkState(roots);
-    expect(state.size).toBe(1);
+    expect(events.map((e) => e.type)).toEqual(["work.created", "work.created"]);
+    const inbox = loadWorkState(roots).get(result.item.partOf!)!;
+    expect(inbox).toMatchObject({ kind: "feature", title: "Inbox", container: true, domain: "snapjack" });
+    expect(loadWorkState(roots).size).toBe(2);
   });
 
   it("createWork treats a blank partOf as a root item", () => {
@@ -72,18 +74,18 @@ describe("work-ops", () => {
 
     expect(() =>
       createWork(roots, { kind: "task", domain: "wolfpack", title: "bad", assignee: "1uk4", partOf: "not-a-work-id" })
-    ).toThrow(/Invalid work\.created event.*partOf/);
+    ).toThrow(/parent work item not-a-work-id not found/);
     expect(() =>
       createWork(roots, { kind: "task", domain: "wolfpack", title: "", assignee: "1uk4" })
     ).toThrow(/title/);
 
-    expect(readWorkLedger(roots)).toHaveLength(1);
+    expect(readWorkLedger(roots)).toHaveLength(2); // Inbox + "ok"
   });
 
   it("noteWork rejects empty text without touching the ledger", () => {
     const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" });
     expect(() => noteWork(roots, id, "")).toThrow(/Invalid work\.noted event/);
-    expect(readWorkLedger(roots)).toHaveLength(1);
+    expect(readWorkLedger(roots)).toHaveLength(2); // Inbox + "t"
   });
 
   it("stageWork advances the stage", () => {
@@ -185,9 +187,9 @@ describe("work-ops", () => {
   });
 
   it("queryWork filters by domain and assignee", () => {
-    createWork(roots, { kind: "task", domain: "snapjack", title: "a", assignee: "1uk4" });
-    createWork(roots, { kind: "task", domain: "snapjack", title: "b", assignee: "hal" });
-    createWork(roots, { kind: "task", domain: "personal", title: "c", assignee: "1uk4" });
+    createWork(roots, { kind: "feature", domain: "snapjack", title: "a", assignee: "1uk4" });
+    createWork(roots, { kind: "feature", domain: "snapjack", title: "b", assignee: "hal" });
+    createWork(roots, { kind: "feature", domain: "personal", title: "c", assignee: "1uk4" });
 
     expect(queryWork(roots, { domain: "snapjack" })).toHaveLength(2);
     expect(queryWork(roots, { assignee: "1uk4" })).toHaveLength(2);
@@ -255,5 +257,85 @@ describe("work-ops", () => {
 
   it("throws on unknown work item", () => {
     expect(() => stageWork(roots, "work-snapjack-NoSuch0", "in_build")).toThrow(/not found/);
+  });
+
+  describe("hierarchy", () => {
+    const mk = (kind: string, partOf?: string, domain = "wolfpack") =>
+      createWork(roots, { kind: kind as any, domain, title: `${kind} ${Math.random()}`, assignee: "1uk4", partOf }).item;
+
+    it("allows initiative → feature → task, and standalone features", () => {
+      const init = mk("initiative");
+      const feat = mk("feature", init.id);
+      expect(mk("task", feat.id).partOf).toBe(feat.id);
+      expect(mk("issue", feat.id).partOf).toBe(feat.id);
+      expect(mk("spike", mk("feature").id).kind).toBe("spike");
+      expect(mk("idea").partOf).toBeNull();
+    });
+
+    it("rejects tasks under initiatives or tasks, and parents for initiatives/ideas", () => {
+      const init = mk("initiative");
+      const feat = mk("feature", init.id);
+      const task = mk("task", feat.id);
+      const before = readWorkLedger(roots).length;
+
+      expect(() => mk("task", init.id)).toThrow(/only sit under a feature/);
+      expect(() => mk("task", task.id)).toThrow(/only sit under a feature/);
+      expect(() => mk("feature", feat.id)).toThrow(/only sit under an initiative/);
+      expect(() => mk("initiative", init.id)).toThrow(/cannot have a parent/);
+      expect(() => mk("idea", feat.id)).toThrow(/cannot have a parent/);
+      expect(() => mk("task", mk("feature", undefined, "snapjack").id)).toThrow(/domain/);
+      expect(readWorkLedger(roots)).toHaveLength(before + 1); // only the snapjack feature
+    });
+  });
+
+  describe("inbox", () => {
+    it("is one container per domain, created on first use", () => {
+      const a = createWork(roots, { kind: "task", domain: "wolfpack", title: "a", assignee: "1uk4" }).item;
+      const b = createWork(roots, { kind: "spike", domain: "wolfpack", title: "b", assignee: "1uk4" }).item;
+      const c = createWork(roots, { kind: "issue", domain: "personal", title: "c", assignee: "1uk4" }).item;
+
+      expect(a.partOf).toBe(b.partOf);
+      expect(c.partOf).not.toBe(a.partOf);
+      expect(ensureInbox(roots, "wolfpack", "1uk4").id).toBe(a.partOf);
+      expect([...loadWorkState(roots).values()].filter((i) => i.container)).toHaveLength(2);
+    });
+
+    it("never ships", () => {
+      const inbox = ensureInbox(roots, "wolfpack", "1uk4");
+      expect(() => stageWork(roots, inbox.id, "shipped")).toThrow(/never ships/);
+    });
+  });
+
+  describe("moveWork", () => {
+    it("re-parents a task, keeps its body, and records one event", () => {
+      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "1uk4" }).item;
+      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" }).item;
+      commitWorkItem(roots, task, "## Plan\nkeep me");
+
+      const { item } = moveWork(roots, task.id, feat.id);
+
+      expect(item.partOf).toBe(feat.id);
+      expect(resolveWorkItem(roots, "wolfpack", task.id)?.body).toContain("keep me");
+      expect(readWorkLedger(roots).at(-1)).toMatchObject({ type: "work.moved", partOf: feat.id });
+      expect(moveWork(roots, task.id, feat.id).event).toBeNull(); // already there
+    });
+
+    it("validates the target and refuses to move the Inbox", () => {
+      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "1uk4" }).item;
+      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" }).item;
+      const before = readWorkLedger(roots).length;
+
+      expect(() => moveWork(roots, task.id, init.id)).toThrow(/only sit under a feature/);
+      expect(() => moveWork(roots, task.id, null)).toThrow(/needs a feature/);
+      expect(() => moveWork(roots, task.partOf!, init.id)).toThrow(/cannot be moved/);
+      expect(readWorkLedger(roots)).toHaveLength(before);
+    });
+
+    it("moves a feature under an initiative and back to standalone", () => {
+      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "1uk4" }).item;
+      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "1uk4" }).item;
+      expect(moveWork(roots, feat.id, init.id).item.partOf).toBe(init.id);
+      expect(moveWork(roots, feat.id, null).item.partOf).toBeNull();
+    });
   });
 });

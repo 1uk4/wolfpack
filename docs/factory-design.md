@@ -20,7 +20,19 @@
 ---
 
 ## Two orthogonal axes
-1. **Work tree** — `partOf`: *vertical* decomposition, `initiative → feature → task`.
+1. **Work tree** — `partOf`: *vertical* decomposition, enforced on create and move
+   (`placementError` in `kb/schema/work.ts`):
+   ```
+   initiative            → contains only features         (parent: none)
+   feature               → contains task / issue / spike   (parent: initiative, or none = standalone)
+   task · issue · spike  → bindable work units             (parent: a feature, required)
+   idea                  → standalone, not bindable
+   ```
+   Features and initiatives are **workspaces**; only tasks, issues and spikes can be
+   bound. A work unit created with no parent is filed in its domain's **Inbox**: a
+   feature flagged `container: true`, created on first use, that never ships or
+   graduates. **Moving** (`work.moved`, `moveWork`, the `task_move` tool, `m` in
+   `/task`) re-parents an item under the same rules — that is how Inbox triage works.
 2. **Area** — a field: *horizontal* grouping within a domain (`marketing`,
    `engineering`, …).
 
@@ -61,6 +73,7 @@ WorkItem {
   dependsOn       WorkId[]           // work → work
   blocks          WorkId[]
   graduatedTo     EntryId[]          // entries born from this work
+  container       boolean            // true only for the per-domain Inbox
   log             { at, text }[]
   created, updated
 }
@@ -75,7 +88,7 @@ written if it is invalid), and the item's `.md` file is re-rendered.
 
 ```
 work.created · work.staged · work.assigned · work.criteria · work.area
-work.retitled · work.deleted · work.noted · work.linked
+work.retitled · work.deleted · work.noted · work.linked · work.moved
 work.bound · work.unbound · work.summarized
 ```
 
@@ -101,9 +114,10 @@ work.bound · work.unbound · work.summarized
 - **Binding** a task injects an `<active_task>` block into the system prompt
   (title, stage, `done_when`, working document, recent log, stage guidance) and
   advances its ancestors to `in_build`. File changes are tracked while bound.
-- **Agent tools:** `task_create`, `task_query`, `task_update` (working document),
-  `task_note`, `task_stage`, `task_link`, `task_done` (ship the bound task and bind
-  the next unfinished sibling).
+- **Agent tools:** `task_create` (a work unit defaults into the bound task's
+  feature, else the Inbox), `task_query`, `task_update` (working document),
+  `task_note`, `task_stage`, `task_link`, `task_move`, `task_done` (ship the bound
+  task and bind the next open task in the same feature).
 - **Ship policy:** `task_done` asks *"📦 Mark '…' as shipped?"* (showing the
   success criteria) before shipping; **No** leaves the task where it is and tells
   the agent to ask what's missing. A wolf with `WOLFPACK_TASK_SHIP=auto` in its
@@ -137,6 +151,5 @@ work.bound · work.unbound · work.summarized
   list, but nothing feeds it (`addWorkObservation` has no caller).
 - **Work files land in the receive-only mirror** on wolves, so they never reach
   sfo-01 (the ledger in the den is unaffected).
-- **No re-parenting.** There is no event to change `partOf` after creation.
 - Several helpers in `memory/src/work/` (`processWorkEvent`,
   `processGraduationQueue`, file-pattern detection) are written but not wired.

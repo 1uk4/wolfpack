@@ -39,6 +39,7 @@ const testItem: WorkItem = {
   dependsOn: [],
   blocks: [],
   graduatedTo: [],
+  container: false,
   log: [],
   created: IsoDate.parse("2026-10-09"),
   updated: IsoDate.parse("2026-10-09"),
@@ -94,6 +95,7 @@ describe("work-store", () => {
           partOf: null,
           successCriteria: null,
           stage: "plan",
+          container: false,
         },
         {
           type: "work.staged",
@@ -124,6 +126,7 @@ describe("work-store", () => {
           partOf: null,
           successCriteria: null,
           stage: "plan",
+          container: false,
         },
       ];
       appendWorkLedger(roots, events);

@@ -49,6 +49,7 @@ function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem |
     dependsOn: asStringArray(fields.dependsOn) as WorkItem["dependsOn"],
     blocks: asStringArray(fields.blocks) as WorkItem["blocks"],
     graduatedTo: asStringArray(fields.graduatedTo) as WorkItem["graduatedTo"],
+    container: fields.container === true || fields.container === "true",
     log: Array.isArray(fields.log) ? (fields.log as WorkItem["log"]) : [],
     created: fields.created as WorkItem["created"],
     updated: fields.updated as WorkItem["updated"],
@@ -102,6 +103,7 @@ function renderWorkItem(item: WorkItem, body: string): string {
   lines.push(`assignee: ${item.assignee}`);
   if (item.successCriteria) lines.push(`successCriteria: ${yamlStr(item.successCriteria)}`);
   if (item.partOf) lines.push(`partOf: ${item.partOf}`);
+  if (item.container) lines.push(`container: true`);
 
   const refs = item.references ?? [];
   const deps = item.dependsOn ?? [];

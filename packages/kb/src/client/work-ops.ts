@@ -15,6 +15,9 @@ import {
   type LinkRel,
   foldWork,
   assertAdvanceable,
+  isBindable,
+  placementError,
+  INBOX_TITLE,
 } from "../schema/work.js";
 import { type DomainId, type Slug, type IsoDate } from "../schema/knowledge.js";
 import { Stage } from "@wolfpack/engine";
@@ -38,6 +41,8 @@ export interface CreateWorkInput {
   partOf?: string | null;
   successCriteria?: string | null;
   stage?: WorkItem["stage"];
+  /** Holding container (the per-domain Inbox). Use ensureInbox, not this. */
+  container?: boolean;
 }
 
 export interface CreateWorkResult {
@@ -52,7 +57,24 @@ function slugifyArea(s: string | null | undefined): Slug | null {
   return slug ? (slug as unknown as Slug) : null;
 }
 
+/**
+ * Create a work item. The hierarchy is enforced here, so every caller (TUI,
+ * wizard, agent tools) follows it: a task/issue/spike with no parent is filed
+ * in its domain's Inbox; anything else that breaks the hierarchy throws.
+ */
 export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkResult {
+  let partOf = input.partOf?.trim() || null; // blank means "no parent"
+  if (!partOf && isBindable({ kind: input.kind })) {
+    partOf = ensureInbox(roots, input.domain, input.assignee).id;
+  }
+  const parent = partOf ? loadWorkState(roots).get(partOf as WorkId) ?? null : null;
+  if (partOf && !parent) throw new Error(`parent work item ${partOf} not found`);
+  const err = placementError(
+    { kind: input.kind, domain: input.domain as DomainId, container: input.container },
+    parent
+  );
+  if (err) throw new Error(`Cannot create "${input.title}": ${err}`);
+
   const id = workId(input.domain) as WorkId;
   const event: WorkEvent = {
     type: "work.created",
@@ -63,10 +85,10 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
     title: input.title,
     assignee: input.assignee as WolfId,
     area: slugifyArea(input.area),
-    // Blank means "no parent" — "" would fail WorkId validation.
-    partOf: (input.partOf?.trim() || null) as WorkId | null,
+    partOf: partOf as WorkId | null,
     successCriteria: input.successCriteria ?? null,
     stage: (input.stage ?? "plan") as WorkItem["stage"],
+    container: input.container ?? false,
   };
 
   appendWorkLedger(roots, [event]);
@@ -75,6 +97,51 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
   if (!item) throw new Error(`Failed to create work item ${id} — event did not fold`);
   commitWorkItem(roots, item);
   return { id, event, item };
+}
+
+// ── inbox ───────────────────────────────────────────────────────────────────
+
+/** The domain's Inbox (a container feature for strays), created on first use. */
+export function ensureInbox(roots: KbRoots, domain: string, assignee: string): WorkItem {
+  for (const item of loadWorkState(roots).values()) {
+    if (item.container && item.domain === domain) return item;
+  }
+  return createWork(roots, {
+    kind: "feature",
+    domain,
+    title: INBOX_TITLE,
+    assignee,
+    container: true,
+    stage: "in_build",
+  }).item;
+}
+
+// ── move ────────────────────────────────────────────────────────────────────
+
+/** Re-parent an item (null = no parent), validated against the hierarchy. */
+export function moveWork(
+  roots: KbRoots,
+  id: string,
+  partOf: string | null,
+): { event: WorkEvent | null; item: WorkItem } {
+  const items = loadWorkState(roots);
+  const item = items.get(id as WorkId);
+  if (!item) throw new Error(`work item ${id} not found`);
+  if (item.container) throw new Error(`${item.title} is a holding container and cannot be moved`);
+  const target = partOf?.trim() || null;
+  if (target === item.id) throw new Error("an item cannot be its own parent");
+  if ((item.partOf ?? null) === target) return { event: null, item };
+
+  const parent = target ? items.get(target as WorkId) ?? null : null;
+  if (target && !parent) throw new Error(`parent work item ${target} not found`);
+  const err = placementError(item, parent);
+  if (err) throw new Error(`Cannot move "${item.title}": ${err}`);
+
+  const event: WorkEvent = { type: "work.moved", id: item.id, at: now(), partOf: target as WorkId | null };
+  appendWorkLedger(roots, [event]);
+  const updated = loadWorkState(roots).get(item.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return { event, item: updated };
 }
 
 // ── stage ───────────────────────────────────────────────────────────────────

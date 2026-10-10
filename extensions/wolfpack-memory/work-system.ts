@@ -30,6 +30,10 @@ import {
   deleteWork,
   STAGE_ORDER,
   isComplete,
+  isBindable,
+  placementError,
+  moveWork,
+  ensureInbox,
   type CreateWorkInput,
   type WorkQuery,
   type WorkItem,
@@ -428,8 +432,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     if (!activeTask) { activeItem = null; return null; }
     const state = loadWorkState(roots);
     activeItem = state.get(activeTask.workId as WorkId) ?? null;
-    if (!activeItem) {
-      // Stale binding — item was deleted; auto-clear
+    if (!activeItem || !isBindable(activeItem)) {
+      // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
+      // older version bound: only tasks, issues and spikes are bindable.
+      activeItem = null;
       activeTask = null;
       writeActiveTask(wolfDen, null);
     }
@@ -453,8 +459,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
   }
 
-  /** Bind to a work item with full tracking */
-  function bindToTask(item: WorkItem, ctx: any): void {
+  /** Bind to a work item with full tracking. Only tasks/issues/spikes bind. */
+  function bindToTask(item: WorkItem, ctx: any): boolean {
+    if (!isBindable(item)) {
+      if (ctx?.hasUI) ctx.ui.notify(`${item.title} is a ${item.kind}, a workspace: bind one of its tasks.`, "warning");
+      return false;
+    }
     // Stop tracking previous task if any
     if (activeTask) stopFileTracking(activeTask.workId);
 
@@ -487,6 +497,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
     refreshActiveItem();
     updateWidget(ctx);
+    return true;
   }
 
   /** Unbind from current task with tracking cleanup */
@@ -605,7 +616,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── Command: /task ────────────────────────────────────────────────────────
 
-  type PanelAction = "bind" | "new" | "unbind" | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | null;
+  type PanelAction = "bind" | "new" | "unbind" | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | null;
 
   // Check if a work item is blocked (has incomplete dependencies)
   function isBlocked(item: WorkItem, allItems: WorkItem[]): boolean {
@@ -619,6 +630,20 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       }
     }
     return false;
+  }
+
+  /** Valid new parents for an item (current parent excluded), plus Inbox/standalone. */
+  function moveTargets(item: WorkItem, all: WorkItem[]): { label: string; id: string | null; inbox?: boolean }[] {
+    const out: { label: string; id: string | null; inbox?: boolean }[] = [];
+    if (isBindable(item) && !all.some((i) => i.container && i.domain === item.domain && i.id === item.partOf)) {
+      out.push({ label: "📥 Inbox", id: null, inbox: true });
+    }
+    if (item.partOf && !placementError(item, null)) out.push({ label: "(no parent — standalone)", id: null });
+    for (const p of all) {
+      if (p.id === item.id || p.id === item.partOf || p.container || isComplete(p)) continue;
+      if (!placementError(item, p)) out.push({ label: `${kindIcon(p)} ${p.title} (${p.kind})`, id: p.id as string });
+    }
+    return out;
   }
 
   pi.registerCommand("task", {
@@ -730,9 +755,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
                 if (isBlocked(selected, items)) {
                   return; // Can't bind blocked item
                 }
-                bindToTask(selected, ctx);
-                done("bind");
+                if (bindToTask(selected, ctx)) done("bind");
               }
+              return;
+            }
+            // m: move the selected item under another parent
+            if (data === "m" && cursor < displayOrder.length) {
+              const selected = displayOrder[cursor].item;
+              if (!selected.container) done({ type: "move", id: selected.id as string });
               return;
             }
             if (matchesKey(data, Key.escape)) {
@@ -814,7 +844,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             add(`${newPrefix}${newLabel}`);
 
             add("");
-            const hints = ["j/k navigate", "Space bind", "Enter open", "D depend", "x delete", "Esc close"];
+            const hints = ["j/k navigate", "Space bind", "Enter open", "m move", "D depend", "x delete", "Esc close"];
             add(` ${theme.fg("dim", hints.join(" \u00b7 "))}`);
             add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -833,8 +863,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
       if (action === "new") {
         const result = await wizardNew(ctx, roots, wolfName);
-        if (result) {
-          bindToTask(result.item, ctx);
+        if (result && bindToTask(result.item, ctx)) {
           // Kick off iteration on the new item
           await promptTaskIteration(ctx, roots, result.item);
         }
@@ -902,6 +931,27 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify(`${item.kind} graduated to KB.`, "info");
         } else {
           ctx.ui.notify("Graduation not configured.", "warning");
+        }
+      } else if (typeof action === "object" && action?.type === "move") {
+        const all = queryWork(roots, {}) ?? [];
+        const item = all.find((i) => i.id === action.id);
+        if (!item) return;
+        const choices = moveTargets(item, all);
+        if (choices.length === 0) {
+          ctx.ui.notify(`Nowhere valid to move ${item.title}.`, "warning");
+          return;
+        }
+        const picked = await ctx.ui.select(`Move "${item.title}" under:`, choices.map((c) => c.label));
+        const target = choices.find((c) => c.label === picked);
+        if (!target) return;
+        try {
+          const parentId = target.inbox ? ensureInbox(roots, item.domain as string, wolfName).id : target.id;
+          moveWork(roots, item.id, parentId);
+          refreshActiveItem();
+          updateWidget(ctx);
+          ctx.ui.notify(`Moved ${item.title} → ${target.label}`, "info");
+        } catch (e: any) {
+          ctx.ui.notify(e.message, "error");
         }
       } else if (action === "unbind") {
         ctx.ui.notify("Task unbound.", "info");
@@ -997,8 +1047,39 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   pi.registerTool(
     defineTool({
+      name: "task_move",
+      description: "Move a work item under a different parent (re-parent). Hierarchy: task/issue/spike under a feature or the Inbox; feature under an initiative or standalone. Defaults to the bound task.",
+      parameters: Type.Object({
+        to: Type.String({ description: "New parent work item ID, \"inbox\" for the domain's Inbox, or \"none\" to make a feature standalone" }),
+        id: Type.Optional(Type.String({ description: "Work item to move (default: the bound task)" })),
+      }),
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        const id = params.id ?? activeTask?.workId;
+        if (!id) return { content: [{ type: "text" as const, text: "No id given and no task bound." }], isError: true };
+        try {
+          const item = loadWorkState(roots).get(id as WorkId);
+          if (!item) throw new Error(`work item ${id} not found`);
+          const to = params.to.trim();
+          const parentId =
+            to.toLowerCase() === "inbox" ? ensureInbox(roots, item.domain as string, wolfName).id
+            : to.toLowerCase() === "none" ? null
+            : to;
+          const { event, item: moved } = moveWork(roots, id, parentId);
+          refreshActiveItem();
+          updateWidget(ctx);
+          const where = moved.partOf ? loadWorkState(roots).get(moved.partOf as WorkId)?.title : "no parent";
+          return { content: [{ type: "text" as const, text: event ? `Moved ${moved.title} → ${where}` : `${moved.title} is already under ${where}` }] };
+        } catch (e: any) {
+          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+        }
+      },
+    })
+  );
+
+  pi.registerTool(
+    defineTool({
       name: "task_create",
-      description: "Create a new work item in the factory. If a task is active, the new item becomes a child (partOf).",
+      description: "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. A task/issue/spike with no partOf goes into the bound task's feature, or the domain's Inbox if none is bound. Features may be standalone or under an initiative.",
       parameters: Type.Object({
         kind: Type.String({ description: "idea | initiative | feature | task | issue | spike" }),
         domain: Type.String({ description: "Domain: snapjack | wolfpack | personal" }),
@@ -1006,7 +1087,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         area: Type.Optional(Type.String({ description: "Horizontal area: marketing, engineering, analysis…" })),
         successCriteria: Type.Optional(Type.String({ description: "Done-condition (required for tasks)" })),
         assignee: Type.Optional(Type.String({ description: "Wolf to assign (default: current wolf)" })),
-        partOf: Type.Optional(Type.String({ description: "Parent work item ID (overrides active task)" })),
+        partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, _ctx) {
         const input: CreateWorkInput = {
@@ -1016,7 +1097,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           assignee: params.assignee ?? wolfName,
           area: params.area,
           successCriteria: params.successCriteria,
-          partOf: params.partOf ?? activeTask?.workId,
+          // Work units default to the bound task's workspace (its feature);
+          // createWork files them in the Inbox when there is none.
+          partOf: params.partOf ?? (isBindable({ kind: params.kind as any }) ? activeItem?.partOf : null),
         };
         try {
           const result = createWork(roots, input);
@@ -1097,7 +1180,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           let nextItem: WorkItem | null = null;
           if (shipped.partOf) {
             const allSiblings = queryWork(roots, { partOf: shipped.partOf as string }) ?? [];
-            const siblings = allSiblings.filter((i) => i.id !== shipped.id && !isComplete(i));
+            const siblings = allSiblings.filter((i) => i.id !== shipped.id && isBindable(i) && !isComplete(i));
             if (siblings.length > 0) nextItem = siblings[0];
           }
 

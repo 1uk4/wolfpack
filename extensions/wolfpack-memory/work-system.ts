@@ -655,9 +655,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         (tui: any, theme: any, _kb: any, done: (result: PanelAction) => void) => {
           // Two-pane workspace browser. Navigation is the pure reducer in
           // @wolfpack/memory (work/selector.ts); this only renders + applies effects.
+          // `items` is what the panel shows (archived work has left /task);
+          // readiness reads `allItems`, since an initiative is ready only once
+          // its features have graduated, and graduated features are archived.
           let items: WorkItem[] = [];
+          let allItems: WorkItem[] = [];
           const reload = () => {
-            items = (queryWork(roots, { assignee: wolfName }) ?? []).filter((i) => i.stage !== "archived");
+            allItems = queryWork(roots, { assignee: wolfName }) ?? [];
+            items = allItems.filter((i) => i.stage !== "archived");
           };
           reload();
           let sel: SelectorState = initialState(items, activeTask?.workId ?? null);
@@ -717,7 +722,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "g") {
               // From the task pane, g graduates the open feature, not the task.
               const target = sel.pane === "right" ? items.find((i) => i.id === sel.openId) : focused;
-              if (target && readyToGraduate(target, items)) {
+              if (target && readyToGraduate(target, allItems)) {
                 return done({ type: "graduate", id: target.id as string });
               }
               ctx.ui.notify(notReadyReason(target), "warning");
@@ -730,7 +735,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (!item) return "Nothing selected to graduate.";
             if (item.container) return "The Inbox never graduates.";
             if (item.graduated) return `${item.title} has already graduated.`;
-            const kids = items.filter((i) => i.partOf === item.id);
+            const kids = allItems.filter((i) => i.partOf === item.id);
             if (item.kind === "feature") {
               const open = kids.filter((k) => !isComplete(k)).length;
               return kids.length === 0 ? `${item.title} has no tasks yet.` : `${item.title}: ${open} task(s) still open.`;
@@ -775,7 +780,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;
               const stage = item.container ? ""
-                : readyToGraduate(item, items) ? theme.fg("success", " \ud83c\udf93 ready") : ` ${STAGE_ICONS[item.stage] ?? ""}`;
+                : readyToGraduate(item, allItems) ? theme.fg("success", " \ud83c\udf93 ready") : ` ${STAGE_ICONS[item.stage] ?? ""}`;
               out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${extraMark(extra)}${relationMark(item.id as string)}`);
             });
             return out;
@@ -787,7 +792,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const { done: d, total } = progress(ws, items);
             const out = [`${theme.bold(ws.title)}${total ? theme.fg("dim", ` ${d}/${total}`) : ""}`];
             if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
-            if (readyToGraduate(ws, items)) {
+            if (readyToGraduate(ws, allItems)) {
               out.push(theme.fg("success", "\ud83c\udf93 All tasks done: press g to graduate"));
             }
             out.push("");
@@ -954,6 +959,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           refreshActiveItem();
           updateWidget(ctx);
           ctx.ui.notify(`🎓 ${item.title} graduated and archived.`, "info");
+          // Its last feature delivered → the initiative can be completed (never automatic).
+          const after = queryWork(roots, {}) ?? [];
+          const parent = hub ? after.find((i) => i.id === hub.id) : undefined;
+          if (readyToGraduate(parent, after)) {
+            ctx.ui.notify(`🎓 All features of "${parent.title}" have graduated: press g on it to complete it.`, "info");
+          }
         } catch (e: any) {
           ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
         }

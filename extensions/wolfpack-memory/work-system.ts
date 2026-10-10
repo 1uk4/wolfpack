@@ -357,8 +357,9 @@ async function promptTaskIteration(
   if (next === "Review and update the plan") {
     // Start the review turn right away, rather than leaving a draft to send.
     const review =
-      `Review the working document for "${item.title}" (shown in <active_task>). ` +
-      `Discuss what should change, then use task_update to write the updated plan.`;
+      `I want to update the plan for "${item.title}" (its working document is in ` +
+      `<active_task>). Ask me what I want to change before suggesting anything, then ` +
+      `talk it through with me. Write the agreed plan with task_update only once I confirm.`;
     try {
       pi.sendUserMessage(review);
     } catch {

@@ -69,6 +69,7 @@ import { renderDomainDigest } from "./librarian/domains.js";
 import { labelSection, sectionSummary, type SectionMember } from "./librarian/summarize.js";
 import { retireEntries } from "./librarian/retire.js";
 import { unpark, listParked } from "./librarian/park.js";
+import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
 import { ev, type KbEvent } from "./shared/index.js";
 import type { Section, SectionId, DomainId } from "./schema/knowledge.js";
 import { parseFrontmatter } from "@wolfpack/engine";
@@ -463,11 +464,23 @@ async function cmdStatus(): Promise<void> {
   console.log(`  KB_OPS  : ${roots.opsRoot}`);
   console.log(`  ledger  : ${events.length} events${lastAt ? `, last ${lastAt}` : ""}`);
   console.log(`  sweep   : ${lockLine}`);
+  const current = readCurrent(roots);
+  if (current && existsSync(lp)) {
+    console.log(
+      `  working : ${current.from}/${current.denTopicId} for ${formatAge(Date.now() - current.startedAt)}` +
+        (current.route ? ` — ${current.route}` : "")
+    );
+  }
+  const oldest = oldestInbox(roots);
   console.log(
     `  inbox   : ${pending.total} pending${
       pending.total ? ` — ${pending.wolves.join(", ")}` : ""
-    }`
+    }${oldest ? `; oldest ${oldest.wolf}/${oldest.file} waiting ${formatAge(oldest.ageMs)}` : ""}`
   );
+  const parkedItems = listParked(roots);
+  if (parkedItems.length) {
+    console.log(`  ⛔ parked: ${parkedItems.length} — ${parkedItems.map((p) => `${p.wolf}/${p.file}`).join(", ")} (wolfpack-kb unpark)`);
+  }
   console.log(`  registry: ${regTopics} topic(s)`);
   if (unclassified > 0)
     console.log(`  ⚠ unclassified (undeclared domain, quarantined): ${unclassified}`);

@@ -118,3 +118,36 @@ describe("sweep: one bad contribution never blocks the queue", () => {
     expect(listParked(roots)).toEqual([]);
   });
 });
+
+describe("sweep: per-item log line and in-progress state", () => {
+  it("logs route, timing and outcome per item; status file shows the current item", async () => {
+    const { readCurrent, oldestInbox } = await import("./progress.js");
+    const base = mkdtempSync(join(tmpdir(), "kb-prog-"));
+    const roots: KbRoots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    const inbox = join(roots.opsRoot, "inbox", "w1");
+    mkdirSync(inbox, { recursive: true });
+    mkdirSync(join(roots.kbBase, "domains", "wp", "entries"), { recursive: true });
+    writeFileSync(join(inbox, "t.md"), "---\nfrom: w1\nden_topic_id: topic-a\ncontent_hash: ha\nprev_hash: null\ndomain_hint: wp\n---\n\n# a\n\nbody\n");
+    expect(oldestInbox(roots)?.file).toBe("t.md");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
+
+    let seenDuringProduce: unknown;
+    const engine = {
+      call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+        if (step === "classifyToSection") return schema.parse({ section: "NEW", confidence: "low" });
+        seenDuringProduce = readCurrent(roots);
+        return schema.parse(opinion("Alpha"));
+      }),
+      usage: { summarize: () => ({}) },
+    } as unknown as Engine;
+    const notes: string[] = [];
+    await sweep({ engine, roots, loadEntryVectors: async () => [], notify: (m) => notes.push(m) });
+
+    expect(seenDuringProduce).toMatchObject({ from: "w1", denTopicId: "topic-a", route: expect.stringMatching(/^create entry in sec-wp-/) });
+    expect(readCurrent(roots)).toBeNull();
+    expect(notes.find((n) => n.startsWith("item w1/topic-a:"))).toMatch(/create entry in sec-wp-\w+ · llm \d+\.\ds · total \d+\.\ds → created kb-wp-/);
+    expect(oldestInbox(roots)).toBeNull();
+    vi.unstubAllGlobals();
+    rmSync(base, { recursive: true, force: true });
+  });
+});

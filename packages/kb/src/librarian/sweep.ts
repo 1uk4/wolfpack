@@ -32,6 +32,7 @@ import {
 import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, isDeclared } from "./domains.js";
 import { readSections, writeSections } from "./sections.js";
 import { withBudget, BudgetExceeded, recordFailure, clearAttempts, park } from "./park.js";
+import { writeCurrent, clearCurrent } from "./progress.js";
 import {
   DomainId,
   SectionId,
@@ -194,12 +195,30 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     }
     result.processed++;
 
+    // One summary line per contribution: route, target size, LLM time, outcome.
+    const itemStart = Date.now();
+    let route = "?";
+    let outcome = "?";
+    let llmMs = 0;
+    writeCurrent(roots, { from: c.from, denTopicId: c.denTopicId, startedAt: itemStart });
+    const setRoute = (r: string) => {
+      route = r;
+      writeCurrent(roots, { from: c.from, denTopicId: c.denTopicId, startedAt: itemStart, route });
+    };
+
     try {
       await withBudget(itemBudgetMs, async (signal) => {
       // Every LLM call for this contribution is cancelled when its budget ends.
       const itemEngine: Engine = {
         ...engine,
-        call: (step, schema, opts) => engine.call(step, schema, { ...opts, signal }),
+        call: async (step, schema, opts) => {
+          const t = Date.now();
+          try {
+            return await engine.call(step, schema, { ...opts, signal });
+          } finally {
+            llmMs += Date.now() - t;
+          }
+        },
       };
       const oracles = createOracles(itemEngine);
       const domain = c.domainHint || "wolfpack";
@@ -210,6 +229,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         writeReceipt(roots, c.from, c, "unclassified", `pending domain: ${domain}`);
         markProcessed(c);
         result.unclassified++;
+        outcome = `unclassified (domain ${domain})`;
         return;
       }
 
@@ -276,6 +296,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
           );
           markProcessed(c);
           result.rejected++;
+          outcome = "rejected (archived, older than live entry)";
           return;
         }
       }
@@ -343,6 +364,12 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       }
 
       if (!sectionId || !placement) throw new Error("unrouted contribution");
+      if (targetId) {
+        const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
+        setRoute(`${targetId === ownId ? "update own" : "merge into"} ${targetId} (${size} chars)`);
+      } else {
+        setRoute(`${ownId ? "create own" : "create"} ${ownId ?? "entry"} in ${sectionId}`);
+      }
 
       // ── PRODUCE (LLM → opinion only; code assembles) ────────────────────
       const existingMarkdown = targetId
@@ -385,6 +412,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);
       touchedDomains.add(domain);
+      outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
       else result.merged++;
       });
@@ -398,12 +426,20 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         // Over budget (expensive and likely to repeat) or out of attempts: park it.
         const why = err instanceof BudgetExceeded ? reason : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
+        outcome = `PARKED: ${why}`;
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });
       } else {
+        outcome = `skipped, attempt ${attempts}/${SWEEP.maxAttempts}: ${reason}`;
         ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} (attempt ${attempts}/${SWEEP.maxAttempts}) — ${reason}`);
         result.failures.push({ from: c.from, denTopicId: c.denTopicId, reason });
       }
+    } finally {
+      clearCurrent(roots);
+      const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+      ctx.notify?.(
+        `item ${c.from}/${c.denTopicId}: ${route} · llm ${secs(llmMs)} · total ${secs(Date.now() - itemStart)} → ${outcome}`
+      );
     }
   }
 

@@ -13,8 +13,9 @@
  *   canonical topics + summaries + vocab + gaps + journey   consumed by both paths
  *
  * ── PATH A · LIVE memory (per wolf) ──────────────────────────────────────────
- *   memory/consolidate loads the digest, selects the relevant subset, injects a
- *   "PACK ALREADY KNOWS" block into buildConsolidatePrompt → KB-aware delta:
+ *   NOT WIRED. Den promotion is a deterministic upsert (no LLM), so the old
+ *   priming point is gone. If revived, inject the "PACK ALREADY KNOWS" block
+ *   into the session consolidation prompt (orchestrator.ts) → KB-aware delta:
  *     · merge vs restate   · correct domain/kind at source
  *     · real references/see_also ids   · targets gaps
  *
@@ -40,7 +41,8 @@
  * BUILD ORDER: implement AFTER the typed Entry + assembler land. Wiring points:
  *   1. kb/librarian: `renderDomainDigest(roots, domain)` — write _digest.json each
  *      sweep (mirror-safe, deterministic), alongside renderDomainIndex.
- *   2a. memory/consolidate  (live): inject the primed subset into buildConsolidatePrompt.
+ *   2a. memory/orchestrator (live): inject the primed subset into the session
+ *       consolidation prompt (not wired; see PATH A).
  *   2b. memory/crawl/consolidate (crawl): feed digest.topics[match] as `existing`,
  *       pass `currency`, and maintain the running merge across batches; feed
  *       digest.journey into crawl/journey.

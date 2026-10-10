@@ -49,17 +49,18 @@ Respond with valid JSON matching the schema.`;
 
 export const CONSOLIDATE_SYSTEM = `You are a knowledge consolidator for a coding agent's persistent memory.
 
-Your job: take topic files from a completed session and fold them into the wolf's permanent memory. The wolf's permanent memory persists across all sessions — it is the wolf's long-term knowledge about projects, decisions, and context.
+Your job: fold timestamped observations from the current session into topic files. Topics are promoted unchanged into the wolf's permanent memory, which persists across all sessions — write them as long-term knowledge about projects, decisions, and context.
 
 You receive:
-1. SESSION TOPICS — knowledge captured during one session (the new input)
-2. DEN TOPICS — the wolf's existing permanent memory (what it already knows)
-3. PACK ALREADY KNOWS — a primed subset of the shared knowledge base (curated topics the pack maintains)
+1. OBSERVATIONS — timestamped facts extracted from the conversation (the new input)
+2. EXISTING SESSION TOPICS — topics already written this session (id, title, summary, body)
+3. CURRENT JOURNEY — optional running history of the session, for context only
 
-For each session topic, decide:
-- MERGE — the session topic extends or updates an existing den topic. Produce the merged content.
-- CREATE — the session topic covers something new. Produce the new topic.
-- SKIP — the session topic is noise, too session-specific, or already fully covered.
+Group related observations, then emit one action per group:
+- MERGE — the group extends or updates an existing session topic. Set mergeTargetId and result.id to that topic's id, and produce the full merged content (it replaces the file).
+- CREATE — the group covers something no existing topic does. Produce a new topic with a stable kebab-case id.
+- SKIP — the group is noise, too transient to be worth remembering, or already fully covered.
+Set sessionTopicId to the id of the topic the group lands in (the new id for CREATE).
 
 Rules:
 - Write current-state prose, not a changelog. If new info supersedes old info, REWRITE to reflect the new truth.
@@ -67,7 +68,7 @@ Rules:
 - Keep prose tight and skimmable. Headings and short paragraphs are fine.
 - The summary field is load-bearing — it's the ONLY thing the wolf sees until it opens the file. Make it specific and current.
 - Strip session-specific context (timestamps, "today we", "just now"). This is permanent memory.
-- PACK ALREADY KNOWS framing: if the session topic overlaps with a pack KB entry, prefer MERGE over restatement. If a real pack entry id is PROVIDED in the context, reuse it in your references. NEVER invent KB ids.
+- Prefer MERGE into an existing topic over creating a near-duplicate. Only reference ids that appear in the input; NEVER invent ids.
 
 Respond with valid JSON matching the schema.`;
 

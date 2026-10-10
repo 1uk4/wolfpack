@@ -1,24 +1,8 @@
-export const PACK_ALREADY_KNOWS_SHARED_KB_TEMPLATE = `
-===== PACK ALREADY KNOWS (shared KB context) =====
-{{sectionLines}}
-===== END PACK ALREADY KNOWS =====
-`;
-
 export const PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE = `
 ===== PACK ALREADY KNOWS (running digest) =====
 {{sectionLines}}
 ===== END PACK ALREADY KNOWS =====
 `;
-
-export const LIVE_CONSOLIDATION_USER_PROMPT = `===== SESSION TOPICS (new input from this session) =====
-{{sessionSection}}
-===== END SESSION TOPICS =====
-
-===== DEN TOPICS (existing permanent memory) =====
-{{denSection}}
-===== END DEN TOPICS =====
-{{packKnowsBlock}}
-Fold the session topics into permanent memory. For each session topic, decide MERGE, CREATE, or SKIP.`;
 
 export const SESSION_CONSOLIDATION_USER_PROMPT = `===== OBSERVATIONS TO CONSOLIDATE =====
 {{obsLines}}

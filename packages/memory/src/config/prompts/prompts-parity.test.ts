@@ -4,7 +4,6 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildObserverPrompt, buildCrawlObserverPrompt } from "../../observer/prompts.js";
-import { buildConsolidatePrompt } from "../../prompts.js";
 import { buildCrawlConsolidatePrompt } from "../../crawl/consolidate.js";
 import { buildJourneyPrompt } from "../../crawl/journey.js";
 import { getStageContext } from "../../work-memory.js";
@@ -73,36 +72,6 @@ describe("observer prompt parity", () => {
 });
 
 describe("consolidation prompt parity", () => {
-  const topic = { id: "t1", title: "T", summary: "S", body: "B" } as any;
-
-  it("live (den) consolidation prompt, with and without digest", () => {
-    const legacy = (pack: string, den: string) => [
-      "===== SESSION TOPICS (new input from this session) =====",
-      "### t1 — T\nSummary: S\n\nB",
-      "===== END SESSION TOPICS =====",
-      "",
-      "===== DEN TOPICS (existing permanent memory) =====",
-      den,
-      "===== END DEN TOPICS =====",
-      pack,
-      "Fold the session topics into permanent memory. For each session topic, decide MERGE, CREATE, or SKIP.",
-    ].join("\n");
-    const pack = [
-      "",
-      "===== PACK ALREADY KNOWS (shared KB context) =====",
-      "- kb-1 — KB 1\n  Summary 1",
-      "===== END PACK ALREADY KNOWS =====",
-      "",
-    ].join("\n");
-
-    expect(buildConsolidatePrompt([topic], [])).toBe(
-      legacy("", "(empty — no existing memory)")
-    );
-    expect(buildConsolidatePrompt([topic], [topic], [section(1)])).toBe(
-      legacy(pack, "### t1 — T\nSummary: S\n\nB")
-    );
-  });
-
   it("session (orchestrator) consolidation prompt, with and without journey", () => {
     const legacy = (journey: string) => [
       "===== OBSERVATIONS TO CONSOLIDATE =====",

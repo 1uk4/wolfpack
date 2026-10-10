@@ -19,19 +19,20 @@
  *   │ Observation pool (ledger)                                │
  *   └──────────┬───────────────────────────────────────────────┘
  *              │
- *   [CONSOLIDATE] (smart model)
- *   buildConsolidatePrompt (template: packages/memory/src/config/prompts)
+ *   [CONSOLIDATE] (smart model, when the pool overflows)
+ *   orchestrator.ts + SESSION_CONSOLIDATION_USER_PROMPT
  *              │
  *              ├─ CONSOLIDATE_SYSTEM: fold observations into
  *              │  session topics
- *              │  in: observations + den topics → out: topics
+ *              │  in: observations + session topics → out: topics
  *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Session topics (.memory/<sid>/topics/)                   │
  *   └──────────┬───────────────────────────────────────────────┘
  *              │
- *   (Session end → promotion)
+ *   (Session end → promotion: deterministic upsert into the den,
+ *    no LLM; merging across sessions is owned by the KB sweep)
  *              │
  *        [JOURNEY] (appended, simple v1)
  *   buildJourneyPrompt: not yet wired to LLM
@@ -159,10 +160,11 @@ export {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * stage: consolidate (live) · model: smart · in: observations + den topics · out: topics
+ * stage: consolidate (live) · model: smart · in: observations + session topics · out: topics
  *
- * Fold observations into session topics, merging with den topics where applicable.
- * Dynamic builder: buildConsolidatePrompt (in packages/memory/src/prompts.ts; template in packages/memory/src/config/prompts).
+ * Fold overflowing observations into session topics (merge/create/skip).
+ * Called from packages/memory/src/orchestrator.ts; user prompt template is
+ * SESSION_CONSOLIDATION_USER_PROMPT in packages/memory/src/config/prompts.
  */
 // CONSOLIDATE_SYSTEM is exported from ./config/prompts/memory.js.
 

@@ -6,6 +6,7 @@ import {
   projectWork,
   parseWorkEvent,
   assertAdvanceable,
+  isComplete,
   type WorkEvent,
   type WorkItem,
 } from "./work.js";
@@ -131,5 +132,13 @@ describe("assertAdvanceable", () => {
   it("does not require a criterion for non-task kinds", () => {
     const feat = { ...taskNoCriteria, kind: "feature" as const };
     expect(assertAdvanceable(feat, "in_build")).toBeNull();
+  });
+});
+
+describe("isComplete", () => {
+  it("is true from shipped onward and false before", () => {
+    const at = (stage: string) => isComplete({ stage } as Pick<WorkItem, "stage">);
+    expect(["shipped", "live", "archived"].map(at)).toEqual([true, true, true]);
+    expect(["idea", "plan", "feasibility", "approved", "in_build"].map(at)).toEqual([false, false, false, false, false]);
   });
 });

@@ -8,8 +8,9 @@
  * - Embed summary in parent feature
  * - Trigger graduation when parent completes
  */
+import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
-import type { WorkItem, WorkId, WorkEvent, WolfId } from "@wolfpack/kb/client";
+import { isComplete, type WorkItem, type WorkId, type WorkEvent, type WolfId } from "@wolfpack/kb/client";
 import {
   ACTIVE_WORK_CONTEXT_HEADER,
   SUCCESS_CRITERIA_LINE,
@@ -80,14 +81,6 @@ export function onWorkBound(workId: WorkId, wolf: WolfId, at: string): void {
 }
 
 /**
- * Handle wolf unbinding from a work item — end session but keep data
- * (data is cleared after summarization on completion)
- */
-export function onWorkUnbound(workId: WorkId): void {
-  // Keep session data — it will be used for summarization if task completes
-}
-
-/**
  * Add an observation to the active work session
  * (called by memory observer when wolf is bound to a task)
  */
@@ -129,8 +122,6 @@ export function getWorkSession(workId: WorkId): WorkSession | undefined {
 // ════════════════════════════════════════════════════════════════════════════
 // 4 · TASK COMPLETION SUMMARIZATION
 // ════════════════════════════════════════════════════════════════════════════
-
-import { z } from "zod";
 
 const TaskSummaryResult = z.object({
   summary: z.string().max(140),
@@ -241,20 +232,11 @@ ${summary.implementation}
 // 6 · COMPLETION DETECTION
 // ════════════════════════════════════════════════════════════════════════════
 
-const COMPLETE_STAGES = ["shipped", "live", "archived"];
-
 /**
  * Check if all children of a work item are complete
  */
 export function areAllChildrenComplete(children: WorkItem[]): boolean {
-  return children.length > 0 && children.every(c => COMPLETE_STAGES.includes(c.stage));
-}
-
-/**
- * Check if a work item is complete
- */
-export function isComplete(item: WorkItem): boolean {
-  return COMPLETE_STAGES.includes(item.stage);
+  return children.length > 0 && children.every(isComplete);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -284,7 +266,7 @@ export async function processWorkEvent(
       return { action: "session_started", details: `Wolf ${event.wolf} bound to ${event.id}` };
 
     case "work.unbound":
-      onWorkUnbound(event.id);
+      // Session data is kept: it feeds the summary if the task later ships.
       return { action: "session_ended" };
 
     case "work.noted":

@@ -4,7 +4,7 @@
  * Analyzes work item state and conversation to detect when a stage transition
  * is appropriate, then prompts the user for confirmation.
  */
-import type { WorkItem } from "@wolfpack/kb/client";
+import { isComplete, type WorkItem } from "@wolfpack/kb/client";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · TRANSITION DETECTION RULES
@@ -214,14 +214,13 @@ export function extractTransitionContext(
   children: WorkItem[],
   recentNotes: string[]
 ): Parameters<typeof detectTransition>[1] {
-  const completedStages = ["shipped", "live", "archived"];
   const safeChildren = children ?? [];
   
   return {
     bodyLength: body.length,
     hasSuccessCriteria: !!item.successCriteria,
     childCount: safeChildren.length,
-    completedChildCount: safeChildren.filter(c => completedStages.includes(c.stage)).length,
+    completedChildCount: safeChildren.filter(isComplete).length,
     hasOpenQuestions: body.toLowerCase().includes("?") || body.toLowerCase().includes("tbd"),
     recentActivity: recentNotes,
   };

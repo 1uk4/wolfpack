@@ -261,6 +261,14 @@ export const STAGE_ORDER = [
   "archived",
 ] as const;
 
+/** Stages at which a work item counts as done. */
+export const COMPLETE_STAGES: readonly Stage[] = ["shipped", "live", "archived"];
+
+/** True once a work item has shipped (or gone further). */
+export function isComplete(item: Pick<WorkItem, "stage">): boolean {
+  return COMPLETE_STAGES.includes(item.stage);
+}
+
 /**
  * Guard a stage transition. A `task` may not advance past `plan` without a
  * success criterion — every job must declare its done-condition. Returns an

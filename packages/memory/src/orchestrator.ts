@@ -17,7 +17,7 @@ import { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidatio
 import { fillPromptTemplate } from "./config/prompts/template.js";
 import type { AgentRuntime, ConversationChunk } from "./runtime.js";
 import { observe } from "./observer/observe.js";
-import type { RawObservation } from "./observer/schemas.js";
+import { ConsolidationResultSchema } from "./schemas.js";
 import type { Observation, LedgerEvent } from "./ledger/types.js";
 import { foldLedger, poolTokens, selectPromotionOverflow } from "./ledger/fold.js";
 import {
@@ -60,15 +60,6 @@ export interface MemoryOrchestrator {
    * results to the ledger, and triggers consolidation if needed.
    */
   processChunks(chunks: ConversationChunk[]): Promise<void>;
-
-  /**
-   * Feed raw observations directly (e.g. from an existing OM pipeline).
-   * Skips the observer step — just commits to ledger and consolidates.
-   */
-  ingestObservations(
-    observations: RawObservation[],
-    coversUpToId: string
-  ): Promise<void>;
 
   /**
    * Force consolidation now (ignores threshold).
@@ -196,31 +187,6 @@ export function createOrchestrator(
     }
   }
 
-  async function ingestObservations(
-    observations: RawObservation[],
-    coversUpToId: string
-  ): Promise<void> {
-    if (observations.length === 0) return;
-
-    const typed: Observation[] = observations.map((o) => ({
-      timestamp: o.timestamp,
-      content: o.content,
-      tokenCount: estimateTokens(o.content),
-    }));
-
-    appendEvent({
-      type: "observations_recorded",
-      observations: typed,
-      coversUpToId,
-    });
-
-    // Check consolidation threshold
-    const folded = foldLedger(ledgerEvents);
-    if (poolTokens(folded.activeObservations) >= cfg.consolidateAtPoolTokens) {
-      await runConsolidation();
-    }
-  }
-
   async function runConsolidation(forceAll: boolean = false): Promise<void> {
     const folded = foldLedger(ledgerEvents);
 
@@ -251,9 +217,6 @@ export function createOrchestrator(
     // Read existing session topics for context
     const existingTopics = readTopics(memRoot);
     const journey = readJourney(memRoot);
-
-    // Use engine to consolidate (reuse consolidation logic)
-    const { ConsolidationResultSchema } = await import("./schemas.js");
 
     const existingSection =
       existingTopics.length > 0
@@ -344,7 +307,6 @@ export function createOrchestrator(
 
   return {
     processChunks,
-    ingestObservations,
     consolidateNow,
     promoteToWolfMemory,
     getActiveObservations,

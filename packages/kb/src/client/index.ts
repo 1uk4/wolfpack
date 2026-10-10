@@ -39,6 +39,8 @@ export {
   type LinkRel,
   assertAdvanceable,
   STAGE_ORDER,
+  COMPLETE_STAGES,
+  isComplete,
   foldWork,
   projectWork,
   parseWorkEvent,

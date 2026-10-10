@@ -9,13 +9,12 @@
  * 2. Graduate feature with reference to initiative entry
  * 3. Dewey processes and places appropriately
  */
-import type { WorkItem, WorkId } from "@wolfpack/kb/client";
+import { isComplete, type WorkItem, type WorkId } from "@wolfpack/kb/client";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · GRADUATION ELIGIBILITY
 // ════════════════════════════════════════════════════════════════════════════
 
-const COMPLETE_STAGES = ["shipped", "live", "archived"];
 const GRADUATABLE_KINDS = ["feature", "initiative"];
 
 /**
@@ -23,7 +22,7 @@ const GRADUATABLE_KINDS = ["feature", "initiative"];
  */
 export function canGraduate(item: WorkItem): boolean {
   // Must be complete
-  if (!COMPLETE_STAGES.includes(item.stage)) return false;
+  if (!isComplete(item)) return false;
   
   // Must be feature or initiative (tasks embed in parent)
   if (!GRADUATABLE_KINDS.includes(item.kind)) return false;

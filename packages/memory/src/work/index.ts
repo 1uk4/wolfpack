@@ -47,7 +47,6 @@ export {
 export {
   getStageContext,
   onWorkBound,
-  onWorkUnbound,
   addWorkObservation,
   addWorkNote,
   addStageChange,
@@ -55,7 +54,6 @@ export {
   summarizeTask,
   embedTaskInParent,
   areAllChildrenComplete,
-  isComplete,
   processWorkEvent,
   type WorkSession,
   type SummarizeTaskInput,

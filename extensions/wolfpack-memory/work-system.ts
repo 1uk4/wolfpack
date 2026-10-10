@@ -29,6 +29,7 @@ import {
   setCriteria,
   deleteWork,
   STAGE_ORDER,
+  isComplete,
   type CreateWorkInput,
   type WorkQuery,
   type WorkItem,
@@ -41,7 +42,6 @@ import {
   recordFileChange,
   getFileSession,
   onWorkBound,
-  onWorkUnbound,
   addWorkNote,
   getWorkSession,
   detectTransition,
@@ -453,10 +453,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   /** Bind to a work item with full tracking */
   function bindToTask(item: WorkItem, ctx: any): void {
     // Stop tracking previous task if any
-    if (activeTask) {
-      stopFileTracking(activeTask.workId);
-      onWorkUnbound(activeTask.workId as any);
-    }
+    if (activeTask) stopFileTracking(activeTask.workId);
 
     // Bind to new task
     activeTask = {
@@ -491,10 +488,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   /** Unbind from current task with tracking cleanup */
   function unbindTask(ctx: any): void {
-    if (activeTask) {
-      stopFileTracking(activeTask.workId);
-      onWorkUnbound(activeTask.workId as any);
-    }
+    if (activeTask) stopFileTracking(activeTask.workId);
     activeTask = null;
     activeItem = null;
     writeActiveTask(wolfDen, null);
@@ -783,15 +777,15 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
                 const boundMark = isBound ? theme.fg("success", " \u25c0") : "";
                 const blocked = isBlocked(item, items);
                 const blockedMark = blocked ? theme.fg("error", " \u26d4") : "";
-                const isComplete = ["shipped", "live", "archived"].includes(item.stage);
+                const done = isComplete(item);
                 const isGraduated = item.graduatedTo && item.graduatedTo.length > 0;
-                const icon = isGraduated ? "📚" : isComplete ? "\u2714" : kindIcon(item);  // 📚 graduated, ✔ complete
-                const titleStyle = isComplete
+                const icon = isGraduated ? "📚" : done ? "\u2714" : kindIcon(item);  // 📚 graduated, ✔ complete
+                const titleStyle = done
                   ? theme.fg("dim", item.title)  // dim completed items
                   : blocked
                     ? theme.fg("dim", item.title)
                     : focused ? theme.fg("accent", item.title) : theme.fg("text", item.title);
-                const completeMark = isComplete ? theme.fg("success", " \u2713") : "";  // green checkmark
+                const completeMark = done ? theme.fg("success", " \u2713") : "";  // green checkmark
                 const meta = theme.fg("dim", ` (${item.kind}) ${item.domain}${item.area ? "/" + item.area : ""}`);
 
                 add(`${prefix}${treeChar}${icon} ${titleStyle}${meta}${blockedMark}${completeMark}${boundMark}`);
@@ -1083,7 +1077,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           let nextItem: WorkItem | null = null;
           if (shipped.partOf) {
             const allSiblings = queryWork(roots, { partOf: shipped.partOf as string }) ?? [];
-            const siblings = allSiblings.filter((i) => i.id !== shipped.id && !["shipped", "live", "archived"].includes(i.stage));
+            const siblings = allSiblings.filter((i) => i.id !== shipped.id && !isComplete(i));
             if (siblings.length > 0) nextItem = siblings[0];
           }
 

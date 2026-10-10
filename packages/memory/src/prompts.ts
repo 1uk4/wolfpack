@@ -8,6 +8,11 @@ import type { DenTopic } from "./den.js";
 import { CONSOLIDATE_SYSTEM, JOURNEY_SYSTEM } from "@wolfpack/engine";
 import type { ContextDigest, DigestSection } from "@wolfpack/kb/shared";
 import { DIGEST } from "@wolfpack/engine";
+import {
+  PACK_ALREADY_KNOWS_SHARED_KB_TEMPLATE,
+  LIVE_CONSOLIDATION_USER_PROMPT,
+} from "./config/prompts/consolidations.js";
+import { fillPromptTemplate } from "./config/prompts/template.js";
 
 // Re-export for backward compatibility
 export { CONSOLIDATE_SYSTEM, JOURNEY_SYSTEM };
@@ -24,13 +29,9 @@ function renderPackKnows(sections: DigestSection[]): string {
   const lines = capped.map(
     (s) => `- ${s.sectionId} — ${s.title}\n  ${s.summary}`
   );
-  return [
-    "",
-    "===== PACK ALREADY KNOWS (shared KB context) =====",
-    lines.join("\n\n"),
-    "===== END PACK ALREADY KNOWS =====",
-    "",
-  ].join("\n");
+  return fillPromptTemplate(PACK_ALREADY_KNOWS_SHARED_KB_TEMPLATE, {
+    sectionLines: lines.join("\n\n"),
+  });
 }
 
 /**
@@ -68,15 +69,9 @@ export function buildConsolidatePrompt(
     : [];
   const packKnowsBlock = renderPackKnows(sections);
 
-  return [
-    "===== SESSION TOPICS (new input from this session) =====",
+  return fillPromptTemplate(LIVE_CONSOLIDATION_USER_PROMPT, {
     sessionSection,
-    "===== END SESSION TOPICS =====",
-    "",
-    "===== DEN TOPICS (existing permanent memory) =====",
     denSection,
-    "===== END DEN TOPICS =====",
     packKnowsBlock,
-    "Fold the session topics into permanent memory. For each session topic, decide MERGE, CREATE, or SKIP.",
-  ].join("\n");
+  });
 }

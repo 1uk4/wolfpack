@@ -10,6 +10,15 @@
  */
 import type { Engine } from "@wolfpack/engine";
 import type { WorkItem, WorkId, WorkEvent, WolfId } from "@wolfpack/kb/client";
+import {
+  ACTIVE_WORK_CONTEXT_HEADER,
+  SUCCESS_CRITERIA_LINE,
+  STAGE_CONTEXT,
+  TASK_SUMMARY_SYSTEM,
+} from "./config/prompts/tasks.js";
+import { fillPromptTemplate } from "./config/prompts/template.js";
+
+export { STAGE_CONTEXT, TASK_SUMMARY_SYSTEM };
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · WORK SESSION TRACKING
@@ -35,81 +44,24 @@ const activeSessions = new Map<WorkId, WorkSession>();
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * Stage-specific context injected into LLM prompts when a wolf is working on a task.
- * This helps the LLM understand the current goal and what kind of output is expected.
- */
-export const STAGE_CONTEXT: Record<string, string> = {
-  idea: `You are exploring and defining scope for this work item.
-GOAL: Clarify requirements, identify constraints, explore approaches.
-OUTPUT: Update the document with refined scope, open questions, and initial thoughts.`,
-
-  plan: `You are planning this work item.
-GOAL: Define the approach, break down into steps, establish success criteria.
-OUTPUT: Fill out the planning document with concrete steps, dependencies, and acceptance criteria.
-The plan should be detailed enough that another wolf could execute it.`,
-
-  feasibility: `You are validating feasibility of this work item.
-GOAL: Identify risks, validate assumptions, prototype if needed.
-OUTPUT: Update the document with findings, blockers, and go/no-go recommendation.`,
-
-  approved: `This work item is approved and ready for implementation.
-GOAL: Prepare for active development.
-OUTPUT: Ensure all prerequisites are met, dependencies resolved.`,
-
-  in_build: `You are actively implementing this work item.
-GOAL: Make progress toward the success criteria.
-OUTPUT: Working code/solution that meets the defined criteria.
-Update the document with implementation notes and decisions.`,
-
-  shipped: `This work item is complete.
-GOAL: Summarize what was accomplished.
-OUTPUT: Concise summary of implementation for the parent feature document.`,
-
-  live: `This work item is deployed and in production.
-GOAL: Monitor and validate.
-OUTPUT: Confirm success criteria are met in production.`,
-};
-
-/**
- * Get the stage context for a work item to inject into prompts
+ * Get the stage context for a work item to inject into prompts.
+ * Stage text lives in config/prompts/tasks.ts (STAGE_CONTEXT).
  */
 export function getStageContext(item: WorkItem): string {
   const context = STAGE_CONTEXT[item.stage];
   if (!context) return "";
 
-  const header = `\n\n## ACTIVE WORK CONTEXT\nYou are bound to: ${item.title} [${item.kind}]\nStage: ${item.stage}\n\n`;
+  const header = fillPromptTemplate(ACTIVE_WORK_CONTEXT_HEADER, {
+    title: item.title,
+    kind: item.kind,
+    stage: item.stage,
+  });
   const criteria = item.successCriteria
-    ? `SUCCESS CRITERIA: ${item.successCriteria}\n\n`
+    ? fillPromptTemplate(SUCCESS_CRITERIA_LINE, { successCriteria: item.successCriteria })
     : "";
 
   return header + criteria + context;
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// 3 · SUMMARIZATION PROMPT (strict, like consolidation)
-// ════════════════════════════════════════════════════════════════════════════
-
-export const TASK_SUMMARY_SYSTEM = `You summarize completed development tasks into tight, factual implementation notes.
-
-INPUTS:
-- Task title and success criteria
-- Notes and observations collected during implementation
-- Duration and context
-
-OUTPUT FORMAT (JSON):
-{
-  "summary": "One-line summary (≤140 chars) of what was accomplished",
-  "implementation": "2-4 sentences covering: what changed, key decisions, notable patterns"
-}
-
-RULES:
-1. Be CONCRETE and SPECIFIC — no vague statements
-2. Focus on WHAT and HOW, not the process
-3. Include specific file names, function names, or component names when known
-4. Mention any non-obvious decisions or tradeoffs
-5. If the task involved multiple changes, prioritize the most significant
-6. Do NOT repeat the task title
-7. Do NOT include temporal language ("first", "then", "finally")`;
 
 // ════════════════════════════════════════════════════════════════════════════
 // 3 · EVENT HANDLERS

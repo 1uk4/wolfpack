@@ -13,6 +13,8 @@
  */
 import type { Engine } from "@wolfpack/engine";
 import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
+import { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
+import { fillPromptTemplate } from "./config/prompts/template.js";
 import type { AgentRuntime, ConversationChunk } from "./runtime.js";
 import { observe } from "./observer/observe.js";
 import type { RawObservation } from "./observer/schemas.js";
@@ -261,18 +263,13 @@ export function createOrchestrator(
             .join("\n\n---\n\n")
         : "(empty — no session memory yet)";
 
-    const prompt = [
-      "===== OBSERVATIONS TO CONSOLIDATE =====",
+    const prompt = fillPromptTemplate(SESSION_CONSOLIDATION_USER_PROMPT, {
       obsLines,
-      "===== END OBSERVATIONS =====",
-      "",
-      "===== EXISTING SESSION TOPICS =====",
       existingSection,
-      "===== END SESSION TOPICS =====",
-      "",
-      journey ? `===== CURRENT JOURNEY =====\n${journey}\n===== END JOURNEY =====\n` : "",
-      "Fold the observations into session topics. For each group of related observations, decide MERGE, CREATE, or SKIP.",
-    ].join("\n");
+      journeyBlock: journey
+        ? `===== CURRENT JOURNEY =====\n${journey}\n===== END JOURNEY =====\n`
+        : "",
+    });
 
     const result = await engine.call("consolidate", ConsolidationResultSchema, {
       system: CONSOLIDATE_SYSTEM,

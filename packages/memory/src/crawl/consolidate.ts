@@ -10,6 +10,11 @@
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
 import { CRAWL_CONSOLIDATE_SYSTEM, atomicWrite, DIGEST } from "@wolfpack/engine";
+import {
+  PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE,
+  CRAWL_CONSOLIDATION_USER_PROMPT,
+} from "../config/prompts/consolidations.js";
+import { fillPromptTemplate } from "../config/prompts/template.js";
 import { join } from "node:path";
 import { ordersJourney } from "./dates.js";
 import type { CrawlObservation } from "./extract.js";
@@ -56,13 +61,9 @@ function renderPackKnows(sections: DigestSection[]): string {
   const lines = capped.map(
     (s) => `- ${s.sectionId} — ${s.title}\n  ${s.summary}`
   );
-  return [
-    "",
-    "===== PACK ALREADY KNOWS (running digest) =====",
-    lines.join("\n\n"),
-    "===== END PACK ALREADY KNOWS =====",
-    "",
-  ].join("\n");
+  return fillPromptTemplate(PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE, {
+    sectionLines: lines.join("\n\n"),
+  });
 }
 
 /**
@@ -134,20 +135,17 @@ export function buildCrawlConsolidatePrompt(
     : [];
   const packKnowsBlock = renderPackKnows(sections);
   
-  return [
-    `TOPIC: ${topic}`,
-    `CURRENCY: ${currency}  (archived/snapshot = historical; present as of its dates)`,
-    "",
-    "===== OBSERVATIONS (all belong to this ONE topic) =====",
+  const existingBlock = existing
+    ? `===== EXISTING ENTRY (extend this) =====\n${existing}\n===== END EXISTING =====\n`
+    : "(no existing entry — create fresh)";
+
+  return fillPromptTemplate(CRAWL_CONSOLIDATION_USER_PROMPT, {
+    topic,
+    currency,
     obsLines,
-    "===== END OBSERVATIONS =====",
-    "",
-    existing
-      ? `===== EXISTING ENTRY (extend this) =====\n${existing}\n===== END EXISTING =====\n`
-      : "(no existing entry — create fresh)",
+    existingBlock,
     packKnowsBlock,
-    "Fold the observations into ONE current-state entry. Respond with JSON.",
-  ].join("\n");
+  });
 }
 
 export async function consolidateBatch(

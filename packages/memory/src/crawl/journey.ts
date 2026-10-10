@@ -14,6 +14,8 @@
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
 import { CRAWL_JOURNEY_SYSTEM } from "@wolfpack/engine";
+import { CRAWL_JOURNEY_USER_PROMPT } from "../config/prompts/consolidations.js";
+import { fillPromptTemplate } from "../config/prompts/template.js";
 import { normalizeDate } from "./dates.js";
 import type { CrawlTopic, CrawlEvent } from "./consolidate.js";
 import type { CrawlPlan } from "./schemas.js";
@@ -31,19 +33,15 @@ export function buildJourneyPrompt(
   current: string,
   eventLines: string
 ): string {
-  return [
-    `DOMAIN: ${domain}`,
-    "",
-    current
-      ? `===== CURRENT JOURNEY (extend this) =====\n${current}\n===== END CURRENT JOURNEY =====`
-      : "(no journey yet — begin it)",
-    "",
-    "===== NEW EVENTS (chronological, oldest first) =====",
+  const currentBlock = current
+    ? `===== CURRENT JOURNEY (extend this) =====\n${current}\n===== END CURRENT JOURNEY =====`
+    : "(no journey yet — begin it)";
+
+  return fillPromptTemplate(CRAWL_JOURNEY_USER_PROMPT, {
+    domain,
+    currentBlock,
     eventLines,
-    "===== END EVENTS =====",
-    "",
-    "Extend the journey with these events. Narrate what changed; do not list specifications. Respond with JSON.",
-  ].join("\n");
+  });
 }
 
 export interface JourneyResult {

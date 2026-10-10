@@ -5,6 +5,9 @@
  * is appropriate, then prompts the user for confirmation.
  */
 import type { WorkItem } from "@wolfpack/kb/client";
+import { BREAKDOWN_SUGGESTION_SYSTEM } from "../config/prompts/tasks.js";
+
+export { BREAKDOWN_SUGGESTION_SYSTEM };
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · TRANSITION DETECTION RULES
@@ -242,29 +245,3 @@ export interface BreakdownSuggestion {
   prompt: string;
 }
 
-/**
- * Prompt template for suggesting task breakdown
- */
-export const BREAKDOWN_SUGGESTION_SYSTEM = `You analyze a work item plan and suggest how to break it down into child tasks or features.
-
-INPUT: Work item title, body/plan, and kind (initiative, feature, task)
-
-OUTPUT (JSON):
-{
-  "suggestions": [
-    {
-      "title": "Short, specific task title",
-      "kind": "task" or "feature",
-      "successCriteria": "Concrete done condition"
-    }
-  ],
-  "reasoning": "Why this breakdown makes sense"
-}
-
-RULES:
-1. Tasks should be completable in one session (1-4 hours)
-2. Each task needs a concrete success criteria
-3. Group related work into features if complex
-4. Identify dependencies between tasks
-5. Keep titles short and action-oriented
-6. Max 10 suggestions per breakdown`;

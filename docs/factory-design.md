@@ -104,7 +104,14 @@ work.bound · work.unbound · work.summarized
 - **Agent tools:** `task_create`, `task_query`, `task_update` (working document),
   `task_note`, `task_stage`, `task_link`, `task_done` (ship the bound task and bind
   the next unfinished sibling).
-- **Stage detection** suggests transitions (e.g. "looks done — mark shipped?").
+- **Ship policy:** `task_done` asks *"📦 Mark '…' as shipped?"* (showing the
+  success criteria) before shipping; **No** leaves the task where it is and tells
+  the agent to ask what's missing. A wolf with `WOLFPACK_TASK_SHIP=auto` in its
+  `.env`, or a session with no UI attached, ships without asking, so agent loops
+  can finish tasks on their own (`memory/src/work/ship-policy.ts`).
+- **Stage detection** suggests other transitions at the end of each turn, e.g. a
+  feature whose child tasks are all done. Tasks are not guessed done from their
+  notes; that is `task_done`'s job.
 
 ## Completion and graduation
 1. **Task ships** → the LLM summarizes it (`TASK_SUMMARY_SYSTEM`) from its working

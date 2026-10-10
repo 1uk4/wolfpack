@@ -144,23 +144,8 @@ export function detectTransition(
     // IN_BUILD → SHIPPED: work complete
     // ─────────────────────────────────────────────────────────────────────────
     case "in_build": {
-      // For tasks: success criteria met
-      if (item.kind === "task") {
-        const criteriaMetSignals = recentActivity.some(a => 
-          a.includes("done") || a.includes("complete") || a.includes("finished") || 
-          a.includes("working") || a.includes("implemented")
-        );
-        
-        if (criteriaMetSignals && hasSuccessCriteria) {
-          return {
-            from: "in_build",
-            to: "shipped",
-            confidence: "medium",
-            reason: "Task appears complete",
-            prompt: `📦 "${item.title}" looks done. Mark as shipped?`,
-          };
-        }
-      }
+      // Tasks are shipped through task_done, which asks first (see
+      // work/ship-policy.ts) — no keyword guessing here.
 
       // For features/initiatives: all children complete
       if ((item.kind === "feature" || item.kind === "initiative") && childCount > 0) {

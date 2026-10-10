@@ -99,6 +99,18 @@ describe("work-ops", () => {
     expect(item.stage).toBe("in_build");
   });
 
+  it("stageWork to the current stage records nothing", () => {
+    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4", successCriteria: "ok" });
+    stageWork(roots, id, "shipped");
+    const before = readWorkLedger(roots).length;
+
+    const again = stageWork(roots, id, "shipped");
+
+    expect(again.event).toBeNull();
+    expect(again.item.stage).toBe("shipped");
+    expect(readWorkLedger(roots)).toHaveLength(before);
+  });
+
   it("stageWork blocks a task without criteria", () => {
     const { id } = createWork(roots, {
       kind: "task",

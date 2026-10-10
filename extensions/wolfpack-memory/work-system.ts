@@ -46,6 +46,8 @@ import {
   getWorkSession,
   detectTransition,
   extractTransitionContext,
+  resolveShipPolicy,
+  shouldConfirmShip,
 } from "@wolfpack/memory";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1049,11 +1051,27 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_done",
-      description: "Mark the active task as shipped and bind to the next unfinished sibling task. Use this when the current task's success criteria are met.",
+      description: "Mark the active task as shipped and bind to the next unfinished sibling task. Use this when the current task's success criteria are met. Unless the wolf's ship policy is auto (WOLFPACK_TASK_SHIP=auto), the user is asked to confirm first; if they decline, the task is not shipped.",
       parameters: Type.Object({}),
       async execute(_id, _params, _signal, onUpdate, ctx) {
         if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
-        
+
+        // Human gate (default) vs. agent loops (auto / no UI attached).
+        if (shouldConfirmShip(resolveShipPolicy(), !!ctx?.hasUI)) {
+          const ok = await ctx.ui.confirm(
+            `📦 Mark "${activeItem.title}" as shipped?`,
+            activeItem.successCriteria ? `Done when: ${activeItem.successCriteria}` : ""
+          );
+          if (!ok) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Not shipped: the user declined. "${activeItem.title}" stays in ${activeItem.stage}. Ask what is still missing before calling task_done again.`,
+              }],
+            };
+          }
+        }
+
         let shipped: WorkItem;
         let resultText = "";
         

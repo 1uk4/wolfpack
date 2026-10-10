@@ -17,6 +17,9 @@ export {
   type BreakdownSuggestion,
 } from "./stage-detection.js";
 
+// Ship policy (confirm vs. auto for agent loops)
+export { resolveShipPolicy, shouldConfirmShip, type ShipPolicy } from "./ship-policy.js";
+
 // File observation
 export {
   startFileTracking,

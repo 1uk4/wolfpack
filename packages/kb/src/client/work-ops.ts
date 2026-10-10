@@ -83,10 +83,12 @@ export function stageWork(
   roots: KbRoots,
   id: string,
   to: string,
-): { event: WorkEvent; item: WorkItem } {
+): { event: WorkEvent | null; item: WorkItem } {
   const items = loadWorkState(roots);
   const item = items.get(id as WorkId);
   if (!item) throw new Error(`work item ${id} not found`);
+  // Already there: record nothing (no duplicate transition events).
+  if (item.stage === to) return { event: null, item };
 
   const err = assertAdvanceable(item, to as WorkItem["stage"]);
   if (err) throw new Error(err);

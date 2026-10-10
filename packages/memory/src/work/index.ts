@@ -61,7 +61,6 @@ export {
 export {
   canGraduate,
   readyToGraduate,
-  graduationCascade,
   needsParentFirst,
   buildContribution,
   graduationEntryId,

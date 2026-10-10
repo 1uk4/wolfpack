@@ -53,7 +53,6 @@ import {
   resolveShipPolicy,
   shouldConfirmShip,
   readyToGraduate,
-  graduationCascade,
   archiveSet,
   workspaceHeader,
   initialState,
@@ -788,8 +787,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             const out = [`${theme.bold(ws.title)}${total ? theme.fg("dim", ` ${d}/${total}`) : ""}`];
             if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
             if (readyToGraduate(ws, items)) {
-              const parent = graduationCascade(ws, items);
-              out.push(theme.fg("success", `\ud83c\udf93 All tasks done: press g to graduate${parent ? ` (${parent.title} graduates too)` : ""}`));
+              out.push(theme.fg("success", "\ud83c\udf93 All tasks done: press g to graduate"));
             }
             out.push("");
             const tree = rightTree(items, sel.openId);
@@ -930,17 +928,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify("Graduation not configured.", "warning");
           return;
         }
-        const parent = item.kind === "feature" ? graduationCascade(item, all) : undefined;
         const archived = archiveSet(item, all);
         const tasks = archived.length - 1;
         const what = (item.kind === "feature"
           ? "Ships the feature and sends it to Dewey as a knowledge base entry."
           : "Ships the initiative and sends it to Dewey as a knowledge base entry.") +
           ` Then archives it${tasks ? ` and its ${tasks} remaining item(s)` : ""}: they leave /task (history is kept).`;
-        const cascade = parent
-          ? ` It is the last feature in "${parent.title}" to graduate, so that initiative ships and graduates too.`
-          : "";
-        const ok = await ctx.ui.confirm(`🎓 Graduate "${item.title}" to the knowledge base?`, what + cascade);
+        const ok = await ctx.ui.confirm(`🎓 Graduate "${item.title}" to the knowledge base?`, what);
         if (!ok) return;
         try {
           const shippedItem = isComplete(item) ? item : stageWork(roots, item.id, "shipped").item;
@@ -953,7 +947,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           if (activeTask && archived.some((a) => a.id === activeTask!.workId)) unbindTask(ctx);
           refreshActiveItem();
           updateWidget(ctx);
-          ctx.ui.notify(`🎓 ${item.title} graduated and archived${parent ? `, and so did ${parent.title}` : ""}.`, "info");
+          ctx.ui.notify(`🎓 ${item.title} graduated and archived.`, "info");
         } catch (e: any) {
           ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
         }

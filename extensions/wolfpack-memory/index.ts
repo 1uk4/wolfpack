@@ -1671,14 +1671,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
                 parentBody += `\n\n## Features\n${featureLink}`;
               }
               commitWorkItem(kbRoots, parent, parentBody);
-
-              // Check if all features graduated → ship + graduate initiative
-              const siblings = queryWork(kbRoots, { partOf: item.partOf as string }) ?? [];
-              const allGraduated = siblings.every(s => s.graduatedTo && s.graduatedTo.length > 0);
-              if (allGraduated && siblings.length > 0) {
-                const { item: shippedInit } = stageWork(kbRoots, parent.id as any, "shipped");
-                await workConfig.onReadyToGraduate?.(shippedInit);
-              }
+              // The initiative stays active (features can still be added); it
+              // completes only via g on it.
             }
           }
         } else if (item.kind === "initiative") {

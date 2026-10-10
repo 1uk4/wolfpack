@@ -21,7 +21,8 @@ const GRADUATABLE_KINDS = ["feature", "initiative"];
 /**
  * Ready to graduate (shown in /task, triggered with `g` — never automatic):
  *   feature     all its tasks are complete (at least one), not graduated yet
- *   initiative  all its features have graduated, not graduated yet
+ *   initiative  all its current features have graduated (more can be added
+ *               later, so it never completes on its own), not graduated yet
  * Holding containers (the Inbox) never graduate.
  */
 export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): item is WorkItem {
@@ -33,17 +34,6 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
     return features.length > 0 && features.every((f) => (f.graduatedTo ?? []).length > 0);
   }
   return false;
-}
-
-/**
- * The initiative that will graduate along with `feature`, because it is the
- * last of the initiative's features still to graduate — or undefined.
- */
-export function graduationCascade(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
-  const parent = feature.partOf ? all.find((i) => i.id === feature.partOf) : undefined;
-  if (!parent || parent.kind !== "initiative" || (parent.graduatedTo ?? []).length > 0) return undefined;
-  const others = all.filter((i) => i.partOf === parent.id && i.kind === "feature" && i.id !== feature.id);
-  return others.every((f) => (f.graduatedTo ?? []).length > 0) ? parent : undefined;
 }
 
 /**

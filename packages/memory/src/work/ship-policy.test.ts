@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveShipPolicy, shouldConfirmShip } from "./ship-policy.js";
 import { detectTransition } from "./stage-detection.js";
-import { readyToGraduate, graduationCascade } from "./graduate.js";
+import { readyToGraduate } from "./graduate.js";
 import type { WorkItem } from "@wolfpack/kb/client";
 
 describe("ship policy", () => {
@@ -41,7 +41,7 @@ describe("detectTransition (in_build)", () => {
 
 });
 
-describe("readyToGraduate / graduationCascade", () => {
+describe("readyToGraduate", () => {
   let n = 0;
   const w = (kind: string, stage: string, partOf?: string, extra: Partial<WorkItem> = {}) =>
     ({ id: `w${++n}`, kind, stage, partOf: partOf ?? null, title: `${kind}${n}`, graduatedTo: [], container: false, ...extra }) as unknown as WorkItem;
@@ -63,14 +63,11 @@ describe("readyToGraduate / graduationCascade", () => {
     expect(readyToGraduate(t, [t])).toBe(false);
   });
 
-  it("an initiative is ready when all its features graduated; the last feature cascades", () => {
+  it("an initiative is ready only when all its current features graduated", () => {
     const i = w("initiative", "in_build");
     const done = w("feature", "shipped", i.id, { graduatedTo: ["kb-wp-bbbbbbb"] } as any);
     const last = w("feature", "in_build", i.id);
     expect(readyToGraduate(i, [i, done, last])).toBe(false);
-    expect(graduationCascade(last, [i, done, last])?.id).toBe(i.id);
-    expect(graduationCascade(last, [i, done, last, w("feature", "plan", i.id)])).toBeUndefined();
     expect(readyToGraduate(i, [i, done, { ...last, graduatedTo: ["kb-wp-ccccccc"] } as any])).toBe(true);
-    expect(graduationCascade(w("feature", "in_build"), [])).toBeUndefined(); // standalone
   });
 });

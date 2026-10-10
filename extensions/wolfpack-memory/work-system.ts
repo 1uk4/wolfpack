@@ -667,9 +667,32 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "x") return done({ type: "delete", id: focused.id as string });
             if (data === "D") return done({ type: "depend", id: focused.id as string });
             if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
-            if (data === "g" && readyToGraduate(focused, items)) {
-              return done({ type: "graduate", id: focused.id as string });
+            if (data === "g") {
+              // From the task pane, g graduates the open feature, not the task.
+              const target = sel.pane === "right" ? items.find((i) => i.id === sel.openId) : focused;
+              if (target && readyToGraduate(target, items)) {
+                return done({ type: "graduate", id: target.id as string });
+              }
+              ctx.ui.notify(notReadyReason(target), "warning");
+              return;
             }
+          }
+
+          /** Why g can't graduate this item (shown instead of doing nothing). */
+          function notReadyReason(item: WorkItem | undefined): string {
+            if (!item) return "Nothing selected to graduate.";
+            if (item.container) return "The Inbox never graduates.";
+            if ((item.graduatedTo ?? []).length) return `${item.title} has already graduated.`;
+            const kids = items.filter((i) => i.partOf === item.id);
+            if (item.kind === "feature") {
+              const open = kids.filter((k) => !isComplete(k)).length;
+              return kids.length === 0 ? `${item.title} has no tasks yet.` : `${item.title}: ${open} task(s) still open.`;
+            }
+            if (item.kind === "initiative") {
+              const left = kids.filter((k) => k.kind === "feature" && !(k.graduatedTo ?? []).length).length;
+              return `${item.title}: ${left} feature(s) still to graduate (press g on each feature).`;
+            }
+            return `Only features and initiatives graduate; open a feature and press g.`;
           }
 
           /** ○ todo · ● in progress · ✔ shipped · ⛔ blocked */

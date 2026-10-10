@@ -1634,7 +1634,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       try {
-        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork, stageWork, linkWork } = await import("@wolfpack/kb/client");
+        const { resolveWorkItem, commitWorkItem, loadWorkState, queryWork, graduateWork } = await import("@wolfpack/kb/client");
         const resolved = resolveWorkItem(kbRoots, item.domain as string, item.id as string);
         const body = resolved?.body ?? "";
         const inboxDir = path.join(kbRoots.opsRoot, "inbox", wolfName);
@@ -1653,7 +1653,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
           });
           fs.writeFileSync(path.join(inboxDir, file.name), file.content);
           const featureEntryId = graduationEntryId(item);
-          linkWork(kbRoots, item.id as any, "graduated_to", featureEntryId);
+          graduateWork(kbRoots, item.id as string);
 
           // Update parent initiative with link to this feature
           if (item.partOf) {
@@ -1685,8 +1685,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
           const filename = `work-${item.id}-${Date.now()}.md`;
           fs.writeFileSync(path.join(inboxDir, filename), mdContent);
 
-          const entryId = `kb-${contribution.domain}-${item.id.split("-").pop()}`;
-          linkWork(kbRoots, item.id as any, "graduated_to", entryId);
+          graduateWork(kbRoots, item.id as string);
         }
         
       } catch (e: any) {

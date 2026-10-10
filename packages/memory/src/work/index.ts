@@ -61,18 +61,13 @@ export {
 export {
   canGraduate,
   readyToGraduate,
-  needsParentFirst,
   buildContribution,
   graduationEntryId,
   archiveSet,
   featureDossier,
   graduationFile,
   type GraduationFile,
-  graduateWorkItem,
-  processGraduationQueue,
   type GraduationContribution,
-  type GraduationResult,
-  type GraduationContext,
 } from "./graduate.js";
 
 // Session tracking + summarization (prompt text lives in config/prompts/tasks.ts)

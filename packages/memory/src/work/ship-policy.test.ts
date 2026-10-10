@@ -44,7 +44,7 @@ describe("detectTransition (in_build)", () => {
 describe("readyToGraduate", () => {
   let n = 0;
   const w = (kind: string, stage: string, partOf?: string, extra: Partial<WorkItem> = {}) =>
-    ({ id: `w${++n}`, kind, stage, partOf: partOf ?? null, title: `${kind}${n}`, graduatedTo: [], container: false, ...extra }) as unknown as WorkItem;
+    ({ id: `w${++n}`, kind, stage, partOf: partOf ?? null, title: `${kind}${n}`, graduated: null, container: false, ...extra }) as unknown as WorkItem;
 
   it("a feature is ready once all its tasks are done, whatever its own stage", () => {
     const f = w("feature", "in_build");
@@ -55,7 +55,7 @@ describe("readyToGraduate", () => {
   });
 
   it("graduated features, the Inbox and tasks are never ready", () => {
-    const f = w("feature", "shipped", undefined, { graduatedTo: ["kb-wp-aaaaaaa"] } as any);
+    const f = w("feature", "shipped", undefined, { graduated: "2026-10-10" } as any);
     const inbox = w("feature", "in_build", undefined, { container: true });
     const t = w("task", "shipped", f.id);
     expect(readyToGraduate(f, [f, t])).toBe(false);
@@ -65,9 +65,9 @@ describe("readyToGraduate", () => {
 
   it("an initiative is ready only when all its current features graduated", () => {
     const i = w("initiative", "in_build");
-    const done = w("feature", "shipped", i.id, { graduatedTo: ["kb-wp-bbbbbbb"] } as any);
+    const done = w("feature", "shipped", i.id, { graduated: "2026-10-10" } as any);
     const last = w("feature", "in_build", i.id);
     expect(readyToGraduate(i, [i, done, last])).toBe(false);
-    expect(readyToGraduate(i, [i, done, { ...last, graduatedTo: ["kb-wp-ccccccc"] } as any])).toBe(true);
+    expect(readyToGraduate(i, [i, done, { ...last, graduated: "2026-10-10" } as any])).toBe(true);
   });
 });

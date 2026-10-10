@@ -35,10 +35,9 @@ const testItem: WorkItem = {
   assignee: WolfId.parse("1uk4"),
   successCriteria: "users can redeem referral codes",
   partOf: null,
-  references: [],
   dependsOn: [],
   blocks: [],
-  graduatedTo: [],
+  graduated: null,
   container: false,
   log: [],
   created: IsoDate.parse("2026-10-09"),
@@ -138,5 +137,25 @@ describe("work-store", () => {
     it("returns empty state for non-existent ledger", () => {
       expect(loadWorkState(roots).size).toBe(0);
     });
+  });
+});
+
+describe("generated log section", () => {
+  it("strips stacked generated logs and keeps the written document", async () => {
+    const { stripGeneratedLog } = await import("./work-store.js");
+    const body = "## Plan\n\nkeep this\n\n## Log\n\n- **2026-10-10 10:00** — a\n\n## Log\n\n- **2026-10-10 10:00** — a\n- **2026-10-10 11:00** — b\n";
+    expect(stripGeneratedLog(body)).toBe("## Plan\n\nkeep this");
+    expect(stripGeneratedLog("## Plan\n\n## Logistics\n\ntext")).toBe("## Plan\n\n## Logistics\n\ntext");
+  });
+
+  it("re-rendering a file is idempotent", () => {
+    const roots = makeRoots();
+    const item = { ...testItem, log: [{ at: "2026-10-10 10:00", text: "a note" }] } as any;
+    commitWorkItem(roots, item, "## Plan\n\nbody");
+    const once = readFileSync(resolveWorkItem(roots, item.domain, item.id)!.filePath, "utf8");
+    commitWorkItem(roots, item, resolveWorkItem(roots, item.domain, item.id)!.body);
+    const twice = readFileSync(resolveWorkItem(roots, item.domain, item.id)!.filePath, "utf8");
+    expect(twice).toBe(once);
+    expect(once.match(/^## Log$/gm)).toHaveLength(1);
   });
 });

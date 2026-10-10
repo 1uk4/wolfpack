@@ -109,7 +109,7 @@ const KIND_ICONS: Record<string, string> = {
 
 function kindIcon(item: WorkItem): string {
   // Show 📚 for graduated items
-  if (item.graduatedTo && item.graduatedTo.length > 0) return "📚";
+  if (item.graduated) return "📚";
   return KIND_ICONS[item.kind] ?? "◇";
 }
 
@@ -728,14 +728,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           function notReadyReason(item: WorkItem | undefined): string {
             if (!item) return "Nothing selected to graduate.";
             if (item.container) return "The Inbox never graduates.";
-            if ((item.graduatedTo ?? []).length) return `${item.title} has already graduated.`;
+            if (item.graduated) return `${item.title} has already graduated.`;
             const kids = items.filter((i) => i.partOf === item.id);
             if (item.kind === "feature") {
               const open = kids.filter((k) => !isComplete(k)).length;
               return kids.length === 0 ? `${item.title} has no tasks yet.` : `${item.title}: ${open} task(s) still open.`;
             }
             if (item.kind === "initiative") {
-              const left = kids.filter((k) => k.kind === "feature" && !(k.graduatedTo ?? []).length).length;
+              const left = kids.filter((k) => k.kind === "feature" && !k.graduated).length;
               return `${item.title}: ${left} feature(s) still to graduate (press g on each feature).`;
             }
             return `Only features and initiatives graduate; open a feature and press g.`;
@@ -1045,10 +1045,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_link",
-      description: "Link the active work item to a KB entry or another work item. depends_on/blocks: a task only to tasks in the same feature, a feature only to features under the same initiative; never across initiatives or in a cycle.",
+      description: "Link the active work item to another work item (depends_on / blocks): a task only to tasks in the same feature, a feature only to features under the same initiative; never across initiatives or in a cycle. Work never links to KB entries.",
       parameters: Type.Object({
-        rel: Type.String({ description: "Relation: references | depends_on | blocks | graduated_to" }),
-        target: Type.String({ description: "Target id (kb-* for entries, work-* for work items)" }),
+        rel: Type.String({ description: "Relation: depends_on | blocks (work items link only to each other, never to KB entries)" }),
+        target: Type.String({ description: "Target work item id (work-*)" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
@@ -1069,7 +1069,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       name: "task_unlink",
       description: "Remove a link from the active work item (e.g. a depends_on dependency).",
       parameters: Type.Object({
-        rel: Type.String({ description: "Relation: references | depends_on | blocks | graduated_to" }),
+        rel: Type.String({ description: "Relation: depends_on | blocks (work items link only to each other, never to KB entries)" }),
         target: Type.String({ description: "Target id to unlink" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {

@@ -29,6 +29,16 @@ export interface ResolvedWorkItem {
   filePath: string;
 }
 
+/**
+ * The "## Log" section is generated from the ledger on every render. Strip it
+ * (and any stacked copies older renders left behind) when reading, so the body
+ * is only the human-written document and re-rendering is idempotent.
+ */
+export function stripGeneratedLog(body: string): string {
+  const m = /(^|\n)## Log\n\n- \*\*/.exec(body);
+  return m ? body.slice(0, m.index).trimEnd() : body;
+}
+
 function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem | null {
   const { fields, body } = parseFrontmatter(raw);
   if (!fields.id || fields.nodeType !== "work") return null;
@@ -45,16 +55,15 @@ function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem |
     assignee: fields.assignee as WorkItem["assignee"],
     successCriteria: (fields.successCriteria as string) ?? null,
     partOf: (fields.partOf as WorkItem["partOf"]) ?? null,
-    references: asStringArray(fields.references) as WorkItem["references"],
     dependsOn: asStringArray(fields.dependsOn) as WorkItem["dependsOn"],
     blocks: asStringArray(fields.blocks) as WorkItem["blocks"],
-    graduatedTo: asStringArray(fields.graduatedTo) as WorkItem["graduatedTo"],
+    graduated: (fields.graduated as WorkItem["graduated"]) ?? null,
     container: fields.container === true || fields.container === "true",
     log: Array.isArray(fields.log) ? (fields.log as WorkItem["log"]) : [],
     created: fields.created as WorkItem["created"],
     updated: fields.updated as WorkItem["updated"],
   };
-  return { item, body: body.trim(), filePath };
+  return { item, body: stripGeneratedLog(body).trim(), filePath };
 }
 
 function asStringArray(v: unknown): string[] {
@@ -105,15 +114,9 @@ function renderWorkItem(item: WorkItem, body: string): string {
   if (item.partOf) lines.push(`partOf: ${item.partOf}`);
   if (item.container) lines.push(`container: true`);
 
-  const refs = item.references ?? [];
   const deps = item.dependsOn ?? [];
   const blks = item.blocks ?? [];
-  const grads = item.graduatedTo ?? [];
-  
-  if (refs.length > 0) {
-    lines.push(`references:`);
-    for (const r of refs) lines.push(`  - ${r}`);
-  }
+
   if (deps.length > 0) {
     lines.push(`dependsOn:`);
     for (const d of deps) lines.push(`  - ${d}`);
@@ -122,10 +125,7 @@ function renderWorkItem(item: WorkItem, body: string): string {
     lines.push(`blocks:`);
     for (const b of blks) lines.push(`  - ${b}`);
   }
-  if (grads.length > 0) {
-    lines.push(`graduatedTo:`);
-    for (const g of grads) lines.push(`  - ${g}`);
-  }
+  if (item.graduated) lines.push(`graduated: ${item.graduated}`);
 
   lines.push(`created: ${item.created}`);
   lines.push(`updated: ${item.updated}`);

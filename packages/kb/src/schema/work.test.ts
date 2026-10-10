@@ -12,7 +12,7 @@ import {
   type WorkEvent,
   type WorkItem,
 } from "./work.js";
-import { DomainId, Slug, EntryId } from "./knowledge.js";
+import { DomainId, Slug } from "./knowledge.js";
 
 const id = (s: string) => WorkId.parse(s);
 const wolf = (s: string) => WolfId.parse(s);
@@ -53,7 +53,10 @@ const events: WorkEvent[] = [
   },
   { type: "work.staged", id: task, at: "2026-10-09 11:00", to: "in_build" },
   { type: "work.noted", id: task, at: "2026-10-09 11:30", text: "codes generate; redemption WIP" },
+  // Legacy work → KB links still parse: references is dropped, graduated_to
+  // becomes the graduation date.
   { type: "work.linked", id: task, at: "2026-10-09 12:00", rel: "references", target: "kb-snapjack-aB3xZ9k" },
+  { type: "work.linked", id: feature, at: "2026-10-09 12:05", rel: "graduated_to", target: "kb-snapjack-Ft00001" },
   { type: "work.assigned", id: task, at: "2026-10-09 12:10", assignee: wolf("hal") },
 ];
 
@@ -73,7 +76,10 @@ describe("foldWork", () => {
     expect(t.area).toBe("marketing"); // inherited (set at creation)
     expect(t.assignee).toBe("hal"); // reassigned from 1uk4 → hal
     expect(t.log).toHaveLength(1);
-    expect(t.references).toEqual([EntryId.parse("kb-snapjack-aB3xZ9k")]);
+    expect(t).not.toHaveProperty("references");
+    expect(t.graduated).toBeNull();
+    expect(f.graduated).toBe("2026-10-09");
+    expect(f).not.toHaveProperty("graduatedTo");
     expect(t.updated).toBe("2026-10-09"); // last event date
   });
 
@@ -115,10 +121,9 @@ describe("assertAdvanceable", () => {
     assignee: wolf("1uk4"),
     successCriteria: null,
     partOf: null,
-    references: [],
     dependsOn: [],
     blocks: [],
-    graduatedTo: [],
+    graduated: null,
     container: false,
     log: [],
     created: "2026-10-09" as never,
@@ -169,5 +174,12 @@ describe("placementError / isBindable", () => {
   it("only tasks, issues and spikes are bindable", () => {
     expect(["task", "issue", "spike", "feature", "initiative", "idea"].map((k) => isBindable({ kind: k } as any)))
       .toEqual([true, true, true, false, false, false]);
+  });
+});
+
+describe("work.graduated", () => {
+  it("sets the graduation date, once", () => {
+    const g = foldWork([...events, { type: "work.graduated", id: task, at: "2026-10-11 09:00" }]);
+    expect(g.get(task)!.graduated).toBe("2026-10-11");
   });
 });

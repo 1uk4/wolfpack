@@ -19,6 +19,7 @@ import {
   placementError,
   dependencyError,
   INBOX_TITLE,
+  WORK_LINK_RELS,
 } from "../schema/work.js";
 import { type DomainId, type Slug, type IsoDate } from "../schema/knowledge.js";
 import { Stage } from "@wolfpack/engine";
@@ -145,6 +146,20 @@ export function moveWork(
   return { event, item: updated };
 }
 
+// ── graduate ────────────────────────────────────────────────────────────────
+
+/** Record that an item graduated into the KB (no-op if it already has). */
+export function graduateWork(roots: KbRoots, id: string): { event: WorkEvent | null; item: WorkItem } {
+  const item = loadWorkState(roots).get(id as WorkId);
+  if (!item) throw new Error(`work item ${id} not found`);
+  if (item.graduated) return { event: null, item };
+  const event: WorkEvent = { type: "work.graduated", id: item.id, at: now() };
+  appendWorkLedger(roots, [event]);
+  const updated = loadWorkState(roots).get(item.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return { event, item: updated };
+}
+
 // ── stage ───────────────────────────────────────────────────────────────────
 
 export function stageWork(
@@ -235,6 +250,9 @@ export function linkWork(
   rel: string,
   target: string,
 ): { event: WorkEvent | null; item: WorkItem } {
+  if (!(WORK_LINK_RELS as readonly string[]).includes(rel)) {
+    throw new Error(`work items only link to each other (${WORK_LINK_RELS.join(", ")}); "${rel}" is not supported`);
+  }
   const items = loadWorkState(roots);
   const item = items.get(id as WorkId);
   if (!item) throw new Error(`work item ${id} not found`);
@@ -275,9 +293,8 @@ export function unlinkWork(
 ): { event: WorkEvent | null; item: WorkItem } {
   const item = loadWorkState(roots).get(id as WorkId);
   if (!item) throw new Error(`work item ${id} not found`);
-  const field = { references: "references", graduated_to: "graduatedTo", depends_on: "dependsOn", blocks: "blocks" }[rel] as
-    | "references" | "graduatedTo" | "dependsOn" | "blocks" | undefined;
-  if (!field) throw new Error(`unknown relation ${rel}`);
+  const field = { depends_on: "dependsOn", blocks: "blocks" }[rel] as "dependsOn" | "blocks" | undefined;
+  if (!field) throw new Error(`work items only link to each other (${WORK_LINK_RELS.join(", ")}); "${rel}" is not supported`);
   if (!(item[field] as readonly string[]).includes(target)) return { event: null, item };
 
   const event: WorkEvent = { type: "work.unlinked", id: item.id, at: now(), rel: rel as LinkRel, target };

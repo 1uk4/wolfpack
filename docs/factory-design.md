@@ -73,10 +73,9 @@ WorkItem {
   assignee        WolfId             // 1uk4 | hal | <autonomous wolf>
   successCriteria string | null      // required before a task leaves "plan"
   partOf          WorkId | null      // the work tree (null = root)
-  references      EntryId[]          // work → Library context
   dependsOn       WorkId[]           // work → work
   blocks          WorkId[]
-  graduatedTo     EntryId[]          // entries born from this work
+  graduated       IsoDate | null     // date it graduated (no KB entry id is stored)
   container       boolean            // true only for the per-domain Inbox
   log             { at, text }[]
   created, updated
@@ -92,7 +91,8 @@ written if it is invalid), and the item's `.md` file is re-rendered.
 
 ```
 work.created · work.staged · work.assigned · work.criteria · work.area
-work.retitled · work.deleted · work.noted · work.linked · work.moved
+work.retitled · work.deleted · work.noted · work.linked · work.unlinked
+work.moved · work.graduated
 work.bound · work.unbound · work.summarized
 ```
 
@@ -157,7 +157,7 @@ work.bound · work.unbound · work.summarized
    Nothing graduates automatically.
 3. **Graduate with `g`** → confirms first, explaining what happens; then ships the
    feature, writes a contribution to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`),
-   records `graduatedTo`, and **archives** the feature and its tasks (they leave
+   records the `graduated` date, and **archives** the feature and its tasks (they leave
    `/task`; the ledger keeps their history). Nothing is archived if graduation fails. If it is the last feature of its **initiative** to
    graduate, the confirmation says so and the initiative ships and graduates too.
 4. **Dewey's sweep** turns the contribution into a curated entry like any other.

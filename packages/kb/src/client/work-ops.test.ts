@@ -17,6 +17,7 @@ import {
   ensureInbox,
   moveWork,
   unlinkWork,
+  graduateWork,
 } from "./work-ops.js";
 import { loadWorkState, readWorkLedger, resolveWorkItem, commitWorkItem } from "./work-store.js";
 
@@ -151,7 +152,7 @@ describe("work-ops", () => {
     expect(item.log[1].text).toBe("halfway done");
   });
 
-  it("linkWork adds references", () => {
+  it("linkWork refuses links to KB entries", () => {
     const { id } = createWork(roots, {
       kind: "task",
       domain: "snapjack",
@@ -159,8 +160,19 @@ describe("work-ops", () => {
       assignee: "1uk4",
     });
 
-    const { item } = linkWork(roots, id, "references", "kb-snapjack-aB3xZ9k");
-    expect(item.references).toHaveLength(1);
+    const before = readWorkLedger(roots).length;
+    expect(() => linkWork(roots, id, "references", "kb-snapjack-aB3xZ9k")).toThrow(/only link to each other/);
+    expect(() => linkWork(roots, id, "graduated_to", "kb-snapjack-aB3xZ9k")).toThrow(/only link to each other/);
+    expect(() => unlinkWork(roots, id, "references", "kb-snapjack-aB3xZ9k")).toThrow(/only link to each other/);
+    expect(readWorkLedger(roots)).toHaveLength(before);
+  });
+
+  it("graduateWork records the date once and links nothing", () => {
+    const { id } = createWork(roots, { kind: "feature", domain: "snapjack", title: "f", assignee: "1uk4" });
+    const first = graduateWork(roots, id);
+    expect(first.item.graduated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(graduateWork(roots, id).event).toBeNull();
+    expect(resolveWorkItem(roots, "snapjack", id)!.item.graduated).toBe(first.item.graduated);
   });
 
   it("setCriteria updates success criteria", () => {

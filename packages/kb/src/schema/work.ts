@@ -74,10 +74,11 @@ export const WorkItem = z.object({
    *  (enforced in the ops layer, not the schema — see assertAdvanceable). */
   successCriteria: z.string().nullable().default(null),
   partOf: WorkId.nullable().default(null), // the work tree (null = root)
-  references: z.array(EntryId).default([]), // work → Library context it used
   dependsOn: z.array(WorkId).default([]), // work → work
   blocks: z.array(WorkId).default([]), // work → work
-  graduatedTo: z.array(EntryId).default([]), // entries born from this work
+  /** Date it graduated into the KB, or null. Work never stores a KB entry id:
+   *  the Factory publishes into the KB but nothing links the two. */
+  graduated: IsoDate.nullable().default(null),
   /** A holding container (the per-domain Inbox): never ships or graduates. */
   container: z.boolean().default(false),
   log: z.array(WorkLogEntry).default([]),
@@ -93,7 +94,11 @@ export type WorkItem = z.infer<typeof WorkItem>;
 // 3 · EVENT UNION  — the source of truth; state is a fold over these
 // ════════════════════════════════════════════════════════════════════════════
 
+/** Relations in the ledger. Only depends_on / blocks can be created now;
+ *  "references" and "graduated_to" (work → KB entry) are legacy and parse only
+ *  so old events still fold. */
 export const LinkRel = z.enum(["references", "depends_on", "blocks", "graduated_to"]);
+export const WORK_LINK_RELS = ["depends_on", "blocks"] as const;
 export type LinkRel = z.infer<typeof LinkRel>;
 
 export const WorkEvent = z.discriminatedUnion("type", [
@@ -111,6 +116,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
     stage: Stage.default("plan"),
     container: z.boolean().default(false),
   }),
+  /** The item graduated into the KB (publishes; links nothing). */
+  z.object({ type: z.literal("work.graduated"), id: WorkId, at: z.string() }),
   /** Re-parent an item (validated against the hierarchy by moveWork). */
   z.object({ type: z.literal("work.moved"), id: WorkId, at: z.string(), partOf: WorkId.nullable() }),
   z.object({ type: z.literal("work.staged"), id: WorkId, at: z.string(), to: Stage }),
@@ -177,10 +184,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
           assignee: e.assignee,
           successCriteria: e.successCriteria ?? null,
           partOf: e.partOf ?? null,
-          references: [],
           dependsOn: [],
           blocks: [],
-          graduatedTo: [],
+          graduated: null,
           container: e.container ?? false,
           log: [],
           created: dateOf(e.at),
@@ -219,10 +225,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.linked":
         switch (e.rel) {
           case "references":
-            next.references = pushUnique(cur.references, EntryId.parse(e.target));
-            break;
+            break; // legacy work → KB link: dropped
           case "graduated_to":
-            next.graduatedTo = pushUnique(cur.graduatedTo, EntryId.parse(e.target));
+            next.graduated ??= dateOf(e.at); // legacy: now just the graduation date
             break;
           case "depends_on":
             next.dependsOn = pushUnique(cur.dependsOn, WorkId.parse(e.target));
@@ -243,10 +248,11 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.moved":
         next.partOf = e.partOf;
         break;
+      case "work.graduated":
+        next.graduated = dateOf(e.at);
+        break;
       case "work.unlinked": {
         const drop = <T>(arr: readonly T[]) => arr.filter((x) => (x as unknown as string) !== e.target);
-        if (e.rel === "references") next.references = drop(cur.references);
-        if (e.rel === "graduated_to") next.graduatedTo = drop(cur.graduatedTo);
         if (e.rel === "depends_on") next.dependsOn = drop(cur.dependsOn);
         if (e.rel === "blocks") next.blocks = drop(cur.blocks);
         break;

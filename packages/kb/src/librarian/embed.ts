@@ -17,7 +17,7 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter } from "@wolfpack/engine";
+import { parseFrontmatter, EMBED } from "@wolfpack/engine";
 import {
   type KbRoots,
   type Registry,
@@ -42,8 +42,8 @@ export interface EmbedConfig {
 /** Resolve config from env with lean local defaults. */
 export function resolveEmbedConfig(): EmbedConfig {
   return {
-    baseUrl: process.env.WOLFPACK_EMBED_URL ?? "http://localhost:11434",
-    model: process.env.WOLFPACK_EMBED_MODEL ?? "nomic-embed-text",
+    baseUrl: process.env.WOLFPACK_EMBED_URL ?? EMBED.baseUrl,
+    model: process.env.WOLFPACK_EMBED_MODEL ?? EMBED.model,
   };
 }
 
@@ -84,7 +84,7 @@ export function embedInput(parts: {
   return [parts.title, parts.summary, parts.detail]
     .filter(Boolean)
     .join("\n")
-    .slice(0, 4000);
+    .slice(0, EMBED.inputMaxChars);
 }
 
 // ── Ollama-backed, hash-cached embedder ──────────────────────────────────────

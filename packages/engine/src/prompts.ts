@@ -46,31 +46,23 @@
  *   └──────────────────────────────────────────────────────────┘
  *
  *
- *   KB SWEEP PIPELINE (classify → contradict → produce → label):
+ *   KB SWEEP PIPELINE (route → contradict → produce; reorg maintains sections):
  *   ┌──────────────────────────────────────────────────────────┐
  *   │ Contribution (wolf den topic or emitted delta)           │
  *   └──────────┬───────────────────────────────────────────────┘
  *              │
- *   [CLASSIFY] (fast model, conditional)
+ *   [ROUTE] (embeddings; fast model only when ambiguous)
  *              │
- *              ├─ CLASSIFY_SYSTEM: route unknown contrib
- *              │  in: contribution text → out: domain/type
+ *              ├─ SECTION_PICK_SYSTEM: pick ONE section id or NEW
+ *              │  in: contribution + digest sections (enum) → out: section
  *              │
  *              ▼
- *   ┌──────────────────────────────────────────────────────────┐
- *   │ Routed to domain/type/subcategory                        │
- *   └──────────┬───────────────────────────────────────────────┘
- *              │
  *   [CONTRADICT] (fast model, conditional)
  *              │
  *              ├─ CONTRADICT_SYSTEM: compare with existing entry
  *              │  in: new text + existing text + dates → out: winner
  *              │
  *              ▼
- *   ┌──────────────────────────────────────────────────────────┐
- *   │ Merge decision (merge_known, create, supersede)          │
- *   └──────────┬───────────────────────────────────────────────┘
- *              │
  *        [PRODUCE] (smart model)
  *              │
  *              ├─ PRODUCE_SYSTEM: write curated entry
@@ -78,17 +70,17 @@
  *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
- *   │ Curated KB entry (entry.md)                              │
+ *   │ Curated KB entry, placed in the section tree             │
  *   └──────────┬───────────────────────────────────────────────┘
  *              │
- *        [LABEL] (fast model, deferrable)
+ *   [REORG] (fast model; `wolfpack-kb reorg`)
  *              │
- *              ├─ LABEL_SYSTEM: name a topic cluster
- *              │  in: member entry summaries → out: topic label
+ *              ├─ SECTION_SUMMARY_SYSTEM: one-line section summary
+ *              ├─ LABEL_SECTION_SYSTEM: short section title
  *              │
  *              ▼
  *   ┌──────────────────────────────────────────────────────────┐
- *   │ Canonical topic (curated cluster label)                  │
+ *   │ _digest.json + INDEX.md per domain                       │
  *   └──────────────────────────────────────────────────────────┘
  *
  *
@@ -266,33 +258,6 @@ Rules:
 Output valid JSON matching the schema.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// KB SWEEP: CLASSIFY
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * stage: classify (KB sweep) · model: fast · in: contribution + digest sections (enum) · out: section id or NEW
- *
- * Route a contribution to ONE section from the digest, or NEW. This is now a
- * section-pick operation (enum-constrained), replacing the old domain/type/subcategory.
- */
-export const CLASSIFY_SYSTEM = `You route a knowledge contribution to exactly ONE section from the knowledge base.
-
-You will be given:
-1. A contribution (title + summary + body)
-2. A closed list of section ids with their summaries (the enum you must pick from)
-
-Your task: pick the single best-fit section id from the list, or return the literal string "NEW" if none fit well.
-
-Rules:
-- You MUST return a section id that was provided in the list, or the exact string "NEW".
-- NEVER invent a section id. NEVER return free text, a domain name, or a description.
-- If multiple sections could fit, pick the most specific one.
-- If no section is a good fit, return "NEW" and the system will create a new section or park it.
-- Rate your confidence: low/medium/high.
-
-Output valid JSON matching the schema (section: string, confidence: enum).`;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // KB SWEEP: CONTRADICT
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -346,18 +311,6 @@ FRONTMATTER RULES (the entry is machine-read — be disciplined):
   (e.g. \`#2E7D32\`) so Obsidian does not misread them as tags.
 
 Output JSON matching the entry schema.`;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// KB SWEEP: LABEL
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * stage: label (KB sweep) · model: fast · in: member entry summaries · out: topic label
- *
- * Name a cluster of related knowledge entries.
- * Deferrable — can be batched or deferred for efficiency.
- */
-export const LABEL_SYSTEM = `You name a cluster of related knowledge entries with a concise human topic label and a kebab-case slug. Output JSON only.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CRAWL: OBSERVER (document mode)

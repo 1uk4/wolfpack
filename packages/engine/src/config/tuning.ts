@@ -62,29 +62,6 @@ export const HIERARCHY = {
 } as const;
 
 /**
- * Relation derivation (the two-layer link model) — how many and how strong the
- * auto-`see_also` edges are, and the confidence floor for keeping an LLM edge.
- */
-export const RELATIONS = {
-  /** Max embedding-derived see_also edges written per entry. */
-  maxSeeAlso: 5,
-  /** Min cosine for an auto see_also edge. */
-  seeAlsoMinSim: 0.74,
-  /** Max LLM-proposed semantic edges accepted per entry (after resolution). */
-  maxProposed: 8,
-} as const;
-
-/**
- * Maturity derivation (Library). Deterministic defaults; curator may override.
- *  - a hub becomes `canonical`
- *  - an entry below `stubIntegration` connectivity is a `stub` (a gap)
- *  - low-confidence content is a `draft`
- */
-export const MATURITY_RULES = {
-  stubIntegration: 0.15,
-} as const;
-
-/**
  * Context digest (DESIGN — see kb/shared/schemas/digest.ts). How much of the
  * pack's existing knowledge Dewey briefs a wolf with at consolidation time.
  * Keep lean: summaries, not bodies. Selection is title/keyword match wolf-side

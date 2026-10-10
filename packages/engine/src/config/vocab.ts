@@ -13,14 +13,6 @@
 import { z } from "zod";
 
 // ════════════════════════════════════════════════════════════════════════════
-// NODE TYPE — the two layers of the knowledge graph (one shared substrate)
-// ════════════════════════════════════════════════════════════════════════════
-/** reference = the Library (durable context). work = the Factory (live, staged). */
-export const NODE_TYPES = ["reference", "work"] as const;
-export const NodeType = z.enum(NODE_TYPES);
-export type NodeType = z.infer<typeof NodeType>;
-
-// ════════════════════════════════════════════════════════════════════════════
 // ENTRY KIND — document kind for LIBRARY (reference) nodes
 // `other` is handled by a discriminated union (requires a staging `tag`), so it
 // is intentionally NOT in this list. Add recurring tags here to promote them.
@@ -38,8 +30,6 @@ export const ENTRY_KINDS = [
   "product",
   "incident",
 ] as const;
-export const EntryKind = z.enum(ENTRY_KINDS);
-export type EntryKind = z.infer<typeof EntryKind>;
 
 // ════════════════════════════════════════════════════════════════════════════
 // WORK KIND — the shape of a FACTORY (work) node
@@ -93,31 +83,6 @@ export const RELATION_KINDS = [
   "graduated_from", // entry ← work
   "blocks", // work → work
 ] as const;
-export const RelationKind = z.enum(RELATION_KINDS);
-export type RelationKind = z.infer<typeof RelationKind>;
-
-/** Who asserted an edge (provenance). */
-export const EDGE_SOURCES = ["embedding", "llm", "human"] as const;
-export const EdgeSource = z.enum(EDGE_SOURCES);
-export type EdgeSource = z.infer<typeof EdgeSource>;
-
-// ════════════════════════════════════════════════════════════════════════════
-// SHARED SCALAR VOCABULARIES
-// ════════════════════════════════════════════════════════════════════════════
-export const CONFIDENCE = ["low", "medium", "high", "verified"] as const;
-export const Confidence = z.enum(CONFIDENCE);
-export type Confidence = z.infer<typeof Confidence>;
-
-/** Library lifecycle maturity. */
-export const MATURITY = ["stub", "draft", "active", "canonical", "deprecated"] as const;
-export const Maturity = z.enum(MATURITY);
-export type Maturity = z.infer<typeof Maturity>;
-
-/** Where knowledge sits in time. */
-export const CURRENCY = ["live", "snapshot", "archived"] as const;
-export const Currency = z.enum(CURRENCY);
-export type Currency = z.infer<typeof Currency>;
 
 /** Controlled facet keys (replace free-text subcategory). Values are Slugs. */
 export const FACET_KEYS = ["subsystem", "surface", "layer", "lifecycle"] as const;
-export type FacetKey = (typeof FACET_KEYS)[number];

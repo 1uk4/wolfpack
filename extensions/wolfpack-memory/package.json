@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pi extension for wolfpack memory system — observer, consolidator, den management",
+  "description": "Pi extension for wolfpack memory system \u2014 observer, consolidator, den management",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "zod": "^3.24.0",
@@ -12,6 +12,13 @@
     "@wolfpack/kb": "*"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "wolfpack": {
+    "assets": [
+      "./kb-graph"
+    ]
   }
 }

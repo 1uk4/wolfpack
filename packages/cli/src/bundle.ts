@@ -136,6 +136,8 @@ async function bundleExtension(
     name?: string;
     version?: string;
     pi?: PiManifest;
+    /** Extra folders the extension reads at runtime (e.g. "kb-graph"), copied as-is. */
+    wolfpack?: { assets?: string[] };
   };
   const pi = pkg.pi ?? {};
   const dest = path.join(destRoot, ext.dir);
@@ -182,6 +184,15 @@ async function bundleExtension(
   const outPrompts = copyGlobDir(pi.prompts);
   const outSkills = copyGlobDir(pi.skills);
   const outThemes = copyGlobDir(pi.themes);
+
+  // 2b. Copy runtime asset folders (not Pi resources; just files next to the bundle).
+  for (const asset of pkg.wolfpack?.assets ?? []) {
+    const abs = path.resolve(srcDir, asset);
+    if (fs.existsSync(abs)) {
+      fs.cpSync(abs, path.join(dest, path.basename(asset)), { recursive: true });
+      hash.update(asset);
+    }
+  }
 
   // 3. Write a slim package.json: inlined deps, Pi resources repointed to .js.
   const outPi: PiManifest = { extensions: outExtensions };

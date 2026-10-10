@@ -74,6 +74,10 @@ import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** This extension's folder (bundled assets such as kb-graph/ live here). */
+const EXT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Custom entry types ──────────────────────────────────────────────────────
 
@@ -1787,13 +1791,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     handler: async (args: string, ctx: any) => {
       const { execFile } = require("node:child_process");
       const home = process.env.HOME ?? "";
-      const script = path.join(home, ".local", "share", "wolfpack", "kb-graph", "build_graph.py");
+      // The generator ships with this extension (kb-graph/build_graph.py).
+      const script = path.join(EXT_DIR, "kb-graph", "build_graph.py");
       if (!fs.existsSync(script)) {
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            `🐺 kb-graph skill not found at ${script}\n   install it or run the generator manually`,
-            "error",
-          );
+        if (ctx.hasUI) ctx.ui.notify(`🐺 kb-graph generator missing at ${script}`, "error");
         return;
       }
 

@@ -519,7 +519,9 @@ function applyFilters(){
 function render(domainKey){
   const ds = DATA.find(d=>d.domain===domainKey); currentDS = ds;
   const nodes = ds.nodes.map(n=>({
-    id:n.id, label:n.label, value:n.value, group:n.group,
+    // No `group` here: vis-network would paint its default group palette over
+    // our colors. Code that needs the kind reads the raw DATA node instead.
+    id:n.id, label:n.label, value:n.value,
     color:{background:nodeColor(n), border:"#0f1115"},
     font:{color:"#cdd6e4", size: n.group==="domain"?18:(n.group==="section"?13:11)},
     shape: n.group==="domain"?"star":"dot",

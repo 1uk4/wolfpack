@@ -80,6 +80,20 @@ const STAGE_COLORS: Record<string, string> = {
   archived: "\x1b[2m",
 };
 
+const STAGE_ICONS: Record<string, string> = {
+  idea: "💡",
+  plan: "📋",
+  feasibility: "🔍",
+  approved: "✅",
+  in_build: "🔨",
+  shipped: "📦",
+  live: "🟢",
+  archived: "📁",
+};
+
+/** "🔨 in_build" — the stage with its symbol. */
+const stageLabel = (stage: string) => `${STAGE_ICONS[stage] ?? "○"} ${stage}`;
+
 const KIND_ICONS: Record<string, string> = {
   initiative: "🎯",
   feature: "🧩",
@@ -189,7 +203,7 @@ function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: num
   const stageColor = STAGE_COLORS[item.stage] ?? "";
   const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
   const ws = workspace ? ` \x1b[2m· ${clip(workspace.title, 40)} ${workspace.done}/${workspace.total}\x1b[0m` : "";
-  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${item.stage}\x1b[0m${ws}`];
+  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${stageLabel(item.stage)}\x1b[0m${ws}`];
   if (item.successCriteria) lines.push(`  \x1b[2m✓ ${clip(item.successCriteria, 100)}\x1b[0m`);
   return lines;
 }
@@ -199,7 +213,7 @@ function renderStatusBarCompact(item: WorkItem): string {
   const title = item.title.length > 30
     ? item.title.slice(0, 30) + "…"
     : item.title;
-  return `${icon} ${title} \x1b[2m[${item.stage}]\x1b[0m`;
+  return `${icon} ${title} \x1b[2m${stageLabel(item.stage)}\x1b[0m`;
 }
 
 function renderQueueList(items: WorkItem[]): string {
@@ -683,7 +697,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const open = item.id === sel.openId;
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;
-              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${icon} ${title}${count}`);
+              const stage = item.container ? "" : ` ${STAGE_ICONS[item.stage] ?? ""}`;
+              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${icon} ${title}${count}${stage}`);
             });
             return out;
           }
@@ -721,7 +736,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             add(theme.fg("accent", "\u2500".repeat(width)));
             add(` ${theme.fg("toolTitle", theme.bold("\ud83d\udce5 Tasks"))} ${theme.fg("dim", `\u00b7 ${wolfName}`)}`);
             add(activeTask && activeItem
-              ? ` ${theme.fg("success", "\u25b6")} ${theme.fg("accent", activeItem.title)} ${theme.fg("dim", `[${activeItem.stage}]`)}`
+              ? ` ${theme.fg("success", "\u25b6")} ${theme.fg("accent", activeItem.title)} ${theme.fg("dim", stageLabel(activeItem.stage))}`
               : ` ${theme.fg("dim", "No task bound \u2014 open a feature, then Space on a task")}`);
             add("");
 

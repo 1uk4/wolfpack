@@ -145,17 +145,29 @@ function makeEngine() {
 /** Send a Telegram message as Dewey (best-effort; silent if unconfigured). */
 async function tg(text: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
+  // The systemd unit sets WOLFPACK_OWNER_TELEGRAM_ID; a wolf's .env uses TELEGRAM_OWNER_ID.
   const chat =
-    process.env.TELEGRAM_CHAT_ID ?? process.env.WOLFPACK_OWNER_TELEGRAM_ID;
-  if (!token || !chat) return;
+    process.env.TELEGRAM_CHAT_ID ??
+    process.env.WOLFPACK_OWNER_TELEGRAM_ID ??
+    process.env.TELEGRAM_OWNER_ID;
+  if (!token || !chat) {
+    console.error("telegram: not configured (TELEGRAM_BOT_TOKEN + owner/chat id), alert not sent");
+    return;
+  }
+  // Never let a notification failure break a sweep — but say so in the log.
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: chat, text, parse_mode: "Markdown" }),
-    });
-  } catch {
-    /* never let a notification failure break a sweep */
+    const send = (parse_mode?: string) =>
+      fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: chat, text, ...(parse_mode ? { parse_mode } : {}) }),
+      });
+    let res = await send("Markdown");
+    // A Markdown parse error (stray _ or * in an id) is a 400: resend as plain text.
+    if (res.status === 400) res = await send();
+    if (!res.ok) console.error(`telegram: send failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.error(`telegram: send failed: ${e instanceof Error ? e.message : e}`);
   }
 }
 

@@ -462,7 +462,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   /** Bind to a work item with full tracking. Only tasks/issues/spikes bind. */
   function bindToTask(item: WorkItem, ctx: any): boolean {
     if (!isBindable(item)) {
-      if (ctx?.hasUI) ctx.ui.notify(`${item.title} is a ${item.kind}, a workspace: bind one of its tasks.`, "warning");
+      if (ctx?.hasUI) ctx.ui.notify(`${item.title} is ${/^[aeiou]/.test(item.kind) ? "an" : "a"} ${item.kind}, a workspace: bind one of its tasks.`, "warning");
       return false;
     }
     // Stop tracking previous task if any

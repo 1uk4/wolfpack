@@ -99,7 +99,7 @@ export async function stampExtension(
   if (!fs.existsSync(srcDir)) return undefined;
   const pkg = JSON.parse(
     fs.readFileSync(path.join(srcDir, "package.json"), "utf8"),
-  ) as { name?: string; version?: string; pi?: PiManifest };
+  ) as { name?: string; version?: string; pi?: PiManifest; wolfpack?: { assets?: string[] } };
   const hash = createHash("sha256");
   for (const entry of pkg.pi?.extensions ?? []) {
     const built = await esbuild.build({
@@ -113,6 +113,10 @@ export async function stampExtension(
       logLevel: "silent",
     });
     for (const f of built.outputFiles) hash.update(f.contents);
+  }
+  // Must match bundleExtension's hash, which includes the asset folders.
+  for (const asset of pkg.wolfpack?.assets ?? []) {
+    if (fs.existsSync(path.resolve(srcDir, asset))) hash.update(asset);
   }
   return {
     key,

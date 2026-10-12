@@ -87,3 +87,29 @@ RULES:
 4. Identify dependencies between tasks
 5. Keep titles short and action-oriented
 6. Max 10 suggestions per breakdown`;
+
+export const GRILL_ME_PROTOCOL = `
+## Grill-Me Protocol
+
+Run a relentless interview to sharpen the plan. Map decisions as a **design tree**: every decision branches into decisions that hang off it.
+
+Work in **rounds**. The **frontier** is every decision whose prerequisites are settled. Ask the whole frontier using the \`ask_user_question\` tool — one question per call, but you can make multiple calls in parallel for independent questions. Provide your recommended answer in the \`details\` field or as the first option.
+
+### Rules
+
+1. **Facts are your job** — use tools to look up filesystem, API, or codebase facts. Don't ask the user what you could discover.
+2. **Decisions are the user's** — use ask_user_question and wait for answers.
+3. **Recompute after each round** — settled decisions push the frontier outward.
+4. **Done when frontier is empty** — every branch visited, nothing assumed.
+
+After grilling: summarize the spec and create with \`task_create\` including synthesized \`successCriteria\`.
+`;
+
+export const NEW_WORK_PROMPT = `The user wants to create a new work item. Work items have this hierarchy:
+- **Initiative**: A large goal with multiple features (e.g., "Dockerize Wolfpack")
+- **Feature**: A capability to build, can be standalone or under an initiative  
+- **Task**: A unit of work under a feature (also: issue for bugs, spike for research)
+
+Use the ask_user_question tool to ask what they want to do. Once you understand, ask if it's a development feature (code changes, architecture, implementation). If yes, run the grill-me protocol to sharpen the spec before creating. Then create the item with task_create.
+
+` + GRILL_ME_PROTOCOL;

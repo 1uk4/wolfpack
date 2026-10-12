@@ -101,3 +101,6 @@ export * from "./crawl/index.js";
 
 // Work Memory — unified work item lifecycle
 export * from "./work/index.js";
+
+// Task prompts
+export { NEW_WORK_PROMPT, GRILL_ME_PROTOCOL } from "./config/prompts/tasks.js";

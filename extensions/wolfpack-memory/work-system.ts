@@ -65,6 +65,7 @@ import {
   firstTask,
   progress,
   isBlocked,
+  NEW_WORK_PROMPT,
   type SelectorState,
   type SelectorKey,
   type SelectorEffect,
@@ -118,22 +119,6 @@ function kindIcon(item: WorkItem): string {
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function discoverDomains(roots: KbRoots): string[] {
-  const domains = new Set<string>(["personal"]);
-  try {
-    const domainsRoot = path.join(roots.kbBase, "domains");
-    const entries = fs.readdirSync(domainsRoot, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.isDirectory() && !e.name.startsWith(".")) {
-        domains.add(e.name);
-      }
-    }
-  } catch {
-    // KB_BASE not available
-  }
-  return [...domains];
 }
 
 // ── Area discovery ────────────────────────────────────────────────────────
@@ -242,76 +227,6 @@ function renderQueueList(items: WorkItem[]): string {
 }
 
 // ── Extension entry point ───────────────────────────────────────────────────
-
-// ── Wizard: conversational /task new ────────────────────────────────────────
-
-interface WizardResult {
-  id: string;
-  item: WorkItem;
-}
-
-async function wizardNew(
-  ctx: any,
-  roots: KbRoots,
-  wolfName: string,
-): Promise<WizardResult | null> {
-
-  // Step 1: What do you want to do?
-  const description = await ctx.ui.input("What do you want to do?");
-  if (!description) return null;
-
-  // Step 2: Domain
-  const domainChoices = discoverDomains(roots);
-  const domain = domainChoices.length === 1
-    ? domainChoices[0]
-    : await ctx.ui.select("Which domain?", domainChoices);
-  if (!domain) return null;
-
-  // Step 3: Classify
-  const scopeChoice = await ctx.ui.select("What best describes this?", [
-    "A one-off action I need to do",
-    "Something to investigate or research",
-    "A problem or bug to fix",
-    "A capability to build",
-    "A larger effort with multiple parts",
-  ]);
-  if (!scopeChoice) return null;
-
-  const kindMap: Record<string, string> = {
-    "A one-off action I need to do": "task",
-    "Something to investigate or research": "spike",
-    "A problem or bug to fix": "issue",
-    "A capability to build": "feature",
-    "A larger effort with multiple parts": "initiative",
-  };
-  const kind = kindMap[scopeChoice] ?? "task";
-
-  // Step 4: Title
-  const title = await ctx.ui.input("Title", description);
-  if (!title) return null;
-
-  // Step 5: Create with a starter body template
-  const TEMPLATES: Record<string, string> = {
-    task:       `## Plan\n\n${description}\n\n## Done when\n\n_(to be defined)_\n`,
-    spike:      `## Question\n\n${description}\n\n## Findings\n\n`,
-    issue:      `## Problem\n\n${description}\n\n## Expected behavior\n\n\n## Fix\n\n`,
-    feature:    `## Overview\n\n${description}\n\n## Plan\n\n\n## Done when\n\n_(to be defined)_\n`,
-    initiative: `## Goal\n\n${description}\n\n## Features\n\n\n## Plan\n\n`,
-  };
-
-  const result = createWork(roots, {
-    kind: kind as any,
-    domain,
-    title,
-    assignee: wolfName,
-  });
-
-  commitWorkItem(roots, result.item, TEMPLATES[kind] ?? "");
-  ctx.ui.notify(`Created ${kind}: ${title}`, "info");
-
-  return { id: result.id, item: result.item };
-}
-
 
 /**
  * After binding a task, show its current state and ask if the user wants
@@ -856,12 +771,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       );
 
       if (action === "new") {
-        const result = await wizardNew(ctx, roots, wolfName);
-        if (result && bindToTask(result.item, ctx)) {
-          // Kick off iteration on the new item
-          await promptTaskIteration(pi, ctx, roots, result.item);
-          refreshActiveItem();
-          updateWidget(ctx);
+        // Conversational flow: let the agent ask questions and create the task
+        try {
+          pi.sendUserMessage(NEW_WORK_PROMPT);
+        } catch {
+          ctx.ui.pasteToEditor(NEW_WORK_PROMPT);
         }
       } else if (action === "bind" && activeItem) {
         // Show current state and offer iteration

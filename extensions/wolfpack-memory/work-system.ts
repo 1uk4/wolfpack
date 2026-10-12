@@ -164,28 +164,22 @@ function activeTaskPath(wolfDen: string): string {
 
 function readActiveTask(wolfDen: string): ActiveTaskState | null {
   const p = activeTaskPath(wolfDen);
-  console.error("[work-system] readActiveTask:", p, "exists?", fs.existsSync(p));
   if (!fs.existsSync(p)) return null;
   try {
-    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
-    console.error("[work-system] readActiveTask: loaded", data?.workId);
-    return data;
-  } catch (e) {
-    console.error("[work-system] readActiveTask: parse error", e);
+    return JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch {
     return null;
   }
 }
 
 function writeActiveTask(wolfDen: string, state: ActiveTaskState | null): void {
   const p = activeTaskPath(wolfDen);
-  console.error("[work-system] writeActiveTask:", p, state ? "writing" : "deleting");
   fs.mkdirSync(path.dirname(p), { recursive: true });
   if (state === null) {
     if (fs.existsSync(p)) fs.unlinkSync(p);
     return;
   }
   fs.writeFileSync(p, JSON.stringify(state, null, 2));
-  console.error("[work-system] writeActiveTask: wrote successfully");
 }
 
 // ── Widget rendering ────────────────────────────────────────────────────────
@@ -310,15 +304,12 @@ export interface WorkSystemConfig {
 }
 
 export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): void {
-  console.error("[work-system] initWorkSystem called");
   const wolfDen = process.env.WOLF_DEN;
   const wolfName = process.env.WOLF_NAME ?? "1uk4";
   const kbBase = process.env.KB_BASE;
-  console.error("[work-system] wolfDen:", wolfDen, "kbBase:", kbBase);
 
   if (!wolfDen) {
     // No den = no factory. Silent skip.
-    console.error("[work-system] No WOLF_DEN, skipping");
     return;
   }
 
@@ -329,7 +320,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   };
 
   let activeTask: ActiveTaskState | null = readActiveTask(wolfDen);
-  console.error("[work-system] Initial activeTask:", activeTask);
   let activeItem: WorkItem | null = null;
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */
@@ -355,16 +345,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   }
 
   function refreshActiveItem(): WorkItem | null {
-    if (!activeTask) {
-      console.error("[work-system] refreshActiveItem: no activeTask");
-      activeItem = null;
-      return null;
-    }
-    console.error("[work-system] refreshActiveItem: loading", activeTask.workId);
+    if (!activeTask) { activeItem = null; return null; }
     const state = loadWorkState(roots);
-    console.error("[work-system] refreshActiveItem: state size", state.size);
     activeItem = state.get(activeTask.workId as WorkId) ?? null;
-    console.error("[work-system] refreshActiveItem: found?", !!activeItem);
     if (!activeItem || !isBindable(activeItem)) {
       // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
       // older version bound: only tasks, issues and spikes are bindable.
@@ -493,9 +476,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // ── System prompt injection ─────────────────────────────────────────────
 
   pi.on("before_agent_start", (event: any, _ctx: any) => {
-    console.error("[work-system] before_agent_start fired");
     refreshActiveItem();
-    console.error("[work-system] activeTask:", activeTask?.workId, "activeItem:", activeItem?.title);
     const all = queryWork(roots, {}) ?? [];
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.
@@ -555,10 +536,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
     parts.push("</active_task>");
 
-    const injection = "\n" + parts.join("\n") + "\n";
-    console.error("[work-system] Injecting active_task, length:", injection.length);
     return {
-      systemPrompt: event.systemPrompt + injection,
+      systemPrompt: event.systemPrompt + "\n" + parts.join("\n") + "\n",
     };
   });
 

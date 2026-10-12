@@ -158,12 +158,13 @@ interface ActiveTaskState {
   boundAt: string;
 }
 
-function activeTaskPath(wolfDen: string): string {
-  return path.join(wolfDen, "factory", "active-task.json");
+function activeTaskPath(wolfDen: string, sessionId: string): string {
+  return path.join(wolfDen, "factory", "sessions", sessionId, "active-task.json");
 }
 
-function readActiveTask(wolfDen: string): ActiveTaskState | null {
-  const p = activeTaskPath(wolfDen);
+function readActiveTask(wolfDen: string, sessionId: string): ActiveTaskState | null {
+  if (!sessionId || sessionId === "unknown") return null;
+  const p = activeTaskPath(wolfDen, sessionId);
   if (!fs.existsSync(p)) return null;
   try {
     return JSON.parse(fs.readFileSync(p, "utf-8"));
@@ -172,8 +173,9 @@ function readActiveTask(wolfDen: string): ActiveTaskState | null {
   }
 }
 
-function writeActiveTask(wolfDen: string, state: ActiveTaskState | null): void {
-  const p = activeTaskPath(wolfDen);
+function writeActiveTask(wolfDen: string, sessionId: string, state: ActiveTaskState | null): void {
+  if (!sessionId || sessionId === "unknown") return;
+  const p = activeTaskPath(wolfDen, sessionId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   if (state === null) {
     if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -319,8 +321,22 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     denLocal: path.join(wolfDen, "kb"),
   };
 
-  let activeTask: ActiveTaskState | null = readActiveTask(wolfDen);
+  // Session-specific task binding
+  let sessionId: string | null = null;
+  let activeTask: ActiveTaskState | null = null;
   let activeItem: WorkItem | null = null;
+
+  function getSessionId(ctx: any): string {
+    return ctx?.sessionManager?.getSessionId?.() ?? ctx?.sessionId ?? "unknown";
+  }
+
+  function ensureSessionLoaded(ctx: any): void {
+    const sid = getSessionId(ctx);
+    if (sid !== sessionId) {
+      sessionId = sid;
+      activeTask = readActiveTask(wolfDen, sessionId);
+    }
+  }
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */
   let workspaceId: string | null = null;
@@ -352,10 +368,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
       // older version bound: only tasks, issues and spikes are bindable.
       // But don't delete the file if state is empty - might just be loading.
-      if (state.size > 0) {
+      if (state.size > 0 && sessionId) {
         activeItem = null;
         activeTask = null;
-        writeActiveTask(wolfDen, null);
+        writeActiveTask(wolfDen, sessionId, null);
       }
     }
     if (activeItem?.partOf && !workspaceId) workspaceId = activeItem.partOf as string;
@@ -384,6 +400,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   /** Bind to a work item with full tracking. Only tasks/issues/spikes bind. */
   function bindToTask(item: WorkItem, ctx: any): boolean {
+    ensureSessionLoaded(ctx);
+    if (!sessionId) return false;
     if (!isBindable(item)) {
       if (ctx?.hasUI) ctx.ui.notify(`${item.title} is ${/^[aeiou]/.test(item.kind) ? "an" : "a"} ${item.kind}, a workspace: bind one of its tasks.`, "warning");
       return false;
@@ -397,7 +415,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       domain: item.domain as string,
       boundAt: new Date().toISOString(),
     };
-    writeActiveTask(wolfDen, activeTask);
+    writeActiveTask(wolfDen, sessionId, activeTask);
     if (item.partOf) workspaceId = item.partOf as string;
 
     // Start tracking
@@ -426,10 +444,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   /** Unbind from current task with tracking cleanup */
   function unbindTask(ctx: any): void {
+    ensureSessionLoaded(ctx);
     if (activeTask) stopFileTracking(activeTask.workId);
     activeTask = null;
     activeItem = null;
-    writeActiveTask(wolfDen, null);
+    if (sessionId) writeActiveTask(wolfDen, sessionId, null);
     updateWidget(ctx);
   }
 
@@ -439,12 +458,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   pi.on("session_start", (_event: unknown, ctx: any) => {
     lastCtx = ctx;
+    ensureSessionLoaded(ctx);
     refreshActiveItem();
     updateWidget(ctx);
   });
 
   pi.on("turn_end", async (_event: unknown, ctx: any) => {
     lastCtx = ctx;
+    ensureSessionLoaded(ctx);
     refreshActiveItem();
     updateWidget(ctx);
 
@@ -478,7 +499,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── System prompt injection ─────────────────────────────────────────────
 
-  pi.on("before_agent_start", (event: any, _ctx: any) => {
+  pi.on("before_agent_start", (event: any, ctx: any) => {
+    ensureSessionLoaded(ctx);
     refreshActiveItem();
     const all = queryWork(roots, {}) ?? [];
     if (!activeItem || !activeTask) {

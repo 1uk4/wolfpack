@@ -351,9 +351,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     if (!activeItem || !isBindable(activeItem)) {
       // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
       // older version bound: only tasks, issues and spikes are bindable.
-      activeItem = null;
-      activeTask = null;
-      writeActiveTask(wolfDen, null);
+      // But don't delete the file if state is empty - might just be loading.
+      if (state.size > 0) {
+        activeItem = null;
+        activeTask = null;
+        writeActiveTask(wolfDen, null);
+      }
     }
     if (activeItem?.partOf && !workspaceId) workspaceId = activeItem.partOf as string;
     return activeItem;

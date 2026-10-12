@@ -330,14 +330,20 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return ctx?.sessionManager?.getSessionId?.() ?? ctx?.sessionId ?? "unknown";
   }
 
+  // Debug logging to file (tail -f $WOLF_DEN/work-system.log)
+  const debugLog = (msg: string, ...args: any[]) => {
+    if (!process.env.WOLFPACK_DEBUG) return;
+    const line = `[${new Date().toISOString()}] ${msg} ${args.map(a => JSON.stringify(a)).join(' ')}\n`;
+    fs.appendFileSync(path.join(wolfDen, 'work-system.log'), line);
+  };
+
   function ensureSessionLoaded(ctx: any): void {
     const sid = getSessionId(ctx);
-    const needsLoad = sid !== sessionId || (sessionId && !activeTask);
-    console.error("[work-system] ensureSessionLoaded: sid=", sid, "needsLoad=", needsLoad, "activeTask before=", activeTask?.workId);
-    if (needsLoad) {
+    if (sid !== sessionId || (sessionId && !activeTask)) {
+      debugLog('ensureSessionLoaded: loading', { sid, prev: sessionId });
       sessionId = sid;
       activeTask = readActiveTask(wolfDen, sessionId);
-      console.error("[work-system] ensureSessionLoaded: loaded=", activeTask?.workId);
+      debugLog('ensureSessionLoaded: loaded', { activeTask: activeTask?.workId });
     }
   }
   /** The feature this session works in. Kept when a task is unbound, so new
@@ -505,7 +511,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.on("before_agent_start", (event: any, ctx: any) => {
     ensureSessionLoaded(ctx);
     refreshActiveItem();
-    console.error("[work-system] before_agent_start: activeTask=", activeTask?.workId, "activeItem=", activeItem?.title);
+    debugLog('before_agent_start', { activeTask: activeTask?.workId, activeItem: activeItem?.title });
     const all = queryWork(roots, {}) ?? [];
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.
@@ -566,12 +572,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     parts.push("</active_task>");
 
     const injection = "\n" + parts.join("\n") + "\n";
-    const basePrompt = event.systemPrompt;
-    console.error("[work-system] INJECTING active_task, injection length=", injection.length, "base prompt length=", basePrompt?.length);
-    const finalPrompt = basePrompt + injection;
-    console.error("[work-system] final prompt length=", finalPrompt.length, "contains active_task?", finalPrompt.includes("<active_task>"));
+    debugLog('injecting active_task', { injectionLen: injection.length, baseLen: event.systemPrompt?.length });
     return {
-      systemPrompt: finalPrompt,
+      systemPrompt: event.systemPrompt + injection,
     };
   });
 

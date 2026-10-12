@@ -327,18 +327,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   let activeItem: WorkItem | null = null;
 
   function getSessionId(ctx: any): string {
-    const sid = ctx?.sessionManager?.getSessionId?.() ?? ctx?.sessionId ?? "unknown";
-    console.error("[work-system] getSessionId:", sid);
-    return sid;
+    return ctx?.sessionManager?.getSessionId?.() ?? ctx?.sessionId ?? "unknown";
   }
 
   function ensureSessionLoaded(ctx: any): void {
     const sid = getSessionId(ctx);
-    console.error("[work-system] ensureSessionLoaded: sid=", sid, "current=", sessionId);
-    if (sid !== sessionId) {
+    if (sid !== sessionId || (sessionId && !activeTask)) {
       sessionId = sid;
       activeTask = readActiveTask(wolfDen, sessionId);
-      console.error("[work-system] ensureSessionLoaded: loaded activeTask=", activeTask?.workId);
     }
   }
   /** The feature this session works in. Kept when a task is unbound, so new

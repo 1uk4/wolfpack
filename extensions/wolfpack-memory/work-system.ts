@@ -528,7 +528,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     const docBody = resolved?.body ?? "";
 
     const parts: string[] = [];
-    parts.push("<active_task>");
     parts.push(`You are working on: "${activeItem.title}" (${activeItem.kind}, ${activeItem.stage})`);
     parts.push(`id: ${activeItem.id} | domain: ${activeItem.domain}${activeItem.area ? " | area: " + activeItem.area : ""} | assignee: ${activeItem.assignee}`);
     if (activeItem.successCriteria) {
@@ -569,13 +568,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     if (shipPolicy() === "auto") {
       parts.push("AUTO-SHIP IS ON: when done_when is met and verified, log a task_note and call task_done yourself (no confirmation). It binds the next task in this feature; keep going until none are left. Do not graduate the feature: that stays a manual g by the user.");
     }
-    parts.push("</active_task>");
 
-    const injection = "\n" + parts.join("\n") + "\n";
-    debugLog('injecting active_task', { injectionLen: injection.length, baseLen: event.systemPrompt?.length });
-    return {
-      systemPrompt: event.systemPrompt + injection,
-    };
+    // Use sections API - Pi wraps each section in a tag automatically
+    const content = parts.join("\n");
+    event.systemPromptOptions.sections["active_task"] = content;
+    debugLog('injecting active_task section', { contentLen: content.length });
   });
 
 

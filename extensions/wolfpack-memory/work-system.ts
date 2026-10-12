@@ -332,9 +332,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   function ensureSessionLoaded(ctx: any): void {
     const sid = getSessionId(ctx);
-    if (sid !== sessionId || (sessionId && !activeTask)) {
+    const needsLoad = sid !== sessionId || (sessionId && !activeTask);
+    console.error("[work-system] ensureSessionLoaded: sid=", sid, "needsLoad=", needsLoad, "activeTask before=", activeTask?.workId);
+    if (needsLoad) {
       sessionId = sid;
       activeTask = readActiveTask(wolfDen, sessionId);
+      console.error("[work-system] ensureSessionLoaded: loaded=", activeTask?.workId);
     }
   }
   /** The feature this session works in. Kept when a task is unbound, so new
@@ -502,6 +505,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.on("before_agent_start", (event: any, ctx: any) => {
     ensureSessionLoaded(ctx);
     refreshActiveItem();
+    console.error("[work-system] before_agent_start: activeTask=", activeTask?.workId, "activeItem=", activeItem?.title);
     const all = queryWork(roots, {}) ?? [];
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.

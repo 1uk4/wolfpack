@@ -566,9 +566,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     parts.push("</active_task>");
 
     const injection = "\n" + parts.join("\n") + "\n";
-    console.error("[work-system] INJECTING active_task, length=", injection.length);
+    const basePrompt = event.systemPrompt;
+    console.error("[work-system] INJECTING active_task, injection length=", injection.length, "base prompt length=", basePrompt?.length);
+    const finalPrompt = basePrompt + injection;
+    console.error("[work-system] final prompt length=", finalPrompt.length, "contains active_task?", finalPrompt.includes("<active_task>"));
     return {
-      systemPrompt: event.systemPrompt + injection,
+      systemPrompt: finalPrompt,
     };
   });
 

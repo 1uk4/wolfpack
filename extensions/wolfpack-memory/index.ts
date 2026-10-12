@@ -1469,6 +1469,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   }
 
   pi.on("before_agent_start", (event: any, _ctx: any) => {
+    console.error("[memory/index] before_agent_start fired");
     const parts: string[] = [];
 
     const denContext = renderDenContext();
@@ -1478,9 +1479,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     if (kbAccess) parts.push("<kb_access>", kbAccess, "</kb_access>");
 
 
-    if (parts.length === 0) return;
+    if (parts.length === 0) {
+      console.error("[memory/index] no context to inject, returning early");
+      return;
+    }
 
     const injection = "\n" + parts.join("\n") + "\n";
+    console.error("[memory/index] injecting context, length:", injection.length);
     return {
       systemPrompt: event.systemPrompt + injection,
     };

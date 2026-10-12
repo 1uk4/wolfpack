@@ -476,7 +476,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // ── System prompt injection ─────────────────────────────────────────────
 
   pi.on("before_agent_start", (event: any, _ctx: any) => {
+    console.error("[work-system] before_agent_start fired");
     refreshActiveItem();
+    console.error("[work-system] activeTask:", activeTask?.workId, "activeItem:", activeItem?.title);
     const all = queryWork(roots, {}) ?? [];
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.
@@ -536,8 +538,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
     parts.push("</active_task>");
 
+    const injection = "\n" + parts.join("\n") + "\n";
+    console.error("[work-system] Injecting active_task, length:", injection.length);
     return {
-      systemPrompt: event.systemPrompt + "\n" + parts.join("\n") + "\n",
+      systemPrompt: event.systemPrompt + injection,
     };
   });
 

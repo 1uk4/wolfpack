@@ -565,8 +565,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
     parts.push("</active_task>");
 
+    const injection = "\n" + parts.join("\n") + "\n";
+    console.error("[work-system] INJECTING active_task, length=", injection.length);
     return {
-      systemPrompt: event.systemPrompt + "\n" + parts.join("\n") + "\n",
+      systemPrompt: event.systemPrompt + injection,
     };
   });
 

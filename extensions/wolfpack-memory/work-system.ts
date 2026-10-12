@@ -164,22 +164,28 @@ function activeTaskPath(wolfDen: string): string {
 
 function readActiveTask(wolfDen: string): ActiveTaskState | null {
   const p = activeTaskPath(wolfDen);
+  console.error("[work-system] readActiveTask:", p, "exists?", fs.existsSync(p));
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    console.error("[work-system] readActiveTask: loaded", data?.workId);
+    return data;
+  } catch (e) {
+    console.error("[work-system] readActiveTask: parse error", e);
     return null;
   }
 }
 
 function writeActiveTask(wolfDen: string, state: ActiveTaskState | null): void {
   const p = activeTaskPath(wolfDen);
+  console.error("[work-system] writeActiveTask:", p, state ? "writing" : "deleting");
   fs.mkdirSync(path.dirname(p), { recursive: true });
   if (state === null) {
     if (fs.existsSync(p)) fs.unlinkSync(p);
     return;
   }
   fs.writeFileSync(p, JSON.stringify(state, null, 2));
+  console.error("[work-system] writeActiveTask: wrote successfully");
 }
 
 // ── Widget rendering ────────────────────────────────────────────────────────

@@ -323,6 +323,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   };
 
   let activeTask: ActiveTaskState | null = readActiveTask(wolfDen);
+  console.error("[work-system] Initial activeTask:", activeTask);
   let activeItem: WorkItem | null = null;
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */
@@ -348,9 +349,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   }
 
   function refreshActiveItem(): WorkItem | null {
-    if (!activeTask) { activeItem = null; return null; }
+    if (!activeTask) {
+      console.error("[work-system] refreshActiveItem: no activeTask");
+      activeItem = null;
+      return null;
+    }
+    console.error("[work-system] refreshActiveItem: loading", activeTask.workId);
     const state = loadWorkState(roots);
+    console.error("[work-system] refreshActiveItem: state size", state.size);
     activeItem = state.get(activeTask.workId as WorkId) ?? null;
+    console.error("[work-system] refreshActiveItem: found?", !!activeItem);
     if (!activeItem || !isBindable(activeItem)) {
       // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
       // older version bound: only tasks, issues and spikes are bindable.

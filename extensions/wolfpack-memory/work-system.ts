@@ -304,12 +304,15 @@ export interface WorkSystemConfig {
 }
 
 export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): void {
+  console.error("[work-system] initWorkSystem called");
   const wolfDen = process.env.WOLF_DEN;
   const wolfName = process.env.WOLF_NAME ?? "1uk4";
   const kbBase = process.env.KB_BASE;
+  console.error("[work-system] wolfDen:", wolfDen, "kbBase:", kbBase);
 
   if (!wolfDen) {
     // No den = no factory. Silent skip.
+    console.error("[work-system] No WOLF_DEN, skipping");
     return;
   }
 

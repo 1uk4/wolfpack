@@ -62,12 +62,58 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   const reg = foldRegistry(log);
   const embedder = createEmbedder(roots);
   const allVectors = await buildEntryVectors(roots, reg, embedder);
-  // Read sections from file, or fold from ledger if file is missing
+  // Read sections from file, or fold from ledger, or bootstrap from entry frontmatter
   let sections = readSections(roots);
   if (sections.length === 0 && log.length > 0) {
     sections = foldSections(log);
     if (sections.length > 0) {
       notify?.(`Bootstrapped ${sections.length} sections from ledger`);
+    }
+  }
+  // Last resort: bootstrap from entry frontmatter + vectors
+  if (sections.length === 0 && allVectors.length > 0) {
+    const secMembers = new Map<string, typeof allVectors>();
+    for (const v of allVectors) {
+      const eDir = join(domainsRoot, v.domain, "entries");
+      const file = join(eDir, `${v.entryId}.md`);
+      if (!existsSync(file)) continue;
+      const { fields } = parseFrontmatter(readFileSync(file, "utf-8"));
+      const sec = String(fields.section ?? "");
+      if (!sec) continue;
+      if (!secMembers.has(sec)) secMembers.set(sec, []);
+      secMembers.get(sec)!.push(v);
+    }
+    if (secMembers.size > 0) {
+      const today = new Date().toISOString().split("T")[0];
+      for (const [secId, members] of secMembers) {
+        const domain = secId.replace(/^sec-/, "").replace(/-[^-]+$/, "");
+        // Compute centroid from member vectors
+        const dim = members[0]?.vector?.length ?? 768;
+        const centroid = new Array(dim).fill(0);
+        for (const m of members) {
+          for (let i = 0; i < dim; i++) centroid[i] += (m.vector[i] ?? 0);
+        }
+        for (let i = 0; i < dim; i++) centroid[i] /= members.length;
+        // Generate label from section ID
+        const label = secId.replace(/^sec-[^-]+-/, "").toLowerCase();
+        sections.push({
+          id: secId,
+          domain,
+          parent: null,
+          depth: 0,
+          label,
+          title: `Section ${label}`,
+          centroid,
+          memberCount: members.length,
+          childIds: [],
+          summary: `${members.length} entries`,
+          summaryHash: "",
+          dirty: true,
+          created: today,
+          updated: today,
+        } as unknown as Section);
+      }
+      notify?.(`Bootstrapped ${sections.length} sections from entry frontmatter`);
     }
   }
   const events: KbEvent[] = [];

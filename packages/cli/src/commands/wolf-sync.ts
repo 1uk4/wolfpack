@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
-import { buildRemoteBundle, buildHarnessBundle } from "../bundle.js";
+import { buildRemoteBundle, buildHarnessBundle, stampExtension } from "../bundle.js";
 import {
   loadConfig,
   getHost,
@@ -27,6 +27,7 @@ import {
 import { isLibrarian, writePiSettings } from "../extensions.js";
 import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
+import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
 
 interface SyncOpts {
@@ -69,17 +70,18 @@ export async function wolfSync(
   const localExists = fs.existsSync(path.join(localWolfDir(config, name), "wolf.yaml"));
   if (!opts.host && localExists) {
     syncLocal(config, name);
-    return;
+  } else {
+    const host = getHost(config, opts.host);
+    if (!host) {
+      console.error(c.red(`'${name}' not found locally and no host specified.`));
+      process.exit(1);
+    }
+
+    const hostName = opts.host ?? config.defaultHost!;
+    await syncOne(host, hostName, name);
   }
 
-  const host = getHost(config, opts.host);
-  if (!host) {
-    console.error(c.red(`'${name}' not found locally and no host specified.`));
-    process.exit(1);
-  }
-
-  const hostName = opts.host ?? config.defaultHost!;
-  await syncOne(host, hostName, name);
+  await runMeshReconcile();
 }
 
 /**
@@ -142,7 +144,7 @@ async function syncPiDurable(
   console.log(c.bold(`Syncing ${cfg.name} (pi-durable) on ${hostName}...`));
 
   // Collect extra config (everything except base keys)
-  const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness"]);
+  const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness", "bundle"]);
   const extraConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(cfg as Record<string, unknown>)) {
     if (!baseKeys.has(key) && value !== undefined) {
@@ -227,6 +229,9 @@ async function syncOne(
     process.exit(1);
   }
   
+  // Report extension drift before syncing
+  await reportDrift(cfg.extensions ?? [], wolf);
+
   // Use pi-durable sync for pi-durable wolves
   if ((cfg as Record<string, unknown>).runtime === "pi-durable") {
     await syncPiDurable(host, hostName, wolf);
@@ -305,5 +310,55 @@ async function syncAll(config: CliConfig): Promise<void> {
     for (const w of wolves) {
       await syncOne(host, hostName, w.id);
     }
+  }
+
+  await runMeshReconcile();
+}
+
+async function reportDrift(
+  extKeys: string[],
+  wolf: RemoteWolf,
+): Promise<void> {
+  const bundleExts = (wolf as unknown as Record<string, unknown>).bundle as
+    | { extensions?: Array<{ key: string; hash: string; version: string }> }
+    | undefined;
+  const deployed = new Map(
+    (bundleExts?.extensions ?? []).map((e) => [e.key, e]),
+  );
+
+  const stale: string[] = [];
+  const missing: string[] = [];
+
+  for (const key of extKeys) {
+    const local = await stampExtension(key);
+    if (!local) continue;
+    const remote = deployed.get(key);
+    if (!remote) {
+      missing.push(key);
+    } else if (remote.hash !== local.hash) {
+      stale.push(`${key} (${remote.hash.slice(0, 8)}.. → ${local.hash.slice(0, 8)}..)`); 
+    }
+  }
+
+  if (stale.length || missing.length) {
+    console.log(c.dim("  Extension drift:"));
+    for (const s of stale) console.log(c.yellow(`    ↻ ${s}`));
+    for (const m of missing) console.log(c.yellow(`    + ${m} (new)`));
+  } else if (deployed.size > 0) {
+    console.log(c.dim("  Extensions: all up to date"));
+  }
+}
+
+async function runMeshReconcile(): Promise<void> {
+  try {
+    console.log(c.dim("\n  Reconciling mesh..."));
+    const result = await reconcileMesh();
+    if (result.applied === 0) {
+      console.log(c.dim("  Mesh: already in sync."));
+    } else {
+      console.log(c.green(`  \u2713 Mesh: ${result.applied} folder(s) wired.`));
+    }
+  } catch (err) {
+    console.log(c.yellow(`  ! Mesh reconcile skipped: ${err instanceof Error ? err.message : err}`));
   }
 }

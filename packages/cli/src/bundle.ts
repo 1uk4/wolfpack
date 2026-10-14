@@ -463,6 +463,24 @@ export async function buildHarnessBundle(
   wolfYamlLines.push(`harness:`);
   wolfYamlLines.push(`  storage: session.sqlite`);
 
+  // Bundle manifest for drift detection
+  const stamps: Array<{ key: string; name: string; version: string; hash: string }> = [];
+  for (const key of included) {
+    const stamp = await stampExtension(key);
+    if (stamp) stamps.push(stamp);
+  }
+  if (stamps.length) {
+    wolfYamlLines.push(`bundle:`);
+    wolfYamlLines.push(`  builtAt: "${new Date().toISOString()}"`);
+    wolfYamlLines.push(`  extensions:`);
+    for (const s of stamps) {
+      wolfYamlLines.push(`    - key: ${s.key}`);
+      wolfYamlLines.push(`      name: ${s.name}`);
+      wolfYamlLines.push(`      version: ${s.version}`);
+      wolfYamlLines.push(`      hash: "${s.hash}"`);
+    }
+  }
+
   // Include extra config (memory, telegram, etc.)
   if (cfg.extraConfig) {
     const { stringify: yamlStringify } = await import("yaml");

@@ -19,7 +19,7 @@ import { ensureDenMirror } from "./host-sync.js";
 import { loadConfig, getHost, localWolfDir, kbBaseDir, librarianDir } from "../config.js";
 import { loadRegistry, listDomainNames, unknownDomains } from "../domains.js";
 import { c } from "../render.js";
-import { multiSelect, prompt } from "../prompts.js";
+import { select, multiSelect, prompt } from "../prompts.js";
 import {
   AVAILABLE_EXTENSIONS,
   defaultProfile,
@@ -58,21 +58,50 @@ interface TelegramChoice {
 }
 
 interface ResolvedChoices {
+  host?: string;
   runtime: string;
   profile: WolfProfile;
+  model: string;
   extensions: string[];
   domains: string[];
   telegram?: TelegramChoice;
 }
 
-/** Decide profile, extensions, and Telegram config. */
+/** Decide host, runtime, profile, extensions, model, domains, and Telegram config. */
 async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
   const interactive = !opts.yes && process.stdin.isTTY;
-  const runtime = opts.runtime === "pi-durable" ? "pi-durable" : "pi";
+  const config = loadConfig();
+
+  // 1. Host
+  let host = opts.host;
+  if (!host && interactive) {
+    const hostNames = Object.keys(config.hosts);
+    const hostOptions: Array<{ label: string; value: string }> = [
+      { label: "Local (this machine)", value: "local" },
+      ...hostNames.map((h) => ({ label: `${h} (VPS)`, value: h })),
+    ];
+    host = await select<string>("Where should this wolf run?", hostOptions);
+    if (host === "local") host = undefined;
+  }
+
+  // 2. Runtime
+  let runtime: string;
+  if (opts.runtime) {
+    runtime = opts.runtime === "pi-durable" ? "pi-durable" : "pi";
+  } else if (interactive) {
+    const defaultRt = host ? "pi-durable" : "pi";
+    runtime = await select<string>("Runtime", [
+      { label: `pi — interactive CLI agent${!host ? " (recommended for local)" : ""}`, value: "pi" },
+      { label: `pi-durable — persistent background agent${host ? " (recommended for VPS)" : ""}`, value: "pi-durable" },
+    ]);
+  } else {
+    runtime = host ? "pi-durable" : "pi";
+  }
+
   const profile: WolfProfile =
     opts.profile === "assistant" || opts.profile === "worker"
       ? opts.profile
-      : defaultProfile(!!opts.host);
+      : defaultProfile(!!host);
 
   // Extensions
   let extensions: string[];
@@ -80,7 +109,7 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     extensions = opts.extensions;
   } else if (interactive) {
     const seed = defaultExtensionKeys(profile);
-    const available = extensionsForRuntime(runtime);
+    const available = extensionsForRuntime(runtime).filter((e) => !e.librarian);
     extensions = await multiSelect<string>(
       `Select extensions (${runtime} runtime)`,
       available.map((e) => ({
@@ -93,19 +122,36 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     extensions = defaultExtensionKeys(profile);
   }
 
+  // Model
+  let model: string;
+  if (opts.model) {
+    model = opts.model;
+  } else if (interactive) {
+    model = await prompt("Model ID", "claude-sonnet-4-5");
+  } else {
+    model = "claude-sonnet-4-5";
+  }
+
   // Telegram config (only if the telegram extension is attached)
   let telegram: TelegramChoice | undefined;
   if (needsTelegram(extensions)) {
+    if (interactive) {
+      console.log(c.bold("\n  Telegram setup"));
+      console.log(c.dim("  1. Open @BotFather on Telegram"));
+      console.log(c.dim("  2. Send /newbot and follow the prompts"));
+      console.log(c.dim("  3. Copy the bot token below"));
+      console.log(c.dim("  4. Your user ID: send /start to @userinfobot\n"));
+    }
     const token =
       opts.telegramToken ??
       (interactive
-        ? await prompt("Telegram bot token (from @BotFather)")
+        ? await prompt("Telegram bot token")
         : "");
     const ownerRaw =
       opts.telegramOwner !== undefined
         ? String(opts.telegramOwner)
         : interactive
-          ? await prompt("Telegram owner user id")
+          ? await prompt("Telegram owner user ID (restricts access to you)")
           : "";
     telegram = {
       tokenEnv: TELEGRAM_TOKEN_ENV,
@@ -140,13 +186,14 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     domains = [];
   }
 
-  return { runtime, profile, extensions, domains, telegram };
+  return { host, runtime, profile, model, extensions, domains, telegram };
 }
 
 export async function wolfAdd(name: string, opts: AddWolfOpts): Promise<void> {
   const choices = await resolveChoices(opts);
-  if (opts.host) {
-    await addRemote(name, opts, choices);
+  const targetHost = choices.host ?? opts.host;
+  if (targetHost) {
+    await addRemote(name, { ...opts, host: targetHost }, choices);
   } else {
     addLocal(name, opts, choices);
   }
@@ -180,7 +227,7 @@ function addLocal(
     name,
     runtime: choices.runtime,
     profile: choices.profile,
-    model: opts.model ?? "claude-sonnet-4-6",
+    model: choices.model,
     role: opts.role ?? name,
     specialty: opts.specialty,
     domains: choices.domains,
@@ -238,7 +285,7 @@ async function addRemote(
 
   console.log(c.bold(`Creating wolf '${name}' on ${opts.host}...`));
 
-  const model = opts.model ?? "claude-sonnet-4-6";
+  const model = choices.model;
 
   // Build the portable identity bundle (single source of truth) locally.
   console.log(c.dim("Building identity bundle (extensions + settings)..."));

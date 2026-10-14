@@ -33,14 +33,26 @@ export class RemoteBackend implements WolfBackend {
         serviceState: string;
       }>;
     };
-    return (result.wolves ?? []).map((w) => ({
-      id: w.id,
-      name: w.name,
-      host: this.host,
-      runtime: w.runtime,
-      profile: w.profile,
-      status: w.active ? "active" : w.serviceState,
-    }));
+    return (result.wolves ?? []).map((w) => {
+      const raw = w as Record<string, unknown>;
+      const bundle = raw.bundle as
+        | { extensions?: Array<{ key: string; hash: string }> }
+        | undefined;
+      const bundleHashes: Record<string, string> = {};
+      for (const e of bundle?.extensions ?? []) {
+        bundleHashes[e.key] = e.hash;
+      }
+      return {
+        id: w.id,
+        name: w.name,
+        host: this.host,
+        runtime: w.runtime,
+        profile: w.profile,
+        domains: raw.domains as string[] | undefined,
+        status: w.active ? "active" : w.serviceState,
+        bundleHashes: Object.keys(bundleHashes).length ? bundleHashes : undefined,
+      };
+    });
   }
 
   async status(nameOrId: string): Promise<WolfStatusInfo> {

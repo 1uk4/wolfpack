@@ -26,53 +26,78 @@ const c = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
-const HELP = `${c.bold("wolfpack")} — manage the pack
+const HELP = `${c.bold("wolfpack")} — wolf management CLI
 
-${c.bold("SETUP")}
-  setup                           Establish the hub + librarian (required roles)
+${c.bold("COMMANDS")}
+  setup                           First-time setup (hub + librarian)
+  add wolf <name>                 Create a new wolf (interactive wizard)
+  add domain <name>               Declare a new knowledge domain
+  launch <wolf> [dir]             Run a wolf locally in a project dir
+  sync <wolf>                     Deploy wolf to host (bundle + mesh)
+  list                            Show all wolves grouped by host
+  status <wolf>                   Wolf health and service state
+  logs <wolf>                     View wolf logs
+  config <wolf>                   Configure wolf (domains, extensions, model)
 
-${c.bold("HOST")}
+${c.bold("FLAGS")}
+  --host <name>       Target host (default from config)
+  --json              Machine-readable output
+  -f, --follow        Stream logs in real-time
+  --lines <n>         Number of log lines (default 100)
+  -y, --yes           Non-interactive: accept defaults
+
+  ${c.dim("Run wolfpack --help-all for the full command reference.")}
+`;
+
+const HELP_ALL = `${c.bold("wolfpack")} — full command reference
+
+${c.bold("WORKFLOW COMMANDS")}
+  setup                           First-time setup (hub + librarian)
+  add wolf <name>                 Create a new wolf (interactive wizard)
+  add domain <name>               Declare a new knowledge domain
+  launch <wolf> [dir]             Run a wolf locally in a project dir
+  sync <wolf> [--host <h>]        Deploy wolf to host (bundle + mesh)
+  sync --all                      Sync every wolf on every host
+  list [--json]                   Show all wolves grouped by host
+  status <wolf> [--host <h>]      Wolf health and service state
+  logs <wolf> [-f] [--lines N]    View wolf logs
+  config <wolf> [--set key=val]   Configure wolf (interactive or scripted)
+
+${c.bold("HOST (advanced)")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
-  host sync [name]                Wire Syncthing den mirrors (VPS → ~/wolves)
+  host sync [name]                Wire Syncthing den mirrors (VPS \u2192 ~/wolves)
   host redeploy [name]            Re-provision + redeploy agent on an existing host
 
-${c.bold("WOLVES")}
-  add wolf <name> [--host <h>]    Create a PI wolf (local or remote, interactive)
-  launch <wolf> [dir]             Run Pi as the wolf in a project dir (default: cwd)
-  list [--json]                   Show all wolves across hosts
-  status <wolf> [--host <h>]      Wolf service state
-  logs <wolf> [-f] [--lines N]    Tail wolf logs
-  restart <wolf> [--host <h>]     Restart wolf
-  config <wolf> [--set key=val]   View/update wolf config (interactive if no --set)
-  sync <wolf> [--host <h>]        Rebuild + push identity bundle (propagate exts)
-  sync --all                      Sync every wolf on every host
-
-${c.bold("DOMAINS")}
+${c.bold("DOMAIN (advanced)")}
   domain list                     Declared domains + subscribers + entry counts
   domain add <name>               Declare a new domain (--label, --description)
   domain show <name>              Domain metadata + subscribers
   domain rm <name>                Remove a domain declaration (guarded)
-  domain subscribe <wolf> <name>    Attach a domain to a wolf
-  domain subscribe <name>           Pick wolves to (un)subscribe (existing domain)
-  domain wolves <name>              Same picker \u2014 manage a domain's subscribers
+  domain subscribe <wolf> <name>  Attach a domain to a wolf
   domain unsubscribe <wolf> <name>  Detach a domain from a wolf
+  domain wolves <name>            Manage a domain's subscribers (picker)
 
-${c.bold("MESH")}
+${c.bold("MESH (advanced)")}
   mesh                            Reconcile Syncthing fabric to match config
-  mesh --check                    Report mesh drift (missing/stale) \u2014 no change
+  mesh --check                    Report mesh drift without changes
+
+${c.bold("OTHER")}
+  restart <wolf> [--host <h>]     Restart wolf service
 
 ${c.bold("ADD WOLF FLAGS")}
-  --domains a,b       Subscribe the new wolf to these domains (skip picker)
+  --host <h>          Target host (or pick during wizard)
+  --runtime <r>       pi (default) | pi-durable
+  --domains a,b       Subscribe to these domains (skip picker)
   --profile <p>       worker (local) | assistant (24/7 VPS, +telegram)
   --ext a,b           Attach these extensions (skip picker)
   --telegram-token <t>  Telegram bot token (assistant profile)
   --telegram-owner <id> Telegram owner user id
-  -y, --yes           Non-interactive: accept profile defaults
   --model <m>         Model id
+  -y, --yes           Non-interactive: accept defaults
 
-${c.bold("FLAGS")}
+${c.bold("GLOBAL FLAGS")}
   --host <name>       Target host (default from config)
   --json              Machine-readable output
   -f, --follow        Stream logs in real-time
@@ -89,6 +114,8 @@ function parseArgs(argv: string[]) {
     const arg = argv[i]!;
     if (arg === "--json") {
       flags.json = true;
+    } else if (arg === "--help-all") {
+      flags.helpAll = true;
     } else if (arg === "--all") {
       flags.all = true;
     } else if (arg === "--check") {
@@ -282,7 +309,11 @@ async function main(): Promise<void> {
       case "help":
       case "--help":
       case "-h":
-        process.stdout.write(HELP);
+        process.stdout.write(flags.helpAll ? HELP_ALL : HELP);
+        break;
+
+      case "--help-all":
+        process.stdout.write(HELP_ALL);
         break;
 
       default:

@@ -1,74 +1,124 @@
 /**
- * wolfpack list — show all wolves across every backend (local + each host).
+ * wolfpack list — show all wolves grouped by host.
  */
 
 import { allBackends } from "../backend/index.js";
-import { c, table } from "../render.js";
+import type { WolfSummary } from "../backend/types.js";
+import { stampExtension } from "../bundle.js";
+import { c } from "../render.js";
 
 export async function wolfList(opts: { json?: boolean }): Promise<void> {
-  type Row = {
-    name: string;
-    id: string;
-    host: string;
-    runtime: string;
-    status: string;
-  };
-
-  const rows: Row[] = [];
+  const byHost = new Map<string, WolfSummary[]>();
 
   await Promise.all(
     allBackends().map(async (backend) => {
       try {
         const wolves = await backend.list();
         for (const w of wolves) {
-          rows.push({
-            name: w.name,
-            id: w.id,
-            host: w.host,
-            runtime: w.runtime,
-            status: w.status,
-          });
+          const group = byHost.get(w.host) ?? [];
+          group.push(w);
+          byHost.set(w.host, group);
         }
       } catch {
-        // Local backend never throws here; a remote host may be unreachable.
         if (backend.host !== "local") {
-          rows.push({
-            name: c.dim("(unreachable)"),
+          byHost.set(backend.host, [{
             id: "",
+            name: "(unreachable)",
             host: backend.host,
             runtime: "",
-            status: c.red("agent down"),
-          });
+            status: "agent down",
+          }]);
         }
       }
     }),
   );
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+    const all = [...byHost.values()].flat();
+    process.stdout.write(JSON.stringify(all, null, 2) + "\n");
     return;
   }
 
-  if (rows.length === 0) {
+  if (byHost.size === 0) {
     console.log("No wolves found. Run `wolfpack add wolf <name>` to create one.");
     return;
   }
 
-  const statusColor = (s: string) =>
-    s === "active" || s === "live"
-      ? c.green(`🟢 ${s}`)
-      : s === "—"
-        ? c.dim(s)
-        : c.red(`🔴 ${s}`);
+  const cols = process.stdout.columns || 80;
+  let total = 0;
 
-  const tableRows = rows.map((r) => [
-    c.bold(r.name),
-    c.dim(r.id),
-    r.host,
-    r.runtime === "pi" ? c.cyan("pi") : r.runtime,
-    statusColor(r.status),
-  ]);
+  for (const [host, wolves] of byHost) {
+    const label = host === "local" ? "Local" : host;
+    console.log(`\n  ${c.bold(label)}`);
 
-  console.log(table(["NAME", "ID", "HOST", "RUNTIME", "STATUS"], tableRows));
-  console.log(c.dim(`\n${rows.length} wolf(s)`));
+    for (const w of wolves) {
+      total++;
+      const status = formatStatus(w.status);
+      const rt = formatRuntime(w.runtime);
+      const id = w.id ? c.dim(w.id) : "";
+      const drift = await checkDrift(w);
+      const driftTag = drift.length > 0 ? c.yellow(` [${drift.length} stale]`) : "";
+
+      console.log(`    ${c.bold(w.name.padEnd(12))} ${rt.padEnd(8)} ${status}${driftTag}  ${id}`);
+
+      // Row 2: domains (wrapped if needed)
+      const domains = w.domains?.length ? w.domains : [];
+      if (domains.length > 0) {
+        const indent = "      ";
+        const maxWidth = Math.max(40, cols - indent.length - 2);
+        const lines = wrapDomains(domains, maxWidth);
+        for (const line of lines) {
+          console.log(`${indent}${c.dim(line)}`);
+        }
+      }
+    }
+  }
+
+  console.log(c.dim(`\n  ${total} wolf(s)\n`));
+}
+
+function formatStatus(s: string): string {
+  if (s === "active" || s === "live") return c.green(`● ${s}`);
+  if (s === "agent down") return c.red(`○ ${s}`);
+  return c.dim(`○ ${s}`);
+}
+
+function formatRuntime(rt: string): string {
+  if (rt === "pi") return c.cyan("pi");
+  if (rt === "pi-durable") return c.cyan("pi-dur");
+  return rt || "";
+}
+
+function wrapDomains(domains: string[], maxWidth: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+
+  for (const d of domains) {
+    const sep = current ? ", " : "";
+    if (current && (current + sep + d).length > maxWidth) {
+      lines.push(current);
+      current = d;
+    } else {
+      current += sep + d;
+    }
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
+async function checkDrift(w: WolfSummary): Promise<string[]> {
+  if (!w.bundleHashes) return [];
+  const stale: string[] = [];
+  for (const [key, deployedHash] of Object.entries(w.bundleHashes)) {
+    try {
+      const local = await stampExtension(key);
+      if (local && local.hash !== deployedHash) {
+        stale.push(key);
+      }
+    } catch {
+      // can't stamp — skip
+    }
+  }
+  return stale;
 }

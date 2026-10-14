@@ -13,11 +13,13 @@ import path from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { AgentClient } from "../agent-client.js";
 import { loadConfig, getHost, localWolfDir } from "../config.js";
+import { loadRegistry, listDomainNames } from "../domains.js";
 import { c } from "../render.js";
-import { multiSelect, prompt } from "../prompts.js";
+import { select, multiSelect, prompt } from "../prompts.js";
 import {
   AVAILABLE_EXTENSIONS,
   defaultExtensionKeys,
+  extensionSupportsRuntime,
   needsTelegram,
   writePiSettings,
 } from "../extensions.js";
@@ -142,43 +144,85 @@ async function configLocal(
     return;
   }
 
-  // Interactive editor (PI only)
+  // Interactive menu
   console.log(c.bold(`\nConfiguring ${name} (${wolf.id})`));
-  console.log(c.dim(yamlStringify(wolf)));
+  console.log(c.dim(`  runtime:    ${wolf.runtime || "pi"}`));
+  console.log(c.dim(`  model:      ${wolf.model || "(default)"}`));
+  console.log(c.dim(`  domains:    ${wolf.domains?.join(", ") || "(none)"}`));
+  console.log(c.dim(`  extensions: ${wolf.extensions?.join(", ") || "(none)"}\n`));
 
-  wolf.runtime = "pi";
-  const profile = (wolf.profile as string) ?? "worker";
-  const current = wolf.extensions ?? defaultExtensionKeys(
-    profile === "assistant" ? "assistant" : "worker",
-  );
-  wolf.extensions = await multiSelect<string>(
-    "Select extensions to attach",
-    AVAILABLE_EXTENSIONS.map((e) => ({
-      label: `${e.label} — ${e.description}`,
-      value: e.key,
-      selected: current.includes(e.key),
-    })),
-  );
+  const section = await select<string>("What do you want to configure?", [
+    { label: "Domains", value: "domains" },
+    { label: "Extensions", value: "extensions" },
+    { label: "Model", value: "model" },
+  ]);
 
-  // Memory / Librarian configuration
-  if (wolf.extensions?.includes("memory")) {
-    const isLibrarian = await prompt("Enable librarian mode? (y/n)");
-    wolf.memory = { librarian: isLibrarian.toLowerCase() === "y" };
-  } else {
-    delete wolf.memory;
-  }
+  switch (section) {
+    case "domains": {
+      const reg = loadRegistry();
+      const allDomains = listDomainNames(reg);
+      if (allDomains.length === 0) {
+        console.log(c.dim("No domains declared. Create one: wolfpack add domain <name>"));
+        break;
+      }
+      wolf.domains = await multiSelect<string>(
+        "Select domains",
+        allDomains.map((d) => ({
+          label: d,
+          value: d,
+          selected: (wolf.domains ?? []).includes(d),
+        })),
+      );
+      break;
+    }
+    case "extensions": {
+      const runtime = wolf.runtime || "pi";
+      const profile = (wolf.profile as string) ?? "worker";
+      const current = wolf.extensions ?? defaultExtensionKeys(
+        profile === "assistant" ? "assistant" : "worker",
+      );
+      const pickable = AVAILABLE_EXTENSIONS.filter((e) => {
+        if (!extensionSupportsRuntime(e, runtime)) return false;
+        if (e.librarian) return false;
+        return true;
+      });
+      wolf.extensions = await multiSelect<string>(
+        `Select extensions (${runtime} runtime)`,
+        pickable.map((e) => ({
+          label: `${e.label} — ${e.description}`,
+          value: e.key,
+          selected: current.includes(e.key),
+        })),
+      );
 
-  // Collect Telegram config if newly attached and not configured yet
-  if (needsTelegram(wolf.extensions) && !wolf.telegram) {
-    const owner = await prompt("Telegram owner user id");
-    wolf.telegram = {
-      tokenEnv: TELEGRAM_TOKEN_ENV,
-      ownerId: parseInt(owner, 10) || 0,
-    };
-    const token = await prompt("Telegram bot token (blank to set later in .env)");
-    if (token) upsertEnv(wolfDir, TELEGRAM_TOKEN_ENV, token);
-  } else if (!needsTelegram(wolf.extensions)) {
-    delete wolf.telegram;
+      if (wolf.extensions?.includes("memory")) {
+        const mem = wolf.memory as Record<string, unknown> | undefined;
+        if (mem?.librarian) {
+          wolf.extensions.push("kb");
+        }
+      } else {
+        delete wolf.memory;
+      }
+
+      if (needsTelegram(wolf.extensions) && !wolf.telegram) {
+        const owner = await prompt("Telegram owner user id");
+        wolf.telegram = {
+          tokenEnv: TELEGRAM_TOKEN_ENV,
+          ownerId: parseInt(owner, 10) || 0,
+        };
+        const token = await prompt("Telegram bot token (blank to set later in .env)");
+        if (token) upsertEnv(wolfDir, TELEGRAM_TOKEN_ENV, token);
+      } else if (!needsTelegram(wolf.extensions)) {
+        delete wolf.telegram;
+      }
+      break;
+    }
+    case "model": {
+      const current = (wolf.model as string) || "";
+      const newModel = await prompt("Model ID", current);
+      if (newModel) wolf.model = newModel;
+      break;
+    }
   }
 
   const missing = persistLocal(wolfDir, yamlPath, wolf);
@@ -225,6 +269,22 @@ function persistLocal(
 }
 
 /** Remote wolf config via agent */
+interface RemoteWolfStatus {
+  id: string;
+  name: string;
+  runtime: string;
+  config?: {
+    model?: string;
+    domains?: string[];
+    extensions?: string[];
+    profile?: string;
+    memory?: Record<string, unknown>;
+    telegram?: { tokenEnv: string; ownerId: number };
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+
 async function configRemote(
   nameOrId: string,
   opts: { host?: string; set?: string[] },
@@ -239,10 +299,29 @@ async function configRemote(
 
   const client = new AgentClient(host);
 
-  if (!opts.set || opts.set.length === 0) {
+  let status: RemoteWolfStatus;
+  try {
+    status = (await client.wolfStatus(nameOrId)) as RemoteWolfStatus;
+  } catch (err) {
+    console.error(c.red(`Failed to reach ${nameOrId}: ${err}`));
+    process.exit(1);
+  }
+
+  const cfg = status.config;
+  if (!cfg) {
+    console.error(c.red(`Agent did not return config for '${nameOrId}'.`));
+    process.exit(1);
+  }
+
+  // Scripted update
+  if (opts.set && opts.set.length > 0) {
+    const updates = parseSets(opts.set);
     try {
-      const status = await client.wolfStatus(nameOrId);
-      console.log(JSON.stringify(status, null, 2));
+      const result = (await client.updateWolfConfig(nameOrId, updates)) as {
+        wolf: Record<string, unknown>;
+      };
+      console.log(c.green(`\u2713 Config updated`));
+      console.log(c.dim(JSON.stringify(result.wolf, null, 2)));
     } catch (err) {
       console.error(c.red(`Failed: ${err}`));
       process.exit(1);
@@ -250,15 +329,88 @@ async function configRemote(
     return;
   }
 
-  const updates = parseSets(opts.set);
+  // Non-TTY: dump JSON
+  if (!process.stdin.isTTY) {
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+
+  // Interactive menu
+  const runtime = (cfg.runtime as string) || "pi-durable";
+  const hostName = opts.host ?? config.defaultHost ?? "remote";
+
+  console.log(c.bold(`\nConfiguring ${cfg.name ?? nameOrId} (${status.id}) on ${hostName}`));
+  console.log(c.dim(`  runtime:    ${runtime}`));
+  console.log(c.dim(`  model:      ${cfg.model || "(default)"}`));
+  console.log(c.dim(`  domains:    ${cfg.domains?.join(", ") || "(none)"}`));
+  console.log(c.dim(`  extensions: ${cfg.extensions?.join(", ") || "(none)"}\n`));
+
+  const section = await select<string>("What do you want to configure?", [
+    { label: "Domains", value: "domains" },
+    { label: "Extensions", value: "extensions" },
+    { label: "Model", value: "model" },
+  ]);
+
+  const updates: Record<string, unknown> = {};
+
+  switch (section) {
+    case "domains": {
+      const reg = loadRegistry();
+      const allDomains = listDomainNames(reg);
+      if (allDomains.length === 0) {
+        console.log(c.dim("No domains declared. Create one: wolfpack add domain <name>"));
+        return;
+      }
+      updates.domains = await multiSelect<string>(
+        "Select domains",
+        allDomains.map((d) => ({
+          label: d,
+          value: d,
+          selected: (cfg.domains ?? []).includes(d),
+        })),
+      );
+      break;
+    }
+    case "extensions": {
+      const pickable = AVAILABLE_EXTENSIONS.filter((e) => {
+        if (!extensionSupportsRuntime(e, runtime)) return false;
+        if (e.librarian) return false;
+        return true;
+      });
+      const chosen = await multiSelect<string>(
+        `Select extensions (${runtime} runtime)`,
+        pickable.map((e) => ({
+          label: `${e.label} \u2014 ${e.description}`,
+          value: e.key,
+          selected: (cfg.extensions ?? []).includes(e.key),
+        })),
+      );
+      // Preserve librarian kb extension if configured
+      if (cfg.memory?.librarian && !chosen.includes("kb")) {
+        chosen.push("kb");
+      }
+      updates.extensions = chosen;
+      break;
+    }
+    case "model": {
+      const newModel = await prompt("Model ID", cfg.model || "");
+      if (newModel) updates.model = newModel;
+      break;
+    }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    console.log(c.dim("No changes."));
+    return;
+  }
 
   try {
-    console.log(`Updating ${nameOrId} config...`);
-    const result = (await client.updateWolfConfig(nameOrId, updates)) as {
-      wolf: Record<string, unknown>;
-    };
-    console.log(c.green(`✓ Config updated and wolf restarted`));
-    console.log(c.dim(JSON.stringify(result.wolf, null, 2)));
+    await client.updateWolfConfig(nameOrId, updates);
+    console.log(c.green(`\u2713 Config updated on ${hostName}`));
+    for (const [k, v] of Object.entries(updates)) {
+      console.log(c.dim(`  ${k}: ${Array.isArray(v) ? v.join(", ") : v}`));
+    }
+    console.log(c.yellow(`  Run \`wolfpack sync ${nameOrId}\` to rebuild and deploy.`));
   } catch (err) {
     console.error(c.red(`Failed: ${err}`));
     process.exit(1);

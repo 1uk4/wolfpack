@@ -26,23 +26,78 @@ export async function select<T>(
   question: string,
   options: Array<{ label: string; value: T }>,
 ): Promise<T> {
-  console.log(`\n${question}`);
-  options.forEach((opt, i) => {
-    console.log(`  ${i + 1}) ${opt.label}`);
-  });
+  if (!process.stdin.isTTY) {
+    return options[0]!.value;
+  }
 
-  const rl = createRl();
+  const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+  const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+
+  let cursor = 0;
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+
+  const header = `${question}\n${dim("  \u2191/\u2193 move \u00b7 enter select")}`;
+
+  function render(first: boolean): void {
+    if (!first) {
+      stdout.write(`\x1b[${options.length}A`);
+    }
+    const cols = stdout.columns || 80;
+    const maxLabel = Math.max(10, cols - 6);
+    for (let i = 0; i < options.length; i++) {
+      const isCursor = i === cursor;
+      const pointer = isCursor ? cyan("\u276f") : " ";
+      const raw = options[i]!.label;
+      const text = raw.length > maxLabel ? `${raw.slice(0, maxLabel - 1)}\u2026` : raw;
+      const label = isCursor ? cyan(text) : text;
+      stdout.write(`\x1b[2K ${pointer} ${label}\n`);
+    }
+  }
+
+  console.log(`\n${header}`);
+  render(true);
+
   return new Promise((resolve) => {
-    rl.question(`\nSelect (1-${options.length}): `, (answer) => {
-      rl.close();
-      const idx = parseInt(answer.trim()) - 1;
-      if (idx >= 0 && idx < options.length) {
-        resolve(options[idx]!.value);
-      } else {
-        console.error(`Invalid selection, defaulting to 1`);
-        resolve(options[0]!.value);
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+
+    function cleanup(): void {
+      stdin.setRawMode?.(wasRaw ?? false);
+      stdin.pause();
+      stdin.removeListener("data", onData);
+    }
+
+    function onData(key: string): void {
+      switch (key) {
+        case "\x1b[A":
+        case "k":
+          cursor = (cursor - 1 + options.length) % options.length;
+          render(false);
+          break;
+        case "\x1b[B":
+        case "j":
+          cursor = (cursor + 1) % options.length;
+          render(false);
+          break;
+        case "\r":
+        case "\n":
+          cleanup();
+          stdout.write("\n");
+          resolve(options[cursor]!.value);
+          break;
+        case "\x03":
+        case "\x1b":
+          cleanup();
+          stdout.write("\n");
+          process.exit(130);
+          break;
       }
-    });
+    }
+
+    stdin.on("data", onData);
   });
 }
 

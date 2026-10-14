@@ -688,26 +688,42 @@ Domains: ${domainList}`;
       // ─── task_link ───────────────────────────────────────────────────────
       defineTool({
         name: "task_link",
-        description: "Add a dependency link from the active task to another.",
+        description: "Add a dependency link between work items. Uses the active task if no id provided.",
         parameters: Type.Object({
           rel: Type.String({ description: "Relation: depends_on or blocks" }),
           target: Type.String({ description: "Target work item ID" }),
+          id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
         }),
-        async execute(args: { rel: string; target: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
-          if (!binding) {
-            return {
-              content: [{ type: "text", text: "No task bound. Use task_bind first." }],
-              isError: true,
-            };
+        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          let sourceId = args.id;
+          let domain: string | undefined;
+
+          if (!sourceId) {
+            const binding = await readBinding(ctx.wolfDen);
+            if (!binding) {
+              return {
+                content: [{ type: "text", text: "No active task and no id provided." }],
+                isError: true,
+              };
+            }
+            sourceId = binding.taskId;
+            domain = binding.domain;
           }
 
-          const roots = buildKbRoots(binding.domain);
+          if (!domain) {
+            const match = sourceId.match(/^work-(\w+)-/);
+            domain = match?.[1];
+          }
+          if (!domain) {
+            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
+          }
+
+          const roots = buildKbRoots(domain);
           
           try {
-            linkWork(roots, binding.taskId, args.rel as "depends_on" | "blocks", args.target);
+            linkWork(roots, sourceId, args.rel as "depends_on" | "blocks", args.target);
             return {
-              content: [{ type: "text", text: `${binding.taskId} ${args.rel} ${args.target}` }],
+              content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
             return {
@@ -721,26 +737,42 @@ Domains: ${domainList}`;
       // ─── task_unlink ─────────────────────────────────────────────────────
       defineTool({
         name: "task_unlink",
-        description: "Remove a dependency link from the active task.",
+        description: "Remove a dependency link between work items. Uses the active task if no id provided.",
         parameters: Type.Object({
           rel: Type.String({ description: "Relation: depends_on or blocks" }),
           target: Type.String({ description: "Target work item ID" }),
+          id: Type.Optional(Type.String({ description: "Source work item ID (defaults to active task)" })),
         }),
-        async execute(args: { rel: string; target: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
-          if (!binding) {
-            return {
-              content: [{ type: "text", text: "No task bound. Use task_bind first." }],
-              isError: true,
-            };
+        async execute(args: { rel: string; target: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          let sourceId = args.id;
+          let domain: string | undefined;
+
+          if (!sourceId) {
+            const binding = await readBinding(ctx.wolfDen);
+            if (!binding) {
+              return {
+                content: [{ type: "text", text: "No active task and no id provided." }],
+                isError: true,
+              };
+            }
+            sourceId = binding.taskId;
+            domain = binding.domain;
           }
 
-          const roots = buildKbRoots(binding.domain);
+          if (!domain) {
+            const match = sourceId.match(/^work-(\w+)-/);
+            domain = match?.[1];
+          }
+          if (!domain) {
+            return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
+          }
+
+          const roots = buildKbRoots(domain);
           
           try {
-            unlinkWork(roots, binding.taskId, args.rel as "depends_on" | "blocks", args.target);
+            unlinkWork(roots, sourceId, args.rel as "depends_on" | "blocks", args.target);
             return {
-              content: [{ type: "text", text: `Removed: ${binding.taskId} ${args.rel} ${args.target}` }],
+              content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
             };
           } catch (err) {
             return {

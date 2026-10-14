@@ -17,6 +17,8 @@ export interface WolfSummary {
   domains?: string[];
   /** Live-ish state label for the list view */
   status: string;
+  /** Deployed extension hashes (remote wolves) for drift detection in list. */
+  bundleHashes?: Record<string, string>;
 }
 
 /** Snapshot of the memory extension's status, read from den/status.json. */

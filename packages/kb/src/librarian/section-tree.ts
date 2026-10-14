@@ -273,15 +273,68 @@ export function buildTreeBottomUp(
           const sim = cosine(entry.vector, child.centroid);
           if (sim > bestSim) { bestSim = sim; bestChild = child; }
         }
-        assignments.set(entry.entryId, bestChild.id);
         bestChild.members.push(entry);
-        // Update memberCount on the corresponding section
-        const sec = sections.find((s) => s.id === bestChild.id);
-        if (sec) sec.memberCount++;
       }
     } else {
-      // No children to distribute to — singletons stay as direct members
-      for (const m of singletons) assignments.set(m.entryId, sectionId);
+      // No children — singletons are direct members
+      for (const m of singletons) {
+        assignments.set(m.entryId, sectionId);
+      }
+    }
+    
+    // Final enforcement: re-split any child that exceeds threshold
+    // This handles singletons that inflated a child past the limit
+    const finalChildren: typeof childSections = [];
+    for (const child of childSections) {
+      if (child.members.length <= config.splitThreshold) {
+        finalChildren.push(child);
+        continue;
+      }
+      // Convert back to clusters and force-split
+      const oversized: Cluster = {
+        id: child.id as string,
+        centroid: child.centroid,
+        members: child.members,
+        children: [],
+        weight: child.members.length,
+      };
+      const splitResult = ensureSplitThreshold([oversized]);
+      for (const sub of splitResult) {
+        finalChildren.push({
+          id: mkSectionId(domain as DomainId),
+          centroid: sub.centroid,
+          members: sub.members,
+        });
+      }
+      // Remove the original oversized section
+      const idx = sections.findIndex((s) => s.id === child.id);
+      if (idx >= 0) sections.splice(idx, 1);
+      const cidx = childIds.indexOf(child.id);
+      if (cidx >= 0) childIds.splice(cidx, 1);
+    }
+    
+    // Create final child sections and record assignments
+    for (const child of finalChildren) {
+      if (!sections.some((s) => s.id === child.id)) {
+        childIds.push(child.id);
+        sections.push({
+          id: child.id,
+          domain: domain as unknown as DomainId,
+          parent: sectionId,
+          depth: depth + 1,
+          label: (child.id as string).slice(-7) as any,
+          title: "",
+          centroid: child.centroid,
+          memberCount: child.members.length,
+          childIds: [],
+          summary: "",
+          summaryHash: "",
+          dirty: true,
+          created: today as any,
+          updated: today as any,
+        });
+      }
+      for (const m of child.members) assignments.set(m.entryId, child.id);    
     }
 
     sections.push({

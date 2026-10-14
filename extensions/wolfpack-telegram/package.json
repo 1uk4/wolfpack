@@ -9,6 +9,9 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
+  "pi-durable": {
+    "extensions": ["./unified.ts"]
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*",

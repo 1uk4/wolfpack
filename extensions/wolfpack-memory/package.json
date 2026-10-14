@@ -16,6 +16,11 @@
       "./index.ts"
     ]
   },
+  "pi-durable": {
+    "extensions": [
+      "./durable.ts"
+    ]
+  },
   "wolfpack": {
     "assets": [
       "./kb-graph"

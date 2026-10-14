@@ -18,6 +18,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
 import {
   getExtension,
@@ -343,108 +344,149 @@ export async function buildRemoteBundle(
   }
 }
 
+/** Return type for pi-durable harness bundle (individual files, not tarball). */
+export interface BuiltHarnessBundle {
+  /** Path to the bundled harness.cjs file */
+  harnessPath: string;
+  /** Path to the generated wolf.yaml */
+  wolfYamlPath: string;
+  /** Path to the generated AGENTS.md */
+  agentsMdPath: string;
+  /** Extension keys that were missing (skipped) */
+  missing: string[];
+  /** Extension keys actually included */
+  included: string[];
+  /** Temporary directory (caller must clean up) */
+  tmpDir: string;
+}
+
 /**
- * Build a harness bundle for pi-durable wolves with wolf.yaml generation.
- * Similar to buildRemoteBundle but includes a wolf.yaml config file.
+ * Bundle @wolfpack/harness + extensions for pi-durable runtime.
+ *
+ * Uses esbuild to produce:
+ * - harness.cjs (~1.2-2.4MB) from packages/harness/src/bin/harness.ts
+ * - Extensions bundled separately in extensions/<name>/index.js
+ * - wolf.yaml config file
+ * - AGENTS.md persona file
+ *
+ * Returns file paths — caller reads, base64-encodes, and ships to VPS.
  */
 export async function buildHarnessBundle(
   cfg: HarnessBundleConfig,
-): Promise<BuiltBundle> {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-harness-bundle-"));
-  const agentStage = path.join(tmpRoot, "agent");
-  const extStage = path.join(agentStage, "extensions");
-  fs.mkdirSync(extStage, { recursive: true });
+  wolfId: string,
+): Promise<BuiltHarnessBundle> {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-harness-"));
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-  const base = extensionsDir();
   const included: string[] = [];
   const missing: string[] = [];
-  const packages: string[] = [];
-  const stamps: ExtensionStamp[] = [];
 
-  try {
-    for (const key of cfg.extensions) {
-      const ext = getExtension(key);
-      if (!ext) {
-        missing.push(key);
-        continue;
-      }
-      const srcDir = path.join(base, ext.dir);
-      if (!fs.existsSync(srcDir)) {
-        missing.push(key);
-        continue;
-      }
-      stamps.push(await bundleExtension(ext, srcDir, extStage));
-      packages.push(`./extensions/${ext.dir}`);
-      included.push(key);
+  // 1. Bundle harness.cjs via esbuild
+  const harnessEntry = path.join(repoRoot, "packages/harness/src/bin/harness.ts");
+  const harnessPath = path.join(outDir, "harness.cjs");
+  await esbuild.build({
+    entryPoints: [harnessEntry],
+    outfile: harnessPath,
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node20",
+    external: ["@anthropic-ai/claude-agent-sdk"],
+    logLevel: "silent",
+  });
+
+  // 2. Bundle extensions separately
+  const extDir = path.join(outDir, "extensions");
+  fs.mkdirSync(extDir, { recursive: true });
+  const base = extensionsDir();
+
+  for (const key of cfg.extensions) {
+    const ext = getExtension(key);
+    if (!ext) { missing.push(key); continue; }
+    const srcDir = path.join(base, ext.dir);
+    if (!fs.existsSync(srcDir)) { missing.push(key); continue; }
+
+    const pkgPath = path.join(srcDir, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+      "pi-durable"?: { extensions?: string[] };
+    };
+    const durableEntries = pkg["pi-durable"]?.extensions;
+    if (!durableEntries || durableEntries.length === 0) {
+      missing.push(key);
+      continue;
     }
 
-    const manifest: BundleManifest = {
-      builtAt: new Date().toISOString(),
-      extensions: stamps,
-    };
-
-    // settings.json
-    fs.writeFileSync(
-      path.join(agentStage, "settings.json"),
-      JSON.stringify({ packages }, null, 2) + "\n",
-    );
-
-    // bundle manifest
-    fs.writeFileSync(
-      path.join(agentStage, "bundle.json"),
-      JSON.stringify(manifest, null, 2) + "\n",
-    );
-
-    // persona
-    fs.writeFileSync(path.join(agentStage, "AGENTS.md"), renderPersona(cfg));
-
-    // wolf.yaml with harness config and extraConfig
-    const { stringify: yamlStringify } = await import("yaml");
-    const wolfYamlLines: string[] = [];
-    
-    // Base configuration
-    const baseConfig: Record<string, unknown> = {
-      id: cfg.id,
-      name: cfg.name,
-      runtime: "pi-durable",
-      model: cfg.model,
-      role: cfg.role,
-    };
-    if (cfg.specialty) baseConfig.specialty = cfg.specialty;
-    if (cfg.domains?.length) baseConfig.domains = cfg.domains;
-    if (cfg.extensions?.length) baseConfig.extensions = cfg.extensions;
-    
-    // Add base config
-    wolfYamlLines.push(yamlStringify(baseConfig).trim());
-    
-    // Add harness configuration
-    wolfYamlLines.push("harness:");
-    wolfYamlLines.push("  storage: session.sqlite");
-    
-    // Add extraConfig if present
-    if (cfg.extraConfig) {
-      const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness"]);
-      for (const [key, value] of Object.entries(cfg.extraConfig)) {
-        if (value !== undefined && value !== null && !baseKeys.has(key)) {
-          const serialized = yamlStringify({ [key]: value }).trim();
-          wolfYamlLines.push(serialized);
-        }
-      }
+    const entryFile = path.resolve(srcDir, durableEntries[0]);
+    if (!fs.existsSync(entryFile)) {
+      console.warn(`Extension ${key}: pi-durable entrypoint not found: ${durableEntries[0]}`);
+      missing.push(key);
+      continue;
     }
-    
-    fs.writeFileSync(
-      path.join(agentStage, "wolf.yaml"),
-      wolfYamlLines.join("\n") + "\n",
-    );
 
-    // tar + gzip + base64
-    const tarBuf = execFileSync(
-      "tar",
-      ["-czf", "-", "-C", agentStage, "."],
-      { maxBuffer: 256 * 1024 * 1024 },
-    );
-    return { bundleB64: tarBuf.toString("base64"), missing, included, manifest };
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    const extOutDir = path.join(extDir, ext.dir);
+    fs.mkdirSync(extOutDir, { recursive: true });
+    await esbuild.build({
+      entryPoints: [entryFile],
+      outfile: path.join(extOutDir, "index.js"),
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: "node20",
+      external: [
+        "@earendil-works/pi-coding-agent",
+        "@earendil-works/pi-tui",
+        "grammy",
+      ],
+      logLevel: "silent",
+    });
+    included.push(key);
   }
+
+  // 3. Generate wolf.yaml
+  const wolfYamlLines: string[] = [
+    `id: ${wolfId}`,
+    `name: ${cfg.name}`,
+    `runtime: pi-durable`,
+    `model: ${cfg.model ?? "claude-sonnet-4-5"}`,
+    `provider: anthropic`,
+    `role: ${cfg.role}`,
+  ];
+  if (cfg.specialty) wolfYamlLines.push(`specialty: ${cfg.specialty}`);
+  if (cfg.domains?.length) {
+    wolfYamlLines.push(`domains:`);
+    for (const d of cfg.domains) wolfYamlLines.push(`  - ${d}`);
+  }
+  if (included.length) {
+    wolfYamlLines.push(`extensions:`);
+    for (const e of included) wolfYamlLines.push(`  - ${e}`);
+  }
+  wolfYamlLines.push(`harness:`);
+  wolfYamlLines.push(`  storage: session.sqlite`);
+
+  // Include extra config (memory, telegram, etc.)
+  if (cfg.extraConfig) {
+    const { stringify: yamlStringify } = await import("yaml");
+    for (const [key, value] of Object.entries(cfg.extraConfig)) {
+      if (value !== undefined && value !== null) {
+        const serialized = yamlStringify({ [key]: value }).trim();
+        wolfYamlLines.push(serialized);
+      }
+    }
+  }
+
+  const wolfYamlPath = path.join(outDir, "wolf.yaml");
+  fs.writeFileSync(wolfYamlPath, wolfYamlLines.join("\n") + "\n");
+
+  // 4. Generate AGENTS.md persona
+  const agentsMdPath = path.join(outDir, "AGENTS.md");
+  fs.writeFileSync(agentsMdPath, renderPersona(cfg));
+
+  return {
+    harnessPath,
+    wolfYamlPath,
+    agentsMdPath,
+    missing,
+    included,
+    tmpDir: outDir,
+  };
 }

@@ -22,10 +22,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { stringify as yamlStringify } from "yaml";
+import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import type {
   WolfConfig,
   WolfStatus,
+  WolfRuntime,
   CreateWolfRequest,
   UpdateWolfConfigRequest,
   BundleManifest,
@@ -162,7 +163,7 @@ export class WolfManager {
     const config: WolfConfig = {
       id,
       name: req.name,
-      runtime: "pi",
+      runtime: req.runtime ?? "pi",
       profile: req.profile,
       model: req.model,
       role: req.role,
@@ -220,8 +221,20 @@ export class WolfManager {
    * stdin so systemd's null stdin can't EOF-shut-down pi. The same FIFO is the
    * future injection point for the (deferred) agent→wolf RPC bridge.
    */
-  private async writeLauncher(home: string, id: string): Promise<void> {
-    const script = `#!/usr/bin/env bash
+  private async writeLauncher(home: string, id: string, runtime: WolfRuntime = "pi"): Promise<void> {
+    let script: string;
+    
+    if (runtime === "pi-durable") {
+      script = `#!/usr/bin/env bash
+# wolf-${id} launcher — pi-durable harness
+set -eu
+cd "${home}"
+# Add agent/node_modules for external deps (grammy)
+export NODE_PATH="${home}/agent/node_modules"
+exec node "${home}/agent/harness.cjs"
+`;
+    } else {
+      script = `#!/usr/bin/env bash
 # wolf-${id} launcher — headless pi (RPC mode) with a persistent stdin FIFO.
 set -u
 
@@ -230,8 +243,6 @@ mkdir -p "$RUNTIME"
 FIFO="$RUNTIME/rpc.in"
 [ -p "$FIFO" ] || mkfifo "$FIFO"
 
-# Hold the FIFO's write end open so pi never sees stdin EOF (= orderly shutdown).
-# Later the Option-3 bridge writes JSONL commands into this FIFO.
 sleep infinity > "$FIFO" &
 KEEPALIVE=$!
 trap 'kill "$KEEPALIVE" 2>/dev/null' EXIT INT TERM
@@ -241,6 +252,8 @@ MODEL_ARG=()
 
 exec pi --mode rpc "\${MODEL_ARG[@]}" < "$FIFO"
 `;
+    }
+    
     const launchPath = path.join(home, "agent", "launch.sh");
     await fs.writeFile(launchPath, script, { mode: 0o755 });
   }
@@ -343,45 +356,81 @@ WantedBy=multi-user.target
    */
   async updatePiDurableBundle(
     id: string,
-    bundleB64: string,
-    manifest: BundleManifest,
+    harnessB64: string,
+    wolfYamlB64: string,
+    agentsMdB64: string,
+    extensionsMap?: Record<string, string>,
   ): Promise<WolfConfig> {
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
     const home = wolfHome(id);
     const user = wolfUser(id);
+    const agentDir = path.join(home, "agent");
+    const denDir = path.join(home, "den");
 
-    await this.extractBundle(home, bundleB64, { clean: true });
+    // Ensure agent dir exists
+    await fs.mkdir(agentDir, { recursive: true });
+
+    // Write harness.cjs
+    const harnessPath = path.join(agentDir, "harness.cjs");
+    await fs.writeFile(harnessPath, Buffer.from(harnessB64, "base64"));
+
+    // Write extensions to den/extensions/<name>/index.js
+    if (extensionsMap && Object.keys(extensionsMap).length > 0) {
+      const extDir = path.join(denDir, "extensions");
+      await fs.rm(extDir, { recursive: true, force: true });
+      await fs.mkdir(extDir, { recursive: true });
+      for (const [name, contentB64] of Object.entries(extensionsMap)) {
+        const extPath = path.join(extDir, name);
+        await fs.mkdir(extPath, { recursive: true });
+        await fs.writeFile(
+          path.join(extPath, "index.js"),
+          Buffer.from(contentB64, "base64"),
+        );
+      }
+    }
+
+    // Write AGENTS.md
+    const agentsPath = path.join(agentDir, "AGENTS.md");
+    await fs.writeFile(agentsPath, Buffer.from(agentsMdB64, "base64"));
+
+    // Update wolf.yaml from bundle (contains updated config)
+    const wolfYamlContent = Buffer.from(wolfYamlB64, "base64").toString("utf-8");
+    const newConfig = yamlParse(wolfYamlContent) as WolfConfig;
+
+    // Merge: keep existing fields, update from bundle
+    const merged: WolfConfig = { ...config, ...newConfig, id: config.id, runtime: "pi-durable" };
+    await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(merged));
+    this.wolvesIndex.set(id, merged);
+
+    // Install grammy if telegram extension is used
+    if (merged.extensions?.includes("telegram")) {
+      const grammyCheck = path.join(agentDir, "node_modules", "grammy");
+      try {
+        await fs.access(grammyCheck);
+      } catch {
+        await exec("npm", ["install", "--prefix", agentDir, "grammy"], { cwd: home });
+      }
+    }
 
     // Ensure standard env vars are set
     await this.ensureEnvVars(home, id, config.name);
 
     // Disable old sweep timer (silently ignore errors)
-    try {
-      await exec("systemctl", ["stop", `${user}-kb-sweep.timer`]);
-    } catch {
-      // Timer might not exist
-    }
-    try {
-      await exec("systemctl", ["disable", `${user}-kb-sweep.timer`]);
-    } catch {
-      // Timer might not exist
-    }
-    try {
-      await exec("systemctl", ["stop", `${user}-kb-sweep.service`]);
-    } catch {
-      // Service might not exist
-    }
+    try { await exec("systemctl", ["stop", `${user}-kb-sweep.timer`]).catch(() => {}); } catch {}
+    try { await exec("systemctl", ["disable", `${user}-kb-sweep.timer`]).catch(() => {}); } catch {}
+    try { await exec("systemctl", ["stop", `${user}-kb-sweep.service`]).catch(() => {}); } catch {}
 
-    await exec("chown", ["-R", `${user}:${user}`, path.join(home, "agent")]);
-
-    config.bundle = manifest;
-    await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(config));
-    this.wolvesIndex.set(id, config);
+    // Update launcher for pi-durable runtime
+    await this.writeLauncher(home, id, "pi-durable");
     await this.saveIndex();
 
+    // Fix ownership
+    await exec("chown", ["-R", `${user}:${user}`, agentDir]);
+    await exec("chown", ["-R", `${user}:${user}`, denDir]);
+
     await this.restart(id);
-    return config;
+    return merged;
   }
 
   async status(id: string): Promise<WolfStatus> {
@@ -412,7 +461,7 @@ WantedBy=multi-user.target
         id,
         name: config.name,
         active: serviceState === "active",
-        runtime: "pi",
+        runtime: config.runtime ?? "pi",
         profile: config.profile,
         serviceState,
         since,
@@ -424,7 +473,7 @@ WantedBy=multi-user.target
         id,
         name: config.name,
         active: false,
-        runtime: "pi",
+        runtime: config.runtime ?? "pi",
         profile: config.profile,
         serviceState: "unknown",
         bundle: config.bundle,

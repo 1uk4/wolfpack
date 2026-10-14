@@ -140,7 +140,7 @@ async function syncPiDurable(
   }
 
   console.log(c.bold(`Syncing ${cfg.name} (pi-durable) on ${hostName}...`));
-  
+
   // Collect extra config (everything except base keys)
   const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness"]);
   const extraConfig: Record<string, unknown> = {};
@@ -149,37 +149,59 @@ async function syncPiDurable(
       extraConfig[key] = value;
     }
   }
-  
-  const built = await buildHarnessBundle({
-    id: wolf.id,
-    name: cfg.name,
-    role: cfg.role,
-    specialty: cfg.specialty,
-    domains: cfg.domains ?? [],
-    extensions: cfg.extensions ?? [],
-    extraConfig,
-  });
-  
+
+  const built = await buildHarnessBundle(
+    {
+      name: cfg.name,
+      role: cfg.role,
+      specialty: cfg.specialty,
+      domains: cfg.domains ?? [],
+      extensions: cfg.extensions ?? [],
+      extraConfig: Object.keys(extraConfig).length > 0 ? extraConfig : undefined,
+    },
+    wolf.id,
+  );
+
   if (built.missing.length) {
-    console.log(c.yellow(`  ! Skipped (not vendored): ${built.missing.join(", ")}`));
+    console.log(c.yellow(`  ! Skipped extensions: ${built.missing.join(", ")}`));
+  }
+
+  // Read and base64 encode the individual files
+  const harnessB64 = fs.readFileSync(built.harnessPath).toString("base64");
+  const wolfYamlB64 = fs.readFileSync(built.wolfYamlPath).toString("base64");
+  const agentsMdB64 = fs.readFileSync(built.agentsMdPath).toString("base64");
+
+  // Package extensions as a map of name -> base64 content
+  const extBundleDir = path.join(built.tmpDir, "extensions");
+  const extensions: Record<string, string> = {};
+  if (fs.existsSync(extBundleDir)) {
+    for (const name of fs.readdirSync(extBundleDir)) {
+      const extIndex = path.join(extBundleDir, name, "index.js");
+      if (fs.existsSync(extIndex)) {
+        extensions[name] = fs.readFileSync(extIndex).toString("base64");
+      }
+    }
   }
 
   const client = new AgentClient(host);
   try {
     await client.updateWolfBundle(wolf.id, {
-      bundle: built.bundleB64,
-      manifest: built.manifest,
+      runtime: "pi-durable",
+      harness: harnessB64,
+      wolfYaml: wolfYamlB64,
+      agentsMd: agentsMdB64,
+      extensions,
     });
     console.log(
       c.green(
-        `✓ Synced: ${built.manifest.extensions
-          .map((e) => `${e.key}@${e.version}`)
-          .join(", ") || "(none)"} — restarted`,
+        `✓ Synced harness + ${built.included.length} extensions — restarted`,
       ),
     );
   } catch (err) {
     console.error(c.red(`Sync failed: ${err}`));
     process.exit(1);
+  } finally {
+    fs.rmSync(built.tmpDir, { recursive: true, force: true });
   }
 }
 

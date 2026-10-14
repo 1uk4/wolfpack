@@ -67,15 +67,30 @@ export function wolvesRouter(manager: WolfManager): Router {
         res.status(404).json({ error: `Wolf not found: ${req.params.nameOrId}` });
         return;
       }
-      const body = req.body as UpdateBundleRequest;
+      const body = req.body as Record<string, unknown>;
+      
+      // Detect pi-durable format: {runtime, harness, wolfYaml, agentsMd, extensions}
+      if (body.runtime === "pi-durable" && body.harness) {
+        const updated = await manager.updatePiDurableBundle(
+          config.id,
+          body.harness as string,
+          body.wolfYaml as string,
+          body.agentsMd as string,
+          body.extensions as Record<string, string> | undefined,
+        );
+        res.json({ wolf: updated });
+        return;
+      }
+      
+      // Legacy pi format: {bundle, manifest}
       if (!body.bundle || !body.manifest) {
         res.status(400).json({ error: "bundle and manifest are required" });
         return;
       }
       const updated = await manager.updateBundle(
         config.id,
-        body.bundle,
-        body.manifest,
+        body.bundle as string,
+        body.manifest as UpdateBundleRequest["manifest"],
       );
       res.json({ wolf: updated });
     } catch (err) {

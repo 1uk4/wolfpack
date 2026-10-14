@@ -184,6 +184,15 @@ export const SECTION_TREE = {
   splitThreshold: 8,
 
   /**
+   * Maximum children per section. When a section has more children than
+   * this, group them into intermediate sub-sections via k-means on
+   * children centroids. Keeps the tree navigable (Miller's number: 3-7).
+   *
+   * k = ceil(numChildren / maxChildrenPerSection)
+   */
+  maxChildrenPerSection: 6,
+
+  /**
    * When splitting, how to choose which cluster becomes the parent:
    * - "domain_centrality": cluster whose centroid is closer to the domain
    *   centroid becomes parent (more general = parent). Preferred.

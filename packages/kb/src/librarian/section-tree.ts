@@ -337,6 +337,63 @@ export function buildTreeBottomUp(
       for (const m of child.members) assignments.set(m.entryId, child.id);    
     }
 
+    // Group children if too many (branching factor control)
+    if (childIds.length > config.maxChildrenPerSection) {
+      const k = Math.ceil(childIds.length / config.maxChildrenPerSection);
+      const childSecs = childIds.map((cid) => sections.find((s) => s.id === cid)!).filter(Boolean);
+      const childVectors = childSecs.map((s) => s.centroid);
+      const { assignment } = kMeans2Multi(childVectors, k);
+      
+      // Group children by cluster assignment
+      const groups = new Map<number, typeof childSecs>();
+      for (let i = 0; i < childSecs.length; i++) {
+        const g = assignment[i];
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g)!.push(childSecs[i]);
+      }
+      
+      // Create intermediate grouping sections
+      const newChildIds: SectionId[] = [];
+      for (const [, group] of groups) {
+        if (group.length === 1) {
+          // Single child in group — keep as direct child
+          newChildIds.push(group[0].id);
+          continue;
+        }
+        const groupId = mkSectionId(domain as DomainId);
+        const groupCentroid = computeCentroid(group.map((s) => s.centroid));
+        const groupMemberCount = group.reduce((sum, s) => sum + s.memberCount, 0);
+        
+        // Re-parent the grouped children under the new intermediate section
+        const groupChildIds: SectionId[] = [];
+        for (const child of group) {
+          child.parent = groupId;
+          child.depth = depth + 2;
+          groupChildIds.push(child.id);
+        }
+        
+        sections.push({
+          id: groupId,
+          domain: domain as unknown as DomainId,
+          parent: sectionId,
+          depth: depth + 1,
+          label: groupId.slice(-7) as any,
+          title: "",
+          centroid: groupCentroid,
+          memberCount: 0,
+          childIds: groupChildIds,
+          summary: "",
+          summaryHash: "",
+          dirty: true,
+          created: today as any,
+          updated: today as any,
+        });
+        newChildIds.push(groupId);
+      }
+      childIds.length = 0;
+      childIds.push(...newChildIds);
+    }
+
     sections.push({
       id: sectionId,
       domain: domain as unknown as DomainId,
@@ -749,4 +806,53 @@ function kMeans2(vectors: Vector[], maxIter: number = 10): {
   }
 
   return { clusters: centroids, assignment };
+}
+
+/** k-means for arbitrary k. Used for grouping children when branching factor is too high. */
+function kMeans2Multi(vectors: Vector[], k: number, maxIter: number = 10): {
+  centroids: Vector[];
+  assignment: number[];
+} {
+  if (vectors.length <= k) {
+    return { centroids: [...vectors], assignment: vectors.map((_, i) => i) };
+  }
+
+  // Initialize centroids by picking k evenly spaced vectors
+  const step = Math.floor(vectors.length / k);
+  const centroids: Vector[] = [];
+  for (let i = 0; i < k; i++) {
+    centroids.push([...vectors[i * step]]);
+  }
+
+  const assignment = new Array(vectors.length).fill(0);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    let changed = false;
+
+    // Assign each vector to nearest centroid
+    for (let i = 0; i < vectors.length; i++) {
+      let bestCluster = 0;
+      let bestSim = -1;
+      for (let c = 0; c < k; c++) {
+        const sim = cosine(vectors[i], centroids[c]);
+        if (sim > bestSim) { bestSim = sim; bestCluster = c; }
+      }
+      if (assignment[i] !== bestCluster) {
+        assignment[i] = bestCluster;
+        changed = true;
+      }
+    }
+
+    if (!changed) break;
+
+    // Recompute centroids
+    for (let c = 0; c < k; c++) {
+      const members = vectors.filter((_, i) => assignment[i] === c);
+      if (members.length > 0) {
+        centroids[c] = computeCentroid(members);
+      }
+    }
+  }
+
+  return { centroids, assignment };
 }

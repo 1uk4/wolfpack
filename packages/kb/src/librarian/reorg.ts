@@ -494,6 +494,59 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
 
+    // Final singleton absorption pass (catches singletons created by post-split)
+    for (const domain of result.domains) {
+      const domVecs2 = allVectors.filter((v) => v.domain === domain);
+      const totalEntries2 = domVecs2.length;
+      const minEntries2 = Math.max(2, Math.ceil(totalEntries2 * stConfig.minRootRatio));
+      const eDir3 = join(domainsRoot, domain, "entries");
+      const domainRoots2 = sections.filter((s) => s.domain === domain && s.parent === null);
+      for (const root of domainRoots2) {
+        const actualMembers = root.memberCount + sections.filter((s) => s.parent === root.id).reduce((sum, c) => sum + c.memberCount, 0);
+        if (actualMembers >= minEntries2) continue;
+        if (root.childIds.length > 0 && actualMembers > 1) continue;
+        const neighbors = domainRoots2.filter((r) => r.id !== root.id && r.id !== root.id);
+        if (neighbors.length === 0) continue;
+        let bestN = neighbors[0];
+        let bestS = -1;
+        for (const n of neighbors) {
+          const sim = cosine(root.centroid, n.centroid);
+          if (sim > bestS) { bestS = sim; bestN = n; }
+        }
+        notify?.(`  final absorb: "${root.title}" (${actualMembers}) -> "${bestN.title}"`);
+        // Move entries
+        if (existsSync(eDir3)) {
+          for (const f of readdirSync(eDir3).filter((x) => x.endsWith(".md"))) {
+            const { fields } = parseFrontmatter(readFileSync(join(eDir3, f), "utf-8"));
+            if (String(fields.section ?? "") === String(root.id)) {
+              let content = readFileSync(join(eDir3, f), "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${bestN.id}`);
+              writeFileSync(join(eDir3, f), content);
+              bestN.memberCount++;
+            }
+          }
+        }
+        sections = sections.filter((s) => s.id !== root.id);
+        result.merges++;
+      }
+    }
+
+    // Final memberCount reconciliation
+    for (const domain of result.domains) {
+      const eDir4 = join(domainsRoot, domain, "entries");
+      const counts = new Map<string, number>();
+      if (existsSync(eDir4)) {
+        for (const f of readdirSync(eDir4).filter((x) => x.endsWith(".md"))) {
+          const { fields } = parseFrontmatter(readFileSync(join(eDir4, f), "utf-8"));
+          const sec = String(fields.section ?? "");
+          if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+        }
+      }
+      for (const sec of sections.filter((s) => s.domain === domain)) {
+        sec.memberCount = counts.get(sec.id as string) ?? 0;
+      }
+    }
+
     // Persist
     writeSections(roots, sections);
     const freshLog = readLedger(roots);

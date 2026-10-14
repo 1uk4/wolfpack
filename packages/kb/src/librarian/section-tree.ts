@@ -233,18 +233,18 @@ export function buildTreeBottomUp(
     subClusters = ensureSplitThreshold(subClusters);
 
     const childIds: SectionId[] = [];
-    let directMembers = 0;
+    const childSections: Array<{ id: SectionId; centroid: Vector; members: EntryWithVector[] }> = [];
+    const singletons: EntryWithVector[] = [];
 
     for (const sub of subClusters) {
       if (sub.weight < 2) {
-        directMembers += sub.weight;
-        // Assign singleton members to parent section
-        for (const m of sub.members) assignments.set(m.entryId, sectionId);
+        // Collect singletons — will assign to nearest child after
+        singletons.push(...sub.members);
         continue;
       }
       const childId = mkSectionId(domain as DomainId);
       childIds.push(childId);
-      // Record entry assignments for this child leaf
+      childSections.push({ id: childId, centroid: sub.centroid, members: [...sub.members] });
       for (const m of sub.members) assignments.set(m.entryId, childId);
       sections.push({
         id: childId,
@@ -264,6 +264,26 @@ export function buildTreeBottomUp(
       });
     }
 
+    // Distribute singletons to their nearest child section
+    if (singletons.length > 0 && childSections.length > 0) {
+      for (const entry of singletons) {
+        let bestChild = childSections[0];
+        let bestSim = -1;
+        for (const child of childSections) {
+          const sim = cosine(entry.vector, child.centroid);
+          if (sim > bestSim) { bestSim = sim; bestChild = child; }
+        }
+        assignments.set(entry.entryId, bestChild.id);
+        bestChild.members.push(entry);
+        // Update memberCount on the corresponding section
+        const sec = sections.find((s) => s.id === bestChild.id);
+        if (sec) sec.memberCount++;
+      }
+    } else {
+      // No children to distribute to — singletons stay as direct members
+      for (const m of singletons) assignments.set(m.entryId, sectionId);
+    }
+
     sections.push({
       id: sectionId,
       domain: domain as unknown as DomainId,
@@ -272,7 +292,7 @@ export function buildTreeBottomUp(
       label: sectionId.slice(-7) as any,
       title: "",
       centroid: cluster.centroid,
-      memberCount: directMembers,
+      memberCount: singletons.length > 0 && childSections.length === 0 ? singletons.length : 0,
       childIds,
       summary: "",
       summaryHash: "",

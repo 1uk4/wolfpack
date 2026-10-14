@@ -116,8 +116,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   const defaultDomain = config.domains?.[0] ?? process.env.WOLFPACK_DOMAIN ?? "wolfpack";
 
   // Initialize sweep manager if librarian mode is enabled
-  const librarianConfig = config.memory?.librarian;
-  const isLibrarian = librarianConfig === true || (typeof librarianConfig === "object" && librarianConfig.enabled);
+  const isLibrarian = config.memory?.librarian === true;
   let sweepManager: SweepManager | undefined;
   
   if (isLibrarian && kbRoots) {
@@ -243,7 +242,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
 
   // Set up sweep timer if librarian mode with interval
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
-  const sweepInterval = (config.memory as Record<string, unknown> | undefined)?.sweepInterval as string | undefined;
+  const sweepInterval = config.memory?.sweepInterval;
   
   if (sweepManager && sweepInterval) {
     const sweepMs = parseInterval(sweepInterval);

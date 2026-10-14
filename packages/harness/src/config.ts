@@ -27,12 +27,10 @@ export interface WolfConfig {
       interval?: string;         // e.g. "24h" - pi-durable only
       threshold?: number;        // tokens (default: 15000)
     };
-    /** Librarian mode - enables KB inbox tools and optional sweep */
-    librarian?: boolean | {
-      enabled: boolean;
-      /** Sweep interval (e.g., "15m", "1h") - triggers systemd service */
-      sweepInterval?: string;
-    };
+    /** Librarian mode - enables KB inbox tools and sweep */
+    librarian?: boolean;
+    /** Sweep interval (e.g., "15m", "1h") - auto-triggers sweep on timer */
+    sweepInterval?: string;
   };
   harness?: {
     storage?: string;

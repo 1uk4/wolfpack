@@ -114,16 +114,14 @@ export class WolfManager {
     ];
     await fs.writeFile(envPath, lines.join("\n") + "\n", { mode: 0o600 });
 
-    // Ensure shared KB directories are writable
-    try {
-      await exec("chmod", ["-R", "a+rwX", "/var/wolfpack/kb/ops"]);
-    } catch {
-      // Directory might not exist yet
-    }
-    try {
-      await exec("chmod", ["-R", "a+rwX", "/var/wolfpack/kb/base"]);
-    } catch {
-      // Directory might not exist yet
+    // Ensure shared KB directories are writable (follow symlinks with -L)
+    for (const dir of ["/var/wolfpack/kb/ops", "/var/wolfpack/kb/base"]) {
+      try {
+        // Use find to follow symlinks and chmod each file
+        await exec("find", ["-L", dir, "-exec", "chmod", "a+rwX", "{}", ";"]);
+      } catch {
+        // Directory might not exist yet
+      }
     }
   }
 

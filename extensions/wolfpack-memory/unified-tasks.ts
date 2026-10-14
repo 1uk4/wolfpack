@@ -17,21 +17,12 @@ import {
   type ToolResult,
 } from "@wolfpack/harness/extension";
 import {
-  createWork,
-  stageWork,
-  noteWork,
-  linkWork,
-  unlinkWork,
-  moveWork,
-  listWorkItems,
-  resolveWorkItem,
-  commitWorkItem,
   type WorkItem,
   type CreateWorkInput,
   STAGE_ORDER,
   isComplete,
 } from "@wolfpack/kb/client";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { WorkClient } from "./work-client.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
 type WorkItemStage = typeof STAGE_ORDER[number];
@@ -122,18 +113,8 @@ function formatHierarchy(
   return lines.join("\n");
 }
 
-function buildKbRoots(domain: string): KbRoots {
-  const kbBase = process.env.KB_BASE;
-  const kbOps = process.env.KB_OPS;
-  const wolfDen = process.env.WOLF_DEN;
-  
-  if (!kbOps) throw new Error("KB_OPS not set");
-  
-  return {
-    kbBase: kbBase ?? "",
-    opsRoot: kbOps,
-    denLocal: wolfDen ? join(wolfDen, "kb") : "",
-  };
+function makeClient(): WorkClient {
+  return new WorkClient();
 }
 
 // ─── Extension Factory ─────────────────────────────────────────────────────
@@ -145,43 +126,70 @@ export default function createTasksExtension(
   const { wolfDen, wolfName, domains } = context;
   const autoShip = config.autoShip ?? true;
 
-  // Helper to get all items for a domain (reads from KB markdown files)
-  function getItems(domain: string): WorkItem[] {
-    const roots = buildKbRoots(domain);
-    const ids = listWorkItems(roots, domain);
-    const items: WorkItem[] = [];
-    for (const id of ids) {
-      const resolved = resolveWorkItem(roots, domain, id);
-      if (resolved?.item) items.push(resolved.item);
-    }
-    return items;
+  const client = makeClient();
+
+  // ── Cache: sections read sync, tools write async ────────────────────────
+  interface TaskCache {
+    task: WorkItem;
+    parent?: WorkItem;
+    siblings?: WorkItem[];
   }
 
-  // Helper to find item across subscribed domains
-  function findItem(id: string): { item: WorkItem; domain: string } | null {
-    for (const domain of domains) {
+  function cachePath(): string {
+    return join(wolfDen, "factory", "task-cache.json");
+  }
+
+  function readCache(): TaskCache | null {
+    try {
+      return JSON.parse(require("fs").readFileSync(cachePath(), "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeCache(task: WorkItem): Promise<void> {
+    const dir = dirname(cachePath());
+    await mkdir(dir, { recursive: true });
+    let parent: WorkItem | undefined;
+    let siblings: WorkItem[] | undefined;
+    if (task.partOf) {
       try {
-        const items = getItems(domain);
-        const item = items.find(i => i.id === id);
-        if (item) return { item, domain };
-      } catch {
-        continue;
-      }
+        parent = await client.get(task.partOf as string);
+        siblings = await client.query({ domain: task.domain as string, partOf: task.partOf as string });
+      } catch { /* best effort */ }
     }
-    return null;
+    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings }));
   }
 
-  // Helper to get children of an item
-  function getChildren(domain: string, parentId: string): WorkItem[] {
-    const items = getItems(domain);
-    return items.filter(item => item.partOf === parentId);
+  function clearCache(): void {
+    try { require("fs").unlinkSync(cachePath()); } catch { /* ok */ }
   }
 
-  // Helper to get parent of an item
-  function getParent(domain: string, item: WorkItem): WorkItem | null {
+  // ── API helpers ─────────────────────────────────────────────────────────
+  async function getItems(domain: string): Promise<WorkItem[]> {
+    return client.query({ domain });
+  }
+
+  async function findItem(id: string): Promise<{ item: WorkItem; domain: string } | null> {
+    try {
+      const item = await client.get(id);
+      return { item, domain: item.domain as string };
+    } catch {
+      return null;
+    }
+  }
+
+  async function getChildren(domain: string, parentId: string): Promise<WorkItem[]> {
+    return client.query({ domain, partOf: parentId });
+  }
+
+  async function getParent(domain: string, item: WorkItem): Promise<WorkItem | null> {
     if (!item.partOf) return null;
-    const items = getItems(domain);
-    return items.find(i => i.id === item.partOf) ?? null;
+    try {
+      return await client.get(item.partOf as string);
+    } catch {
+      return null;
+    }
   }
 
   return defineExtension({
@@ -200,38 +208,29 @@ Domains: ${domainList}`;
       }),
 
       // Active task section — shows current binding with feature context
-      section("active_task", (ctx) => {
+      section("active_task", () => {
         try {
-          // Synchronous read for section (sections should be fast)
-          const path = bindingPath(ctx.wolfDen);
-          if (!existsSync(path)) {
-            return `## Active Task\n\nNo task bound. Use \`task_query\` to see available work, then \`task_bind\` to start.`;
-          }
-          
-          const content = require("fs").readFileSync(path, "utf-8");
-          const binding = JSON.parse(content) as ActiveBinding | null;
-          
-          if (!binding || !binding.taskId) {
+          const bp = bindingPath(wolfDen);
+          if (!existsSync(bp)) {
             return `## Active Task\n\nNo task bound. Use \`task_query\` to see available work, then \`task_bind\` to start.`;
           }
 
-          const found = findItem(binding.taskId);
-          if (!found) {
-            return `## Active Task\n\nBound task ${binding.taskId} not found. Use \`task_unbind\` then \`task_bind\` to select a new task.`;
+          const binding = JSON.parse(require("fs").readFileSync(bp, "utf-8")) as ActiveBinding | null;
+          if (!binding?.taskId) {
+            return `## Active Task\n\nNo task bound. Use \`task_query\` to see available work, then \`task_bind\` to start.`;
           }
 
-          const { item: task, domain } = found;
+          const cached = readCache();
+          if (!cached) {
+            return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
+          }
+
+          const { task, parent, siblings } = cached;
           const lines: string[] = ["## Active Task", ""];
-          
-          // Get parent feature if exists
-          if (task.partOf) {
-            const parent = getParent(domain, task);
-            if (parent && (parent.kind === "feature" || parent.kind === "initiative")) {
-              const siblings = getChildren(domain, parent.id);
-              lines.push(formatHierarchy(parent, siblings, task.id));
-            }
+
+          if (parent && (parent.kind === "feature" || parent.kind === "initiative") && siblings) {
+            lines.push(formatHierarchy(parent, siblings, task.id));
           } else {
-            // Task is standalone
             lines.push(`**Task:** [${task.id}] ${task.title}`);
             lines.push(`  Stage: ${task.stage}`);
           }
@@ -257,7 +256,7 @@ Domains: ${domainList}`;
           id: Type.String({ description: "Work item ID to bind to" }),
         }),
         async execute(args: { id: string }, ctx: ToolContext): Promise<ToolResult> {
-          const found = findItem(args.id);
+          const found = await findItem(args.id);
           if (!found) {
             return {
               content: [{ type: "text", text: `Task ${args.id} not found in subscribed domains.` }],
@@ -276,7 +275,8 @@ Domains: ${domainList}`;
           }
 
           await writeBinding(ctx.wolfDen, item.id, domain);
-          
+          await writeCache(item);
+
           return {
             content: [{
               type: "text",
@@ -300,6 +300,7 @@ Domains: ${domainList}`;
           }
 
           await clearBinding(ctx.wolfDen);
+          clearCache();
           return {
             content: [{ type: "text", text: `Unbound from ${binding.taskId}.` }],
           };
@@ -319,7 +320,7 @@ Domains: ${domainList}`;
             };
           }
 
-          const found = findItem(binding.taskId);
+          const found = await findItem(binding.taskId);
           if (!found) {
             return {
               content: [{ type: "text", text: `Bound task ${binding.taskId} not found.` }],
@@ -364,11 +365,11 @@ Domains: ${domainList}`;
             if (!domains.includes(domain)) continue;
             
             try {
-              const roots = buildKbRoots(domain);
+              
               
               // Specific item lookup
               if (args.id) {
-                const found = findItem(args.id);
+                const found = await findItem(args.id);
                 if (!found || found.domain !== domain) continue;
                 
                 const item = found.item;
@@ -376,7 +377,7 @@ Domains: ${domainList}`;
                 
                 // Get parent context
                 if (item.partOf) {
-                  const parent = getParent(domain, item);
+                  const parent = await getParent(domain, item);
                   if (parent) {
                     lines.push(`Parent: ${formatWorkItem(parent)}`);
                     lines.push("");
@@ -387,7 +388,7 @@ Domains: ${domainList}`;
                 
                 // Get children
                 if (depth > 0) {
-                  const children = getChildren(domain, item.id);
+                  const children = await getChildren(domain, item.id);
                   if (children.length > 0) {
                     lines.push("");
                     lines.push("Children:");
@@ -401,12 +402,11 @@ Domains: ${domainList}`;
                 continue;
               }
 
-              // General query - read from KB markdown files
-              let items = getItems(domain);
-              
-              // Apply filters
-              if (args.kind) items = items.filter(i => i.kind === args.kind);
-              if (args.stage) items = items.filter(i => i.stage === args.stage);
+              const items = await client.query({
+                domain,
+                ...(args.kind ? { kind: args.kind } : {}),
+                ...(args.stage ? { stage: args.stage } : {}),
+              });
 
               if (items.length === 0) continue;
 
@@ -470,14 +470,14 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(args.domain);
+          
           
           // Default partOf to bound task's workspace (its feature) for tasks/issues/spikes
           let partOf = args.partOf;
           if (!partOf && ["task", "issue", "spike"].includes(args.kind)) {
             const binding = await readBinding(ctx.wolfDen);
             if (binding) {
-              const boundTask = findItem(binding.taskId);
+              const boundTask = await findItem(binding.taskId);
               if (boundTask?.item.partOf) {
                 partOf = boundTask.item.partOf;
               }
@@ -494,7 +494,7 @@ Domains: ${domainList}`;
               assignee: ctx.wolfName,
             };
             
-            const result = createWork(roots, input);
+            const result = await client.create(input);
 
             return {
               content: [{
@@ -527,10 +527,10 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(binding.domain);
+          
           
           try {
-            noteWork(roots, binding.taskId, args.text);
+            await client.note(binding.taskId, args.text);
             return {
               content: [{ type: "text", text: `Note added to ${binding.taskId}.` }],
             };
@@ -559,7 +559,7 @@ Domains: ${domainList}`;
             };
           }
 
-          const found = findItem(binding.taskId);
+          const found = await findItem(binding.taskId);
           if (!found) {
             return {
               content: [{ type: "text", text: `Task ${binding.taskId} not found.` }],
@@ -567,10 +567,11 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(binding.domain);
+          
           
           try {
-            commitWorkItem(roots, found.item, args.body);
+            await client.updateBody(found.item.id, args.body);
+            await writeCache(found.item);
             return {
               content: [{ type: "text", text: `Updated working document for: ${found.item.title}` }],
             };
@@ -599,10 +600,10 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(binding.domain);
+          
           
           try {
-            stageWork(roots, binding.taskId, args.to as WorkItemStage);
+            await client.stage(binding.taskId, args.to);
             return {
               content: [{ type: "text", text: `${binding.taskId} → ${args.to}` }],
             };
@@ -644,19 +645,19 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(binding.domain);
+          
           
           try {
             // Ship the task
-            stageWork(roots, binding.taskId, "shipped");
+            await client.stage(binding.taskId, "shipped");
             
-            const found = findItem(binding.taskId);
+            const found = await findItem(binding.taskId);
             const result: string[] = [`Shipped: ${binding.taskId}`];
             
             // Find next sibling if requested
             const bindNext = args.bindNext ?? true;
             if (bindNext && found?.item.partOf) {
-              const siblings = getChildren(binding.domain, found.item.partOf);
+              const siblings = await getChildren(binding.domain, found.item.partOf);
               const next = siblings.find(s => 
                 s.id !== binding.taskId && 
                 !isComplete(s)
@@ -718,10 +719,10 @@ Domains: ${domainList}`;
             return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
           }
 
-          const roots = buildKbRoots(domain);
+          
           
           try {
-            linkWork(roots, sourceId, args.rel as "depends_on" | "blocks", args.target);
+            await client.link(sourceId, args.rel, args.target);
             return {
               content: [{ type: "text", text: `${sourceId} ${args.rel} ${args.target}` }],
             };
@@ -767,10 +768,10 @@ Domains: ${domainList}`;
             return { content: [{ type: "text", text: "Cannot determine domain from item ID." }], isError: true };
           }
 
-          const roots = buildKbRoots(domain);
+          
           
           try {
-            unlinkWork(roots, sourceId, args.rel as "depends_on" | "blocks", args.target);
+            unawait client.link(sourceId, args.rel, args.target);
             return {
               content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
             };
@@ -799,11 +800,11 @@ Domains: ${domainList}`;
             };
           }
 
-          const roots = buildKbRoots(binding.domain);
+          
           
           try {
             const newParent = args.to === "none" ? null : args.to;
-            moveWork(roots, binding.taskId, newParent);
+            await client.move(binding.taskId, newParent);
             return {
               content: [{ type: "text", text: `Moved ${binding.taskId} to ${args.to}` }],
             };
@@ -831,7 +832,7 @@ Domains: ${domainList}`;
             };
           }
 
-          const items = getItems(args.domain);
+          const items = await getItems(args.domain);
           const features = items.filter(i => 
             i.kind === "feature" && 
             !isComplete(i)

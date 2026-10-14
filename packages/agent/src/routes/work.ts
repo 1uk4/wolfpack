@@ -24,6 +24,7 @@ import {
   setCriteria,
   assignWork,
   loadWorkState,
+  commitWorkItem,
   type CreateWorkInput,
   type WorkQuery,
 } from "@wolfpack/kb/client";
@@ -128,6 +129,15 @@ export function workRouter(): Router {
         const unlink = body.unlink as { rel: string; target: string };
         const r = unlinkWork(roots, id, unlink.rel, unlink.target);
         result = { item: r.item };
+      } else if (body.body !== undefined) {
+        const items = loadWorkState(roots);
+        const item = items.get(id as any);
+        if (!item) {
+          res.status(404).json({ error: `Work item not found: ${id}` });
+          return;
+        }
+        commitWorkItem(roots, item, String(body.body));
+        result = { item };
       } else {
         res.status(400).json({ error: "No recognized update field. Use: stage, note, title, successCriteria, assignee, moveTo, link, unlink" });
         return;

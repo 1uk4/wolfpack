@@ -9,7 +9,7 @@ import { parseFrontmatter } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { readSections, writeSections } from "./sections.js";
+import { readSections, writeSections, foldSections } from "./sections.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { renderDomainDigest, renderDomainIndex } from "./domains.js";
 import { renderRegistry } from "./registry.js";
@@ -58,16 +58,25 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
   if (domains.length === 0) return { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
 
-  const reg = foldRegistry(readLedger(roots));
+  const log = readLedger(roots);
+  const reg = foldRegistry(log);
   const embedder = createEmbedder(roots);
   const allVectors = await buildEntryVectors(roots, reg, embedder);
+  // Read sections from file, or fold from ledger if file is missing
   let sections = readSections(roots);
+  if (sections.length === 0 && log.length > 0) {
+    sections = foldSections(log);
+    if (sections.length > 0) {
+      notify?.(`Bootstrapped ${sections.length} sections from ledger`);
+    }
+  }
   const events: KbEvent[] = [];
   const result: ReorgResult = { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
 
   for (const domain of domains) {
     notify?.(`reorg: ${domain}`);
     const domainVectors = allVectors.filter((v) => v.domain === domain);
+    notify?.(`  ${domainVectors.length} entries with vectors`);
     const eDir = join(domainsRoot, domain, "entries");
 
     const entrySectionMap = new Map<string, string>();
@@ -251,8 +260,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   writeSections(roots, sections);
 
   // Re-render digest + index
-  const log = readLedger(roots);
-  renderRegistry(roots, foldRegistry(log));
+  const freshLog = readLedger(roots);
+  renderRegistry(roots, foldRegistry(freshLog));
   for (const domain of result.domains) {
     renderDomainDigest(roots, domain);
     renderDomainIndex(roots, domain);

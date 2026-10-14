@@ -545,8 +545,19 @@ function render(domainKey){
   
   function getConnected(nodeId) {
     const connected = new Set([nodeId]);
+    // Walk the full tree downward (children, grandchildren, etc.)
+    const queue = [nodeId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      ds.edges.forEach(e => {
+        if (e.from === current && !connected.has(e.to)) {
+          connected.add(e.to);
+          queue.push(e.to);
+        }
+      });
+    }
+    // Also include parent (one level up for context)
     ds.edges.forEach(e => {
-      if (e.from === nodeId) connected.add(e.to);
       if (e.to === nodeId) connected.add(e.from);
     });
     return connected;

@@ -337,62 +337,6 @@ export function buildTreeBottomUp(
       for (const m of child.members) assignments.set(m.entryId, child.id);    
     }
 
-    // Group children if too many (branching factor control)
-    if (childIds.length > config.maxChildrenPerSection) {
-      const k = Math.ceil(childIds.length / config.maxChildrenPerSection);
-      const childSecs = childIds.map((cid) => sections.find((s) => s.id === cid)!).filter(Boolean);
-      const childVectors = childSecs.map((s) => s.centroid);
-      const { assignment } = kMeans2Multi(childVectors, k);
-      
-      // Group children by cluster assignment
-      const groups = new Map<number, typeof childSecs>();
-      for (let i = 0; i < childSecs.length; i++) {
-        const g = assignment[i];
-        if (!groups.has(g)) groups.set(g, []);
-        groups.get(g)!.push(childSecs[i]);
-      }
-      
-      // Create intermediate grouping sections
-      const newChildIds: SectionId[] = [];
-      for (const [, group] of groups) {
-        if (group.length === 1) {
-          // Single child in group — keep as direct child
-          newChildIds.push(group[0].id);
-          continue;
-        }
-        const groupId = mkSectionId(domain as DomainId);
-        const groupCentroid = computeCentroid(group.map((s) => s.centroid));
-        const groupMemberCount = group.reduce((sum, s) => sum + s.memberCount, 0);
-        
-        // Re-parent the grouped children under the new intermediate section
-        const groupChildIds: SectionId[] = [];
-        for (const child of group) {
-          child.parent = groupId;
-          child.depth = depth + 2;
-          groupChildIds.push(child.id);
-        }
-        
-        sections.push({
-          id: groupId,
-          domain: domain as unknown as DomainId,
-          parent: sectionId,
-          depth: depth + 1,
-          label: groupId.slice(-7) as any,
-          title: "",
-          centroid: groupCentroid,
-          memberCount: 0,
-          childIds: groupChildIds,
-          summary: "",
-          summaryHash: "",
-          dirty: true,
-          created: today as any,
-          updated: today as any,
-        });
-        newChildIds.push(groupId);
-      }
-      childIds.length = 0;
-      childIds.push(...newChildIds);
-    }
 
     sections.push({
       id: sectionId,
@@ -415,6 +359,9 @@ export function buildTreeBottomUp(
   for (const cluster of clusters) {
     buildSection(cluster, null, 0);
   }
+
+  // Post-build: enforce maxChildrenPerSection recursively on all sections
+  enforceBranchingFactor(sections, domain, config);
 
   return { sections, assignments };
 }
@@ -748,6 +695,79 @@ function normalize(v: Vector): Vector {
   for (const x of v) norm += x * x;
   norm = Math.sqrt(norm);
   return norm > 0 ? v.map((x) => x / norm) : v;
+}
+
+/**
+ * Recursively enforce maxChildrenPerSection on all sections.
+ * If a section has too many children, group them via k-means into
+ * intermediate sub-sections. Repeats until no section exceeds the limit.
+ */
+function enforceBranchingFactor(
+  sections: Section[],
+  domain: string,
+  config: typeof SECTION_TREE,
+): void {
+  const today = new Date().toISOString().split("T")[0];
+  let changed = true;
+  // Iterate until stable (grouping might create new sections that also need grouping)
+  while (changed) {
+    changed = false;
+    for (const sec of [...sections]) {
+      if (sec.domain !== domain) continue;
+      if (sec.childIds.length <= config.maxChildrenPerSection) continue;
+
+      changed = true;
+      const k = Math.ceil(sec.childIds.length / config.maxChildrenPerSection);
+      const childSecs = sec.childIds
+        .map((cid) => sections.find((s) => s.id === cid)!)
+        .filter(Boolean);
+      if (childSecs.length < 2) continue;
+
+      const { assignment } = kMeans2Multi(childSecs.map((s) => s.centroid), k);
+
+      const groups = new Map<number, Section[]>();
+      for (let i = 0; i < childSecs.length; i++) {
+        const g = assignment[i];
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g)!.push(childSecs[i]);
+      }
+
+      const newChildIds: SectionId[] = [];
+      for (const [, group] of groups) {
+        if (group.length === 1) {
+          newChildIds.push(group[0].id);
+          continue;
+        }
+        const groupId = mkSectionId(domain as DomainId);
+        const groupCentroid = computeCentroid(group.map((s) => s.centroid));
+        const groupChildIds: SectionId[] = [];
+        for (const child of group) {
+          child.parent = groupId;
+          child.depth = sec.depth + 2;
+          groupChildIds.push(child.id);
+        }
+        sections.push({
+          id: groupId,
+          domain: domain as unknown as DomainId,
+          parent: sec.id,
+          depth: sec.depth + 1,
+          label: groupId.slice(-7) as any,
+          title: "",
+          centroid: groupCentroid,
+          memberCount: 0,
+          childIds: groupChildIds,
+          summary: "",
+          summaryHash: "",
+          dirty: true,
+          created: today as any,
+          updated: today as any,
+        } as Section);
+        newChildIds.push(groupId);
+      }
+      sec.childIds = newChildIds;
+      sec.dirty = true;
+    }
+  }
 }
 
 /** Simple k-means with k=2. */

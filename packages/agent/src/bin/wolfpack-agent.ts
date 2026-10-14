@@ -11,6 +11,7 @@ import { authMiddleware } from "../auth.js";
 import { wolvesRouter } from "../routes/wolves.js";
 import { logsRouter } from "../routes/logs.js";
 import { healthRouter } from "../routes/health.js";
+import { workRouter } from "../routes/work.js";
 
 const PORT = parseInt(process.env.WOLFPACK_AGENT_PORT ?? "3141");
 const DATA_DIR = process.env.WOLFPACK_AGENT_DATA ?? "/opt/wolfpack";
@@ -33,6 +34,7 @@ async function main() {
   app.use("/wolves", wolvesRouter(manager));
   app.use("/logs", logsRouter(manager));
   app.use("/health", healthRouter(manager));
+  app.use("/work", workRouter());
 
   app.listen(PORT, () => {
     const count = manager.list().length;

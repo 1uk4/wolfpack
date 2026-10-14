@@ -4,10 +4,10 @@
  * The one and only KB sweep (v1 retired).
  *
  * First-cut bring-up pipeline (entry-first, reachability never gated):
- *   intake → embed → routeByTree → (classifyToSection fallback) → produceEntry
+ *   intake → embed → placeEntry → (classifyToSection fallback) → produceEntry
  *          → commitEntry → record events → renderDomainDigest → persist
  *
- * Tree REORGANIZATION (maybeSplit / crystallizeUnplaced / shouldMerge) runs as a
+ * Tree REORGANIZATION (splitAsParentChild / placeEntry / shouldMerge) runs as a
  * separate maintenance pass and inside the migration backfill, where per-section
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
  * reachability. See docs/kb-implementation.md §Phase 5.
@@ -18,7 +18,7 @@ import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js"
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, cosine } from "./embed.js";
 import { renderRegistry } from "./registry.js";
-import { routeByTree, type EntryVector } from "./route.js";
+import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";

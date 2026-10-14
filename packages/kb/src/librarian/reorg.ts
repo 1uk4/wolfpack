@@ -14,9 +14,7 @@ import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { renderDomainDigest, renderDomainIndex } from "./domains.js";
 import { renderRegistry } from "./registry.js";
 import {
-  maybeSplit,
   shouldMerge,
-  crystallizeUnplaced,
   type EntryWithVector,
 } from "./hierarchy.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
@@ -690,30 +688,36 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       result.merges++;
     }
 
-    // 3. Crystallize unplaced (only on full reorg, not targeted)
+    // 3. Place unplaced entries via placeEntry (replaces old crystallize)
     if (!opts.touchedSections && unplaced.length > 0) {
-      const domSections = sections.filter((s) => s.domain === domain);
-      const candidates = crystallizeUnplaced(unplaced, domSections, domain as DomainId);
-      for (const c of candidates) {
-        notify?.(`  crystallize: ${c.section.id} (${c.entryIds.length} entries)`);
-        sections = [...sections, c.section];
-        events.push(ev.sectionCreated({
-          sectionId: c.section.id, domain, parent: c.section.parent, label: String(c.section.label),
-        }));
-        events.push(ev.sectionCrystallized({
-          sectionId: c.section.id, parentId: c.section.parent ?? "", entryIds: c.entryIds, cohesion: c.cohesion,
-        }));
-        for (const eid of c.entryIds) {
-          const file = join(eDir, `${eid}.md`);
-          if (existsSync(file)) {
-            let content = readFileSync(file, "utf-8");
-            content = content.replace(/^section: .+$/m, `section: ${c.section.id}`);
-            writeFileSync(file, content);
-          }
-          events.push(ev.entryPlaced({ entryId: eid, sectionId: c.section.id, basis: "crystallized", fit: 1 }));
-          result.placements++;
+      const { placeEntry: placeEntryFn } = await import("./section-tree.js");
+      notify?.(`  placing ${unplaced.length} unplaced entries`);
+      for (const entry of unplaced) {
+        // Read entry metadata for abstraction scoring
+        const entryFile = join(eDir, `${entry.entryId}.md`);
+        let meta: { kind?: string; maturity?: string } = {};
+        if (existsSync(entryFile)) {
+          const { fields } = parseFrontmatter(readFileSync(entryFile, "utf-8"));
+          meta = { kind: fields.kind ? String(fields.kind) : undefined, maturity: fields.maturity ? String(fields.maturity) : undefined };
         }
-        result.crystallized++;
+        const decision = placeEntryFn(entry.vector, meta, sections, domainCentroid, sectionMembers);
+        if (decision.sectionId !== "_unplaced") {
+          const targetSec = sections.find((s) => s.id === decision.sectionId);
+          if (targetSec) {
+            if (existsSync(entryFile)) {
+              let content = readFileSync(entryFile, "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${decision.sectionId}`);
+              writeFileSync(entryFile, content);
+            }
+            targetSec.memberCount++;
+            const members = sectionMembers.get(decision.sectionId as string) ?? [];
+            members.push(entry);
+            sectionMembers.set(decision.sectionId as string, members);
+            events.push(ev.entryPlaced({ entryId: entry.entryId, sectionId: decision.sectionId as SectionId, basis: "routed", fit: 1 }));
+            result.placements++;
+            notify?.(`  placed: ${entry.entryId} → ${decision.sectionId}`);
+          }
+        }
       }
     }
 

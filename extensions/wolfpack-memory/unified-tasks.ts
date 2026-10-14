@@ -771,7 +771,7 @@ Domains: ${domainList}`;
           
           
           try {
-            unawait client.link(sourceId, args.rel, args.target);
+            await client.unlink(sourceId, args.rel, args.target);
             return {
               content: [{ type: "text", text: `Removed: ${sourceId} ${args.rel} ${args.target}` }],
             };

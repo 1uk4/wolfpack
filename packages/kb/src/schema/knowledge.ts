@@ -93,6 +93,8 @@ export const Section = z.object({
   summary: z.string().min(1),
   summaryHash: z.string(),
   dirty: z.boolean().default(false),
+  /** Entry count when this section was last labeled. Used for drift detection. */
+  memberCountAtLastLabel: z.number().int().min(0).default(0),
   created: IsoDate,
   updated: IsoDate,
 });

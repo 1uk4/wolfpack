@@ -120,7 +120,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           childIds: [],
           summary: `${members.length} entries`,
           summaryHash: "",
-          dirty: true,
+          dirty: true, memberCountAtLastLabel: 0,
           created: today,
           updated: today,
         } as unknown as Section);
@@ -336,6 +336,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
               maxDepth: maxTreeDepth,
             });
             sec.dirty = false;
+            (sec as any).memberCountAtLastLabel = sec.memberCount;
             sec.updated = new Date().toISOString().split("T")[0] as any;
             notify?.(`  labeled: ${sec.id} → "${sec.title}"`);
             result.labelsUpdated++;
@@ -350,6 +351,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           });
           sec.title = shortTitles.join(", ");
           sec.dirty = false;
+            (sec as any).memberCountAtLastLabel = sec.memberCount;
           notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
           result.labelsUpdated++;
         }
@@ -416,7 +418,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             childIds: [],
             summary: "",
             summaryHash: "",
-            dirty: true,
+            dirty: true, memberCountAtLastLabel: 0,
             created: new Date().toISOString().split("T")[0] as any,
             updated: new Date().toISOString().split("T")[0] as any,
           } as Section);
@@ -485,6 +487,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
               depth: sec.depth, maxDepth: mxd,
             });
             sec.dirty = false;
+            (sec as any).memberCountAtLastLabel = sec.memberCount;
             notify?.(`  post-split labeled: ${sec.id} \u2192 "${sec.title}"`);
             result.labelsUpdated++;
           } catch (e) {
@@ -818,7 +821,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
               childIds: chunk.map((c) => c.sec.id),
               summary: "",
               summaryHash: "",
-              dirty: true,
+              dirty: true, memberCountAtLastLabel: 0,
               created: new Date().toISOString().split("T")[0] as any,
               updated: new Date().toISOString().split("T")[0] as any,
             } as Section);
@@ -831,8 +834,29 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
 
-    // 7. Label dirty sections
-    const dirty = sections.filter((s) => s.domain === domain && s.dirty);
+    // 7. Drift-based rename detection
+    const { SECTION_TREE: driftCfg } = await import("@wolfpack/engine");
+    for (const sec of sections.filter((s) => s.domain === domain && !s.dirty)) {
+      const lastCount = (sec as any).memberCountAtLastLabel ?? 0;
+      const currentCount = sec.memberCount;
+      if (lastCount > 0 && currentCount > 0) {
+        const drift = Math.abs(currentCount - lastCount) / lastCount;
+        if (drift >= driftCfg.driftRecalcThreshold) {
+          notify?.(`  drift: ${sec.id} "${sec.title?.slice(0, 30)}" changed ${lastCount}→${currentCount} (${Math.round(drift * 100)}%)`);
+          sec.dirty = true;
+        }
+      }
+    }
+
+    // 8. Label dirty sections (bottom-up, bubble to parents)
+    // Re-collect dirty each iteration since bubble-up marks new sections
+    let labelPass = 0;
+    while (true) {
+      const dirty = sections
+        .filter((s) => s.domain === domain && s.dirty)
+        .sort((a, b) => b.depth - a.depth);
+      if (dirty.length === 0 || labelPass > 5) break;
+      labelPass++;
     for (const sec of dirty) {
       const members = sectionMembers.get(sec.id) ?? [];
       const memberInfo: SectionMember[] = [];
@@ -883,16 +907,26 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             maxDepth: maxTreeDepth,
           });
           sec.dirty = false;
+          (sec as any).memberCountAtLastLabel = sec.memberCount;
           sec.updated = new Date().toISOString().split("T")[0] as any;
+          // Bubble up: mark parent dirty so it re-generalizes
+          if (sec.parent) {
+            const parentSec = sections.find((s) => s.id === sec.parent);
+            if (parentSec && !parentSec.dirty) {
+              parentSec.dirty = true;
+            }
+          }
           notify?.(`  labeled: ${sec.id} → "${sec.title}"`);
           result.labelsUpdated++;
         } catch (e) {
           notify?.(`  label failed: ${sec.id}: ${e}`);
         }
       }
-    }
+    } // end while (label passes)
 
     result.domains.push(domain);
+  }
+
   }
 
   // Persist

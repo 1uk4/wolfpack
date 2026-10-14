@@ -390,7 +390,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
               childIds: [],
               summary: c.summary || "(pending summary)",
               summaryHash: "",
-              dirty: true,
+              dirty: true, memberCountAtLastLabel: 0,
               created: nowIso,
               updated: nowIso,
             };

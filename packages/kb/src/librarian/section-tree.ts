@@ -221,7 +221,7 @@ export function buildTreeBottomUp(
         childIds: [],
         summary: "",
         summaryHash: "",
-        dirty: true,
+        dirty: true, memberCountAtLastLabel: 0,
         created: today as any,
         updated: today as any,
       });
@@ -258,7 +258,7 @@ export function buildTreeBottomUp(
         childIds: [],
         summary: "",
         summaryHash: "",
-        dirty: true,
+        dirty: true, memberCountAtLastLabel: 0,
         created: today as any,
         updated: today as any,
       });
@@ -329,7 +329,7 @@ export function buildTreeBottomUp(
           childIds: [],
           summary: "",
           summaryHash: "",
-          dirty: true,
+          dirty: true, memberCountAtLastLabel: 0,
           created: today as any,
           updated: today as any,
         });
@@ -350,7 +350,7 @@ export function buildTreeBottomUp(
       childIds,
       summary: "",
       summaryHash: "",
-      dirty: true,
+      dirty: true, memberCountAtLastLabel: 0,
       created: today as any,
       updated: today as any,
     });
@@ -541,7 +541,7 @@ export function splitAsParentChild(
     childIds: [],
     summary: "",
     summaryHash: "",
-    dirty: true,
+    dirty: true, memberCountAtLastLabel: 0,
     created: today as any,
     updated: today as any,
   };
@@ -758,7 +758,7 @@ function enforceBranchingFactor(
           childIds: groupChildIds,
           summary: "",
           summaryHash: "",
-          dirty: true,
+          dirty: true, memberCountAtLastLabel: 0,
           created: today as any,
           updated: today as any,
         } as Section);

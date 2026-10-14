@@ -126,7 +126,7 @@ export function maybeSplit(
       childIds: [],
       summary: "", // TODO(Phase 3): LLM call to generate summary
       summaryHash: "",
-      dirty: true,
+      dirty: true, memberCountAtLastLabel: 0,
       created: now() as any,
       updated: now() as any,
     };
@@ -193,7 +193,7 @@ export function crystallizeUnplaced(
       childIds: [],
       summary: "", // TODO(Phase 3): LLM call to generate summary
       summaryHash: "",
-      dirty: true,
+      dirty: true, memberCountAtLastLabel: 0,
       created: now() as any,
       updated: now() as any,
     };

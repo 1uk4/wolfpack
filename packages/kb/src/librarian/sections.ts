@@ -63,7 +63,7 @@ export function foldSections(events: KbEvent[]): Section[] {
             childIds: [],
             summary: "",
             summaryHash: "",
-            dirty: true,
+            dirty: true, memberCountAtLastLabel: 0,
             created: e.at as any,
             updated: e.at as any,
           });

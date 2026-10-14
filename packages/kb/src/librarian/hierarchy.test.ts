@@ -50,7 +50,7 @@ describe("hierarchy — split", () => {
     childIds: [],
     summary: "test",
     summaryHash: "",
-    dirty: false,
+    dirty: false, memberCountAtLastLabel: 0,
     created: "2024-01-01" as any,
     updated: "2024-01-01" as any,
   });
@@ -113,7 +113,7 @@ describe("hierarchy — crystallize", () => {
     childIds: [],
     summary: "test",
     summaryHash: "",
-    dirty: false,
+    dirty: false, memberCountAtLastLabel: 0,
     created: "2024-01-01" as any,
     updated: "2024-01-01" as any,
   });
@@ -189,7 +189,7 @@ describe("hierarchy — merge", () => {
     childIds: [],
     summary: "test",
     summaryHash: "",
-    dirty: false,
+    dirty: false, memberCountAtLastLabel: 0,
     created: "2024-01-01" as any,
     updated: "2024-01-01" as any,
   });

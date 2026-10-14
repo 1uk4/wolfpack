@@ -30,7 +30,7 @@ describe("routeByTree — deterministic tree-descent router", () => {
       childIds: [],
       summary: "test",
       summaryHash: "",
-      dirty: false,
+      dirty: false, memberCountAtLastLabel: 0,
       created: "2024-01-01" as any,
       updated: "2024-01-01" as any,
     };

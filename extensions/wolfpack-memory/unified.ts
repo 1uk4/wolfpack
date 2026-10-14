@@ -474,6 +474,43 @@ export default function createMemoryExtension(
             }
           },
         }),
+        
+        defineTool({
+          name: "kb_retire",
+          description: "Remove KB entries by ID. Deletes the entry file, updates registry, digest, and index.",
+          parameters: Type.Object({
+            entryIds: Type.Array(Type.String({ description: "Entry IDs to retire (e.g., kb-wolfpack-abc1234)" })),
+            reason: Type.Optional(Type.String({ description: "Reason for retirement" })),
+          }),
+          async execute(args: { entryIds: string[]; reason?: string }, ctx: ToolContext): Promise<ToolResult> {
+            try {
+              const { retireEntries } = await import("@wolfpack/kb/librarian");
+              
+              const roots = {
+                kbBase: kbRoots.kbBase,
+                opsRoot: kbRoots.opsRoot,
+                denLocal: join(wolfDen, "kb"),
+              };
+              
+              const result = retireEntries(roots, args.entryIds, { reason: args.reason });
+              
+              const lines = [`## Retired ${result.retired.length} entries`];
+              for (const e of result.retired) {
+                lines.push(`- ${e.entryId}`);
+              }
+              if (result.notFound.length > 0) {
+                lines.push("", `Not found: ${result.notFound.join(", ")}`);
+              }
+              
+              return { content: [{ type: "text", text: lines.join("\n") }] };
+            } catch (err) {
+              return {
+                content: [{ type: "text", text: `Retire failed: ${err instanceof Error ? err.message : String(err)}` }],
+                isError: true,
+              };
+            }
+          },
+        }),
       ] : []),
     ],
 

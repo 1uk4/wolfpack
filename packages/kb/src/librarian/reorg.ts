@@ -259,7 +259,29 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
 
-    // 4. Label dirty sections
+    // 4. Prune empty sections (0 entries, 0 children)
+    const beforePrune = sections.length;
+    sections = sections.filter((s) => {
+      if (s.domain !== domain) return true;
+      const members = sectionMembers.get(s.id) ?? [];
+      const hasChildren = sections.some((c) => c.parent === s.id);
+      if (members.length === 0 && !hasChildren) {
+        notify?.(`  prune: ${s.id} "${s.title}" (empty)`);
+        // Remove from parent's childIds
+        if (s.parent) {
+          const parent = sections.find((p) => p.id === s.parent);
+          if (parent) parent.childIds = parent.childIds.filter((c) => c !== s.id);
+        }
+        result.merges++;
+        return false;
+      }
+      return true;
+    });
+    if (beforePrune > sections.length) {
+      notify?.(`  pruned ${beforePrune - sections.length} empty section(s)`);
+    }
+
+    // 5. Label dirty sections
     const dirty = sections.filter((s) => s.domain === domain && s.dirty);
     for (const sec of dirty) {
       const members = sectionMembers.get(sec.id) ?? [];

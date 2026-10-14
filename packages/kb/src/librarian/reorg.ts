@@ -274,6 +274,13 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           });
         }
       }
+      // For parent sections with no direct members, use children's titles
+      if (memberInfo.length === 0 && sec.childIds.length > 0) {
+        const childSections = sections.filter((s) => sec.childIds.includes(s.id));
+        for (const child of childSections) {
+          memberInfo.push({ title: child.title, summary: child.summary });
+        }
+      }
       if (memberInfo.length > 0) {
         try {
           sec.summary = await sectionSummary(engine, memberInfo);

@@ -14,6 +14,25 @@ const exec = promisify(execFile);
 export function healthRouter(manager: WolfManager): Router {
   const router = Router();
 
+  router.post("/fix-kb-permissions", async (_req: Request, res: Response) => {
+    try {
+      const dirs = ["/var/wolfpack/kb/ops", "/var/wolfpack/kb/base"];
+      const results: string[] = [];
+      for (const dir of dirs) {
+        try {
+          await exec("find", ["-L", dir, "-type", "f", "-exec", "chmod", "666", "{}", ";"]);
+          await exec("find", ["-L", dir, "-type", "d", "-exec", "chmod", "777", "{}", ";"]);
+          results.push(`${dir}: fixed`);
+        } catch (err) {
+          results.push(`${dir}: ${err}`);
+        }
+      }
+      res.json({ success: true, results });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   router.get("/", async (_req: Request, res: Response) => {
     try {
       const wolves = manager.list();

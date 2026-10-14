@@ -659,41 +659,55 @@ function showPanel(node, body){
   else if(m.type==="Section"){
     md = "## "+(m.title||"")+"\\n\\n"+(m.summary||"_(section)_");
     
-    // Find child sections (connected FROM this section node)
-    const sectionNodeId = node.id;
-    const childSectionIds = new Set(currentDS.edges
-      .filter(e => e.from === sectionNodeId)
-      .map(e => e.to));
-    const childSections = currentDS.nodes.filter(n => childSectionIds.has(n.id) && n.group === "section");
-    const childEntries = currentDS.nodes.filter(n => childSectionIds.has(n.id) && n.group === "entry");
-    
-    if (childSections.length > 0) {
-      md += "\\n\\n---\\n\\n";
-      let html = `<div style="margin-bottom:16px;"><div style="color:#7dcfff;font-weight:600;margin-bottom:8px;font-size:13px;">📂 Child Sections (${childSections.length})</div>`;
-      html += `<div class="child-links">`;
+    // Build recursive tree of all descendants
+    function buildSectionTree(nodeId, depth) {
+      const childIds = new Set(currentDS.edges.filter(e => e.from === nodeId).map(e => e.to));
+      const childSections = currentDS.nodes.filter(n => childIds.has(n.id) && n.group === "section");
+      const childEntries = currentDS.nodes.filter(n => childIds.has(n.id) && n.group === "entry");
+      let html = "";
+      
       for (const child of childSections) {
         const cm = child.meta || child._meta || {};
-        const entryCount = currentDS.edges.filter(e => e.from === child.id).length;
-        html += `<div class="child-link" data-node-id="${child.id}" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 10px;margin:4px 0;background:#1d2230;border-radius:6px;border-left:3px solid #7dcfff">`;
-        html += `<span style="flex:1;">${cm.title || child.label || ""}</span>`;
-        html += `<span style="padding:2px 8px;font-size:11px;background:#363d52;border-radius:4px;color:#7aa2f7;margin-left:8px;">${entryCount} items</span>`;
+        const totalItems = currentDS.edges.filter(e => e.from === child.id).length;
+        const hasChildren = currentDS.edges.some(e => e.from === child.id && currentDS.nodes.some(n => n.id === e.to && (n.group === "section" || n.group === "entry")));
+        const uid = "tree-" + child.id.replace(/[^a-zA-Z0-9]/g, "");
+        
+        html += `<div style="margin-left:${depth * 16}px;margin-bottom:2px;">`;
+        if (hasChildren) {
+          html += `<div class="tree-toggle" data-target="${uid}" style="display:flex;align-items:center;cursor:pointer;padding:5px 8px;background:#1a1f2e;border-radius:4px;border-left:3px solid #7dcfff;">`;
+          html += `<span class="tree-arrow" style="margin-right:6px;font-size:10px;color:#7dcfff;transition:transform 0.15s;">\u25b6</span>`;
+          html += `<span class="child-link" data-node-id="${child.id}" style="flex:1;cursor:pointer;">${cm.title || child.label || ""}</span>`;
+          html += `<span style="padding:2px 6px;font-size:10px;background:#363d52;border-radius:4px;color:#7aa2f7;margin-left:6px;">${totalItems}</span>`;
+          html += `</div>`;
+          html += `<div id="${uid}" class="tree-children" style="display:none;">`;
+          html += buildSectionTree(child.id, depth + 1);
+          html += `</div>`;
+        } else {
+          html += `<div class="child-link" data-node-id="${child.id}" style="display:flex;align-items:center;padding:5px 8px;background:#1a1f2e;border-radius:4px;border-left:3px solid #7dcfff;cursor:pointer;">`;
+          html += `<span style="margin-right:6px;font-size:10px;color:#555;">\u2500</span>`;
+          html += `<span style="flex:1;">${cm.title || child.label || ""}</span>`;
+          html += `<span style="padding:2px 6px;font-size:10px;background:#363d52;border-radius:4px;color:#7aa2f7;margin-left:6px;">${totalItems}</span>`;
+          html += `</div>`;
+        }
         html += `</div>`;
       }
-      html += `</div></div>`;
-      md += html;
-    }
-    
-    if (childEntries.length > 0) {
-      let html = `<div style="margin-bottom:16px;"><div style="color:#9ece6a;font-weight:600;margin-bottom:8px;font-size:13px;">📑 Entries (${childEntries.length})</div>`;
-      html += `<div class="child-links">`;
+      
       for (const entry of childEntries) {
         const em = entry.meta || entry._meta || {};
-        html += `<div class="child-link" data-node-id="${entry.id}" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 10px;margin:4px 0;background:#1d2230;border-radius:6px;border-left:3px solid #9ece6a">`;
-        html += `<span style="flex:1;">${em.title || entry.label || ""}</span>`;
-        html += `</div>`;
+        html += `<div style="margin-left:${depth * 16}px;margin-bottom:2px;">`;
+        html += `<div class="child-link" data-node-id="${entry.id}" style="display:flex;align-items:center;padding:4px 8px;background:#1a1f2e;border-radius:4px;border-left:3px solid #9ece6a;cursor:pointer;">`;
+        html += `<span style="margin-right:6px;font-size:10px;color:#555;">\u2500</span>`;
+        html += `<span style="flex:1;font-size:12px;">${em.title || entry.label || ""}</span>`;
+        html += `</div></div>`;
       }
-      html += `</div></div>`;
-      md += html;
+      
+      return html;
+    }
+    
+    const treeHtml = buildSectionTree(node.id, 0);
+    if (treeHtml) {
+      md += "\\n\\n---\\n\\n";
+      md += `<div style="margin-top:8px;">${treeHtml}</div>`;
     }
   }
   else if(m.type==="Work"){
@@ -778,6 +792,23 @@ function showPanel(node, body){
     el.addEventListener("mouseleave", () => { el.style.background = "#1d2230"; });
   });
   
+  // Add click handlers for tree toggles (expand/collapse)
+  panel.querySelectorAll(".tree-toggle").forEach(el => {
+    el.addEventListener("click", (e) => {
+      // Don't trigger if clicking the child-link span inside
+      if (e.target.classList.contains("child-link")) return;
+      e.stopPropagation();
+      const targetId = el.getAttribute("data-target");
+      const children = document.getElementById(targetId);
+      const arrow = el.querySelector(".tree-arrow");
+      if (children) {
+        const isOpen = children.style.display !== "none";
+        children.style.display = isOpen ? "none" : "block";
+        if (arrow) arrow.style.transform = isOpen ? "" : "rotate(90deg)";
+      }
+    });
+  });
+
   // Add click handlers for open buttons (show modal)
   panel.querySelectorAll(".open-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {

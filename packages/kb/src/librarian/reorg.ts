@@ -147,43 +147,30 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         vector: v.vector,
       }));
       
-      // Build the tree
-      const newSections = buildTreeBottomUp(entries, domain, domainCentroid);
-      notify?.(`  built ${newSections.length} sections`);
+      // Build the tree (returns sections + entry→section assignments)
+      const treeResult = buildTreeBottomUp(entries, domain, domainCentroid);
+      notify?.(`  built ${treeResult.sections.length} sections`);
       
       // Remove old sections for this domain
       sections = sections.filter((s) => s.domain !== domain);
-      sections.push(...newSections);
+      sections.push(...treeResult.sections);
       
-      // Assign entries to leaf sections and update frontmatter
+      // Assign entries using the tree's built-in assignments
       const eDir = join(domainsRoot, domain, "entries");
       let placed = 0;
-      for (const sec of newSections) {
-        if (sec.childIds.length > 0) continue; // only place in leaves
-        for (const member of entries.filter((e) => {
-          // Find which leaf section this entry belongs to by centroid proximity
-          const leafSections = newSections.filter((s) => s.childIds.length === 0 && s.domain === domain);
-          let bestSec = sec;
-          let bestSim = -1;
-          for (const ls of leafSections) {
-            const sim = cosine(e.vector, ls.centroid);
-            if (sim > bestSim) { bestSim = sim; bestSec = ls; }
-          }
-          return bestSec.id === sec.id;
-        })) {
-          const file = join(eDir, `${member.entryId}.md`);
-          if (existsSync(file)) {
-            let content = readFileSync(file, "utf-8");
-            content = content.replace(/^section: .+$/m, `section: ${sec.id}`);
-            writeFileSync(file, content);
-            placed++;
-          }
+      for (const [entryId, sectionId] of treeResult.assignments) {
+        const file = join(eDir, `${entryId}.md`);
+        if (existsSync(file)) {
+          let content = readFileSync(file, "utf-8");
+          content = content.replace(/^section: .+$/m, `section: ${sectionId}`);
+          writeFileSync(file, content);
+          placed++;
         }
       }
       notify?.(`  placed ${placed} entries into leaf sections`);
       
       // Mark all sections as dirty for LLM naming
-      for (const sec of newSections) {
+      for (const sec of treeResult.sections) {
         sec.dirty = true;
       }
       

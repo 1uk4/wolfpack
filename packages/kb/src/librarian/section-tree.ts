@@ -56,13 +56,20 @@ interface SplitResult {
  * 5. Repeat until cluster count reaches target root count
  * 6. Convert merge tree into Section objects
  */
+export interface BuildTreeResult {
+  sections: Section[];
+  /** Map of entryId → leaf sectionId (which section each entry belongs to) */
+  assignments: Map<string, SectionId>;
+}
+
 export function buildTreeBottomUp(
   entries: EntryWithVector[],
   domain: string,
   domainCentroid: Vector,
   config = SECTION_TREE
-): Section[] {
-  if (entries.length === 0) return [];
+): BuildTreeResult {
+  if (entries.length === 0) return { sections: [], assignments: new Map() };
+  const assignments = new Map<string, SectionId>();
 
   // Target number of root sections
   const targetRoots = Math.max(
@@ -198,6 +205,10 @@ export function buildTreeBottomUp(
     const sectionId = mkSectionId(domain as DomainId);
 
     if (cluster.weight <= config.splitThreshold) {
+      // Leaf section — record entry assignments
+      for (const m of cluster.members) {
+        assignments.set(m.entryId, sectionId);
+      }
       sections.push({
         id: sectionId,
         domain: domain as unknown as DomainId,
@@ -227,10 +238,14 @@ export function buildTreeBottomUp(
     for (const sub of subClusters) {
       if (sub.weight < 2) {
         directMembers += sub.weight;
+        // Assign singleton members to parent section
+        for (const m of sub.members) assignments.set(m.entryId, sectionId);
         continue;
       }
       const childId = mkSectionId(domain as DomainId);
       childIds.push(childId);
+      // Record entry assignments for this child leaf
+      for (const m of sub.members) assignments.set(m.entryId, childId);
       sections.push({
         id: childId,
         domain: domain as unknown as DomainId,
@@ -271,7 +286,7 @@ export function buildTreeBottomUp(
     buildSection(cluster, null, 0);
   }
 
-  return sections;
+  return { sections, assignments };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

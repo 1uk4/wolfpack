@@ -134,6 +134,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   // Full bottom-up rebuild mode
   if (opts.rebuild) {
     const { buildTreeBottomUp } = await import("./section-tree.js");
+    const allAssignments = new Map<string, Map<string, SectionId>>();
     
     for (const domain of domains) {
       const domainVectors = allVectors.filter((v) => v.domain === domain);
@@ -184,6 +185,81 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       result.placements += placed;
       result.rebuilt = true;
       result.domains.push(domain);
+      allAssignments.set(domain, treeResult.assignments);
+    }
+    
+    // Absorb singleton roots into nearest neighbor
+    const { SECTION_TREE: stConfig } = await import("@wolfpack/engine");
+    for (const domain of result.domains) {
+      const domVecs = allVectors.filter((v) => v.domain === domain);
+      const totalEntries = domVecs.length;
+      const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
+      const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+      const eDir = join(domainsRoot, domain, "entries");
+      
+      for (const root of domainRoots) {
+        if (root.memberCount >= minEntries) continue;
+        if (root.childIds.length > 0) continue; // has children, not a singleton
+        
+        // Find nearest non-singleton root by centroid similarity
+        const neighbors = domainRoots.filter((r) => r.id !== root.id && (r.memberCount >= minEntries || r.childIds.length > 0));
+        if (neighbors.length === 0) continue;
+        
+        let bestNeighbor = neighbors[0];
+        let bestSim = -1;
+        for (const n of neighbors) {
+          const sim = cosine(root.centroid, n.centroid);
+          if (sim > bestSim) { bestSim = sim; bestNeighbor = n; }
+        }
+        
+        notify?.(`  absorb: "${root.title || root.id}" (${root.memberCount}) → "${bestNeighbor.title || bestNeighbor.id}"`);
+        
+        // Move this root's entries to the neighbor
+        const domAssignments = allAssignments.get(domain) ?? new Map();
+        for (const [entryId, secId] of domAssignments) {
+          if (secId === root.id) {
+            // Find the best leaf section under the neighbor
+            const neighborLeaves = sections.filter((s) => {
+              let cur = s;
+              while (cur.parent) {
+                if (cur.parent === bestNeighbor.id) return true;
+                cur = sections.find((p) => p.id === cur.parent)!;
+                if (!cur) break;
+              }
+              return s.id === bestNeighbor.id;
+            }).filter((s) => s.childIds.length === 0);
+            
+            let targetSec = bestNeighbor.id;
+            if (neighborLeaves.length > 0) {
+              const entryVec = domVecs.find((v) => v.entryId === entryId)?.vector;
+              if (entryVec) {
+                let best = neighborLeaves[0];
+                let bs = -1;
+                for (const l of neighborLeaves) {
+                  const sim = cosine(entryVec, l.centroid);
+                  if (sim > bs) { bs = sim; best = l; }
+                }
+                targetSec = best.id;
+                best.memberCount++;
+              }
+            } else {
+              bestNeighbor.memberCount++;
+            }
+            
+            domAssignments.set(entryId, targetSec);
+            const file = join(eDir, `${entryId}.md`);
+            if (existsSync(file)) {
+              let content = readFileSync(file, "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${targetSec}`);
+              writeFileSync(file, content);
+            }
+          }
+        }
+        
+        // Remove the singleton root
+        sections = sections.filter((s) => s.id !== root.id);
+        result.merges++;
+      }
     }
     
     // Label dirty sections via LLM

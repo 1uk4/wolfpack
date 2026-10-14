@@ -253,7 +253,7 @@ export const SECTION_TREE = {
    *
    * Depth 0 = root sections, depth 1 = first-level children, etc.
    */
-  llmNamingMaxDepth: 2,
+  llmNamingMaxDepth: 4,
 
   /**
    * When generating a parent section title, child sections are weighted

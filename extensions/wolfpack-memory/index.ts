@@ -129,7 +129,8 @@ function renderStatusBar(status: MemoryStatus): string {
   // Cost
   const cost = `$${status.totalCostUsd.toFixed(3)}`;
 
-  return `\x1b[2m«\x1b[0m ${oActive}${status.observations}${oReset} ${oColor}${oBar}\x1b[0m ${cLabel} \x1b[2m|\x1b[0m ${pool} \x1b[2m|\x1b[0m ${cost}`;
+  const domLabel = (status as any).currentDomain ?? "";
+  return `\x1b[2m«\x1b[0m ${oActive}${status.observations}${oReset} ${oColor}${oBar}\x1b[0m ${cLabel} \x1b[2m|\x1b[0m ${pool} \x1b[2m|\x1b[0m ${cost}${domLabel ? ` \x1b[2m|\x1b[0m \x1b[36m${domLabel}\x1b[0m` : ""}`;
 }
 
 function renderBar(pct: number, width: number): string {
@@ -1158,6 +1159,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // inert (no writes to stray relative paths), but session+den memory run fully.
   const kbEnabled = !!(kbRoots.kbBase && kbRoots.opsRoot);
   const defaultDomain  = process.env.WOLFPACK_DOMAIN ?? "wolfpack";
+  let currentDomain = defaultDomain;
 
   // Durable home for crawl entities (plan \u2192 run \u2192 review \u2192 emit all live in one
   // dir). Defaults under the den so runs survive relaunches/reboots; /tmp is
@@ -1297,14 +1299,17 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       },
     });
 
-    orchestrator = createOrchestrator(engine, runtime, {
+    const orchConfig = {
       chunkTokens: 5000,
       consolidateAtPoolTokens: CONSOLIDATE_AT,
       poolTargetTokens: POOL_TARGET,
       observerConcurrency: 4,
       kbRoots: kbEnabled ? kbRoots : undefined,
-      defaultDomain,
-    });
+      defaultDomain: currentDomain,
+    };
+    orchestrator = createOrchestrator(engine, runtime, orchConfig);
+    // Keep reference so domain switches update the orchestrator
+    (orchestrator as any).__orchConfig = orchConfig;
   }
 
   /**
@@ -1366,7 +1371,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
         return;
       }
-      ctx.ui.setStatus("wolfpack-memory", renderStatusBar(status));
+      ctx.ui.setStatus("wolfpack-memory", renderStatusBar({ ...status, currentDomain } as any));
     } catch {
       // stale ctx (post-shutdown/replacement) — safe to ignore
     }
@@ -1746,6 +1751,56 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("wolf:domain", {
+    description: "Switch memory emission domain (/wolf:domain <name>). Pool must be empty — promote first if needed.",
+    handler: async (args: string, ctx: any) => {
+      const target = args.trim();
+      if (!target) {
+        // Show current domain and available domains
+        const available: string[] = [];
+        try {
+          const domainsRoot = path.join(kbRoots.kbBase, "domains");
+          if (fs.existsSync(domainsRoot)) {
+            available.push(...fs.readdirSync(domainsRoot, { withFileTypes: true })
+              .filter((d: any) => d.isDirectory())
+              .map((d: any) => d.name));
+          }
+        } catch { /* ignore */ }
+        const msg = [`Current domain: \x1b[36m${currentDomain}\x1b[0m`];
+        if (available.length) msg.push(`Available: ${available.join(", ")}`);
+        msg.push(`Usage: /wolf:domain <name>`);
+        if (ctx.hasUI) ctx.ui.notify(msg.join("\n"), "info");
+        return;
+      }
+
+      // Check pool is empty
+      if (orchestrator) {
+        const obs = orchestrator.getActiveObservations();
+        if (obs.length > 0) {
+          const tokens = obs.reduce((s: number, o: Observation) => s + o.tokenCount, 0);
+          if (ctx.hasUI) ctx.ui.notify(
+            `\x1b[33mCannot switch domain — pool has ${obs.length} observations (~${tokens} tokens).\n` +
+            `Run /wolf:promote first to flush observations to \x1b[36m${currentDomain}\x1b[33m.\x1b[0m`,
+            "error"
+          );
+          return;
+        }
+      }
+
+      // Validate domain exists
+      const domainDir = path.join(kbRoots.kbBase, "domains", target);
+      if (!fs.existsSync(domainDir)) {
+        if (ctx.hasUI) ctx.ui.notify(`Domain "${target}" not found in KB.`, "error");
+        return;
+      }
+
+      const prev = currentDomain;
+      currentDomain = target;
+      if (ctx.hasUI) ctx.ui.notify(`Domain switched: \x1b[36m${prev}\x1b[0m → \x1b[36m${currentDomain}\x1b[0m`, "info");
+      refreshStatus(ctx);
+    },
+  });
+
   pi.registerCommand("kb", {
     description:
       "Open the KB knowledge-graph in your browser (/kb [kb-root])",
@@ -1862,6 +1917,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         if (ctx.hasUI) ctx.ui.notify("🐺 memory not enabled", "error");
         return;
       }
+      // Sync current domain to orchestrator before promoting
+      const oc = (orchestrator as any).__orchConfig;
+      if (oc) oc.defaultDomain = currentDomain;
 
       // Step 1: Consolidate observations into session topics first
       const obs = orchestrator.getActiveObservations();
@@ -2807,7 +2865,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       const force = /\s(--force|--yes)\b/.test(` ${args ?? ""}`);
       const detail =
         `Re-emit ${wolfName}'s ENTIRE contribution set to the Librarian inbox:\n` +
-        `  \u2022 ${denTopics.length} den topic(s) \u2192 domain "${defaultDomain}"\n` +
+        `  \u2022 ${denTopics.length} den topic(s) \u2192 domain "${currentDomain}"\n` +
         `  \u2022 ${crawlRuns.length} completed crawl(s), ${crawlTopicTotal} topics:\n` +
         crawlRuns
           .map((e) => `      - ${e.domain} \u00b7 ${e.topics} topics \u00b7 ${e.source}`)
@@ -2842,7 +2900,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
             wolf: wolfName,
             denTopicId: t.id,
             change: "create",
-            domainHint: defaultDomain,
+            domainHint: currentDomain,
             summary: t.summary,
             body: t.body,
           });

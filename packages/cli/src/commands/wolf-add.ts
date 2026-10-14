@@ -25,6 +25,7 @@ import {
   defaultProfile,
   defaultExtensionKeys,
   needsTelegram,
+  extensionsForRuntime,
   writePiSettings,
   type WolfProfile,
 } from "../extensions.js";
@@ -33,6 +34,7 @@ const TELEGRAM_TOKEN_ENV = "TELEGRAM_BOT_TOKEN";
 
 interface AddWolfOpts {
   host?: string;
+  runtime?: string;
   model?: string;
   role?: string;
   specialty?: string;
@@ -63,10 +65,10 @@ interface ResolvedChoices {
   telegram?: TelegramChoice;
 }
 
-/** Decide profile, extensions, and Telegram config. PI only. */
+/** Decide profile, extensions, and Telegram config. */
 async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
   const interactive = !opts.yes && process.stdin.isTTY;
-  const runtime = "pi"; // Wolfpack only supports the PI runtime for now.
+  const runtime = opts.runtime === "pi-durable" ? "pi-durable" : "pi";
   const profile: WolfProfile =
     opts.profile === "assistant" || opts.profile === "worker"
       ? opts.profile
@@ -78,9 +80,10 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     extensions = opts.extensions;
   } else if (interactive) {
     const seed = defaultExtensionKeys(profile);
+    const available = extensionsForRuntime(runtime);
     extensions = await multiSelect<string>(
-      `Select extensions to attach (${profile} profile)`,
-      AVAILABLE_EXTENSIONS.map((e) => ({
+      `Select extensions (${runtime} runtime)`,
+      available.map((e) => ({
         label: `${e.label} — ${e.description}`,
         value: e.key,
         selected: seed.includes(e.key),

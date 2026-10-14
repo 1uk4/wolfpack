@@ -162,6 +162,30 @@ export async function wolfLaunch(
     );
   }
 
+  // Pi-durable wolves run the harness directly
+  if (wolf.runtime === "pi-durable") {
+    const harnessEntry = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "../../../harness/dist/bin/harness.js",
+    );
+    if (!fs.existsSync(harnessEntry)) {
+      console.error(c.red(`Harness not built. Run: pnpm build`));
+      process.exit(1);
+    }
+    console.log(c.dim(`Launching ${wolf.name} (pi-durable) in ${workDir}...`));
+    const child = spawn("node", [harnessEntry], {
+      cwd: workDir,
+      env: { ...env, WOLF_DEN: path.join(wolfDir, "den") },
+      stdio: "inherit",
+    });
+    child.on("error", (err) => {
+      console.error(c.red(`Failed to launch harness: ${err.message}`));
+      process.exit(1);
+    });
+    child.on("exit", (code) => process.exit(code ?? 0));
+    return;
+  }
+
   console.log(
     c.dim(`Launching as ${wolf.name} (${wolf.id}) in ${workDir}...`),
   );

@@ -66,7 +66,9 @@ export function buildTreeBottomUp(
   entries: EntryWithVector[],
   domain: string,
   domainCentroid: Vector,
-  config = SECTION_TREE
+  config = SECTION_TREE,
+  /** Entry metadata for abstraction scoring (entryId → { kind, maturity }) */
+  entryMeta?: Map<string, { kind?: string; maturity?: string }>
 ): BuildTreeResult {
   if (entries.length === 0) return { sections: [], assignments: new Map() };
   const assignments = new Map<string, SectionId>();
@@ -354,6 +356,64 @@ export function buildTreeBottomUp(
       created: today as any,
       updated: today as any,
     });
+  }
+
+  // Abstraction-aware root merge: clusters dominated by specific entries
+  // (incident, changelog, fact) should not be root sections — merge them
+  // into the nearest general cluster.
+  if (entryMeta && clusters.length > 1) {
+    function clusterAbstraction(cluster: Cluster): number {
+      let totalScore = 0;
+      for (const m of cluster.members) {
+        const meta = entryMeta!.get(m.entryId);
+        const kindScore = config.abstractionByKind[meta?.kind ?? ""] ?? config.defaultAbstraction;
+        const matMult = config.maturityMultiplier[meta?.maturity ?? ""] ?? 1.0;
+        totalScore += Math.min(1, kindScore * matMult);
+      }
+      return totalScore / cluster.members.length;
+    }
+
+    // A root cluster is "too specific" if its average abstraction score > 0.6
+    // (meaning it's dominated by incident/changelog/fact entries)
+    let merged = true;
+    while (merged) {
+      merged = false;
+      for (let i = clusters.length - 1; i >= 0; i--) {
+        const score = clusterAbstraction(clusters[i]);
+        if (score <= 0.6 || clusters.length <= 2) continue;
+        
+        // Find the nearest general cluster to absorb into
+        let bestIdx = -1;
+        let bestSim = -1;
+        for (let j = 0; j < clusters.length; j++) {
+          if (j === i) continue;
+          if (clusterAbstraction(clusters[j]) > 0.6) continue; // skip other specific clusters
+          const sim = cosine(clusters[i].centroid, clusters[j].centroid);
+          if (sim > bestSim) { bestSim = sim; bestIdx = j; }
+        }
+        
+        if (bestIdx >= 0) {
+          // Merge specific cluster into the general one
+          const target = clusters[bestIdx];
+          const source = clusters[i];
+          const totalWeight = target.weight + source.weight;
+          const mergedCentroid = new Array(target.centroid.length);
+          for (let k = 0; k < mergedCentroid.length; k++) {
+            mergedCentroid[k] = (target.centroid[k] * target.weight + source.centroid[k] * source.weight) / totalWeight;
+          }
+          clusters[bestIdx] = {
+            id: target.id,
+            centroid: normalize(mergedCentroid),
+            members: [...target.members, ...source.members],
+            children: [target, source],
+            weight: totalWeight,
+          };
+          clusters.splice(i, 1);
+          merged = true;
+          break;
+        }
+      }
+    }
   }
 
   for (const cluster of clusters) {

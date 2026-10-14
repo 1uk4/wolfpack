@@ -155,8 +155,21 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         vector: v.vector,
       }));
       
+      // Collect entry metadata for abstraction scoring
+      const entryMeta = new Map<string, { kind?: string; maturity?: string }>();
+      const entriesPath = join(domainsRoot, domain, "entries");
+      if (existsSync(entriesPath)) {
+        for (const f of readdirSync(entriesPath).filter((x) => x.endsWith(".md"))) {
+          const { fields } = parseFrontmatter(readFileSync(join(entriesPath, f), "utf-8"));
+          entryMeta.set(f.replace(/\.md$/, ""), {
+            kind: fields.kind ? String(fields.kind) : undefined,
+            maturity: fields.maturity ? String(fields.maturity) : undefined,
+          });
+        }
+      }
+      
       // Build the tree (returns sections + entry→section assignments)
-      const treeResult = buildTreeBottomUp(entries, domain, domainCentroid);
+      const treeResult = buildTreeBottomUp(entries, domain, domainCentroid, undefined, entryMeta);
       notify?.(`  built ${treeResult.sections.length} sections`);
       
       // Remove old sections for this domain

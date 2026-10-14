@@ -234,8 +234,12 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
           onProgress: (msg: string) => console.log(`[memory] ${msg}`),
         });
         console.log(`[memory] Consolidated: ${result.topicsCreated} created, ${result.topicsMerged} updated`);
+        if (telegram && (result.topicsCreated > 0 || result.topicsMerged > 0)) {
+          telegram.notify(`🧠 Auto-consolidated: ${result.topicsCreated} created, ${result.topicsMerged} updated, ${result.claimsSubmitted} emitted to KB`);
+        }
       } catch (err) {
         console.error("[memory] Timer consolidation failed:", err instanceof Error ? err.message : err);
+        if (telegram) telegram.notify(`❌ Consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }, intervalMs);
   }
@@ -274,6 +278,11 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         sharedState: telegramState,
       });
       await telegram.start();
+      
+      // Wire telegram notifications to background tasks
+      if (sweepManager) {
+        sweepManager.setOnComplete((msg) => telegram!.notify(msg));
+      }
     } else {
       console.warn(`[telegram] ${tokenEnv} not set, skipping Telegram`);
     }

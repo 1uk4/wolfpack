@@ -32,6 +32,8 @@ export interface TelegramClientConfig {
 export interface TelegramClient {
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** Send a notification to the owner (for background task completions) */
+  notify(message: string): Promise<void>;
 }
 
 const MAX_MESSAGE_LENGTH = 4096;
@@ -612,13 +614,20 @@ export async function createTelegramClient(
 
     async stop() {
       console.log("[telegram] Bot stopping...");
-      // Stop all active streams
       for (const [, state] of activeStreams) {
         if (state.flushTimer) clearTimeout(state.flushTimer);
         await state.stream.stop();
       }
       activeStreams.clear();
       await bot.stop();
+    },
+
+    async notify(message: string) {
+      try {
+        await bot.api.sendMessage(config.ownerId, message);
+      } catch (err) {
+        console.error("[telegram] notify failed:", err instanceof Error ? err.message : err);
+      }
     },
   };
 }

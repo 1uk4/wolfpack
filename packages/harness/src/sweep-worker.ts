@@ -45,9 +45,15 @@ export class SweepManager {
   private status: SweepStatus = { state: "idle" };
   private config: SweepWorkerConfig;
   private abortController: AbortController | null = null;
+  private onComplete?: (message: string) => void;
 
-  constructor(config: SweepWorkerConfig) {
+  constructor(config: SweepWorkerConfig, onComplete?: (message: string) => void) {
     this.config = config;
+    this.onComplete = onComplete;
+  }
+
+  setOnComplete(fn: (message: string) => void): void {
+    this.onComplete = fn;
   }
 
   getStatus(): SweepStatus {
@@ -141,6 +147,7 @@ export class SweepManager {
         };
         
         console.log(`[librarian] Dry run completed: ${inbox.length} items in inbox (no changes made)`);
+        this.onComplete?.(`📚 Dry run complete: ${inbox.length} items in inbox (no changes made)`);
         return;
       }
       
@@ -206,6 +213,7 @@ export class SweepManager {
       };
 
       console.log(`[librarian] Sweep completed: ${result.processed} processed, ${result.created} created, ${result.merged} merged`);
+      this.onComplete?.(`📚 Sweep complete: ${result.processed} processed, ${result.created} created, ${result.merged} merged${result.remaining > 0 ? `, ${result.remaining} remaining` : ""}`);
 
       // Post-sweep reorg: check if any touched sections need splitting
       if (result.processed > 0) {
@@ -219,6 +227,7 @@ export class SweepManager {
           });
           if (reorgResult.splits > 0 || reorgResult.merges > 0 || reorgResult.crystallized > 0) {
             console.log(`[librarian] Reorg: ${reorgResult.splits} splits, ${reorgResult.merges} merges, ${reorgResult.crystallized} crystallized`);
+            this.onComplete?.(`📐 Post-sweep reorg: ${reorgResult.splits} splits, ${reorgResult.merges} merges, ${reorgResult.crystallized} crystallized`);
           }
         } catch (reorgErr) {
           console.error("[librarian] Post-sweep reorg failed:", reorgErr instanceof Error ? reorgErr.message : reorgErr);
@@ -227,6 +236,7 @@ export class SweepManager {
 
     } catch (err) {
       console.error("[librarian] Sweep failed:", err instanceof Error ? err.message : err);
+      this.onComplete?.(`❌ Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       
       this.status = {
         state: "failed",
@@ -253,7 +263,7 @@ export function getSweepManager(): SweepManager | null {
   return sweepManager;
 }
 
-export function initSweepManager(config: SweepWorkerConfig): SweepManager {
-  sweepManager = new SweepManager(config);
+export function initSweepManager(config: SweepWorkerConfig, onComplete?: (message: string) => void): SweepManager {
+  sweepManager = new SweepManager(config, onComplete);
   return sweepManager;
 }

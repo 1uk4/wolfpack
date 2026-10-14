@@ -535,7 +535,7 @@ export function splitAsParentChild(
     parent: section.id,
     depth: section.depth + 1,
     label: `${section.label}-child` as any,
-    title: `${section.title} (split)`,
+    title: "",
     centroid: computeCentroid(childMembers.map((m) => m.vector)),
     memberCount: childMembers.length,
     childIds: [],

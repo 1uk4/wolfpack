@@ -455,6 +455,45 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
 
+    // Label any sections created by the post-split pass
+    for (const domain of result.domains) {
+      const eDir2 = join(domainsRoot, domain, "entries");
+      const postSplitDirty = sections.filter((s) => s.domain === domain && s.dirty && (!s.title || s.title.includes("(split)")));
+      for (const sec of postSplitDirty) {
+        const memberInfo2: SectionMember[] = [];
+        if (existsSync(eDir2)) {
+          for (const f of readdirSync(eDir2).filter((x) => x.endsWith(".md"))) {
+            const { fields } = parseFrontmatter(readFileSync(join(eDir2, f), "utf-8"));
+            if (String(fields.section ?? "") === String(sec.id)) {
+              memberInfo2.push({ title: String(fields.title ?? f.replace(/\.md$/, "")), summary: fields.summary ? String(fields.summary) : undefined });
+            }
+          }
+        }
+        if (memberInfo2.length === 0) {
+          for (const cid of sec.childIds) {
+            const child = sections.find((s) => s.id === cid);
+            if (child && child.title) memberInfo2.push({ title: child.title, summary: child.summary });
+          }
+        }
+        if (memberInfo2.length > 0) {
+          try {
+            const { SECTION_TREE: stc } = await import("@wolfpack/engine");
+            const mxd = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
+            sec.summary = await sectionSummary(engine, memberInfo2, { depth: sec.depth, maxDepth: mxd });
+            sec.title = await labelSection(engine, sec.summary, {
+              sampleTitles: memberInfo2.map((m) => m.title),
+              depth: sec.depth, maxDepth: mxd,
+            });
+            sec.dirty = false;
+            notify?.(`  post-split labeled: ${sec.id} \u2192 "${sec.title}"`);
+            result.labelsUpdated++;
+          } catch (e) {
+            notify?.(`  post-split label failed: ${sec.id}: ${e}`);
+          }
+        }
+      }
+    }
+
     // Persist
     writeSections(roots, sections);
     const freshLog = readLedger(roots);

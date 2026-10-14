@@ -669,7 +669,7 @@ function showPanel(node, body){
     
     if (childSections.length > 0) {
       md += "\\n\\n---\\n\\n";
-      let html = `<div style="margin-bottom:16px;"><div style="color:#7dcfff;font-weight:600;margin-bottom:8px;font-size:13px;">\u{1f4c2} Child Sections (${childSections.length})</div>`;
+      let html = `<div style="margin-bottom:16px;"><div style="color:#7dcfff;font-weight:600;margin-bottom:8px;font-size:13px;">📂 Child Sections (${childSections.length})</div>`;
       html += `<div class="child-links">`;
       for (const child of childSections) {
         const cm = child.meta || child._meta || {};
@@ -684,7 +684,7 @@ function showPanel(node, body){
     }
     
     if (childEntries.length > 0) {
-      let html = `<div style="margin-bottom:16px;"><div style="color:#9ece6a;font-weight:600;margin-bottom:8px;font-size:13px;">\u{1f4d1} Entries (${childEntries.length})</div>`;
+      let html = `<div style="margin-bottom:16px;"><div style="color:#9ece6a;font-weight:600;margin-bottom:8px;font-size:13px;">📑 Entries (${childEntries.length})</div>`;
       html += `<div class="child-links">`;
       for (const entry of childEntries) {
         const em = entry.meta || entry._meta || {};

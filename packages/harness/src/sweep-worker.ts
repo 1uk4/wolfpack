@@ -213,7 +213,9 @@ export class SweepManager {
       };
 
       console.log(`[librarian] Sweep completed: ${result.processed} processed, ${result.created} created, ${result.merged} merged`);
-      this.onComplete?.(`📚 Sweep complete: ${result.processed} processed, ${result.created} created, ${result.merged} merged${result.remaining > 0 ? `, ${result.remaining} remaining` : ""}`);
+      if (result.processed > 0) {
+        this.onComplete?.(`📚 Sweep complete: ${result.processed} processed, ${result.created} created, ${result.merged} merged${result.remaining > 0 ? `, ${result.remaining} remaining` : ""}`);
+      }
 
       // Post-sweep reorg: check if any touched sections need splitting
       if (result.processed > 0) {

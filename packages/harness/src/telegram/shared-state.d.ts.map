@@ -1,1 +1,0 @@
-{"version":3,"file":"shared-state.d.ts","sourceRoot":"","sources":["shared-state.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,OAAO,KAAK,EAAE,mBAAmB,EAAE,cAAc,EAAE,aAAa,EAAE,kBAAkB,EAAE,MAAM,qBAAqB,CAAC;AAElH,YAAY,EAAE,mBAAmB,EAAE,cAAc,EAAE,aAAa,EAAE,kBAAkB,EAAE,CAAC;AAGvF,eAAO,MAAM,eAAe,aAO1B,CAAC;AAEH;;;GAGG;AACH,wBAAgB,yBAAyB,IAAI,mBAAmB,CAQ/D"}

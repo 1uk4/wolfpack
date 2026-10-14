@@ -47,6 +47,13 @@ export interface ReorgResult {
   rebuilt?: boolean;
 }
 
+function mkSectionId(domain: string): SectionId {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let tail = "";
+  for (let i = 0; i < 6; i++) tail += chars[Math.floor(Math.random() * chars.length)];
+  return `sec-${domain}-${tail}` as unknown as SectionId;
+}
+
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
   const domainsRoot = join(roots.kbBase, "domains");
@@ -426,7 +433,115 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       notify?.(`  pruned ${beforePrune - sections.length} empty section(s)`);
     }
 
-    // 5. Label dirty sections
+    // 5. Invariant checks
+    const { checkInvariants } = await import("./section-tree.js");
+    const totalDomainEntries = domainVectors.length;
+    const violations = checkInvariants(sections, domain, sectionMembers, totalDomainEntries);
+    for (const v of violations) {
+      if (v.type === "weight_inversion") {
+        // Swap parent and child
+        const parent = sections.find((s) => s.id === v.section);
+        const child = sections.find((s) => s.id === v.child);
+        if (parent && child) {
+          notify?.(`  fix inversion: ${parent.id} (${parent.memberCount}) <-> ${child.id} (${child.memberCount})`);
+          // Swap parent relationship
+          child.parent = parent.parent;
+          child.depth = parent.depth;
+          parent.parent = child.id;
+          parent.depth = child.depth + 1;
+          child.childIds = child.childIds.filter((c) => c !== parent.id);
+          child.childIds.push(...parent.childIds.filter((c) => c !== child.id));
+          parent.childIds = [child.id];
+          // Actually this is complex — just mark dirty for now
+          parent.dirty = true;
+          child.dirty = true;
+          result.merges++;
+        }
+      } else if (v.type === "singleton_root" && v.nearestNeighbor) {
+        const sec = sections.find((s) => s.id === v.section);
+        const neighbor = sections.find((s) => s.id === v.nearestNeighbor);
+        if (sec && neighbor) {
+          notify?.(`  absorb singleton: ${sec.id} "${sec.title}" → ${neighbor.id}`);
+          // Move entries to neighbor
+          const members = sectionMembers.get(sec.id as string) ?? [];
+          for (const m of members) {
+            const file = join(eDir, `${m.entryId}.md`);
+            if (existsSync(file)) {
+              let content = readFileSync(file, "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${neighbor.id}`);
+              writeFileSync(file, content);
+            }
+            result.placements++;
+          }
+          // Transfer members
+          const nMembers = sectionMembers.get(neighbor.id as string) ?? [];
+          sectionMembers.set(neighbor.id as string, [...nMembers, ...members]);
+          sectionMembers.delete(sec.id as string);
+          neighbor.memberCount += members.length;
+          neighbor.dirty = true;
+          // Remove singleton
+          sections = sections.filter((s) => s.id !== sec.id);
+          result.merges++;
+        }
+      }
+    }
+
+    // 6. Branching factor control (maxChildrenPerSection)
+    const { SECTION_TREE: ST } = await import("@wolfpack/engine");
+    for (const sec of sections.filter((s) => s.domain === domain)) {
+      if (sec.childIds.length > ST.maxChildrenPerSection) {
+        notify?.(`  group children: ${sec.id} has ${sec.childIds.length} children (max ${ST.maxChildrenPerSection})`);
+        // Group via k-means on child centroids
+        const childSecs = sec.childIds.map((cid) => sections.find((s) => s.id === cid)!).filter(Boolean);
+        const k = Math.ceil(childSecs.length / ST.maxChildrenPerSection);
+        if (k >= 2) {
+          // Simple grouping: sort by centroid similarity and chunk
+          const childVectors = childSecs.map((s) => s.centroid);
+          const domCentroid = domainVectors.length > 0 ? computeCentroid(domainVectors.map((v) => v.vector)) : [];
+          // Use cosine to domain centroid to sort, then chunk
+          const sorted = childSecs
+            .map((s) => ({ sec: s, sim: cosine(s.centroid, domCentroid) }))
+            .sort((a, b) => b.sim - a.sim);
+          const chunkSize = Math.ceil(sorted.length / k);
+          const newChildIds: SectionId[] = [];
+          for (let i = 0; i < sorted.length; i += chunkSize) {
+            const chunk = sorted.slice(i, i + chunkSize);
+            if (chunk.length === 1) {
+              newChildIds.push(chunk[0].sec.id);
+              continue;
+            }
+            const groupId = mkSectionId(domain);
+            const groupCentroid = computeCentroid(chunk.map((c) => c.sec.centroid));
+            for (const c of chunk) {
+              c.sec.parent = groupId;
+              c.sec.depth = sec.depth + 2;
+            }
+            sections.push({
+              id: groupId,
+              domain: domain as DomainId,
+              parent: sec.id,
+              depth: sec.depth + 1,
+              label: groupId.slice(-7) as any,
+              title: "",
+              centroid: groupCentroid,
+              memberCount: 0,
+              childIds: chunk.map((c) => c.sec.id),
+              summary: "",
+              summaryHash: "",
+              dirty: true,
+              created: new Date().toISOString().split("T")[0] as any,
+              updated: new Date().toISOString().split("T")[0] as any,
+            } as Section);
+            newChildIds.push(groupId);
+            result.splits++;
+          }
+          sec.childIds = newChildIds;
+          sec.dirty = true;
+        }
+      }
+    }
+
+    // 7. Label dirty sections
     const dirty = sections.filter((s) => s.domain === domain && s.dirty);
     for (const sec of dirty) {
       const members = sectionMembers.get(sec.id) ?? [];

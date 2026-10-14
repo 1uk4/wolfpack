@@ -19,6 +19,8 @@ import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, cosine } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { routeByTree, type EntryVector } from "./route.js";
+import { placeEntry } from "./section-tree.js";
+import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
 import {
@@ -343,9 +345,22 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
 
       // Otherwise place a NEW entry by deterministic tree descent.
       if (!sectionId) {
-        const decision = routeByTree(vec, domain, sections, entryVectors);
-        if (decision.section !== "_unplaced") {
-          sectionId = decision.section;
+        // Build section members map for placeEntry
+        const sectionMembers = new Map<string, EWV[]>();
+        for (const ev of entryVectors) {
+          if (ev.domain !== domain) continue;
+          // Find which section this entry is in by checking frontmatter
+          const entryMd = readEntryMarkdown(roots, domain, ev.entryId);
+          const entrySec = entryMd ? String(parseFrontmatter(entryMd).fields.section ?? "") : "";
+          if (entrySec) {
+            if (!sectionMembers.has(entrySec)) sectionMembers.set(entrySec, []);
+            sectionMembers.get(entrySec)!.push({ entryId: ev.entryId, sectionId: entrySec as SectionId, vector: ev.vector });
+          }
+        }
+        const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain).map((e) => e.vector));
+        const decision = placeEntry(vec, {}, sections, domainCentroid, sectionMembers);
+        if (decision.sectionId !== "_unplaced") {
+          sectionId = decision.sectionId as SectionId;
           placement = { basis: "routed", fit: clampFit(decision.fit) };
         } else {
           // ── CLASSIFY FALLBACK (LLM section-pick, confined) ──────────────

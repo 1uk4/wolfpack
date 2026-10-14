@@ -289,29 +289,34 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         }
         
         // For parents with 0 direct members, collect entry titles from descendants
+        // Weight proportionally by child size so all branches contribute
         if (memberInfo.length === 0 && sec.childIds.length > 0) {
-          // Walk down to actual entries rather than using intermediate section titles
-          function collectDescendantEntries(sectionId: SectionId, maxItems: number): SectionMember[] {
+          function collectEntriesFromSection(sectionId: SectionId, max: number): SectionMember[] {
             const result: SectionMember[] = [];
-            // Direct entries
             if (existsSync(eDir)) {
               for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-                if (result.length >= maxItems) break;
+                if (result.length >= max) break;
                 const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
                 if (String(fields.section ?? "") === String(sectionId)) {
                   result.push({ title: String(fields.title ?? f.replace(/\.md$/, "")), summary: fields.summary ? String(fields.summary) : undefined });
                 }
               }
             }
-            // Recurse into children
-            const children = sections.filter((s) => s.parent === sectionId);
-            for (const child of children) {
-              if (result.length >= maxItems) break;
-              result.push(...collectDescendantEntries(child.id, maxItems - result.length));
+            for (const child of sections.filter((s) => s.parent === sectionId)) {
+              if (result.length >= max) break;
+              result.push(...collectEntriesFromSection(child.id, max - result.length));
             }
             return result;
           }
-          memberInfo.push(...collectDescendantEntries(sec.id, 8));
+          
+          // Weighted sampling: each child contributes proportional to its total entries
+          const childSecs = sec.childIds.map((cid) => sections.find((s) => s.id === cid)).filter(Boolean) as Section[];
+          const totalWeight = childSecs.reduce((sum, c) => sum + Math.max(c.memberCount, 1), 0);
+          const maxSamples = 10;
+          for (const child of childSecs) {
+            const quota = Math.max(1, Math.round((Math.max(child.memberCount, 1) / totalWeight) * maxSamples));
+            memberInfo.push(...collectEntriesFromSection(child.id, quota));
+          }
         }
         
         const { SECTION_TREE: stCfg } = await import("@wolfpack/engine");

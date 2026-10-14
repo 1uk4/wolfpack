@@ -38,3 +38,4 @@ export {
 } from "./domains.js";
 export { quarantine } from "./commit.js";
 export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";
+export { retireEntries, type RetireResult } from "./retire.js";

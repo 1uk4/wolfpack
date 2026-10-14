@@ -315,48 +315,49 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       ? domainSections.filter((s) => opts.touchedSections!.has(s.id))
       : domainSections;
 
-    // 1. Split overflow sections
+    // 1. Split overflow sections (parent+child, not siblings)
+    const { splitAsParentChild } = await import("./section-tree.js");
+    const domainCentroid = domainVectors.length > 0
+      ? computeCentroid(domainVectors.map((v) => v.vector))
+      : [];
     const toSplit = sectionsToCheck.filter(
       (s) => (sectionMembers.get(s.id)?.length ?? 0) > 8
     );
     for (const sec of toSplit) {
       const members = sectionMembers.get(sec.id) ?? [];
-      const splitResult = maybeSplit(sec, members);
+      const splitResult = splitAsParentChild(sec, members, domainCentroid, sections);
       if (!splitResult) {
         notify?.(`  skip split: ${sec.id} (no clean cut)`);
         continue;
       }
-      notify?.(`  split: ${sec.id} (${members.length} entries) → ${splitResult.children.length} children`);
+      notify?.(`  split: ${sec.id} (${members.length} entries) → parent(${splitResult.parentMembers.length}) + child(${splitResult.childMembers.length})`);
 
-      sec.childIds.push(...splitResult.children.map((c) => c.id));
+      // Parent keeps its ID, child is new
+      sec.childIds.push(splitResult.childSection.id);
+      sec.memberCount = splitResult.parentMembers.length;
       sec.dirty = true;
-      sections = [...sections, ...splitResult.children];
+      sections = [...sections, splitResult.childSection];
       result.splits++;
 
-      events.push(ev.sectionSplit(sec.id, sec.parent ?? "", splitResult.children.map((c) => c.id)));
-      for (const child of splitResult.children) {
-        events.push(ev.sectionCreated({
-          sectionId: child.id, domain, parent: sec.id, label: String(child.label),
-        }));
-      }
+      events.push(ev.sectionCreated({
+        sectionId: splitResult.childSection.id, domain, parent: sec.id, label: String(splitResult.childSection.label),
+      }));
 
+      // Update entry frontmatter for reassigned entries
       for (const [entryId, newSecId] of splitResult.reassignment) {
         const file = join(eDir, `${entryId}.md`);
         if (existsSync(file)) {
           let content = readFileSync(file, "utf-8");
           content = content.replace(/^section: .+$/m, `section: ${newSecId}`);
-          content = content.replace(/^(placement:)\n(  basis: ).+$/m, `$1\n$2routed`);
           writeFileSync(file, content);
         }
         events.push(ev.entryPlaced({ entryId, sectionId: newSecId, basis: "routed", fit: 1 }));
         result.placements++;
       }
 
-      sectionMembers.delete(sec.id);
-      for (const child of splitResult.children) {
-        const childMembers = members.filter((m) => splitResult.reassignment.get(m.entryId) === child.id);
-        sectionMembers.set(child.id, childMembers.map((m) => ({ ...m, sectionId: child.id })));
-      }
+      // Update sectionMembers map
+      sectionMembers.set(sec.id, splitResult.parentMembers.map((m) => ({ ...m, sectionId: sec.id })));
+      sectionMembers.set(splitResult.childSection.id, splitResult.childMembers.map((m) => ({ ...m, sectionId: splitResult.childSection.id })));
     }
 
     // 2. Merge underfull sections

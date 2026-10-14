@@ -154,20 +154,59 @@ export function buildTreeBottomUp(
     return result;
   }
 
-  for (const rootCluster of clusters) {
-    const rootId = mkSectionId(domain as DomainId);
+  // Force-split oversized leaf clusters using k-means
+  function ensureSplitThreshold(leafClusters: Cluster[]): Cluster[] {
+    const result: Cluster[] = [];
+    for (const cluster of leafClusters) {
+      if (cluster.weight <= config.splitThreshold) {
+        result.push(cluster);
+        continue;
+      }
+      // Split via k-means into 2
+      const vectors = cluster.members.map((m) => m.vector);
+      const { assignment, clusters: centroids } = kMeans2(vectors);
+      const groupA: EntryWithVector[] = [];
+      const groupB: EntryWithVector[] = [];
+      for (let i = 0; i < cluster.members.length; i++) {
+        (assignment[i] === 0 ? groupA : groupB).push(cluster.members[i]);
+      }
+      // Recurse in case sub-clusters are still too large
+      const subA: Cluster = {
+        id: `split-a-${cluster.id}`,
+        centroid: centroids[0],
+        members: groupA,
+        children: [],
+        weight: groupA.length,
+      };
+      const subB: Cluster = {
+        id: `split-b-${cluster.id}`,
+        centroid: centroids[1],
+        members: groupB,
+        children: [],
+        weight: groupB.length,
+      };
+      result.push(...ensureSplitThreshold([subA, subB]));
+    }
+    return result;
+  }
 
-    if (rootCluster.weight <= config.splitThreshold) {
-      // Small enough — single flat section
+  function buildSection(
+    cluster: Cluster,
+    parentId: SectionId | null,
+    depth: number,
+  ): void {
+    const sectionId = mkSectionId(domain as DomainId);
+
+    if (cluster.weight <= config.splitThreshold) {
       sections.push({
-        id: rootId,
+        id: sectionId,
         domain: domain as unknown as DomainId,
-        parent: null,
-        depth: 0,
-        label: rootId.slice(-7) as any,
+        parent: parentId,
+        depth,
+        label: sectionId.slice(-7) as any,
         title: "",
-        centroid: rootCluster.centroid,
-        memberCount: rootCluster.weight,
+        centroid: cluster.centroid,
+        memberCount: cluster.weight,
         childIds: [],
         summary: "",
         summaryHash: "",
@@ -175,48 +214,33 @@ export function buildTreeBottomUp(
         created: today as any,
         updated: today as any,
       });
-    } else {
-      // Large cluster — split into sub-sections
-      const subClusters = collectLeafClusters(rootCluster, config.splitThreshold);
-      const childIds: SectionId[] = [];
-      let directMembers = 0;
+      return;
+    }
 
-      for (const sub of subClusters) {
-        if (sub.weight < 2) {
-          // Too small for its own section — stays as direct member of root
-          directMembers += sub.weight;
-          continue;
-        }
-        const childId = mkSectionId(domain as DomainId);
-        childIds.push(childId);
-        sections.push({
-          id: childId,
-          domain: domain as unknown as DomainId,
-          parent: rootId,
-          depth: 1,
-          label: childId.slice(-7) as any,
-          title: "",
-          centroid: sub.centroid,
-          memberCount: sub.weight,
-          childIds: [],
-          summary: "",
-          summaryHash: "",
-          dirty: true,
-          created: today as any,
-          updated: today as any,
-        });
+    // Large cluster: collect leaf sub-clusters from merge tree, then force-split
+    let subClusters = collectLeafClusters(cluster, config.splitThreshold);
+    subClusters = ensureSplitThreshold(subClusters);
+
+    const childIds: SectionId[] = [];
+    let directMembers = 0;
+
+    for (const sub of subClusters) {
+      if (sub.weight < 2) {
+        directMembers += sub.weight;
+        continue;
       }
-
+      const childId = mkSectionId(domain as DomainId);
+      childIds.push(childId);
       sections.push({
-        id: rootId,
+        id: childId,
         domain: domain as unknown as DomainId,
-        parent: null,
-        depth: 0,
-        label: rootId.slice(-7) as any,
+        parent: sectionId,
+        depth: depth + 1,
+        label: childId.slice(-7) as any,
         title: "",
-        centroid: rootCluster.centroid,
-        memberCount: directMembers,
-        childIds,
+        centroid: sub.centroid,
+        memberCount: sub.weight,
+        childIds: [],
         summary: "",
         summaryHash: "",
         dirty: true,
@@ -224,6 +248,27 @@ export function buildTreeBottomUp(
         updated: today as any,
       });
     }
+
+    sections.push({
+      id: sectionId,
+      domain: domain as unknown as DomainId,
+      parent: parentId,
+      depth,
+      label: sectionId.slice(-7) as any,
+      title: "",
+      centroid: cluster.centroid,
+      memberCount: directMembers,
+      childIds,
+      summary: "",
+      summaryHash: "",
+      dirty: true,
+      created: today as any,
+      updated: today as any,
+    });
+  }
+
+  for (const cluster of clusters) {
+    buildSection(cluster, null, 0);
   }
 
   return sections;

@@ -88,20 +88,29 @@ export function renderKbAccess(
         }
       } catch { /* no entries dir */ }
 
-      // Get section titles from digest
-      let sections: string[] = [];
+      // Build section tree from digest for wolf navigation
+      let sectionTree = "";
       try {
         const digestPath = join(domainDir, "_digest.json");
         if (existsSync(digestPath)) {
           const digest = JSON.parse(readFileSync(digestPath, "utf-8"));
-          sections = (digest.sections ?? [])
-            .map((s: { title?: string }) => (s.title ?? "").replace(/^#+\s*/, "").trim())
-            .filter(Boolean)
-            .slice(0, maxSections);
+          function walkSections(secs: Array<{ title?: string; children?: unknown[] }>, depth: number): string {
+            let result = "";
+            for (const s of secs) {
+              const title = (s.title ?? "").replace(/^#+\s*/, "").trim();
+              if (!title) continue;
+              result += "\n" + "  ".repeat(depth + 1) + "- " + title;
+              if (s.children && Array.isArray(s.children)) {
+                result += walkSections(s.children as typeof secs, depth + 1);
+              }
+            }
+            return result;
+          }
+          sectionTree = walkSections(digest.sections ?? [], 0);
         }
       } catch { /* no digest */ }
 
-      const sectionStr = sections.length > 0 ? `: ${sections.join("; ")}` : "";
+      const sectionStr = sectionTree ? ":" + sectionTree : "";
       return `- ${name} (${entries} entries)${sectionStr}`;
     });
 

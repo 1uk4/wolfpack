@@ -218,6 +218,7 @@ export function crystallizeUnplaced(
  */
 export function shouldMerge(section: Section): SectionId | null {
   if (section.parent === null) return null; // can't merge root
+  if (section.childIds.length > 0) return null; // grouping node with children — not empty
   if (section.memberCount >= HIERARCHY.mergeBelow) return null;
   return section.parent;
 }

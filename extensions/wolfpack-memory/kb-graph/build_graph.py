@@ -670,11 +670,12 @@ function showPanel(node, body){
         const cm = child.meta || child._meta || {};
         const totalItems = currentDS.edges.filter(e => e.from === child.id).length;
         const hasChildren = currentDS.edges.some(e => e.from === child.id && currentDS.nodes.some(n => n.id === e.to && (n.group === "section" || n.group === "entry")));
+        const hasSectionChildren = currentDS.edges.some(e => e.from === child.id && currentDS.nodes.some(n => n.id === e.to && n.group === "section"));
         const uid = "tree-" + child.id.replace(/[^a-zA-Z0-9]/g, "");
         
         html += `<div style="margin-left:${depth * 16}px;margin-bottom:2px;">`;
         if (hasChildren) {
-          html += `<div class="tree-toggle" data-target="${uid}" style="display:flex;align-items:center;cursor:pointer;padding:5px 8px;background:#1a1f2e;border-radius:4px;border-left:3px solid #7dcfff;">`;
+          html += `<div class="tree-toggle" data-target="${uid}" data-has-sections="${hasSectionChildren}" style="display:flex;align-items:center;cursor:pointer;padding:5px 8px;background:#1a1f2e;border-radius:4px;border-left:3px solid #7dcfff;">`;
           html += `<span class="tree-arrow" style="margin-right:6px;font-size:10px;color:#7dcfff;transition:transform 0.15s;">\u25b6</span>`;
           html += `<span class="child-link" data-node-id="${child.id}" style="flex:1;cursor:pointer;">${cm.title || child.label || ""}</span>`;
           html += `<span style="padding:2px 6px;font-size:10px;background:#363d52;border-radius:4px;color:#7aa2f7;margin-left:6px;">${totalItems}</span>`;
@@ -812,8 +813,13 @@ function showPanel(node, body){
   // Expand/Collapse All buttons (sections only, not tasks)
   panel.querySelectorAll(".tree-expand-all").forEach(btn => {
     btn.addEventListener("click", () => {
-      panel.querySelectorAll(".tree-children").forEach(el => { el.style.display = "block"; });
-      panel.querySelectorAll(".tree-arrow").forEach(el => { el.style.transform = "rotate(90deg)"; });
+      panel.querySelectorAll('.tree-toggle[data-has-sections="true"]').forEach(el => {
+        const targetId = el.getAttribute("data-target");
+        const children = document.getElementById(targetId);
+        const arrow = el.querySelector(".tree-arrow");
+        if (children) children.style.display = "block";
+        if (arrow) arrow.style.transform = "rotate(90deg)";
+      });
     });
   });
   panel.querySelectorAll(".tree-collapse-all").forEach(btn => {

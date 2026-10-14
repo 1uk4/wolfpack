@@ -137,53 +137,92 @@ export function buildTreeBottomUp(
   const sectionIds = new Map<string, SectionId>();
   const today = new Date().toISOString().split("T")[0];
 
-  function traverse(cluster: Cluster, parent: SectionId | null, depth: number): SectionId {
-    // Leaf clusters (entries) don't become sections
-    if (cluster.children.length === 0) {
-      // This shouldn't happen in the tree structure, but handle gracefully
-      throw new Error("Leaf cluster in tree conversion");
+  // Convert clusters to sections.
+  // Each root cluster becomes a root section.
+  // If a root cluster is large (> splitThreshold), find its natural
+  // sub-clusters by collecting leaf-level groupings from the merge tree.
+  function collectLeafClusters(cluster: Cluster, minSize: number): Cluster[] {
+    // If small enough, this is a leaf section
+    if (cluster.weight <= minSize || cluster.children.length === 0) {
+      return [cluster];
     }
-
-    // Generate section ID
-    const sectionId = mkSectionId(domain as DomainId);
-    sectionIds.set(cluster.id, sectionId);
-
-    // Recursively process children
-    const childIds: SectionId[] = [];
+    // Otherwise, recurse into children
+    const result: Cluster[] = [];
     for (const child of cluster.children) {
-      if (child.children.length > 0) {
-        // Internal node → becomes a section
-        childIds.push(traverse(child, sectionId, depth + 1));
-      }
-      // Leaf nodes (entries) don't create sections
+      result.push(...collectLeafClusters(child, minSize));
     }
-
-    // Create section
-    const section: Section = {
-      id: sectionId,
-      domain: domain as unknown as DomainId,
-      parent,
-      depth,
-      label: sectionId.slice(-7) as any,
-      title: "", // placeholder, named later by LLM
-      centroid: cluster.centroid,
-      memberCount: cluster.weight,
-      childIds,
-      summary: "",
-      summaryHash: "",
-      dirty: true,
-      created: today as any,
-      updated: today as any,
-    };
-
-    sections.push(section);
-    return sectionId;
+    return result;
   }
 
-  // Process all root clusters
-  for (const cluster of clusters) {
-    if (cluster.children.length > 0) {
-      traverse(cluster, null, 0);
+  for (const rootCluster of clusters) {
+    const rootId = mkSectionId(domain as DomainId);
+
+    if (rootCluster.weight <= config.splitThreshold) {
+      // Small enough — single flat section
+      sections.push({
+        id: rootId,
+        domain: domain as unknown as DomainId,
+        parent: null,
+        depth: 0,
+        label: rootId.slice(-7) as any,
+        title: "",
+        centroid: rootCluster.centroid,
+        memberCount: rootCluster.weight,
+        childIds: [],
+        summary: "",
+        summaryHash: "",
+        dirty: true,
+        created: today as any,
+        updated: today as any,
+      });
+    } else {
+      // Large cluster — split into sub-sections
+      const subClusters = collectLeafClusters(rootCluster, config.splitThreshold);
+      const childIds: SectionId[] = [];
+      let directMembers = 0;
+
+      for (const sub of subClusters) {
+        if (sub.weight < 2) {
+          // Too small for its own section — stays as direct member of root
+          directMembers += sub.weight;
+          continue;
+        }
+        const childId = mkSectionId(domain as DomainId);
+        childIds.push(childId);
+        sections.push({
+          id: childId,
+          domain: domain as unknown as DomainId,
+          parent: rootId,
+          depth: 1,
+          label: childId.slice(-7) as any,
+          title: "",
+          centroid: sub.centroid,
+          memberCount: sub.weight,
+          childIds: [],
+          summary: "",
+          summaryHash: "",
+          dirty: true,
+          created: today as any,
+          updated: today as any,
+        });
+      }
+
+      sections.push({
+        id: rootId,
+        domain: domain as unknown as DomainId,
+        parent: null,
+        depth: 0,
+        label: rootId.slice(-7) as any,
+        title: "",
+        centroid: rootCluster.centroid,
+        memberCount: directMembers,
+        childIds,
+        summary: "",
+        summaryHash: "",
+        dirty: true,
+        created: today as any,
+        updated: today as any,
+      });
     }
   }
 

@@ -195,8 +195,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     // Label dirty sections via LLM
     for (const domain of result.domains) {
       const eDir = join(domainsRoot, domain, "entries");
-      const dirtySections = sections.filter((s) => s.domain === domain && s.dirty);
-      notify?.(`  labeling ${dirtySections.length} sections...`);
+      // Label bottom-up: deepest first so children have titles before parents
+      const dirtySections = sections
+        .filter((s) => s.domain === domain && s.dirty)
+        .sort((a, b) => b.depth - a.depth);
+      notify?.(`  labeling ${dirtySections.length} sections (depth ${Math.max(...dirtySections.map(s => s.depth))} → 0)...`);
       
       for (const sec of dirtySections) {
         // Get member info (direct members or children's titles for parents)
@@ -215,13 +218,15 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           }
         }
         
-        // For parents, use children's titles weighted by entry count
+        // For parents, use ONLY direct children's titles (not grandchildren)
         if (memberInfo.length === 0 && sec.childIds.length > 0) {
           const childSections = sections.filter((s) => sec.childIds.includes(s.id));
           for (const child of childSections) {
-            if (child.title && child.title !== child.id) {
-              memberInfo.push({ title: child.title, summary: child.summary });
-            }
+            // Only use child title if it's been properly labeled (not a raw ID)
+            const title = (child.title && child.title.length < 100 && child.title !== child.id)
+              ? child.title
+              : `${child.memberCount} entries`;
+            memberInfo.push({ title, summary: child.summary || undefined });
           }
         }
         
@@ -245,8 +250,12 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             notify?.(`  label failed: ${sec.id}: ${e}`);
           }
         } else if (memberInfo.length > 0) {
-          // Auto-title from member titles for deep sections
-          sec.title = memberInfo.slice(0, 3).map((m) => m.title.split(":")[0].trim()).join(", ");
+          // Auto-title: short summary from first 3 member titles
+          const shortTitles = memberInfo.slice(0, 3).map((m) => {
+            const t = m.title.split(":")[0].split("—")[0].split("–")[0].trim();
+            return t.length > 40 ? t.slice(0, 37) + "..." : t;
+          });
+          sec.title = shortTitles.join(", ");
           sec.dirty = false;
           notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
           result.labelsUpdated++;

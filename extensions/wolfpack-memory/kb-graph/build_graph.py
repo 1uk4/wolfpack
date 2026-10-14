@@ -707,7 +707,7 @@ function showPanel(node, body){
     const treeHtml = buildSectionTree(node.id, 0);
     if (treeHtml) {
       md += "\\n\\n---\\n\\n";
-      md += `<div style="margin-top:8px;">${treeHtml}</div>`;
+      md += `<div style="margin-top:8px;"><div style="margin-bottom:8px;"><button class="tree-expand-all" style="padding:4px 12px;font-size:11px;background:#363d52;color:#7dcfff;border:1px solid #4a5577;border-radius:4px;cursor:pointer;margin-right:6px;">Expand All</button><button class="tree-collapse-all" style="padding:4px 12px;font-size:11px;background:#363d52;color:#7dcfff;border:1px solid #4a5577;border-radius:4px;cursor:pointer;">Collapse All</button></div>${treeHtml}</div>`;
     }
   }
   else if(m.type==="Work"){
@@ -806,6 +806,20 @@ function showPanel(node, body){
         children.style.display = isOpen ? "none" : "block";
         if (arrow) arrow.style.transform = isOpen ? "" : "rotate(90deg)";
       }
+    });
+  });
+
+  // Expand/Collapse All buttons (sections only, not tasks)
+  panel.querySelectorAll(".tree-expand-all").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelectorAll(".tree-children").forEach(el => { el.style.display = "block"; });
+      panel.querySelectorAll(".tree-arrow").forEach(el => { el.style.transform = "rotate(90deg)"; });
+    });
+  });
+  panel.querySelectorAll(".tree-collapse-all").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelectorAll(".tree-children").forEach(el => { el.style.display = "none"; });
+      panel.querySelectorAll(".tree-arrow").forEach(el => { el.style.transform = ""; });
     });
   });
 

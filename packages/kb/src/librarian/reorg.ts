@@ -288,19 +288,34 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           }
         }
         
-        // For parents, use ONLY direct children's titles (not grandchildren)
+        // For parents with 0 direct members, collect entry titles from descendants
         if (memberInfo.length === 0 && sec.childIds.length > 0) {
-          const childSections = sections.filter((s) => sec.childIds.includes(s.id));
-          for (const child of childSections) {
-            // Only use child title if it's been properly labeled (not a raw ID)
-            const title = (child.title && child.title.length < 100 && child.title !== child.id)
-              ? child.title
-              : `${child.memberCount} entries`;
-            memberInfo.push({ title, summary: child.summary || undefined });
+          // Walk down to actual entries rather than using intermediate section titles
+          function collectDescendantEntries(sectionId: SectionId, maxItems: number): SectionMember[] {
+            const result: SectionMember[] = [];
+            // Direct entries
+            if (existsSync(eDir)) {
+              for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+                if (result.length >= maxItems) break;
+                const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+                if (String(fields.section ?? "") === String(sectionId)) {
+                  result.push({ title: String(fields.title ?? f.replace(/\.md$/, "")), summary: fields.summary ? String(fields.summary) : undefined });
+                }
+              }
+            }
+            // Recurse into children
+            const children = sections.filter((s) => s.parent === sectionId);
+            for (const child of children) {
+              if (result.length >= maxItems) break;
+              result.push(...collectDescendantEntries(child.id, maxItems - result.length));
+            }
+            return result;
           }
+          memberInfo.push(...collectDescendantEntries(sec.id, 8));
         }
         
-        if (memberInfo.length > 0 && sec.depth <= 2) {
+        const { SECTION_TREE: stCfg } = await import("@wolfpack/engine");
+        if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
           try {
             sec.summary = await sectionSummary(engine, memberInfo);
             const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
@@ -632,12 +647,26 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           });
         }
       }
-      // For parent sections with no direct members, use children's titles
+      // For parent sections with no direct members, collect descendant entry titles
       if (memberInfo.length === 0 && sec.childIds.length > 0) {
-        const childSections = sections.filter((s) => sec.childIds.includes(s.id));
-        for (const child of childSections) {
-          memberInfo.push({ title: child.title, summary: child.summary });
+        function collectFromChildren(parentId: SectionId, max: number): SectionMember[] {
+          const result: SectionMember[] = [];
+          const childMembers = sectionMembers.get(parentId as string) ?? [];
+          for (const m of childMembers) {
+            if (result.length >= max) break;
+            const file = join(eDir, `${m.entryId}.md`);
+            if (existsSync(file)) {
+              const { fields } = parseFrontmatter(readFileSync(file, "utf-8"));
+              result.push({ title: String(fields.title ?? m.entryId), summary: fields.summary ? String(fields.summary) : undefined });
+            }
+          }
+          for (const cid of sections.filter((s) => s.parent === parentId).map((s) => s.id)) {
+            if (result.length >= max) break;
+            result.push(...collectFromChildren(cid, max - result.length));
+          }
+          return result;
         }
+        memberInfo.push(...collectFromChildren(sec.id, 8));
       }
       if (memberInfo.length > 0) {
         try {

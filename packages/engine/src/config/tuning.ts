@@ -72,6 +72,218 @@ export const HIERARCHY = {
 } as const;
 
 /**
+ * SECTION TREE ALGORITHM
+ *
+ * Controls how the knowledge base section hierarchy is built, maintained, and
+ * rebalanced. The tree serves as a navigable taxonomy: entries are leaves,
+ * sections are internal nodes, and the root is the domain itself.
+ *
+ * The algorithm has two modes:
+ *
+ * 1. FULL REBUILD (agglomerative bottom-up)
+ *    Triggered manually via `kb_reorg --rebuild` or when drift exceeds threshold.
+ *    Starts with each entry as its own cluster, merges the most similar pair
+ *    repeatedly until target root count is reached. The merge history becomes
+ *    the tree hierarchy — early merges are leaf sections, late merges are roots.
+ *    Produces weight-correct trees (parents always heavier than children).
+ *
+ * 2. INCREMENTAL PLACEMENT (recursive descent + split)
+ *    Runs every sweep when new entries arrive. Descends the tree from root,
+ *    choosing the child with highest centroid similarity at each level. Stops
+ *    when the entry's abstraction level matches its siblings. If a section
+ *    overflows, splits into parent (larger/more general) + child (smaller/
+ *    more specific) rather than two siblings.
+ *
+ * INVARIANTS checked after every mutation:
+ *   - Weight: total_entries(parent) >= total_entries(child)
+ *   - Singleton roots: no root section below minRootRatio of domain entries
+ *   - Cohesion: intra-section similarity above cohesion threshold
+ *
+ * SECTION NAMING:
+ *   - Depth 0-2: LLM-generated, weighted by child entry count
+ *   - Depth 3+: auto-generated from member entry titles (no LLM cost)
+ *   - Parent titles are weighted generalizations — a 50-entry child
+ *     contributes 50x more to the parent's name than a 1-entry child
+ */
+export const SECTION_TREE = {
+
+  // ── Placement: recursive descent ──────────────────────────────────────
+
+  /**
+   * Abstraction scores by entry kind.
+   * Controls how deep an entry is placed. Lower = stays shallow (general),
+   * higher = descends deep (specific). The score is compared against
+   * normalized depth (node.depth / tree.maxDepth).
+   *
+   * Example: an `architecture` entry (0.15) stops at the top 15% of the tree.
+   * A `fact` entry (0.9) descends to the bottom 10%.
+   */
+  abstractionByKind: {
+    architecture: 0.15,
+    overview: 0.20,
+    reference: 0.25,
+    decision: 0.40,
+    process: 0.50,
+    product: 0.50,
+    policy: 0.55,
+    changelog: 0.70,
+    incident: 0.80,
+    fact: 0.90,
+  } as Record<string, number>,
+
+  /**
+   * Default abstraction score when entry kind is not in the map.
+   * 0.5 = middle of the tree.
+   */
+  defaultAbstraction: 0.50,
+
+  /**
+   * Maturity adjustment. Multiplied against abstraction score.
+   * Established entries get placed with more confidence (score unchanged).
+   * Stubs are pushed slightly deeper (higher score = deeper) to avoid
+   * polluting shallow sections with incomplete knowledge.
+   */
+  maturityMultiplier: {
+    established: 1.0,
+    forming: 1.0,
+    stub: 1.15,
+  } as Record<string, number>,
+
+  // ── New section creation (outlier detection) ──────────────────────────
+
+  /**
+   * Minimum cosine similarity to any existing root section centroid.
+   * Below this = entry is an outlier that doesn't fit anywhere.
+   * Outliers accumulate in the unplaced pool until they can crystallize.
+   *
+   * Scales with domain maturity: as sections become denser, this threshold
+   * rises because the domain's topics are well-covered.
+   */
+  isolationThreshold: 0.65,
+
+  /**
+   * Minimum entries in the unplaced pool before attempting crystallization.
+   * Higher = harder to create new sections (more evidence needed).
+   */
+  crystallizeMinEntries: 4,
+
+  /**
+   * Minimum pairwise cosine similarity within the unplaced cluster
+   * for it to qualify as a new section. Must be cohesive, not just
+   * "a pile of things that don't fit elsewhere."
+   */
+  crystallizeCohesion: 0.80,
+
+  // ── Splitting (section overflow) ──────────────────────────────────────
+
+  /**
+   * When a section exceeds this many entries, split into parent + child.
+   * The larger cluster stays as parent, smaller becomes child.
+   * (Same as HIERARCHY.splitAt but used by the new algorithm.)
+   */
+  splitThreshold: 8,
+
+  /**
+   * When splitting, how to choose which cluster becomes the parent:
+   * - "domain_centrality": cluster whose centroid is closer to the domain
+   *   centroid becomes parent (more general = parent). Preferred.
+   * - "size": larger cluster becomes parent. Simpler fallback.
+   */
+  splitParentStrategy: "domain_centrality" as "domain_centrality" | "size",
+
+  // ── Singleton absorption ──────────────────────────────────────────────
+
+  /**
+   * Root sections with fewer than this fraction of total domain entries
+   * are absorbed into their nearest centroid neighbor.
+   *
+   * At 60 entries: 0.05 * 60 = 3 entry minimum per root section.
+   * At 600 entries: 0.05 * 600 = 30 entry minimum.
+   * Scales naturally with domain growth.
+   */
+  minRootRatio: 0.05,
+
+  // ── Promotion ─────────────────────────────────────────────────────────
+
+  /**
+   * An entry is a promotion candidate when its cosine similarity to its
+   * PARENT section's centroid exceeds its similarity to its CURRENT
+   * section's centroid by this margin.
+   *
+   * High margin = conservative (rarely promotes).
+   * Low margin = aggressive (entries bubble up easily).
+   */
+  promotionMargin: 0.10,
+
+  /**
+   * Minimum number of entries that must promote together.
+   * Single-entry promotion is noisy; group promotion (community split)
+   * is more meaningful.
+   */
+  promotionMinGroup: 2,
+
+  // ── Centroid recalculation (drift detection) ──────────────────────────
+
+  /**
+   * Recalculate all section centroids when the fraction of entries that
+   * have been added, retired, or moved since last recalculation exceeds
+   * this threshold.
+   *
+   * At 60 entries: triggers after 6 mutations.
+   * At 600 entries: triggers after 60 mutations.
+   * Prevents stale centroids from accumulating placement errors.
+   */
+  driftRecalcThreshold: 0.10,
+
+  // ── Naming ────────────────────────────────────────────────────────────
+
+  /**
+   * Maximum tree depth at which sections get LLM-generated titles.
+   * Sections deeper than this get auto-titles from member entry titles.
+   * Controls LLM cost during rebuilds.
+   *
+   * Depth 0 = root sections, depth 1 = first-level children, etc.
+   */
+  llmNamingMaxDepth: 2,
+
+  /**
+   * When generating a parent section title, child sections are weighted
+   * by their entry count raised to this power.
+   *
+   * 1.0 = linear weighting (7-entry child has 7x influence over 1-entry child)
+   * 0.5 = sqrt weighting (softer, 7-entry child has 2.6x influence)
+   * 0.0 = equal weighting (all children contribute equally, current behavior)
+   */
+  titleWeightExponent: 1.0,
+
+  // ── Embedding model health ────────────────────────────────────────────
+
+  /**
+   * Minimum ratio of mean intra-section similarity to mean inter-section
+   * similarity. Below this, the embedding model isn't capturing domain
+   * distinctions well enough and should be upgraded.
+   *
+   * Above 1.3 = good separation.
+   * 1.1 - 1.3 = marginal.
+   * Below 1.1 = model upgrade recommended.
+   */
+  embeddingHealthMinRatio: 1.3,
+
+  // ── Full rebuild ──────────────────────────────────────────────────────
+
+  /**
+   * Target number of root sections as a fraction of sqrt(total_entries).
+   * Agglomerative merge stops when this many clusters remain.
+   *
+   * At 60 entries: sqrt(60) * 0.8 ≈ 6 root sections.
+   * At 600 entries: sqrt(600) * 0.8 ≈ 20 root sections.
+   * At 5000 entries: sqrt(5000) * 0.8 ≈ 57 root sections.
+   */
+  rootCountFactor: 0.8,
+
+} as const;
+
+/**
  * Context digest (DESIGN — see kb/shared/schemas/digest.ts). How much of the
  * pack's existing knowledge Dewey briefs a wolf with at consolidation time.
  * Keep lean: summaries, not bodies. Selection is title/keyword match wolf-side

@@ -395,12 +395,52 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           if (members.length <= 8) continue;
           const sr = splitFn(sec, members, domCentroid, sections);
           if (!sr) continue;
-          notify?.(`  post-split: ${sec.id} (${members.length}) -> parent(${sr.parentMembers.length}) + child(${sr.childMembers.length})`);
-          sec.childIds.push(sr.childSection.id);
-          sec.memberCount = sr.parentMembers.length;
+          
+          // Create TWO children — parent becomes pure grouping node
+          const childAId = mkSectionId(domain);
+          const childBId = sr.childSection.id;
+          
+          notify?.(`  post-split: ${sec.id} (${members.length}) -> ${childAId}(${sr.parentMembers.length}) + ${childBId}(${sr.childMembers.length})`);
+          
+          // Child A: the entries that were "parent" in splitAsParentChild
+          const centroidA = computeCentroid(sr.parentMembers.map((m) => m.vector));
+          sections.push({
+            id: childAId,
+            domain: domain as DomainId,
+            parent: sec.id,
+            depth: sec.depth + 1,
+            label: childAId.slice(-7) as any,
+            title: "",
+            centroid: centroidA,
+            memberCount: sr.parentMembers.length,
+            childIds: [],
+            summary: "",
+            summaryHash: "",
+            dirty: true,
+            created: new Date().toISOString().split("T")[0] as any,
+            updated: new Date().toISOString().split("T")[0] as any,
+          } as Section);
+          
+          // Child B: already created by splitAsParentChild
+          sr.childSection.parent = sec.id;
+          sr.childSection.depth = sec.depth + 1;
           sr.childSection.dirty = true;
-          sec.dirty = true;
           sections.push(sr.childSection);
+          
+          // Parent becomes grouping node
+          sec.childIds.push(childAId, childBId);
+          sec.memberCount = 0;
+          sec.dirty = true;
+          
+          // Reassign ALL entries to children
+          for (const m of sr.parentMembers) {
+            const file = join(eDir, `${m.entryId}.md`);
+            if (existsSync(file)) {
+              let content = readFileSync(file, "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${childAId}`);
+              writeFileSync(file, content);
+            }
+          }
           for (const [entryId, newSecId] of sr.reassignment) {
             const file = join(eDir, `${entryId}.md`);
             if (existsSync(file)) {

@@ -372,6 +372,49 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
     
+    // Split any leaves that exceed threshold after absorption
+    const { splitAsParentChild: splitFn } = await import("./section-tree.js");
+    for (const domain of result.domains) {
+      const domCentroid = computeCentroid(allVectors.filter((v) => v.domain === domain).map((v) => v.vector));
+      const eDir = join(domainsRoot, domain, "entries");
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const sec of [...sections].filter((s) => s.domain === domain && s.childIds.length === 0 && s.memberCount > 8)) {
+          // Build member vectors
+          const members: EntryWithVector[] = [];
+          if (existsSync(eDir)) {
+            for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+              const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+              if (String(fields.section ?? "") === String(sec.id)) {
+                const v = allVectors.find((av) => av.entryId === f.replace(/\.md$/, ""));
+                if (v) members.push({ entryId: v.entryId, sectionId: sec.id, vector: v.vector });
+              }
+            }
+          }
+          if (members.length <= 8) continue;
+          const sr = splitFn(sec, members, domCentroid, sections);
+          if (!sr) continue;
+          notify?.(`  post-split: ${sec.id} (${members.length}) -> parent(${sr.parentMembers.length}) + child(${sr.childMembers.length})`);
+          sec.childIds.push(sr.childSection.id);
+          sec.memberCount = sr.parentMembers.length;
+          sr.childSection.dirty = true;
+          sec.dirty = true;
+          sections.push(sr.childSection);
+          for (const [entryId, newSecId] of sr.reassignment) {
+            const file = join(eDir, `${entryId}.md`);
+            if (existsSync(file)) {
+              let content = readFileSync(file, "utf-8");
+              content = content.replace(/^section: .+$/m, `section: ${newSecId}`);
+              writeFileSync(file, content);
+            }
+          }
+          result.splits++;
+          changed = true;
+        }
+      }
+    }
+
     // Persist
     writeSections(roots, sections);
     const freshLog = readLedger(roots);

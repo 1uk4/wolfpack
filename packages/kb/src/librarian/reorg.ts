@@ -218,16 +218,16 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         const domAssignments = allAssignments.get(domain) ?? new Map();
         for (const [entryId, secId] of domAssignments) {
           if (secId === root.id) {
-            // Find the best leaf section under the neighbor
-            const neighborLeaves = sections.filter((s) => {
-              let cur = s;
-              while (cur.parent) {
-                if (cur.parent === bestNeighbor.id) return true;
-                cur = sections.find((p) => p.id === cur.parent)!;
-                if (!cur) break;
+            // Find all leaf sections under the neighbor (recursively)
+            function findLeaves(parentId: SectionId): Section[] {
+              const children = sections.filter((s) => s.parent === parentId);
+              if (children.length === 0) {
+                const sec = sections.find((s) => s.id === parentId);
+                return sec && sec.childIds.length === 0 ? [sec] : [];
               }
-              return s.id === bestNeighbor.id;
-            }).filter((s) => s.childIds.length === 0);
+              return children.flatMap((c) => c.childIds.length === 0 ? [c] : findLeaves(c.id));
+            }
+            const neighborLeaves = findLeaves(bestNeighbor.id);
             
             let targetSec = bestNeighbor.id;
             if (neighborLeaves.length > 0) {

@@ -501,9 +501,18 @@ WantedBy=multi-user.target
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
 
-    // Allow runtime changes via updates
+    // Deep-merge nested objects (memory, telegram, harness) instead of replacing
     const runtime = ((updates as Record<string, unknown>).runtime ?? config.runtime ?? "pi") as WolfConfig["runtime"];
-    const updated: WolfConfig = { ...config, ...updates, id: config.id, runtime };
+    const merged: Record<string, unknown> = { ...config as unknown as Record<string, unknown> };
+    for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
+      if (value && typeof value === "object" && !Array.isArray(value)
+          && merged[key] && typeof merged[key] === "object" && !Array.isArray(merged[key])) {
+        merged[key] = { ...(merged[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
+      } else {
+        merged[key] = value;
+      }
+    }
+    const updated = { ...merged, id: config.id, runtime } as WolfConfig;
     const home = wolfHome(id);
     await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(updated));
     this.wolvesIndex.set(id, updated);

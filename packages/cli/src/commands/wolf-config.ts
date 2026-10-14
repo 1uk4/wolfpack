@@ -86,9 +86,29 @@ export async function wolfConfig(
 ): Promise<void> {
   if (opts.host) {
     await configRemote(nameOrId, opts);
-  } else {
-    await configLocal(nameOrId, opts);
+    return;
   }
+  
+  // Try local first, fall back to remote
+  const config = loadConfig();
+  const wolfDir = localWolfDir(config, nameOrId);
+  if (fs.existsSync(path.join(wolfDir, "wolf.yaml"))) {
+    await configLocal(nameOrId, opts);
+    return;
+  }
+  
+  // Not local — try to find on default host
+  const hostName = config.defaultHost;
+  if (hostName) {
+    const host = getHost(config, hostName);
+    if (host) {
+      await configRemote(nameOrId, { ...opts, host: hostName });
+      return;
+    }
+  }
+  
+  console.error(c.red(`Wolf not found locally or on default host: ${nameOrId}`));
+  process.exit(1);
 }
 
 /** Local wolf config in ~/wolves/<name>/wolf.yaml */

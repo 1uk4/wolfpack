@@ -439,6 +439,8 @@ export default function createMemoryExtension(
                 steps: {
                   classify: { model: fastModel },
                   produce: { model },
+                  sectionSummary: { model },
+                  labelSection: { model },
                 },
               });
               

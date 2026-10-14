@@ -255,6 +255,8 @@ Rules:
   repeat the parent's wording wholesale — name what is specific to this subsection
   versus its siblings.
 - Do NOT add new information. Derive the title only from what is given.
+- Use ONLY terms that appear in the entries. Never infer or add qualifiers
+  (e.g. "AI", "ML", "intelligent", "automated") that the entries do not use.
 
 Output valid JSON matching the schema.`;
 

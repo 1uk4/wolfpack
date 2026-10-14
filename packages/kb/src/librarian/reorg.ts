@@ -356,6 +356,22 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
     }
     
+    // Reconcile memberCount from actual entry frontmatter
+    for (const domain of result.domains) {
+      const eDir = join(domainsRoot, domain, "entries");
+      const actualCounts = new Map<string, number>();
+      if (existsSync(eDir)) {
+        for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+          const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+          const sec = String(fields.section ?? "");
+          if (sec) actualCounts.set(sec, (actualCounts.get(sec) ?? 0) + 1);
+        }
+      }
+      for (const sec of sections.filter((s) => s.domain === domain)) {
+        sec.memberCount = actualCounts.get(sec.id as string) ?? 0;
+      }
+    }
+    
     // Persist
     writeSections(roots, sections);
     const freshLog = readLedger(roots);

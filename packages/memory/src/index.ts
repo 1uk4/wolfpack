@@ -104,3 +104,6 @@ export * from "./work/index.js";
 
 // Task prompts
 export { NEW_WORK_PROMPT, GRILL_ME_PROTOCOL } from "./config/prompts/tasks.js";
+
+// Prompt context — shared rendering for system prompt injection
+export { renderDenContext, renderKbAccess } from "./prompt-context.js";

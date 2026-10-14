@@ -47,9 +47,32 @@ function parseSets(sets: string[]): Record<string, unknown> {
       process.exit(1);
     }
     const key = kv.slice(0, eq);
-    const val = kv.slice(eq + 1);
+    let val: string | boolean | number | string[] = kv.slice(eq + 1);
+    
+    // Handle arrays for domains/extensions
     if (key === "domains" || key === "extensions") {
       updates[key] = val.split(",").map((s) => s.trim()).filter(Boolean);
+      continue;
+    }
+    
+    // Type coercion
+    if (val === "true") val = true;
+    else if (val === "false") val = false;
+    else if (/^\d+$/.test(val)) val = parseInt(val, 10);
+    else if (/^\d+\.\d+$/.test(val)) val = parseFloat(val);
+    
+    // Handle dot notation (e.g., memory.librarian=true)
+    if (key.includes(".")) {
+      const parts = key.split(".");
+      let current = updates;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+        if (!current[part] || typeof current[part] !== "object") {
+          current[part] = {};
+        }
+        current = current[part] as Record<string, unknown>;
+      }
+      current[parts[parts.length - 1]] = val;
     } else {
       updates[key] = val;
     }
@@ -116,6 +139,14 @@ async function configLocal(
       selected: current.includes(e.key),
     })),
   );
+
+  // Memory / Librarian configuration
+  if (wolf.extensions?.includes("memory")) {
+    const isLibrarian = await prompt("Enable librarian mode? (y/n)");
+    wolf.memory = { librarian: isLibrarian.toLowerCase() === "y" };
+  } else {
+    delete wolf.memory;
+  }
 
   // Collect Telegram config if newly attached and not configured yet
   if (needsTelegram(wolf.extensions) && !wolf.telegram) {

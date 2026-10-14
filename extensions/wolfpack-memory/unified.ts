@@ -1,0 +1,541 @@
+/**
+ * Wolfpack Memory Extension — Unified Implementation
+ * 
+ * Supports both pi and pi-durable runtimes through the unified extension API.
+ * Core logic lives in @wolfpack/memory package.
+ */
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+
+import { join } from "node:path";
+import {
+  defineExtension,
+  defineTool,
+  section,
+  Type,
+  type ExtensionContext,
+  type ToolContext,
+  type ToolResult,
+  type HookContext,
+  type AssistantMessage,
+} from "@wolfpack/harness/extension";
+import {
+  observe,
+  renderDenContext,
+  renderKbAccess,
+  type RawObservation,
+} from "@wolfpack/memory";
+import { consolidatePool } from "@wolfpack/harness/memory";
+import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { createEngine, type Engine } from "@wolfpack/engine";
+
+// ─── Config ────────────────────────────────────────────────────────────────
+
+export interface MemoryConfig {
+  enabled?: boolean;
+  /** Model for observation extraction (default: claude-haiku-4-5) */
+  fastModel?: string;
+  /** Model for consolidation (default: claude-sonnet-4-6) */
+  model?: string;
+  /** Provider (default: anthropic) */
+  provider?: "anthropic" | "claude-agent-sdk";
+  /** Minimum text length to trigger observation (default: 100) */
+  minTextLength?: number;
+  /** Consolidation settings */
+  consolidation?: {
+    trigger?: "threshold" | "timer" | "hybrid" | "manual";
+    threshold?: number;
+    interval?: string;
+  };
+  /** Librarian mode - enables KB inbox tools (read-only for now) */
+  librarian?: boolean;
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+function formatMessage(message: AssistantMessage): string {
+  const parts: string[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      parts.push(`[assistant] ${block.text}`);
+    } else if (block.type === "toolCall") {
+      parts.push(`[tool_call] ${block.name}(${JSON.stringify(block.arguments).slice(0, 200)})`);
+    } else if (block.type === "thinking") {
+      parts.push(`[thinking] ${block.thinking.slice(0, 500)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+async function writeToPool(wolfDen: string, observations: RawObservation[]): Promise<void> {
+  if (observations.length === 0) return;
+  const poolDir = join(wolfDen, ".memory", "pool");
+  await mkdir(poolDir, { recursive: true });
+  const poolFile = join(poolDir, "observations.jsonl");
+  const timestamp = new Date().toISOString();
+  const lines = observations.map(obs =>
+    JSON.stringify({ ...obs, recordedAt: timestamp }) + "\n"
+  );
+  await appendFile(poolFile, lines.join(""));
+}
+
+async function getPoolStats(wolfDen: string): Promise<{ count: number; tokens: number }> {
+  const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
+  if (!existsSync(poolFile)) return { count: 0, tokens: 0 };
+  try {
+    const content = await readFile(poolFile, "utf-8");
+    const lines = content.split("\n").filter(l => l.trim());
+    const tokens = Math.ceil(content.length / 4);
+    return { count: lines.length, tokens };
+  } catch {
+    return { count: 0, tokens: 0 };
+  }
+}
+
+// ─── Extension Factory ─────────────────────────────────────────────────────
+
+export default function createMemoryExtension(
+  config: MemoryConfig,
+  context: ExtensionContext
+): ReturnType<typeof defineExtension> {
+  const { wolfDen, wolfName, domains } = context;
+  const {
+    fastModel = "claude-haiku-4-5",
+    model = "claude-sonnet-4-6",
+    provider = "anthropic",
+    minTextLength = 100,
+    consolidation,
+  } = config;
+
+  const consolidationThreshold = consolidation?.threshold ?? 15000;
+  const consolidationTrigger = consolidation?.trigger ?? "threshold";
+
+  // Lazy-init engine
+  let engine: Engine | null = null;
+  function getEngine(): Engine {
+    if (!engine) {
+      engine = createEngine({
+        provider,
+        defaultModel: model,
+        steps: {
+          classify: { model: fastModel },
+          consolidate: { model, maxTokens: 16000 },
+        },
+      });
+    }
+    return engine;
+  }
+
+  // KB roots from env
+  const kbBase = process.env.KB_BASE;
+  const kbOps = process.env.KB_OPS;
+  const kbRoots: KbRoots | null = kbBase && kbOps ? {
+    kbBase,
+    opsRoot: kbOps,
+    denLocal: join(wolfDen, "kb"),
+  } : null;
+  
+  // Librarian mode
+  const isLibrarian = config.librarian === true;
+  
+
+
+  return defineExtension({
+    name: "wolfpack-memory",
+    runtimes: ["pi", "pi-durable"],
+
+    tools: [
+      defineTool({
+        name: "memory_consolidate",
+        description: "Consolidate observation pool into persistent memory topics. Use when you have important context to preserve, or when the pool is getting large.",
+        parameters: Type.Object({
+          reason: Type.Optional(Type.String({ description: "Why you're consolidating (for logging)" })),
+        }),
+        async execute(args: { reason?: string }, ctx: ToolContext): Promise<ToolResult> {
+          try {
+            const stats = await getPoolStats(ctx.wolfDen);
+            if (stats.count === 0) {
+              return {
+                content: [{ type: "text", text: "Nothing to consolidate — pool is empty." }],
+              };
+            }
+
+            const result = await consolidatePool({
+              wolfDen: ctx.wolfDen,
+              wolfName: ctx.wolfName,
+              model,
+              provider,
+              kbRoots: kbRoots ?? undefined,
+              defaultDomain: domains[0] ?? "wolfpack",
+              onProgress: (msg) => console.log(`[memory] ${msg}`),
+            });
+
+            return {
+              content: [{
+                type: "text",
+                text: `Consolidated ${result.observationsProcessed} observations: ${result.topicsCreated} created, ${result.topicsMerged} updated, ${result.claimsSubmitted} emitted to KB.`,
+              }],
+            };
+          } catch (err) {
+            return {
+              content: [{
+                type: "text",
+                text: `Consolidation failed: ${err instanceof Error ? err.message : String(err)}`,
+              }],
+              isError: true,
+            };
+          }
+        },
+      }),
+      
+      // Librarian tools (read-only for now)
+      ...(isLibrarian && kbRoots ? [
+        defineTool({
+          name: "kb_inbox",
+          description: "List pending contributions in the KB inbox. Shows what wolves have submitted for integration.",
+          parameters: Type.Object({
+            limit: Type.Optional(Type.Number({ description: "Max items to show (default: 20)" })),
+          }),
+          async execute(args: { limit?: number }, ctx: ToolContext): Promise<ToolResult> {
+            const contributions = drainInbox(kbRoots);
+            const limit = args.limit ?? 20;
+            
+            if (contributions.length === 0) {
+              return {
+                content: [{ type: "text", text: "KB inbox is empty." }],
+              };
+            }
+            
+            // Group by wolf
+            const byWolf = new Map<string, ParsedContribution[]>();
+            for (const c of contributions) {
+              const list = byWolf.get(c.from) ?? [];
+              list.push(c);
+              byWolf.set(c.from, list);
+            }
+            
+            const lines: string[] = [`## KB Inbox (${contributions.length} pending)`, ""];
+            let shown = 0;
+            
+            for (const [wolf, items] of byWolf.entries()) {
+              lines.push(`### ${wolf} (${items.length})`);
+              for (const c of items.slice(0, limit - shown)) {
+                const domain = c.domainHint || "?";
+                const grad = c.graduation ? ` [${c.graduation}]` : "";
+                lines.push(`- ${c.denTopicId} → ${domain}${grad}`);
+                shown++;
+                if (shown >= limit) break;
+              }
+              if (shown >= limit && contributions.length > limit) {
+                lines.push(`... +${contributions.length - shown} more`);
+                break;
+              }
+              lines.push("");
+            }
+            
+            return { content: [{ type: "text", text: lines.join("\n") }] };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_contribution",
+          description: "View a specific contribution's details by topic ID.",
+          parameters: Type.Object({
+            topicId: Type.String({ description: "The den_topic_id to look up" }),
+          }),
+          async execute(args: { topicId: string }, ctx: ToolContext): Promise<ToolResult> {
+            const contributions = drainInbox(kbRoots);
+            const match = contributions.find(c => c.denTopicId === args.topicId);
+            
+            if (!match) {
+              return {
+                content: [{ type: "text", text: `Not found: ${args.topicId}` }],
+                isError: true,
+              };
+            }
+            
+            const lines = [
+              `## ${match.denTopicId}`,
+              `From: ${match.from}`,
+              `Domain: ${match.domainHint || "(none)"}`,
+              `Change: ${match.change}`,
+              `Hash: ${match.contentHash.slice(0, 12)}`,
+            ];
+            
+            if (match.graduation) lines.push(`Graduation: ${match.graduation}`);
+            if (match.entryId) lines.push(`Entry: ${match.entryId}`);
+            if (match.partOf) lines.push(`Part of: ${match.partOf}`);
+            
+            return { content: [{ type: "text", text: lines.join("\n") }] };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_parked",
+          description: "List parked (stuck) contributions that failed processing. These need manual intervention.",
+          parameters: Type.Object({}),
+          async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
+            const parked = listParked(kbRoots);
+            
+            if (parked.length === 0) {
+              return {
+                content: [{ type: "text", text: "No parked items." }],
+              };
+            }
+            
+            const lines: string[] = [`## Parked Items (${parked.length})`, ""];
+            for (const p of parked) {
+              lines.push(`### ${p.contribution.denTopicId}`);
+              lines.push(`  From: ${p.contribution.from}`);
+              lines.push(`  Domain: ${p.contribution.domainHint || "(none)"}`);
+              lines.push(`  Reason: ${p.reason}`);
+              lines.push(`  Parked: ${p.parkedAt}`);
+              lines.push("");
+            }
+            
+            return { content: [{ type: "text", text: lines.join("\n") }] };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_status",
+          description: "Get KB status overview: inbox count, parked count, and domain health.",
+          parameters: Type.Object({}),
+          async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
+            const inbox = drainInbox(kbRoots);
+            const parked = listParked(kbRoots);
+            
+            // Group inbox by domain
+            const byDomain = new Map<string, number>();
+            for (const c of inbox) {
+              const d = c.domainHint || "unknown";
+              byDomain.set(d, (byDomain.get(d) ?? 0) + 1);
+            }
+            
+            const lines: string[] = [
+              `## KB Status`,
+              "",
+              `**Inbox:** ${inbox.length} pending`,
+              `**Parked:** ${parked.length} stuck`,
+              "",
+            ];
+            
+            if (byDomain.size > 0) {
+              lines.push("**By Domain:**");
+              for (const [d, count] of byDomain.entries()) {
+                lines.push(`  - ${d}: ${count}`);
+              }
+            }
+            
+            return { content: [{ type: "text", text: lines.join("\n") }] };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_sweep_start",
+          description: "Start a KB sweep in the background to process pending contributions. Returns immediately - use kb_sweep_status to monitor progress.",
+          parameters: Type.Object({
+            dryRun: Type.Optional(Type.Boolean({ description: "Test sweep without processing inbox (default: false)" })),
+          }),
+          async execute(args: { dryRun?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+            // Check if sweep manager is available
+            if (!context.sweep) {
+              return {
+                content: [{ type: "text", text: "Sweep manager not initialized. Check librarian configuration." }],
+                isError: true,
+              };
+            }
+            
+            // Check inbox first
+            const inbox = drainInbox(kbRoots);
+            if (inbox.length === 0) {
+              return {
+                content: [{ type: "text", text: "Nothing to sweep — inbox is empty." }],
+              };
+            }
+            
+            // Start sweep in background
+            const result = await context.sweep.start({ dryRun: args.dryRun });
+            
+            if (!result.started) {
+              return {
+                content: [{ type: "text", text: result.reason ?? "Sweep could not start." }],
+              };
+            }
+            
+            const mode = args.dryRun ? " (DRY RUN)" : "";
+            return {
+              content: [{
+                type: "text",
+                text: `Sweep started in background${mode} (${inbox.length} items in inbox).\nUse kb_sweep_status to monitor progress.`,
+              }],
+            };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_sweep_status",
+          description: "Check the status of the KB sweep. Shows progress if running, or last result if completed.",
+          parameters: Type.Object({}),
+          async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
+            if (!context.sweep) {
+              return {
+                content: [{ type: "text", text: "Sweep manager not initialized." }],
+                isError: true,
+              };
+            }
+            
+            const status = context.sweep.getStatus();
+            const lines: string[] = [`## Sweep Status: ${status.state}`];
+            
+            if (status.startedAt) {
+              lines.push(`Started: ${status.startedAt}`);
+            }
+            
+            if (status.state === "running" && status.progress) {
+              lines.push(`Progress: ${status.progress}`);
+            }
+            
+            if (status.completedAt) {
+              lines.push(`Completed: ${status.completedAt}`);
+            }
+            
+            if (status.result) {
+              const r = status.result;
+              lines.push("");
+              lines.push("**Results:**");
+              lines.push(`- Processed: ${r.processed}`);
+              lines.push(`- Created: ${r.created}`);
+              lines.push(`- Merged: ${r.merged}`);
+              lines.push(`- Rejected: ${r.rejected}`);
+              lines.push(`- Parked: ${r.parked}`);
+              lines.push(`- Remaining: ${r.remaining}`);
+              lines.push(`- Duration: ${Math.round(r.duration / 1000)}s`);
+            }
+            
+            if (status.error) {
+              lines.push(`\n**Error:** ${status.error}`);
+            }
+            
+            return { content: [{ type: "text", text: lines.join("\n") }] };
+          },
+        }),
+        
+        defineTool({
+          name: "kb_reorg",
+          description: "Reorganize KB sections: split oversized sections into nested sub-sections, merge underfull ones, and crystallize unplaced entries. Updates digest and index.",
+          parameters: Type.Object({
+            domain: Type.Optional(Type.String({ description: "Only reorg this domain (default: all)" })),
+          }),
+          async execute(args: { domain?: string }, ctx: ToolContext): Promise<ToolResult> {
+            try {
+              const { reorg } = await import("@wolfpack/kb/librarian");
+              const { createEngine } = await import("@wolfpack/engine");
+              
+              const engine = createEngine({
+                provider: provider ?? "anthropic",
+                defaultModel: model,
+                steps: {
+                  classify: { model: fastModel },
+                  produce: { model },
+                },
+              });
+              
+              const roots = {
+                kbBase: kbRoots.kbBase,
+                opsRoot: kbRoots.opsRoot,
+                denLocal: join(wolfDen, "kb"),
+              };
+              
+              const result = await reorg({
+                engine,
+                roots,
+                domains: args.domain ? [args.domain] : undefined,
+                notify: (msg: string) => console.log(`[librarian] ${msg}`),
+              });
+              
+              const lines = [
+                `## Reorg Complete`,
+                "",
+                `- Splits: ${result.splits}`,
+                `- Merges: ${result.merges}`,
+                `- Crystallized: ${result.crystallized}`,
+                `- Entries moved: ${result.placements}`,
+                `- Labels updated: ${result.labelsUpdated}`,
+                `- Domains: ${result.domains.join(", ")}`,
+              ];
+              
+              return { content: [{ type: "text", text: lines.join("\n") }] };
+            } catch (err) {
+              return {
+                content: [{ type: "text", text: `Reorg failed: ${err instanceof Error ? err.message : String(err)}` }],
+                isError: true,
+              };
+            }
+          },
+        }),
+      ] : []),
+    ],
+
+    sections: [
+      section("wolf_memory", (ctx) => {
+        const content = renderDenContext(ctx.wolfDen, ctx.wolfName);
+        return content ?? undefined;
+      }),
+      section("kb_access", (ctx) => {
+        const content = renderKbAccess(kbBase, domains);
+        return content ?? undefined;
+      }),
+    ],
+
+    hooks: {
+      afterResponse: (message: AssistantMessage, ctx: HookContext) => {
+        // Only observe root conversation — subagents are ephemeral
+        if (ctx.conversationId !== 1) return;
+
+        // Fire-and-forget: don't await
+        (async () => {
+          try {
+            const text = formatMessage(message);
+            if (text.length < minTextLength) return;
+
+            const eng = getEngine();
+            const result = await observe({
+              engine: eng,
+              chunkText: text,
+              mode: "conversation",
+            });
+
+            if (result.observations.length > 0) {
+              await writeToPool(ctx.wolfDen, result.observations);
+
+              // Auto-consolidation if threshold trigger
+              if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") {
+                const stats = await getPoolStats(ctx.wolfDen);
+                if (stats.tokens >= consolidationThreshold) {
+                  console.log(`[memory] Threshold reached (${stats.tokens} >= ${consolidationThreshold}), consolidating...`);
+                  try {
+                    const consResult = await consolidatePool({
+                      wolfDen: ctx.wolfDen,
+                      wolfName: ctx.wolfName,
+                      model,
+                      provider,
+                      kbRoots: kbRoots ?? undefined,
+                      defaultDomain: domains[0] ?? "wolfpack",
+                      onProgress: (msg) => console.log(`[memory] ${msg}`),
+                    });
+                    console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);
+                  } catch (consErr) {
+                    console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.error("[memory] observation error:", err instanceof Error ? err.message : err);
+          }
+        })();
+      },
+    },
+  });
+}

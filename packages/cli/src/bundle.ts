@@ -56,6 +56,12 @@ export interface BundleWolfConfig {
   extensions: string[];
 }
 
+/** Config fields for pi-durable harness bundle (includes extra config for wolf.yaml). */
+export interface HarnessBundleConfig extends BundleWolfConfig {
+  model?: string;
+  extraConfig?: Record<string, unknown>;
+}
+
 /** Version + content identity of one bundled extension (drift detection). */
 export interface ExtensionStamp {
   /** Logical key (wolf.yaml `extensions: [...]`). */
@@ -326,6 +332,112 @@ export async function buildRemoteBundle(
     fs.writeFileSync(path.join(agentStage, "AGENTS.md"), renderPersona(cfg));
 
     // tar + gzip + base64 (portable: bsdtar on mac, GNU tar on linux)
+    const tarBuf = execFileSync(
+      "tar",
+      ["-czf", "-", "-C", agentStage, "."],
+      { maxBuffer: 256 * 1024 * 1024 },
+    );
+    return { bundleB64: tarBuf.toString("base64"), missing, included, manifest };
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Build a harness bundle for pi-durable wolves with wolf.yaml generation.
+ * Similar to buildRemoteBundle but includes a wolf.yaml config file.
+ */
+export async function buildHarnessBundle(
+  cfg: HarnessBundleConfig,
+): Promise<BuiltBundle> {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-harness-bundle-"));
+  const agentStage = path.join(tmpRoot, "agent");
+  const extStage = path.join(agentStage, "extensions");
+  fs.mkdirSync(extStage, { recursive: true });
+
+  const base = extensionsDir();
+  const included: string[] = [];
+  const missing: string[] = [];
+  const packages: string[] = [];
+  const stamps: ExtensionStamp[] = [];
+
+  try {
+    for (const key of cfg.extensions) {
+      const ext = getExtension(key);
+      if (!ext) {
+        missing.push(key);
+        continue;
+      }
+      const srcDir = path.join(base, ext.dir);
+      if (!fs.existsSync(srcDir)) {
+        missing.push(key);
+        continue;
+      }
+      stamps.push(await bundleExtension(ext, srcDir, extStage));
+      packages.push(`./extensions/${ext.dir}`);
+      included.push(key);
+    }
+
+    const manifest: BundleManifest = {
+      builtAt: new Date().toISOString(),
+      extensions: stamps,
+    };
+
+    // settings.json
+    fs.writeFileSync(
+      path.join(agentStage, "settings.json"),
+      JSON.stringify({ packages }, null, 2) + "\n",
+    );
+
+    // bundle manifest
+    fs.writeFileSync(
+      path.join(agentStage, "bundle.json"),
+      JSON.stringify(manifest, null, 2) + "\n",
+    );
+
+    // persona
+    fs.writeFileSync(path.join(agentStage, "AGENTS.md"), renderPersona(cfg));
+
+    // wolf.yaml with harness config and extraConfig
+    const { stringify: yamlStringify } = await import("yaml");
+    const wolfYamlLines: string[] = [];
+    
+    // Base configuration
+    const baseConfig: Record<string, unknown> = {
+      id: cfg.id,
+      name: cfg.name,
+      runtime: "pi-durable",
+      model: cfg.model,
+      role: cfg.role,
+    };
+    if (cfg.specialty) baseConfig.specialty = cfg.specialty;
+    if (cfg.domains?.length) baseConfig.domains = cfg.domains;
+    if (cfg.extensions?.length) baseConfig.extensions = cfg.extensions;
+    
+    // Add base config
+    wolfYamlLines.push(yamlStringify(baseConfig).trim());
+    
+    // Add harness configuration
+    wolfYamlLines.push("harness:");
+    wolfYamlLines.push("  storage: session.sqlite");
+    
+    // Add extraConfig if present
+    if (cfg.extraConfig) {
+      const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness"]);
+      for (const [key, value] of Object.entries(cfg.extraConfig)) {
+        if (value !== undefined && value !== null && !baseKeys.has(key)) {
+          const serialized = yamlStringify({ [key]: value }).trim();
+          wolfYamlLines.push(serialized);
+        }
+      }
+    }
+    
+    fs.writeFileSync(
+      path.join(agentStage, "wolf.yaml"),
+      wolfYamlLines.join("\n") + "\n",
+    );
+
+    // tar + gzip + base64
     const tarBuf = execFileSync(
       "tar",
       ["-czf", "-", "-C", agentStage, "."],

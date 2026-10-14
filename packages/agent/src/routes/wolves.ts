@@ -107,6 +107,19 @@ export function wolvesRouter(manager: WolfManager): Router {
         res.status(404).json({ error: `Wolf not found: ${req.params.nameOrId}` });
         return;
       }
+      
+      // Clear session if requested (pi-durable only)
+      if (req.body?.clearSession && config.runtime === "pi-durable") {
+        const { unlink } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const sessionPath = join(`/home/wolf-${config.id}/den`, "session.sqlite");
+        try {
+          await unlink(sessionPath);
+        } catch {
+          // Session file might not exist
+        }
+      }
+      
       await manager.restart(config.id);
       res.json({ success: true, restarted: config.name });
     } catch (err) {

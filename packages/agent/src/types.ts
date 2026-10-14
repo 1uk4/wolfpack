@@ -29,8 +29,8 @@ export interface WolfConfig {
 
 export type WolfProfile = "worker" | "assistant";
 
-/** Wolfpack is PI-only. Kept as a type for forward-compat, single value today. */
-export type WolfRuntime = "pi";
+/** Wolfpack runtime types: pi (original) | pi-durable (harness-based). */
+export type WolfRuntime = "pi" | "pi-durable";
 
 /** Version + content identity of one installed extension (drift detection). */
 export interface ExtensionStamp {

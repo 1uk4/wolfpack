@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
-import { buildRemoteBundle } from "../bundle.js";
+import { buildRemoteBundle, buildHarnessBundle } from "../bundle.js";
 import {
   loadConfig,
   getHost,
@@ -127,6 +127,62 @@ function syncLocal(config: CliConfig, name: string): void {
   }
 }
 
+/** Rebuild + push the bundle for one pi-durable wolf. */
+async function syncPiDurable(
+  host: HostEntry,
+  hostName: string,
+  wolf: RemoteWolf,
+): Promise<void> {
+  const cfg = wolf.config;
+  if (!cfg) {
+    console.error(c.red(`Agent on ${hostName} did not return config for '${wolf.id}'.`));
+    process.exit(1);
+  }
+
+  console.log(c.bold(`Syncing ${cfg.name} (pi-durable) on ${hostName}...`));
+  
+  // Collect extra config (everything except base keys)
+  const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness"]);
+  const extraConfig: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(cfg as Record<string, unknown>)) {
+    if (!baseKeys.has(key) && value !== undefined) {
+      extraConfig[key] = value;
+    }
+  }
+  
+  const built = await buildHarnessBundle({
+    id: wolf.id,
+    name: cfg.name,
+    role: cfg.role,
+    specialty: cfg.specialty,
+    domains: cfg.domains ?? [],
+    extensions: cfg.extensions ?? [],
+    extraConfig,
+  });
+  
+  if (built.missing.length) {
+    console.log(c.yellow(`  ! Skipped (not vendored): ${built.missing.join(", ")}`));
+  }
+
+  const client = new AgentClient(host);
+  try {
+    await client.updateWolfBundle(wolf.id, {
+      bundle: built.bundleB64,
+      manifest: built.manifest,
+    });
+    console.log(
+      c.green(
+        `✓ Synced: ${built.manifest.extensions
+          .map((e) => `${e.key}@${e.version}`)
+          .join(", ") || "(none)"} — restarted`,
+      ),
+    );
+  } catch (err) {
+    console.error(c.red(`Sync failed: ${err}`));
+    process.exit(1);
+  }
+}
+
 /** Rebuild + push the bundle for one wolf on one host. */
 async function syncOne(
   host: HostEntry,
@@ -147,6 +203,12 @@ async function syncOne(
   if (!cfg) {
     console.error(c.red(`Agent on ${hostName} did not return config for '${nameOrId}'.`));
     process.exit(1);
+  }
+  
+  // Use pi-durable sync for pi-durable wolves
+  if ((cfg as Record<string, unknown>).runtime === "pi-durable") {
+    await syncPiDurable(host, hostName, wolf);
+    return;
   }
 
   console.log(c.bold(`Syncing ${cfg.name} on ${hostName}...`));

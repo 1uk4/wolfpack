@@ -29,6 +29,8 @@ export interface WolfExtension {
   requiresTelegram?: boolean;
   /** Librarian capability: triggers host KB-engine provisioning (Ollama + sweep). */
   librarian?: boolean;
+  /** Supported runtimes (defaults to all if not specified) */
+  runtimes?: string[];
 }
 
 export type WolfProfile = "worker" | "assistant";
@@ -53,18 +55,21 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     label: "Memory",
     description: "Observer + consolidator + den management (wolfpack-memory)",
     dir: "wolfpack-memory",
+    runtimes: ["pi", "pi-durable"],
   },
   {
     key: "subagents",
     label: "Interactive sub agents",
     description: "Delegate tasks to specialized agents with isolated context",
     dir: "wolfpack-subagents",
+    runtimes: ["pi"],
   },
   {
     key: "ask",
     label: "Ask user question",
     description: "Pause and ask the user a question (drives the crawl questionnaire)",
     dir: "ask-user-question",
+    runtimes: ["pi"],
   },
   {
     key: "telegram",
@@ -72,6 +77,7 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     description: "Reach the wolf via a Telegram bot (per-wolf token, owner-gated)",
     dir: "wolfpack-telegram",
     requiresTelegram: true,
+    runtimes: ["pi-durable"],
   },
   {
     key: "kb",
@@ -80,6 +86,7 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
       "Shared knowledge-base curation: inbox sweep, embeddings, /kb:sweep (wolfpack-librarian)",
     dir: "wolfpack-librarian",
     librarian: true,
+    runtimes: ["pi", "pi-durable"],
   },
   {
     key: "visual-tools",
@@ -87,6 +94,7 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     description:
       "Mermaid + SVG authoring tools for the mermaid-maker/svg-maker subagents — render-and-inspect diagram loops that publish PNGs into <cwd>/viz (wolfpack-visual-tools)",
     dir: "wolfpack-visual-tools",
+    runtimes: ["pi"],
   },
 ];
 
@@ -130,6 +138,18 @@ export function needsTelegram(keys: string[]): boolean {
 /** Is this a librarian wolf? (carries a KB-engine extension) */
 export function isLibrarian(keys: string[]): boolean {
   return keys.some((k) => getExtension(k)?.librarian);
+}
+
+/** Check if an extension supports a specific runtime. */
+export function extensionSupportsRuntime(ext: WolfExtension, runtime: string): boolean {
+  // If no runtimes specified, extension supports all runtimes
+  if (!ext.runtimes || ext.runtimes.length === 0) return true;
+  return ext.runtimes.includes(runtime);
+}
+
+/** Get all extensions that support a specific runtime. */
+export function extensionsForRuntime(runtime: string): WolfExtension[] {
+  return AVAILABLE_EXTENSIONS.filter((ext) => extensionSupportsRuntime(ext, runtime));
 }
 
 /**

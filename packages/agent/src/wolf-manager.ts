@@ -74,6 +74,58 @@ export class WolfManager {
     await fs.writeFile(this.indexPath, JSON.stringify(entries, null, 2));
   }
 
+  /**
+   * Ensure standard wolf environment variables are set in .env,
+   * preserving existing secrets and other vars.
+   */
+  private async ensureEnvVars(
+    home: string,
+    id: string,
+    name: string,
+  ): Promise<void> {
+    const envPath = path.join(home, ".env");
+    let existing: string[] = [];
+    try {
+      existing = (await fs.readFile(envPath, "utf8")).split("\n").filter(Boolean);
+    } catch {
+      // No .env file yet
+    }
+
+    // Managed keys that should be set/overridden
+    const managed: Record<string, string> = {
+      WOLF_ID: id,
+      WOLF_NAME: name,
+      WOLF_DEN: path.join(home, "den"),
+      KB_BASE: "/var/wolfpack/kb/base",
+      KB_OPS: "/var/wolfpack/kb/ops",
+    };
+
+    // Keep existing env vars that aren't managed
+    const kept = existing.filter((line) => {
+      const key = line.slice(0, line.indexOf("="));
+      return key && !(key in managed);
+    });
+
+    // Write back: managed vars first, then preserved vars
+    const lines = [
+      ...Object.entries(managed).map(([k, v]) => `${k}=${v}`),
+      ...kept,
+    ];
+    await fs.writeFile(envPath, lines.join("\n") + "\n", { mode: 0o600 });
+
+    // Ensure shared KB directories are writable
+    try {
+      await exec("chmod", ["-R", "a+rwX", "/var/wolfpack/kb/ops"]);
+    } catch {
+      // Directory might not exist yet
+    }
+    try {
+      await exec("chmod", ["-R", "a+rwX", "/var/wolfpack/kb/base"]);
+    } catch {
+      // Directory might not exist yet
+    }
+  }
+
   resolve(nameOrId: string): WolfConfig | undefined {
     const byId = this.wolvesIndex.get(nameOrId);
     if (byId) return byId;
@@ -285,6 +337,53 @@ WantedBy=multi-user.target
     return config;
   }
 
+  /**
+   * Update a pi-durable wolf's bundle with env management and cleanup.
+   * Ensures env vars, disables old sweep timer, then updates bundle.
+   */
+  async updatePiDurableBundle(
+    id: string,
+    bundleB64: string,
+    manifest: BundleManifest,
+  ): Promise<WolfConfig> {
+    const config = this.wolvesIndex.get(id);
+    if (!config) throw new Error(`Wolf not found: ${id}`);
+    const home = wolfHome(id);
+    const user = wolfUser(id);
+
+    await this.extractBundle(home, bundleB64, { clean: true });
+
+    // Ensure standard env vars are set
+    await this.ensureEnvVars(home, id, config.name);
+
+    // Disable old sweep timer (silently ignore errors)
+    try {
+      await exec("systemctl", ["stop", `${user}-kb-sweep.timer`]);
+    } catch {
+      // Timer might not exist
+    }
+    try {
+      await exec("systemctl", ["disable", `${user}-kb-sweep.timer`]);
+    } catch {
+      // Timer might not exist
+    }
+    try {
+      await exec("systemctl", ["stop", `${user}-kb-sweep.service`]);
+    } catch {
+      // Service might not exist
+    }
+
+    await exec("chown", ["-R", `${user}:${user}`, path.join(home, "agent")]);
+
+    config.bundle = manifest;
+    await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(config));
+    this.wolvesIndex.set(id, config);
+    await this.saveIndex();
+
+    await this.restart(id);
+    return config;
+  }
+
   async status(id: string): Promise<WolfStatus> {
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
@@ -355,7 +454,9 @@ WantedBy=multi-user.target
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
 
-    const updated: WolfConfig = { ...config, ...updates, id: config.id, runtime: "pi" };
+    // Allow runtime changes via updates
+    const runtime = ((updates as Record<string, unknown>).runtime ?? config.runtime ?? "pi") as WolfConfig["runtime"];
+    const updated: WolfConfig = { ...config, ...updates, id: config.id, runtime };
     const home = wolfHome(id);
     await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(updated));
     this.wolvesIndex.set(id, updated);

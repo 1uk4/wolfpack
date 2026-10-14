@@ -30,10 +30,11 @@ export {
   gitCommit,
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";
-export { withBudget, BudgetExceeded, park, unpark, listParked } from "./park.js";
+export { withBudget, BudgetExceeded, park, unpark, listParked, type ParkedItem } from "./park.js";
 export {
   readDeclaredDomains,
   isDeclared,
   renderDomainIndex,
 } from "./domains.js";
 export { quarantine } from "./commit.js";
+export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";

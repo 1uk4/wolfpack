@@ -391,7 +391,7 @@ export async function buildHarnessBundle(
     platform: "node",
     format: "cjs",
     target: "node20",
-    external: ["@anthropic-ai/claude-agent-sdk"],
+    external: ["@anthropic-ai/claude-agent-sdk", "grammy"],
     logLevel: "silent",
   });
 

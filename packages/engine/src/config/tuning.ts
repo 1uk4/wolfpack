@@ -40,10 +40,28 @@ export const SWEEP = {
    *  real re-promote scored below it and duplicated). Calibrate against real
    *  re-promotes on Dewey; the old v1 estimate was ~0.75 for "same topic". */
   mergeSim: 0.72,
-  /** Entries larger than this (markdown chars) are never merge targets: merging
-   *  rewrites the whole entry, so cost and latency grow with its size. */
-  maxMergeTargetChars: 16_000,
-  /** Max time one contribution may take (embed + LLM calls). Over it → parked. */
+  /**
+   * Estimated milliseconds per character of LLM output during merge operations.
+   * Used to compute the dynamic merge threshold from the item budget.
+   * Calibrate from observed sweep times (12KB entry merged in 145s = ~12ms/char).
+   */
+  msPerMergeChar: 15,
+  
+  /**
+   * Fraction of the per-item budget allocated to the merge LLM call.
+   * The rest covers embedding, routing, and overhead.
+   * maxMergeChars = (itemBudget * mergeBudgetFraction) / msPerMergeChar
+   */
+  mergeBudgetFraction: 0.6,
+  
+  /**
+   * Per-item time budget, computed dynamically at sweep start:
+   *   itemBudget = runBudgetMs / min(inboxSize, batchSize)
+   * This is the CEILING — items that finish early move on immediately.
+   * The budget determines what to ATTEMPT (merge vs create), not how long to wait.
+   * 
+   * Fallback when inbox size is unknown. Normally derived at runtime.
+   */
   itemBudgetMs: 180_000,
   /** Failed attempts (across ticks) before a contribution is parked. */
   maxAttempts: 3,

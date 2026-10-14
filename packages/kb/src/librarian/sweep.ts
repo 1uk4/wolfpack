@@ -151,8 +151,8 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
   const embedder = createEmbedder(roots);
   const startedAt = Date.now();
-  const itemBudgetMs = Number(process.env.KB_SWEEP_ITEM_BUDGET_MS) || SWEEP.itemBudgetMs;
   const runBudgetMs = Number(process.env.KB_SWEEP_RUN_BUDGET_MS) || SWEEP.runBudgetMs;
+  // itemBudgetMs computed after inbox size is known (below)
 
   const log = readLedger(roots);
   let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
@@ -193,6 +193,18 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
     (a.submitted || "").localeCompare(b.submitted || "")
   );
   const contributions = pending.slice(0, batchSize);
+  
+  // Dynamic per-item budget: divide run budget by batch size
+  // Generous for small inboxes, tight for large ones
+  const itemBudgetMs = Math.max(
+    20_000, // floor: 20s minimum per item
+    Math.floor(runBudgetMs / Math.max(contributions.length, 1))
+  );
+  
+  // Dynamic merge threshold: derived from item budget
+  const maxMergeTargetChars = Math.floor(
+    (itemBudgetMs * SWEEP.mergeBudgetFraction) / SWEEP.msPerMergeChar
+  );
   result.remaining = Math.max(0, pending.length - contributions.length);
 
   for (const [i, c] of contributions.entries()) {
@@ -286,9 +298,9 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       // re-pointed on commit.
       if (targetId && targetId !== ownId) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
-        const limit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || SWEEP.maxMergeTargetChars;
+        const limit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
         if (size > limit) {
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry, not merged into ${targetId} (${size} chars > ${limit})`);
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${limit})`);
           targetId = undefined;
         }
       }

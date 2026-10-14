@@ -656,7 +656,46 @@ function showPanel(node, body){
   }
   let md = "";
   if(m.type==="Entry"){ md = body || "_(no body)_"; }
-  else if(m.type==="Section"){ md = "## "+(m.title||"")+"\\n\\n"+(m.summary||"_(section)_"); }
+  else if(m.type==="Section"){
+    md = "## "+(m.title||"")+"\\n\\n"+(m.summary||"_(section)_");
+    
+    // Find child sections (connected FROM this section node)
+    const sectionNodeId = node.id;
+    const childSectionIds = new Set(currentDS.edges
+      .filter(e => e.from === sectionNodeId)
+      .map(e => e.to));
+    const childSections = currentDS.nodes.filter(n => childSectionIds.has(n.id) && n.group === "section");
+    const childEntries = currentDS.nodes.filter(n => childSectionIds.has(n.id) && n.group === "entry");
+    
+    if (childSections.length > 0) {
+      md += "\\n\\n---\\n\\n";
+      let html = `<div style="margin-bottom:16px;"><div style="color:#7dcfff;font-weight:600;margin-bottom:8px;font-size:13px;">\u{1f4c2} Child Sections (${childSections.length})</div>`;
+      html += `<div class="child-links">`;
+      for (const child of childSections) {
+        const cm = child.meta || child._meta || {};
+        const entryCount = currentDS.edges.filter(e => e.from === child.id).length;
+        html += `<div class="child-link" data-node-id="${child.id}" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 10px;margin:4px 0;background:#1d2230;border-radius:6px;border-left:3px solid #7dcfff">`;
+        html += `<span style="flex:1;">${cm.title || child.label || ""}</span>`;
+        html += `<span style="padding:2px 8px;font-size:11px;background:#363d52;border-radius:4px;color:#7aa2f7;margin-left:8px;">${entryCount} items</span>`;
+        html += `</div>`;
+      }
+      html += `</div></div>`;
+      md += html;
+    }
+    
+    if (childEntries.length > 0) {
+      let html = `<div style="margin-bottom:16px;"><div style="color:#9ece6a;font-weight:600;margin-bottom:8px;font-size:13px;">\u{1f4d1} Entries (${childEntries.length})</div>`;
+      html += `<div class="child-links">`;
+      for (const entry of childEntries) {
+        const em = entry.meta || entry._meta || {};
+        html += `<div class="child-link" data-node-id="${entry.id}" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 10px;margin:4px 0;background:#1d2230;border-radius:6px;border-left:3px solid #9ece6a">`;
+        html += `<span style="flex:1;">${em.title || entry.label || ""}</span>`;
+        html += `</div>`;
+      }
+      html += `</div></div>`;
+      md += html;
+    }
+  }
   else if(m.type==="Work"){
     const criteria = m.successCriteria ? "\\n\\n**Done when:** "+m.successCriteria : "";
     md = (body || "_(no plan yet)_") + criteria;

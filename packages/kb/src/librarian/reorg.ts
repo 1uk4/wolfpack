@@ -317,7 +317,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         const { SECTION_TREE: stCfg } = await import("@wolfpack/engine");
         if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
           try {
-            sec.summary = await sectionSummary(engine, memberInfo);
+            const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
+            sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
             const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
             const siblings = sections
               .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
@@ -326,6 +327,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
               sampleTitles: memberInfo.map((m) => m.title),
               parentTitle: parent?.title,
               siblingSummaries: siblings,
+              depth: sec.depth,
+              maxDepth: maxTreeDepth,
             });
             sec.dirty = false;
             sec.updated = new Date().toISOString().split("T")[0] as any;
@@ -670,7 +673,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       }
       if (memberInfo.length > 0) {
         try {
-          sec.summary = await sectionSummary(engine, memberInfo);
+          const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
+          sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
           const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
           const siblings = sections
             .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
@@ -679,6 +683,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             sampleTitles: memberInfo.map((m) => m.title),
             parentTitle: parent?.title,
             siblingSummaries: siblings,
+            depth: sec.depth,
+            maxDepth: maxTreeDepth,
           });
           sec.dirty = false;
           sec.updated = new Date().toISOString().split("T")[0] as any;

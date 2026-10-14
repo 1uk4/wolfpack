@@ -19,9 +19,17 @@ export interface SectionMember {
  */
 export async function sectionSummary(
   engine: Engine,
-  members: SectionMember[]
+  members: SectionMember[],
+  opts?: { depth?: number; maxDepth?: number }
 ): Promise<string> {
   const bounded = members.slice(0, HIERARCHY.maxChildSummaries);
+  const depthHint = opts?.depth !== undefined && opts?.maxDepth
+    ? opts.depth === 0
+      ? "\nThis is a TOP-LEVEL section. Write a BROAD, domain-level summary."
+      : opts.depth <= 1
+        ? "\nThis is a high-level grouping. Write a general thematic summary."
+        : ""
+    : "";
 
   const prompt = [
     "Entries in this section:",
@@ -31,7 +39,7 @@ export async function sectionSummary(
       return `${i + 1}. ${m.title}${summary ? ` — ${summary}` : ""}`;
     }),
     "",
-    "Write the section's one-line summary (one sentence, at most 140 characters).",
+    "Write the section's one-line summary (one sentence, at most 140 characters)." + depthHint,
   ].join("\n");
 
   const result = await engine.call("sectionSummary", SectionSummarySchema, {
@@ -49,7 +57,7 @@ export async function sectionSummary(
 export async function labelSection(
   engine: Engine,
   summary: string,
-  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[] } = {}
+  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[]; depth?: number; maxDepth?: number } = {}
 ): Promise<string> {
   const { sampleTitles = [], parentTitle, siblingSummaries = [] } = context;
   const bounded = sampleTitles.slice(0, HIERARCHY.maxChildSummaries);
@@ -64,7 +72,7 @@ export async function labelSection(
     bounded.length ? "\nSample member titles:" : "",
     ...bounded.map((t) => `- ${t}`),
     "",
-    "Produce a short, specific title that is distinct from the parent and siblings.",
+    (context.depth === 0 ? "Produce a BROAD, domain-level title (2-4 words). This is the top-level section." : context.depth !== undefined && context.depth <= 1 ? "Produce a general thematic title (2-5 words) that covers the scope of this group." : "Produce a short, specific title that is distinct from the parent and siblings."),
   ].join("\n");
 
   const result = await engine.call("labelSection", LabelSectionSchema, {

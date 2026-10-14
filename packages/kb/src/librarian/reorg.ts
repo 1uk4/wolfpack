@@ -20,7 +20,8 @@ import {
   type EntryWithVector,
 } from "./hierarchy.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
-import { createEmbedder, buildEntryVectors } from "./embed.js";
+import { createEmbedder, buildEntryVectors, cosine } from "./embed.js";
+import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
 
 export interface ReorgOptions {
@@ -30,6 +31,8 @@ export interface ReorgOptions {
   domains?: string[];
   /** Only check these sections (for post-sweep targeted reorg) */
   touchedSections?: Set<string>;
+  /** Full bottom-up rebuild of the section tree (agglomerative clustering) */
+  rebuild?: boolean;
   notify?: (msg: string) => void;
 }
 
@@ -40,6 +43,8 @@ export interface ReorgResult {
   placements: number;
   labelsUpdated: number;
   domains: string[];
+  /** Set when a full rebuild was performed */
+  rebuilt?: boolean;
 }
 
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
@@ -118,6 +123,149 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   }
   const events: KbEvent[] = [];
   const result: ReorgResult = { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
+
+  // Full bottom-up rebuild mode
+  if (opts.rebuild) {
+    const { buildTreeBottomUp } = await import("./section-tree.js");
+    
+    for (const domain of domains) {
+      const domainVectors = allVectors.filter((v) => v.domain === domain);
+      if (domainVectors.length === 0) {
+        notify?.(`rebuild: ${domain} — no entries, skipping`);
+        continue;
+      }
+      
+      notify?.(`rebuild: ${domain} (${domainVectors.length} entries)`);
+      
+      // Compute domain centroid
+      const domainCentroid = computeCentroid(domainVectors.map((v) => v.vector));
+      
+      // Build entries with vectors for the algorithm
+      const entries: EntryWithVector[] = domainVectors.map((v) => ({
+        entryId: v.entryId,
+        sectionId: "" as SectionId,
+        vector: v.vector,
+      }));
+      
+      // Build the tree
+      const newSections = buildTreeBottomUp(entries, domain, domainCentroid);
+      notify?.(`  built ${newSections.length} sections`);
+      
+      // Remove old sections for this domain
+      sections = sections.filter((s) => s.domain !== domain);
+      sections.push(...newSections);
+      
+      // Assign entries to leaf sections and update frontmatter
+      const eDir = join(domainsRoot, domain, "entries");
+      let placed = 0;
+      for (const sec of newSections) {
+        if (sec.childIds.length > 0) continue; // only place in leaves
+        for (const member of entries.filter((e) => {
+          // Find which leaf section this entry belongs to by centroid proximity
+          const leafSections = newSections.filter((s) => s.childIds.length === 0 && s.domain === domain);
+          let bestSec = sec;
+          let bestSim = -1;
+          for (const ls of leafSections) {
+            const sim = cosine(e.vector, ls.centroid);
+            if (sim > bestSim) { bestSim = sim; bestSec = ls; }
+          }
+          return bestSec.id === sec.id;
+        })) {
+          const file = join(eDir, `${member.entryId}.md`);
+          if (existsSync(file)) {
+            let content = readFileSync(file, "utf-8");
+            content = content.replace(/^section: .+$/m, `section: ${sec.id}`);
+            writeFileSync(file, content);
+            placed++;
+          }
+        }
+      }
+      notify?.(`  placed ${placed} entries into leaf sections`);
+      
+      // Mark all sections as dirty for LLM naming
+      for (const sec of newSections) {
+        sec.dirty = true;
+      }
+      
+      result.placements += placed;
+      result.rebuilt = true;
+      result.domains.push(domain);
+    }
+    
+    // Label dirty sections via LLM
+    for (const domain of result.domains) {
+      const eDir = join(domainsRoot, domain, "entries");
+      const dirtySections = sections.filter((s) => s.domain === domain && s.dirty);
+      notify?.(`  labeling ${dirtySections.length} sections...`);
+      
+      for (const sec of dirtySections) {
+        // Get member info (direct members or children's titles for parents)
+        const memberInfo: SectionMember[] = [];
+        
+        // Direct members
+        if (existsSync(eDir)) {
+          for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+            const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+            if (String(fields.section ?? "") === sec.id) {
+              memberInfo.push({
+                title: String(fields.title ?? f.replace(/\.md$/, "")),
+                summary: fields.summary ? String(fields.summary) : undefined,
+              });
+            }
+          }
+        }
+        
+        // For parents, use children's titles weighted by entry count
+        if (memberInfo.length === 0 && sec.childIds.length > 0) {
+          const childSections = sections.filter((s) => sec.childIds.includes(s.id));
+          for (const child of childSections) {
+            if (child.title && child.title !== child.id) {
+              memberInfo.push({ title: child.title, summary: child.summary });
+            }
+          }
+        }
+        
+        if (memberInfo.length > 0 && sec.depth <= 2) {
+          try {
+            sec.summary = await sectionSummary(engine, memberInfo);
+            const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
+            const siblings = sections
+              .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
+              .map((s) => s.summary);
+            sec.title = await labelSection(engine, sec.summary, {
+              sampleTitles: memberInfo.map((m) => m.title),
+              parentTitle: parent?.title,
+              siblingSummaries: siblings,
+            });
+            sec.dirty = false;
+            sec.updated = new Date().toISOString().split("T")[0] as any;
+            notify?.(`  labeled: ${sec.id} → "${sec.title}"`);
+            result.labelsUpdated++;
+          } catch (e) {
+            notify?.(`  label failed: ${sec.id}: ${e}`);
+          }
+        } else if (memberInfo.length > 0) {
+          // Auto-title from member titles for deep sections
+          sec.title = memberInfo.slice(0, 3).map((m) => m.title.split(":")[0].trim()).join(", ");
+          sec.dirty = false;
+          notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
+          result.labelsUpdated++;
+        }
+      }
+    }
+    
+    // Persist
+    writeSections(roots, sections);
+    const freshLog = readLedger(roots);
+    renderRegistry(roots, foldRegistry(freshLog));
+    for (const domain of result.domains) {
+      renderDomainDigest(roots, domain);
+      renderDomainIndex(roots, domain);
+    }
+    
+    notify?.(`rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
+    return result;
+  }
 
   for (const domain of domains) {
     notify?.(`reorg: ${domain}`);

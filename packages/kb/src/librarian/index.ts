@@ -39,3 +39,10 @@ export {
 export { quarantine } from "./commit.js";
 export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";
 export { retireEntries, type RetireResult } from "./retire.js";
+export {
+  buildTreeBottomUp,
+  placeEntry,
+  splitAsParentChild,
+  checkInvariants,
+  shouldRecalculate,
+} from "./section-tree.js";

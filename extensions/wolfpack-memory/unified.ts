@@ -423,11 +423,12 @@ export default function createMemoryExtension(
         
         defineTool({
           name: "kb_reorg",
-          description: "Reorganize KB sections: split oversized sections into nested sub-sections, merge underfull ones, and crystallize unplaced entries. Updates digest and index.",
+          description: "Reorganize KB sections. Use rebuild=true for full bottom-up reconstruction of the section tree (agglomerative clustering). Without rebuild, does incremental maintenance (split/merge/prune).",
           parameters: Type.Object({
             domain: Type.Optional(Type.String({ description: "Only reorg this domain (default: all)" })),
+            rebuild: Type.Optional(Type.Boolean({ description: "Full bottom-up rebuild of section tree (default: false)" })),
           }),
-          async execute(args: { domain?: string }, ctx: ToolContext): Promise<ToolResult> {
+          async execute(args: { domain?: string; rebuild?: boolean }, ctx: ToolContext): Promise<ToolResult> {
             try {
               const { reorg } = await import("@wolfpack/kb/librarian");
               const { createEngine } = await import("@wolfpack/engine");
@@ -451,11 +452,12 @@ export default function createMemoryExtension(
                 engine,
                 roots,
                 domains: args.domain ? [args.domain] : undefined,
+                rebuild: args.rebuild,
                 notify: (msg: string) => console.log(`[librarian] ${msg}`),
               });
               
               const lines = [
-                `## Reorg Complete`,
+                `## Reorg Complete${result.rebuilt ? " (Full Rebuild)" : ""}`,
                 "",
                 `- Splits: ${result.splits}`,
                 `- Merges: ${result.merges}`,

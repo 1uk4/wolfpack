@@ -73,6 +73,9 @@ Messages from Telegram are prefixed with "[telegram]".
 
 - **telegram_buttons** — Inline buttons below your message. callback_data sent as next message.
 - **telegram_keyboard** — Large reply keyboard below input. Button text sent as next message.
+- **telegram_pin** — Pin a message. Use message_id='last' to pin the most recent bot message.
+- **telegram_unpin** — Unpin a message by ID.
+- **telegram_edit** — Edit a sent message's text. Use message_id='last' for the most recent. Supports MarkdownV2.
 - **telegram_react** — React to the message with an emoji (no text reply needed).
 - **telegram_attach** — Send a local file as attachment.
 
@@ -184,6 +187,73 @@ Never ask a multiple-choice question without first calling telegram_buttons.
           return {
             content: [{ type: "text" as const, text: `Queued reply keyboard with ${params.buttons.length} row(s).` }],
           };
+        },
+      }),
+
+      defineTool({
+        name: "telegram_pin",
+        description: "Pin a message in the chat. Use 'last' to pin the most recently sent message.",
+        parameters: Type.Object({
+          message_id: Type.String({ description: "Message ID to pin, or 'last' for the most recent bot message" }),
+        }),
+        async execute(params: { message_id: string }) {
+          if (!state.botApi) {
+            return { content: [{ type: "text" as const, text: "Bot API not available" }], isError: true };
+          }
+          const chatId = state.botApi.getChatId();
+          if (!chatId) {
+            return { content: [{ type: "text" as const, text: "No active chat" }], isError: true };
+          }
+          const msgId = params.message_id === "last" ? state.botApi.getLastMessageId() : parseInt(params.message_id);
+          if (!msgId) {
+            return { content: [{ type: "text" as const, text: "No message to pin" }], isError: true };
+          }
+          await state.botApi.pinChatMessage(chatId, msgId);
+          return { content: [{ type: "text" as const, text: `Pinned message ${msgId}` }] };
+        },
+      }),
+
+      defineTool({
+        name: "telegram_unpin",
+        description: "Unpin a message in the chat.",
+        parameters: Type.Object({
+          message_id: Type.String({ description: "Message ID to unpin" }),
+        }),
+        async execute(params: { message_id: string }) {
+          if (!state.botApi) {
+            return { content: [{ type: "text" as const, text: "Bot API not available" }], isError: true };
+          }
+          const chatId = state.botApi.getChatId();
+          if (!chatId) {
+            return { content: [{ type: "text" as const, text: "No active chat" }], isError: true };
+          }
+          await state.botApi.unpinChatMessage(chatId, parseInt(params.message_id));
+          return { content: [{ type: "text" as const, text: `Unpinned message ${params.message_id}` }] };
+        },
+      }),
+
+      defineTool({
+        name: "telegram_edit",
+        description: "Edit the text of a previously sent message. Use 'last' to edit the most recent bot message.",
+        parameters: Type.Object({
+          message_id: Type.String({ description: "Message ID to edit, or 'last' for the most recent bot message" }),
+          text: Type.String({ description: "New message text" }),
+          parse_mode: Type.Optional(Type.String({ description: "Parse mode: MarkdownV2 or HTML (optional)" })),
+        }),
+        async execute(params: { message_id: string; text: string; parse_mode?: string }) {
+          if (!state.botApi) {
+            return { content: [{ type: "text" as const, text: "Bot API not available" }], isError: true };
+          }
+          const chatId = state.botApi.getChatId();
+          if (!chatId) {
+            return { content: [{ type: "text" as const, text: "No active chat" }], isError: true };
+          }
+          const msgId = params.message_id === "last" ? state.botApi.getLastMessageId() : parseInt(params.message_id);
+          if (!msgId) {
+            return { content: [{ type: "text" as const, text: "No message to edit" }], isError: true };
+          }
+          await state.botApi.editMessageText(chatId, msgId, params.text, params.parse_mode);
+          return { content: [{ type: "text" as const, text: `Edited message ${msgId}` }] };
         },
       }),
 

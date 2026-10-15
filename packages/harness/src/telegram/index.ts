@@ -50,6 +50,25 @@ export async function createTelegramClient(
   // Use provided shared state or create internal (for backwards compat)
   const telegramState = config.sharedState ?? createTelegramSharedState();
 
+  // Track the owner's chat ID for bot API access
+  let ownerChatId: number | undefined;
+  let lastSentMessageId: number | undefined;
+
+  // Expose direct bot API for pin/edit/unpin tools
+  telegramState.botApi = {
+    async pinChatMessage(chatId: number, messageId: number) {
+      await bot.api.pinChatMessage(chatId, messageId, { disable_notification: true });
+    },
+    async unpinChatMessage(chatId: number, messageId: number) {
+      await bot.api.unpinChatMessage(chatId, messageId);
+    },
+    async editMessageText(chatId: number, messageId: number, text: string, parseMode?: string) {
+      await bot.api.editMessageText(chatId, messageId, text, parseMode ? { parse_mode: parseMode as any } : undefined);
+    },
+    getChatId() { return ownerChatId; },
+    getLastMessageId() { return lastSentMessageId; },
+  };
+
   // Track active streams per chat
   const activeStreams = new Map<number, {
     stream: AgentEventStream;
@@ -142,6 +161,7 @@ export async function createTelegramClient(
     const extras = [buttons?.length && `${buttons.flat().length} btn`, replyKeyboard && "kbd"].filter(Boolean);
     console.log(`[tg] \u2192 ${preview}${extras.length ? ` [${extras.join(", ")}]` : ""}`);
     
+    lastSentMessageId = sent.message_id;
     return sent.message_id;
   }
 
@@ -296,6 +316,9 @@ export async function createTelegramClient(
       await ctx.reply("Not authorized.");
       return;
     }
+
+    // Track owner chat ID for bot API tools
+    ownerChatId = chatId;
 
     // Log incoming message
     const preview = messageText.length > 60 ? messageText.slice(0, 57) + "..." : messageText;

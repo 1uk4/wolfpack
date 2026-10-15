@@ -112,6 +112,14 @@ export interface TelegramSharedState {
   queuedAttachments: Map<string, TelegramAttachment[]>;
   /** Valid reaction emojis */
   validReactions: Set<string>;
+  /** Direct Bot API access for pin/edit/unpin. Injected by harness after bot creation. */
+  botApi?: {
+    pinChatMessage(chatId: number, messageId: number): Promise<void>;
+    unpinChatMessage(chatId: number, messageId: number): Promise<void>;
+    editMessageText(chatId: number, messageId: number, text: string, parseMode?: string): Promise<void>;
+    getChatId(): number | undefined;
+    getLastMessageId(): number | undefined;
+  };
 }
 
 // ─── Extension Definition ──────────────────────────────────────────────────

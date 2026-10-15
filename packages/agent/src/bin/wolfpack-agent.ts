@@ -12,6 +12,7 @@ import { wolvesRouter } from "../routes/wolves.js";
 import { logsRouter } from "../routes/logs.js";
 import { healthRouter } from "../routes/health.js";
 import { workRouter } from "../routes/work.js";
+import { dashboardRouter } from "../routes/dashboard.js";
 
 const PORT = parseInt(process.env.WOLFPACK_AGENT_PORT ?? "3141");
 const DATA_DIR = process.env.WOLFPACK_AGENT_DATA ?? "/opt/wolfpack";
@@ -28,6 +29,9 @@ async function main() {
   app.get("/ping", (_req, res) => {
     res.json({ status: "ok", version: "0.1.0" });
   });
+
+  // Dashboard — no auth required (Tailscale is the auth layer)
+  app.use("/dashboard", dashboardRouter());
 
   // Everything below requires the API key.
   app.use(authMiddleware);

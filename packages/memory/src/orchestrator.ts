@@ -17,6 +17,7 @@ import { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidatio
 import { fillPromptTemplate } from "./config/prompts/template.js";
 import type { AgentRuntime, ConversationChunk } from "./runtime.js";
 import { observe } from "./observer/observe.js";
+import { buildDomainContext } from "./observer/domain-context.js";
 import { ConsolidationResultSchema } from "./schemas.js";
 import type { Observation, LedgerEvent } from "./ledger/types.js";
 import { foldLedger, poolTokens, selectPromotionOverflow } from "./ledger/fold.js";
@@ -44,6 +45,10 @@ export interface OrchestratorConfig {
   kbRoots?: KbRoots;
   /** Default domain hint for emitted deltas (default: "wolfpack"). */
   defaultDomain?: string;
+  /** All domains the wolf subscribes to. Enables per-observation domain classification. */
+  domains?: string[];
+  /** Path to KB base directory (for building domain context). */
+  kbBasePath?: string;
 }
 
 export const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -94,6 +99,11 @@ export function createOrchestrator(
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const memRoot = sessionMemoryRoot(runtime.cwd, runtime.sessionId);
 
+  // Build domain context once at startup for per-observation classification
+  const domainContext = cfg.domains && cfg.domains.length > 1
+    ? buildDomainContext(cfg.domains, cfg.kbBasePath ?? cfg.kbRoots?.kbBase)
+    : "";
+
   // In-memory ledger events (also persisted via runtime)
   // The runtime stores generic LedgerEntry; we extract the typed data.
   let ledgerEvents: LedgerEvent[] = runtime
@@ -121,9 +131,9 @@ export function createOrchestrator(
    * model timestamps ("YYYY-MM-DD HH:MM") to second-resolution ids
    * ("YYYY-MM-DDTHH:MM:00") and appends ".01", ".02" for collisions.
    */
-  function assignUniqueTimestamps(
-    observations: Array<{ timestamp: string; content: string }>
-  ): Array<{ timestamp: string; content: string }> {
+  function assignUniqueTimestamps<T extends { timestamp: string; content: string }>(
+    observations: T[]
+  ): T[] {
     const used = new Set<string>();
     // Seed with already-known timestamps from the ledger
     const folded = foldLedger(ledgerEvents);
@@ -157,7 +167,7 @@ export function createOrchestrator(
   async function processChunks(chunks: ConversationChunk[]): Promise<void> {
     // Observe each chunk (could parallelize later)
     for (const chunk of chunks) {
-      const result = await observe({ engine, chunkText: chunk.text });
+      const result = await observe({ engine, chunkText: chunk.text, domainContext: domainContext || undefined });
 
       if (result.observations.length > 0) {
         const uniqueObs = assignUniqueTimestamps(result.observations);
@@ -165,6 +175,7 @@ export function createOrchestrator(
           timestamp: o.timestamp,
           content: o.content,
           tokenCount: estimateTokens(o.content),
+          domain: o.domain,
         }));
 
         appendEvent({
@@ -211,7 +222,10 @@ export function createOrchestrator(
 
     // Build prompt from observations
     const obsLines = promote
-      .map((o) => `${o.timestamp}  ${o.content}`)
+      .map((o) => {
+        const domainTag = o.domain ? ` [${o.domain}]` : "";
+        return `${o.timestamp}${domainTag}  ${o.content}`;
+      })
       .join("\n");
 
     // Read existing session topics for context
@@ -233,8 +247,13 @@ export function createOrchestrator(
         : "",
     });
 
+    let system = CONSOLIDATE_SYSTEM;
+    if (domainContext) {
+      system += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainContext}`;
+    }
+
     const result = await engine.call("consolidate", ConsolidationResultSchema, {
-      system: CONSOLIDATE_SYSTEM,
+      system,
       prompt,
     });
 
@@ -250,6 +269,7 @@ export function createOrchestrator(
         summary: action.result.summary,
         updated: now,
         body: action.result.body,
+        domain: action.result.domain,
       });
     }
 

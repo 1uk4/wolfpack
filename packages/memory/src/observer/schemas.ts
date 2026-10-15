@@ -11,6 +11,10 @@ export const RawObservationSchema = z.object({
     .string()
     .min(1)
     .describe("Single-line plain prose — no markdown, no tags"),
+  domain: z
+    .string()
+    .optional()
+    .describe("The knowledge domain this observation belongs to"),
 });
 
 export type RawObservation = z.infer<typeof RawObservationSchema>;

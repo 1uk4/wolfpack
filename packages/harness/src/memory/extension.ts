@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, hook, section, GenerationTask } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { observe, renderDenContext, renderKbAccess, type RawObservation } from "@wolfpack/memory";
+import { observe, renderDenContext, renderKbAccess, buildDomainContext, type RawObservation } from "@wolfpack/memory";
 import { createEngine, type Engine } from "@wolfpack/engine";
 import { consolidatePool } from "./consolidation.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -81,7 +81,7 @@ async function writeToPool(
   const timestamp = new Date().toISOString();
 
   const lines = observations.map(obs =>
-    JSON.stringify({ ...obs, recordedAt: timestamp }) + "\n"
+    JSON.stringify({ timestamp: obs.timestamp, content: obs.content, domain: obs.domain, recordedAt: timestamp }) + "\n"
   );
 
   await appendFile(poolFile, lines.join(""));
@@ -100,6 +100,11 @@ export function createMemoryExtension(config: MemoryExtensionConfig) {
     provider = "anthropic",
     minTextLength = 100,
   } = config;
+
+  // Build domain context once for per-observation classification
+  const domainContext = config.subscribedDomains && config.subscribedDomains.length > 1
+    ? buildDomainContext(config.subscribedDomains, config.kbBase)
+    : "";
 
   // Lazy-init engine on first observation
   let engine: Engine | null = null;
@@ -220,6 +225,7 @@ export function createMemoryExtension(config: MemoryExtensionConfig) {
                 engine: eng,
                 chunkText: text,
                 mode: "conversation",
+                domainContext: domainContext || undefined,
               });
 
               if (result.observations.length > 0) {
@@ -238,6 +244,7 @@ export function createMemoryExtension(config: MemoryExtensionConfig) {
                         provider,
                         kbRoots: config.kbRoots,
                         defaultDomain: config.defaultDomain,
+                        domains: config.subscribedDomains,
                         onProgress: (msg) => console.log(`[memory] ${msg}`),
                       });
                       console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated`);

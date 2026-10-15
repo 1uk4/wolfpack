@@ -18,6 +18,7 @@ export interface TopicFile {
   summary: string;
   updated: string;
   body: string;
+  domain?: string;
   filename: string;
 }
 
@@ -50,6 +51,7 @@ export function readTopics(root: string): TopicFile[] {
       summary: String(fields.summary ?? ""),
       updated: String(fields.updated ?? ""),
       body: body.trim(),
+      domain: fields.domain ? String(fields.domain) : undefined,
       filename,
     };
   });
@@ -76,6 +78,7 @@ export function writeTopic(
     summary: string;
     updated: string;
     body: string;
+    domain?: string;
   }
 ): void {
   mkdirSync(root, { recursive: true });
@@ -85,6 +88,7 @@ export function writeTopic(
     `title: ${topic.title}`,
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
+    ...(topic.domain ? [`domain: ${topic.domain}`] : []),
     "---",
     "",
     topic.body,

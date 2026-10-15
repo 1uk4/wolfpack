@@ -23,6 +23,7 @@ export const TopicActionSchema = z.object({
         .describe("One line (\u2264140 chars), what this topic covers — shown in the index")
         .transform((s) => (s.length > 140 ? s.slice(0, 139) + "\u2026" : s)),
       body: z.string().describe("Full topic content, current-state prose"),
+      domain: z.string().optional().describe("The knowledge domain this topic belongs to"),
     })
     .nullable()
     .optional(),

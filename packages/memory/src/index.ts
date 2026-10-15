@@ -39,6 +39,7 @@ export {
   type ObserverResult,
   type ObserveOptions,
   type ObserveResult,
+  buildDomainContext,
 } from "./observer/index.js";
 
 // Ledger

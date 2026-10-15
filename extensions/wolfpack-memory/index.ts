@@ -1306,6 +1306,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       observerConcurrency: 4,
       kbRoots: kbEnabled ? kbRoots : undefined,
       defaultDomain: currentDomain,
+      domains: wolfDomains,
+      kbBasePath: kbRoots.kbBase || undefined,
     };
     orchestrator = createOrchestrator(engine, runtime, orchConfig);
     // Keep reference so domain switches update the orchestrator

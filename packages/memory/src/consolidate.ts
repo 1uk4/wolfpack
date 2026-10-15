@@ -133,6 +133,7 @@ export async function consolidateSession(
     title: string;
     summary: string;
     body: string;
+    domain?: string;
     change: "create" | "merge";
   }> = [];
 
@@ -149,6 +150,7 @@ export async function consolidateSession(
       summary: t.summary,
       updated: now,
       body: t.body,
+      domain: t.domain,
     };
 
     writeDenTopic(den.denRoot, topic);
@@ -167,17 +169,21 @@ export async function consolidateSession(
 
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     for (const topic of updatedTopics) {
+      const hint = topic.domain || defaultDomain;
       const emitted = emitDelta({
         roots: kbRoots,
         wolf: den.wolfName,
         denTopicId: topic.id,
         change: topic.change,
-        domainHint: defaultDomain,
+        domainHint: hint,
         summary: topic.summary,
         body: topic.body,
         session: sessionId,
       });
-      if (emitted) claimsSubmitted++;
+      if (emitted) {
+        claimsSubmitted++;
+        onProgress?.(`  emitted: ${topic.title} → ${hint}`);
+      }
     }
   }
 

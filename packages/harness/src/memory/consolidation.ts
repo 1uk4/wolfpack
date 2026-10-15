@@ -19,6 +19,7 @@ import {
   renderDenIndex,
   ensureDenDirs,
   readDenTopics,
+  buildDomainContext,
 } from "@wolfpack/memory";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -28,6 +29,7 @@ export interface PoolObservation {
   timestamp: string;
   content: string;
   recordedAt: string;
+  domain?: string;
 }
 
 export interface ConsolidationConfig {
@@ -41,6 +43,8 @@ export interface ConsolidationConfig {
   kbRoots?: KbRoots;
   /** Default domain hint for KB emissions (default: wolfpack) */
   defaultDomain?: string;
+  /** Wolf's subscribed domains (enables per-observation domain routing) */
+  domains?: string[];
   /** Skip emitting to KB (default: false) */
   skipClaims?: boolean;
   /** Minimum observations to consolidate (default: 5) */
@@ -129,6 +133,11 @@ export async function consolidatePool(
     onProgress,
   } = config;
 
+  // Build domain context for consolidation prompt
+  const domainCtx = config.domains && config.domains.length > 1
+    ? buildDomainContext(config.domains, config.kbRoots?.kbBase)
+    : "";
+
   // Read pool
   const observations = await readPool(wolfDen);
   if (observations.length === 0) {
@@ -164,7 +173,10 @@ export async function consolidatePool(
 
   // Build prompt (same format as Pi-CLI orchestrator)
   const obsLines = observations
-    .map((o) => `${o.timestamp}  ${o.content}`)
+    .map((o) => {
+      const domainTag = o.domain ? ` [${o.domain}]` : "";
+      return `${o.timestamp}${domainTag}  ${o.content}`;
+    })
     .join("\n");
 
   const prompt = `===== OBSERVATIONS TO CONSOLIDATE =====
@@ -175,7 +187,9 @@ ${obsLines}
 ${existingSection}
 ===== END TOPICS =====
 
-Fold the observations into topics. For each group of related observations, decide MERGE (into existing topic), CREATE (new topic), or SKIP (not worth persisting).`;
+Fold the observations into topics. For each group of related observations, decide MERGE (into existing topic), CREATE (new topic), or SKIP (not worth persisting).
+
+Domain tags [domain] appear on observations. When creating or merging topics, set the domain field to the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.`;
 
   // Create engine for consolidation
   const engine = createEngine({
@@ -187,8 +201,13 @@ Fold the observations into topics. For each group of related observations, decid
   });
 
   onProgress?.("Running LLM consolidation...");
+  let consolidateSystem = CONSOLIDATE_SYSTEM;
+  if (domainCtx) {
+    consolidateSystem += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainCtx}`;
+  }
+
   const result = await engine.call("consolidate", ConsolidationResultSchema, {
-    system: CONSOLIDATE_SYSTEM,
+    system: consolidateSystem,
     prompt,
   });
 
@@ -204,6 +223,7 @@ Fold the observations into topics. For each group of related observations, decid
     title: string;
     summary: string;
     body: string;
+    domain?: string;
     change: "create" | "merge";
   }> = [];
 
@@ -230,6 +250,7 @@ Fold the observations into topics. For each group of related observations, decid
       title: action.result.title,
       summary: action.result.summary,
       body: action.result.body,
+      domain: action.result.domain,
       change,
     });
 
@@ -245,18 +266,19 @@ Fold the observations into topics. For each group of related observations, decid
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     onProgress?.("Emitting deltas to KB...");
     for (const topic of updatedTopics) {
+      const hint = topic.domain || defaultDomain;
       const emitted = emitDelta({
         roots: kbRoots,
         wolf: wolfName,
         denTopicId: topic.id,
         change: topic.change,
-        domainHint: defaultDomain,
+        domainHint: hint,
         summary: topic.summary,
         body: topic.body,
       });
       if (emitted) {
         claimsSubmitted++;
-        onProgress?.(`  emitted: ${topic.id}`);
+        onProgress?.(`  emitted: ${topic.id} → ${hint}`);
       }
     }
   }

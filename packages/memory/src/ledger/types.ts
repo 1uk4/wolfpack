@@ -11,6 +11,7 @@ export interface Observation {
   timestamp: string;
   content: string;
   tokenCount: number;
+  domain?: string;
 }
 
 /**

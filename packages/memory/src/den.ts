@@ -90,6 +90,7 @@ export function writeDenTopic(
     updated: string;
     related?: string[];
     body: string;
+    domain?: string;
   }
 ): void {
   ensureDenDirs(denRoot);
@@ -102,6 +103,7 @@ export function writeDenTopic(
     `title: ${topic.title}`,
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
+    ...(topic.domain ? [`domain: ${topic.domain}`] : []),
   ];
 
   if (relatedArr.length > 0) {

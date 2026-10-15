@@ -16,6 +16,8 @@ export interface ObserveOptions {
   mode?: "conversation" | "document";
   /** Document mode only: the recovered source date for default timestamps. */
   sourceDate?: string;
+  /** Domain context block for per-observation classification. */
+  domainContext?: string;
 }
 
 export interface ObserveResult {
@@ -27,9 +29,13 @@ export interface ObserveResult {
  * One LLM call with Zod validation.
  */
 export async function observe(options: ObserveOptions): Promise<ObserveResult> {
-  const { engine, chunkText, mode = "conversation", sourceDate } = options;
+  const { engine, chunkText, mode = "conversation", sourceDate, domainContext } = options;
 
-  const system = mode === "document" ? CRAWL_OBSERVER_SYSTEM : OBSERVER_SYSTEM;
+  let system = mode === "document" ? CRAWL_OBSERVER_SYSTEM : OBSERVER_SYSTEM;
+  if (domainContext) {
+    system += `\n\n## Domain Classification\n\nClassify each observation into exactly one domain. Set the "domain" field.\n\n${domainContext}`;
+  }
+
   const prompt =
     mode === "document"
       ? buildCrawlObserverPrompt(chunkText, sourceDate)

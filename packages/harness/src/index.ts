@@ -15,6 +15,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { loadWolfConfig, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
+import { createFileToolsExtension } from "./extensions/file-tools.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
@@ -97,6 +98,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Wolf identity extension — provides AGENTS.md, CLAUDE.md sections
   const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(wolfDen, "..", "agent");
   registry.install(createWolfIdentityExtension({ config, wolfDen, agentDir }));
+  registry.install(createFileToolsExtension(wolfDen));
   
   // Memory config for timer-based consolidation
   const memoryEnabled = config.memory?.enabled ?? config.extensions?.includes("memory") ?? false;

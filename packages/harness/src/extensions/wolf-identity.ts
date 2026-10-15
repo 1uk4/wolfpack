@@ -4,8 +4,9 @@
  * Reads AGENTS.md and CLAUDE.md from the wolf directories and injects them
  * as system prompt sections. Also provides wolf context (name, domains, role).
  */
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { defineExtension, section } from "@earendil-works/pi-durable";
 import type { WolfConfig } from "../config.js";
 
@@ -88,6 +89,27 @@ export function createWolfIdentityExtension(options: WolfIdentityOptions) {
           }
         }
         return undefined; // No CLAUDE.md found, skip section
+      }),
+
+      // Skills — auto-load all $WOLF_DEN/skills/*/SKILL.md
+      section("wolf_skills", async () => {
+        const skillsDir = join(wolfDen, "skills");
+        if (!existsSync(skillsDir)) return undefined;
+        try {
+          const dirs = await readdir(skillsDir, { withFileTypes: true });
+          const parts: string[] = [];
+          for (const d of dirs) {
+            if (!d.isDirectory()) continue;
+            try {
+              const content = await readFile(join(skillsDir, d.name, "SKILL.md"), "utf-8");
+              parts.push(content);
+            } catch { continue; }
+          }
+          if (parts.length === 0) return undefined;
+          return parts.join("\n\n---\n\n");
+        } catch {
+          return undefined;
+        }
       }),
 
       // telegram.md section — user-defined telegram interaction rules

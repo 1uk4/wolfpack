@@ -173,37 +173,49 @@ function buildDomainDataset(domain: string, label: string, domainDir: string) {
   }
 
   // Work items
-  const workDir = join(domainDir, "work");
+  // Work items — same structure as build_graph.py
+  const workDirPath = join(domainDir, "work");
   const workItems = new Map<string, Record<string, any>>();
-  if (existsSync(workDir)) {
-    for (const f of readdirSync(workDir)) {
+  if (existsSync(workDirPath)) {
+    for (const f of readdirSync(workDirPath)) {
       if (!f.endsWith(".md")) continue;
       try {
-        const raw = readFileSync(join(workDir, f), "utf-8");
+        const raw = readFileSync(join(workDirPath, f), "utf-8");
         const { meta, body } = parseFrontmatter(raw);
+        if (meta.nodeType !== "work") continue;
+        if (meta.stage === "archived") continue;
         const id = meta.id ?? f.replace(/\.md$/, "");
-        workItems.set(id, { ...meta, id, body });
+        // Parse dependsOn from YAML list
+        let dependsOn: string[] = [];
+        const depMatch = raw.match(/dependsOn:\n((?:\s+-\s+\S+\n?)*)/)
+        if (depMatch) {
+          dependsOn = depMatch[1].match(/- (\S+)/g)?.map((m: string) => m.slice(2)) ?? [];
+        }
+        workItems.set(id, { ...meta, id, body, dependsOn });
       } catch { continue; }
     }
   }
 
   if (workItems.size > 0) {
-    const factoryNode = `factory:${domain}`;
+    const factoryNode = `fac:${domain}`;
     nodes.push({
       id: factoryNode,
       label: "Factory",
       group: "factory",
       value: 25,
-      meta: { type: "Factory", items: workItems.size },
+      meta: { type: "Factory", workCount: workItems.size },
     });
     edges.push({ from: domNode, to: factoryNode });
 
+    const workIds = new Set(workItems.keys());
     for (const [wid, w] of workItems) {
       const wnode = `work:${wid}`;
       nodes.push({
         id: wnode,
         label: (w.title ?? wid).slice(0, 40),
-        group: w.kind ?? "task",
+        group: "work",
+        workKind: w.kind ?? "task",
+        stage: w.stage ?? "plan",
         value: 12,
         meta: {
           type: "Work",
@@ -213,29 +225,26 @@ function buildDomainDataset(domain: string, label: string, domainDir: string) {
           stage: w.stage ?? "",
           assignee: w.assignee ?? "",
           area: w.area ?? "",
+          successCriteria: w.successCriteria ?? "",
+          dependsOn: w.dependsOn ?? [],
         },
-      });
+      } as any);
       bodies[wnode] = w.body ?? "";
 
       const parentId = w.partOf;
-      if (parentId && workItems.has(parentId)) {
+      if (parentId && workIds.has(parentId)) {
         edges.push({ from: `work:${parentId}`, to: wnode });
       } else {
         edges.push({ from: factoryNode, to: wnode });
       }
     }
 
-    // Dependency edges
+    // Dependency edges (dashed in the graph)
     for (const [wid, w] of workItems) {
-      const deps = w.dependsOn;
-      if (typeof deps === "string" && deps.startsWith("[")) {
-        try {
-          for (const dep of JSON.parse(deps.replace(/'/g, '"'))) {
-            if (workItems.has(dep)) {
-              edges.push({ from: `work:${dep}`, to: `work:${wid}`, type: "depends" });
-            }
-          }
-        } catch { /* skip */ }
+      for (const dep of w.dependsOn ?? []) {
+        if (workIds.has(dep)) {
+          edges.push({ from: `work:${dep}`, to: `work:${wid}`, type: "depends" });
+        }
       }
     }
   }

@@ -16,6 +16,7 @@ import { loadWolfConfig, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 import { createFileToolsExtension } from "./extensions/file-tools.js";
+import { startPlannerTimer } from "./extensions/planner-timer.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
@@ -290,6 +291,9 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     }
   }
 
+  // Start planner timer for day-planner skill
+  const stopPlanner = startPlannerTimer(wolfDen, telegramState);
+
   return {
     harness,
     config,
@@ -298,6 +302,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     sweepTimer,
     close: async () => {
       console.log("Closing harness...");
+      stopPlanner();
       if (consolidationTimer) clearInterval(consolidationTimer);
       if (sweepTimer) clearInterval(sweepTimer);
       if (telegram) await telegram.stop();

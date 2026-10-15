@@ -1659,7 +1659,24 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     },
   };
 
-  initWorkSystem(pi, workConfig);
+  // Read wolf's subscribed domains from wolf.yaml
+  let wolfDomains: string[] = [];
+  try {
+    const wolfYamlPath = path.join(wolfDen, "..", "wolf.yaml");
+    if (fs.existsSync(wolfYamlPath)) {
+      const raw = fs.readFileSync(wolfYamlPath, "utf-8");
+      const match = raw.match(/domains:\s*\n((?:\s+-\s+\S+\n?)*)/)
+      if (match) {
+        wolfDomains = match[1].match(/- (\S+)/g)?.map(m => m.slice(2)) ?? [];
+      }
+    }
+  } catch { /* best effort */ }
+
+  initWorkSystem(pi, {
+    ...workConfig,
+    domains: wolfDomains,
+    getCurrentDomain: () => currentDomain,
+  });
 
   // ── Commands ────────────────────────────────────────────────────────────
 

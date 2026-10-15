@@ -282,6 +282,10 @@ async function promptTaskIteration(
 // ── Work system initialization ─────────────────────────────────────────────
 
 export interface WorkSystemConfig {
+  /** Wolf's subscribed domains */
+  domains?: string[];
+  /** Get the currently active domain (from /wolf:domain) */
+  getCurrentDomain?: () => string | undefined;
   /** Callback to get stage context for prompt injection */
   getStageContext?: (item: WorkItem) => string;
   /** Callback when task completes (for summarization) */
@@ -588,11 +592,20 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if ((rawArgs ?? "").trim().toLowerCase() === "auto") return toggleAutoShip(ctx);
       lastCtx = ctx;
 
-      // Pre-fetch all items before entering the TUI panel
+      // Pre-fetch items for subscribed domains
       let allItems: WorkItem[] = [];
       let items: WorkItem[] = [];
       try {
-        allItems = await client.query({ assignee: wolfName }) ?? [];
+        const activeDomain = config.getCurrentDomain?.();
+        const queryDomains = activeDomain ? [activeDomain] : (config.domains ?? []);
+        if (queryDomains.length > 0) {
+          const results = await Promise.all(
+            queryDomains.map((d) => client.query({ domain: d }))
+          );
+          allItems = results.flat();
+        } else {
+          allItems = await client.query({}) ?? [];
+        }
         items = allItems.filter((i) => i.stage !== "archived");
       } catch (e: any) {
         ctx.ui.notify(`Failed to load work items: ${e.message}`, "warning");

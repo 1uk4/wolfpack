@@ -114,6 +114,7 @@ export interface TelegramSharedState {
   validReactions: Set<string>;
   /** Direct Bot API access for pin/edit/unpin. Injected by harness after bot creation. */
   botApi?: {
+    sendMessage(chatId: number, text: string, parseMode?: string): Promise<number>;
     pinChatMessage(chatId: number, messageId: number): Promise<void>;
     unpinChatMessage(chatId: number, messageId: number): Promise<void>;
     editMessageText(chatId: number, messageId: number, text: string, parseMode?: string): Promise<void>;

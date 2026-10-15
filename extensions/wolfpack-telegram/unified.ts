@@ -71,13 +71,20 @@ Messages from Telegram are prefixed with "[telegram]".
 
 ### Tools
 
-- **telegram_buttons** — Inline buttons below your message. callback_data sent as next message.
+- **telegram_send** — Send a standalone message separate from your reply. Use when a message must exist independently (e.g. to pin it or reference it later). Returns the message ID.
+- **telegram_buttons** — Inline buttons below your reply. callback_data sent as next message.
 - **telegram_keyboard** — Large reply keyboard below input. Button text sent as next message.
 - **telegram_pin** — Pin a message. Use message_id='last' to pin the most recent bot message.
 - **telegram_unpin** — Unpin a message by ID.
-- **telegram_edit** — Edit a sent message's text. Use message_id='last' for the most recent. Supports MarkdownV2.
+- **telegram_edit** — Edit a previously sent message's text. Use message_id='last' for the most recent. Supports MarkdownV2.
 - **telegram_react** — React to the message with an emoji (no text reply needed).
 - **telegram_attach** — Send a local file as attachment.
+
+### Sending patterns
+
+- Your reply text is always one message. To send MULTIPLE messages in one turn, use telegram_send for the extras.
+- To pin something: telegram_send the content, then telegram_pin with message_id="last".
+- To update a message later: save the message ID from telegram_send, then use telegram_edit.
 
 ### ALWAYS use buttons for choices
 
@@ -187,6 +194,26 @@ Never ask a multiple-choice question without first calling telegram_buttons.
           return {
             content: [{ type: "text" as const, text: `Queued reply keyboard with ${params.buttons.length} row(s).` }],
           };
+        },
+      }),
+
+      defineTool({
+        name: "telegram_send",
+        description: "Send a standalone message separate from your reply. Use for the workout card or any message that must be its own message (e.g. to pin independently).",
+        parameters: Type.Object({
+          text: Type.String({ description: "Message text" }),
+          parse_mode: Type.Optional(Type.String({ description: "Parse mode: MarkdownV2 or HTML (optional)" })),
+        }),
+        async execute(params: { text: string; parse_mode?: string }) {
+          if (!state.botApi) {
+            return { content: [{ type: "text" as const, text: "Bot API not available" }], isError: true };
+          }
+          const chatId = state.botApi.getChatId();
+          if (!chatId) {
+            return { content: [{ type: "text" as const, text: "No active chat" }], isError: true };
+          }
+          const msgId = await state.botApi.sendMessage(chatId, params.text, params.parse_mode);
+          return { content: [{ type: "text" as const, text: `Sent message ${msgId}` }] };
         },
       }),
 

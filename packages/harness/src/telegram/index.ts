@@ -56,6 +56,11 @@ export async function createTelegramClient(
 
   // Expose direct bot API for pin/edit/unpin tools
   telegramState.botApi = {
+    async sendMessage(chatId: number, text: string, parseMode?: string) {
+      const sent = await bot.api.sendMessage(chatId, text, parseMode ? { parse_mode: parseMode as any } : undefined);
+      lastSentMessageId = sent.message_id;
+      return sent.message_id;
+    },
     async pinChatMessage(chatId: number, messageId: number) {
       await bot.api.pinChatMessage(chatId, messageId, { disable_notification: true });
     },

@@ -248,7 +248,7 @@ export async function createTelegramClient(
             if (tc.name) {
               console.log(`[tg] ⚙ ${tc.name}`);
               // Notify user of long-running tool calls
-              const longRunning = ["kb_reorg", "kb_sweep_start", "memory_consolidate", "task_query"];
+              const longRunning = ["kb_reorg", "kb_sweep_start", "memory_consolidate"];
               if (longRunning.includes(tc.name)) {
                 try {
                   await bot.api.sendMessage(chatId, `⚙️ Running ${tc.name}...`);
@@ -261,7 +261,7 @@ export async function createTelegramClient(
         const toolEvent = event as { toolName?: string };
         if (toolEvent.toolName) {
           console.log(`[tg] ⚙ ${toolEvent.toolName}`);
-          const longRunning = ["kb_reorg", "kb_sweep_start", "memory_consolidate", "task_query", "kb_status", "kb_inbox"];
+          const longRunning = ["kb_reorg", "kb_sweep_start", "memory_consolidate"];
           if (longRunning.includes(toolEvent.toolName)) {
             try {
               await bot.api.sendMessage(chatId, `⚙️ Running ${toolEvent.toolName}...`);

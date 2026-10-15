@@ -144,14 +144,12 @@ export async function createTelegramClient(
     let sent;
     try {
       sent = await bot.api.sendMessage(chatId, truncated, {
-        reply_to_message_id: replyTo,
         parse_mode: "Markdown",
         reply_markup,
       });
     } catch (e) {
       // Markdown parsing failed, send as plain text
       sent = await bot.api.sendMessage(chatId, truncated, {
-        reply_to_message_id: replyTo,
         reply_markup,
       });
     }

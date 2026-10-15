@@ -16,30 +16,17 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth, Key, matchesKey } from "@earendil-works/pi-tui";
 import {
-  createWork,
-  stageWork,
-  noteWork,
-  linkWork,
-  queryWork,
-  getWorkTree,
-  loadWorkState,
-  commitWorkItem,
-  resolveWorkItem,
-  deleteWork,
   STAGE_ORDER,
   isComplete,
   isBindable,
   placementError,
   dependencyError,
-  unlinkWork,
-  moveWork,
-  ensureInbox,
   type CreateWorkInput,
   type WorkQuery,
   type WorkItem,
   type WorkId,
 } from "@wolfpack/kb/client";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { WorkClient } from "./work-client.js";
 import {
   startFileTracking,
   stopFileTracking,
@@ -123,19 +110,19 @@ function slugify(s: string): string {
 
 // ── Area discovery ────────────────────────────────────────────────────────
 
-function discoverAreas(roots: KbRoots): string[] {
+async function discoverAreas(wc: WorkClient): Promise<string[]> {
   const areas = new Set<string>();
   try {
-    const state = loadWorkState(roots);
-    for (const item of state.values()) {
+    const items = await wc.query({});
+    for (const item of items) {
       if (item.area) areas.add(item.area as string);
     }
   } catch { /* empty */ }
   return [...areas].sort();
 }
 
-async function pickArea(ctx: any, roots: KbRoots): Promise<string | undefined> {
-  const existing = discoverAreas(roots);
+async function pickArea(ctx: any, wc: WorkClient): Promise<string | undefined> {
+  const existing = await discoverAreas(wc);
   if (existing.length === 0) {
     const raw = await ctx.ui.input("Area? (e.g. engineering, marketing — optional)");
     return raw ? slugify(raw) : undefined;
@@ -238,12 +225,10 @@ function renderQueueList(items: WorkItem[]): string {
 async function promptTaskIteration(
   pi: ExtensionAPI,
   ctx: any,
-  roots: KbRoots,
+  wc: WorkClient,
   item: WorkItem,
 ): Promise<void> {
-  // Read the working document
-  const resolved = resolveWorkItem(roots, item.domain as string, item.id as string);
-  const body = resolved?.body?.trim();
+  const body: string | undefined = undefined; // body now lives on the API side
 
   // Build a summary of current state
   const lines: string[] = [];
@@ -272,7 +257,7 @@ async function promptTaskIteration(
   const target = next === "Start working" ? "in_build" : "plan";
   if (STAGE_ORDER.indexOf(item.stage as any) < STAGE_ORDER.indexOf(target as any)) {
     try {
-      stageWork(roots, item.id as string, target);
+      await client.stage(item.id as string, target);
     } catch (e: any) {
       // e.g. a task needs success criteria before it leaves plan
       ctx.ui.notify(`Stayed in ${item.stage}: ${e.message}`, "warning");
@@ -315,16 +300,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return;
   }
 
-  const roots: KbRoots = {
-    kbBase: kbBase ?? path.join(wolfDen, "kb", "base"),
-    opsRoot: process.env.KB_OPS ?? path.join(wolfDen, "kb", "ops"),
-    denLocal: path.join(wolfDen, "kb"),
-  };
+  const client = new WorkClient();
 
   // Session-specific task binding
   let sessionId: string | null = null;
   let activeTask: ActiveTaskState | null = null;
   let activeItem: WorkItem | null = null;
+  let cachedWorkspace: { title: string; done: number; total: number } | undefined;
 
   function getSessionId(ctx: any): string {
     return ctx?.sessionManager?.getSessionId?.() ?? ctx?.sessionId ?? "unknown";
@@ -357,7 +339,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     autoShipOverride === null ? resolveShipPolicy() : autoShipOverride ? "auto" : "confirm";
   function toggleAutoShip(ctx: any): void {
     autoShipOverride = shipPolicy() !== "auto";
-    refreshActiveItem();
     updateWidget(ctx);
     if (ctx?.hasUI) {
       ctx.ui.notify(
@@ -369,21 +350,30 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
   }
 
-  function refreshActiveItem(): WorkItem | null {
+  async function refreshActiveItem(): Promise<WorkItem | null> {
     if (!activeTask) { activeItem = null; return null; }
-    const state = loadWorkState(roots);
-    activeItem = state.get(activeTask.workId as WorkId) ?? null;
+    try {
+      activeItem = await client.get(activeTask.workId);
+    } catch {
+      activeItem = null;
+    }
     if (!activeItem || !isBindable(activeItem)) {
-      // Stale binding (deleted) or a workspace (feature/initiative/idea) that an
-      // older version bound: only tasks, issues and spikes are bindable.
-      // But don't delete the file if state is empty - might just be loading.
-      if (state.size > 0 && sessionId) {
+      if (sessionId) {
         activeItem = null;
         activeTask = null;
         writeActiveTask(wolfDen, sessionId, null);
       }
     }
     if (activeItem?.partOf && !workspaceId) workspaceId = activeItem.partOf as string;
+    // Update workspace cache for widget
+    cachedWorkspace = undefined;
+    if (activeItem?.partOf) {
+      try {
+        const all = await client.query({ domain: activeItem.domain as string });
+        const feature = all.find((i) => i.id === activeItem!.partOf);
+        if (feature) cachedWorkspace = { title: feature.title, ...progress(feature, all) };
+      } catch { /* best effort */ }
+    }
     return activeItem;
   }
 
@@ -395,9 +385,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         ctx.ui.setStatus("wolfpack-task", undefined);
         return;
       }
-      const all = queryWork(roots, {}) ?? [];
-      const feature = activeItem.partOf ? all.find((i) => i.id === activeItem!.partOf) : undefined;
-      const workspace = feature ? { title: feature.title, ...progress(feature, all) } : undefined;
+      const workspace = cachedWorkspace;
       ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace, shipPolicy() === "auto"), {
         placement: "aboveEditor",
       });
@@ -408,7 +396,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   }
 
   /** Bind to a work item with full tracking. Only tasks/issues/spikes bind. */
-  function bindToTask(item: WorkItem, ctx: any): boolean {
+  async function bindToTask(item: WorkItem, ctx: any): Promise<boolean> {
     ensureSessionLoaded(ctx);
     if (!sessionId) return false;
     if (!isBindable(item)) {
@@ -435,10 +423,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     try {
       let parentId = item.partOf;
       while (parentId) {
-        const state = loadWorkState(roots); // Reload state each iteration
-        const parent = state.get(parentId as WorkId);
+        let parent: WorkItem | undefined;
+        try { parent = await client.get(parentId as string); } catch { break; }
         if (parent && ["idea", "plan", "feasibility", "approved"].includes(parent.stage)) {
-          stageWork(roots, parent.id, "in_build");
+          await client.stage(parent.id, "in_build");
         }
         parentId = parent?.partOf ?? null;
       }
@@ -446,7 +434,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       // Ignore stage propagation errors - non-critical
     }
 
-    refreshActiveItem();
+    await refreshActiveItem();
     updateWidget(ctx);
     return true;
   }
@@ -465,25 +453,25 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   let lastCtx: any = null;
 
-  pi.on("session_start", (_event: unknown, ctx: any) => {
+  pi.on("session_start", async (_event: unknown, ctx: any) => {
     lastCtx = ctx;
     ensureSessionLoaded(ctx);
-    refreshActiveItem();
+    await refreshActiveItem();
     updateWidget(ctx);
   });
 
   pi.on("turn_end", async (_event: unknown, ctx: any) => {
     lastCtx = ctx;
     ensureSessionLoaded(ctx);
-    refreshActiveItem();
+    await refreshActiveItem();
     updateWidget(ctx);
 
     // Check for stage transitions on active task
     if (activeItem && activeTask && ctx.hasUI) {
       try {
-        const resolved = resolveWorkItem(roots, activeTask.domain, activeTask.workId);
-        const body = resolved?.body ?? "";
-        const children = queryWork(roots, { partOf: activeTask.workId }) ?? [];
+        const resolved = await client.get(activeTask.workId);
+        const body = "";
+        const children = await client.query({ partOf: activeTask.workId }) ?? [];
         const recentNotes = activeItem.log.slice(-3).map((l) => l.text);
 
         const transitionCtx = extractTransitionContext(activeItem, body, children, recentNotes);
@@ -493,9 +481,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           // Show transition prompt
           const confirm = await ctx.ui.confirm(signal.prompt, signal.reason ?? "");
           if (confirm) {
-            stageWork(roots, activeTask.workId, signal.to);
-            noteWork(roots, activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
-            refreshActiveItem();
+            await client.stage(activeTask.workId, signal.to);
+            await client.note(activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
+            await refreshActiveItem();
             updateWidget(ctx);
             ctx.ui.notify(`Advanced to ${signal.to}`, "info");
           }
@@ -508,11 +496,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── System prompt injection ─────────────────────────────────────────────
 
-  pi.on("before_agent_start", (event: any, ctx: any) => {
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
     ensureSessionLoaded(ctx);
-    refreshActiveItem();
+    await refreshActiveItem();
     debugLog('before_agent_start', { activeTask: activeTask?.workId, activeItem: activeItem?.title });
-    const all = queryWork(roots, {}) ?? [];
+    const all = await client.query({}) ?? [];
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.
       const header = workspaceHeader(workspaceId, all, null);
@@ -524,8 +512,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
 
     // Read the working document body
-    const resolved = resolveWorkItem(roots, activeTask.domain, activeTask.workId);
-    const docBody = resolved?.body ?? "";
+    const resolved = await client.get(activeTask.workId);
+    const docBody = "";
 
     const parts: string[] = [];
     parts.push(`You are working on: "${activeItem.title}" (${activeItem.kind}, ${activeItem.stage})`);
@@ -578,7 +566,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── Command: /task ────────────────────────────────────────────────────────
 
-  type PanelAction = "bind" | "new" | "unbind" | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | null;
+  type PanelAction = "bind" | "new" | "unbind" | { type: "bind"; target: WorkItem } | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | null;
 
   /** Valid new parents for an item (current parent excluded), plus Inbox/standalone. */
   function moveTargets(item: WorkItem, all: WorkItem[]): { label: string; id: string | null; inbox?: boolean }[] {
@@ -600,20 +588,19 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if ((rawArgs ?? "").trim().toLowerCase() === "auto") return toggleAutoShip(ctx);
       lastCtx = ctx;
 
+      // Pre-fetch all items before entering the TUI panel
+      let allItems: WorkItem[] = [];
+      let items: WorkItem[] = [];
+      try {
+        allItems = await client.query({ assignee: wolfName }) ?? [];
+        items = allItems.filter((i) => i.stage !== "archived");
+      } catch (e: any) {
+        ctx.ui.notify(`Failed to load work items: ${e.message}`, "warning");
+        return;
+      }
+
       const action = await ctx.ui.custom<PanelAction>(
         (tui: any, theme: any, _kb: any, done: (result: PanelAction) => void) => {
-          // Two-pane workspace browser. Navigation is the pure reducer in
-          // @wolfpack/memory (work/selector.ts); this only renders + applies effects.
-          // `items` is what the panel shows (archived work has left /task);
-          // readiness reads `allItems`, since an initiative is ready only once
-          // its features have graduated, and graduated features are archived.
-          let items: WorkItem[] = [];
-          let allItems: WorkItem[] = [];
-          const reload = () => {
-            allItems = queryWork(roots, { assignee: wolfName }) ?? [];
-            items = allItems.filter((i) => i.stage !== "archived");
-          };
-          reload();
           let sel: SelectorState = initialState(items, activeTask?.workId ?? null);
 
           let cachedLines: string[] | undefined;
@@ -627,15 +614,17 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             return leftRows(items, sel.expanded)[sel.leftIdx]?.item;
           }
 
+          let pendingBind: WorkItem | null = null;
+
           function apply(effect: SelectorEffect | undefined): void {
             if (!effect) return;
             if (effect.type === "unbind") unbindTask(ctx);
             else {
               const target = items.find((i) => i.id === effect.id);
-              if (!target || !bindToTask(target, ctx)) return;
-              if (effect.type === "open") return done("bind");
+              if (!target) return;
+              pendingBind = target;
+              if (effect.type === "open") return done({ type: "bind", target });
             }
-            reload();
           }
 
           const KEYS: Array<[(d: string) => boolean, SelectorKey]> = [
@@ -812,12 +801,15 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.pasteToEditor(NEW_WORK_PROMPT);
         }
       } else if (action === "bind" && activeItem) {
-        // Show current state and offer iteration
-        await promptTaskIteration(pi, ctx, roots, activeItem);
-        refreshActiveItem();
+        await promptTaskIteration(pi, ctx, client, activeItem);
+        await refreshActiveItem();
+        updateWidget(ctx);
+      } else if (typeof action === "object" && action?.type === "bind") {
+        await bindToTask(action.target, ctx);
+        await refreshActiveItem();
         updateWidget(ctx);
       } else if (typeof action === "object" && action?.type === "delete") {
-        const tree = getWorkTree(roots, action.id);
+        const tree = await client.getTree(action.id);
         const target = tree[0];
         if (!target) {
           ctx.ui.notify("Work item not found.", "warning");
@@ -832,18 +824,18 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           `This permanently deletes the work item file and appends delete event(s) to the work ledger.${childWarning}`,
         );
         if (!ok) return;
-        const deleted = deleteWork(roots, action.id);
+        const deleted = await client.delete(action.id);
         if (activeTask && deleted.items.some((i) => i.id === activeTask?.workId)) {
           unbindTask(ctx);
         } else {
-          refreshActiveItem();
+          await refreshActiveItem();
           updateWidget(ctx);
         }
         ctx.ui.notify(`Deleted ${deleted.items.length} work item(s).`, "info");
       } else if (typeof action === "object" && action?.type === "depend") {
         // Valid prerequisites only (same feature / same initiative, no cycles).
         // Picking one the item already depends on removes it.
-        const all = queryWork(roots, {}) ?? [];
+        const all = await client.query({}) ?? [];
         const item = all.find((i) => i.id === action.id);
         if (!item) return;
         const current = new Set((item.dependsOn ?? []).map(String));
@@ -861,10 +853,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         if (!target) return;
         try {
           if (current.has(target.id as string)) {
-            unlinkWork(roots, item.id, "depends_on", target.id as string);
+            await client.unlink(item.id, "depends_on", target.id as string);
             ctx.ui.notify(`Removed dependency: ${item.title} no longer waits on ${target.title}`, "info");
           } else {
-            linkWork(roots, item.id, "depends_on", target.id as string);
+            await client.link(item.id, "depends_on", target.id as string);
             ctx.ui.notify(`Added dependency: ${item.title} waits on ${target.title}`, "info");
           }
         } catch (e: any) {
@@ -872,7 +864,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         }
       } else if (typeof action === "object" && action?.type === "graduate") {
         // Graduate a ready feature/initiative: ship it, then send it to the KB.
-        const all = queryWork(roots, {}) ?? [];
+        const all = await client.query({}) ?? [];
         const item = all.find((i) => i.id === action.id);
         if (!readyToGraduate(item, all)) {
           ctx.ui.notify("Not ready to graduate.", "warning");
@@ -896,19 +888,19 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         );
         if (!ok) return;
         try {
-          const shippedItem = isComplete(item) ? item : stageWork(roots, item.id, "shipped").item;
-          if (!isComplete(item)) noteWork(roots, item.id, "Shipped for graduation: all tasks complete.");
+          const shippedItem = isComplete(item) ? item : (await client.stage(item.id, "shipped"));
+          if (!isComplete(item)) await client.note(item.id, "Shipped for graduation: all tasks complete.");
           ctx.ui.notify(`Graduating ${item.title}…`, "info");
           await config.onReadyToGraduate(shippedItem);
           // Graduated work is past tense: archive it and what it contained.
-          for (const a of archived) stageWork(roots, a.id, "archived");
-          noteWork(roots, item.id, `Archived on graduation${tasks ? ` with ${tasks} item(s)` : ""}.`);
+          for (const a of archived) await client.stage(a.id, "archived");
+          await client.note(item.id, `Archived on graduation${tasks ? ` with ${tasks} item(s)` : ""}.`);
           if (activeTask && archived.some((a) => a.id === activeTask!.workId)) unbindTask(ctx);
-          refreshActiveItem();
+          await refreshActiveItem();
           updateWidget(ctx);
           ctx.ui.notify(`🎓 ${item.title} graduated and archived.`, "info");
           // Its last feature delivered → the initiative can be completed (never automatic).
-          const after = queryWork(roots, {}) ?? [];
+          const after = await client.query({}) ?? [];
           const parent = hub ? after.find((i) => i.id === hub.id) : undefined;
           if (readyToGraduate(parent, after)) {
             ctx.ui.notify(`🎓 All features of "${parent.title}" have graduated: press g on it to complete it.`, "info");
@@ -917,7 +909,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
         }
       } else if (typeof action === "object" && action?.type === "move") {
-        const all = queryWork(roots, {}) ?? [];
+        const all = await client.query({}) ?? [];
         const item = all.find((i) => i.id === action.id);
         if (!item) return;
         const choices = moveTargets(item, all);
@@ -929,9 +921,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         const target = choices.find((c) => c.label === picked);
         if (!target) return;
         try {
-          const parentId = target.inbox ? ensureInbox(roots, item.domain as string, wolfName).id : target.id;
-          moveWork(roots, item.id, parentId);
-          refreshActiveItem();
+          const parentId = target.inbox ? (await client.ensureInbox(item.domain as string, wolfName)).id : target.id;
+          await client.move(item.id, parentId);
+          await refreshActiveItem();
           updateWidget(ctx);
           ctx.ui.notify(`Moved ${item.title} → ${target.label}`, "info");
         } catch (e: any) {
@@ -956,7 +948,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          commitWorkItem(roots, activeItem, params.body);
+          await client.updateBody(activeItem.id, params.body);
           return { content: [{ type: "text" as const, text: `Updated working document for: ${activeItem.title}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
@@ -975,7 +967,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task. Ask the user to /task use first." }], isError: true };
         try {
-          const { item } = noteWork(roots, activeTask.workId, params.text);
+          const item = await client.note(activeTask.workId, params.text);
           activeItem = item;
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `Logged: ${params.text} (${item.log.length} entries)` }] };
@@ -996,7 +988,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          const { item } = stageWork(roots, activeTask.workId, params.to);
+          const item = await client.stage(activeTask.workId, params.to);
           activeItem = item;
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `${item.title} → ${item.stage}` }] };
@@ -1018,8 +1010,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          linkWork(roots, activeTask.workId, params.rel, params.target);
-          refreshActiveItem();
+          await client.link(activeTask.workId, params.rel, params.target);
+          await refreshActiveItem();
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `Linked: ${params.rel} → ${params.target}` }] };
         } catch (e: any) {
@@ -1040,10 +1032,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          const { event } = unlinkWork(roots, activeTask.workId, params.rel, params.target);
-          refreshActiveItem();
+          await client.unlink(activeTask.workId, params.rel, params.target);
+          await refreshActiveItem();
           updateWidget(ctx);
-          return { content: [{ type: "text" as const, text: event ? `Unlinked: ${params.rel} → ${params.target}` : "No such link." }] };
+          return { content: [{ type: "text" as const, text: `Unlinked: ${params.rel} → ${params.target}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }
@@ -1063,18 +1055,18 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         const id = params.id ?? activeTask?.workId;
         if (!id) return { content: [{ type: "text" as const, text: "No id given and no task bound." }], isError: true };
         try {
-          const item = loadWorkState(roots).get(id as WorkId);
-          if (!item) throw new Error(`work item ${id} not found`);
+          const item = await client.get(id);
           const to = params.to.trim();
           const parentId =
-            to.toLowerCase() === "inbox" ? ensureInbox(roots, item.domain as string, wolfName).id
+            to.toLowerCase() === "inbox" ? (await client.ensureInbox(item.domain as string, wolfName)).id
             : to.toLowerCase() === "none" ? null
             : to;
-          const { event, item: moved } = moveWork(roots, id, parentId);
-          refreshActiveItem();
+          const moved = await client.move(id, parentId);
+          await refreshActiveItem();
           updateWidget(ctx);
-          const where = moved.partOf ? loadWorkState(roots).get(moved.partOf as WorkId)?.title : "no parent";
-          return { content: [{ type: "text" as const, text: event ? `Moved ${moved.title} → ${where}` : `${moved.title} is already under ${where}` }] };
+          let where = "no parent";
+          if (moved.partOf) { try { where = (await client.get(moved.partOf as string)).title; } catch {} }
+          return { content: [{ type: "text" as const, text: `Moved ${moved.title} → ${where}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }
@@ -1108,7 +1100,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           partOf: params.partOf ?? (isBindable({ kind: params.kind as any }) ? activeItem?.partOf ?? workspaceId : null),
         };
         try {
-          const result = createWork(roots, input);
+          const result = await client.create(input);
           return { content: [{ type: "text" as const, text: `Created ${result.id}: ${result.item.title} [${result.item.stage}]` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
@@ -1129,7 +1121,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         kind: Type.Optional(Type.String()),
       }),
       async execute(_id, params, _signal, _onUpdate, _ctx) {
-        const items = queryWork(roots, params) ?? [];
+        const items = await client.query(params) ?? [];
         const lines = items.map((i) =>
           `${i.id} | ${i.title} [${i.stage}] ${i.domain}${i.area ? "/" + i.area : ""} → ${i.assignee}`
         );
@@ -1167,9 +1159,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         
         try {
           // onUpdate disabled - may cause Pi crash
-          const result = stageWork(roots, activeTask.workId, "shipped");
-          shipped = result.item;
-          noteWork(roots, activeTask.workId, "Completed.");
+          const result = await client.stage(activeTask.workId, "shipped");
+          shipped = result;
+          await client.note(activeTask.workId, "Completed.");
           resultText = `✓ Shipped: ${shipped.title}`;
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: `Failed to ship: ${e.message}` }], isError: true };
@@ -1185,12 +1177,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           let nextItem: WorkItem | null = null;
           if (shipped.partOf) {
             // Same pick as the selector: first open, unblocked task, in progress first.
-            const all = queryWork(roots, {}) ?? [];
+            const all = await client.query({}) ?? [];
             nextItem = firstTask(rightRows(all, shipped.partOf as string), all) ?? null;
           }
 
           if (nextItem) {
-            bindToTask(nextItem, ctx);
+            await bindToTask(nextItem, ctx);
             resultText += `\n→ Next: ${nextItem.title} [${nextItem.stage}]`;
           } else {
             unbindTask(ctx);
@@ -1202,7 +1194,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         // Last task done → the feature is ready to graduate. Never automatic:
         // the user graduates it with `g` in /task.
         try {
-          const all = queryWork(roots, {}) ?? [];
+          const all = await client.query({}) ?? [];
           const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
           if (readyToGraduate(feature, all)) {
             resultText += `\n🎓 All tasks under "${feature.title}" are done. It is ready to graduate: press g on it in /task.`;

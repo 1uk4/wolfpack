@@ -111,6 +111,37 @@ export class WorkClient {
     return res.item;
   }
 
+  async getTree(rootId: string): Promise<WorkItem[]> {
+    const all = await this.query({});
+    const result: WorkItem[] = [];
+    const root = all.find((i) => i.id === rootId);
+    if (!root) return result;
+    result.push(root);
+    const collectChildren = (parentId: string) => {
+      for (const item of all) {
+        if (item.partOf === parentId) {
+          result.push(item);
+          collectChildren(item.id as string);
+        }
+      }
+    };
+    collectChildren(rootId);
+    return result;
+  }
+
+  async ensureInbox(domain: string, assignee: string): Promise<WorkItem> {
+    const items = await this.query({ domain });
+    const inbox = items.find((i) => i.container && i.kind === "feature");
+    if (inbox) return inbox;
+    const result = await this.create({
+      kind: "feature" as any,
+      domain,
+      title: "Inbox",
+      assignee,
+    });
+    return result.item;
+  }
+
   async delete(id: string): Promise<string[]> {
     const res = await this.request<{ deleted: string[] }>("DELETE", `/${id}`);
     return res.deleted;

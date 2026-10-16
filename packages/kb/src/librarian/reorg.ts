@@ -18,6 +18,8 @@ import {
   type EntryWithVector,
 } from "./hierarchy.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
+import { buildTreeBottomUp, splitAsParentChild, placeEntry, checkInvariants } from "./section-tree.js";
+import { SECTION_TREE } from "@wolfpack/engine";
 import { createEmbedder, buildEntryVectors, cosine } from "./embed.js";
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
@@ -131,7 +133,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
   // Full bottom-up rebuild mode
   if (opts.rebuild) {
-    const { buildTreeBottomUp } = await import("./section-tree.js");
+    
     const allAssignments = new Map<string, Map<string, SectionId>>();
     
     for (const domain of domains) {
@@ -200,7 +202,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
     
     // Absorb singleton roots into nearest neighbor
-    const { SECTION_TREE: stConfig } = await import("@wolfpack/engine");
+    const stConfig = SECTION_TREE;
     for (const domain of result.domains) {
       const domVecs = allVectors.filter((v) => v.domain === domain);
       const totalEntries = domVecs.length;
@@ -330,7 +332,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           }
         }
         
-        const { SECTION_TREE: stCfg } = await import("@wolfpack/engine");
+        const stCfg = SECTION_TREE;
         if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
           try {
             const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
@@ -386,7 +388,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
     
     // Split any leaves that exceed threshold after absorption
-    const { splitAsParentChild: splitFn } = await import("./section-tree.js");
+    const splitFn = splitAsParentChild;
     for (const domain of result.domains) {
       const domCentroid = computeCentroid(allVectors.filter((v) => v.domain === domain).map((v) => v.vector));
       const eDir = join(domainsRoot, domain, "entries");
@@ -490,7 +492,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         }
         if (memberInfo2.length > 0) {
           try {
-            const { SECTION_TREE: stc } = await import("@wolfpack/engine");
+            const stc = SECTION_TREE;
             const mxd = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
             sec.summary = await sectionSummary(engine, memberInfo2, { depth: sec.depth, maxDepth: mxd });
             sec.title = await labelSection(engine, sec.summary, {
@@ -614,7 +616,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       : domainSections;
 
     // 1. Split overflow sections (parent+child, not siblings)
-    const { splitAsParentChild } = await import("./section-tree.js");
+    
     const domainCentroid = domainVectors.length > 0
       ? computeCentroid(domainVectors.map((v) => v.vector))
       : [];
@@ -690,7 +692,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
     // 3. Place unplaced entries via placeEntry (replaces old crystallize)
     if (!opts.touchedSections && unplaced.length > 0) {
-      const { placeEntry: placeEntryFn } = await import("./section-tree.js");
+      const placeEntryFn = placeEntry;
       notify?.(`  placing ${unplaced.length} unplaced entries`);
       for (const entry of unplaced) {
         // Read entry metadata for abstraction scoring
@@ -744,7 +746,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // 5. Invariant checks
-    const { checkInvariants } = await import("./section-tree.js");
+    
     const totalDomainEntries = domainVectors.length;
     const violations = checkInvariants(sections, domain, sectionMembers, totalDomainEntries);
     for (const v of violations) {
@@ -797,7 +799,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // 6. Branching factor control (maxChildrenPerSection)
-    const { SECTION_TREE: ST } = await import("@wolfpack/engine");
+    const ST = SECTION_TREE;
     for (const sec of sections.filter((s) => s.domain === domain)) {
       if (sec.childIds.length > ST.maxChildrenPerSection) {
         notify?.(`  group children: ${sec.id} has ${sec.childIds.length} children (max ${ST.maxChildrenPerSection})`);
@@ -852,7 +854,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // 7. Drift-based rename detection
-    const { SECTION_TREE: driftCfg } = await import("@wolfpack/engine");
+    const driftCfg = SECTION_TREE;
     for (const sec of sections.filter((s) => s.domain === domain && !s.dirty)) {
       const lastCount = (sec as any).memberCountAtLastLabel ?? 0;
       const currentCount = sec.memberCount;

@@ -18,6 +18,7 @@ import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
 import { meshCmd } from "../commands/mesh.js";
+import { kbCmd } from "../commands/kb.js";
 import { setupCmd } from "../commands/setup.js";
 
 const c = {
@@ -206,6 +207,10 @@ async function main(): Promise<void> {
           check: flags.check as boolean | undefined,
           yes: flags.yes as boolean | undefined,
         });
+        break;
+
+      case "kb":
+        await kbCmd(positional.slice(1));
         break;
 
       case "domain":

@@ -984,6 +984,59 @@ async function reorg(): Promise<void> {
     }
   }
 
+  // Final reconciliation: fix orphan entries whose section is unreachable
+  for (const domain of domains) {
+    const sectionById = new Map(sections.filter(s => String(s.domain) === domain).map(s => [String(s.id), s]));
+    const isReachable = (sid: string): boolean => {
+      let cur: string | null = sid;
+      const seen = new Set<string>();
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        const s = sectionById.get(cur);
+        if (!s) return false;
+        if (s.parent === null) return true;
+        cur = String(s.parent);
+      }
+      return false;
+    };
+
+    const eDir6 = join(domainsRoot, domain, "entries");
+    if (existsSync(eDir6)) {
+      let reconciled = 0;
+      for (const f of readdirSync(eDir6).filter(x => x.endsWith(".md"))) {
+        const fp = join(eDir6, f);
+        const raw = readFileSync(fp, "utf-8");
+        const match = raw.match(/^section: (\S+)$/m);
+        if (!match) continue;
+        if (!isReachable(match[1])) {
+          // Find nearest reachable ancestor
+          let newSid: string | null = null;
+          let cur: string | null = match[1];
+          const seen = new Set<string>();
+          while (cur && !seen.has(cur)) {
+            seen.add(cur);
+            const s = sectionById.get(cur);
+            if (!s) break;
+            cur = s.parent ? String(s.parent) : null;
+            if (cur && isReachable(cur)) {
+              newSid = cur;
+              break;
+            }
+          }
+          if (!newSid) {
+            const firstRoot = sections.find(s => s.parent === null && String(s.domain) === domain);
+            if (firstRoot) newSid = String(firstRoot.id);
+          }
+          if (newSid) {
+            writeFileSync(fp, raw.replace(/^section: .+$/m, `section: ${newSid}`));
+            reconciled++;
+          }
+        }
+      }
+      if (reconciled > 0) console.log(`  reconciled: ${reconciled} orphan entries moved to valid sections in ${domain}`);
+    }
+  }
+
   writeSections(roots, sections);
 
   // Re-render digest + index for each touched domain

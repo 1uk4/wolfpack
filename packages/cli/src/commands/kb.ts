@@ -27,6 +27,9 @@ export async function kbCmd(argv: string[]): Promise<void> {
 
   const cmd = argv[0];
   const domain = argv[1];
+  // Any remaining args (--dry-run, --resummarize-all, etc.) pass through to
+  // the remote CLI so flags actually reach the KB engine.
+  const extraFlags = argv.slice(2).join(" ");
 
   const envSetup = [
     "export KB_BASE=/var/wolfpack/kb/base",
@@ -44,16 +47,16 @@ export async function kbCmd(argv: string[]): Promise<void> {
       remoteCmd = `${envSetup} && node ${kbCli} status`;
       break;
     case "reorg":
-      if (!domain) { console.error("Usage: wolfpack kb reorg <domain>"); process.exit(1); }
-      remoteCmd = `${envSetup} && node ${kbCli} reorg ${domain} --resummarize-all`;
+      if (!domain) { console.error("Usage: wolfpack kb reorg <domain> [--dry-run] [--resummarize-all]"); process.exit(1); }
+      remoteCmd = `${envSetup} && node ${kbCli} reorg ${domain} ${extraFlags}`.trim();
       break;
     case "rebuild":
       if (!domain) { console.error("Usage: wolfpack kb rebuild <domain>"); process.exit(1); }
-      remoteCmd = `${envSetup} && node ${kbCli} rebuild ${domain}`;
+      remoteCmd = `${envSetup} && node ${kbCli} rebuild ${domain} ${extraFlags}`.trim();
       break;
     case "sweep":
       if (!domain) { console.error("Usage: wolfpack kb sweep <domain>"); process.exit(1); }
-      remoteCmd = `${envSetup} && node ${kbCli} sweep ${domain}`;
+      remoteCmd = `${envSetup} && node ${kbCli} sweep ${domain} ${extraFlags}`.trim();
       break;
     default:
       console.error("Usage: wolfpack kb <status|reorg|rebuild|sweep> [domain]");

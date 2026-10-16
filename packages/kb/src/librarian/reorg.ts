@@ -208,10 +208,15 @@ function persistDomains(
 }
 
 /**
- * Collapse any root (parent === null) that has 0 direct entries by promoting
- * its children to root level. Runs iteratively until the tree stabilizes.
+ * Collapse single-child chains at ANY depth: a section with 0 direct entries
+ * and exactly 1 child adds no navigational value. Promote the child in place
+ * (child inherits the chain-link's parent and depth, cascading down).
+ *
+ * Multi-child wrappers (0 direct + ≥2 children) are LEGITIMATE grouping nodes
+ * from post-split and are kept. If a multi-child wrapper is dominated by one
+ * child, promoteDominantChildren handles that separately.
  */
-function collapseEmptyRootWrappers(
+function collapseSingleChildChains(
   sections: Section[],
   domain: string,
   eDir: string,
@@ -221,29 +226,33 @@ function collapseEmptyRootWrappers(
   let collapsed = true;
   while (collapsed) {
     collapsed = false;
-    const domainRoots = out.filter(
-      (s) => s.parent === null && String(s.domain) === domain,
-    );
-    for (const root of domainRoots) {
-      if (sectionHasEntriesOnDisk(eDir, root.id)) continue;
-      if (root.childIds.length === 0) continue;
-      for (const cid of root.childIds) {
-        const child = out.find((s) => s.id === cid);
-        if (!child) continue;
-        child.parent = null;
-        child.depth = 0;
-        const fixDepth = (parentId: SectionId, d: number): void => {
-          for (const s of out) {
-            if (s.parent === parentId) {
-              s.depth = d;
-              fixDepth(s.id, d + 1);
-            }
+    for (const sec of out) {
+      if (String(sec.domain) !== domain) continue;
+      if (sectionHasEntriesOnDisk(eDir, sec.id)) continue;
+      const actualChildren = out.filter((s) => s.parent === sec.id);
+      if (actualChildren.length !== 1) continue;
+      const only = actualChildren[0];
+      only.parent = sec.parent;
+      only.depth = sec.depth;
+      const fixDepth = (parentId: SectionId, d: number): void => {
+        for (const s of out) {
+          if (s.parent === parentId) {
+            s.depth = d;
+            fixDepth(s.id, d + 1);
           }
-        };
-        fixDepth(child.id, 1);
+        }
+      };
+      fixDepth(only.id, only.depth + 1);
+      if (sec.parent) {
+        const parent = out.find((s) => s.id === sec.parent);
+        if (parent) {
+          parent.childIds = parent.childIds.filter((c) => c !== sec.id);
+          if (!parent.childIds.includes(only.id)) parent.childIds.push(only.id);
+          parent.dirty = true;
+        }
       }
-      out = out.filter((s) => s.id !== root.id);
-      notify?.(`  collapse: removed empty root wrapper "${root.title}" for ${domain}`);
+      out = out.filter((s) => s.id !== sec.id);
+      notify?.(`  collapse: single-child chain "${sec.title || sec.id}" at depth ${sec.depth}`);
       collapsed = true;
       break;
     }
@@ -335,50 +344,6 @@ async function llmLabelSection(args: {
     notify?.(`  ${prefix} failed: ${sec.id}: ${e}`);
     return false;
   }
-}
-
-/**
- * Collapse any section (at any depth) with 0 direct entries and exactly 2
- * actual children (binary-split artifact). Promotes the children to the
- * wrapper's parent. Uses actual parent relationships rather than
- * `childIds` which can be stale.
- */
-function collapseBinaryWrappers(
-  sections: Section[],
-  domain: string,
-  eDir: string,
-  notify?: (msg: string) => void,
-): Section[] {
-  let out = sections;
-  let collapsed = true;
-  while (collapsed) {
-    collapsed = false;
-    for (const sec of [...out]) {
-      if (String(sec.domain) !== domain) continue;
-      const actualChildren = out.filter((s) => s.parent === sec.id);
-      if (actualChildren.length !== 2) continue;
-      if (sectionHasEntriesOnDisk(eDir, sec.id)) continue;
-      for (const child of actualChildren) {
-        child.parent = sec.parent;
-        child.depth = sec.depth;
-        if (sec.parent) {
-          const parent = out.find((s) => s.id === sec.parent);
-          if (parent && !parent.childIds.includes(child.id)) {
-            parent.childIds.push(child.id);
-          }
-        }
-      }
-      if (sec.parent) {
-        const parent = out.find((s) => s.id === sec.parent);
-        if (parent) parent.childIds = parent.childIds.filter((c) => c !== sec.id);
-      }
-      out = out.filter((s) => s.id !== sec.id);
-      notify?.(`  collapse: removed binary wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
-      collapsed = true;
-      break;
-    }
-  }
-  return out;
 }
 
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
@@ -507,8 +472,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   sections = promoteDominantChildren(sections, result.domains, result, notify);
   for (const domain of result.domains) {
     const eDir = join(domainsRoot, domain, "entries");
-    sections = collapseEmptyRootWrappers(sections, domain, eDir, notify);
-    sections = collapseBinaryWrappers(sections, domain, eDir, notify);
+    sections = collapseSingleChildChains(sections, domain, eDir, notify);
   }
 
   persistDomains(roots, sections, result.domains, opts.dryRun);

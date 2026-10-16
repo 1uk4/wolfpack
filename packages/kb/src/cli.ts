@@ -68,6 +68,7 @@ import {
 import { renderDomainDigest } from "./librarian/domains.js";
 import { labelSection, sectionSummary, type SectionMember } from "./librarian/summarize.js";
 import { retireEntries } from "./librarian/retire.js";
+import { reorg as reorgFn } from "./librarian/reorg.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
 import { ev, type KbEvent } from "./shared/index.js";
@@ -894,6 +895,35 @@ async function reorg(): Promise<void> {
 // retire — remove entries on the librarian (wolf mirrors are receive-only)
 // ════════════════════════════════════════════════════════════════════════════
 
+async function cmdRebuild(): Promise<void> {
+  const roots = resolveRoots();
+  const argv = process.argv.slice(2);
+  const domain = argv.find((a) => !a.startsWith("--") && a !== "rebuild") ?? null;
+
+  if (!domain) {
+    console.error("Usage: wolfpack-kb rebuild <domain>");
+    process.exit(1);
+  }
+
+  console.log(`\n── rebuild: ${domain} (full section tree reconstruction) ──`);
+
+  const engine = makeEngine();
+  const result = await reorgFn({
+    engine,
+    roots,
+    domains: [domain],
+    rebuild: true,
+    notify: (msg) => console.log(`  ${msg}`),
+  });
+
+  console.log(
+    `\nrebuild done: ${result.placements} entries placed, ` +
+    `${result.labelsUpdated} sections labeled, ` +
+    `${result.splits} splits, ${result.merges} merges` +
+    (result.rebuilt ? " (full rebuild)" : "")
+  );
+}
+
 async function cmdRetire(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(3);
@@ -964,6 +994,9 @@ async function main(): Promise<void> {
       break;
     case "reorg":
       await cmdReorg();
+      break;
+    case "rebuild":
+      await cmdRebuild();
       break;
     case "retire":
       await cmdRetire();

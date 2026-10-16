@@ -49,11 +49,8 @@ export async function kbCmd(argv: string[]): Promise<void> {
       break;
     case "rebuild":
       if (!domain) { console.error("Usage: wolfpack kb rebuild <domain>"); process.exit(1); }
-      // Rebuild runs through Dewey's harness tool, not the CLI
-      // For now, call reorg which does the same merge/split/label pass
-      console.log(c.yellow("Note: full rebuild requires Dewey's kb_reorg tool with rebuild=true."));
-      console.log(c.yellow("Ask Dewey on Telegram, or use: wolfpack kb reorg <domain>"));
-      return;
+      remoteCmd = `${envSetup} && node ${kbCli} rebuild ${domain}`;
+      break;
     case "sweep":
       if (!domain) { console.error("Usage: wolfpack kb sweep <domain>"); process.exit(1); }
       remoteCmd = `${envSetup} && node ${kbCli} sweep ${domain}`;

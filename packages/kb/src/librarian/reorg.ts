@@ -952,11 +952,49 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   if (events.length > 0) {
     appendLedger(roots, events);
   }
-  writeSections(roots, sections);
 
   // Re-render digest + index
   const freshLog = readLedger(roots);
   renderRegistry(roots, foldRegistry(freshLog));
+  // Collapse single-root wrappers: if a domain has exactly 1 root section
+  // with 0 direct entries, promote its children to root level.
+  for (const domain of result.domains) {
+    const domainRoots = sections.filter(
+      (s) => s.parent === null && String(s.domain) === domain
+    );
+    if (domainRoots.length === 1) {
+      const root = domainRoots[0];
+      const rootHasEntries = existsSync(join(domainsRoot, domain, "entries"))
+        ? readdirSync(join(domainsRoot, domain, "entries"))
+            .filter((f) => f.endsWith(".md"))
+            .some((f) => {
+              const raw = readFileSync(join(domainsRoot, domain, "entries", f), "utf-8");
+              return raw.includes(`section: ${root.id}`);
+            })
+        : false;
+      if (!rootHasEntries && root.childIds.length > 0) {
+        for (const cid of root.childIds) {
+          const child = sections.find((s) => s.id === cid);
+          if (child) {
+            child.parent = null;
+            child.depth = 0;
+            // Fix descendant depths
+            const fixDepth = (parentId: typeof child.id, d: number) => {
+              for (const s of sections) {
+                if (s.parent === parentId) { s.depth = d; fixDepth(s.id, d + 1); }
+              }
+            };
+            fixDepth(child.id, 1);
+          }
+        }
+        sections = sections.filter((s) => s.id !== root.id);
+        notify?.(`collapse: removed single-root wrapper "${root.title}" for ${domain}`);
+      }
+    }
+  }
+
+  writeSections(roots, sections);
+
   for (const domain of result.domains) {
     renderDomainDigest(roots, domain);
     renderDomainIndex(roots, domain);

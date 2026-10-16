@@ -663,6 +663,15 @@ function rebuildAbsorbSingletonRoots(
         writeEntrySection(eDir, entryId, targetSec, opts.dryRun);
       }
 
+      // Safety: catch any entries whose frontmatter still points at root but
+      // weren't in allAssignments (e.g. new entries added since buildTreeBottomUp).
+      const strays = entriesPointingAt(eDir, root.id);
+      if (strays.length > 0) {
+        notify?.(`    reassigning ${strays.length} stray entries from absorbed root "${root.id}" → "${bestNeighbor.id}"`);
+        for (const eid of strays) writeEntrySection(eDir, eid, bestNeighbor.id, opts.dryRun);
+        bestNeighbor.memberCount += strays.length;
+      }
+
       sections = sections.filter((s) => s.id !== root.id);
       result.merges++;
     }
@@ -859,10 +868,21 @@ function rebuildFinalAbsorb(
         if (sim > bestS) { bestS = sim; bestN = n; }
       }
       notify?.(`  final absorb: "${root.title}" (${actualMembers}) -> "${bestN.title}"`);
+      // Also catch entries pointing at any descendant of root that will be
+      // orphaned when root (and its subtree, if dropped) goes away. For now
+      // we only delete root itself, and children keep their parent pointer.
+      // Reassign direct entries + any descendants transitively.
+      const descendantIds = new Set<string>();
+      const addDesc = (pid: SectionId) => {
+        descendantIds.add(String(pid));
+        for (const s of sections) if (s.parent === pid) addDesc(s.id);
+      };
+      addDesc(root.id);
       if (existsSync(eDir)) {
         for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
           const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-          if (String(fields.section ?? "") === String(root.id)) {
+          const cur = String(fields.section ?? "");
+          if (descendantIds.has(cur)) {
             const eid = f.replace(/\.md$/, "");
             if (writeEntrySection(eDir, eid, bestN.id, opts.dryRun)) {
               bestN.memberCount++;

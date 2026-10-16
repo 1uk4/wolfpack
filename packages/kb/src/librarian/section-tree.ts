@@ -461,6 +461,48 @@ export function buildTreeBottomUp(
     }
   }
 
+  // Collapse binary wrapper sections at ALL depths: a section with 0 direct
+  // entries and EXACTLY 2 children is a binary-split artifact. Promote the
+  // 2 children to this section's parent. Wrappers with 3+ children are kept.
+  let binaryCollapsed = true;
+  while (binaryCollapsed) {
+    binaryCollapsed = false;
+    for (const sec of [...sections]) {
+      if (String(sec.domain) !== domain) continue;
+      if (sec.childIds.length !== 2) continue;
+      const secEntries = [...assignments.values()].filter(sid => sid === sec.id);
+      if (secEntries.length === 0) {
+        for (const cid of sec.childIds) {
+          const child = sections.find(s => s.id === cid);
+          if (child) {
+            child.parent = sec.parent;
+            child.depth = sec.depth;
+            if (sec.parent) {
+              const parent = sections.find(s => s.id === sec.parent);
+              if (parent && !parent.childIds.includes(child.id)) {
+                parent.childIds.push(child.id);
+              }
+            }
+            const fixDepth = (parentId: SectionId, d: number) => {
+              for (const s of sections) {
+                if (s.parent === parentId) { s.depth = d; fixDepth(s.id, d + 1); }
+              }
+            };
+            fixDepth(child.id, child.depth + 1);
+          }
+        }
+        if (sec.parent) {
+          const parent = sections.find(s => s.id === sec.parent);
+          if (parent) parent.childIds = parent.childIds.filter(c => c !== sec.id);
+        }
+        const idx = sections.indexOf(sec);
+        if (idx >= 0) sections.splice(idx, 1);
+        binaryCollapsed = true;
+        break;
+      }
+    }
+  }
+
   return { sections, assignments };
 }
 

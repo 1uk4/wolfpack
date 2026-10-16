@@ -942,6 +942,50 @@ async function reorg(): Promise<void> {
     }
   }
 
+  // Collapse binary wrapper sections at ALL depths: a section with 0 direct
+  // entries and EXACTLY 2 children is a binary-split artifact. Promote the
+  // 2 children to this section's parent.
+  for (const domain of domains) {
+    let collapsed2 = true;
+    while (collapsed2) {
+      collapsed2 = false;
+      for (const sec of [...sections]) {
+        if (String(sec.domain) !== domain) continue;
+        if (sec.childIds.length !== 2) continue;
+        const eDir5 = join(domainsRoot, domain, "entries");
+        const hasEntries = existsSync(eDir5)
+          ? readdirSync(eDir5).filter((f) => f.endsWith(".md")).some((f) => {
+              const raw = readFileSync(join(eDir5, f), "utf-8");
+              return raw.includes(`section: ${sec.id}`);
+            })
+          : false;
+        if (!hasEntries) {
+          for (const cid of sec.childIds) {
+            const child = sections.find((s) => s.id === cid);
+            if (child) {
+              child.parent = sec.parent;
+              child.depth = sec.depth;
+              if (sec.parent) {
+                const parent = sections.find((s) => s.id === sec.parent);
+                if (parent && !parent.childIds.includes(child.id)) {
+                  parent.childIds.push(child.id);
+                }
+              }
+            }
+          }
+          if (sec.parent) {
+            const parent = sections.find((s) => s.id === sec.parent);
+            if (parent) parent.childIds = parent.childIds.filter((c) => c !== sec.id);
+          }
+          sections = sections.filter((s) => s.id !== sec.id);
+          console.log(`  collapse: removed binary wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
+          collapsed2 = true;
+          break;
+        }
+      }
+    }
+  }
+
   writeSections(roots, sections);
 
   // Re-render digest + index for each touched domain

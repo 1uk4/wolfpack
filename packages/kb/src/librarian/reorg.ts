@@ -1005,15 +1005,17 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
   }
 
-  // Collapse empty wrappers at ALL depths: any section with 0 direct entries
-  // and only children promotes its children to its parent.
+  // Collapse binary wrapper sections at ALL depths: a section with 0 direct
+  // entries and EXACTLY 2 children is a binary-split artifact (from post-split
+  // or forced grouping). Promote the 2 children to this section's parent.
+  // Wrappers with 3+ children are kept — they represent genuine category groupings.
   for (const domain of result.domains) {
     let collapsed2 = true;
     while (collapsed2) {
       collapsed2 = false;
       for (const sec of [...sections]) {
         if (String(sec.domain) !== domain) continue;
-        if (sec.childIds.length === 0) continue;
+        if (sec.childIds.length !== 2) continue; // only binary wrappers
         const eDir4 = join(domainsRoot, domain, "entries");
         const hasEntries = existsSync(eDir4)
           ? readdirSync(eDir4).filter((f) => f.endsWith(".md")).some((f) => {
@@ -1043,7 +1045,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             if (parent) parent.childIds = parent.childIds.filter((c) => c !== sec.id);
           }
           sections = sections.filter((s) => s.id !== sec.id);
-          notify?.(`  collapse: removed empty wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
+          notify?.(`  collapse: removed binary wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
           collapsed2 = true;
           break;
         }

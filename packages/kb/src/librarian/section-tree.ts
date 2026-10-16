@@ -90,7 +90,7 @@ export function buildTreeBottomUp(
 
   // Agglomerative merge loop — stop when similarity drops below floor
   // or cluster count reaches target, whichever comes first.
-  const MERGE_SIMILARITY_FLOOR = 0.65;
+  const MERGE_SIMILARITY_FLOOR = 0.75;
 
   while (clusters.length > targetRoots) {
     // Compute pairwise similarity matrix
@@ -365,10 +365,11 @@ export function buildTreeBottomUp(
     });
   }
 
-  // Abstraction-aware root merge: clusters dominated by specific entries
-  // (incident, changelog, fact) should not be root sections — merge them
-  // into the nearest general cluster.
-  if (entryMeta && clusters.length > 1) {
+  // Abstraction-aware root merge: DISABLED.
+  // This was collapsing natural roots back into a single tree by merging
+  // "specific" clusters into "general" ones, recreating binary chains.
+  // The similarity floor in the merge loop already produces coherent roots.
+  if (false && entryMeta && clusters.length > 1) {
     function clusterAbstraction(cluster: Cluster): number {
       let totalScore = 0;
       for (const m of cluster.members) {

@@ -78,6 +78,259 @@ function writeEntrySection(
   return true;
 }
 
+/**
+ * Scan an entries/ directory and return a map of sectionId -> count of
+ * entry files whose frontmatter points at that section.
+ */
+function readSectionCounts(eDir: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (!existsSync(eDir)) return counts;
+  for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+    const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+    const sec = String(fields.section ?? "");
+    if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Set every domain section's memberCount to the actual count on disk. Used
+ * after mutations so section.memberCount matches entry.frontmatter.section.
+ */
+function reconcileMemberCounts(
+  sections: Section[],
+  domain: string,
+  eDir: string,
+): void {
+  const counts = readSectionCounts(eDir);
+  for (const sec of sections.filter((s) => s.domain === domain)) {
+    sec.memberCount = counts.get(sec.id as string) ?? 0;
+  }
+}
+
+/**
+ * True if any entry file in `eDir` has `section: <sectionId>` in its
+ * frontmatter. Uses a text match (not a parse) because it's cheap and
+ * fine for the collapse passes.
+ */
+function sectionHasEntriesOnDisk(eDir: string, sectionId: SectionId | string): boolean {
+  if (!existsSync(eDir)) return false;
+  for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+    const raw = readFileSync(join(eDir, f), "utf-8");
+    if (raw.includes(`section: ${sectionId}`)) return true;
+  }
+  return false;
+}
+
+/**
+ * Create a new Section with the structural boilerplate filled in. Avoids
+ * 3 copies of the full Section literal spread across rebuild post-split and
+ * incremental branching-factor control. All sections are born `dirty: true`
+ * so the next label pass picks them up.
+ */
+function mkChildSection(args: {
+  id: SectionId;
+  domain: string;
+  parent: SectionId | null;
+  depth: number;
+  centroid: number[];
+  memberCount: number;
+  childIds?: SectionId[];
+}): Section {
+  const today = new Date().toISOString().split("T")[0];
+  return {
+    id: args.id,
+    domain: args.domain as DomainId,
+    parent: args.parent,
+    depth: args.depth,
+    label: args.id.slice(-7) as any,
+    title: "",
+    centroid: args.centroid,
+    memberCount: args.memberCount,
+    childIds: args.childIds ?? [],
+    summary: "",
+    summaryHash: "",
+    dirty: true,
+    memberCountAtLastLabel: 0,
+    created: today as any,
+    updated: today as any,
+  } as Section;
+}
+
+/**
+ * Collapse any root (parent === null) that has 0 direct entries by promoting
+ * its children to root level. Runs iteratively until the tree stabilizes.
+ */
+function collapseEmptyRootWrappers(
+  sections: Section[],
+  domain: string,
+  eDir: string,
+  notify?: (msg: string) => void,
+): Section[] {
+  let out = sections;
+  let collapsed = true;
+  while (collapsed) {
+    collapsed = false;
+    const domainRoots = out.filter(
+      (s) => s.parent === null && String(s.domain) === domain,
+    );
+    for (const root of domainRoots) {
+      if (sectionHasEntriesOnDisk(eDir, root.id)) continue;
+      if (root.childIds.length === 0) continue;
+      for (const cid of root.childIds) {
+        const child = out.find((s) => s.id === cid);
+        if (!child) continue;
+        child.parent = null;
+        child.depth = 0;
+        const fixDepth = (parentId: SectionId, d: number): void => {
+          for (const s of out) {
+            if (s.parent === parentId) {
+              s.depth = d;
+              fixDepth(s.id, d + 1);
+            }
+          }
+        };
+        fixDepth(child.id, 1);
+      }
+      out = out.filter((s) => s.id !== root.id);
+      notify?.(`  collapse: removed empty root wrapper "${root.title}" for ${domain}`);
+      collapsed = true;
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Read all `.md` entries from a directory and return title+summary pairs for
+ * those whose `section:` frontmatter matches `sectionId`.
+ */
+function readDirectMembersFromDisk(
+  eDir: string,
+  sectionId: SectionId | string,
+): SectionMember[] {
+  const members: SectionMember[] = [];
+  if (!existsSync(eDir)) return members;
+  for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+    const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+    if (String(fields.section ?? "") === String(sectionId)) {
+      members.push({
+        title: String(fields.title ?? f.replace(/\.md$/, "")),
+        summary: fields.summary ? String(fields.summary) : undefined,
+      });
+    }
+  }
+  return members;
+}
+
+/**
+ * Run the LLM naming oracle for a single section and apply the result.
+ * Returns true on success, false on exception. Caller is responsible for
+ * the dry-run short-circuit, depth-cap guard, and any member collection.
+ */
+async function llmLabelSection(args: {
+  engine: Engine;
+  sec: Section;
+  memberInfo: SectionMember[];
+  sections: Section[];
+  domain: string;
+  withContext: boolean;
+  touchUpdated: boolean;
+  bubbleUp: boolean;
+  logPrefix?: string;
+  notify?: (msg: string) => void;
+}): Promise<boolean> {
+  const { engine, sec, memberInfo, sections, domain, notify } = args;
+  const prefix = args.logPrefix ?? "labeled";
+  const maxTreeDepth = Math.max(
+    ...sections.filter((s) => s.domain === domain).map((s) => s.depth),
+    0,
+  );
+  try {
+    sec.summary = await sectionSummary(engine, memberInfo, {
+      depth: sec.depth,
+      maxDepth: maxTreeDepth,
+    });
+    const labelOpts: {
+      sampleTitles: string[];
+      depth: number;
+      maxDepth: number;
+      parentTitle?: string;
+      siblingSummaries?: string[];
+    } = {
+      sampleTitles: memberInfo.map((m) => m.title),
+      depth: sec.depth,
+      maxDepth: maxTreeDepth,
+    };
+    if (args.withContext) {
+      const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
+      labelOpts.parentTitle = parent?.title;
+      labelOpts.siblingSummaries = sections
+        .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
+        .map((s) => s.summary);
+    }
+    sec.title = await labelSection(engine, sec.summary, labelOpts);
+    sec.dirty = false;
+    (sec as any).memberCountAtLastLabel = sec.memberCount;
+    if (args.touchUpdated) {
+      sec.updated = new Date().toISOString().split("T")[0] as any;
+    }
+    if (args.bubbleUp && sec.parent) {
+      const parentSec = sections.find((s) => s.id === sec.parent);
+      if (parentSec && !parentSec.dirty) parentSec.dirty = true;
+    }
+    notify?.(`  ${prefix}: ${sec.id} → "${sec.title}"`);
+    return true;
+  } catch (e) {
+    notify?.(`  ${prefix} failed: ${sec.id}: ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Collapse any section (at any depth) with 0 direct entries and exactly 2
+ * actual children (binary-split artifact). Promotes the children to the
+ * wrapper's parent. Uses actual parent relationships rather than
+ * `childIds` which can be stale.
+ */
+function collapseBinaryWrappers(
+  sections: Section[],
+  domain: string,
+  eDir: string,
+  notify?: (msg: string) => void,
+): Section[] {
+  let out = sections;
+  let collapsed = true;
+  while (collapsed) {
+    collapsed = false;
+    for (const sec of [...out]) {
+      if (String(sec.domain) !== domain) continue;
+      const actualChildren = out.filter((s) => s.parent === sec.id);
+      if (actualChildren.length !== 2) continue;
+      if (sectionHasEntriesOnDisk(eDir, sec.id)) continue;
+      for (const child of actualChildren) {
+        child.parent = sec.parent;
+        child.depth = sec.depth;
+        if (sec.parent) {
+          const parent = out.find((s) => s.id === sec.parent);
+          if (parent && !parent.childIds.includes(child.id)) {
+            parent.childIds.push(child.id);
+          }
+        }
+      }
+      if (sec.parent) {
+        const parent = out.find((s) => s.id === sec.parent);
+        if (parent) parent.childIds = parent.childIds.filter((c) => c !== sec.id);
+      }
+      out = out.filter((s) => s.id !== sec.id);
+      notify?.(`  collapse: removed binary wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
+      collapsed = true;
+      break;
+    }
+  }
+  return out;
+}
+
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
   const domainsRoot = join(roots.kbBase, "domains");
@@ -305,20 +558,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       
       for (const sec of dirtySections) {
         // Get member info (direct members or children's titles for parents)
-        const memberInfo: SectionMember[] = [];
-        
-        // Direct members
-        if (existsSync(eDir)) {
-          for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-            const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-            if (String(fields.section ?? "") === sec.id) {
-              memberInfo.push({
-                title: String(fields.title ?? f.replace(/\.md$/, "")),
-                summary: fields.summary ? String(fields.summary) : undefined,
-              });
-            }
-          }
-        }
+        const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
         
         // For parents with 0 direct members, collect entry titles from descendants
         // Weight proportionally by child size so all branches contribute
@@ -355,28 +595,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         if (opts.dryRun && memberInfo.length > 0) {
           notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
         } else if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
-          try {
-            const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
-            sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
-            const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
-            const siblings = sections
-              .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
-              .map((s) => s.summary);
-            sec.title = await labelSection(engine, sec.summary, {
-              sampleTitles: memberInfo.map((m) => m.title),
-              parentTitle: parent?.title,
-              siblingSummaries: siblings,
-              depth: sec.depth,
-              maxDepth: maxTreeDepth,
-            });
-            sec.dirty = false;
-            (sec as any).memberCountAtLastLabel = sec.memberCount;
-            sec.updated = new Date().toISOString().split("T")[0] as any;
-            notify?.(`  labeled: ${sec.id} → "${sec.title}"`);
-            result.labelsUpdated++;
-          } catch (e) {
-            notify?.(`  label failed: ${sec.id}: ${e}`);
-          }
+          const ok = await llmLabelSection({
+            engine, sec, memberInfo, sections, domain,
+            withContext: true, touchUpdated: true, bubbleUp: false, notify,
+          });
+          if (ok) result.labelsUpdated++;
         } else if (memberInfo.length > 0) {
           // Auto-title: short summary from first 3 member titles
           const shortTitles = memberInfo.slice(0, 3).map((m) => {
@@ -385,7 +608,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           });
           sec.title = shortTitles.join(", ");
           sec.dirty = false;
-            (sec as any).memberCountAtLastLabel = sec.memberCount;
+          (sec as any).memberCountAtLastLabel = sec.memberCount;
           notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
           result.labelsUpdated++;
         }
@@ -394,18 +617,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     
     // Reconcile memberCount from actual entry frontmatter
     for (const domain of result.domains) {
-      const eDir = join(domainsRoot, domain, "entries");
-      const actualCounts = new Map<string, number>();
-      if (existsSync(eDir)) {
-        for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-          const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-          const sec = String(fields.section ?? "");
-          if (sec) actualCounts.set(sec, (actualCounts.get(sec) ?? 0) + 1);
-        }
-      }
-      for (const sec of sections.filter((s) => s.domain === domain)) {
-        sec.memberCount = actualCounts.get(sec.id as string) ?? 0;
-      }
+      reconcileMemberCounts(sections, domain, join(domainsRoot, domain, "entries"));
     }
     
     // Split any leaves that exceed threshold after absorption
@@ -440,22 +652,14 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           
           // Child A: the entries that were "parent" in splitAsParentChild
           const centroidA = computeCentroid(sr.parentMembers.map((m) => m.vector));
-          sections.push({
+          sections.push(mkChildSection({
             id: childAId,
-            domain: domain as DomainId,
+            domain,
             parent: sec.id,
             depth: sec.depth + 1,
-            label: childAId.slice(-7) as any,
-            title: "",
             centroid: centroidA,
             memberCount: sr.parentMembers.length,
-            childIds: [],
-            summary: "",
-            summaryHash: "",
-            dirty: true, memberCountAtLastLabel: 0,
-            created: new Date().toISOString().split("T")[0] as any,
-            updated: new Date().toISOString().split("T")[0] as any,
-          } as Section);
+          }));
           
           // Child B: already created by splitAsParentChild
           sr.childSection.parent = sec.id;
@@ -486,15 +690,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       const eDir2 = join(domainsRoot, domain, "entries");
       const postSplitDirty = sections.filter((s) => s.domain === domain && s.dirty && (!s.title || s.title.includes("(split)")));
       for (const sec of postSplitDirty) {
-        const memberInfo2: SectionMember[] = [];
-        if (existsSync(eDir2)) {
-          for (const f of readdirSync(eDir2).filter((x) => x.endsWith(".md"))) {
-            const { fields } = parseFrontmatter(readFileSync(join(eDir2, f), "utf-8"));
-            if (String(fields.section ?? "") === String(sec.id)) {
-              memberInfo2.push({ title: String(fields.title ?? f.replace(/\.md$/, "")), summary: fields.summary ? String(fields.summary) : undefined });
-            }
-          }
-        }
+        const memberInfo2: SectionMember[] = readDirectMembersFromDisk(eDir2, sec.id);
         if (memberInfo2.length === 0) {
           for (const cid of sec.childIds) {
             const child = sections.find((s) => s.id === cid);
@@ -504,20 +700,12 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         if (opts.dryRun && memberInfo2.length > 0) {
           notify?.(`  would post-split label: ${sec.id}`);
         } else if (memberInfo2.length > 0) {
-          try {
-            const mxd = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
-            sec.summary = await sectionSummary(engine, memberInfo2, { depth: sec.depth, maxDepth: mxd });
-            sec.title = await labelSection(engine, sec.summary, {
-              sampleTitles: memberInfo2.map((m) => m.title),
-              depth: sec.depth, maxDepth: mxd,
-            });
-            sec.dirty = false;
-            (sec as any).memberCountAtLastLabel = sec.memberCount;
-            notify?.(`  post-split labeled: ${sec.id} \u2192 "${sec.title}"`);
-            result.labelsUpdated++;
-          } catch (e) {
-            notify?.(`  post-split label failed: ${sec.id}: ${e}`);
-          }
+          const ok = await llmLabelSection({
+            engine, sec, memberInfo: memberInfo2, sections, domain,
+            withContext: false, touchUpdated: false, bubbleUp: false,
+            logPrefix: "post-split labeled", notify,
+          });
+          if (ok) result.labelsUpdated++;
         }
       }
     }
@@ -563,18 +751,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
     // Final memberCount reconciliation
     for (const domain of result.domains) {
-      const eDir4 = join(domainsRoot, domain, "entries");
-      const counts = new Map<string, number>();
-      if (existsSync(eDir4)) {
-        for (const f of readdirSync(eDir4).filter((x) => x.endsWith(".md"))) {
-          const { fields } = parseFrontmatter(readFileSync(join(eDir4, f), "utf-8"));
-          const sec = String(fields.section ?? "");
-          if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
-        }
-      }
-      for (const sec of sections.filter((s) => s.domain === domain)) {
-        sec.memberCount = counts.get(sec.id as string) ?? 0;
-      }
+      reconcileMemberCounts(sections, domain, join(domainsRoot, domain, "entries"));
     }
 
     // Persist
@@ -827,22 +1004,15 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
               c.sec.parent = groupId;
               c.sec.depth = sec.depth + 2;
             }
-            sections.push({
+            sections.push(mkChildSection({
               id: groupId,
-              domain: domain as DomainId,
+              domain,
               parent: sec.id,
               depth: sec.depth + 1,
-              label: groupId.slice(-7) as any,
-              title: "",
               centroid: groupCentroid,
               memberCount: 0,
               childIds: chunk.map((c) => c.sec.id),
-              summary: "",
-              summaryHash: "",
-              dirty: true, memberCountAtLastLabel: 0,
-              created: new Date().toISOString().split("T")[0] as any,
-              updated: new Date().toISOString().split("T")[0] as any,
-            } as Section);
+            }));
             newChildIds.push(groupId);
             result.splits++;
           }
@@ -917,35 +1087,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       if (opts.dryRun && memberInfo.length > 0) {
         notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
       } else if (memberInfo.length > 0) {
-        try {
-          const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
-          sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
-          const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;
-          const siblings = sections
-            .filter((s) => s.parent === sec.parent && s.id !== sec.id && s.domain === domain)
-            .map((s) => s.summary);
-          sec.title = await labelSection(engine, sec.summary, {
-            sampleTitles: memberInfo.map((m) => m.title),
-            parentTitle: parent?.title,
-            siblingSummaries: siblings,
-            depth: sec.depth,
-            maxDepth: maxTreeDepth,
-          });
-          sec.dirty = false;
-          (sec as any).memberCountAtLastLabel = sec.memberCount;
-          sec.updated = new Date().toISOString().split("T")[0] as any;
-          // Bubble up: mark parent dirty so it re-generalizes
-          if (sec.parent) {
-            const parentSec = sections.find((s) => s.id === sec.parent);
-            if (parentSec && !parentSec.dirty) {
-              parentSec.dirty = true;
-            }
-          }
-          notify?.(`  labeled: ${sec.id} → "${sec.title}"`);
-          result.labelsUpdated++;
-        } catch (e) {
-          notify?.(`  label failed: ${sec.id}: ${e}`);
-        }
+        const ok = await llmLabelSection({
+          engine, sec, memberInfo, sections, domain,
+          withContext: true, touchUpdated: true, bubbleUp: true, notify,
+        });
+        if (ok) result.labelsUpdated++;
       }
     } // end while (label passes)
 
@@ -966,85 +1112,13 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   // Collapse empty root wrappers: any root with 0 direct entries promotes
   // its children to root level.
   for (const domain of result.domains) {
-    let collapsed = true;
-    while (collapsed) {
-      collapsed = false;
-      const domainRoots = sections.filter(
-        (s) => s.parent === null && String(s.domain) === domain
-      );
-      for (const root of domainRoots) {
-        const rootHasEntries = existsSync(join(domainsRoot, domain, "entries"))
-          ? readdirSync(join(domainsRoot, domain, "entries"))
-              .filter((f) => f.endsWith(".md"))
-              .some((f) => {
-                const raw = readFileSync(join(domainsRoot, domain, "entries", f), "utf-8");
-                return raw.includes(`section: ${root.id}`);
-              })
-          : false;
-        if (!rootHasEntries && root.childIds.length > 0) {
-          for (const cid of root.childIds) {
-            const child = sections.find((s) => s.id === cid);
-            if (child) {
-              child.parent = null;
-              child.depth = 0;
-              const fixDepth = (parentId: typeof child.id, d: number) => {
-                for (const s of sections) {
-                  if (s.parent === parentId) { s.depth = d; fixDepth(s.id, d + 1); }
-                }
-              };
-              fixDepth(child.id, 1);
-            }
-          }
-          sections = sections.filter((s) => s.id !== root.id);
-          notify?.(`  collapse: removed empty root wrapper "${root.title}" for ${domain}`);
-          collapsed = true;
-          break;
-        }
-      }
-    }
+    sections = collapseEmptyRootWrappers(sections, domain, join(domainsRoot, domain, "entries"), notify);
   }
 
   // Collapse binary wrapper sections at ALL depths: a section with 0 direct
-  // entries and EXACTLY 2 children is a binary-split artifact. Promote the
-  // 2 children to this section's parent. Uses ACTUAL children (sections with
-  // parent === sec.id), not sec.childIds which can be out of sync.
+  // entries and EXACTLY 2 children is a binary-split artifact.
   for (const domain of result.domains) {
-    let collapsed2 = true;
-    while (collapsed2) {
-      collapsed2 = false;
-      for (const sec of [...sections]) {
-        if (String(sec.domain) !== domain) continue;
-        const actualChildren = sections.filter((s) => s.parent === sec.id);
-        if (actualChildren.length !== 2) continue;
-        const eDir4 = join(domainsRoot, domain, "entries");
-        const hasEntries = existsSync(eDir4)
-          ? readdirSync(eDir4).filter((f) => f.endsWith(".md")).some((f) => {
-              const raw = readFileSync(join(eDir4, f), "utf-8");
-              return raw.includes(`section: ${sec.id}`);
-            })
-          : false;
-        if (!hasEntries) {
-          for (const child of actualChildren) {
-            child.parent = sec.parent;
-            child.depth = sec.depth;
-            if (sec.parent) {
-              const parent = sections.find((s) => s.id === sec.parent);
-              if (parent && !parent.childIds.includes(child.id)) {
-                parent.childIds.push(child.id);
-              }
-            }
-          }
-          if (sec.parent) {
-            const parent = sections.find((s) => s.id === sec.parent);
-            if (parent) parent.childIds = parent.childIds.filter((c) => c !== sec.id);
-          }
-          sections = sections.filter((s) => s.id !== sec.id);
-          notify?.(`  collapse: removed binary wrapper "${sec.title || sec.id}" at depth ${sec.depth}`);
-          collapsed2 = true;
-          break;
-        }
-      }
-    }
+    sections = collapseBinaryWrappers(sections, domain, join(domainsRoot, domain, "entries"), notify);
   }
 
   if (!opts.dryRun) {

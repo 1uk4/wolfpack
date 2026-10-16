@@ -208,7 +208,7 @@ export const SECTION_TREE = {
    *
    * k = ceil(numChildren / maxChildrenPerSection)
    */
-  maxChildrenPerSection: 6,
+  maxChildrenPerSection: 12,
 
   /**
    * When splitting, how to choose which cluster becomes the parent:

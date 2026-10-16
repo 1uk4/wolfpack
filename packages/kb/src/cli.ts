@@ -984,38 +984,57 @@ async function reorg(): Promise<void> {
     }
   }
 
-  // Final reconciliation: fix orphan SECTIONS whose parent is missing.
-  // Promote them to root (preserving their subtree), so entries that
-  // reference them remain reachable from the domain root.
+  // Final reconciliation: fix orphan entries whose section is unreachable
   for (const domain of domains) {
     const sectionById = new Map(sections.filter(s => String(s.domain) === domain).map(s => [String(s.id), s]));
-    let promoted = 0;
-    for (const sec of sections) {
-      if (String(sec.domain) !== domain) continue;
-      if (sec.parent === null) continue;
-      let cur: string | null = String(sec.parent);
+    const isReachable = (sid: string): boolean => {
+      let cur: string | null = sid;
       const seen = new Set<string>();
-      let reachable = false;
       while (cur && !seen.has(cur)) {
         seen.add(cur);
         const s = sectionById.get(cur);
-        if (!s) break;
-        if (s.parent === null) { reachable = true; break; }
+        if (!s) return false;
+        if (s.parent === null) return true;
         cur = String(s.parent);
       }
-      if (!reachable) {
-        sec.parent = null;
-        sec.depth = 0;
-        promoted++;
-        const fixDepth = (parentId: string, d: number) => {
-          for (const s of sections) {
-            if (s.parent === parentId) { s.depth = d; fixDepth(String(s.id), d + 1); }
+      return false;
+    };
+
+    const eDir6 = join(domainsRoot, domain, "entries");
+    if (existsSync(eDir6)) {
+      let reconciled = 0;
+      for (const f of readdirSync(eDir6).filter(x => x.endsWith(".md"))) {
+        const fp = join(eDir6, f);
+        const raw = readFileSync(fp, "utf-8");
+        const match = raw.match(/^section: (\S+)$/m);
+        if (!match) continue;
+        if (!isReachable(match[1])) {
+          // Find nearest reachable ancestor
+          let newSid: string | null = null;
+          let cur: string | null = match[1];
+          const seen = new Set<string>();
+          while (cur && !seen.has(cur)) {
+            seen.add(cur);
+            const s = sectionById.get(cur);
+            if (!s) break;
+            cur = s.parent ? String(s.parent) : null;
+            if (cur && isReachable(cur)) {
+              newSid = cur;
+              break;
+            }
           }
-        };
-        fixDepth(String(sec.id), 1);
+          if (!newSid) {
+            const firstRoot = sections.find(s => s.parent === null && String(s.domain) === domain);
+            if (firstRoot) newSid = String(firstRoot.id);
+          }
+          if (newSid) {
+            writeFileSync(fp, raw.replace(/^section: .+$/m, `section: ${newSid}`));
+            reconciled++;
+          }
+        }
       }
+      if (reconciled > 0) console.log(`  reconciled: ${reconciled} orphan entries moved to valid sections in ${domain}`);
     }
-    if (promoted > 0) console.log(`  reconciled: promoted ${promoted} orphan section(s) to root in ${domain}`);
   }
 
   writeSections(roots, sections);

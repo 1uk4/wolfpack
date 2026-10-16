@@ -762,42 +762,76 @@ function normalize(v: Vector): Vector {
  * If a section has too many children, group them via k-means into
  * intermediate sub-sections. Repeats until no section exceeds the limit.
  */
+/**
+ * Enforce branching factor by grouping similar children into intermediate
+ * sections. Only creates a group when 3+ children form a coherent cluster
+ * (pairwise similarity above threshold). Children that don't cluster stay
+ * as direct children — no forced grouping.
+ */
 function enforceBranchingFactor(
   sections: Section[],
   domain: string,
   config: typeof SECTION_TREE,
 ): void {
   const today = new Date().toISOString().split("T")[0];
+  const MIN_GROUP_SIZE = 3;
+  const GROUP_SIMILARITY_THRESHOLD = 0.70;
+
   let changed = true;
-  // Iterate until stable (grouping might create new sections that also need grouping)
   while (changed) {
     changed = false;
     for (const sec of [...sections]) {
       if (sec.domain !== domain) continue;
       if (sec.childIds.length <= config.maxChildrenPerSection) continue;
 
-      changed = true;
-      const k = Math.ceil(sec.childIds.length / config.maxChildrenPerSection);
       const childSecs = sec.childIds
         .map((cid) => sections.find((s) => s.id === cid)!)
         .filter(Boolean);
       if (childSecs.length < 2) continue;
 
+      // Try k-means with increasing k until groups are coherent
+      const k = Math.ceil(childSecs.length / config.maxChildrenPerSection);
+      if (k < 2) continue;
+
       const { assignment } = kMeans2Multi(childSecs.map((s) => s.centroid), k);
 
-      const groups = new Map<number, Section[]>();
+      const rawGroups = new Map<number, Section[]>();
       for (let i = 0; i < childSecs.length; i++) {
         const g = assignment[i];
-        if (!groups.has(g)) groups.set(g, []);
-        groups.get(g)!.push(childSecs[i]);
+        if (!rawGroups.has(g)) rawGroups.set(g, []);
+        rawGroups.get(g)!.push(childSecs[i]);
       }
 
+      // Filter: only create a wrapper for groups with 3+ members AND
+      // sufficient internal similarity. Everything else stays ungrouped.
       const newChildIds: SectionId[] = [];
-      for (const [, group] of groups) {
-        if (group.length === 1) {
-          newChildIds.push(group[0].id);
+      let didGroup = false;
+
+      for (const [, group] of rawGroups) {
+        if (group.length < MIN_GROUP_SIZE) {
+          // Too small to group — keep as direct children
+          for (const child of group) newChildIds.push(child.id);
           continue;
         }
+
+        // Check cohesion: average pairwise similarity within the group
+        let pairSum = 0;
+        let pairCount = 0;
+        for (let i = 0; i < group.length; i++) {
+          for (let j = i + 1; j < group.length; j++) {
+            pairSum += cosine(group[i].centroid, group[j].centroid);
+            pairCount++;
+          }
+        }
+        const avgSim = pairCount > 0 ? pairSum / pairCount : 0;
+
+        if (avgSim < GROUP_SIMILARITY_THRESHOLD) {
+          // Not coherent enough — keep as direct children
+          for (const child of group) newChildIds.push(child.id);
+          continue;
+        }
+
+        // Create wrapper section for this coherent group
         const groupId = mkSectionId(domain as DomainId);
         const groupCentroid = computeCentroid(group.map((s) => s.centroid));
         const groupChildIds: SectionId[] = [];
@@ -823,9 +857,14 @@ function enforceBranchingFactor(
           updated: today as any,
         } as Section);
         newChildIds.push(groupId);
+        didGroup = true;
       }
-      sec.childIds = newChildIds;
-      sec.dirty = true;
+
+      if (didGroup) {
+        sec.childIds = newChildIds;
+        sec.dirty = true;
+        changed = true;
+      }
     }
   }
 }

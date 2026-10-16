@@ -746,7 +746,11 @@ async function rebuildPostSplit(
     let changed = true;
     while (changed) {
       changed = false;
-      for (const sec of [...sections].filter((s) => s.domain === domain && s.childIds.length === 0 && s.memberCount > 8)) {
+      // Split any section whose DIRECT entries exceed splitThreshold — not
+      // just leaves. A root that gained children via rebuildMergeSimilarRoots
+      // still needs its own oversized direct-entry pile split; before this
+      // filter was `childIds.length === 0`, which skipped exactly that case.
+      for (const sec of [...sections].filter((s) => s.domain === domain && s.memberCount > stConfig.splitThreshold)) {
         const members: EntryWithVector[] = [];
         if (existsSync(eDir)) {
           for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
@@ -757,7 +761,7 @@ async function rebuildPostSplit(
             }
           }
         }
-        if (members.length <= 8) continue;
+        if (members.length <= stConfig.splitThreshold) continue;
         const sr = splitAsParentChild(sec, members, domCentroid, sections);
         if (!sr) continue;
 

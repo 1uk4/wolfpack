@@ -36,6 +36,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
 /* Main layout */
 #main { display: flex; flex: 1; min-height: 0; }
+#tree { width: 280px; background: #12151c; border-right: 1px solid #262b36;
+        overflow-y: auto; padding: 12px; font-size: 12px; flex-shrink: 0; display: none; }
+#tree.open { display: block; }
+#tree .tree-domain { font-weight: 600; color: #9ecbff; margin-bottom: 8px; font-size: 13px; }
+#tree .tree-section { cursor: pointer; padding: 4px 6px; border-radius: 4px;
+                      border-left: 3px solid #7bdff2; margin: 2px 0; }
+#tree .tree-section:hover { background: #1d2230; }
+#tree .tree-section .arrow { display: inline-block; width: 12px; font-size: 10px;
+                              color: #7bdff2; transition: transform 0.15s; }
+#tree .tree-section .arrow.open { transform: rotate(90deg); }
+#tree .tree-section .label { color: #cdd6e4; }
+#tree .tree-section .count { color: #8b94a3; font-size: 11px; margin-left: 4px; }
+#tree .tree-children { margin-left: 12px; display: none; }
+#tree .tree-children.open { display: block; }
+#tree .tree-entry { padding: 2px 6px; color: #8b94a3; cursor: pointer; border-radius: 3px; }
+#tree .tree-entry:hover { background: #1d2230; color: #cdd6e4; }
 #graph { flex: 1; min-width: 0; background: #0f1115; }
 
 /* Side panel */
@@ -83,6 +99,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 <div id="bar">
   <h1>Wolfpack</h1>
   <select id="domainSelect"></select>
+  <button class="btn" id="treeToggle">Tree</button>
   <button class="btn" id="filterToggle">Filters</button>
   <button class="btn" id="panelToggle">Panel</button>
   <button class="btn" id="fitBtn">Fit</button>
@@ -106,6 +123,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 </div>
 
 <div id="main">
+  <div id="tree"></div>
   <div id="graph"></div>
   <div id="panel">
     <div class="placeholder">Click a node to view its content.</div>
@@ -268,6 +286,121 @@ function render(domain) {
   document.getElementById("stats").textContent =
     ds.sectionCount + " sections, " + ds.entryCount + " entries" +
     (ds.workCount > 0 ? ", " + ds.workCount + " work items" : "");
+
+  buildTree(ds);
+}
+
+function buildTree(ds) {
+  var treeEl = document.getElementById("tree");
+  // Build section lookup from nodes and edges
+  var sectionNodes = {};
+  ds.nodes.forEach(function(n) {
+    if (n.group === "section" || n.group === "domain") sectionNodes[n.id] = n;
+  });
+
+  // Build parent->children map from edges
+  var children = {};
+  var entryParent = {};
+  ds.edges.forEach(function(e) {
+    if (!e.type) { // not dependency edges
+      if (!children[e.from]) children[e.from] = [];
+      children[e.from].push(e.to);
+      // Track entry->section mapping
+      var toNode = ds.nodes.find(function(n) { return n.id === e.to; });
+      if (toNode && toNode.group === "entry") entryParent[e.to] = e.from;
+    }
+  });
+
+  function renderSection(nodeId, depth) {
+    var node = sectionNodes[nodeId];
+    if (!node) return "";
+    var kids = (children[nodeId] || []);
+    var sectionKids = kids.filter(function(id) { return sectionNodes[id] && sectionNodes[id].group === "section"; });
+    var entryKids = kids.filter(function(id) {
+      var n = ds.nodes.find(function(x) { return x.id === id; });
+      return n && n.group === "entry";
+    });
+    var totalEntries = entryKids.length;
+
+    var html = '<div class="tree-section" data-node="' + nodeId + '">';
+    if (sectionKids.length > 0 || entryKids.length > 0) {
+      html += '<span class="arrow">&#9654;</span>';
+    } else {
+      html += '<span style="width:12px;display:inline-block"></span>';
+    }
+    html += '<span class="label">' + (node.label || node.id) + '</span>';
+    if (totalEntries > 0) html += '<span class="count">' + totalEntries + '</span>';
+    html += '</div>';
+
+    if (sectionKids.length > 0 || entryKids.length > 0) {
+      html += '<div class="tree-children" data-parent="' + nodeId + '">';
+      sectionKids.forEach(function(sid) { html += renderSection(sid, depth + 1); });
+      entryKids.forEach(function(eid) {
+        var eNode = ds.nodes.find(function(n) { return n.id === eid; });
+        if (eNode) {
+          html += '<div class="tree-entry" data-node="' + eid + '">' + (eNode.label || eid) + '</div>';
+        }
+      });
+      html += '</div>';
+    }
+    return html;
+  }
+
+  // Find the domain root
+  var domainNodeId = "dom:" + ds.domain;
+  var rootKids = (children[domainNodeId] || []).filter(function(id) {
+    return sectionNodes[id] && sectionNodes[id].group === "section";
+  });
+
+  var html = '<div class="tree-domain">' + ds.label + '</div>';
+  rootKids.forEach(function(sid) { html += renderSection(sid, 0); });
+
+  // Orphan entries (connected to domain, not a section)
+  var orphanEntries = (children[domainNodeId] || []).filter(function(id) {
+    var n = ds.nodes.find(function(x) { return x.id === id; });
+    return n && n.group === "entry";
+  });
+  if (orphanEntries.length > 0) {
+    html += '<div class="tree-section" style="border-left-color:#e0af68;"><span style="width:12px;display:inline-block"></span><span class="label" style="color:#e0af68;">Unplaced (' + orphanEntries.length + ')</span></div>';
+  }
+
+  treeEl.innerHTML = html;
+  treeEl.classList.add("open");
+
+  // Click handlers
+  treeEl.querySelectorAll(".tree-section").forEach(function(el) {
+    el.addEventListener("click", function(e) {
+      e.stopPropagation();
+      var nodeId = el.getAttribute("data-node");
+      // Toggle children
+      var childDiv = el.nextElementSibling;
+      if (childDiv && childDiv.classList.contains("tree-children")) {
+        childDiv.classList.toggle("open");
+        var arrow = el.querySelector(".arrow");
+        if (arrow) arrow.classList.toggle("open");
+      }
+      // Focus in graph
+      if (network && nodeId) {
+        network.selectNodes([nodeId]);
+        network.focus(nodeId, { scale: 1.2, animation: true });
+        var raw = ds.nodes.find(function(n) { return n.id === nodeId; });
+        if (raw) showNode(raw);
+      }
+    });
+  });
+
+  treeEl.querySelectorAll(".tree-entry").forEach(function(el) {
+    el.addEventListener("click", function(e) {
+      e.stopPropagation();
+      var nodeId = el.getAttribute("data-node");
+      if (network && nodeId) {
+        network.selectNodes([nodeId]);
+        network.focus(nodeId, { scale: 1.5, animation: true });
+        var raw = ds.nodes.find(function(n) { return n.id === nodeId; });
+        if (raw) showNode(raw);
+      }
+    });
+  });
 }
 
 function showNode(raw) {
@@ -318,6 +451,10 @@ function hideModal() {
 var sel = document.getElementById("domainSelect");
 sel.addEventListener("change", function() { render(sel.value); });
 
+document.getElementById("treeToggle").addEventListener("click", function() {
+  document.getElementById("tree").classList.toggle("open");
+  if (network) { network.redraw(); network.fit(); }
+});
 document.getElementById("filterToggle").addEventListener("click", function() {
   document.getElementById("filters").classList.toggle("open");
 });

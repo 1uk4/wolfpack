@@ -819,6 +819,8 @@ async function reorg(): Promise<void> {
     const dirty = sections.filter((s) => s.domain === domain && (s.dirty || resummarizeAll));
     if (dirty.length > 0) {
       console.log(`  labeling ${dirty.length} ${resummarizeAll ? "" : "dirty "}section(s)…`);
+      // Sort bottom-up so children label first; parents can then use child summaries
+      dirty.sort((a, b) => b.depth - a.depth);
       for (const sec of dirty) {
         const members = sectionMembers.get(sec.id) ?? [];
         const memberInfo: SectionMember[] = [];
@@ -831,6 +833,30 @@ async function reorg(): Promise<void> {
               summary: fields.summary ? String(fields.summary) : undefined,
             });
           }
+        }
+        // For parent sections with no direct members, collect from descendants
+        if (memberInfo.length === 0 && sec.childIds.length > 0) {
+          function collectFromChildren(parentId: string, max: number): SectionMember[] {
+            const result: SectionMember[] = [];
+            const childMembers = sectionMembers.get(parentId) ?? [];
+            for (const m of childMembers) {
+              if (result.length >= max) break;
+              const file = join(eDir, `${m.entryId}.md`);
+              if (existsSync(file)) {
+                const { fields } = parseFrontmatter(readFileSync(file, "utf-8"));
+                result.push({
+                  title: String(fields.title ?? m.entryId),
+                  summary: fields.summary ? String(fields.summary) : undefined,
+                });
+              }
+            }
+            for (const cid of sections.filter((s) => s.parent === parentId).map((s) => s.id)) {
+              if (result.length >= max) break;
+              result.push(...collectFromChildren(cid as string, max - result.length));
+            }
+            return result;
+          }
+          memberInfo.push(...collectFromChildren(sec.id as string, 8));
         }
         const entryTitles = memberInfo.map((m) => m.title);
         // Compute summary from member titles + summaries
@@ -849,12 +875,17 @@ async function reorg(): Promise<void> {
             });
             sec.dirty = false;
             sec.updated = new Date().toISOString().split("T")[0] as any;
+            // Mark parent dirty so it re-generalizes on next pass
+            if (sec.parent) {
+              const parentSec = sections.find((s) => s.id === sec.parent);
+              if (parentSec && !parentSec.dirty) parentSec.dirty = true;
+            }
             console.log(`    ${sec.id}: "${oldTitle}" → "${sec.title}"`);
           } catch (e) {
             console.error(`    ${sec.id}: label failed: ${e}`);
           }
         } else if (memberInfo.length === 0) {
-          console.log(`    ${sec.id}: skip re-label (0 members) "${sec.title}"`);
+          console.log(`    ${sec.id}: skip re-label (truly empty) "${sec.title}"`);
         } else {
           console.log(`    ${sec.id}: would re-label (${memberInfo.length} member(s)) "${sec.title}"`);
         }

@@ -466,16 +466,19 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       stConfig: SECTION_TREE,
     };
 
+    // 1. Build the tree.
     for (const domain of domains) {
       sections = await rebuildBootstrapDomain(domain, sections, rctx);
     }
     sections = rebuildAbsorbSingletonRoots(sections, rctx);
-    await rebuildLabelAfter(sections, rctx);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
     await rebuildPostSplit(sections, rctx);
-    await rebuildLabelPostSplit(sections, rctx);
     sections = rebuildFinalAbsorb(sections, rctx);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
+
+    // 2. Name the final tree (single bottom-up pass; grouping nodes sampled
+    //    from descendant entries via the labeler's weighted-child fallback).
+    await rebuildLabelAfter(sections, rctx);
 
     rerenderRegistry(roots, opts.dryRun);
     persistDomains(roots, sections, result.domains, opts.dryRun);
@@ -646,7 +649,12 @@ function rebuildAbsorbSingletonRoots(
   return sections;
 }
 
-/** Phase 3 — label every dirty section bottom-up. */
+/**
+ * Final phase — label every dirty section in a single bottom-up pass.
+ * Grouping nodes (0 direct entries) fall back to weighted sampling of
+ * descendant entry titles so the LLM has real content to generalize from.
+ * Runs AFTER post-split and final-absorb so the tree shape is final.
+ */
 async function rebuildLabelAfter(
   sections: Section[],
   ctx: RebuildCtx,
@@ -721,7 +729,7 @@ async function rebuildLabelAfter(
 }
 
 /**
- * Phase 4 — any leaf still over splitThreshold gets split again into a
+ * Phase 3 — any leaf still over splitThreshold gets split again into a
  * 2-child grouping. The parent keeps its id but goes to 0 direct members.
  */
 async function rebuildPostSplit(
@@ -782,42 +790,8 @@ async function rebuildPostSplit(
   }
 }
 
-/** Phase 5 — label the two children emitted by post-split. */
-async function rebuildLabelPostSplit(
-  sections: Section[],
-  ctx: RebuildCtx,
-): Promise<void> {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  for (const domain of result.domains) {
-    const eDir = join(domainsRoot, domain, "entries");
-    const postSplitDirty = sections.filter(
-      (s) => s.domain === domain && s.dirty && (!s.title || s.title.includes("(split)")),
-    );
-    for (const sec of postSplitDirty) {
-      const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
-      if (memberInfo.length === 0) {
-        for (const cid of sec.childIds) {
-          const child = sections.find((s) => s.id === cid);
-          if (child && child.title) memberInfo.push({ title: child.title, summary: child.summary });
-        }
-      }
-      if (opts.dryRun && memberInfo.length > 0) {
-        notify?.(`  would post-split label: ${sec.id}`);
-      } else if (memberInfo.length > 0) {
-        const ok = await llmLabelSection({
-          engine, sec, memberInfo, sections, domain,
-          withContext: false, touchUpdated: false, bubbleUp: false,
-          logPrefix: "post-split labeled", notify,
-        });
-        if (ok) result.labelsUpdated++;
-      }
-    }
-  }
-}
-
 /**
- * Phase 6 — final sweep for singleton roots created by post-split. Looser
+ * Phase 4 — final sweep for singleton roots created by post-split. Looser
  * member count (direct + descendants) and looser neighbor filter than the
  * first absorb; both pre-existing differences preserved.
  */

@@ -205,6 +205,23 @@ async function syncPiDurable(
   } finally {
     fs.rmSync(built.tmpDir, { recursive: true, force: true });
   }
+
+  // Librarian pi-durable wolves also need the standalone KB CLI shipped to
+  // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>`, systemd sweep timer).
+  // The harness bundle only carries the embedded librarian; the CLI binary is
+  // separate.
+  if (isLibrarian(cfg.extensions ?? [])) {
+    try {
+      await provisionKbEngine(host, {
+        id: wolf.id,
+        name: cfg.name,
+        ownerId: cfg.telegram?.ownerId,
+      });
+    } catch (err) {
+      console.error(c.red(`KB engine provisioning failed: ${err}`));
+      process.exit(1);
+    }
+  }
 }
 
 /** Rebuild + push the bundle for one wolf on one host. */

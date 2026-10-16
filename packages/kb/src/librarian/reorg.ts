@@ -471,11 +471,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       sections = await rebuildBootstrapDomain(domain, sections, rctx);
     }
     sections = rebuildAbsorbSingletonRoots(sections, rctx);
-    sections = rebuildMergeSimilarRoots(sections, rctx);
+    sections = mergeSimilarRoots(sections, allVectors, result.domains, result, notify);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
     await rebuildPostSplit(sections, rctx);
     sections = rebuildFinalAbsorb(sections, rctx);
-    sections = rebuildPromoteDominantChildren(sections, rctx);
+    sections = promoteDominantChildren(sections, result.domains, result, notify);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
 
     // 2. Name the final tree (single bottom-up pass; grouping nodes sampled
@@ -500,7 +500,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   if (!opts.dryRun && events.length > 0) appendLedger(roots, events);
   rerenderRegistry(roots, opts.dryRun);
 
-  // Collapse empty root wrappers + binary-split artifacts at all depths.
+  // Shared tail: run the same structural quality passes as rebuild so the
+  // incremental path maintains the same tree invariants and we never need
+  // to "rebuild to recover shape".
+  sections = mergeSimilarRoots(sections, allVectors, result.domains, result, notify);
+  sections = promoteDominantChildren(sections, result.domains, result, notify);
   for (const domain of result.domains) {
     const eDir = join(domainsRoot, domain, "entries");
     sections = collapseEmptyRootWrappers(sections, domain, eDir, notify);
@@ -859,17 +863,23 @@ function rebuildFinalAbsorb(
 }
 
 /**
- * After absorb, collapse root pairs with centroid cosine > rootMergeSimilarity.
- * The smaller root becomes a child of the larger one, preserving its subtree.
- * Catches semantically overlapping roots (e.g. "Pi-Durable Infrastructure" and
+ * Collapse root pairs with centroid cosine > rootMergeSimilarity. The smaller
+ * root becomes a child of the larger one, preserving its subtree. Catches
+ * semantically overlapping roots (e.g. "Pi-Durable Infrastructure" and
  * "Pi Durable Integration") that both exceed minRootRatio independently.
+ *
+ * Shared by rebuild + incremental. Both paths should produce the same tree
+ * invariants after their structural work — that's how we avoid ever needing
+ * a rebuild to recover shape quality.
  */
-function rebuildMergeSimilarRoots(
+function mergeSimilarRoots(
   sections: Section[],
-  ctx: RebuildCtx,
+  allVectors: EntryVector[],
+  domains: string[],
+  result: ReorgResult,
+  notify: ((m: string) => void) | undefined,
 ): Section[] {
-  const { opts, allVectors, result, stConfig } = ctx;
-  const { notify } = opts;
+  const stConfig = SECTION_TREE;
 
   // Count descendants (direct + all children's direct) once per section.
   function totalFor(sec: Section): number {
@@ -878,7 +888,7 @@ function rebuildMergeSimilarRoots(
     return total;
   }
 
-  for (const domain of result.domains) {
+  for (const domain of domains) {
     const domainEntries = allVectors.filter((v) => v.domain === domain).length;
     // Floor: don't collapse below the target root count. All wolfpack entries
     // are naturally similar; without a floor, every pair above threshold
@@ -931,13 +941,16 @@ function rebuildMergeSimilarRoots(
  * all its children (dominant + minority) are promoted to the wrapper's
  * parent, becoming siblings there. Kills "wrapper named after its dominant
  * child" chains that add no navigational value.
+ *
+ * Shared by rebuild + incremental.
  */
-function rebuildPromoteDominantChildren(
+function promoteDominantChildren(
   sections: Section[],
-  ctx: RebuildCtx,
+  domains: string[],
+  result: ReorgResult,
+  notify: ((m: string) => void) | undefined,
 ): Section[] {
-  const { opts, result, stConfig } = ctx;
-  const { notify } = opts;
+  const stConfig = SECTION_TREE;
 
   function totalFor(sec: Section): number {
     let total = sec.memberCount;
@@ -945,7 +958,7 @@ function rebuildPromoteDominantChildren(
     return total;
   }
 
-  for (const domain of result.domains) {
+  for (const domain of domains) {
     let changed = true;
     while (changed) {
       changed = false;
@@ -1059,14 +1072,22 @@ const sectionsToCheck = opts.touchedSections
 const domainCentroid = domainVectors.length > 0
   ? computeCentroid(domainVectors.map((v) => v.vector))
   : [];
+const stCfg = SECTION_TREE;
 const toSplit = sectionsToCheck.filter(
-  (s) => (sectionMembers.get(s.id)?.length ?? 0) > 8
+  (s) => (sectionMembers.get(s.id)?.length ?? 0) > stCfg.splitThreshold,
 );
 for (const sec of toSplit) {
   const members = sectionMembers.get(sec.id) ?? [];
   const splitResult = splitAsParentChild(sec, members, domainCentroid, sections);
   if (!splitResult) {
     notify?.(`  skip split: ${sec.id} (no clean cut)`);
+    continue;
+  }
+  // Same min-balance guard as the rebuild post-split: skip lopsided cuts
+  // (e.g. 9+1) that just orphan a semantic outlier under a fresh wrapper.
+  const minSide = Math.min(splitResult.parentMembers.length, splitResult.childMembers.length);
+  if (minSide < stCfg.splitMinBalance) {
+    notify?.(`  skip split: ${sec.id} (${members.length}) — imbalanced ${splitResult.parentMembers.length}+${splitResult.childMembers.length} < min ${stCfg.splitMinBalance}`);
     continue;
   }
   notify?.(`  split: ${sec.id} (${members.length} entries) → parent(${splitResult.parentMembers.length}) + child(${splitResult.childMembers.length})`);

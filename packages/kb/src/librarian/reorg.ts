@@ -201,14 +201,10 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       allAssignments.set(domain, treeResult.assignments);
     }
     
-    // Absorb singleton roots into nearest neighbor
-    // Skip during rebuilds — buildTreeBottomUp already sizes roots correctly,
-    // and absorbing here can re-create the single-root wrapper that the
-    // collapse step in buildTreeBottomUp just removed.
+    // Absorb singleton roots into nearest neighbor.
+    // During rebuilds, still absorb but stop before going below 2 roots.
     const stConfig = SECTION_TREE;
-    if (opts.rebuild) {
-      // Skip absorb — go straight to labeling
-    } else {
+    {
     for (const domain of result.domains) {
       const domVecs = allVectors.filter((v) => v.domain === domain);
       const totalEntries = domVecs.length;
@@ -217,6 +213,9 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       const eDir = join(domainsRoot, domain, "entries");
       
       for (const root of domainRoots) {
+        // Stop absorbing if we'd go below 2 roots
+        const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+        if (currentRoots.length <= 2) break;
         if (root.memberCount >= minEntries) continue;
         if (root.childIds.length > 0) continue; // has children, not a singleton
         
@@ -280,7 +279,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         result.merges++;
       }
     }
-    } // end skip-absorb-during-rebuild else block
+    }
     
     // Label dirty sections via LLM
     for (const domain of result.domains) {
@@ -518,8 +517,6 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // Final singleton absorption pass (catches singletons created by post-split)
-    // Skip during rebuilds — same reason as the first absorb pass.
-    if (!opts.rebuild)
     for (const domain of result.domains) {
       const domVecs2 = allVectors.filter((v) => v.domain === domain);
       const totalEntries2 = domVecs2.length;
@@ -527,6 +524,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       const eDir3 = join(domainsRoot, domain, "entries");
       const domainRoots2 = sections.filter((s) => s.domain === domain && s.parent === null);
       for (const root of domainRoots2) {
+        const currentRoots2 = sections.filter((s) => s.domain === domain && s.parent === null);
+        if (currentRoots2.length <= 2) break;
         const actualMembers = root.memberCount + sections.filter((s) => s.parent === root.id).reduce((sum, c) => sum + c.memberCount, 0);
         if (actualMembers >= minEntries2) continue;
         if (root.childIds.length > 0 && actualMembers > 1) continue;

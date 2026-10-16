@@ -872,6 +872,40 @@ async function reorg(): Promise<void> {
     appendLedger(roots, events);
     console.log(`\nappended ${events.length} event(s) to ledger`);
   }
+  // Collapse single-root wrappers per domain
+  for (const domain of domains) {
+    const domainRoots = sections.filter(
+      (s) => s.parent === null && String(s.domain) === domain
+    );
+    if (domainRoots.length === 1) {
+      const root = domainRoots[0];
+      const eDir = join(domainsRoot, domain, "entries");
+      const rootHasEntries = existsSync(eDir)
+        ? readdirSync(eDir).filter((f) => f.endsWith(".md")).some((f) => {
+            const raw = readFileSync(join(eDir, f), "utf-8");
+            return raw.includes(`section: ${root.id}`);
+          })
+        : false;
+      if (!rootHasEntries && root.childIds.length > 0) {
+        for (const cid of root.childIds) {
+          const child = sections.find((s) => s.id === cid);
+          if (child) {
+            child.parent = null;
+            child.depth = 0;
+            const fixDepth = (pid: typeof child.id, d: number) => {
+              for (const s of sections) {
+                if (s.parent === pid) { s.depth = d; fixDepth(s.id, d + 1); }
+              }
+            };
+            fixDepth(child.id, 1);
+          }
+        }
+        sections = sections.filter((s) => s.id !== root.id);
+        console.log(`  collapse: removed single-root wrapper "${root.title}" for ${domain}`);
+      }
+    }
+  }
+
   writeSections(roots, sections);
 
   // Re-render digest + index for each touched domain

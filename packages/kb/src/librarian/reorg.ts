@@ -864,7 +864,7 @@ function rebuildMergeSimilarRoots(
   sections: Section[],
   ctx: RebuildCtx,
 ): Section[] {
-  const { opts, result, stConfig } = ctx;
+  const { opts, allVectors, result, stConfig } = ctx;
   const { notify } = opts;
 
   // Count descendants (direct + all children's direct) once per section.
@@ -875,38 +875,47 @@ function rebuildMergeSimilarRoots(
   }
 
   for (const domain of result.domains) {
+    const domainEntries = allVectors.filter((v) => v.domain === domain).length;
+    // Floor: don't collapse below the target root count. All wolfpack entries
+    // are naturally similar; without a floor, every pair above threshold
+    // chains into one mega-root.
+    const targetRoots = Math.max(3, Math.round(Math.sqrt(domainEntries) * stConfig.rootCountFactor));
+
     let changed = true;
     while (changed) {
       changed = false;
       const roots = sections.filter((s) => s.domain === domain && s.parent === null);
-      // Scan pairs; take the first above-threshold pair.
-      outer: for (let i = 0; i < roots.length; i++) {
+      if (roots.length <= targetRoots) break;
+      // Find the MOST similar pair across all pairs; merge only that one per
+      // iteration so we don't chain-collapse through a weakly-similar bridge.
+      let bestI = -1, bestJ = -1;
+      let bestSim: number = stConfig.rootMergeSimilarity;
+      for (let i = 0; i < roots.length; i++) {
         for (let j = i + 1; j < roots.length; j++) {
           const sim = cosine(roots[i].centroid, roots[j].centroid);
-          if (sim < stConfig.rootMergeSimilarity) continue;
-          const [larger, smaller] = totalFor(roots[i]) >= totalFor(roots[j])
-            ? [roots[i], roots[j]]
-            : [roots[j], roots[i]];
-          notify?.(`  merge root: "${smaller.title || smaller.id}" (${totalFor(smaller)}) → "${larger.title || larger.id}" (${totalFor(larger)}) [cos=${sim.toFixed(2)}]`);
-          smaller.parent = larger.id;
-          smaller.depth = larger.depth + 1;
-          // Fix depth of smaller's entire subtree.
-          const bump = (parentId: SectionId, d: number): void => {
-            for (const s of sections) {
-              if (s.parent === parentId) {
-                s.depth = d;
-                bump(s.id, d + 1);
-              }
-            }
-          };
-          bump(smaller.id, smaller.depth + 1);
-          if (!larger.childIds.includes(smaller.id)) larger.childIds.push(smaller.id);
-          larger.dirty = true;
-          result.merges++;
-          changed = true;
-          break outer;
+          if (sim > bestSim) { bestSim = sim; bestI = i; bestJ = j; }
         }
       }
+      if (bestI < 0) break;
+      const [larger, smaller] = totalFor(roots[bestI]) >= totalFor(roots[bestJ])
+        ? [roots[bestI], roots[bestJ]]
+        : [roots[bestJ], roots[bestI]];
+      notify?.(`  merge root: "${smaller.title || smaller.id}" (${totalFor(smaller)}) → "${larger.title || larger.id}" (${totalFor(larger)}) [cos=${bestSim.toFixed(2)}]`);
+      smaller.parent = larger.id;
+      smaller.depth = larger.depth + 1;
+      const bump = (parentId: SectionId, d: number): void => {
+        for (const s of sections) {
+          if (s.parent === parentId) {
+            s.depth = d;
+            bump(s.id, d + 1);
+          }
+        }
+      };
+      bump(smaller.id, smaller.depth + 1);
+      if (!larger.childIds.includes(smaller.id)) larger.childIds.push(smaller.id);
+      larger.dirty = true;
+      result.merges++;
+      changed = true;
     }
   }
   return sections;

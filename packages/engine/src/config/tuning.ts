@@ -246,8 +246,13 @@ export const SECTION_TREE = {
    * becomes a child of the larger. Catches cases where two roots are
    * semantically overlapping (e.g. "Pi-Durable Infrastructure" and
    * "Pi Durable Integration") but both independently clear minRootRatio.
+   *
+   * Set high (0.92+) because within a single domain, all centroids are
+   * naturally similar — only merge truly redundant pairs. The pass also
+   * respects a root-count floor derived from rootCountFactor so it never
+   * collapses more than needed to reach the target root count.
    */
-  rootMergeSimilarity: 0.85,
+  rootMergeSimilarity: 0.92,
 
   // ── Wrapper collapse ───────────────────────────────────────────────
 

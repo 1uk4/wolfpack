@@ -140,6 +140,24 @@ export function isLibrarian(keys: string[]): boolean {
   return keys.some((k) => getExtension(k)?.librarian);
 }
 
+/**
+ * Full librarian detection: either the legacy `kb` extension (used by
+ * non-pi-durable wolves) OR a pi-durable wolf whose memory extension declares
+ * librarian mode in-config (dewey's pattern since the Oct 2026 migration).
+ *
+ * Must match the harness's runtime check (`config.memory?.librarian === true`
+ * in createWolfHarness) so sync ships the KB CLI to every wolf that runs the
+ * embedded librarian at runtime.
+ */
+export function isLibrarianConfig(cfg: {
+  extensions?: string[];
+  memory?: { librarian?: boolean };
+}): boolean {
+  if (isLibrarian(cfg.extensions ?? [])) return true;
+  if (cfg.memory?.librarian === true) return true;
+  return false;
+}
+
 /** Check if an extension supports a specific runtime. */
 export function extensionSupportsRuntime(ext: WolfExtension, runtime: string): boolean {
   // If no runtimes specified, extension supports all runtimes

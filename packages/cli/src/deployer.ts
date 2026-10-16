@@ -87,7 +87,10 @@ export async function bundleKbCli(repoRoot: string, outFile: string): Promise<vo
  * Ollama + sweep stack lands solely on hosts that actually run a librarian.
  *
  * Installs: Ollama + the embedding model, the `wolfpack-kb` CLI, and a per-wolf
- * systemd sweep timer that drains the inbox and Telegrams a summary. Idempotent.
+ * admin CLI binary at /opt/wolfpack-kb/cli.cjs. The sweep schedule itself
+ * lives in the pi-durable harness (setInterval + sweepManager), NOT in
+ * systemd — any legacy systemd units left over from older deploys get
+ * removed as part of this step. Idempotent.
  */
 export async function provisionKbEngine(
   host: HostEntry,
@@ -103,9 +106,7 @@ export async function provisionKbEngine(
 
   const user = `wolf-${wolf.id}`;
   const home = `/home/${user}`;
-  const ownerLine = wolf.ownerId
-    ? `Environment=WOLFPACK_OWNER_TELEGRAM_ID=${wolf.ownerId}`
-    : "";
+  void wolf.ownerId; // owner id was only used by the removed systemd sweep service
 
   // 1. Bundle + ship the CLI.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-kb-"));
@@ -131,49 +132,25 @@ step "KB storage roots + den-local state"
 mkdir -p ${home}/knowledge/base ${home}/librarian
 chown -R ${user}:${user} ${home}/knowledge ${home}/librarian
 # den-local ledger/vectors live outside the (user-owned, synced) den because the
-# sweep runs as root (consistent with root-owned Syncthing writes into the KB dirs).
+# admin CLI may run as root in some flows; keep that path consistent with the
+# per-wolf isolation we already have.
 mkdir -p /var/lib/wolfpack-kb/${wolf.id}
 
-step "let the wolf trigger the sweep on demand (/kb:sweep)"
-echo '${user} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${user}-kb-sweep.service' > /etc/sudoers.d/${user}-kb-sweep
-chmod 440 /etc/sudoers.d/${user}-kb-sweep
+# NOTE: no systemd sweep timer or sweep service is installed. The sweep runs
+# on the pi-durable harness's own setInterval (packages/harness/src/index.ts),
+# gated by config.memory.sweepInterval + config.memory.librarian in wolf.yaml.
+# /opt/wolfpack-kb/cli.cjs stays for admin ops (wolfpack kb status/reorg/rebuild).
+# If a prior deploy left behind the old units/sudoers rule, clean them up here.
+systemctl list-unit-files 'wolf-${wolf.id}-kb-sweep.timer' >/dev/null 2>&1 && {
+  systemctl stop 'wolf-${wolf.id}-kb-sweep.timer' 2>/dev/null || true
+  systemctl disable 'wolf-${wolf.id}-kb-sweep.timer' 2>/dev/null || true
+  rm -f /etc/systemd/system/wolf-${wolf.id}-kb-sweep.{timer,service}
+  rm -f /etc/sudoers.d/${user}-kb-sweep
+  systemctl daemon-reload
+  printf '\\n  \\u2713 Removed legacy systemd kb-sweep timer\\n'
+} || true
 
-step "sweep service + timer"
-cat > /etc/systemd/system/${user}-kb-sweep.service <<UNIT
-[Unit]
-Description=Wolfpack KB sweep - ${wolf.name}
-After=network-online.target ollama.service
-Wants=network-online.target
-[Service]
-# Runs as root so it can process root-owned Syncthing writes in the KB dirs and
-# write entries that Syncthing (also root) mirrors back out.
-Type=oneshot
-User=root
-Environment=HOME=${home}
-Environment=KB_BASE=${home}/knowledge/base
-Environment=KB_OPS=${home}/librarian
-Environment=KB_DEN_LOCAL=/var/lib/wolfpack-kb/${wolf.id}
-Environment=WOLFPACK_EMBED_URL=http://127.0.0.1:11434
-${ownerLine}
-EnvironmentFile=-${home}/.env
-# Resource guard: a single run is bounded by SWEEP.batchSize contributions; this
-# timeout kills a hung/runaway sweep before the next tick rather than piling up.
-TimeoutStartSec=900
-ExecStart=/usr/bin/node /opt/wolfpack-kb/cli.cjs sweep
-UNIT
-cat > /etc/systemd/system/${user}-kb-sweep.timer <<UNIT
-[Unit]
-Description=Wolfpack KB sweep timer - ${wolf.name}
-[Timer]
-OnCalendar=*:0/15
-Persistent=true
-Unit=${user}-kb-sweep.service
-[Install]
-WantedBy=timers.target
-UNIT
-systemctl daemon-reload
-systemctl enable --now ${user}-kb-sweep.timer
-printf '\\n\\033[32m  \\u2713 KB engine ready (ollama + ${KB_EMBED_MODEL} + sweep timer)\\033[0m\\n'
+printf '\\n\\033[32m  \\u2713 KB engine ready (ollama + ${KB_EMBED_MODEL} + /opt/wolfpack-kb/cli.cjs)\\033[0m\\n'
 `;
 
   const scriptPath = path.join(tmp, "kb-provision.sh");

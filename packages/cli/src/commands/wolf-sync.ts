@@ -24,7 +24,7 @@ import {
   type CliConfig,
   type HostEntry,
 } from "../config.js";
-import { isLibrarian, writePiSettings } from "../extensions.js";
+import { isLibrarian, isLibrarianConfig, writePiSettings } from "../extensions.js";
 import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { reconcileMesh } from "../mesh-reconcile.js";
@@ -207,10 +207,14 @@ async function syncPiDurable(
   }
 
   // Librarian pi-durable wolves also need the standalone KB CLI shipped to
-  // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>`, systemd sweep timer).
-  // The harness bundle only carries the embedded librarian; the CLI binary is
-  // separate.
-  if (isLibrarian(cfg.extensions ?? [])) {
+  // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>` for admin ops like
+  // status/reorg/rebuild). The harness bundle carries the embedded librarian
+  // the sweep timer uses; the CLI binary is a separate artifact.
+  //
+  // Detection: the pi-durable harness checks `config.memory?.librarian === true`
+  // for sweep-manager init — isLibrarianConfig mirrors that, so every wolf that
+  // runs the embedded librarian also gets the admin CLI shipped.
+  if (isLibrarianConfig(cfg as { extensions?: string[]; memory?: { librarian?: boolean } })) {
     try {
       await provisionKbEngine(host, {
         id: wolf.id,

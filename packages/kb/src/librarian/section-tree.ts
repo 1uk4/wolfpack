@@ -431,6 +431,33 @@ export function buildTreeBottomUp(
   // Post-build: enforce maxChildrenPerSection recursively on all sections
   enforceBranchingFactor(sections, domain, config);
 
+  // Collapse single-root wrappers: if only 1 root section with 0 direct entries,
+  // promote its children to root level. Prevents a meaningless wrapper around
+  // the entire domain.
+  const roots = sections.filter(s => s.parent === null && String(s.domain) === domain);
+  if (roots.length === 1) {
+    const root = roots[0];
+    const rootEntries = [...assignments.values()].filter(sid => sid === root.id);
+    if (rootEntries.length === 0 && root.childIds.length > 0) {
+      for (const cid of root.childIds) {
+        const child = sections.find(s => s.id === cid);
+        if (child) {
+          child.parent = null;
+          child.depth = 0;
+          // Fix descendant depths
+          const fixDepth = (parentId: SectionId, d: number) => {
+            for (const s of sections) {
+              if (s.parent === parentId) { s.depth = d; fixDepth(s.id, d + 1); }
+            }
+          };
+          fixDepth(child.id, 1);
+        }
+      }
+      const idx = sections.indexOf(root);
+      if (idx >= 0) sections.splice(idx, 1);
+    }
+  }
+
   return { sections, assignments };
 }
 

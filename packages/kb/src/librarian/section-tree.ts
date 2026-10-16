@@ -90,7 +90,7 @@ export function buildTreeBottomUp(
 
   // Agglomerative merge loop — stop when similarity drops below floor
   // or cluster count reaches target, whichever comes first.
-  const MERGE_SIMILARITY_FLOOR = 0.75;
+  const MERGE_SIMILARITY_FLOOR = 0.65;
 
   while (clusters.length > targetRoots) {
     // Compute pairwise similarity matrix

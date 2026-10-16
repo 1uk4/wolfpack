@@ -471,9 +471,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       sections = await rebuildBootstrapDomain(domain, sections, rctx);
     }
     sections = rebuildAbsorbSingletonRoots(sections, rctx);
+    sections = rebuildMergeSimilarRoots(sections, rctx);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
     await rebuildPostSplit(sections, rctx);
     sections = rebuildFinalAbsorb(sections, rctx);
+    sections = rebuildPromoteDominantChildren(sections, rctx);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
 
     // 2. Name the final tree (single bottom-up pass; grouping nodes sampled
@@ -759,6 +761,16 @@ async function rebuildPostSplit(
         const sr = splitAsParentChild(sec, members, domCentroid, sections);
         if (!sr) continue;
 
+        // Skip splits that would orphan a semantic outlier (e.g. 8+1). An
+        // imbalanced split just wraps a well-formed section + a stray in a
+        // fresh grouping node that the LLM can't name coherently. Leaving
+        // the section slightly oversized is better than a lopsided wrapper.
+        const minSide = Math.min(sr.parentMembers.length, sr.childMembers.length);
+        if (minSide < stConfig.splitMinBalance) {
+          notify?.(`  skip post-split: ${sec.id} (${members.length}) — imbalanced ${sr.parentMembers.length}+${sr.childMembers.length} < min ${stConfig.splitMinBalance}`);
+          continue;
+        }
+
         const childAId = mkSectionId(domain);
         const childBId = sr.childSection.id;
         notify?.(`  post-split: ${sec.id} (${members.length}) -> ${childAId}(${sr.parentMembers.length}) + ${childBId}(${sr.childMembers.length})`);
@@ -837,6 +849,139 @@ function rebuildFinalAbsorb(
       }
       sections = sections.filter((s) => s.id !== root.id);
       result.merges++;
+    }
+  }
+  return sections;
+}
+
+/**
+ * After absorb, collapse root pairs with centroid cosine > rootMergeSimilarity.
+ * The smaller root becomes a child of the larger one, preserving its subtree.
+ * Catches semantically overlapping roots (e.g. "Pi-Durable Infrastructure" and
+ * "Pi Durable Integration") that both exceed minRootRatio independently.
+ */
+function rebuildMergeSimilarRoots(
+  sections: Section[],
+  ctx: RebuildCtx,
+): Section[] {
+  const { opts, result, stConfig } = ctx;
+  const { notify } = opts;
+
+  // Count descendants (direct + all children's direct) once per section.
+  function totalFor(sec: Section): number {
+    let total = sec.memberCount;
+    for (const c of sections.filter((s) => s.parent === sec.id)) total += totalFor(c);
+    return total;
+  }
+
+  for (const domain of result.domains) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const roots = sections.filter((s) => s.domain === domain && s.parent === null);
+      // Scan pairs; take the first above-threshold pair.
+      outer: for (let i = 0; i < roots.length; i++) {
+        for (let j = i + 1; j < roots.length; j++) {
+          const sim = cosine(roots[i].centroid, roots[j].centroid);
+          if (sim < stConfig.rootMergeSimilarity) continue;
+          const [larger, smaller] = totalFor(roots[i]) >= totalFor(roots[j])
+            ? [roots[i], roots[j]]
+            : [roots[j], roots[i]];
+          notify?.(`  merge root: "${smaller.title || smaller.id}" (${totalFor(smaller)}) → "${larger.title || larger.id}" (${totalFor(larger)}) [cos=${sim.toFixed(2)}]`);
+          smaller.parent = larger.id;
+          smaller.depth = larger.depth + 1;
+          // Fix depth of smaller's entire subtree.
+          const bump = (parentId: SectionId, d: number): void => {
+            for (const s of sections) {
+              if (s.parent === parentId) {
+                s.depth = d;
+                bump(s.id, d + 1);
+              }
+            }
+          };
+          bump(smaller.id, smaller.depth + 1);
+          if (!larger.childIds.includes(smaller.id)) larger.childIds.push(smaller.id);
+          larger.dirty = true;
+          result.merges++;
+          changed = true;
+          break outer;
+        }
+      }
+    }
+  }
+  return sections;
+}
+
+/**
+ * Collapse grouping wrappers whose entries are concentrated in a single
+ * dominant child (>= dominantChildThreshold). The wrapper is removed and
+ * all its children (dominant + minority) are promoted to the wrapper's
+ * parent, becoming siblings there. Kills "wrapper named after its dominant
+ * child" chains that add no navigational value.
+ */
+function rebuildPromoteDominantChildren(
+  sections: Section[],
+  ctx: RebuildCtx,
+): Section[] {
+  const { opts, result, stConfig } = ctx;
+  const { notify } = opts;
+
+  function totalFor(sec: Section): number {
+    let total = sec.memberCount;
+    for (const c of sections.filter((s) => s.parent === sec.id)) total += totalFor(c);
+    return total;
+  }
+
+  for (const domain of result.domains) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      // Walk deepest-first so promotions cascade correctly up the tree.
+      const wrappers = sections
+        .filter((s) => s.domain === domain && s.memberCount === 0)
+        .sort((a, b) => b.depth - a.depth);
+      for (const wrapper of wrappers) {
+        const kids = sections.filter((s) => s.parent === wrapper.id);
+        if (kids.length < 2) continue; // nothing to collapse
+        const totals = kids.map((k) => ({ k, n: totalFor(k) }));
+        const grand = totals.reduce((sum, t) => sum + t.n, 0);
+        if (grand === 0) continue;
+        const dominant = totals.find((t) => t.n / grand >= stConfig.dominantChildThreshold);
+        if (!dominant) continue;
+
+        notify?.(`  promote: wrapper "${wrapper.title || wrapper.id}" dominated by "${dominant.k.title || dominant.k.id}" (${dominant.n}/${grand}); promoting ${kids.length} children to parent`);
+
+        // Reparent every child of the wrapper to the wrapper's parent.
+        for (const kid of kids) {
+          kid.parent = wrapper.parent;
+          kid.depth = wrapper.depth; // depth of wrapper's parent + 1 == wrapper's depth
+          // Fix all its descendants' depths.
+          const bump = (parentId: SectionId, d: number): void => {
+            for (const s of sections) {
+              if (s.parent === parentId) {
+                s.depth = d;
+                bump(s.id, d + 1);
+              }
+            }
+          };
+          bump(kid.id, kid.depth + 1);
+        }
+        // Rewire parent's childIds.
+        if (wrapper.parent) {
+          const parent = sections.find((s) => s.id === wrapper.parent);
+          if (parent) {
+            parent.childIds = parent.childIds.filter((c) => c !== wrapper.id);
+            for (const kid of kids) {
+              if (!parent.childIds.includes(kid.id)) parent.childIds.push(kid.id);
+            }
+            parent.dirty = true;
+          }
+        }
+        sections = sections.filter((s) => s.id !== wrapper.id);
+        result.merges++;
+        changed = true;
+        break; // re-sort after each change
+      }
     }
   }
   return sections;

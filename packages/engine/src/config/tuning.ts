@@ -218,6 +218,16 @@ export const SECTION_TREE = {
    */
   splitParentStrategy: "domain_centrality" as "domain_centrality" | "size",
 
+  /**
+   * Minimum members on the smaller side of a post-split. If a split would
+   * produce a side with fewer than this, the section is left as a leaf
+   * even if it exceeds splitThreshold. Prevents imbalanced splits
+   * (8+1, 8+2) that just orphan a semantic outlier under a fresh wrapper.
+   *
+   * Rule of thumb: splitThreshold / 3 (so 3 at splitThreshold=8).
+   */
+  splitMinBalance: 3,
+
   // ── Singleton absorption ──────────────────────────────────────────────
 
   /**
@@ -229,6 +239,25 @@ export const SECTION_TREE = {
    * Scales naturally with domain growth.
    */
   minRootRatio: 0.05,
+
+  /**
+   * After the singleton-root absorb pass, any two roots whose centroids
+   * exceed this cosine similarity are collapsed into one — the smaller
+   * becomes a child of the larger. Catches cases where two roots are
+   * semantically overlapping (e.g. "Pi-Durable Infrastructure" and
+   * "Pi Durable Integration") but both independently clear minRootRatio.
+   */
+  rootMergeSimilarity: 0.85,
+
+  // ── Wrapper collapse ───────────────────────────────────────────────
+
+  /**
+   * If a grouping section (0 direct entries) has one child containing at
+   * least this fraction of all descendant entries, the wrapper is removed
+   * and its children promoted to the wrapper's parent. Prevents redundant
+   * "wrapper named after its dominant child" chains.
+   */
+  dominantChildThreshold: 0.80,
 
   // ── Promotion ─────────────────────────────────────────────────────────
 

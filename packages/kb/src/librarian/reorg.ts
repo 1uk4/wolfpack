@@ -518,6 +518,8 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // Final singleton absorption pass (catches singletons created by post-split)
+    // Skip during rebuilds — same reason as the first absorb pass.
+    if (!opts.rebuild)
     for (const domain of result.domains) {
       const domVecs2 = allVectors.filter((v) => v.domain === domain);
       const totalEntries2 = domVecs2.length;

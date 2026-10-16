@@ -33,6 +33,10 @@ export interface ReorgOptions {
   touchedSections?: Set<string>;
   /** Full bottom-up rebuild of the section tree (agglomerative clustering) */
   rebuild?: boolean;
+  /** No disk writes, no ledger appends, no LLM labeling — logging only. */
+  dryRun?: boolean;
+  /** Treat every section as dirty (re-label all, not just changed ones). */
+  resummarizeAll?: boolean;
   notify?: (msg: string) => void;
 }
 
@@ -52,6 +56,26 @@ function mkSectionId(domain: string): SectionId {
   let tail = "";
   for (let i = 0; i < 6; i++) tail += chars[Math.floor(Math.random() * chars.length)];
   return `sec-${domain}-${tail}` as unknown as SectionId;
+}
+
+/**
+ * Rewrite an entry file's `section:` frontmatter field. No-op if the file is
+ * missing or if `dryRun` is set. Single site for the pattern that was copy-
+ * pasted ~15 times across the rebuild and incremental paths.
+ */
+function writeEntrySection(
+  eDir: string,
+  entryId: string,
+  sectionId: SectionId | string,
+  dryRun?: boolean,
+): boolean {
+  if (dryRun) return false;
+  const file = join(eDir, `${entryId}.md`);
+  if (!existsSync(file)) return false;
+  let content = readFileSync(file, "utf-8");
+  content = content.replace(/^section: .+$/m, `section: ${sectionId}`);
+  writeFileSync(file, content);
+  return true;
 }
 
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
@@ -180,13 +204,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       const eDir = join(domainsRoot, domain, "entries");
       let placed = 0;
       for (const [entryId, sectionId] of treeResult.assignments) {
-        const file = join(eDir, `${entryId}.md`);
-        if (existsSync(file)) {
-          let content = readFileSync(file, "utf-8");
-          content = content.replace(/^section: .+$/m, `section: ${sectionId}`);
-          writeFileSync(file, content);
-          placed++;
-        }
+        if (writeEntrySection(eDir, entryId, sectionId, opts.dryRun)) placed++;
       }
       notify?.(`  placed ${placed} entries into leaf sections`);
       
@@ -265,12 +283,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             }
             
             domAssignments.set(entryId, targetSec);
-            const file = join(eDir, `${entryId}.md`);
-            if (existsSync(file)) {
-              let content = readFileSync(file, "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${targetSec}`);
-              writeFileSync(file, content);
-            }
+            writeEntrySection(eDir, entryId, targetSec, opts.dryRun);
           }
         }
         
@@ -339,7 +352,9 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         }
         
         const stCfg = SECTION_TREE;
-        if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
+        if (opts.dryRun && memberInfo.length > 0) {
+          notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
+        } else if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
           try {
             const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
             sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
@@ -455,20 +470,10 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           
           // Reassign ALL entries to children
           for (const m of sr.parentMembers) {
-            const file = join(eDir, `${m.entryId}.md`);
-            if (existsSync(file)) {
-              let content = readFileSync(file, "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${childAId}`);
-              writeFileSync(file, content);
-            }
+            writeEntrySection(eDir, m.entryId, childAId, opts.dryRun);
           }
           for (const [entryId, newSecId] of sr.reassignment) {
-            const file = join(eDir, `${entryId}.md`);
-            if (existsSync(file)) {
-              let content = readFileSync(file, "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${newSecId}`);
-              writeFileSync(file, content);
-            }
+            writeEntrySection(eDir, entryId, newSecId, opts.dryRun);
           }
           result.splits++;
           changed = true;
@@ -496,9 +501,10 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             if (child && child.title) memberInfo2.push({ title: child.title, summary: child.summary });
           }
         }
-        if (memberInfo2.length > 0) {
+        if (opts.dryRun && memberInfo2.length > 0) {
+          notify?.(`  would post-split label: ${sec.id}`);
+        } else if (memberInfo2.length > 0) {
           try {
-            const stc = SECTION_TREE;
             const mxd = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
             sec.summary = await sectionSummary(engine, memberInfo2, { depth: sec.depth, maxDepth: mxd });
             sec.title = await labelSection(engine, sec.summary, {
@@ -543,10 +549,10 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           for (const f of readdirSync(eDir3).filter((x) => x.endsWith(".md"))) {
             const { fields } = parseFrontmatter(readFileSync(join(eDir3, f), "utf-8"));
             if (String(fields.section ?? "") === String(root.id)) {
-              let content = readFileSync(join(eDir3, f), "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${bestN.id}`);
-              writeFileSync(join(eDir3, f), content);
-              bestN.memberCount++;
+              const eid = f.replace(/\.md$/, "");
+              if (writeEntrySection(eDir3, eid, bestN.id, opts.dryRun)) {
+                bestN.memberCount++;
+              }
             }
           }
         }
@@ -572,15 +578,19 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // Persist
-    writeSections(roots, sections);
-    const freshLog = readLedger(roots);
-    renderRegistry(roots, foldRegistry(freshLog));
-    for (const domain of result.domains) {
-      renderDomainDigest(roots, domain);
-      renderDomainIndex(roots, domain);
+    if (!opts.dryRun) {
+      writeSections(roots, sections);
+      const freshLog = readLedger(roots);
+      renderRegistry(roots, foldRegistry(freshLog));
+      for (const domain of result.domains) {
+        renderDomainDigest(roots, domain);
+        renderDomainIndex(roots, domain);
+      }
     }
-    
-    notify?.(`rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
+
+    notify?.(opts.dryRun
+      ? `rebuild dry-run: ${result.placements} would be placed, ${result.labelsUpdated} would be labeled`
+      : `rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
     return result;
   }
 
@@ -653,12 +663,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
       // Update entry frontmatter for reassigned entries
       for (const [entryId, newSecId] of splitResult.reassignment) {
-        const file = join(eDir, `${entryId}.md`);
-        if (existsSync(file)) {
-          let content = readFileSync(file, "utf-8");
-          content = content.replace(/^section: .+$/m, `section: ${newSecId}`);
-          writeFileSync(file, content);
-        }
+        writeEntrySection(eDir, entryId, newSecId, opts.dryRun);
         events.push(ev.entryPlaced({ entryId, sectionId: newSecId, basis: "routed", fit: 1 }));
         result.placements++;
       }
@@ -678,12 +683,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
       notify?.(`  merge: ${sec.id} (${members.length} entries) → ${parentId}`);
 
       for (const m of members) {
-        const file = join(eDir, `${m.entryId}.md`);
-        if (existsSync(file)) {
-          let content = readFileSync(file, "utf-8");
-          content = content.replace(/^section: .+$/m, `section: ${parentId}`);
-          writeFileSync(file, content);
-        }
+        writeEntrySection(eDir, m.entryId, parentId, opts.dryRun);
         events.push(ev.entryPlaced({ entryId: m.entryId, sectionId: parentId, basis: "routed", fit: 1 }));
         result.placements++;
       }
@@ -714,11 +714,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         if (decision.sectionId !== "_unplaced") {
           const targetSec = sections.find((s) => s.id === decision.sectionId);
           if (targetSec) {
-            if (existsSync(entryFile)) {
-              let content = readFileSync(entryFile, "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${decision.sectionId}`);
-              writeFileSync(entryFile, content);
-            }
+            writeEntrySection(eDir, entry.entryId, decision.sectionId, opts.dryRun);
             targetSec.memberCount++;
             const members = sectionMembers.get(decision.sectionId as string) ?? [];
             members.push(entry);
@@ -785,12 +781,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           // Move entries to neighbor
           const members = sectionMembers.get(sec.id as string) ?? [];
           for (const m of members) {
-            const file = join(eDir, `${m.entryId}.md`);
-            if (existsSync(file)) {
-              let content = readFileSync(file, "utf-8");
-              content = content.replace(/^section: .+$/m, `section: ${neighbor.id}`);
-              writeFileSync(file, content);
-            }
+            writeEntrySection(eDir, m.entryId, neighbor.id, opts.dryRun);
             result.placements++;
           }
           // Transfer members
@@ -876,6 +867,11 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
 
     // 8. Label dirty sections (bottom-up, bubble to parents)
+    // If --resummarize-all, mark every section dirty first (used after a prompt
+    // or template change where every title/summary should be regenerated).
+    if (opts.resummarizeAll) {
+      for (const sec of sections.filter((s) => s.domain === domain)) sec.dirty = true;
+    }
     // Re-collect dirty each iteration since bubble-up marks new sections
     let labelPass = 0;
     while (true) {
@@ -918,7 +914,9 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         }
         memberInfo.push(...collectFromChildren(sec.id, 8));
       }
-      if (memberInfo.length > 0) {
+      if (opts.dryRun && memberInfo.length > 0) {
+        notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
+      } else if (memberInfo.length > 0) {
         try {
           const maxTreeDepth = Math.max(...sections.filter(s => s.domain === domain).map(s => s.depth), 0);
           sec.summary = await sectionSummary(engine, memberInfo, { depth: sec.depth, maxDepth: maxTreeDepth });
@@ -956,14 +954,15 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
   }
 
-  // Persist
-  if (events.length > 0) {
+  // Persist (ledger + registry)
+  if (!opts.dryRun && events.length > 0) {
     appendLedger(roots, events);
   }
 
-  // Re-render digest + index
-  const freshLog = readLedger(roots);
-  renderRegistry(roots, foldRegistry(freshLog));
+  if (!opts.dryRun) {
+    const freshLog = readLedger(roots);
+    renderRegistry(roots, foldRegistry(freshLog));
+  }
   // Collapse empty root wrappers: any root with 0 direct entries promotes
   // its children to root level.
   for (const domain of result.domains) {
@@ -1048,13 +1047,16 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
   }
 
-  writeSections(roots, sections);
-
-  for (const domain of result.domains) {
-    renderDomainDigest(roots, domain);
-    renderDomainIndex(roots, domain);
+  if (!opts.dryRun) {
+    writeSections(roots, sections);
+    for (const domain of result.domains) {
+      renderDomainDigest(roots, domain);
+      renderDomainIndex(roots, domain);
+    }
   }
 
-  notify?.(`reorg done: ${result.splits} splits, ${result.merges} merges, ${result.crystallized} crystallized, ${result.labelsUpdated} labeled`);
+  notify?.(opts.dryRun
+    ? `reorg dry-run: ${result.splits} splits, ${result.merges} merges, ${result.crystallized} crystallized, ${result.labelsUpdated} labeled (no writes)`
+    : `reorg done: ${result.splits} splits, ${result.merges} merges, ${result.crystallized} crystallized, ${result.labelsUpdated} labeled`);
   return result;
 }

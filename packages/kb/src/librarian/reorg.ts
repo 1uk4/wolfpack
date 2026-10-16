@@ -95,10 +95,47 @@ function writeEntrySection(
   if (dryRun) return false;
   const file = join(eDir, `${entryId}.md`);
   if (!existsSync(file)) return false;
-  let content = readFileSync(file, "utf-8");
-  content = content.replace(/^section: .+$/m, `section: ${sectionId}`);
+  const original = readFileSync(file, "utf-8");
+  let content: string;
+  if (/^section: .+$/m.test(original)) {
+    // Replace existing section line.
+    content = original.replace(/^section: .+$/m, `section: ${sectionId}`);
+  } else if (/^domain: .+$/m.test(original)) {
+    // Insert immediately after the `domain:` line so section lands inside
+    // the frontmatter block. This handles entries whose frontmatter was
+    // created without a section field (e.g. by admin split operations).
+    content = original.replace(/^(domain: .+)$/m, `$1\nsection: ${sectionId}`);
+  } else {
+    // No place to insert — fail loudly rather than silently returning true.
+    throw new Error(
+      `writeEntrySection: ${entryId}.md has neither a 'section:' nor a 'domain:' line; cannot assign section ${sectionId}`,
+    );
+  }
+  if (content === original) {
+    // Should never happen now, but guard against a silent no-op.
+    throw new Error(`writeEntrySection: ${entryId}.md unchanged after assignment to ${sectionId}`);
+  }
   writeFileSync(file, content);
   return true;
+}
+
+/**
+ * Scan an entries/ directory for files whose frontmatter `section:` field
+ * matches `sectionId`. Returns the entry ids (filename without .md).
+ *
+ * Used as the ground-truth check before deleting a section: the in-memory
+ * `memberCount` can lie (stale after mutations), but the disk never lies.
+ */
+function entriesPointingAt(eDir: string, sectionId: SectionId | string): string[] {
+  if (!existsSync(eDir)) return [];
+  const matches: string[] = [];
+  for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+    const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+    if (String(fields.section ?? "") === String(sectionId)) {
+      matches.push(f.replace(/\.md$/, ""));
+    }
+  }
+  return matches;
 }
 
 /**
@@ -221,6 +258,7 @@ function collapseSingleChildChains(
   domain: string,
   eDir: string,
   notify?: (msg: string) => void,
+  dryRun?: boolean,
 ): Section[] {
   let out = sections;
   let collapsed = true;
@@ -228,10 +266,23 @@ function collapseSingleChildChains(
     collapsed = false;
     for (const sec of out) {
       if (String(sec.domain) !== domain) continue;
-      if (sectionHasEntriesOnDisk(eDir, sec.id)) continue;
       const actualChildren = out.filter((s) => s.parent === sec.id);
       if (actualChildren.length !== 1) continue;
       const only = actualChildren[0];
+
+      // Verify-and-reassign: in-memory state says sec has 0 members and 1
+      // child, but if any entries physically point at it on disk (stale
+      // memberCount from an upstream mutation whose writeEntrySection may
+      // have been dropped), reassign them to the only child before deleting.
+      // With fix-1 to writeEntrySection this should never fire — but is kept
+      // as a belt-and-suspenders invariant.
+      const strays = entriesPointingAt(eDir, sec.id);
+      if (strays.length > 0) {
+        notify?.(`    reassigning ${strays.length} stray entries from chain-link "${sec.id}" → "${only.id}"`);
+        for (const eid of strays) writeEntrySection(eDir, eid, only.id, dryRun);
+        only.memberCount += strays.length;
+        only.dirty = true;
+      }
       only.parent = sec.parent;
       only.depth = sec.depth;
       const fixDepth = (parentId: SectionId, d: number): void => {
@@ -440,7 +491,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
     await rebuildPostSplit(sections, rctx);
     sections = rebuildFinalAbsorb(sections, rctx);
-    sections = promoteDominantChildren(sections, result.domains, result, notify);
+    sections = promoteDominantChildren(sections, result.domains, domainsRoot, result, notify, opts.dryRun);
     for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
 
     // 2. Name the final tree (single bottom-up pass; grouping nodes sampled
@@ -469,10 +520,10 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   // incremental path maintains the same tree invariants and we never need
   // to "rebuild to recover shape".
   sections = mergeSimilarRoots(sections, allVectors, result.domains, result, notify);
-  sections = promoteDominantChildren(sections, result.domains, result, notify);
+  sections = promoteDominantChildren(sections, result.domains, domainsRoot, result, notify, opts.dryRun);
   for (const domain of result.domains) {
     const eDir = join(domainsRoot, domain, "entries");
-    sections = collapseSingleChildChains(sections, domain, eDir, notify);
+    sections = collapseSingleChildChains(sections, domain, eDir, notify, opts.dryRun);
   }
 
   persistDomains(roots, sections, result.domains, opts.dryRun);
@@ -911,8 +962,10 @@ function mergeSimilarRoots(
 function promoteDominantChildren(
   sections: Section[],
   domains: string[],
+  domainsRoot: string,
   result: ReorgResult,
   notify: ((m: string) => void) | undefined,
+  dryRun?: boolean,
 ): Section[] {
   const stConfig = SECTION_TREE;
 
@@ -923,6 +976,7 @@ function promoteDominantChildren(
   }
 
   for (const domain of domains) {
+    const eDir = join(domainsRoot, domain, "entries");
     let changed = true;
     while (changed) {
       changed = false;
@@ -940,6 +994,18 @@ function promoteDominantChildren(
         if (!dominant) continue;
 
         notify?.(`  promote: wrapper "${wrapper.title || wrapper.id}" dominated by "${dominant.k.title || dominant.k.id}" (${dominant.n}/${grand}); promoting ${kids.length} children to parent`);
+
+        // Safety check: in-memory memberCount==0 may be stale after upstream
+        // mutations. Before deleting the wrapper, scan disk for any entries
+        // whose frontmatter still points at it and reassign them to the
+        // dominant child so we never orphan an entry via wrapper deletion.
+        const strays = entriesPointingAt(eDir, wrapper.id);
+        if (strays.length > 0) {
+          notify?.(`    reassigning ${strays.length} stray entries from "${wrapper.id}" → "${dominant.k.id}"`);
+          for (const eid of strays) writeEntrySection(eDir, eid, dominant.k.id, dryRun);
+          dominant.k.memberCount += strays.length;
+          dominant.k.dirty = true;
+        }
 
         // Reparent every child of the wrapper to the wrapper's parent.
         for (const kid of kids) {

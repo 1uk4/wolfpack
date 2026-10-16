@@ -202,7 +202,13 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     }
     
     // Absorb singleton roots into nearest neighbor
+    // Skip during rebuilds — buildTreeBottomUp already sizes roots correctly,
+    // and absorbing here can re-create the single-root wrapper that the
+    // collapse step in buildTreeBottomUp just removed.
     const stConfig = SECTION_TREE;
+    if (opts.rebuild) {
+      // Skip absorb — go straight to labeling
+    } else {
     for (const domain of result.domains) {
       const domVecs = allVectors.filter((v) => v.domain === domain);
       const totalEntries = domVecs.length;
@@ -274,6 +280,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
         result.merges++;
       }
     }
+    } // end skip-absorb-during-rebuild else block
     
     // Label dirty sections via LLM
     for (const domain of result.domains) {

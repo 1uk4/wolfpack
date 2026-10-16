@@ -942,16 +942,17 @@ async function reorg(): Promise<void> {
     }
   }
 
-  // Collapse binary wrapper sections at ALL depths: a section with 0 direct
-  // entries and EXACTLY 2 children is a binary-split artifact. Promote the
-  // 2 children to this section's parent.
+  // Collapse binary wrapper sections at ALL depths: 0 entries + 2 actual children.
+  // Uses ACTUAL children (sections with parent === sec.id), not sec.childIds
+  // which can be out of sync.
   for (const domain of domains) {
     let collapsed2 = true;
     while (collapsed2) {
       collapsed2 = false;
       for (const sec of [...sections]) {
         if (String(sec.domain) !== domain) continue;
-        if (sec.childIds.length !== 2) continue;
+        const actualChildren = sections.filter((s) => s.parent === sec.id);
+        if (actualChildren.length !== 2) continue;
         const eDir5 = join(domainsRoot, domain, "entries");
         const hasEntries = existsSync(eDir5)
           ? readdirSync(eDir5).filter((f) => f.endsWith(".md")).some((f) => {
@@ -960,16 +961,13 @@ async function reorg(): Promise<void> {
             })
           : false;
         if (!hasEntries) {
-          for (const cid of sec.childIds) {
-            const child = sections.find((s) => s.id === cid);
-            if (child) {
-              child.parent = sec.parent;
-              child.depth = sec.depth;
-              if (sec.parent) {
-                const parent = sections.find((s) => s.id === sec.parent);
-                if (parent && !parent.childIds.includes(child.id)) {
-                  parent.childIds.push(child.id);
-                }
+          for (const child of actualChildren) {
+            child.parent = sec.parent;
+            child.depth = sec.depth;
+            if (sec.parent) {
+              const parent = sections.find((s) => s.id === sec.parent);
+              if (parent && !parent.childIds.includes(child.id)) {
+                parent.childIds.push(child.id);
               }
             }
           }

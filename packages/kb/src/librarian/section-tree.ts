@@ -88,7 +88,10 @@ export function buildTreeBottomUp(
     weight: 1,
   }));
 
-  // Agglomerative merge loop
+  // Agglomerative merge loop — stop when similarity drops below floor
+  // or cluster count reaches target, whichever comes first.
+  const MERGE_SIMILARITY_FLOOR = 0.65;
+
   while (clusters.length > targetRoots) {
     // Compute pairwise similarity matrix
     let maxSim = -1;
@@ -107,6 +110,10 @@ export function buildTreeBottomUp(
     }
 
     if (mergeI === -1 || mergeJ === -1) break; // safety: no valid merge found
+
+    // Stop merging when the best available pair isn't similar enough.
+    // Whatever clusters remain at this point are the natural roots.
+    if (maxSim < MERGE_SIMILARITY_FLOOR) break;
 
     // Merge the two most similar clusters
     const clusterA = clusters[mergeI];

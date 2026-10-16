@@ -158,6 +158,33 @@ function mkChildSection(args: {
 }
 
 /**
+ * Re-fold the ledger into the registry file. No-op if `dryRun`.
+ */
+function rerenderRegistry(roots: KbRoots, dryRun?: boolean): void {
+  if (dryRun) return;
+  const freshLog = readLedger(roots);
+  renderRegistry(roots, foldRegistry(freshLog));
+}
+
+/**
+ * Write sections.json and re-render per-domain digest + index. No-op if
+ * `dryRun`. Called from both rebuild (early return) and incremental (bottom).
+ */
+function persistDomains(
+  roots: KbRoots,
+  sections: Section[],
+  domains: string[],
+  dryRun?: boolean,
+): void {
+  if (dryRun) return;
+  writeSections(roots, sections);
+  for (const domain of domains) {
+    renderDomainDigest(roots, domain);
+    renderDomainIndex(roots, domain);
+  }
+}
+
+/**
  * Collapse any root (parent === null) that has 0 direct entries by promoting
  * its children to root level. Runs iteratively until the tree stabilizes.
  */
@@ -410,29 +437,26 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
   // Full bottom-up rebuild mode
   if (opts.rebuild) {
-    
+    const stConfig = SECTION_TREE;
+    // Per-domain assignment maps (entryId -> sectionId), used by absorb to
+    // find and reassign entries whose host section is being dissolved.
     const allAssignments = new Map<string, Map<string, SectionId>>();
-    
-    for (const domain of domains) {
+
+    // Phase 1: run buildTreeBottomUp per domain, write assignments, mark dirty.
+    async function bootstrapDomain(domain: string): Promise<void> {
       const domainVectors = allVectors.filter((v) => v.domain === domain);
       if (domainVectors.length === 0) {
         notify?.(`rebuild: ${domain} — no entries, skipping`);
-        continue;
+        return;
       }
-      
       notify?.(`rebuild: ${domain} (${domainVectors.length} entries)`);
-      
-      // Compute domain centroid
       const domainCentroid = computeCentroid(domainVectors.map((v) => v.vector));
-      
-      // Build entries with vectors for the algorithm
       const entries: EntryWithVector[] = domainVectors.map((v) => ({
         entryId: v.entryId,
         sectionId: "" as SectionId,
         vector: v.vector,
       }));
-      
-      // Collect entry metadata for abstraction scoring
+      // Entry metadata for abstraction scoring during clustering.
       const entryMeta = new Map<string, { kind?: string; maturity?: string }>();
       const entriesPath = join(domainsRoot, domain, "entries");
       if (existsSync(entriesPath)) {
@@ -444,80 +468,72 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
           });
         }
       }
-      
-      // Build the tree (returns sections + entry→section assignments)
       const treeResult = buildTreeBottomUp(entries, domain, domainCentroid, undefined, entryMeta);
       notify?.(`  built ${treeResult.sections.length} sections`);
-      
-      // Remove old sections for this domain
+
+      // Replace the old tree for this domain in place.
       sections = sections.filter((s) => s.domain !== domain);
       sections.push(...treeResult.sections);
-      
-      // Assign entries using the tree's built-in assignments
+
       const eDir = join(domainsRoot, domain, "entries");
       let placed = 0;
       for (const [entryId, sectionId] of treeResult.assignments) {
         if (writeEntrySection(eDir, entryId, sectionId, opts.dryRun)) placed++;
       }
       notify?.(`  placed ${placed} entries into leaf sections`);
-      
-      // Mark all sections as dirty for LLM naming
-      for (const sec of treeResult.sections) {
-        sec.dirty = true;
-      }
-      
+      for (const sec of treeResult.sections) sec.dirty = true;
+
       result.placements += placed;
       result.rebuilt = true;
       result.domains.push(domain);
       allAssignments.set(domain, treeResult.assignments);
     }
-    
-    // Absorb singleton roots into nearest neighbor.
-    // During rebuilds, still absorb but stop before going below 2 roots.
-    const stConfig = SECTION_TREE;
-    {
-    for (const domain of result.domains) {
-      const domVecs = allVectors.filter((v) => v.domain === domain);
-      const totalEntries = domVecs.length;
-      const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
-      const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-      const eDir = join(domainsRoot, domain, "entries");
-      
-      for (const root of domainRoots) {
-        // Stop absorbing if we'd go below 2 roots
-        const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-        if (currentRoots.length <= 2) break;
-        if (root.memberCount >= minEntries) continue;
-        if (root.childIds.length > 0) continue; // has children, not a singleton
-        
-        // Find nearest non-singleton root by centroid similarity
-        const neighbors = domainRoots.filter((r) => r.id !== root.id && (r.memberCount >= minEntries || r.childIds.length > 0));
-        if (neighbors.length === 0) continue;
-        
-        let bestNeighbor = neighbors[0];
-        let bestSim = -1;
-        for (const n of neighbors) {
-          const sim = cosine(root.centroid, n.centroid);
-          if (sim > bestSim) { bestSim = sim; bestNeighbor = n; }
-        }
-        
-        notify?.(`  absorb: "${root.title || root.id}" (${root.memberCount}) → "${bestNeighbor.title || bestNeighbor.id}"`);
-        
-        // Move this root's entries to the neighbor
-        const domAssignments = allAssignments.get(domain) ?? new Map();
-        for (const [entryId, secId] of domAssignments) {
-          if (secId === root.id) {
-            // Find all leaf sections under the neighbor (recursively)
-            function findLeaves(parentId: SectionId): Section[] {
-              const children = sections.filter((s) => s.parent === parentId);
-              if (children.length === 0) {
-                const sec = sections.find((s) => s.id === parentId);
-                return sec && sec.childIds.length === 0 ? [sec] : [];
-              }
-              return children.flatMap((c) => c.childIds.length === 0 ? [c] : findLeaves(c.id));
+
+    // Phase 2: absorb singleton roots whose memberCount is below the floor.
+    // Stops before the domain drops below 2 roots. Reassigns the orphan
+    // entries into the nearest leaf under the chosen neighbor via the
+    // allAssignments map.
+    function absorbSingletonRoots(): void {
+      for (const domain of result.domains) {
+        const domVecs = allVectors.filter((v) => v.domain === domain);
+        const totalEntries = domVecs.length;
+        const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
+        const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+        const eDir = join(domainsRoot, domain, "entries");
+
+        for (const root of domainRoots) {
+          const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+          if (currentRoots.length <= 2) break;
+          if (root.memberCount >= minEntries) continue;
+          if (root.childIds.length > 0) continue;
+
+          const neighbors = domainRoots.filter(
+            (r) => r.id !== root.id && (r.memberCount >= minEntries || r.childIds.length > 0),
+          );
+          if (neighbors.length === 0) continue;
+
+          let bestNeighbor = neighbors[0];
+          let bestSim = -1;
+          for (const n of neighbors) {
+            const sim = cosine(root.centroid, n.centroid);
+            if (sim > bestSim) { bestSim = sim; bestNeighbor = n; }
+          }
+
+          notify?.(`  absorb: "${root.title || root.id}" (${root.memberCount}) → "${bestNeighbor.title || bestNeighbor.id}"`);
+
+          const findLeaves = (parentId: SectionId): Section[] => {
+            const children = sections.filter((s) => s.parent === parentId);
+            if (children.length === 0) {
+              const sec = sections.find((s) => s.id === parentId);
+              return sec && sec.childIds.length === 0 ? [sec] : [];
             }
+            return children.flatMap((c) => (c.childIds.length === 0 ? [c] : findLeaves(c.id)));
+          };
+
+          const domAssignments = allAssignments.get(domain) ?? new Map();
+          for (const [entryId, secId] of domAssignments) {
+            if (secId !== root.id) continue;
             const neighborLeaves = findLeaves(bestNeighbor.id);
-            
             let targetSec = bestNeighbor.id;
             if (neighborLeaves.length > 0) {
               const entryVec = domVecs.find((v) => v.entryId === entryId)?.vector;
@@ -534,236 +550,226 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
             } else {
               bestNeighbor.memberCount++;
             }
-            
             domAssignments.set(entryId, targetSec);
             writeEntrySection(eDir, entryId, targetSec, opts.dryRun);
           }
+
+          sections = sections.filter((s) => s.id !== root.id);
+          result.merges++;
         }
-        
-        // Remove the singleton root
-        sections = sections.filter((s) => s.id !== root.id);
-        result.merges++;
       }
     }
+
+    // Phase 3: label every dirty section bottom-up. Deep sections past the
+    // llmNamingMaxDepth cap fall back to a 3-title auto-title.
+    async function labelAfterRebuild(): Promise<void> {
+      for (const domain of result.domains) {
+        const eDir = join(domainsRoot, domain, "entries");
+        const dirtySections = sections
+          .filter((s) => s.domain === domain && s.dirty)
+          .sort((a, b) => b.depth - a.depth);
+        notify?.(`  labeling ${dirtySections.length} sections (depth ${Math.max(...dirtySections.map(s => s.depth))} → 0)...`);
+
+        for (const sec of dirtySections) {
+          const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
+
+          // For wrappers (0 direct members), weight-sample from each child's
+          // descendants so all branches contribute to the label prompt.
+          if (memberInfo.length === 0 && sec.childIds.length > 0) {
+            const collectEntriesFromSection = (sectionId: SectionId, max: number): SectionMember[] => {
+              const result: SectionMember[] = [];
+              if (existsSync(eDir)) {
+                for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
+                  if (result.length >= max) break;
+                  const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+                  if (String(fields.section ?? "") === String(sectionId)) {
+                    result.push({
+                      title: String(fields.title ?? f.replace(/\.md$/, "")),
+                      summary: fields.summary ? String(fields.summary) : undefined,
+                    });
+                  }
+                }
+              }
+              for (const child of sections.filter((s) => s.parent === sectionId)) {
+                if (result.length >= max) break;
+                result.push(...collectEntriesFromSection(child.id, max - result.length));
+              }
+              return result;
+            };
+            const childSecs = sec.childIds
+              .map((cid) => sections.find((s) => s.id === cid))
+              .filter(Boolean) as Section[];
+            const totalWeight = childSecs.reduce((sum, c) => sum + Math.max(c.memberCount, 1), 0);
+            const maxSamples = 10;
+            for (const child of childSecs) {
+              const quota = Math.max(1, Math.round((Math.max(child.memberCount, 1) / totalWeight) * maxSamples));
+              memberInfo.push(...collectEntriesFromSection(child.id, quota));
+            }
+          }
+
+          if (opts.dryRun && memberInfo.length > 0) {
+            notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
+          } else if (memberInfo.length > 0 && sec.depth <= stConfig.llmNamingMaxDepth) {
+            const ok = await llmLabelSection({
+              engine, sec, memberInfo, sections, domain,
+              withContext: true, touchUpdated: true, bubbleUp: false, notify,
+            });
+            if (ok) result.labelsUpdated++;
+          } else if (memberInfo.length > 0) {
+            const shortTitles = memberInfo.slice(0, 3).map((m) => {
+              const t = m.title.split(":")[0].split("—")[0].split("–")[0].trim();
+              return t.length > 40 ? t.slice(0, 37) + "..." : t;
+            });
+            sec.title = shortTitles.join(", ");
+            sec.dirty = false;
+            (sec as any).memberCountAtLastLabel = sec.memberCount;
+            notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
+            result.labelsUpdated++;
+          }
+        }
+      }
     }
-    
-    // Label dirty sections via LLM
-    for (const domain of result.domains) {
-      const eDir = join(domainsRoot, domain, "entries");
-      // Label bottom-up: deepest first so children have titles before parents
-      const dirtySections = sections
-        .filter((s) => s.domain === domain && s.dirty)
-        .sort((a, b) => b.depth - a.depth);
-      notify?.(`  labeling ${dirtySections.length} sections (depth ${Math.max(...dirtySections.map(s => s.depth))} → 0)...`);
-      
-      for (const sec of dirtySections) {
-        // Get member info (direct members or children's titles for parents)
-        const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
-        
-        // For parents with 0 direct members, collect entry titles from descendants
-        // Weight proportionally by child size so all branches contribute
-        if (memberInfo.length === 0 && sec.childIds.length > 0) {
-          function collectEntriesFromSection(sectionId: SectionId, max: number): SectionMember[] {
-            const result: SectionMember[] = [];
+
+    // Phase 4: any leaf still over splitThreshold gets split again into a
+    // 2-child grouping. The parent keeps its id but goes to 0 direct members.
+    async function postSplitOverflowingLeaves(): Promise<void> {
+      for (const domain of result.domains) {
+        const domCentroid = computeCentroid(allVectors.filter((v) => v.domain === domain).map((v) => v.vector));
+        const eDir = join(domainsRoot, domain, "entries");
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const sec of [...sections].filter((s) => s.domain === domain && s.childIds.length === 0 && s.memberCount > 8)) {
+            const members: EntryWithVector[] = [];
             if (existsSync(eDir)) {
               for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-                if (result.length >= max) break;
                 const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-                if (String(fields.section ?? "") === String(sectionId)) {
-                  result.push({ title: String(fields.title ?? f.replace(/\.md$/, "")), summary: fields.summary ? String(fields.summary) : undefined });
+                if (String(fields.section ?? "") === String(sec.id)) {
+                  const v = allVectors.find((av) => av.entryId === f.replace(/\.md$/, ""));
+                  if (v) members.push({ entryId: v.entryId, sectionId: sec.id, vector: v.vector });
                 }
               }
             }
-            for (const child of sections.filter((s) => s.parent === sectionId)) {
-              if (result.length >= max) break;
-              result.push(...collectEntriesFromSection(child.id, max - result.length));
-            }
-            return result;
+            if (members.length <= 8) continue;
+            const sr = splitAsParentChild(sec, members, domCentroid, sections);
+            if (!sr) continue;
+
+            const childAId = mkSectionId(domain);
+            const childBId = sr.childSection.id;
+            notify?.(`  post-split: ${sec.id} (${members.length}) -> ${childAId}(${sr.parentMembers.length}) + ${childBId}(${sr.childMembers.length})`);
+
+            const centroidA = computeCentroid(sr.parentMembers.map((m) => m.vector));
+            sections.push(mkChildSection({
+              id: childAId, domain,
+              parent: sec.id, depth: sec.depth + 1,
+              centroid: centroidA, memberCount: sr.parentMembers.length,
+            }));
+
+            // Child B was pre-built by splitAsParentChild; attach + mark dirty.
+            sr.childSection.parent = sec.id;
+            sr.childSection.depth = sec.depth + 1;
+            sr.childSection.dirty = true;
+            sections.push(sr.childSection);
+
+            // Parent becomes a pure grouping node.
+            sec.childIds.push(childAId, childBId);
+            sec.memberCount = 0;
+            sec.dirty = true;
+
+            for (const m of sr.parentMembers) writeEntrySection(eDir, m.entryId, childAId, opts.dryRun);
+            for (const [entryId, newSecId] of sr.reassignment) writeEntrySection(eDir, entryId, newSecId, opts.dryRun);
+            result.splits++;
+            changed = true;
           }
-          
-          // Weighted sampling: each child contributes proportional to its total entries
-          const childSecs = sec.childIds.map((cid) => sections.find((s) => s.id === cid)).filter(Boolean) as Section[];
-          const totalWeight = childSecs.reduce((sum, c) => sum + Math.max(c.memberCount, 1), 0);
-          const maxSamples = 10;
-          for (const child of childSecs) {
-            const quota = Math.max(1, Math.round((Math.max(child.memberCount, 1) / totalWeight) * maxSamples));
-            memberInfo.push(...collectEntriesFromSection(child.id, quota));
-          }
-        }
-        
-        const stCfg = SECTION_TREE;
-        if (opts.dryRun && memberInfo.length > 0) {
-          notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
-        } else if (memberInfo.length > 0 && sec.depth <= stCfg.llmNamingMaxDepth) {
-          const ok = await llmLabelSection({
-            engine, sec, memberInfo, sections, domain,
-            withContext: true, touchUpdated: true, bubbleUp: false, notify,
-          });
-          if (ok) result.labelsUpdated++;
-        } else if (memberInfo.length > 0) {
-          // Auto-title: short summary from first 3 member titles
-          const shortTitles = memberInfo.slice(0, 3).map((m) => {
-            const t = m.title.split(":")[0].split("—")[0].split("–")[0].trim();
-            return t.length > 40 ? t.slice(0, 37) + "..." : t;
-          });
-          sec.title = shortTitles.join(", ");
-          sec.dirty = false;
-          (sec as any).memberCountAtLastLabel = sec.memberCount;
-          notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
-          result.labelsUpdated++;
         }
       }
     }
-    
-    // Reconcile memberCount from actual entry frontmatter
-    for (const domain of result.domains) {
-      reconcileMemberCounts(sections, domain, join(domainsRoot, domain, "entries"));
+
+    // Phase 5: label the two children emitted by post-split.
+    async function labelPostSplitSections(): Promise<void> {
+      for (const domain of result.domains) {
+        const eDir = join(domainsRoot, domain, "entries");
+        const postSplitDirty = sections.filter(
+          (s) => s.domain === domain && s.dirty && (!s.title || s.title.includes("(split)")),
+        );
+        for (const sec of postSplitDirty) {
+          const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
+          if (memberInfo.length === 0) {
+            for (const cid of sec.childIds) {
+              const child = sections.find((s) => s.id === cid);
+              if (child && child.title) memberInfo.push({ title: child.title, summary: child.summary });
+            }
+          }
+          if (opts.dryRun && memberInfo.length > 0) {
+            notify?.(`  would post-split label: ${sec.id}`);
+          } else if (memberInfo.length > 0) {
+            const ok = await llmLabelSection({
+              engine, sec, memberInfo, sections, domain,
+              withContext: false, touchUpdated: false, bubbleUp: false,
+              logPrefix: "post-split labeled", notify,
+            });
+            if (ok) result.labelsUpdated++;
+          }
+        }
+      }
     }
-    
-    // Split any leaves that exceed threshold after absorption
-    const splitFn = splitAsParentChild;
-    for (const domain of result.domains) {
-      const domCentroid = computeCentroid(allVectors.filter((v) => v.domain === domain).map((v) => v.vector));
-      const eDir = join(domainsRoot, domain, "entries");
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const sec of [...sections].filter((s) => s.domain === domain && s.childIds.length === 0 && s.memberCount > 8)) {
-          // Build member vectors
-          const members: EntryWithVector[] = [];
+
+    // Phase 6: final sweep for singleton roots created by post-split. Uses
+    // a looser member count (direct + descendants) and a looser neighbor
+    // filter than the first absorb; both pre-existing differences preserved.
+    function finalSingletonAbsorb(): void {
+      for (const domain of result.domains) {
+        const domVecs = allVectors.filter((v) => v.domain === domain);
+        const totalEntries = domVecs.length;
+        const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
+        const eDir = join(domainsRoot, domain, "entries");
+        const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+        for (const root of domainRoots) {
+          const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+          if (currentRoots.length <= 2) break;
+          const actualMembers =
+            root.memberCount +
+            sections.filter((s) => s.parent === root.id).reduce((sum, c) => sum + c.memberCount, 0);
+          if (actualMembers >= minEntries) continue;
+          if (root.childIds.length > 0 && actualMembers > 1) continue;
+          const neighbors = domainRoots.filter((r) => r.id !== root.id);
+          if (neighbors.length === 0) continue;
+          let bestN = neighbors[0];
+          let bestS = -1;
+          for (const n of neighbors) {
+            const sim = cosine(root.centroid, n.centroid);
+            if (sim > bestS) { bestS = sim; bestN = n; }
+          }
+          notify?.(`  final absorb: "${root.title}" (${actualMembers}) -> "${bestN.title}"`);
           if (existsSync(eDir)) {
             for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
               const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-              if (String(fields.section ?? "") === String(sec.id)) {
-                const v = allVectors.find((av) => av.entryId === f.replace(/\.md$/, ""));
-                if (v) members.push({ entryId: v.entryId, sectionId: sec.id, vector: v.vector });
+              if (String(fields.section ?? "") === String(root.id)) {
+                const eid = f.replace(/\.md$/, "");
+                if (writeEntrySection(eDir, eid, bestN.id, opts.dryRun)) {
+                  bestN.memberCount++;
+                }
               }
             }
           }
-          if (members.length <= 8) continue;
-          const sr = splitFn(sec, members, domCentroid, sections);
-          if (!sr) continue;
-          
-          // Create TWO children — parent becomes pure grouping node
-          const childAId = mkSectionId(domain);
-          const childBId = sr.childSection.id;
-          
-          notify?.(`  post-split: ${sec.id} (${members.length}) -> ${childAId}(${sr.parentMembers.length}) + ${childBId}(${sr.childMembers.length})`);
-          
-          // Child A: the entries that were "parent" in splitAsParentChild
-          const centroidA = computeCentroid(sr.parentMembers.map((m) => m.vector));
-          sections.push(mkChildSection({
-            id: childAId,
-            domain,
-            parent: sec.id,
-            depth: sec.depth + 1,
-            centroid: centroidA,
-            memberCount: sr.parentMembers.length,
-          }));
-          
-          // Child B: already created by splitAsParentChild
-          sr.childSection.parent = sec.id;
-          sr.childSection.depth = sec.depth + 1;
-          sr.childSection.dirty = true;
-          sections.push(sr.childSection);
-          
-          // Parent becomes grouping node
-          sec.childIds.push(childAId, childBId);
-          sec.memberCount = 0;
-          sec.dirty = true;
-          
-          // Reassign ALL entries to children
-          for (const m of sr.parentMembers) {
-            writeEntrySection(eDir, m.entryId, childAId, opts.dryRun);
-          }
-          for (const [entryId, newSecId] of sr.reassignment) {
-            writeEntrySection(eDir, entryId, newSecId, opts.dryRun);
-          }
-          result.splits++;
-          changed = true;
+          sections = sections.filter((s) => s.id !== root.id);
+          result.merges++;
         }
       }
     }
 
-    // Label any sections created by the post-split pass
-    for (const domain of result.domains) {
-      const eDir2 = join(domainsRoot, domain, "entries");
-      const postSplitDirty = sections.filter((s) => s.domain === domain && s.dirty && (!s.title || s.title.includes("(split)")));
-      for (const sec of postSplitDirty) {
-        const memberInfo2: SectionMember[] = readDirectMembersFromDisk(eDir2, sec.id);
-        if (memberInfo2.length === 0) {
-          for (const cid of sec.childIds) {
-            const child = sections.find((s) => s.id === cid);
-            if (child && child.title) memberInfo2.push({ title: child.title, summary: child.summary });
-          }
-        }
-        if (opts.dryRun && memberInfo2.length > 0) {
-          notify?.(`  would post-split label: ${sec.id}`);
-        } else if (memberInfo2.length > 0) {
-          const ok = await llmLabelSection({
-            engine, sec, memberInfo: memberInfo2, sections, domain,
-            withContext: false, touchUpdated: false, bubbleUp: false,
-            logPrefix: "post-split labeled", notify,
-          });
-          if (ok) result.labelsUpdated++;
-        }
-      }
-    }
+    // Rebuild spine.
+    for (const domain of domains) await bootstrapDomain(domain);
+    absorbSingletonRoots();
+    await labelAfterRebuild();
+    for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
+    await postSplitOverflowingLeaves();
+    await labelPostSplitSections();
+    finalSingletonAbsorb();
+    for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
 
-    // Final singleton absorption pass (catches singletons created by post-split)
-    for (const domain of result.domains) {
-      const domVecs2 = allVectors.filter((v) => v.domain === domain);
-      const totalEntries2 = domVecs2.length;
-      const minEntries2 = Math.max(2, Math.ceil(totalEntries2 * stConfig.minRootRatio));
-      const eDir3 = join(domainsRoot, domain, "entries");
-      const domainRoots2 = sections.filter((s) => s.domain === domain && s.parent === null);
-      for (const root of domainRoots2) {
-        const currentRoots2 = sections.filter((s) => s.domain === domain && s.parent === null);
-        if (currentRoots2.length <= 2) break;
-        const actualMembers = root.memberCount + sections.filter((s) => s.parent === root.id).reduce((sum, c) => sum + c.memberCount, 0);
-        if (actualMembers >= minEntries2) continue;
-        if (root.childIds.length > 0 && actualMembers > 1) continue;
-        const neighbors = domainRoots2.filter((r) => r.id !== root.id && r.id !== root.id);
-        if (neighbors.length === 0) continue;
-        let bestN = neighbors[0];
-        let bestS = -1;
-        for (const n of neighbors) {
-          const sim = cosine(root.centroid, n.centroid);
-          if (sim > bestS) { bestS = sim; bestN = n; }
-        }
-        notify?.(`  final absorb: "${root.title}" (${actualMembers}) -> "${bestN.title}"`);
-        // Move entries
-        if (existsSync(eDir3)) {
-          for (const f of readdirSync(eDir3).filter((x) => x.endsWith(".md"))) {
-            const { fields } = parseFrontmatter(readFileSync(join(eDir3, f), "utf-8"));
-            if (String(fields.section ?? "") === String(root.id)) {
-              const eid = f.replace(/\.md$/, "");
-              if (writeEntrySection(eDir3, eid, bestN.id, opts.dryRun)) {
-                bestN.memberCount++;
-              }
-            }
-          }
-        }
-        sections = sections.filter((s) => s.id !== root.id);
-        result.merges++;
-      }
-    }
-
-    // Final memberCount reconciliation
-    for (const domain of result.domains) {
-      reconcileMemberCounts(sections, domain, join(domainsRoot, domain, "entries"));
-    }
-
-    // Persist
-    if (!opts.dryRun) {
-      writeSections(roots, sections);
-      const freshLog = readLedger(roots);
-      renderRegistry(roots, foldRegistry(freshLog));
-      for (const domain of result.domains) {
-        renderDomainDigest(roots, domain);
-        renderDomainIndex(roots, domain);
-      }
-    }
+    rerenderRegistry(roots, opts.dryRun);
+    persistDomains(roots, sections, result.domains, opts.dryRun);
 
     notify?.(opts.dryRun
       ? `rebuild dry-run: ${result.placements} would be placed, ${result.labelsUpdated} would be labeled`
@@ -771,7 +777,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
     return result;
   }
 
-  for (const domain of domains) {
+  async function reorgDomain(domain: string): Promise<void> {
     notify?.(`reorg: ${domain}`);
     const domainVectors = allVectors.filter((v) => v.domain === domain);
     notify?.(`  ${domainVectors.length} entries with vectors`);
@@ -1100,34 +1106,20 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
   }
 
-  // Persist (ledger + registry)
-  if (!opts.dryRun && events.length > 0) {
-    appendLedger(roots, events);
-  }
+  for (const domain of domains) await reorgDomain(domain);
 
-  if (!opts.dryRun) {
-    const freshLog = readLedger(roots);
-    renderRegistry(roots, foldRegistry(freshLog));
-  }
-  // Collapse empty root wrappers: any root with 0 direct entries promotes
-  // its children to root level.
+  // Persist ledger first so the re-rendered registry sees the new events.
+  if (!opts.dryRun && events.length > 0) appendLedger(roots, events);
+  rerenderRegistry(roots, opts.dryRun);
+
+  // Collapse empty root wrappers + binary-split artifacts at all depths.
   for (const domain of result.domains) {
-    sections = collapseEmptyRootWrappers(sections, domain, join(domainsRoot, domain, "entries"), notify);
+    const eDir = join(domainsRoot, domain, "entries");
+    sections = collapseEmptyRootWrappers(sections, domain, eDir, notify);
+    sections = collapseBinaryWrappers(sections, domain, eDir, notify);
   }
 
-  // Collapse binary wrapper sections at ALL depths: a section with 0 direct
-  // entries and EXACTLY 2 children is a binary-split artifact.
-  for (const domain of result.domains) {
-    sections = collapseBinaryWrappers(sections, domain, join(domainsRoot, domain, "entries"), notify);
-  }
-
-  if (!opts.dryRun) {
-    writeSections(roots, sections);
-    for (const domain of result.domains) {
-      renderDomainDigest(roots, domain);
-      renderDomainIndex(roots, domain);
-    }
-  }
+  persistDomains(roots, sections, result.domains, opts.dryRun);
 
   notify?.(opts.dryRun
     ? `reorg dry-run: ${result.splits} splits, ${result.merges} merges, ${result.crystallized} crystallized, ${result.labelsUpdated} labeled (no writes)`

@@ -191,9 +191,18 @@ export async function buildEntryVectors(
     const entriesDir = join(domainsRoot, domain, "entries");
     if (!existsSync(entriesDir)) continue;
     for (const file of readdirSync(entriesDir).filter((f) => f.endsWith(".md"))) {
-      const { fields, body } = parseFrontmatter(
-        readFileSync(join(entriesDir, file), "utf-8")
-      );
+      // A concurrent admin op (retire, split-fat) can delete an entry file
+      // between this readdir snapshot and the readFileSync. Treat vanished
+      // entries as benignly skipped — they are not in the registry anymore
+      // either, so the vector set would exclude them on the next tick anyway.
+      let raw: string;
+      try {
+        raw = readFileSync(join(entriesDir, file), "utf-8");
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+        throw err;
+      }
+      const { fields, body } = parseFrontmatter(raw);
       const id = String(fields.id ?? file.replace(/\.md$/, ""));
       const text = embedInput({ title: String(fields.title ?? ""), detail: body });
       const hash = contentHash(text);

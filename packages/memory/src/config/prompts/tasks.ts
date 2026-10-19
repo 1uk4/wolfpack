@@ -88,44 +88,13 @@ RULES:
 5. Keep titles short and action-oriented
 6. Max 10 suggestions per breakdown`;
 
-export const GRILL_ME_PROTOCOL = `
-## Grill-Me Protocol
-
-Run a relentless interview to sharpen the plan. Map decisions as a **design tree**: every decision branches into decisions that hang off it.
-
-Work in **rounds**. The **frontier** is every decision whose prerequisites are settled. Ask the whole frontier using the \`ask_user_question\` tool — one question per call, but you can make multiple calls in parallel for independent questions. Provide your recommended answer in the \`details\` field or as the first option.
-
-### Rules
-
-1. **Facts are your job** — use tools to look up filesystem, API, or codebase facts. Don't ask the user what you could discover.
-2. **Decisions are the user's** — use ask_user_question and wait for answers.
-3. **Recompute after each round** — settled decisions push the frontier outward.
-4. **Done when frontier is empty** — every branch visited, nothing assumed.
-
-After grilling: summarize the spec and create with \`task_create\` including synthesized \`successCriteria\`.
-`;
-
-export const NEW_WORK_PROMPT = `The user wants to create a new work item. Work items have this hierarchy:
-- **Initiative**: A large goal with multiple features (e.g., "Dockerize Wolfpack")
-- **Feature**: A capability to build, can be standalone or under an initiative
-- **Task**: A unit of work under a feature (also: issue for bugs, spike for research)
-
-## Domain and parent — pick carefully
-
-Every work item belongs to exactly ONE domain. The domain names what the item is ABOUT, not who is doing it:
-- **wolfpack** — changes to this codebase (CLI, agent, memory, kb, extensions), infra for the pack, agent prompts, developer docs
-- **snapjack** — the Snapjack iOS/web app, its features, bugs, growth
-- **personal** — the user's life: fitness, admin, finance, planning, non-work
-
-Before you call task_create:
-1. Pick the domain that owns the SUBJECT. A fix to the gym-log skill is **wolfpack** (code change), even though it's about fitness. An actual workout is **personal**.
-2. Pick partOf ONLY if there is a feature in the SAME domain that this task belongs under. **Never parent a task under a feature in a different domain** — the system will reject the create.
-3. If no fitting feature exists in that domain, OMIT partOf. The item lands in that domain's Inbox and can be moved later.
-
-Use ask_user_question when the domain or the right feature is ambiguous.
-
-## Development features
-
-Ask if it's a development feature (code changes, architecture, implementation). If yes, run the grill-me protocol to sharpen the spec before creating. Then create the item with task_create.
-
-` + GRILL_ME_PROTOCOL;
+// The task-create flow lives in ./task-create/*. One orchestrator prompt
+// (NEW_WORK_PROMPT) routes by kind; features run the full three-stage
+// pipeline (grilling -> to-spec -> to-tickets). Re-exported here so the rest
+// of the package keeps its import surface (`@wolfpack/memory`).
+export {
+  NEW_WORK_PROMPT,
+  GRILLING_PROTOCOL,
+  TO_SPEC_PROTOCOL,
+  TO_TICKETS_PROTOCOL,
+} from "./task-create/index.js";

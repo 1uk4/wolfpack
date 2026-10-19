@@ -192,6 +192,10 @@ export function graduationFile(opts: {
     `entry_id: ${graduationEntryId(item)}`,
     ...(final ? ["final: true"] : []),
     ...(initiative ? [`part_of: ${graduationEntryId(initiative)}`] : []),
+    // Feature graduations are deliberate accounts: the sender's body IS
+    // the record. Keep it verbatim (no LLM paraphrase in produce). Hubs
+    // stay LLM-produced — they're short overviews, not records.
+    ...(graduation === "feature" ? ["preserve_body: true"] : []),
     `submitted: ${submitted.toISOString()}`,
     "---",
   ];

@@ -72,6 +72,53 @@ export function scrubGraduation(opinion: LlmOpinion, graduation: "feature" | "hu
   });
 }
 
+/**
+ * Verbatim-opinion builder: construct an LlmOpinion from the contribution body
+ * without calling the LLM. Title = first H1 (`# ...`) in the body; summary =
+ * first non-empty, non-H1 paragraph; detail = body as written (H1 stripped).
+ *
+ * Used when `preserveBody` is set — the sender's deliberate account IS the
+ * entry. Classification + relations are still handled by the normal pipeline.
+ */
+export function buildVerbatimOpinion(c: Pick<ParsedContribution, "body" | "summary">): LlmOpinion {
+  const body = c.body ?? "";
+  const h1Match = body.match(/^#\s+([^\n]+)\n/);
+  const title = h1Match ? h1Match[1].trim() : (c.summary.split("\n")[0] || "Untitled").trim();
+  const detail = (h1Match ? body.slice(h1Match[0].length) : body).trim();
+  // Summary resolution order:
+  //   1. Sender's deliberate one-line summary (no newlines, not just an H1).
+  //   2. First non-empty, non-header paragraph of the detail (strips tables
+  //      and headings; useful when the sender just wrote prose).
+  //   3. Fallback to the title.
+  // Flattened to a single line and clipped at 200 chars.
+  const senderSummary = (c.summary ?? "").trim();
+  const senderSummaryIsClean =
+    senderSummary &&
+    !senderSummary.includes("\n") &&
+    !senderSummary.startsWith("#");
+  const bodyParagraph = detail
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p.length > 0 && !p.startsWith("#") && !p.startsWith("|"));
+  const summaryRaw =
+    (senderSummaryIsClean && senderSummary) ||
+    bodyParagraph ||
+    senderSummary ||
+    title;
+  const summaryLine = summaryRaw.replace(/\s+/g, " ").trim();
+  const summary = summaryLine.length > 200 ? summaryLine.slice(0, 197) + "…" : summaryLine;
+  return LlmOpinion.parse({
+    title,
+    summary,
+    detail,
+    kind: { type: "fact" },
+    confidence: "verified",
+    facets: {},
+    properties: {},
+    proposedRelations: [],
+  });
+}
+
 /** The part_of edge a graduated feature carries to its initiative's hub. */
 export function graduationRelations(c: Pick<ParsedContribution, "graduation" | "partOf">): Relation[] {
   if (c.graduation !== "feature" || !c.partOf) return [];
@@ -92,32 +139,42 @@ export async function produceEntry(
   const graduation = contribution.graduation;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
 
-  // Build LLM prompt (bounded, context-aware)
-  const prompt = [
-    `DOMAIN: ${domain}`,
-    `CONTRIBUTION (from ${contribution.from}):`,
-    contribution.summary,
-    "",
-    contribution.body,
-    existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${existingMarkdown}` : "",
-    context ? `\n${context}` : "",
-    graduation === "hub" && contribution.final ? "\nTHE INITIATIVE IS COMPLETE." : "",
-    `\nACTION: ${action}`,
-  ].join("\n");
+  // Preserve-body shortcut: for deliberate accounts (graduated features by
+  // default), the sender's body IS the record. Skip the LLM entirely and
+  // derive title/summary deterministically. Hubs never take this path — they
+  // are LLM-produced short overviews. Classification + relations still run
+  // through the normal post-LLM pipeline.
+  let opinion: LlmOpinion;
+  if (contribution.preserveBody && graduation !== "hub") {
+    opinion = buildVerbatimOpinion(contribution);
+  } else {
+    // Build LLM prompt (bounded, context-aware)
+    const prompt = [
+      `DOMAIN: ${domain}`,
+      `CONTRIBUTION (from ${contribution.from}):`,
+      contribution.summary,
+      "",
+      contribution.body,
+      existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${existingMarkdown}` : "",
+      context ? `\n${context}` : "",
+      graduation === "hub" && contribution.final ? "\nTHE INITIATIVE IS COMPLETE." : "",
+      `\nACTION: ${action}`,
+    ].join("\n");
 
-  // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
-  // Re-parse through the schema to guarantee branded types AND re-validate the
-  // model output (the confinement firewall — nothing invalid reaches assemble).
-  const system = graduation
-    ? `${PRODUCE_SYSTEM}\n\n${graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES}`
-    : PRODUCE_SYSTEM;
-  let opinion = LlmOpinion.parse(
-    await engine.call("produce", LlmOpinion, {
-      system,
-      prompt,
-    })
-  );
-  if (graduation) opinion = scrubGraduation(opinion, graduation);
+    // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
+    // Re-parse through the schema to guarantee branded types AND re-validate the
+    // model output (the confinement firewall — nothing invalid reaches assemble).
+    const system = graduation
+      ? `${PRODUCE_SYSTEM}\n\n${graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES}`
+      : PRODUCE_SYSTEM;
+    opinion = LlmOpinion.parse(
+      await engine.call("produce", LlmOpinion, {
+        system,
+        prompt,
+      })
+    );
+    if (graduation) opinion = scrubGraduation(opinion, graduation);
+  }
 
   // Build DerivedFacts deterministically
   const id = EntryId.parse(entryId ?? newEntryId ?? mkEntryId(domain));

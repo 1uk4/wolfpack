@@ -69,6 +69,17 @@ export const ContributionSchema = z.object({
   /** Feature only: the hub entry it belongs to (its initiative's), linked
    *  part_of by code. Named by the sender, like entryId. */
   partOf: z.string().optional(),
+  /** Deliberate account: the sender's body is the record and must land
+   *  verbatim. The sweep's `produce` stage bypasses the LLM entirely — title
+   *  derived from H1, summary from the first paragraph, detail = body as
+   *  written. Classification (section placement) and relation resolution
+   *  still run. Defaults to false (observational contributions go through
+   *  the normal LLM consolidation path).
+   *
+   *  Set by graduated work (features) so a deliberately-authored week record
+   *  isn't paraphrased away. Hubs ignore this — they're meant to be LLM-
+   *  produced short overviews. */
+  preserveBody: z.boolean().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

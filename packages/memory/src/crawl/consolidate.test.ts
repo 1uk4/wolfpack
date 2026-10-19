@@ -6,11 +6,13 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
+import { CRAWL } from "@wolfpack/engine";
 import {
   mergeRunningDigest,
   buildCrawlConsolidatePrompt,
   createRunningDigest,
   consolidateTopic,
+  CrawlTopicSchema,
 } from "./consolidate.js";
 import { createSink } from "./sink.js";
 import type { CrawlPlan, DatedFile } from "./schemas.js";
@@ -339,6 +341,57 @@ describe("buildCrawlConsolidatePrompt", () => {
     );
 
     expect(prompt).not.toContain("PACK ALREADY KNOWS");
+  });
+
+  it("includes the domain context block when provided", () => {
+    const prompt = buildCrawlConsolidatePrompt(
+      "test-topic",
+      "snapshot",
+      observations,
+      undefined,
+      undefined,
+      "DOMAIN: wolfpack\nScope: multi-agent system\nExisting top sections: Memory, KB"
+    );
+
+    expect(prompt).toContain("DOMAIN: wolfpack");
+    expect(prompt).toContain("Scope: multi-agent system");
+    expect(prompt).toContain("Existing top sections: Memory, KB");
+    // Domain block precedes TOPIC
+    expect(prompt.indexOf("DOMAIN: wolfpack")).toBeLessThan(prompt.indexOf("TOPIC: test-topic"));
+  });
+
+  it("omits the domain block cleanly when not provided", () => {
+    const prompt = buildCrawlConsolidatePrompt(
+      "test-topic",
+      "snapshot",
+      observations
+    );
+
+    expect(prompt).not.toContain("DOMAIN:");
+    expect(prompt.startsWith("TOPIC: test-topic")).toBe(true);
+  });
+});
+
+describe("CrawlTopicSchema body size cap", () => {
+  it("accepts bodies at or under the hard cap", () => {
+    const result = CrawlTopicSchema.safeParse({
+      title: "T",
+      summary: "s",
+      body: "x".repeat(CRAWL.bodyMaxChars),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects bodies that exceed the hard cap so the engine will retry", () => {
+    const result = CrawlTopicSchema.safeParse({
+      title: "T",
+      summary: "s",
+      body: "x".repeat(CRAWL.bodyMaxChars + 1),
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain(String(CRAWL.bodyMaxChars));
+    }
   });
 });
 

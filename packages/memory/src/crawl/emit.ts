@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { CRAWL } from "@wolfpack/engine";
 import { readPlan } from "./plan.js";
 import { discoverSources } from "./discover.js";
 import { resolveDates, isGitRepo } from "./dates.js";
@@ -90,10 +91,17 @@ export function emitCrawl(
       "KB_OPS is required to emit to the real inbox (or use --dry-run)."
     );
   }
+  // Dry-run must NOT mutate the real den's emitted.json hash tracker, or the
+  // subsequent real emit would see every contribution as "unchanged" and skip
+  // it. Point denLocal at the sink too so the dry-run's hash writes are
+  // throwaway.
+  const denLocal = opts.dryRun
+    ? join(sink.dir, "den-kb")
+    : join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
   const roots: KbRoots = {
     kbBase: process.env.KB_BASE ?? "",
     opsRoot,
-    denLocal: join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb"),
+    denLocal,
   };
 
   // Load the staged topics + history produced by run/resume.
@@ -152,6 +160,12 @@ export function emitCrawl(
       currency,
       status: result ? "emit" : "skip",
     });
+    if (body.length > CRAWL.bodyTargetChars) {
+      sink.log(
+        `emit: ${b.topic} body ${body.length} chars > target ${CRAWL.bodyTargetChars} ` +
+          `(cap ${CRAWL.bodyMaxChars}) — consider splitting this batch`
+      );
+    }
     if (result) {
       emitted++;
       sink.log(`emit: ${b.topic} → ${result.denTopicId}`);

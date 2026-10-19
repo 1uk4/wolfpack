@@ -345,6 +345,19 @@ export const SECTION_TREE = {
 } as const;
 
 /**
+ * Crawl pipeline size budgets. Caps the LLM-generated body of each crawl
+ * topic so a bloated source never flows straight into the KB as a 20k+ entry.
+ *
+ *  - bodyTargetChars: soft target surfaced in the consolidation prompt.
+ *  - bodyMaxChars:    hard cap enforced by CrawlTopicSchema; overflow triggers
+ *                     the engine's self-correcting retry loop.
+ */
+export const CRAWL = {
+  bodyTargetChars: 5000,
+  bodyMaxChars: 8000,
+} as const;
+
+/**
  * Context digest (DESIGN — see kb/shared/schemas/digest.ts). How much of the
  * pack's existing knowledge Dewey briefs a wolf with at consolidation time.
  * Keep lean: summaries, not bodies. Selection is title/keyword match wolf-side

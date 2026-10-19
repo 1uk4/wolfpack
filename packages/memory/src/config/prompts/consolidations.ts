@@ -15,7 +15,7 @@ export const SESSION_CONSOLIDATION_USER_PROMPT = `===== OBSERVATIONS TO CONSOLID
 {{journeyBlock}}
 Fold the observations into session topics. For each group of related observations, decide MERGE, CREATE, or SKIP.`;
 
-export const CRAWL_CONSOLIDATION_USER_PROMPT = `TOPIC: {{topic}}
+export const CRAWL_CONSOLIDATION_USER_PROMPT = `{{domainBlock}}TOPIC: {{topic}}
 CURRENCY: {{currency}}  (archived/snapshot = historical; present as of its dates)
 
 ===== OBSERVATIONS (all belong to this ONE topic) =====

@@ -15,20 +15,44 @@ import { readPlan, writePlan, gatePlan } from "./plan.js";
 import { createSink, type CrawlSink } from "./sink.js";
 import { extractBatch } from "./extract.js";
 import { consolidateTopic, createRunningDigest, type CrawlTopic } from "./consolidate.js";
+import { buildCrawlDomainContext } from "../observer/domain-context.js";
 import { buildJourney, renderHistoryDoc } from "./journey.js";
 import type { CrawlPlan, DatedFile, SourceFile } from "./schemas.js";
 
 // ── shared helpers (run + resume) ─────────────────────────────────────────────
 
-/** Engine for a crawl: fast model extracts, smart model consolidates + journeys. */
+/**
+ * Engine for a crawl: fast model extracts, smart model consolidates + journeys.
+ *
+ * Transport selection mirrors the KB engine: default to the Claude Agent SDK
+ * bridge (uses the local Claude subscription — no API key needed) so
+ * subscription-authed wolves (1uk4) can crawl without wiring an API key.
+ * Override with WOLFPACK_CRAWL_PROVIDER=anthropic for metered API usage.
+ *
+ * Bridge speaks Claude Code model aliases (undated); the API path wants
+ * dated ids. Defaults pick the right shape for each transport.
+ */
 export function createCrawlEngine(): { engine: Engine; fastModel: string; smartModel: string } {
+  const provider = (
+    process.env.WOLFPACK_CRAWL_PROVIDER ??
+    process.env.WOLFPACK_KB_PROVIDER ??
+    "claude-agent-sdk"
+  ).toLowerCase();
+  const useBridge = provider === "claude-agent-sdk" || provider === "claude-bridge";
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY required to run a crawl.");
-  const fastModel = process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20251001";
-  const smartModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-6";
+  if (!useBridge && !apiKey) {
+    throw new Error(
+      "ANTHROPIC_API_KEY required to run a crawl " +
+        "(or set WOLFPACK_CRAWL_PROVIDER=claude-agent-sdk to use the subscription bridge)."
+    );
+  }
+  const smartModel =
+    process.env.WOLFPACK_MODEL ?? (useBridge ? "claude-sonnet-5-5" : "claude-sonnet-5-5");
+  const fastModel =
+    process.env.WOLFPACK_FAST_MODEL ?? (useBridge ? "claude-haiku-5-5" : "claude-haiku-5-5");
   const engine = createEngine({
-    provider: "anthropic",
-    apiKey,
+    provider: useBridge ? "claude-agent-sdk" : "anthropic",
+    ...(useBridge ? {} : { apiKey }),
     defaultModel: smartModel,
     steps: {
       classify: { model: fastModel, maxTokens: 8192 },
@@ -249,10 +273,12 @@ export async function runCrawl(
   const total = batchesToRun.length;
   const published = loadPublishedDigest(limited.domain);
   const digest = createRunningDigest(limited.domain, published);
+  const domainContext = buildCrawlDomainContext(limited.domain, process.env.KB_BASE);
   sink.log(
     `run: ${total} batch(es), up to ${concurrency} at once ` +
       `(extract ${fastModel} → consolidate ${smartModel})` +
-      (published ? " (digest-primed)" : "")
+      (published ? " (digest-primed)" : "") +
+      (domainContext ? " (domain-context primed)" : "")
   );
 
   // Shared checkpoint: push cumulative engine usage to the monitor header.
@@ -340,6 +366,7 @@ export async function runCrawl(
         files: bFiles,
         sink,
         digest,
+        domainContext,
       });
       topicByName.set(b.topic, topic);
       writeTopicsSnapshot();

@@ -139,6 +139,10 @@ Produce: a title, a load-bearing one-line summary, a current-state body, and a
 list of dated events.
 
 BODY rules (what is true NOW):
+- Target ~5000 characters, hard cap 8000. If a topic needs more, that is a
+  SIGNAL the batch is too broad — keep the body tight and let separate topics
+  carry distinct concepts. Prefer links/pointers (file paths, entry ids) over
+  copying content that is better looked up at the source.
 - Write current-state prose. When a later observation supersedes an earlier one,
   REWRITE to the new truth and DELETE the obsolete statement. No "was X, now Y".
 - Do NOT include a timeline, changelog, or chronological narrative in the body —

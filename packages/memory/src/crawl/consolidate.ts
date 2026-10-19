@@ -9,7 +9,7 @@
  */
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
-import { CRAWL_CONSOLIDATE_SYSTEM, DIGEST } from "@wolfpack/engine";
+import { CRAWL_CONSOLIDATE_SYSTEM, CRAWL, DIGEST } from "@wolfpack/engine";
 import {
   PACK_ALREADY_KNOWS_RUNNING_DIGEST_TEMPLATE,
   CRAWL_CONSOLIDATION_USER_PROMPT,
@@ -32,13 +32,26 @@ export const CrawlEventSchema = z.object({
 });
 export type CrawlEvent = z.infer<typeof CrawlEventSchema>;
 
+// Allow env override for admin runs on dense corpora. Defaults from tuning.ts.
+const bodyMaxChars = Number(process.env.WOLFPACK_CRAWL_BODY_MAX_CHARS) || CRAWL.bodyMaxChars;
+const bodyTargetChars =
+  Number(process.env.WOLFPACK_CRAWL_BODY_TARGET_CHARS) || CRAWL.bodyTargetChars;
+
 export const CrawlTopicSchema = z.object({
   title: z.string().describe("Concise noun phrase naming the topic"),
   summary: z
     .string()
     .describe("One line (≤140 chars), specific and current — the load-bearing index line")
     .transform((s) => (s.length > 140 ? s.slice(0, 139) + "…" : s)),
-  body: z.string().describe("Current-state markdown ONLY — no timeline/history narrative"),
+  body: z
+    .string()
+    .max(
+      bodyMaxChars,
+      `Body exceeds ${bodyMaxChars}-char cap — tighten the entry (target ~${bodyTargetChars}); drop restated detail, prefer links/pointers over copying, split distinct concepts into separate topics in the plan.`
+    )
+    .describe(
+      `Current-state markdown ONLY — no timeline/history narrative. Target ~${bodyTargetChars} chars; hard cap ${bodyMaxChars}.`
+    ),
   /** Dated decisions/changes — the raw material for the domain journey. */
   events: z.array(CrawlEventSchema).optional(),
 });
@@ -118,7 +131,8 @@ export function buildCrawlConsolidatePrompt(
   currency: Currency,
   observations: CrawlObservation[],
   existing?: string,
-  digest?: RunningDigest | DigestSection[]
+  digest?: RunningDigest | DigestSection[],
+  domainContext?: string
 ): string {
   const obsLines = observations
     .map((o) => `${o.timestamp && o.timestamp.trim() ? o.timestamp : "undated"}  ${o.content}`)
@@ -136,7 +150,10 @@ export function buildCrawlConsolidatePrompt(
     ? `===== EXISTING ENTRY (extend this) =====\n${existing}\n===== END EXISTING =====\n`
     : "(no existing entry — create fresh)";
 
+  const domainBlock = domainContext ? `${domainContext}\n\n` : "";
+
   return fillPromptTemplate(CRAWL_CONSOLIDATION_USER_PROMPT, {
+    domainBlock,
     topic,
     currency,
     obsLines,
@@ -278,13 +295,22 @@ export async function consolidateTopic(
     files: DatedFile[];
     sink: CrawlSink;
     digest?: RunningDigestState;
+    /** Precomputed domain context block (meta.yaml + top sections). */
+    domainContext?: string;
   }
 ): Promise<CrawlTopic> {
-  const { plan, topic: name, currency, observations, files, sink, digest } = args;
+  const { plan, topic: name, currency, observations, files, sink, digest, domainContext } = args;
   const topic = await sink.heartbeat(`consolidating ${name} (${observations.length} obs)`, () =>
     engine.call("consolidate", CrawlTopicSchema, {
       system: CRAWL_CONSOLIDATE_SYSTEM,
-      prompt: buildCrawlConsolidatePrompt(name, currency, observations, undefined, digest?.current()),
+      prompt: buildCrawlConsolidatePrompt(
+        name,
+        currency,
+        observations,
+        undefined,
+        digest?.current(),
+        domainContext
+      ),
     })
   );
   const temporal = computeTemporal(files);

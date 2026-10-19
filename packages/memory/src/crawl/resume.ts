@@ -10,6 +10,7 @@ import { discoverSources } from "./discover.js";
 import { readPlan, writePlan } from "./plan.js";
 import { createSink } from "./sink.js";
 import { consolidateTopic, createRunningDigest, type CrawlTopic } from "./consolidate.js";
+import { buildCrawlDomainContext } from "../observer/domain-context.js";
 import type { CrawlObservation } from "./extract.js";
 import type { DatedFile } from "./schemas.js";
 import {
@@ -60,9 +61,11 @@ export async function resumeCrawl(
   );
   const published = loadPublishedDigest(plan.domain);
   const digest = createRunningDigest(plan.domain, published);
+  const domainContext = buildCrawlDomainContext(plan.domain, process.env.KB_BASE);
   sink.log(
     `consolidate: ${plan.batches.length} batch(es) on ${smartModel}` +
-      (published ? ` (digest-primed)` : "")
+      (published ? ` (digest-primed)` : "") +
+      (domainContext ? ` (domain-context primed)` : "")
   );
 
   const topicByName = new Map<string, CrawlTopic>();
@@ -80,6 +83,7 @@ export async function resumeCrawl(
       files: b.files.map((rel) => byPath.get(rel)).filter((f): f is DatedFile => !!f),
       sink,
       digest,
+      domainContext,
     });
     topicByName.set(b.topic, topic);
   });

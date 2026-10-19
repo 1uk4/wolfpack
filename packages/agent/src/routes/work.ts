@@ -30,8 +30,8 @@ import {
 } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
-const KB_BASE = "/var/wolfpack/kb/base";
-const WORK_LEDGER_DIR = "/var/wolfpack/kb/work";
+const KB_BASE = process.env.KB_BASE ?? "/var/wolfpack/kb/base";
+const WORK_LEDGER_DIR = process.env.WORK_LEDGER_DIR ?? "/var/wolfpack/kb/work";
 
 function makeRoots(): KbRoots {
   return {

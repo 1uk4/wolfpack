@@ -325,12 +325,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   function ensureSessionLoaded(ctx: any): void {
     const sid = getSessionId(ctx);
-    if (sid !== sessionId || (sessionId && !activeTask)) {
-      debugLog('ensureSessionLoaded: loading', { sid, prev: sessionId });
+    // Always re-read: the file can change out from under us (another process,
+    // out-of-band edit). Cost is one small JSON read per turn.
+    if (sid !== sessionId) {
+      debugLog('ensureSessionLoaded: session change', { sid, prev: sessionId });
       sessionId = sid;
-      activeTask = readActiveTask(wolfDen, sessionId);
-      debugLog('ensureSessionLoaded: loaded', { activeTask: activeTask?.workId });
     }
+    activeTask = readActiveTask(wolfDen, sessionId);
   }
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */

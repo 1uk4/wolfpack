@@ -24,20 +24,11 @@ function buildNodeIndex(nodes) {
   return idx;
 }
 
-// Mass tunes how each group behaves in forceAtlas2Based:
-// higher = anchor-like (resists motion, strong central presence);
-// lower = drifty (gets pushed around by repulsion, settles on the perimeter).
+// Every node has the same mass. In forceAtlas2Based, mass scales repulsion,
+// so mixed masses (0.4 to 50) flung light nodes around heavy ones and kept
+// the graph moving. Layout comes from edge lengths and the anchor's springs.
 function nodeMass(n) {
-  if (n.group === "anchor") return 50;   // pack center — huge anchor
-  if (n.group === "domain") return 6;
-  if (n.group === "section") return 2;
-  if (n.group === "factory") return 0.5;
-  if (n.group === "work") {
-    // Features are summary/grouping nodes; let them drift to the outside so
-    // their task clusters follow. Other work kinds behave like regular entries.
-    return n.workKind === "feature" ? 0.4 : 1;
-  }
-  return 1; // entry (default)
+  return 1;
 }
 
 function makeVisNode(n) {
@@ -282,8 +273,11 @@ function render(domain) {
   network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
     physics: {
       solver: "forceAtlas2Based",
-      forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005, springLength: 80 },
-      stabilization: { iterations: 150 }
+      forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005, springLength: 80, damping: 0.6 },
+      // Stop once nodes are nearly still, and settle before first paint.
+      minVelocity: 1,
+      maxVelocity: 30,
+      stabilization: { iterations: 400 }
     },
     interaction: Object.assign({
       hover: true,

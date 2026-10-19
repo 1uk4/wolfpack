@@ -11,55 +11,95 @@ import type { z } from "zod";
 /**
  * Extract JSON from LLM response text. Handles:
  * - Pure JSON response
- * - JSON wrapped in markdown code fences
- * - JSON embedded in surrounding text
+ * - JSON wrapped in matched markdown code fences
+ * - JSON with ONLY an opening fence (truncated response, closing fence lost)
+ * - JSON with ONLY a trailing fence
+ * - JSON embedded in surrounding text (brace-matching fallback)
+ *
+ * Robust to Claude 5-series behavior of wrapping outputs in ```json\n ... \n```
+ * even when told not to, and to responses truncated mid-stream by maxTokens.
  */
 export function extractJSON(text: string): unknown {
   const trimmed = text.trim();
 
-  // Try direct parse first
+  // 1) Pure JSON
+  const direct = tryParse(trimmed);
+  if (direct !== undefined) return direct;
+
+  // 2) Matched fences: ```json ... ``` (greedy to allow fences inside strings)
+  const matchedFence = trimmed.match(/```(?:json|JSON)?\s*\n?([\s\S]*)\n?```\s*$/);
+  if (matchedFence) {
+    const inner = tryParse(matchedFence[1].trim());
+    if (inner !== undefined) return inner;
+  }
+
+  // 3) Unmatched fence: strip any leading ```json/``` and trailing ``` and retry.
+  //    Handles both truncated-response and model-ignored-instruction cases.
+  let stripped = trimmed
+    .replace(/^```(?:json|JSON)?\s*\n?/, "")
+    .replace(/\n?```\s*$/, "");
+  if (stripped !== trimmed) {
+    const peeled = tryParse(stripped.trim());
+    if (peeled !== undefined) return peeled;
+  } else {
+    stripped = trimmed;
+  }
+
+  // 4) Brace-matching fallback: find first { or [ and scan to matching close.
+  //    String-aware so braces inside JSON strings don't throw the depth count.
+  const braced = scanBalancedJson(stripped);
+  if (braced !== undefined) return braced;
+
+  return null;
+}
+
+function tryParse(s: string): unknown | undefined {
   try {
-    return JSON.parse(trimmed);
+    return JSON.parse(s);
   } catch {
-    // Continue to fallbacks
+    return undefined;
   }
+}
 
-  // Try stripping markdown code fences
-  const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1].trim());
-    } catch {
-      // Continue
-    }
-  }
-
-  // Try finding first { ... } or [ ... ] block
-  const braceStart = trimmed.indexOf("{");
-  const bracketStart = trimmed.indexOf("[");
+/**
+ * Scan for the first `{` or `[` and return the parsed JSON of the balanced
+ * region ending at the matching close. String-aware: ignores `{`, `}`, `[`, `]`
+ * that appear inside double-quoted strings (with backslash escapes). Returns
+ * `undefined` if no parseable block is found.
+ */
+function scanBalancedJson(s: string): unknown | undefined {
+  const braceStart = s.indexOf("{");
+  const bracketStart = s.indexOf("[");
   const start =
     braceStart >= 0 && (bracketStart < 0 || braceStart < bracketStart)
       ? braceStart
       : bracketStart;
+  if (start < 0) return undefined;
 
-  if (start >= 0) {
-    const open = trimmed[start];
-    const close = open === "{" ? "}" : "]";
-    let depth = 0;
-    for (let i = start; i < trimmed.length; i++) {
-      if (trimmed[i] === open) depth++;
-      else if (trimmed[i] === close) depth--;
-      if (depth === 0) {
-        try {
-          return JSON.parse(trimmed.slice(start, i + 1));
-        } catch {
-          break;
-        }
-      }
+  const open = s[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) return tryParse(s.slice(start, i + 1));
     }
   }
-
-  return null;
+  return undefined;
 }
 
 /**

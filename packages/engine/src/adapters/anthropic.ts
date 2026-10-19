@@ -104,8 +104,18 @@ export class AnthropicAdapter implements KnowledgeAdapter {
       // Parse JSON from response
       const json = extractJSON(text);
       if (json === null) {
+        // Dump full response to help diagnose malformed/truncated output.
+        // stop_reason tells us if the model ran into max_tokens (truncation).
+        const stop = (response as any).stop_reason ?? "?";
+        const tail = text.length > 400 ? text.slice(-200) : "";
+        if (process.env.WOLFPACK_LLM_DEBUG) {
+          console.error(
+            `[anthropic] JSON extract FAILED (stop=${stop}, len=${text.length}):\n` +
+              `--- HEAD ---\n${text.slice(0, 400)}\n--- TAIL ---\n${tail}\n---`
+          );
+        }
         lastError = new Error(
-          `Could not extract JSON from response: ${text.slice(0, 200)}`
+          `Could not extract JSON from response (stop=${stop}, len=${text.length}): ${text.slice(0, 160)} ... ${tail}`
         );
         continue;
       }

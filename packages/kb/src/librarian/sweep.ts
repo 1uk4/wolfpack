@@ -131,6 +131,22 @@ export function graduationEntryId(c: Pick<ParsedContribution, "graduation" | "en
   return id;
 }
 
+/**
+ * Entries owned by graduated work, read from the ledger: a graduation is
+ * logged as a contribution from den topic `work-<domain>-<id>` and owns entry
+ * `kb-<domain>-<id>`. These entries are records; nothing else may merge into
+ * them (a merge has the LLM rewrite the whole entry).
+ */
+export function graduationOwnedIds(log: Array<{ t: string; denTopicId?: string }>): Set<string> {
+  const owned = new Set<string>();
+  for (const e of log) {
+    if (e.t !== "contribution" || !e.denTopicId) continue;
+    const m = /^work-([a-z0-9]+)-([0-9A-Za-z]{7})$/.exec(e.denTopicId);
+    if (m) owned.add(`kb-${m[1]}-${m[2]}`);
+  }
+  return owned;
+}
+
 /** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
 export function listedEntryIds(body: string): string[] {
   const ids = [...body.matchAll(/\[\[(kb-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\]\]/g)].map((m) => m[1]);
@@ -270,15 +286,19 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
       // content-similarity to the nearest entry (seeds the alias on commit).
       let targetId: string | undefined;
       // Graduated work owns exactly one entry, named in the contribution: update
-      // it if it exists, otherwise create it. Never similarity-merged.
+      // it if it exists, otherwise create it. Never similarity-merged, and no
+      // other contribution may merge into it (by alias or by similarity): an
+      // alias that points at a graduated entry is ignored, so that den topic
+      // gets its own entry and the alias is re-pointed on commit.
       const ownId = graduationEntryId(c, domain);
+      const protectedIds = graduationOwnedIds([...log, ...batch] as any);
       if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
       for (const topic of ownId ? [] : reg.values()) {
         const alias = topic.aliases.find(
           (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
         );
         if (alias) {
-          targetId = topic.entries[0];
+          if (!protectedIds.has(topic.entries[0])) targetId = topic.entries[0];
           break;
         }
       }
@@ -286,6 +306,7 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
         let near: { id: string; score: number } | null = null;
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
+          if (protectedIds.has(e.entryId)) continue;
           const s = cosine(vec, e.vector);
           if (!near || s > near.score) near = { id: e.entryId, score: s };
         }

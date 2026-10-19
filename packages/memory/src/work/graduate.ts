@@ -143,7 +143,8 @@ export function featureDossier(
  * document as written (minus its own H1), rollup markers and work ids removed.
  */
 export function verbatimFeatureBody(feature: WorkItem, body: string): string {
-  const doc = stripRollupMarkers(body.replace(/^#\s+.*\n+/, ""))
+  // Drop the document's own H1 (the body may start with blank lines).
+  const doc = stripRollupMarkers(body.replace(/^\s*#\s+.*\n+/, ""))
     .replace(WORK_ID, "")
     .trim();
   return `# ${feature.title}\n\n${doc}`;

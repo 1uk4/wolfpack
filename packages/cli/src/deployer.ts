@@ -131,10 +131,9 @@ mv /tmp/wolfpack-kb-cli.cjs /opt/wolfpack-kb/cli.cjs
 step "KB storage roots + den-local state"
 mkdir -p ${home}/knowledge/base ${home}/librarian
 chown -R ${user}:${user} ${home}/knowledge ${home}/librarian
-# den-local ledger/vectors live outside the (user-owned, synced) den because the
-# admin CLI may run as root in some flows; keep that path consistent with the
-# per-wolf isolation we already have.
-mkdir -p /var/lib/wolfpack-kb/${wolf.id}
+# Den-local KB state (ledger/vectors) lives in the wolf's den at den/kb, the
+# path the pi-durable sweep uses. Admin CLI runs must leave KB_DEN_LOCAL unset
+# (or point it there), or they write to a ledger the sweep never reads.
 
 # NOTE: no systemd sweep timer or sweep service is installed. The sweep runs
 # on the pi-durable harness's own setInterval (packages/harness/src/index.ts),

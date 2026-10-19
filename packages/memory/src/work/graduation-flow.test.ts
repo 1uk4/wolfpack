@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import type { WorkItem } from "@wolfpack/kb/client";
 import { sweep } from "@wolfpack/kb/librarian";
-import { graduationFiles } from "./graduate.js";
+import { graduationFiles, verbatimFeatureBody } from "./graduate.js";
 
 let n = 0;
 const w = (kind: string, title: string, partOf: string | null, extra: Partial<WorkItem> = {}) =>
@@ -50,6 +50,12 @@ describe("graduationFiles", () => {
     expect(files(solo)[0].content).not.toContain("part_of:");
     const [hub] = files(init);
     expect(hub.content).toContain("final: true");
+  });
+
+  it("verbatimFeatureBody keeps a single title even when the body starts with blank lines", () => {
+    const out = verbatimFeatureBody(solo, "\n\n# Standalone\n\n## Sessions\nx\n");
+    expect(out.match(/^# /gm)).toHaveLength(1);
+    expect(out).toContain("## Sessions\nx");
   });
 
   it("a feature without a rollup zone goes to the LLM (no preserve_body)", () => {

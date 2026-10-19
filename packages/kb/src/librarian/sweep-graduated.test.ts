@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { sweep, graduationEntryId } from "./sweep.js";
+import { sweep, graduationEntryId, graduationOwnedIds } from "./sweep.js";
 import { scrubGraduation } from "./produce.js";
-import { readLedger } from "./ledger.js";
+import { readLedger, appendLedger } from "./ledger.js";
+import { ev } from "../shared/index.js";
 import type { KbRoots } from "../shared/index.js";
 
 describe("graduationEntryId", () => {
@@ -14,6 +15,17 @@ describe("graduationEntryId", () => {
     expect(graduationEntryId({ entryId: "kb-wolfpack-UbWXWMv" }, "wolfpack")).toBeNull();
     expect(() => graduationEntryId({ graduation: "hub" }, "wolfpack")).toThrow(/needs entry_id/);
     expect(() => graduationEntryId({ graduation: "hub", entryId: "kb-other-UbWXWMv" }, "wolfpack")).toThrow(/needs entry_id/);
+  });
+});
+
+describe("graduationOwnedIds", () => {
+  it("maps graduation contributions (work-<domain>-<id>) to their entries", () => {
+    const ids = graduationOwnedIds([
+      { t: "contribution", denTopicId: "work-wolfpack-ggNO3Sv" },
+      { t: "contribution", denTopicId: "kb-sweep-performance" },
+      { t: "entry_written" },
+    ]);
+    expect([...ids]).toEqual(["kb-wolfpack-ggNO3Sv"]);
   });
 });
 
@@ -94,6 +106,27 @@ describe("sweep: graduated work creates its own entry", () => {
     // Regenerated from the dossier, never from its previous text.
     expect(prompts[1]).not.toContain("EXISTING ENTRY");
     expect(readFileSync(join(entries(), "kb-wp-BIGBIG1.md"), "utf8")).toContain("huge catch-all");
+  });
+
+  it("nothing else merges into a graduated entry: similarity skips it, a stale alias is ignored", async () => {
+    drop("work-wp-Feat002", "g1", "the record", featureGrad("kb-wp-Feat002"));
+    await run();
+    const onlyGrad = () =>
+      sweep({
+        engine, roots, notify: () => {},
+        loadEntryVectors: async () => [{ entryId: "kb-wp-Feat002", domain: "wp", vector: [1, 0, 0] } as any],
+      });
+
+    // Maximally similar memory topic: gets its own entry, the record is untouched.
+    drop("memory-topic", "m1", "notes that look like the record");
+    expect(await onlyGrad()).toMatchObject({ created: 1, merged: 0 });
+    expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-Feat002)");
+
+    // A den topic aliased to the record before this guard existed: alias ignored.
+    appendLedger(roots, [ev.aliased("w1", "old-topic", "kb-wp-Feat002", "o0")]);
+    drop("old-topic", "o1", "an update to an old topic");
+    expect(await onlyGrad()).toMatchObject({ created: 1, merged: 0 });
+    expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-Feat002)");
   });
 
   it("non-work contributions still merge by similarity", async () => {

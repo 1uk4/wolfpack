@@ -259,6 +259,7 @@ echo "PREREQS_OK"
 export async function deployAgent(
   hostName: string,
   host: HostEntry,
+  opts: { rotateKey?: boolean } = {},
 ): Promise<void> {
   console.log(c.bold(`\nDeploying wolfpack-agent to ${hostName}...`));
 
@@ -273,13 +274,22 @@ export async function deployAgent(
     );
   }
 
-  // 2. Generate API key
-  const apiKey = generateApiKey();
+  // 2. Resolve API key. Preserve the existing one by default so every wolf's
+  //    WORK_TOKEN stays valid across redeploys. Rotate only when explicitly
+  //    asked for or when no key exists yet (first deploy).
   const keyDir = path.join(os.homedir(), ".wolfpack/keys");
   fs.mkdirSync(keyDir, { recursive: true });
   const keyFile = path.join(keyDir, `${hostName}.key`);
-  fs.writeFileSync(keyFile, apiKey, { mode: 0o600 });
-  console.log(c.dim(`API key saved to: ${keyFile}`));
+  const existingKey = host.apiKey || (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, "utf-8").trim() : "");
+  const willRotate = opts.rotateKey === true || !existingKey;
+  const apiKey = willRotate ? generateApiKey() : existingKey;
+  if (willRotate) {
+    fs.writeFileSync(keyFile, apiKey, { mode: 0o600 });
+    console.log(c.yellow(`⚠ API key rotated (${existingKey ? "explicit" : "first deploy"}). All wolves on ${hostName} will be re-tokened.`));
+    console.log(c.dim(`  Key saved to: ${keyFile}`));
+  } else {
+    console.log(c.dim(`API key preserved: ${keyFile}`));
+  }
 
   // Update host config with API key
   host.apiKey = apiKey;

@@ -69,7 +69,7 @@ ${c.bold("HOST (advanced)")}
   host list                       Show registered hosts
   host status [name]              Host health + wolf overview
   host sync [name]                Wire Syncthing den mirrors (VPS \u2192 ~/wolves)
-  host redeploy [name]            Re-provision + redeploy agent on an existing host
+  host redeploy [name] [--rotate-key]  Re-provision + redeploy (preserves API key by default)
 
 ${c.bold("DOMAIN (advanced)")}
   domain list                     Declared domains + subscribers + entry counts
@@ -190,7 +190,9 @@ async function main(): Promise<void> {
             await hostSync(positional[2]);
             break;
           case "redeploy":
-            await hostRedeploy(positional[2]);
+            await hostRedeploy(positional[2], {
+              rotateKey: Boolean(flags["rotate-key"]) || Boolean(flags.rotateKey),
+            });
             break;
           default:
             console.error("Usage: wolfpack host <add|list|status|sync|redeploy>");

@@ -53,6 +53,12 @@ export class WorkClient {
     return res.item;
   }
 
+  /** Fetch an item along with its materialized body. Body is null when the
+   *  work .md hasn't been written yet (freshly created, never committed). */
+  async getWithBody(id: string): Promise<{ item: WorkItem; body: string | null }> {
+    return this.request<{ item: WorkItem; body: string | null }>("GET", `/${id}`);
+  }
+
   async query(q: WorkQuery = {}): Promise<WorkItem[]> {
     const params = new URLSearchParams();
     if (q.domain) params.set("domain", q.domain);

@@ -27,6 +27,7 @@ import {
   loadWorkState,
   commitWorkItem,
   graduateWork,
+  resolveWorkItem,
   type CreateWorkInput,
   type WorkQuery,
 } from "@wolfpack/kb/client";
@@ -75,7 +76,11 @@ export function workRouter(): Router {
         res.status(404).json({ error: `Work item not found: ${req.params.id}` });
         return;
       }
-      res.json({ item });
+      // Include the materialized body so clients (rollup, etc.) don't need a
+      // second round-trip. Body is the markdown below the frontmatter; null
+      // when the file hasn't been written yet (freshly created).
+      const resolved = resolveWorkItem(roots, item.domain as string, item.id as string);
+      res.json({ item, body: resolved?.body ?? null });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

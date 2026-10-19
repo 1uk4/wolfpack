@@ -45,6 +45,8 @@ import {
   workspaceHeader,
   initialState,
   reduce,
+  rollupToParent,
+  type RollupClient,
   leftRows,
   rightRows,
   rightTree,
@@ -306,6 +308,40 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   const client = new WorkClient();
 
+  // ── Rollup adapter: fold a shipped child's body into the parent feature ──
+  // Opt-in by parent-body-shape: only runs when the parent has a rollup zone.
+  // Errors are swallowed and logged — a bad rollup never blocks the ship.
+  const rollupClient: RollupClient = {
+    async query({ ids }) {
+      const all = (await client.query({})) ?? [];
+      const want = new Set(ids ?? []);
+      return all.filter((i) => want.has(i.id as string)).map((i) => ({
+        id: i.id as string,
+        kind: i.kind as string,
+        title: i.title,
+        partOf: (i.partOf as string | null) ?? null,
+        updated: i.updated as string,
+      }));
+    },
+    async getBody(id) {
+      const { body } = await client.getWithBody(id);
+      return body ?? "";
+    },
+    async updateBody(id, body) {
+      await client.updateBody(id, body);
+    },
+  };
+
+  async function shipWithRollup(id: string): Promise<WorkItem> {
+    const item = await client.stage(id, "shipped");
+    try {
+      await rollupToParent(rollupClient, id);
+    } catch (err) {
+      debugLog("rollupToParent failed", { id, err: String(err) });
+    }
+    return item;
+  }
+
   // Session-specific task binding
   let sessionId: string | null = null;
   let activeTask: ActiveTaskState | null = null;
@@ -486,7 +522,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           // Show transition prompt
           const confirm = await ctx.ui.confirm(signal.prompt, signal.reason ?? "");
           if (confirm) {
-            await client.stage(activeTask.workId, signal.to);
+            if (signal.to === "shipped" || signal.to === "live") {
+              await shipWithRollup(activeTask.workId);
+            } else {
+              await client.stage(activeTask.workId, signal.to);
+            }
             await client.note(activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
             await refreshActiveItem();
             updateWidget(ctx);
@@ -858,7 +898,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             target.successCriteria ? `Done when: ${target.successCriteria}` : "",
           );
           if (!ok) return;
-          const shipped = await client.stage(action.id, "shipped");
+          const shipped = await shipWithRollup(action.id);
           await client.note(action.id, "Completed.");
           if (activeTask && activeTask.workId === action.id) unbindTask(ctx);
           await refreshActiveItem();
@@ -947,7 +987,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         );
         if (!ok) return;
         try {
-          const shippedItem = isComplete(item) ? item : (await client.stage(item.id, "shipped"));
+          const shippedItem = isComplete(item) ? item : (await shipWithRollup(item.id));
           if (!isComplete(item)) await client.note(item.id, "Shipped for graduation: all tasks complete.");
           ctx.ui.notify(`Graduating ${item.title}…`, "info");
           await config.onReadyToGraduate(shippedItem);
@@ -1045,7 +1085,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          const item = await client.stage(activeTask.workId, params.to);
+          const item = params.to === "shipped" || params.to === "live"
+            ? await shipWithRollup(activeTask.workId)
+            : await client.stage(activeTask.workId, params.to);
           activeItem = item;
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `${item.title} → ${item.stage}` }] };
@@ -1258,7 +1300,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         
         try {
           // onUpdate disabled - may cause Pi crash
-          const result = await client.stage(activeTask.workId, "shipped");
+          const result = await shipWithRollup(activeTask.workId);
           shipped = result;
           await client.note(activeTask.workId, "Completed.");
           resultText = `✓ Shipped: ${shipped.title}`;

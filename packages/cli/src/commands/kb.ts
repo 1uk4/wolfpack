@@ -65,12 +65,16 @@ export async function kbCmd(argv: string[]): Promise<void> {
 
   console.log(c.dim(`Running on ${lib.host}...`));
 
+  // Run as the librarian wolf's own user, not the SSH user (root): the KB
+  // engine writes into the wolf's den (lock, sections, ledger) and its
+  // knowledge folder, and root-owned files there block the wolf's own sweep.
+  const asWolf = `sudo -u wolf-${lib.id} bash -c '${remoteCmd.replace(/'/g, `'\\''`)}'`;
   const sshKey = host.ssh?.key;
   const sshUser = host.ssh?.user ?? "root";
   const sshArgs = [
     ...(sshKey ? ["-i", sshKey] : []),
     `${sshUser}@${host.address}`,
-    remoteCmd,
+    asWolf,
   ];
 
   const child = spawn("ssh", sshArgs, { stdio: "inherit" });

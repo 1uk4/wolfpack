@@ -197,8 +197,10 @@ function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM: the process exists but belongs to another user (e.g. a root CLI
+    // run seen from the wolf's sweep). Only ESRCH means it is gone.
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
   }
 }
 

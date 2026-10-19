@@ -57,6 +57,13 @@ describe("withKbLock", () => {
     expect(existsSync(kbLockFile(roots))).toBe(true);
   });
 
+  it("treats a lock held by another user's live process as busy, not stale", async () => {
+    // pid 1 is alive and owned by root, so signalling it gives EPERM.
+    writeFileSync(kbLockFile(roots), JSON.stringify({ pid: 1, at: Date.now() }));
+    await expect(withKbLock(roots, async () => "ran")).rejects.toBeInstanceOf(KbLockBusy);
+    expect(JSON.parse(readFileSync(kbLockFile(roots), "utf8")).pid).toBe(1);
+  });
+
   it("reclaims a lock whose owner is gone", async () => {
     writeFileSync(kbLockFile(roots), JSON.stringify({ pid: 999_999_99, at: Date.now() }));
     expect(await withKbLock(roots, async () => "ran")).toBe("ran");

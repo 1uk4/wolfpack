@@ -1063,20 +1063,25 @@ export interface IncompleteRun {
   done: number;
   total: number;
   domain: string;
+  /** True when history.json exists but batches are still missing (completed-with-errors). */
+  journeyWritten: boolean;
+  /** mtime of plan.yaml; newest-first in result order. */
+  mtime: number;
 }
 
 /**
- * Find an interrupted run (crash / relaunch / cancel mid-crawl) for the given
- * plan. Resumable = has observations.jsonl (extraction began) but no
- * history.json (journey never finished), and matches this plan's source+domain.
+ * Find resumable runs for the given plan. Resumable = has observations.jsonl
+ * (extraction began) AND either (a) no history.json yet OR (b) history.json
+ * exists but some batches never made it into topics.json (errored or partial).
+ * Match on plan source+domain. Returned newest-first; empty list when nothing
+ * is resumable.
  */
-function findIncompleteRun(
+function findIncompleteRuns(
   resolved: { source: string; domain: string },
   bases: string[]
-): IncompleteRun | null {
-  const found: (IncompleteRun & { mtime: number })[] = [];
+): IncompleteRun[] {
+  const found: IncompleteRun[] = [];
   for (const dir of scanCrawlDirs(bases)) {
-    if (hasFile(dir, "history.json")) continue; // finished
     if (!hasFile(dir, "observations.jsonl")) continue; // never ran (plan dir)
     let plan: any;
     try {
@@ -1097,6 +1102,9 @@ function findIncompleteRun(
     }
     const topics: string[] = plan.batches.map((b: any) => b.topic);
     const missing = topics.filter((t) => !doneTopics.has(t));
+    const journeyWritten = hasFile(dir, "history.json");
+    // Fully done: journey + all batches landed. Skip.
+    if (journeyWritten && missing.length === 0) continue;
     let mtime = 0;
     try {
       mtime = fsStatSync(path.join(dir, "plan.yaml")).mtimeMs;
@@ -1109,19 +1117,25 @@ function findIncompleteRun(
       done: doneTopics.size,
       total: topics.length,
       domain: plan.domain,
+      journeyWritten,
       mtime,
     });
   }
-  if (found.length === 0) return null;
   found.sort((a, b) => b.mtime - a.mtime);
-  const f = found[0];
-  return {
-    runDir: f.runDir,
-    missing: f.missing,
-    done: f.done,
-    total: f.total,
-    domain: f.domain,
-  };
+  return found;
+}
+
+/**
+ * Legacy single-run accessor. Prefer `findIncompleteRuns` and let the caller
+ * pick (via selector when >1). Kept because the resume wizard uses it directly
+ * for the common one-run case.
+ */
+function findIncompleteRun(
+  resolved: { source: string; domain: string },
+  bases: string[]
+): IncompleteRun | null {
+  const runs = findIncompleteRuns(resolved, bases);
+  return runs[0] ?? null;
 }
 
 // ── Extension entry ─────────────────────────────────────────────────────────
@@ -2607,43 +2621,86 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       let seedRunDir: string | undefined;
       let seedOnly: string[] | undefined;
 
-      // Resume step: if an interrupted run exists for this plan, offer to finish it.
+      // Resume step: if any outstanding runs exist for this plan, offer them.
+      // When multiple are outstanding (e.g. several failed/partial attempts),
+      // show a selector so the user picks which one to continue — don't silently
+      // pick "newest" and lose the others.
       try {
         const resolved = readPlan(planFile);
-        const incomplete = findIncompleteRun(
+        const outstanding = findIncompleteRuns(
           { source: resolved.source, domain: resolved.domain },
           crawlBases
         );
-        if (incomplete) {
-          const remaining = incomplete.missing.length;
-          const choice = await wizardSingleChoice(
-            ctx,
-            "🐺 Resume the interrupted crawl?",
-            `Found an unfinished run in ${incomplete.runDir}\n` +
-              `${incomplete.done}/${incomplete.total} batches done` +
-              (remaining
-                ? `, ${remaining} remaining`
-                : `, journey not written`) +
-              ` \u00b7 domain ${incomplete.domain}.`,
-            [
-              {
-                label: remaining
-                  ? `Resume \u2014 finish the ${remaining} remaining batch(es)`
-                  : "Resume \u2014 finish the journey",
-                value: "resume",
-              },
-              {
-                label: "Start fresh \u2014 new run from the full plan",
-                value: "fresh",
-              },
-              { label: "Cancel", value: "cancel" },
-            ]
-          );
-          if (choice === null || choice === "cancel") return;
-          if (choice === "resume") {
-            seedRunDir = incomplete.runDir;
-            seedOnly = incomplete.missing; // [] => journey-only
-            runPlanFile = path.join(incomplete.runDir, "plan.yaml");
+        if (outstanding.length > 0) {
+          const fmtAgo = (ms: number): string => {
+            const s = Math.floor((Date.now() - ms) / 1000);
+            if (s < 60) return `${s}s ago`;
+            const m = Math.floor(s / 60);
+            if (m < 60) return `${m}m ago`;
+            const h = Math.floor(m / 60);
+            if (h < 24) return `${h}h ago`;
+            return `${Math.floor(h / 24)}d ago`;
+          };
+          const runLabel = (r: IncompleteRun): string => {
+            const remaining = r.missing.length;
+            const bits = [`${r.done}/${r.total} batches`];
+            if (remaining > 0) bits.push(`${remaining} remaining`);
+            if (r.journeyWritten) bits.push("journey written");
+            else bits.push("journey pending");
+            return `${path.basename(r.runDir)} \u2014 ${bits.join(" \u00b7 ")} \u00b7 ${fmtAgo(r.mtime)}`;
+          };
+
+          let chosen: IncompleteRun | null = null;
+          if (outstanding.length === 1) {
+            // Single-run flow: same inline prompt as before.
+            const r = outstanding[0];
+            const remaining = r.missing.length;
+            const choice = await wizardSingleChoice(
+              ctx,
+              "🐺 Resume the outstanding crawl?",
+              `Found an unfinished run in ${r.runDir}\n` +
+                `${r.done}/${r.total} batches done` +
+                (remaining ? `, ${remaining} remaining` : `, journey not written`) +
+                (r.journeyWritten && remaining > 0 ? " (completed with errors)" : "") +
+                ` \u00b7 domain ${r.domain}.`,
+              [
+                {
+                  label: remaining
+                    ? `Resume \u2014 finish the ${remaining} remaining batch(es)`
+                    : "Resume \u2014 finish the journey",
+                  value: "resume",
+                },
+                { label: "Start fresh \u2014 new run from the full plan", value: "fresh" },
+                { label: "Cancel", value: "cancel" },
+              ]
+            );
+            if (choice === null || choice === "cancel") return;
+            if (choice === "resume") chosen = r;
+          } else {
+            // Multi-run flow: pick which outstanding run to resume.
+            const choice = await wizardSingleChoice(
+              ctx,
+              `🐺 ${outstanding.length} outstanding runs \u2014 pick one to resume`,
+              `Each had errored or unfinished batches. Choose which to continue, ` +
+                `or start a fresh run instead.`,
+              [
+                ...outstanding.map((r, i) => ({
+                  label: runLabel(r),
+                  value: `resume:${i}`,
+                })),
+                { label: "Start fresh \u2014 new run from the full plan", value: "fresh" },
+                { label: "Cancel", value: "cancel" },
+              ]
+            );
+            if (choice === null || choice === "cancel") return;
+            if (choice.startsWith("resume:")) {
+              chosen = outstanding[Number(choice.slice("resume:".length))] ?? null;
+            }
+          }
+          if (chosen) {
+            seedRunDir = chosen.runDir;
+            seedOnly = chosen.missing; // [] => journey-only
+            runPlanFile = path.join(chosen.runDir, "plan.yaml");
           }
         }
       } catch {

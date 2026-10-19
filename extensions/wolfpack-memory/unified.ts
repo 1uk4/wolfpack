@@ -79,6 +79,23 @@ async function writeToPool(wolfDen: string, observations: RawObservation[]): Pro
   await appendFile(poolFile, lines.join(""));
 }
 
+function renderSplitResult(
+  r: { entryId: string; parentSize: number; shards: Array<{ entryId: string; title: string; size: number }>; retired: boolean },
+  dryRun: boolean
+): string {
+  const lines = [`### ${r.entryId} (${r.parentSize} chars)`];
+  if (r.shards.length === 0) {
+    lines.push("  (below threshold — skipped)");
+    return lines.join("\n");
+  }
+  const status = dryRun ? "would write" : r.retired ? "wrote + retired" : "wrote (retire failed)";
+  lines.push(`  ${status}: ${r.shards.length} shards`);
+  for (const s of r.shards) {
+    lines.push(`    - ${s.entryId} (${s.size} chars) — ${s.title}`);
+  }
+  return lines.join("\n");
+}
+
 async function getPoolStats(wolfDen: string): Promise<{ count: number; tokens: number }> {
   const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
   if (!existsSync(poolFile)) return { count: 0, tokens: 0 };
@@ -510,6 +527,129 @@ export default function createMemoryExtension(
             } catch (err) {
               return {
                 content: [{ type: "text", text: `Retire failed: ${err instanceof Error ? err.message : String(err)}` }],
+                isError: true,
+              };
+            }
+          },
+        }),
+
+        defineTool({
+          name: "kb_split_fat",
+          description:
+            "Scan and split oversized KB entries into cohesive shards. " +
+            "With no action args, reports what would be split (dry report). " +
+            "With entryId, splits that one entry. With auto=true, splits up to " +
+            "`max` oversized entries in order of size. Runs the LLM to propose " +
+            "shards along ## boundaries. Follow with kb_reorg to re-cluster.",
+          parameters: Type.Object({
+            domain: Type.Optional(Type.String({ description: "Scope to one domain (default: all)" })),
+            entryId: Type.Optional(Type.String({ description: "Split exactly this entry" })),
+            auto: Type.Optional(Type.Boolean({ description: "Process every oversized entry in scope" })),
+            max: Type.Optional(Type.Number({ description: "Cap on entries processed when auto=true (default: 20)" })),
+            threshold: Type.Optional(Type.Number({ description: `Oversized threshold in chars (default: 10000)` })),
+            dryRun: Type.Optional(Type.Boolean({ description: "Propose shards without writing or retiring" })),
+          }),
+          async execute(
+            args: {
+              domain?: string;
+              entryId?: string;
+              auto?: boolean;
+              max?: number;
+              threshold?: number;
+              dryRun?: boolean;
+            },
+            ctx: ToolContext
+          ): Promise<ToolResult> {
+            try {
+              const { scanFat, splitFatEntry, splitFatAuto, SPLIT_FAT } = await import(
+                "@wolfpack/kb/librarian"
+              );
+
+              const roots = {
+                kbBase: kbRoots.kbBase,
+                opsRoot: kbRoots.opsRoot,
+                denLocal: join(wolfDen, "kb"),
+              };
+
+              // Scan-only (no action args)
+              if (!args.entryId && !args.auto) {
+                const candidates = scanFat(roots, {
+                  domain: args.domain,
+                  threshold: args.threshold,
+                });
+                if (candidates.length === 0) {
+                  return {
+                    content: [{
+                      type: "text",
+                      text: `No oversized entries${args.domain ? ` in ${args.domain}` : ""} (threshold ${args.threshold ?? SPLIT_FAT.oversizedThreshold} chars).`,
+                    }],
+                  };
+                }
+                const lines: string[] = [
+                  `## Oversized Entries (${candidates.length})`,
+                  "",
+                  `Threshold: ${args.threshold ?? SPLIT_FAT.oversizedThreshold} chars · target shard max: ${SPLIT_FAT.targetShardMax}`,
+                  "",
+                ];
+                for (const c of candidates) {
+                  lines.push(
+                    `- **${c.entryId}** (${c.domain}, ${c.size} chars, ${c.nH2Sections} H2 sections) → ${c.suggestedShards} shards`,
+                  );
+                  lines.push(`  ${c.title}`);
+                }
+                return { content: [{ type: "text", text: lines.join("\n") }] };
+              }
+
+              // Lazy engine
+              const { createEngine } = await import("@wolfpack/engine");
+              const splitEngine = createEngine({
+                provider: provider ?? "anthropic",
+                defaultModel: model,
+                steps: {
+                  consolidate: { model, maxTokens: 16_000 },
+                },
+              });
+              const notify = (m: string) => console.log(`[librarian] ${m}`);
+
+              // Single-entry split
+              if (args.entryId) {
+                const r = await splitFatEntry({
+                  engine: splitEngine,
+                  roots,
+                  entryId: args.entryId,
+                  threshold: args.threshold,
+                  notify,
+                  dryRun: args.dryRun,
+                });
+                return { content: [{ type: "text", text: renderSplitResult(r, !!args.dryRun) }] };
+              }
+
+              // Auto-split
+              const { scanned, processed } = await splitFatAuto({
+                engine: splitEngine,
+                roots,
+                domain: args.domain,
+                threshold: args.threshold,
+                max: args.max ?? 20,
+                notify,
+                dryRun: args.dryRun,
+              });
+
+              const lines: string[] = [
+                `## Split Fat ${args.dryRun ? "(DRY RUN) " : ""}— ${processed.length} / ${scanned.length} oversized`,
+                "",
+              ];
+              for (const r of processed) {
+                lines.push(renderSplitResult(r, !!args.dryRun));
+                lines.push("");
+              }
+              if (!args.dryRun && processed.length > 0) {
+                lines.push("Follow up with `kb_reorg` to re-cluster the new shards into the section tree.");
+              }
+              return { content: [{ type: "text", text: lines.join("\n") }] };
+            } catch (err) {
+              return {
+                content: [{ type: "text", text: `Split failed: ${err instanceof Error ? err.message : String(err)}` }],
                 isError: true,
               };
             }

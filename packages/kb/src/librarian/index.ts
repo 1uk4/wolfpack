@@ -40,6 +40,16 @@ export { quarantine } from "./commit.js";
 export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";
 export { retireEntries, type RetireResult } from "./retire.js";
 export {
+  scanFat,
+  splitFatEntry,
+  splitFatAuto,
+  SPLIT_FAT,
+  type FatCandidate,
+  type SplitFatResult,
+  type SplitFatOptions,
+  type SplitFatAutoOptions,
+} from "./split-fat.js";
+export {
   buildTreeBottomUp, type BuildTreeResult,
   placeEntry,
   splitAsParentChild,

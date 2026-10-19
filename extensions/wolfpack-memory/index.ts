@@ -1325,8 +1325,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       kbBasePath: kbRoots.kbBase || undefined,
     };
     orchestrator = createOrchestrator(engine, runtime, orchConfig);
-    // Keep reference so domain switches update the orchestrator
-    (orchestrator as any).__orchConfig = orchConfig;
   }
 
   /**
@@ -1811,19 +1809,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // Check pool is empty
-      if (orchestrator) {
-        const obs = orchestrator.getActiveObservations();
-        if (obs.length > 0) {
-          const tokens = obs.reduce((s: number, o: Observation) => s + o.tokenCount, 0);
-          if (ctx.hasUI) ctx.ui.notify(
-            `\x1b[33mCannot switch domain — pool has ${obs.length} observations (~${tokens} tokens).\n` +
-            `Run /wolf:promote first to flush observations to \x1b[36m${currentDomain}\x1b[33m.\x1b[0m`,
-            "error"
-          );
-          return;
-        }
-      }
+      // No pool flush needed: every pooled observation is already stamped
+      // with its domain, so switching only affects future untagged ones.
 
       // Validate domain exists
       const domainDir = path.join(kbRoots.kbBase, "domains", target);
@@ -1834,6 +1821,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
       const prev = currentDomain;
       currentDomain = target;
+      orchestrator?.setDefaultDomain(currentDomain);
       if (ctx.hasUI) ctx.ui.notify(`Domain switched: \x1b[36m${prev}\x1b[0m → \x1b[36m${currentDomain}\x1b[0m`, "info");
       refreshStatus(ctx);
     },
@@ -1955,9 +1943,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         if (ctx.hasUI) ctx.ui.notify("🐺 memory not enabled", "error");
         return;
       }
-      // Sync current domain to orchestrator before promoting
-      const oc = (orchestrator as any).__orchConfig;
-      if (oc) oc.defaultDomain = currentDomain;
 
       // Step 1: Consolidate observations into session topics first
       const obs = orchestrator.getActiveObservations();

@@ -83,6 +83,13 @@ export interface MemoryOrchestrator {
   getActiveObservations(): Observation[];
 
   /**
+   * Change the domain stamped on observations the observer leaves untagged.
+   * Applies to observations recorded from now on; already-pooled ones keep
+   * the domain they were stamped with.
+   */
+  setDefaultDomain(domain: string): void;
+
+  /**
    * Get the session memory root path.
    */
   getMemoryRoot(): string;
@@ -171,11 +178,13 @@ export function createOrchestrator(
 
       if (result.observations.length > 0) {
         const uniqueObs = assignUniqueTimestamps(result.observations);
+        // Stamp untagged observations with the domain current at observe
+        // time, so a later domain switch can't reroute them at promote.
         const observations: Observation[] = uniqueObs.map((o) => ({
           timestamp: o.timestamp,
           content: o.content,
           tokenCount: estimateTokens(o.content),
-          domain: o.domain,
+          domain: o.domain || cfg.defaultDomain,
         }));
 
         appendEvent({
@@ -259,6 +268,11 @@ export function createOrchestrator(
 
     const now = new Date().toISOString().replace("T", " ").slice(0, 16);
 
+    // If the consolidator drops a topic's domain, fall back to the batch's
+    // domain when the batch has exactly one; otherwise leave it unset.
+    const batchDomains = new Set(promote.map((o) => o.domain).filter(Boolean));
+    const soleDomain = batchDomains.size === 1 ? [...batchDomains][0] : undefined;
+
     // Write results
     for (const action of result.actions) {
       if (action.action === "skip" || !action.result) continue;
@@ -269,7 +283,7 @@ export function createOrchestrator(
         summary: action.result.summary,
         updated: now,
         body: action.result.body,
-        domain: action.result.domain,
+        domain: action.result.domain || soleDomain,
       });
     }
 
@@ -325,11 +339,16 @@ export function createOrchestrator(
     return memRoot;
   }
 
+  function setDefaultDomain(domain: string): void {
+    cfg.defaultDomain = domain;
+  }
+
   return {
     processChunks,
     consolidateNow,
     promoteToWolfMemory,
     getActiveObservations,
     getMemoryRoot,
+    setDefaultDomain,
   };
 }

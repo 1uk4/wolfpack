@@ -200,7 +200,9 @@ export function graduationFile(opts: {
   const { from, item, graduation, body, final, initiative, submitted, preserveBody, summary } = opts;
   // The sweep skips content it has seen: a final hub can have the same body as
   // the last update, so "final" is part of what is hashed.
-  const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${body}`).digest("hex").slice(0, 16);
+  // part_of is hashed too, so a change of hub re-sends the entry.
+  const partOf = initiative ? graduationEntryId(initiative) : "";
+  const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${partOf}|${body}`).digest("hex").slice(0, 16);
   const fm = [
     "---",
     `from: ${from}`,
@@ -299,5 +301,7 @@ export function graduationFiles(opts: {
 /** The initiative whose hub a feature's graduation updates, if any. */
 export function hubOf(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
   const parent = feature.partOf ? all.find((p) => p.id === feature.partOf) : undefined;
-  return parent?.kind === "initiative" ? parent : undefined;
+  // A standing initiative (Fitness, Daily Planning) has no hub: its features
+  // graduate as standalone entries.
+  return parent?.kind === "initiative" && !parent.standing ? parent : undefined;
 }

@@ -58,6 +58,15 @@ describe("graduationFiles", () => {
     expect(out).toContain("## Sessions\nx");
   });
 
+  it("a feature under a standing initiative sends only its own entry: no hub, no part_of", () => {
+    const fitness = w("initiative", "Fitness", null, { stage: "in_build", standing: true } as any);
+    const week = w("feature", "Week 43", fitness.id);
+    const out = graduationFiles({ item: week, all: [fitness, week], bodyOf: () => "", from: "1uk4", now: new Date(1000) });
+    expect(out).toHaveLength(1);
+    expect(out[0].content).toContain("graduation: feature");
+    expect(out[0].content).not.toContain("part_of:");
+  });
+
   it("a feature without a rollup zone goes to the LLM (no preserve_body)", () => {
     const [feat] = files(f2);
     expect(feat.content).not.toContain("preserve_body");

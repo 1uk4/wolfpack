@@ -1218,7 +1218,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_create",
-      description: "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. A task/issue/spike with no partOf goes into the current workspace (the bound task's feature, or the last feature worked in this session), else the domain's Inbox. Features may be standalone or under an initiative.",
+      description:
+        "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. " +
+        "A task/issue/spike with no partOf goes into the current workspace (the bound task's feature, or the last feature worked in this session), else the domain's Inbox. " +
+        "Features may be standalone or under an initiative. " +
+        "PARENT MUST BE IN THE SAME DOMAIN: a task with domain=wolfpack cannot sit under a feature with domain=personal. " +
+        "If no feature in the same domain fits, OMIT partOf — the item lands in that domain's Inbox and can be moved later. " +
+        "Pick domain by SUBJECT: a fix to a Hal skill is domain=wolfpack (code change), an actual workout is domain=personal.",
       parameters: Type.Object({
         kind: Type.String({ description: "idea | initiative | feature | task | issue | spike" }),
         domain: Type.String({ description: "Domain: snapjack | wolfpack | personal" }),
@@ -1229,6 +1235,33 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, _ctx) {
+        // Resolve partOf first so we can check its domain. Keep the current
+        // workspace-defaulting behaviour (bound task's feature; last-worked
+        // feature in session).
+        const resolvedPartOf =
+          params.partOf ??
+          (isBindable({ kind: params.kind as any }) ? activeItem?.partOf ?? workspaceId : null);
+
+        // Cross-domain guard: if the resolved parent is in a different domain
+        // than the new item, fail fast with a clear message. The server
+        // enforces this too (placementError), but we save a round-trip and
+        // produce a nicer error.
+        if (resolvedPartOf) {
+          const parent = (await client.query({})).find((i) => i.id === resolvedPartOf);
+          if (parent && parent.domain !== params.domain) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `Parent ${resolvedPartOf} is in domain '${parent.domain}', not '${params.domain}'. ` +
+                  `A task must sit under a feature in the SAME domain. ` +
+                  `Either change this item's domain to '${parent.domain}', pick a feature in '${params.domain}', or omit partOf to land in the '${params.domain}' Inbox.`,
+              }],
+              isError: true,
+            };
+          }
+        }
+
         const input: CreateWorkInput = {
           kind: params.kind as any,
           domain: params.domain,
@@ -1236,9 +1269,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           assignee: params.assignee ?? wolfName,
           area: params.area,
           successCriteria: params.successCriteria,
-          // Work units default to the bound task's workspace (its feature);
-          // createWork files them in the Inbox when there is none.
-          partOf: params.partOf ?? (isBindable({ kind: params.kind as any }) ? activeItem?.partOf ?? workspaceId : null),
+          partOf: resolvedPartOf,
         };
         try {
           const result = await client.create(input);

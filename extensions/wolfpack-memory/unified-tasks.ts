@@ -448,7 +448,11 @@ Domains: ${domainList}`;
       // ─── task_create ─────────────────────────────────────────────────────
       defineTool({
         name: "task_create",
-        description: "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified.",
+        description:
+          "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
+          "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task with domain=wolfpack cannot sit under a feature with domain=personal. " +
+          "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
+          "Pick domain by SUBJECT: a code change to a skill is wolfpack even if the skill is about fitness; an actual workout is personal.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
           domain: Type.String({ description: "Domain for the work item" }),
@@ -470,9 +474,7 @@ Domains: ${domainList}`;
             };
           }
 
-          
-          
-          // Default partOf to bound task's workspace (its feature) for tasks/issues/spikes
+          // Default partOf to bound task's workspace (its feature) for tasks/issues/spikes.
           let partOf = args.partOf;
           if (!partOf && ["task", "issue", "spike"].includes(args.kind)) {
             const binding = await readBinding(ctx.wolfDen);
@@ -481,6 +483,26 @@ Domains: ${domainList}`;
               if (boundTask?.item.partOf) {
                 partOf = boundTask.item.partOf;
               }
+            }
+          }
+
+          // Cross-domain guard: parent must be in the same domain as the new
+          // item. The server enforces this (placementError), but failing fast
+          // here gives a clearer error AND prevents the bound-feature default
+          // from silently misparenting a wolfpack task under a personal feature.
+          if (partOf) {
+            const parent = await findItem(partOf);
+            if (parent && parent.item.domain !== args.domain) {
+              return {
+                content: [{
+                  type: "text",
+                  text:
+                    `Parent ${partOf} is in domain '${parent.item.domain}', not '${args.domain}'. ` +
+                    `A task must sit under a feature in the SAME domain. ` +
+                    `Either change the new item's domain to '${parent.item.domain}', pick a feature in '${args.domain}', or omit partOf to land in the '${args.domain}' Inbox.`,
+                }],
+                isError: true,
+              };
             }
           }
           

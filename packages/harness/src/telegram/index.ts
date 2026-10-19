@@ -609,6 +609,90 @@ export async function createTelegramClient(
     }
   });
 
+  // Download raw audio bytes from Telegram (voice note or music/audio message)
+  // and POST them to the agent's /transcribe endpoint. Returns the transcript
+  // or null if transcription failed / is unavailable.
+  async function transcribeViaAgent(fileId: string): Promise<string | null> {
+    const endpoint = process.env.TRANSCRIBE_ENDPOINT || process.env.WORK_ENDPOINT;
+    const token = process.env.TRANSCRIBE_TOKEN || process.env.WORK_TOKEN;
+    if (!endpoint) {
+      console.warn("[telegram] no TRANSCRIBE_ENDPOINT/WORK_ENDPOINT set; voice message dropped");
+      return null;
+    }
+    try {
+      const file = await bot.api.getFile(fileId);
+      const filePath = file.file_path;
+      if (!filePath) return null;
+      const tgUrl = `https://api.telegram.org/file/bot${config.botToken}/${filePath}`;
+      const audioRes = await fetch(tgUrl);
+      if (!audioRes.ok) throw new Error(`telegram file fetch ${audioRes.status}`);
+      const audio = Buffer.from(await audioRes.arrayBuffer());
+
+      const url = endpoint.replace(/\/$/, "") + "/transcribe";
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          ...(token ? { "x-api-key": token } : {}),
+        },
+        body: audio,
+      });
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`transcribe ${resp.status}: ${body.slice(0, 200)}`);
+      }
+      const json = (await resp.json()) as { text?: string };
+      return json.text ?? "";
+    } catch (err) {
+      console.error("[telegram] transcribe failed:", err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  // Voice notes (opus/ogg) — the common "hold mic" case on mobile Telegram.
+  bot.on("message:voice", async (ctx) => {
+    const v = ctx.message?.voice;
+    if (!v) return;
+    const caption = ctx.message?.caption ?? "";
+    const transcript = await transcribeViaAgent(v.file_id);
+    if (transcript === null) {
+      await ctx.reply("🎙 couldn't transcribe (check agent /transcribe setup).");
+      return;
+    }
+    const text = caption
+      ? `${caption}\n\n[voice] ${transcript}`
+      : transcript || "[empty voice note]";
+    await handleMessage(ctx, text, ctx.message?.message_id);
+  });
+
+  // Attached audio files (recorded elsewhere, forwarded, etc.).
+  bot.on("message:audio", async (ctx) => {
+    const a = ctx.message?.audio;
+    if (!a) return;
+    const caption = ctx.message?.caption ?? "";
+    const transcript = await transcribeViaAgent(a.file_id);
+    if (transcript === null) {
+      await ctx.reply("🎵 couldn't transcribe audio file (check agent /transcribe setup).");
+      return;
+    }
+    const text = caption
+      ? `${caption}\n\n[audio] ${transcript}`
+      : transcript || "[empty audio]";
+    await handleMessage(ctx, text, ctx.message?.message_id);
+  });
+
+  // Video notes (circular Telegram clips) — extract audio track if any.
+  bot.on("message:video_note", async (ctx) => {
+    const vn = ctx.message?.video_note;
+    if (!vn) return;
+    const transcript = await transcribeViaAgent(vn.file_id);
+    if (transcript === null) {
+      await ctx.reply("📹 couldn't transcribe video note.");
+      return;
+    }
+    await handleMessage(ctx, `[video note] ${transcript || "(no speech)"}`, ctx.message?.message_id);
+  });
+
   // Global error handler to prevent crashes
   bot.catch((err) => {
     console.error("[telegram] Bot error:", err.message);

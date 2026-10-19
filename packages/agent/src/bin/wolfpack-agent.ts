@@ -13,6 +13,7 @@ import { logsRouter } from "../routes/logs.js";
 import { healthRouter } from "../routes/health.js";
 import { workRouter } from "../routes/work.js";
 import { dashboardRouter } from "../routes/dashboard.js";
+import { transcribeRouter } from "../routes/transcribe.js";
 
 const PORT = parseInt(process.env.WOLFPACK_AGENT_PORT ?? "3141");
 const DATA_DIR = process.env.WOLFPACK_AGENT_DATA ?? "/opt/wolfpack";
@@ -39,6 +40,7 @@ async function main() {
   app.use("/logs", logsRouter(manager));
   app.use("/health", healthRouter(manager));
   app.use("/work", workRouter());
+  app.use("/transcribe", transcribeRouter());
 
   app.listen(PORT, () => {
     const count = manager.list().length;

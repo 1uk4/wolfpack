@@ -323,6 +323,10 @@ Environment="WOLFPACK_AGENT_API_KEY=${apiKey}"
 Environment="SYNCTHING_UNIT="
 Environment="SYNCTHING_URL=http://127.0.0.1:8384"
 Environment="SYNCTHING_API_KEY=${syncApiKey}"
+Environment="WHISPER_BIN=/opt/whisper-cpp/build/bin/whisper-cli"
+Environment="WHISPER_MODEL=/opt/whisper-cpp/models/ggml-base.en.bin"
+Environment="WHISPER_LANGUAGE=en"
+Environment="WHISPER_THREADS=4"
 
 [Install]
 WantedBy=multi-user.target

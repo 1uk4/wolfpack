@@ -57,23 +57,24 @@ export async function sectionSummary(
 export async function labelSection(
   engine: Engine,
   summary: string,
-  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[]; depth?: number; maxDepth?: number } = {}
+  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[]; depth?: number; maxDepth?: number; domain?: string } = {}
 ): Promise<string> {
-  const { sampleTitles = [], parentTitle, siblingSummaries = [] } = context;
+  const { sampleTitles = [], parentTitle, siblingSummaries = [], domain } = context;
   const bounded = sampleTitles.slice(0, HIERARCHY.maxChildSummaries);
   const sibs = siblingSummaries.slice(0, HIERARCHY.maxChildSummaries);
   const prompt = [
+    domain ? `Domain: ${domain} (do NOT include this word as a prefix in the title)` : "",
     parentTitle ? `Parent section title: ${parentTitle}` : "",
     sibs.length ? "Sibling sections (make THIS title distinct from these):" : "",
     ...sibs.map((s) => `- ${s}`),
-    sibs.length || parentTitle ? "" : "",
+    sibs.length || parentTitle || domain ? "" : "",
     "Section summary:",
     summary,
     bounded.length ? "\nSample member titles:" : "",
     ...bounded.map((t) => `- ${t}`),
     "",
     (context.depth === 0 ? "Produce a BROAD, domain-level title (2-4 words). This is the top-level section." : context.depth !== undefined && context.depth <= 1 ? "Produce a general thematic title (2-5 words) that covers the scope of this group." : "Produce a short, specific title that is distinct from the parent and siblings."),
-  ].join("\n");
+  ].filter((line, i, arr) => line !== "" || (i > 0 && arr[i - 1] !== "")).join("\n");
 
   const result = await engine.call("labelSection", LabelSectionSchema, {
     system: LABEL_SECTION_SYSTEM,

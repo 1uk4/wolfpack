@@ -245,12 +245,15 @@ Output valid JSON matching the schema.`;
 export const LABEL_SECTION_SYSTEM = `You name a section of the knowledge base with a short title.
 
 You will be given a section summary, and optionally its parent title, its sibling
-sections, and a few member entry titles. Produce a SHORT, specific title that names
-this section's topic AND is distinct from its parent and siblings.
+sections, the domain name, and a few member entry titles. Produce a SHORT, specific
+title that names this section's topic AND is distinct from its parent and siblings.
 
 Rules:
 - 2 to 6 words. Title Case. No trailing punctuation.
 - Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
+- NEVER prefix the title with the domain name. The domain is already implicit in
+  the tree — "Snapjack Platform Authentication" should just be "Platform Authentication".
+  Member entry titles often include the domain for provenance; strip it from your output.
 - If a parent title or sibling sections are given, make THIS title DISTINCT: do not
   repeat the parent's wording wholesale — name what is specific to this subsection
   versus its siblings.

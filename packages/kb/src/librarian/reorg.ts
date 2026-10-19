@@ -367,10 +367,12 @@ async function llmLabelSection(args: {
       maxDepth: number;
       parentTitle?: string;
       siblingSummaries?: string[];
+      domain?: string;
     } = {
       sampleTitles: memberInfo.map((m) => m.title),
       depth: sec.depth,
       maxDepth: maxTreeDepth,
+      domain,
     };
     if (args.withContext) {
       const parent = sec.parent ? sections.find((s) => s.id === sec.parent) : null;

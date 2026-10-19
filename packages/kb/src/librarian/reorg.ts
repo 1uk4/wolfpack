@@ -23,6 +23,7 @@ import { SECTION_TREE } from "@wolfpack/engine";
 import { createEmbedder, buildEntryVectors, cosine, type EntryVector } from "./embed.js";
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
+import { withKbLock } from "./lock.js";
 
 /**
  * Shared state threaded through every rebuild phase. `sections` is NOT in
@@ -230,14 +231,20 @@ function rerenderRegistry(roots: KbRoots, dryRun?: boolean): void {
  * Write sections.json and re-render per-domain digest + index. No-op if
  * `dryRun`. Called from both rebuild (early return) and incremental (bottom).
  */
-function persistDomains(
+/** Exported for tests. */
+export function persistDomains(
   roots: KbRoots,
   sections: Section[],
   domains: string[],
   dryRun?: boolean,
 ): void {
   if (dryRun) return;
-  writeSections(roots, sections);
+  // The snapshot holds every domain. Replace only the domains this run
+  // worked on, so a stale in-memory copy of another domain never overwrites
+  // that domain's current tree.
+  const own = new Set(domains);
+  const others = readSections(roots).filter((s) => !own.has(s.domain));
+  writeSections(roots, [...others, ...sections.filter((s) => own.has(s.domain))]);
   for (const domain of domains) {
     renderDomainDigest(roots, domain);
     renderDomainIndex(roots, domain);
@@ -399,7 +406,17 @@ async function llmLabelSection(args: {
   }
 }
 
+/**
+ * Reorganize (or rebuild) the section tree. Holds the KB write lock for the
+ * whole run, waiting up to 15 min for another sweep/reorg/rebuild to finish:
+ * two writers at once overwrite each other's section trees.
+ */
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
+  if (opts.dryRun) return reorgUnlocked(opts);
+  return withKbLock(opts.roots, () => reorgUnlocked(opts), { waitMs: 15 * 60_000 });
+}
+
+async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
   const domainsRoot = join(roots.kbBase, "domains");
   if (!existsSync(domainsRoot)) {
@@ -841,7 +858,8 @@ async function rebuildPostSplit(
  * member count (direct + descendants) and looser neighbor filter than the
  * first absorb; both pre-existing differences preserved.
  */
-function rebuildFinalAbsorb(
+/** Exported for tests. */
+export function rebuildFinalAbsorb(
   sections: Section[],
   ctx: RebuildCtx,
 ): Section[] {
@@ -853,12 +871,15 @@ function rebuildFinalAbsorb(
     const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
     const eDir = join(domainsRoot, domain, "entries");
     const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
+    // Entries in a section's whole subtree. Post-split can nest a root's
+    // entries several levels down, leaving the root and its children with 0
+    // direct members; counting one level made such a root look empty.
+    const totalFor = (sec: Section): number =>
+      sec.memberCount + sections.filter((s) => s.parent === sec.id).reduce((sum, c) => sum + totalFor(c), 0);
     for (const root of domainRoots) {
       const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
       if (currentRoots.length <= 2) break;
-      const actualMembers =
-        root.memberCount +
-        sections.filter((s) => s.parent === root.id).reduce((sum, c) => sum + c.memberCount, 0);
+      const actualMembers = totalFor(root);
       if (actualMembers >= minEntries) continue;
       if (root.childIds.length > 0 && actualMembers > 1) continue;
       const neighbors = domainRoots.filter((r) => r.id !== root.id);
@@ -869,11 +890,10 @@ function rebuildFinalAbsorb(
         const sim = cosine(root.centroid, n.centroid);
         if (sim > bestS) { bestS = sim; bestN = n; }
       }
-      notify?.(`  final absorb: "${root.title}" (${actualMembers}) -> "${bestN.title}"`);
-      // Also catch entries pointing at any descendant of root that will be
-      // orphaned when root (and its subtree, if dropped) goes away. For now
-      // we only delete root itself, and children keep their parent pointer.
-      // Reassign direct entries + any descendants transitively.
+      notify?.(`  final absorb: "${root.title || root.id}" (${actualMembers}) -> "${bestN.title || bestN.id}"`);
+      // The whole subtree goes: its few entries (actualMembers < minEntries)
+      // move to bestN and every section under root is dropped, so nothing is
+      // left pointing at a deleted parent.
       const descendantIds = new Set<string>();
       const addDesc = (pid: SectionId) => {
         descendantIds.add(String(pid));
@@ -892,7 +912,7 @@ function rebuildFinalAbsorb(
           }
         }
       }
-      sections = sections.filter((s) => s.id !== root.id);
+      sections = sections.filter((s) => !descendantIds.has(String(s.id)));
       result.merges++;
     }
   }

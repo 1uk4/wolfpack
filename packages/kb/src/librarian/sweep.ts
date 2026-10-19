@@ -23,6 +23,7 @@ import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
+import { withKbLock, KbLockBusy } from "./lock.js";
 import {
   commitEntry,
   readEntryMarkdown,
@@ -163,7 +164,24 @@ function clampFit(x: number): number {
 /**
  * The KB sweep: hierarchical section-tree placement.
  */
+/**
+ * Sweep the inbox. Holds the KB write lock; if a reorg/rebuild holds it, this
+ * run is skipped (the next tick picks the inbox up).
+ */
 export async function sweep(ctx: SweepContext): Promise<SweepResult> {
+  try {
+    return await withKbLock(ctx.roots, () => sweepUnlocked(ctx));
+  } catch (err) {
+    if (!(err instanceof KbLockBusy)) throw err;
+    ctx.notify?.("sweep: skipped, the KB is busy (a reorg or rebuild is running)");
+    return {
+      processed: 0, created: 0, merged: 0, rejected: 0, crystallized: 0, errors: 0,
+      unclassified: 0, suggestedDomains: [], failures: [], parked: [], remaining: 0,
+    };
+  }
+}
+
+async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
   const embedder = createEmbedder(roots);
   const startedAt = Date.now();

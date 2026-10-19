@@ -81,6 +81,10 @@ export const WorkItem = z.object({
   graduated: IsoDate.nullable().default(null),
   /** A holding container (the per-domain Inbox): never ships or graduates. */
   container: z.boolean().default(false),
+  /** Initiative that never completes (e.g. Fitness, which gains a new week
+   *  feature every week). Its features graduate into its hub as usual; the
+   *  initiative itself is never offered for completion. */
+  standing: z.boolean().default(false),
   /** When this task is scheduled to run. ISO-ish "YYYY-MM-DD HH:MM" in local
    *  time (no TZ). Null = unscheduled. Pair with `durationMinutes` to define a
    *  calendar block; without duration the task is a timeline dot. */
@@ -157,6 +161,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
     scheduledFor: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable(),
     durationMinutes: z.number().int().positive().nullable(),
   }),
+  /** Mark or unmark an initiative as standing (never completes). */
+  z.object({ type: z.literal("work.standing"), id: WorkId, at: z.string(), standing: z.boolean() }),
 ]);
 export type WorkEvent = z.infer<typeof WorkEvent>;
 
@@ -264,6 +270,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
       case "work.scheduled":
         next.scheduledFor = e.scheduledFor;
         next.durationMinutes = e.durationMinutes;
+        break;
+      case "work.standing":
+        next.standing = e.standing;
         break;
       case "work.moved":
         next.partOf = e.partOf;

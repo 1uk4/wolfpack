@@ -22,6 +22,7 @@ import {
   deleteWork,
   retitleWork,
   scheduleWork,
+  setStanding,
   setCriteria,
   assignWork,
   loadWorkState,
@@ -145,6 +146,8 @@ export function workRouter(): Router {
         }
         commitWorkItem(roots, item, String(body.body));
         result = { item };
+      } else if (typeof body.standing === "boolean") {
+        result = { item: setStanding(roots, id, body.standing).item };
       } else if (body.schedule !== undefined) {
         // body.schedule: { scheduledFor: string | null, durationMinutes?: number | null }
         // Pass scheduledFor=null to unschedule.
@@ -155,7 +158,7 @@ export function workRouter(): Router {
         });
         result = { item: r.item };
       } else {
-        res.status(400).json({ error: "No recognized update field. Use: stage, note, title, successCriteria, assignee, moveTo, link, unlink, schedule" });
+        res.status(400).json({ error: "No recognized update field. Use: stage, note, title, successCriteria, assignee, moveTo, link, unlink, schedule, standing" });
         return;
       }
 

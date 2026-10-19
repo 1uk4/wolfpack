@@ -59,6 +59,7 @@ function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem |
     blocks: asStringArray(fields.blocks) as WorkItem["blocks"],
     graduated: (fields.graduated as WorkItem["graduated"]) ?? null,
     container: fields.container === true || fields.container === "true",
+    standing: fields.standing === true || fields.standing === "true",
     scheduledFor: (fields.scheduledFor as string) ?? null,
     durationMinutes:
       typeof fields.durationMinutes === "number"
@@ -120,6 +121,7 @@ function renderWorkItem(item: WorkItem, body: string): string {
   if (item.successCriteria) lines.push(`successCriteria: ${yamlStr(item.successCriteria)}`);
   if (item.partOf) lines.push(`partOf: ${item.partOf}`);
   if (item.container) lines.push(`container: true`);
+  if (item.standing) lines.push(`standing: true`);
 
   const deps = item.dependsOn ?? [];
   const blks = item.blocks ?? [];

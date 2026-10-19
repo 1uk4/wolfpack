@@ -39,6 +39,7 @@ const testItem: WorkItem = {
   blocks: [],
   graduated: null,
   container: false,
+  standing: false,
   scheduledFor: null,
   durationMinutes: null,
   log: [],

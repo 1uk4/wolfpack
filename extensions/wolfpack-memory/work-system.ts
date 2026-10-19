@@ -612,7 +612,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── Command: /task ────────────────────────────────────────────────────────
 
-  type PanelAction = "bind" | "new" | { type: "bind"; target: WorkItem } | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | { type: "ship"; id: string } | null;
+  type PanelAction = "bind" | "new" | { type: "bind"; target: WorkItem } | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | { type: "ship"; id: string } | { type: "standing"; id: string } | null;
 
   /** Valid new parents for an item (current parent excluded), plus Inbox/standalone. */
   function moveTargets(item: WorkItem, all: WorkItem[]): { label: string; id: string | null; inbox?: boolean }[] {
@@ -712,6 +712,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "x") return done({ type: "delete", id: focused.id as string });
             if (data === "D") return done({ type: "depend", id: focused.id as string });
             if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
+            if (data === "S") {
+              if (focused.kind !== "initiative") {
+                ctx.ui.notify("Only an initiative can be standing.", "warning");
+                return;
+              }
+              return done({ type: "standing", id: focused.id as string });
+            }
             if (data === "g") {
               // Try focused first — lets you graduate individual tasks (e.g.
               // Inbox items). Fall back to the open feature (right pane) when
@@ -754,6 +761,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               return kids.length === 0 ? `${item.title} has no tasks yet.` : `${item.title}: ${open} task(s) still open.`;
             }
             if (item.kind === "initiative") {
+              if (item.standing) return `${item.title} is standing: it never completes. Press S to change that.`;
               const left = kids.filter((k) => k.kind === "feature" && !k.graduated).length;
               return `${item.title}: ${left} feature(s) still to graduate (press g on each feature).`;
             }
@@ -796,6 +804,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;
               const stage = item.container ? ""
+                : item.standing ? theme.fg("dim", " · standing")
                 : readyToGraduate(item, allItems) ? theme.fg("success", " \ud83c\udf93 ready") : ` ${STAGE_ICONS[item.stage] ?? ""}`;
               out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${extraMark(extra)}${relationMark(item.id as string)}`);
             });
@@ -854,7 +863,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             }
 
             add("");
-            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "s ship", "m move", "D depend", "x delete", "g graduate", "a auto-ship", "Esc close"];
+            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "s ship", "m move", "D depend", "x delete", "g graduate", "S standing", "a auto-ship", "Esc close"];
             add(` ${theme.fg("dim", hints.join(" \u00b7 "))}`);
             add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -1007,6 +1016,23 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           }
         } catch (e: any) {
           ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
+        }
+      } else if (typeof action === "object" && action?.type === "standing") {
+        try {
+          const cur = (await client.query({}) ?? []).find((i) => i.id === action.id);
+          if (!cur) return;
+          const next = !cur.standing;
+          const ok = await ctx.ui.confirm(
+            next ? `Make "${cur.title}" standing?` : `Stop "${cur.title}" being standing?`,
+            next
+              ? "It will never be offered for completion. Its features keep graduating into its hub."
+              : "Once all its features have graduated, it can be completed with g.",
+          );
+          if (!ok) return;
+          await client.setStanding(action.id, next);
+          ctx.ui.notify(`${cur.title}: ${next ? "standing" : "no longer standing"}.`, "info");
+        } catch (e: any) {
+          ctx.ui.notify(`Failed: ${e.message}`, "error");
         }
       } else if (typeof action === "object" && action?.type === "move") {
         const all = await client.query({}) ?? [];
@@ -1234,6 +1260,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         successCriteria: Type.Optional(Type.String({ description: "Done-condition (required for tasks)" })),
         assignee: Type.Optional(Type.String({ description: "Wolf to assign (default: current wolf)" })),
         partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
+        standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, _ctx) {
         // Resolve partOf first so we can check its domain. Keep the current
@@ -1271,6 +1298,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           area: params.area,
           successCriteria: params.successCriteria,
           partOf: resolvedPartOf,
+          standing: params.standing,
         };
         try {
           const result = await client.create(input);

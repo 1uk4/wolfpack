@@ -117,6 +117,12 @@ export class WorkClient {
     return res.item;
   }
 
+  /** Mark or unmark an initiative as standing (never completes). */
+  async setStanding(id: string, standing: boolean): Promise<WorkItem> {
+    const res = await this.request<{ item: WorkItem }>("PATCH", `/${id}`, { standing });
+    return res.item;
+  }
+
   /** Pin a task to a calendar slot. Pass scheduledFor=null to unschedule. */
   async schedule(
     id: string,

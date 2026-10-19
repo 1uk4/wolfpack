@@ -125,6 +125,7 @@ describe("assertAdvanceable", () => {
     blocks: [],
     graduated: null,
     container: false,
+    standing: false,
     scheduledFor: null,
     durationMinutes: null,
     log: [],

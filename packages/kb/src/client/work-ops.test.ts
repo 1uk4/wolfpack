@@ -18,6 +18,7 @@ import {
   moveWork,
   unlinkWork,
   graduateWork,
+  setStanding,
 } from "./work-ops.js";
 import { loadWorkState, readWorkLedger, resolveWorkItem, commitWorkItem } from "./work-store.js";
 
@@ -316,6 +317,26 @@ describe("work-ops", () => {
     it("never ships", () => {
       const inbox = ensureInbox(roots, "wolfpack", "1uk4");
       expect(() => stageWork(roots, inbox.id, "shipped")).toThrow(/never ships/);
+    });
+  });
+
+  describe("standing", () => {
+    it("is set on create or toggled later, survives a reload, and is written to the file", () => {
+      const fit = createWork(roots, { kind: "initiative", domain: "personal", title: "Fitness", assignee: "1uk4", standing: true }).item;
+      expect(fit.standing).toBe(true);
+      const plan = createWork(roots, { kind: "initiative", domain: "personal", title: "Planning", assignee: "1uk4" }).item;
+      expect(plan.standing).toBe(false);
+
+      expect(setStanding(roots, plan.id, true).item.standing).toBe(true);
+      expect(setStanding(roots, fit.id, false).item.standing).toBe(false);
+      expect(loadWorkState(roots).get(plan.id)!.standing).toBe(true);
+      expect(resolveWorkItem(roots, "personal", plan.id)!.item.standing).toBe(true);
+    });
+
+    it("only applies to initiatives", () => {
+      const f = createWork(roots, { kind: "feature", domain: "personal", title: "Week 43", assignee: "1uk4" }).item;
+      expect(() => setStanding(roots, f.id, true)).toThrow(/only an initiative/);
+      expect(() => createWork(roots, { kind: "feature", domain: "personal", title: "x", assignee: "1uk4", standing: true })).toThrow(/only an initiative/);
     });
   });
 

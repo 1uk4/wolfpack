@@ -22,7 +22,8 @@ const STANDALONE_KINDS = ["task", "issue", "spike"];
  * Ready to graduate (shown in /task, triggered with `g` — never automatic):
  *   feature     all its tasks are complete (at least one), not graduated yet
  *   initiative  all its current features have graduated (more can be added
- *               later, so it never completes on its own), not graduated yet
+ *               later, so it never completes on its own), not graduated yet,
+ *               and not standing (a standing initiative never completes)
  *   task/issue/spike  shipped or live, not graduated yet, and loose: in the
  *               Inbox or without a parent. Tasks inside a real feature
  *               never graduate alone; they go with their feature.
@@ -33,6 +34,7 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
   const kids = all.filter((i) => i.partOf === item.id);
   if (item.kind === "feature") return kids.length > 0 && kids.every(isComplete);
   if (item.kind === "initiative") {
+    if (item.standing) return false;
     const features = kids.filter((i) => i.kind === "feature");
     return features.length > 0 && features.every((f) => !!f.graduated);
   }

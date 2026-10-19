@@ -459,6 +459,7 @@ Domains: ${domainList}`;
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
           successCriteria: Type.Optional(Type.String({ description: "Done condition (required for tasks)" })),
+          standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
         }),
         async execute(args: {
           kind: string;
@@ -466,6 +467,7 @@ Domains: ${domainList}`;
           title: string;
           partOf?: string;
           successCriteria?: string;
+          standing?: boolean;
         }, ctx: ToolContext): Promise<ToolResult> {
           if (!domains.includes(args.domain)) {
             return {
@@ -513,6 +515,7 @@ Domains: ${domainList}`;
               title: args.title,
               partOf: partOf || undefined,
               successCriteria: args.successCriteria,
+              standing: args.standing,
               assignee: ctx.wolfName,
             };
             

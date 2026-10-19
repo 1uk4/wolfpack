@@ -45,6 +45,8 @@ export interface CreateWorkInput {
   stage?: WorkItem["stage"];
   /** Holding container (the per-domain Inbox). Use ensureInbox, not this. */
   container?: boolean;
+  /** Initiatives only: never completes (see WorkItem.standing). */
+  standing?: boolean;
 }
 
 export interface CreateWorkResult {
@@ -93,12 +95,38 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
     container: input.container ?? false,
   };
 
-  appendWorkLedger(roots, [event]);
+  if (input.standing && input.kind !== "initiative") {
+    throw new Error(`Cannot create "${input.title}": only an initiative can be standing`);
+  }
+  const events: WorkEvent[] = [event];
+  if (input.standing) events.push({ type: "work.standing", id, at: event.at, standing: true });
+
+  appendWorkLedger(roots, events);
   const items = loadWorkState(roots);
   const item = items.get(id);
   if (!item) throw new Error(`Failed to create work item ${id} — event did not fold`);
   commitWorkItem(roots, item);
   return { id, event, item };
+}
+
+// ── standing ──────────────────────────────────────────────────────────────────────
+
+/** Mark or unmark an initiative as standing: it never completes, its
+ *  features keep graduating into its hub. */
+export function setStanding(
+  roots: KbRoots,
+  id: string,
+  standing: boolean,
+): { event: WorkEvent; item: WorkItem } {
+  const item = loadWorkState(roots).get(id as WorkId);
+  if (!item) throw new Error(`work item ${id} not found`);
+  if (item.kind !== "initiative") throw new Error(`${item.title} is ${item.kind === "idea" ? "an" : "a"} ${item.kind}; only an initiative can be standing`);
+
+  const event: WorkEvent = { type: "work.standing", id: id as WorkId, at: now(), standing };
+  appendWorkLedger(roots, [event]);
+  const updated = loadWorkState(roots).get(id as WorkId)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return { event, item: updated };
 }
 
 // ── inbox ───────────────────────────────────────────────────────────────────

@@ -172,12 +172,19 @@ export class SweepManager {
       }
 
       this.updateProgress("Creating engine...");
+      // produce: large merge outputs can run 10–20k chars. The adapter's 4096
+      // default truncates them mid-JSON, which then can't be parsed and parks
+      // the item. Keep this in sync with packages/kb/src/cli.ts makeEngine().
       const engine = createEngine({
         provider: this.config.provider ?? "anthropic",
         defaultModel: this.config.model ?? "claude-sonnet-4-6",
         steps: {
           classify: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-          produce: { model: this.config.model ?? "claude-sonnet-4-6" },
+          produce: { model: this.config.model ?? "claude-sonnet-4-6", maxTokens: 16000 },
+          contradict: { model: this.config.fastModel ?? "claude-haiku-4-5" },
+          classifyToSection: { model: this.config.fastModel ?? "claude-haiku-4-5" },
+          sectionSummary: { model: this.config.fastModel ?? "claude-haiku-4-5" },
+          labelSection: { model: this.config.fastModel ?? "claude-haiku-4-5" },
         },
       });
 

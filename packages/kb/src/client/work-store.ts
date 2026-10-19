@@ -144,9 +144,9 @@ function renderWorkItem(item: WorkItem, body: string): string {
   lines.push(`# ${item.title}`);
   lines.push("");
   if (body) {
-    // Strip any existing title lines that match (from previous buggy commits)
-    const titlePattern = new RegExp(`^(# ${item.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n)+`, 'g');
-    const cleanBody = body.replace(titlePattern, '').trimStart();
+    // The H1 is always the current title (written above). Drop any leading
+    // H1 lines the body carries, including ones left by an earlier title.
+    const cleanBody = body.replace(/^(\s*#[ \t]+[^\n]*\n)+/, "").trimStart();
     lines.push(cleanBody);
   } else {
     lines.push("## Plan");

@@ -68,6 +68,13 @@ describe("work-store", () => {
       const resolved = resolveWorkItem(roots, "snapjack", "work-snapjack-Ft00001");
       expect(resolved!.body).toContain("Custom plan content here.");
     });
+
+    it("writes a single H1 (the current title) even when the body carries an old one", () => {
+      commitWorkItem(roots, testItem, "# referral program v1\n\n# referral program\n\n## Plan\nx\n");
+      const file = readFileSync(resolveWorkItem(roots, "snapjack", "work-snapjack-Ft00001")!.filePath, "utf8");
+      expect(file.match(/^# /gm)).toEqual(["# "]);
+      expect(file).toContain("# referral program\n\n## Plan\nx");
+    });
   });
 
   describe("listWorkItems", () => {

@@ -352,6 +352,43 @@ export function retitleWork(
   return { event, item: updated };
 }
 
+// ── schedule ──────────────────────────────────────────────────────────────
+
+/**
+ * Pin a work item to a calendar slot. Default duration is 60 min when a
+ * scheduledFor is set without one. Pass scheduledFor=null to unschedule
+ * (durationMinutes is forced to null in that case).
+ *
+ * scheduledFor format: "YYYY-MM-DD HH:MM" (local, no TZ). Minutes are whole.
+ */
+export function scheduleWork(
+  roots: KbRoots,
+  id: string,
+  input: { scheduledFor: string | null; durationMinutes?: number | null },
+): { event: WorkEvent; item: WorkItem } {
+  const items = loadWorkState(roots);
+  const item = items.get(id as WorkId);
+  if (!item) throw new Error(`work item ${id} not found`);
+
+  const scheduledFor = input.scheduledFor;
+  const durationMinutes = scheduledFor === null
+    ? null
+    : (input.durationMinutes ?? 60);
+
+  const event: WorkEvent = {
+    type: "work.scheduled",
+    id: id as WorkId,
+    at: now(),
+    scheduledFor,
+    durationMinutes,
+  };
+
+  appendWorkLedger(roots, [event]);
+  const updated = loadWorkState(roots).get(id as WorkId)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return { event, item: updated };
+}
+
 // ── delete ─────────────────────────────────────────────────────────────────
 
 export interface DeleteWorkResult {

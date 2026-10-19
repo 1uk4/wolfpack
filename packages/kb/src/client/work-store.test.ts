@@ -39,6 +39,8 @@ const testItem: WorkItem = {
   blocks: [],
   graduated: null,
   container: false,
+  scheduledFor: null,
+  durationMinutes: null,
   log: [],
   created: IsoDate.parse("2026-10-09"),
   updated: IsoDate.parse("2026-10-09"),

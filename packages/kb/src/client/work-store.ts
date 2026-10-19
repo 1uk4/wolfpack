@@ -59,6 +59,13 @@ function parseWorkFrontmatter(raw: string, filePath: string): ResolvedWorkItem |
     blocks: asStringArray(fields.blocks) as WorkItem["blocks"],
     graduated: (fields.graduated as WorkItem["graduated"]) ?? null,
     container: fields.container === true || fields.container === "true",
+    scheduledFor: (fields.scheduledFor as string) ?? null,
+    durationMinutes:
+      typeof fields.durationMinutes === "number"
+        ? fields.durationMinutes
+        : (typeof fields.durationMinutes === "string" && fields.durationMinutes !== ""
+            ? Number(fields.durationMinutes)
+            : null),
     log: Array.isArray(fields.log) ? (fields.log as WorkItem["log"]) : [],
     created: fields.created as WorkItem["created"],
     updated: fields.updated as WorkItem["updated"],

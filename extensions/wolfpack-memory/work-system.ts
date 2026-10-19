@@ -1015,6 +1015,48 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   pi.registerTool(
     defineTool({
+      name: "task_schedule",
+      description:
+        "Pin the active task to a calendar slot. scheduledFor is 'YYYY-MM-DD HH:MM' " +
+        "(local, no TZ). durationMinutes defaults to 60. Pass clear=true to unschedule.",
+      parameters: Type.Object({
+        scheduledFor: Type.Optional(
+          Type.String({ description: "YYYY-MM-DD HH:MM local time" })
+        ),
+        durationMinutes: Type.Optional(
+          Type.Number({ description: "Block length in minutes (default 60)" })
+        ),
+        clear: Type.Optional(
+          Type.Boolean({ description: "Unschedule (clears both fields)" })
+        ),
+      }),
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
+        const unscheduling = params.clear === true || params.scheduledFor === "";
+        const sched: string | null = unscheduling ? null : (params.scheduledFor ?? null);
+        if (!unscheduling && !sched) {
+          return { content: [{ type: "text" as const, text: "Provide scheduledFor='YYYY-MM-DD HH:MM' or clear=true." }], isError: true };
+        }
+        if (sched && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(sched)) {
+          return { content: [{ type: "text" as const, text: `scheduledFor must be 'YYYY-MM-DD HH:MM', got '${sched}'.` }], isError: true };
+        }
+        try {
+          const item = await client.schedule(activeTask.workId, sched, params.durationMinutes ?? null);
+          activeItem = item;
+          updateWidget(ctx);
+          const label = unscheduling
+            ? `${item.title} unscheduled`
+            : `${item.title} @ ${sched} (${(item as any).durationMinutes ?? params.durationMinutes ?? 60} min)`;
+          return { content: [{ type: "text" as const, text: label }] };
+        } catch (e: any) {
+          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+        }
+      },
+    })
+  );
+
+  pi.registerTool(
+    defineTool({
       name: "task_link",
       description: "Link the active work item to another work item (depends_on / blocks): a task only to tasks in the same feature, a feature only to features under the same initiative; never across initiatives or in a cycle. Work never links to KB entries.",
       parameters: Type.Object({

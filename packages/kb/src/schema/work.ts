@@ -81,6 +81,13 @@ export const WorkItem = z.object({
   graduated: IsoDate.nullable().default(null),
   /** A holding container (the per-domain Inbox): never ships or graduates. */
   container: z.boolean().default(false),
+  /** When this task is scheduled to run. ISO-ish "YYYY-MM-DD HH:MM" in local
+   *  time (no TZ). Null = unscheduled. Pair with `durationMinutes` to define a
+   *  calendar block; without duration the task is a timeline dot. */
+  scheduledFor: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable().default(null),
+  /** Length of the block in minutes. Null when unscheduled; defaults to 60
+   *  when `scheduledFor` is set without an explicit duration (enforced in ops). */
+  durationMinutes: z.number().int().positive().nullable().default(null),
   log: z.array(WorkLogEntry).default([]),
   created: IsoDate,
   updated: IsoDate,
@@ -141,6 +148,15 @@ export const WorkEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("work.unbound"), id: WorkId, at: z.string(), wolf: WolfId }),
   /** Summary generated (typically on completion or graduation) */
   z.object({ type: z.literal("work.summarized"), id: WorkId, at: z.string(), summary: z.string().max(140) }),
+  /** Pin the task to a calendar slot. Both fields nullable so a single event
+   *  can set, update, or clear (unschedule) by sending nulls. */
+  z.object({
+    type: z.literal("work.scheduled"),
+    id: WorkId,
+    at: z.string(),
+    scheduledFor: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable(),
+    durationMinutes: z.number().int().positive().nullable(),
+  }),
 ]);
 export type WorkEvent = z.infer<typeof WorkEvent>;
 
@@ -244,6 +260,10 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
         break;
       case "work.summarized":
         next.summary = e.summary;
+        break;
+      case "work.scheduled":
+        next.scheduledFor = e.scheduledFor;
+        next.durationMinutes = e.durationMinutes;
         break;
       case "work.moved":
         next.partOf = e.partOf;

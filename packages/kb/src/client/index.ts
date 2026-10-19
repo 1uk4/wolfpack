@@ -24,6 +24,7 @@ export {
   unlinkWork,
   setCriteria,
   retitleWork,
+  scheduleWork,
   deleteWork,
   ensureInbox,
   moveWork,

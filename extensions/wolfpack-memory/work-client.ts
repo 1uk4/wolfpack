@@ -106,6 +106,18 @@ export class WorkClient {
     return res.item;
   }
 
+  /** Pin a task to a calendar slot. Pass scheduledFor=null to unschedule. */
+  async schedule(
+    id: string,
+    scheduledFor: string | null,
+    durationMinutes?: number | null,
+  ): Promise<WorkItem> {
+    const res = await this.request<{ item: WorkItem }>("PATCH", `/${id}`, {
+      schedule: { scheduledFor, durationMinutes },
+    });
+    return res.item;
+  }
+
   async updateBody(id: string, body: string): Promise<WorkItem> {
     const res = await this.request<{ item: WorkItem }>("PATCH", `/${id}`, { body });
     return res.item;

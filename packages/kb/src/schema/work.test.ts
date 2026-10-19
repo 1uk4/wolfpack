@@ -125,6 +125,8 @@ describe("assertAdvanceable", () => {
     blocks: [],
     graduated: null,
     container: false,
+    scheduledFor: null,
+    durationMinutes: null,
     log: [],
     created: "2026-10-09" as never,
     updated: "2026-10-09" as never,

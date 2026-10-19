@@ -686,6 +686,80 @@ Domains: ${domainList}`;
         },
       }),
 
+      // ─── task_schedule ───────────────────────────────────────────────────
+      defineTool({
+        name: "task_schedule",
+        description:
+          "Pin a task to a calendar slot. scheduledFor is 'YYYY-MM-DD HH:MM' " +
+          "(local time). durationMinutes defaults to 60 when omitted. Pass " +
+          "scheduledFor='' or clear=true to unschedule. Uses the active task " +
+          "if no id provided.",
+        parameters: Type.Object({
+          scheduledFor: Type.Optional(
+            Type.String({ description: "YYYY-MM-DD HH:MM local time. Empty string unschedules." })
+          ),
+          durationMinutes: Type.Optional(
+            Type.Number({ description: "Block length in minutes (default 60)" })
+          ),
+          clear: Type.Optional(
+            Type.Boolean({ description: "Unschedule the task (clears both fields)" })
+          ),
+          id: Type.Optional(
+            Type.String({ description: "Work item ID (defaults to active task)" })
+          ),
+        }),
+        async execute(
+          args: { scheduledFor?: string; durationMinutes?: number; clear?: boolean; id?: string },
+          ctx: ToolContext
+        ): Promise<ToolResult> {
+          let targetId = args.id;
+          if (!targetId) {
+            const binding = await readBinding(ctx.wolfDen);
+            if (!binding) {
+              return {
+                content: [{ type: "text", text: "No active task and no id provided." }],
+                isError: true,
+              };
+            }
+            targetId = binding.taskId;
+          }
+
+          const unscheduling = args.clear === true || args.scheduledFor === "";
+          const sched = unscheduling ? null : (args.scheduledFor ?? null);
+          if (!unscheduling && !sched) {
+            return {
+              content: [{ type: "text", text: "Provide scheduledFor='YYYY-MM-DD HH:MM' or clear=true." }],
+              isError: true,
+            };
+          }
+          if (sched && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(sched)) {
+            return {
+              content: [{ type: "text", text: `scheduledFor must be 'YYYY-MM-DD HH:MM', got '${sched}'.` }],
+              isError: true,
+            };
+          }
+
+          try {
+            const item = await client.schedule(targetId, sched, args.durationMinutes ?? null);
+            if (unscheduling) {
+              return { content: [{ type: "text", text: `${targetId} unscheduled.` }] };
+            }
+            const mins = (item as any).durationMinutes ?? args.durationMinutes ?? 60;
+            return {
+              content: [{
+                type: "text",
+                text: `${targetId} scheduled for ${sched} (${mins} min)`,
+              }],
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
+              isError: true,
+            };
+          }
+        },
+      }),
+
       // ─── task_link ───────────────────────────────────────────────────────
       defineTool({
         name: "task_link",

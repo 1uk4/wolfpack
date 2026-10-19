@@ -57,6 +57,19 @@ export {
   type WorkPattern,
 } from "./file-observation.js";
 
+// Rollup (child → parent feature body)
+export {
+  extractDistilled,
+  upsertRollupBlock,
+  recomputeTotals,
+  parseKeyedValue,
+  sumKeys,
+  rollupToParent,
+  type ChildMeta,
+  type ParsedValue,
+  type RollupClient,
+} from "./rollup.js";
+
 // Graduation
 export {
   canGraduate,

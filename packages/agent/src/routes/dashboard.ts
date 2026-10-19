@@ -10,7 +10,7 @@ import type { Request, Response } from "express";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-const KB_BASE = "/var/wolfpack/kb/base";
+const KB_BASE = process.env.KB_BASE ?? "/var/wolfpack/kb/base";
 
 function parseFrontmatter(text: string): { meta: Record<string, any>; body: string } {
   const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
@@ -307,4 +307,4 @@ export function dashboardRouter(): Router {
   return router;
 }
 
-import { DASHBOARD_HTML } from "./dashboard-html.js";
+import { DASHBOARD_HTML } from "./dashboard-html/index.js";

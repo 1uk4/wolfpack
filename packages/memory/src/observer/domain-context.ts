@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { readDomainRegistry } from "@wolfpack/kb/shared";
 
 interface DomainInfo {
   name: string;
@@ -18,8 +19,14 @@ function readDomainInfo(domain: string, kbBase?: string): DomainInfo {
   const topics: string[] = [];
 
   if (kbBase) {
+    // The declared-domain registry is the source of truth for descriptions.
+    const declared = readDomainRegistry(kbBase)[domain];
+    if (declared?.label) label = declared.label;
+    if (declared?.description) description = declared.description.replace(/\s+/g, " ");
+
+    // Legacy per-domain meta.yaml, used only if the registry had nothing.
     const metaPath = join(kbBase, "domains", domain, "meta.yaml");
-    if (existsSync(metaPath)) {
+    if (!description && existsSync(metaPath)) {
       try {
         const raw = readFileSync(metaPath, "utf-8");
         const labelMatch = raw.match(/label:\s*(.+)/);
@@ -63,6 +70,13 @@ export function buildDomainContext(
     }
     lines.push(line);
   }
+  lines.push(
+    "",
+    "Classify by SUBJECT. Work on software itself (its code, prompts, skills, agents, " +
+      "tools, infrastructure) belongs to the domain that owns that software, even when " +
+      "the software serves another domain: changing how a fitness skill logs workouts " +
+      "is a software change; the workout itself is a fitness fact."
+  );
 
   return lines.join("\n");
 }

@@ -6,6 +6,9 @@ import {
   parseKeyedValue,
   sumKeys,
   rollupToParent,
+  hasRollupZone,
+  stripRollupMarkers,
+  totalsSummary,
   type ChildMeta,
   type RollupClient,
 } from "./rollup.js";
@@ -254,5 +257,45 @@ describe("rollupToParent (orchestrator)", () => {
     );
     const r = await rollupToParent(client, "task-1");
     expect(r).toBe("no-parent");
+  });
+});
+
+describe("graduation helpers", () => {
+  it("extractDistilled treats an untouched template body as empty", () => {
+    expect(extractDistilled("# Lower A\n\n## Plan\n\n## Notes\n")).toBe("");
+    expect(extractDistilled("# T\n\n## Plan\n\n## Notes\nreal note\n")).toBe("## Notes\nreal note");
+  });
+
+  it("stripRollupMarkers removes marker lines and keeps their content", () => {
+    const body = "## S\n<!-- rollup:children -->\n<!-- rollup:item id=t1 when=2026-10-15 -->\n### Wed — A\nx\n<!-- /rollup:item -->\n<!-- /rollup:children -->\n";
+    const out = stripRollupMarkers(body);
+    expect(out).not.toContain("rollup:");
+    expect(out).toContain("### Wed — A\nx");
+    expect(hasRollupZone(body)).toBe(true);
+    expect(hasRollupZone(out)).toBe(false);
+  });
+
+  it("totalsSummary flattens a populated totals block and skips empty keys", () => {
+    const body = '<!-- rollup:totals keys="Sets,Volume,Duration" -->\n- Sessions: **4**\n- Sets: **74**\n- Volume: **—**\n- Duration: **6:32**\n<!-- /rollup:totals -->';
+    expect(totalsSummary(body)).toBe("Sessions 4 · Sets 74 · Duration 6:32");
+    expect(totalsSummary("# no totals")).toBeNull();
+  });
+
+  it("rollupToParent falls back to successCriteria when the task body is an empty template", async () => {
+    const writes: Record<string, string> = {};
+    const client: RollupClient = {
+      async query({ ids }) {
+        return [
+          { id: "t1", kind: "task", title: "Add X", partOf: "f1", updated: "2026-10-16", successCriteria: "X works end to end" },
+          { id: "f1", kind: "feature", title: "F", partOf: null, updated: "2026-10-15" },
+        ].filter((i) => (ids ?? []).includes(i.id));
+      },
+      async getBody(id) {
+        return writes[id] ?? (id === "t1" ? "# Add X\n\n## Plan\n\n## Notes\n" : "# F\n\n## Delivered\n<!-- rollup:children -->\n<!-- /rollup:children -->\n");
+      },
+      async updateBody(id, body) { writes[id] = body; },
+    };
+    expect(await rollupToParent(client, "t1")).toBe("written");
+    expect(writes.f1).toContain("Delivered: X works end to end");
   });
 });

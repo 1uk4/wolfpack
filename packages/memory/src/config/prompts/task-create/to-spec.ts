@@ -103,7 +103,14 @@ reader might assume are in scope but are not.
 
 Context the above misses. Open questions that did not block consensus during
 grilling (they can block individual tickets later without blocking the spec).
+
+## Delivered
+
+<!-- rollup:children -->
+<!-- /rollup:children -->
 \`\`\`
+
+Copy the \`## Delivered\` section exactly, markers included, and leave it empty. The work system fills it as each ticket ships, and its presence is what makes the feature graduate into the KB verbatim (spec + what was delivered) instead of being rewritten by an LLM.
 
 ## Boundary with stage 3
 

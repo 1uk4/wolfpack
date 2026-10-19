@@ -17,6 +17,7 @@ What to emit:
 - Use the timestamp from the relevant conversation message ("YYYY-MM-DD HH:MM", local, to the minute).
 - Group repeated similar events into a single observation rather than one per occurrence.
 - Skip routine, low-information events. It is fine to emit zero observations if the chunk carries no new information.
+- Skip activity that is already recorded somewhere else: individual sets, reps and weights logged during a workout; rows appended to a data file; notes and stage changes on a bound task. Those records already exist. Record only what they miss: decisions, changed plans, preferences, problems found, and the reasons behind them.
 
 Observation content rules:
 

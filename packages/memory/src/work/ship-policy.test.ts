@@ -73,6 +73,14 @@ describe("readyToGraduate", () => {
     expect(readyToGraduate(spike, [inbox, spike])).toBe(true);
   });
 
+  it("a shipped task inside a real feature never graduates alone", () => {
+    const feature = w("feature", "in_build");
+    const t = w("task", "shipped", feature.id);
+    expect(readyToGraduate(t, [feature, t])).toBe(false);
+    // ...the feature graduates instead, taking the task with it.
+    expect(readyToGraduate(feature, [feature, t])).toBe(true);
+  });
+
   it("an initiative is ready only when all its current features graduated", () => {
     const i = w("initiative", "in_build");
     const done = w("feature", "shipped", i.id, { graduated: "2026-10-10" } as any);

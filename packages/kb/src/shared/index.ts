@@ -10,4 +10,5 @@ export * from "./schemas/digest.js";
 export * from "./hash.js";
 export * from "./ids.js";
 export * from "./paths.js";
+export * from "./domain-registry.js";
 export * from "./ev.js";

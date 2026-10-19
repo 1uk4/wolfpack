@@ -82,7 +82,9 @@ function parseContribution(filePath: string): ParsedContribution | null {
       fields.preserve_body === true || fields.preserve_body === "true"
         ? true
         : undefined,
-    summary: content.split("\n\n")[0] ?? "",
+    // A sender may name the summary (verbatim graduations do); else the
+    // first paragraph of the body.
+    summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",
     body: content,

@@ -68,11 +68,60 @@ export function extractDistilled(body: string): string {
     return body.slice(headerEnd, end).trim();
   }
 
-  // 2) whole body minus leading H1
+  // 2) whole body minus leading H1, minus empty template sections
+  //    ("## Plan" with nothing under it) so an untouched task reads as empty.
   let b = body;
   const h1 = b.match(/^#\s+[^\n]*\n/);
   if (h1) b = b.slice(h1[0].length);
-  return b.trim();
+  return dropEmptySections(b).trim();
+}
+
+/** Remove headings that have no content before the next heading or EOF. */
+function dropEmptySections(body: string): string {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^#{1,6}\s/.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j >= lines.length || /^#{1,6}\s/.test(lines[j])) continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n");
+}
+
+// ── Public: helpers for graduating a rolled-up feature ────────────────
+
+/** True when the body opts into rollup (has a children zone). */
+export function hasRollupZone(body: string): boolean {
+  return body.includes(CHILDREN_OPEN);
+}
+
+/** Remove every rollup marker comment line; keeps the content between them. */
+export function stripRollupMarkers(body: string): string {
+  return body
+    .split("\n")
+    .filter((l) => !/^\s*<!--\s*\/?rollup:[^>]*-->\s*$/.test(l))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * One-line summary from the totals block, e.g.
+ * "Sessions 4 · Sets 74 · Volume 63,783 lb · Duration 6:32". Null when the
+ * body has no populated totals block.
+ */
+export function totalsSummary(body: string): string | null {
+  const zone = findTotalsZone(body);
+  if (!zone) return null;
+  const parts = body
+    .slice(zone.innerStart, zone.innerEnd)
+    .split("\n")
+    .map((l) => l.match(/^-\s*([^:]+):\s*\*{0,2}([^*]+?)\*{0,2}\s*$/))
+    .filter((m): m is RegExpMatchArray => !!m && m[2].trim() !== "—")
+    .map((m) => `${m[1].trim()} ${m[2].trim()}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 // ── Public: upsert a child block in the parent's rollup zone ─────────────
@@ -344,6 +393,7 @@ export interface RollupClient {
     title: string;
     partOf: string | null;
     updated: string;
+    successCriteria?: string | null;
   }>>;
   getBody(id: string): Promise<string>;
   updateBody(id: string, body: string): Promise<void>;
@@ -375,8 +425,11 @@ export async function rollupToParent(
   const parentBody = await client.getBody(parent.id);
   if (parentBody.indexOf(CHILDREN_OPEN) < 0) return "no-zone";
 
+  // A task nobody wrote a body for still records what it delivered.
   const taskBody = await client.getBody(task.id);
-  const distilled = extractDistilled(taskBody);
+  const distilled =
+    extractDistilled(taskBody) ||
+    (task.successCriteria ? `Delivered: ${task.successCriteria}` : "");
   if (!distilled) return "no-content";
 
   const when = (task.updated || "").slice(0, 10) || new Date().toISOString().slice(0, 10);

@@ -51,6 +51,44 @@ describe("graduationFiles", () => {
     const [hub] = files(init);
     expect(hub.content).toContain("final: true");
   });
+
+  it("a feature without a rollup zone goes to the LLM (no preserve_body)", () => {
+    const [feat] = files(f2);
+    expect(feat.content).not.toContain("preserve_body");
+    expect(feat.content).toContain("## What was built");
+  });
+
+  it("a rolled-up feature sends its body verbatim: no dossier, no markers, summary from totals", () => {
+    const week = w("feature", "Week 42", init.id);
+    const body = [
+      "# Week 42",
+      "",
+      "## Sessions",
+      "",
+      "<!-- rollup:children -->",
+      "<!-- rollup:item id=work-wp-tas0099 when=2026-10-15 -->",
+      "### Wed 10/15 — Lower A",
+      "**Sets: 20 | Volume: 21,300 lb | Duration: 1:44**",
+      "<!-- /rollup:item -->",
+      "<!-- /rollup:children -->",
+      "",
+      "## Totals",
+      '<!-- rollup:totals keys="Sets,Volume,Duration" -->',
+      "- Sessions: **1**",
+      "- Sets: **20**",
+      "- Volume: **21,300 lb**",
+      "- Duration: **1:44**",
+      "<!-- /rollup:totals -->",
+    ].join("\n");
+    const [feat] = graduationFiles({ item: week, all: [init, week], bodyOf: () => body, from: "1uk4", now: new Date(1000) });
+    expect(feat.content).toContain("preserve_body: true");
+    expect(feat.content).toContain('summary: "Sessions 1 · Sets 20 · Volume 21,300 lb · Duration 1:44"');
+    expect(feat.content).toContain("### Wed 10/15 — Lower A");
+    expect(feat.content).not.toContain("rollup:");
+    expect(feat.content).not.toContain("Original plan");
+    // Work ids may appear in the routing frontmatter, never in the record.
+    expect(feat.content.split("\n---\n")[1]).not.toContain("work-wp-");
+  });
 });
 
 describe("graduation flow through the real sweep", () => {
@@ -97,31 +135,25 @@ describe("graduation flow through the real sweep", () => {
     const f1 = w("feature", "Base image", init.id);
     const f2 = w("feature", "Compose", init.id);
 
-    // 1 · first feature: its entry (verbatim, no LLM), then the hub (LLM) in
-    //     the same section. Features graduate with preserve_body=true since
-    //     they are deliberate accounts.
+    // 1 · first feature: its entry, then the hub in the same section
     expect(await graduate(f1, [init, f1, f2])).toMatchObject({ created: 2, merged: 0 });
     expect(existsSync(entry(f1.id)) && existsSync(entry(init.id))).toBe(true);
     expect(sectionOf(entry(init.id))).toBe(sectionOf(entry(f1.id)));
-    expect(calls.length).toBe(1);
-    const hub1 = calls[0];
+    const hub1 = calls[1];
     expect(hub1.system).toContain("GRADUATION — INITIATIVE HUB ENTRY");
     expect(hub1.prompt).toContain("RECORDED FEATURE ENTRIES");
-    // Feature summaries are now verbatim from the dossier (first non-H1 line);
-    // for a feature with successCriteria, that's "Goal: <criteria>".
-    expect(hub1.prompt).toContain("Goal: Base image works");
+    expect(hub1.prompt).toContain("Base image summary");
     expect(hub1.prompt).not.toContain("Compose");
     expect(readFileSync(entry(init.id), "utf8")).toMatch(/^kind: overview$/m);
 
-    // 2 · second feature: feature verbatim (no LLM), hub regenerated (1 LLM call)
+    // 2 · second feature: hub regenerated (updated in place), listing both
     calls.length = 0;
     const f1g = { ...f1, graduated: "2026-10-10" } as WorkItem;
     expect(await graduate(f2, [init, f1g, f2])).toMatchObject({ created: 1, merged: 1 });
-    expect(calls.length).toBe(1);
-    expect(calls[0].prompt).toContain("Base image");
-    expect(calls[0].prompt).toContain("Compose");
-    expect(calls[0].prompt).not.toContain("EXISTING ENTRY");
-    expect(calls[0].prompt).not.toContain("THE INITIATIVE IS COMPLETE");
+    expect(calls[1].prompt).toContain("Base image");
+    expect(calls[1].prompt).toContain("Compose");
+    expect(calls[1].prompt).not.toContain("EXISTING ENTRY");
+    expect(calls[1].prompt).not.toContain("THE INITIATIVE IS COMPLETE");
 
     // 3 · completing the initiative: final hub
     calls.length = 0;
@@ -136,11 +168,9 @@ describe("graduation flow through the real sweep", () => {
     }
     expect(readFileSync(entry(init.id), "utf8")).not.toMatch(/^relations:/m);
 
-    // Verbatim feature dossiers for these fixtures (title + Goal line) have no
-    // H2 of their own, so renderEntry adds the "## Detail" wrapper. Hubs still
-    // go through the LLM: their mocked detail is "d", also wrapped.
-    expect(readFileSync(entry(f1.id), "utf8")).toContain("## Detail");
-    expect(readFileSync(entry(f1.id), "utf8")).toContain("Goal: Base image works");
+    // Detail with its own sections gets no empty "## Detail" wrapper; plain detail does.
+    expect(readFileSync(entry(f1.id), "utf8")).not.toContain("## Detail");
+    expect(readFileSync(entry(f1.id), "utf8")).toContain("## How it works");
     expect(readFileSync(entry(init.id), "utf8")).toContain("## Detail\n\nd");
 
     // Nothing in the KB names a work item.

@@ -321,6 +321,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         title: i.title,
         partOf: (i.partOf as string | null) ?? null,
         updated: i.updated as string,
+        successCriteria: i.successCriteria ?? null,
       }));
     },
     async getBody(id) {

@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { isComplete, type WorkItem } from "@wolfpack/kb/client";
+import { hasRollupZone, stripRollupMarkers, totalsSummary } from "./rollup.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · GRADUATION ELIGIBILITY
@@ -22,8 +23,9 @@ const STANDALONE_KINDS = ["task", "issue", "spike"];
  *   feature     all its tasks are complete (at least one), not graduated yet
  *   initiative  all its current features have graduated (more can be added
  *               later, so it never completes on its own), not graduated yet
- *   task/issue/spike  shipped or live, not graduated yet — for standalone
- *               Inbox items (orphan tasks) that become KB entries directly
+ *   task/issue/spike  shipped or live, not graduated yet, and loose: in the
+ *               Inbox or without a parent. Tasks inside a real feature
+ *               never graduate alone; they go with their feature.
  * Holding containers (the Inbox) never graduate.
  */
 export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): item is WorkItem {
@@ -34,7 +36,10 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
     const features = kids.filter((i) => i.kind === "feature");
     return features.length > 0 && features.every((f) => !!f.graduated);
   }
-  if (STANDALONE_KINDS.includes(item.kind)) return isComplete(item);
+  if (STANDALONE_KINDS.includes(item.kind)) {
+    const parent = item.partOf ? all.find((p) => p.id === item.partOf) : undefined;
+    return (!parent || !!parent.container) && isComplete(item);
+  }
   return false;
 }
 
@@ -132,6 +137,17 @@ export function featureDossier(
 }
 
 /**
+ * A rolled-up feature's body as its KB record: the feature title as H1, the
+ * document as written (minus its own H1), rollup markers and work ids removed.
+ */
+export function verbatimFeatureBody(feature: WorkItem, body: string): string {
+  const doc = stripRollupMarkers(body.replace(/^#\s+.*\n+/, ""))
+    .replace(WORK_ID, "")
+    .trim();
+  return `# ${feature.title}\n\n${doc}`;
+}
+
+/**
  * The raw material for an initiative's hub entry: its goal and document, and
  * the features delivered so far, each with the entry id it graduated to. Only
  * graduated features are listed, never remaining ones (more may be added).
@@ -173,8 +189,12 @@ export function graduationFile(opts: {
   /** Feature under an initiative: the initiative, whose hub it is part_of. */
   initiative?: Pick<WorkItem, "id" | "domain">;
   submitted: Date;
+  /** The body is a finished record: Dewey stores it verbatim, no LLM. */
+  preserveBody?: boolean;
+  /** One-line summary for the entry (verbatim graduations). */
+  summary?: string;
 }): GraduationFile {
-  const { from, item, graduation, body, final, initiative, submitted } = opts;
+  const { from, item, graduation, body, final, initiative, submitted, preserveBody, summary } = opts;
   // The sweep skips content it has seen: a final hub can have the same body as
   // the last update, so "final" is part of what is hashed.
   const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${body}`).digest("hex").slice(0, 16);
@@ -192,10 +212,8 @@ export function graduationFile(opts: {
     `entry_id: ${graduationEntryId(item)}`,
     ...(final ? ["final: true"] : []),
     ...(initiative ? [`part_of: ${graduationEntryId(initiative)}`] : []),
-    // Feature graduations are deliberate accounts: the sender's body IS
-    // the record. Keep it verbatim (no LLM paraphrase in produce). Hubs
-    // stay LLM-produced — they're short overviews, not records.
-    ...(graduation === "feature" ? ["preserve_body: true"] : []),
+    ...(preserveBody ? ["preserve_body: true"] : []),
+    ...(summary ? [`summary: "${summary.replace(/"/g, "'")}"`] : []),
     `submitted: ${submitted.toISOString()}`,
     "---",
   ];
@@ -236,20 +254,25 @@ export function graduationFiles(opts: {
 
   if (item.kind === "initiative") return [hub(item, true, 0)];
 
-  // Standalone task/issue/spike (e.g. Inbox items): emit a single feature-
-  // type entry. No hub because the parent is a container (Inbox) or absent.
+  // Loose task/issue/spike (Inbox or no parent): one entry, written by the
+  // LLM from its own notes. No hub: the parent is a container or absent.
   if (STANDALONE_KINDS.includes(item.kind)) {
     return [
       graduationFile({
         from,
         item,
         graduation: "feature",
-        body: featureDossier(item, bodyOf(item), []),
+        body: featureDossier(item, bodyOf(item), [item]),
         submitted: at(0),
       }),
     ];
   }
 
+  // A feature whose body is maintained by rollup (a fitness week, a spec with
+  // its delivered tasks) is already the finished record: send it verbatim.
+  // Otherwise the LLM writes the entry from the dossier (task notes + plan).
+  const body = bodyOf(item);
+  const verbatim = hasRollupZone(body);
   const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
   const parent = hubOf(item, all);
   const files = [
@@ -257,9 +280,11 @@ export function graduationFiles(opts: {
       from,
       item,
       graduation: "feature",
-      body: featureDossier(item, bodyOf(item), tasks),
+      body: verbatim ? verbatimFeatureBody(item, body) : featureDossier(item, body, tasks),
       initiative: parent,
       submitted: at(0),
+      preserveBody: verbatim,
+      summary: verbatim ? (item.summary ?? totalsSummary(body) ?? item.successCriteria ?? undefined) : undefined,
     }),
   ];
   // The hub is sent after the feature, so Dewey has written the feature entry

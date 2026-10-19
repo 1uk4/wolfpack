@@ -26,6 +26,7 @@ import {
   assignWork,
   loadWorkState,
   commitWorkItem,
+  graduateWork,
   type CreateWorkInput,
   type WorkQuery,
 } from "@wolfpack/kb/client";
@@ -164,6 +165,16 @@ export function workRouter(): Router {
     try {
       const result = deleteWork(makeRoots(), req.params.id);
       res.json({ deleted: result.items.map((i) => i.id) });
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  // ── Graduate work item ─ marks graduated=now on the authoritative ledger. ──
+  router.post("/:id/graduate", (req: Request, res: Response) => {
+    try {
+      const r = graduateWork(makeRoots(), req.params.id);
+      res.json({ item: r.item });
     } catch (err) {
       res.status(400).json({ error: String(err) });
     }

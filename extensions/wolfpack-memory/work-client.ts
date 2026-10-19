@@ -76,6 +76,11 @@ export class WorkClient {
     return res.item;
   }
 
+  async graduate(id: string): Promise<WorkItem> {
+    const res = await this.request<{ item: WorkItem }>("POST", `/${id}/graduate`);
+    return res.item;
+  }
+
   async retitle(id: string, title: string): Promise<WorkItem> {
     const res = await this.request<{ item: WorkItem }>("PATCH", `/${id}`, { title });
     return res.item;

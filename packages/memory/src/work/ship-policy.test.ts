@@ -54,13 +54,23 @@ describe("readyToGraduate", () => {
     expect(readyToGraduate(w("feature", "in_build"), [])).toBe(false); // no tasks
   });
 
-  it("graduated features, the Inbox and tasks are never ready", () => {
+  it("graduated features and the Inbox are never ready", () => {
     const f = w("feature", "shipped", undefined, { graduated: "2026-10-10" } as any);
     const inbox = w("feature", "in_build", undefined, { container: true });
-    const t = w("task", "shipped", f.id);
-    expect(readyToGraduate(f, [f, t])).toBe(false);
+    expect(readyToGraduate(f, [f, w("task", "shipped", f.id)])).toBe(false);
     expect(readyToGraduate(inbox, [inbox, w("task", "shipped", inbox.id)])).toBe(false);
-    expect(readyToGraduate(t, [t])).toBe(false);
+  });
+
+  it("a shipped standalone task/issue/spike is ready; a plan-stage task is not", () => {
+    const inbox = w("feature", "in_build", undefined, { container: true });
+    const t = w("task", "shipped", inbox.id);
+    expect(readyToGraduate(t, [inbox, t])).toBe(true);
+    const planned = w("task", "plan", inbox.id);
+    expect(readyToGraduate(planned, [inbox, planned])).toBe(false);
+    const graduated = w("task", "shipped", inbox.id, { graduated: "2026-10-10" } as any);
+    expect(readyToGraduate(graduated, [inbox, graduated])).toBe(false);
+    const spike = w("spike", "shipped", inbox.id);
+    expect(readyToGraduate(spike, [inbox, spike])).toBe(true);
   });
 
   it("an initiative is ready only when all its current features graduated", () => {

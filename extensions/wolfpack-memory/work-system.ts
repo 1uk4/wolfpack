@@ -571,7 +571,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── Command: /task ────────────────────────────────────────────────────────
 
-  type PanelAction = "bind" | "new" | "unbind" | { type: "bind"; target: WorkItem } | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | null;
+  type PanelAction = "bind" | "new" | { type: "bind"; target: WorkItem } | { type: "delete"; id: string } | { type: "depend"; id: string } | { type: "graduate"; id: string } | { type: "move"; id: string } | { type: "ship"; id: string } | null;
 
   /** Valid new parents for an item (current parent excluded), plus Inbox/standalone. */
   function moveTargets(item: WorkItem, all: WorkItem[]): { label: string; id: string | null; inbox?: boolean }[] {
@@ -672,13 +672,33 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "D") return done({ type: "depend", id: focused.id as string });
             if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
             if (data === "g") {
-              // From the task pane, g graduates the open feature, not the task.
-              const target = sel.pane === "right" ? items.find((i) => i.id === sel.openId) : focused;
+              // Try focused first — lets you graduate individual tasks (e.g.
+              // Inbox items). Fall back to the open feature (right pane) when
+              // focused isn't a graduation target.
+              const opened = sel.openId ? items.find((i) => i.id === sel.openId) : undefined;
+              const target = readyToGraduate(focused, allItems)
+                ? focused
+                : (opened && readyToGraduate(opened, allItems) ? opened : focused);
               if (target && readyToGraduate(target, allItems)) {
                 return done({ type: "graduate", id: target.id as string });
               }
               ctx.ui.notify(notReadyReason(target), "warning");
               return;
+            }
+            if (data === "s") {
+              // Ship: close the panel and let the outer command handler do the
+              // confirm + mutation (same pattern as delete/graduate). Features
+              // and initiatives use g to graduate, not s to ship.
+              if (focused.container) return;
+              if (!isBindable(focused)) {
+                ctx.ui.notify(`${focused.title}: already ${focused.stage}.`, "warning");
+                return;
+              }
+              if (focused.kind !== "task" && focused.kind !== "issue" && focused.kind !== "spike") {
+                ctx.ui.notify(`Press g to graduate ${focused.kind}s.`, "warning");
+                return;
+              }
+              return done({ type: "ship", id: focused.id as string });
             }
           }
 
@@ -696,7 +716,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const left = kids.filter((k) => k.kind === "feature" && !k.graduated).length;
               return `${item.title}: ${left} feature(s) still to graduate (press g on each feature).`;
             }
-            return `Only features and initiatives graduate; open a feature and press g.`;
+            if (item.kind === "task" || item.kind === "issue" || item.kind === "spike") {
+              return `${item.title} must be shipped before graduating (press s to ship).`;
+            }
+            return `Idea items don't graduate; convert to a task first.`;
           }
 
           /** ○ todo · ● in progress · ✔ shipped · ⛔ blocked */
@@ -790,7 +813,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             }
 
             add("");
-            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "m move", "D depend", "x delete", "g graduate", "a auto-ship", "Esc close"];
+            const hints = ["h/j/k/l move", "Space bind", "Enter open", "n new", "s ship", "m move", "D depend", "x delete", "g graduate", "a auto-ship", "Esc close"];
             add(` ${theme.fg("dim", hints.join(" \u00b7 "))}`);
             add(theme.fg("accent", "\u2500".repeat(width)));
 
@@ -822,6 +845,28 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         await bindToTask(action.target, ctx);
         await refreshActiveItem();
         updateWidget(ctx);
+      } else if (typeof action === "object" && action?.type === "ship") {
+        try {
+          const all = await client.query({}) ?? [];
+          const target = all.find((i) => i.id === action.id);
+          if (!target) {
+            ctx.ui.notify("Work item not found.", "warning");
+            return;
+          }
+          const ok = await ctx.ui.confirm(
+            `📦 Mark "${target.title}" as shipped?`,
+            target.successCriteria ? `Done when: ${target.successCriteria}` : "",
+          );
+          if (!ok) return;
+          const shipped = await client.stage(action.id, "shipped");
+          await client.note(action.id, "Completed.");
+          if (activeTask && activeTask.workId === action.id) unbindTask(ctx);
+          await refreshActiveItem();
+          updateWidget(ctx);
+          ctx.ui.notify(`✓ Shipped: ${shipped.title}`, "info");
+        } catch (e: any) {
+          ctx.ui.notify(`Failed to ship: ${e.message}`, "error");
+        }
       } else if (typeof action === "object" && action?.type === "delete") {
         const tree = await client.getTree(action.id);
         const target = tree[0];
@@ -943,8 +988,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         } catch (e: any) {
           ctx.ui.notify(e.message, "error");
         }
-      } else if (action === "unbind") {
-        ctx.ui.notify("Task unbound.", "info");
       }
     },
   });

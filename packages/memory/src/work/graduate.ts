@@ -14,13 +14,16 @@ import { isComplete, type WorkItem } from "@wolfpack/kb/client";
 // 1 · GRADUATION ELIGIBILITY
 // ════════════════════════════════════════════════════════════════════════════
 
-const GRADUATABLE_KINDS = ["feature", "initiative"];
+const GRADUATABLE_KINDS = ["feature", "initiative", "task", "issue", "spike"];
+const STANDALONE_KINDS = ["task", "issue", "spike"];
 
 /**
  * Ready to graduate (shown in /task, triggered with `g` — never automatic):
  *   feature     all its tasks are complete (at least one), not graduated yet
  *   initiative  all its current features have graduated (more can be added
  *               later, so it never completes on its own), not graduated yet
+ *   task/issue/spike  shipped or live, not graduated yet — for standalone
+ *               Inbox items (orphan tasks) that become KB entries directly
  * Holding containers (the Inbox) never graduate.
  */
 export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): item is WorkItem {
@@ -31,6 +34,7 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
     const features = kids.filter((i) => i.kind === "feature");
     return features.length > 0 && features.every((f) => !!f.graduated);
   }
+  if (STANDALONE_KINDS.includes(item.kind)) return isComplete(item);
   return false;
 }
 
@@ -227,6 +231,20 @@ export function graduationFiles(opts: {
     });
 
   if (item.kind === "initiative") return [hub(item, true, 0)];
+
+  // Standalone task/issue/spike (e.g. Inbox items): emit a single feature-
+  // type entry. No hub because the parent is a container (Inbox) or absent.
+  if (STANDALONE_KINDS.includes(item.kind)) {
+    return [
+      graduationFile({
+        from,
+        item,
+        graduation: "feature",
+        body: featureDossier(item, bodyOf(item), []),
+        submitted: at(0),
+      }),
+    ];
+  }
 
   const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
   const parent = hubOf(item, all);

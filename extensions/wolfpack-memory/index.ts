@@ -37,6 +37,7 @@ import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
+import { WorkClient } from "./work-client.js";
 import {
   getStageContext,
   summarizeTask,
@@ -1638,22 +1639,26 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       try {
-        const { resolveWorkItem, queryWork, graduateWork } = await import("@wolfpack/kb/client");
+        const { resolveWorkItem } = await import("@wolfpack/kb/client");
         const inboxDir = path.join(kbRoots.opsRoot, "inbox", wolfName);
         fs.mkdirSync(inboxDir, { recursive: true });
 
         // Feature → its past-tense entry, plus its initiative's hub (created on
         // the first feature, updated after). Initiative → its final hub.
-        // Nothing is written back into the work items except the date.
+        // Nothing is written back into the work items except the date. Query
+        // + graduate go through the shared Work API since the local ledger
+        // isn't the source of truth anymore.
+        const graduationClient = new WorkClient();
+        const all = (await graduationClient.query({})) ?? [];
         const files = graduationFiles({
           item,
-          all: queryWork(kbRoots, {}) ?? [],
+          all,
           bodyOf: (w) => resolveWorkItem(kbRoots, w.domain as string, w.id as string)?.body ?? "",
           from: wolfName,
           now: new Date(),
         });
         for (const f of files) fs.writeFileSync(path.join(inboxDir, f.name), f.content);
-        graduateWork(kbRoots, item.id as string);
+        await graduationClient.graduate(item.id as string);
       } catch (e: any) {
         console.error(`[work] Failed to graduate: ${e.message}`);
         throw e;

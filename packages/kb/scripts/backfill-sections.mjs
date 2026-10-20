@@ -19,7 +19,8 @@
  *   node scripts/backfill-sections.mjs --apply         # write _sections.json + stamp entries + digest
  *   BACKFILL_DOMAIN=wolfpack node scripts/backfill-sections.mjs
  *
- * Requires (same env as the sweep): KB_BASE, KB_OPS, ANTHROPIC_API_KEY, and an
+ * Requires (same env as the sweep): KB_BASE, KB_OPS, WOLF_DEN (for the model table),
+ * ANTHROPIC_API_KEY when the transport is api, and an
  * embedder reachable at WOLFPACK_EMBED_URL (default ollama localhost:11434).
  *
  */
@@ -30,6 +31,8 @@ import {
   parseFrontmatter,
   renderFrontmatter,
   createEngine,
+  engineSteps,
+  loadModelTable,
   HIERARCHY,
 } from "@wolfpack/engine";
 import { computeCentroid, maybeSplit } from "../dist/librarian/hierarchy.js";
@@ -101,18 +104,18 @@ if (!existsSync(entriesDir)) {
 }
 
 // ── engine (mirror cli.ts makeEngine) ───────────────────────────────────────
+const { table } = loadModelTable();
+const provider = table.tiers.smart.provider;
 const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error("ANTHROPIC_API_KEY is required");
+if (provider === "anthropic" && !apiKey) {
+  console.error("ANTHROPIC_API_KEY is required (this wolf's transport is api)");
   process.exit(1);
 }
-const defaultModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-6";
-const fastModel = process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20251001";
 const engine = createEngine({
-  provider: "anthropic",
-  apiKey,
-  defaultModel,
-  steps: { sectionSummary: { model: fastModel }, labelSection: { model: fastModel } },
+  provider,
+  ...(provider === "anthropic" ? { apiKey } : {}),
+  defaultModel: table.tiers.smart.model,
+  steps: engineSteps(table),
 });
 const embedder = createEmbedder(roots);
 

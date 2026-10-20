@@ -16,11 +16,8 @@
  * refuses rather than racing (stale locks are auto-reclaimed).
  *
  * Environment:
- *   WOLFPACK_KB_PROVIDER  — "claude-agent-sdk" (default; Claude subscription
- *                           bridge, no API key) or "anthropic" (ANTHROPIC_API_KEY)
- *   ANTHROPIC_API_KEY     — required only when WOLFPACK_KB_PROVIDER=anthropic
- *   WOLFPACK_MODEL        — smart model for produce (default: sonnet-4-5 bridge / sonnet-4-6 api)
- *   WOLFPACK_FAST_MODEL   — fast model for oracles (default: haiku-4-5 bridge / dated on api)
+ *   ANTHROPIC_API_KEY     — required only when the wolf's transport is api
+ *   (models come from the resolved model table — see loadModelTable)
  *   KB_BASE               — knowledge/base root (default: ~/knowledge/base)
  *   KB_OPS                — librarian-ops root (default: ~/librarian)
  *   WOLF_DEN              — den root; den-local KB state lives at $WOLF_DEN/kb
@@ -38,7 +35,7 @@ import {
   unlinkSync,
   mkdirSync,
 } from "node:fs";
-import { createEngine } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "./shared/index.js";
 import {
   vectorsDir,
@@ -88,44 +85,37 @@ function resolveRoots(): KbRoots {
 }
 
 function makeEngine() {
-  // Transport. Default to the Claude Agent SDK bridge (user's Claude
-  // subscription via the local `claude` binary) so sweeps don't need an API key.
-  // On wolf-01 / systemd where the subscription OAuth isn't available, set
-  // WOLFPACK_KB_PROVIDER=anthropic to use ANTHROPIC_API_KEY instead.
-  const provider = (process.env.WOLFPACK_KB_PROVIDER ?? "claude-agent-sdk").toLowerCase();
-  const useBridge = provider === "claude-agent-sdk" || provider === "claude-bridge";
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!useBridge && !apiKey) {
-    console.error(
-      "ANTHROPIC_API_KEY is required (or set WOLFPACK_KB_PROVIDER=claude-agent-sdk " +
-        "to use the Claude subscription bridge)"
-    );
+  // Models and transport come from the resolved table: the shipped models.json
+  // beside wolf.yaml on a VPS wolf, else the pack config + wolf.yaml.
+  let table: ModelTable;
+  try {
+    ({ table } = loadModelTable());
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-  // The bridge speaks Claude Code model aliases (undated); the API path wants
-  // dated ids. Pick defaults to match whichever transport is active.
-  const defaultModel =
-    process.env.WOLFPACK_MODEL ?? (useBridge ? "claude-sonnet-4-5" : "claude-sonnet-4-6");
-  const fastModel =
-    process.env.WOLFPACK_FAST_MODEL ?? (useBridge ? "claude-haiku-4-5" : "claude-haiku-4-5-20251001");
+  const provider = table.tiers.smart.provider;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (provider === "anthropic" && !apiKey) {
+    console.error("ANTHROPIC_API_KEY is required (this wolf's transport is api)");
+    process.exit(1);
+  }
+  const steps = engineSteps(table);
   // Bound a single hanging call (anthropic path only; the bridge has no API
   // timeout and ignores this). Default 10m is generous enough for a large
   // 16k-token produce but still caps a wedged request. Tunable per run.
   const requestTimeoutMs =
     Number(process.env.WOLFPACK_REQUEST_TIMEOUT_MS) || 600_000;
   return createEngine({
-    provider: useBridge ? "claude-agent-sdk" : "anthropic",
-    ...(useBridge ? {} : { apiKey }),
-    defaultModel,
+    provider,
+    ...(provider === "anthropic" ? { apiKey } : {}),
+    defaultModel: table.tiers.smart.model,
     requestTimeoutMs,
     steps: {
+      ...steps,
       // Entries (esp. merges) produce large JSON; the 4096 default truncates it
       // and breaks JSON extraction (same lesson as the memory consolidator).
-      produce: { model: defaultModel, maxTokens: 16000 },
-      contradict: { model: fastModel },
-      classifyToSection: { model: fastModel },
-      sectionSummary: { model: fastModel },
-      labelSection: { model: fastModel },
+      produce: { ...steps.produce, maxTokens: 16000 },
     },
   });
 }

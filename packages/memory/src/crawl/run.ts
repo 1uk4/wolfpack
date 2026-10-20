@@ -7,7 +7,7 @@
  */
 import { statSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { createEngine, type Engine } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type Engine } from "@wolfpack/engine";
 import type { ContextDigest } from "@wolfpack/kb/shared";
 import { discoverSources } from "./discover.js";
 import { resolveDates, isGitRepo } from "./dates.js";
@@ -23,43 +23,28 @@ import type { CrawlPlan, DatedFile, SourceFile } from "./schemas.js";
 
 /**
  * Engine for a crawl: fast model extracts, smart model consolidates + journeys.
- *
- * Transport selection mirrors the KB engine: default to the Claude Agent SDK
- * bridge (uses the local Claude subscription — no API key needed) so
- * subscription-authed wolves (1uk4) can crawl without wiring an API key.
- * Override with WOLFPACK_CRAWL_PROVIDER=anthropic for metered API usage.
- *
- * Bridge speaks Claude Code model aliases (undated); the API path wants
- * dated ids. Defaults pick the right shape for each transport.
+ * Models and transport come from the resolved model table (loadModelTable:
+ * the launch / shipped table, else the pack config + the wolf's wolf.yaml).
  */
 export function createCrawlEngine(): { engine: Engine; fastModel: string; smartModel: string } {
-  const provider = (
-    process.env.WOLFPACK_CRAWL_PROVIDER ??
-    process.env.WOLFPACK_KB_PROVIDER ??
-    "claude-agent-sdk"
-  ).toLowerCase();
-  const useBridge = provider === "claude-agent-sdk" || provider === "claude-bridge";
+  const { table } = loadModelTable();
+  const provider = table.tiers.smart.provider;
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!useBridge && !apiKey) {
-    throw new Error(
-      "ANTHROPIC_API_KEY required to run a crawl " +
-        "(or set WOLFPACK_CRAWL_PROVIDER=claude-agent-sdk to use the subscription bridge)."
-    );
+  if (provider === "anthropic" && !apiKey) {
+    throw new Error("ANTHROPIC_API_KEY required to run a crawl (this wolf's transport is api).");
   }
-  const smartModel =
-    process.env.WOLFPACK_MODEL ?? (useBridge ? "claude-sonnet-5-5" : "claude-sonnet-5-5");
-  const fastModel =
-    process.env.WOLFPACK_FAST_MODEL ?? (useBridge ? "claude-haiku-5-5" : "claude-haiku-5-5");
+  const steps = engineSteps(table);
   const engine = createEngine({
-    provider: useBridge ? "claude-agent-sdk" : "anthropic",
-    ...(useBridge ? {} : { apiKey }),
-    defaultModel: smartModel,
+    provider,
+    ...(provider === "anthropic" ? { apiKey } : {}),
+    defaultModel: table.tiers.smart.model,
     steps: {
-      classify: { model: fastModel, maxTokens: 8192 },
-      consolidate: { model: smartModel, maxTokens: 16000 },
+      ...steps,
+      classify: { ...steps.classify, maxTokens: 8192 },
+      consolidate: { ...steps.consolidate, maxTokens: 16000 },
     },
   });
-  return { engine, fastModel, smartModel };
+  return { engine, fastModel: steps.classify.model, smartModel: steps.consolidate.model };
 }
 
 /** Resolve dates for a plan's discovered files, keyed by relPath. */

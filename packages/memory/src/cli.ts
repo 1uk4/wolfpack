@@ -8,14 +8,14 @@
  *   wolfpack-consolidate --wolf 1uk4 --den ~/wolves/dens/1uk4 --memory .memory --all
  *
  * Environment:
- *   ANTHROPIC_API_KEY     — required
- *   WOLFPACK_MODEL        — default model (default: claude-sonnet-4-6)
- *   WOLFPACK_FAST_MODEL   — model for cheap steps (default: claude-haiku-4-5-20251001)
+ *   ANTHROPIC_API_KEY     — required only when the wolf's transport is api
+ *   WOLF_DEN              — the wolf's den; selects its wolf.yaml / models.json
+ *   (models come from the resolved model table — see loadModelTable)
  *   KB_OPS                — librarian-ops root (enables emit of KB deltas)
  *   KB_BASE               — knowledge-base root (resolve curated entries)
  *   WOLFPACK_DOMAIN       — default domain for claims (default: wolfpack)
  */
-import { createEngine } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { emitDelta } from "@wolfpack/kb/client";
 import { consolidateSession } from "./consolidate.js";
@@ -47,22 +47,25 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  let table: ModelTable;
+  try {
+    ({ table } = loadModelTable());
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  const provider = table.tiers.smart.provider;
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.error("ANTHROPIC_API_KEY is required");
+  if (provider === "anthropic" && !apiKey) {
+    console.error("ANTHROPIC_API_KEY is required (this wolf's transport is api)");
     process.exit(1);
   }
 
-  const defaultModel = process.env.WOLFPACK_MODEL ?? "claude-sonnet-4-6";
-  const fastModel = process.env.WOLFPACK_FAST_MODEL ?? "claude-haiku-4-5-20251001";
-
   const engine = createEngine({
-    provider: "anthropic",
-    apiKey,
-    defaultModel,
-    steps: {
-      consolidate: { model: defaultModel },
-    },
+    provider,
+    ...(provider === "anthropic" ? { apiKey } : {}),
+    defaultModel: table.tiers.smart.model,
+    steps: engineSteps(table),
   });
 
   const resolvedDen = resolve(denRoot);

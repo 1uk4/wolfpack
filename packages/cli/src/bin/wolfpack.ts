@@ -110,6 +110,7 @@ function parseArgs(argv: string[]) {
   const flags: Record<string, string | boolean> = {};
   // Collected --set key=value pairs (kept as a list so values may contain commas)
   const sets: string[] = [];
+  const passthrough: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -155,14 +156,19 @@ function parseArgs(argv: string[]) {
       sets.push(argv[++i]!);
     } else if (!arg.startsWith("-")) {
       positional.push(arg);
+    } else {
+      // Not a flag this CLI knows. Pass-through commands (kb) forward these to
+      // the remote tool; dropping them silently once turned `kb reorg --dry-run`
+      // into a real reorg.
+      passthrough.push(arg);
     }
   }
 
-  return { positional, flags, sets };
+  return { positional, flags, sets, passthrough };
 }
 
 async function main(): Promise<void> {
-  const { positional, flags, sets } = parseArgs(process.argv.slice(2));
+  const { positional, flags, sets, passthrough } = parseArgs(process.argv.slice(2));
   const cmd = positional[0];
   const sub = positional[1];
 
@@ -212,7 +218,7 @@ async function main(): Promise<void> {
         break;
 
       case "kb":
-        await kbCmd(positional.slice(1));
+        await kbCmd([...positional.slice(1), ...passthrough]);
         break;
 
       case "domain":

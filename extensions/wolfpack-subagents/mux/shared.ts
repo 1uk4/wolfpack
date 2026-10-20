@@ -66,8 +66,10 @@ export function shellEscape(s: string): string {
  * Wolf environment a subagent must inherit. A subagent pane is a fresh
  * multiplexer shell (it only gets the user's shell profile), not a child of
  * pi, so the env `wolfpack launch` loaded from the wolf's .env (den, KB roots,
- * Work API) never reaches it. ANTHROPIC_API_KEY is deliberately not forwarded:
- * launch withholds it from subscription wolves so they don't bill the API.
+ * Work API) never reaches it. ANTHROPIC_API_KEY is never forwarded, and when
+ * pi itself has none (launch withholds it from subscription wolves) it is
+ * unset in the pane too: the multiplexer server's own env may carry one, and a
+ * subagent must not bill the API when its parent doesn't.
  */
 const FORWARDED_ENV = /^(WOLF_|KB_|WORK_|WOLFPACK_)/;
 
@@ -81,6 +83,7 @@ export function wolfEnvPrefix(path: string, env: NodeJS.ProcessEnv = process.env
   const lines = Object.entries(env)
     .filter(([k, v]) => FORWARDED_ENV.test(k) && v !== undefined)
     .map(([k, v]) => `export ${k}=${shellEscape(v as string)}`);
+  if (env.ANTHROPIC_API_KEY === undefined) lines.push("unset ANTHROPIC_API_KEY");
   if (lines.length === 0) return "";
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, lines.join("\n") + "\n", { mode: 0o600 });

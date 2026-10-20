@@ -1,9 +1,11 @@
 /**
- * wolfpack setup — establish the two required roles of a pack:
+ * wolfpack setup — establish the two required roles of a pack, plus its models:
  *   • HUB      — this machine. Holds ~/wolves (location configurable) + runs the
  *                Syncthing device every wolf mirrors through.
  *   • LIBRARIAN — the wolf that curates the shared KB (required for memory/KB).
  *                Runs locally (on the hub) or on a registered host.
+ *   • MODELS   — the pack's `models:` block (tiers + transport defaults),
+ *                written when absent. The only model defaults that exist.
  *
  * Neither is optional: the memory system needs a hub to distribute knowledge and
  * a librarian to curate it. Idempotent — safe to re-run; confirms before changes.
@@ -11,9 +13,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { KNOWN_MODELS, type PackModels } from "@wolfpack/engine";
 import {
   loadConfig,
   saveConfig,
+  savePackModels,
   getHost,
   kbBaseDir,
   librarianDir,
@@ -33,6 +37,7 @@ export async function setupCmd(opts: { yes?: boolean }): Promise<void> {
   const config = loadConfig();
 
   await setupHub(config, opts);
+  setupModels(loadConfig());
   await setupLibrarian(loadConfig(), opts);
 
   console.log(c.bold("\n✓ Setup complete."));
@@ -88,6 +93,42 @@ async function setupHub(config: CliConfig, opts: { yes?: boolean }): Promise<voi
       ),
     );
   }
+}
+
+// ── MODELS ───────────────────────────────────────────────────────────────────
+
+/** Newest model of a family — KNOWN_MODELS lists newest first. */
+function newest(family: "opus" | "sonnet" | "haiku"): string {
+  const id = KNOWN_MODELS.find((m) => m.startsWith(`claude-${family}-`));
+  if (!id) throw new Error(`No claude-${family} model in the engine's KNOWN_MODELS`);
+  return id;
+}
+
+/** The block `wolfpack setup` writes: main on Opus, smart on Sonnet, fast on Haiku. */
+export function defaultPackModels(): PackModels {
+  return {
+    main: { model: newest("opus") },
+    smart: { model: newest("sonnet") },
+    fast: { model: newest("haiku") },
+    transport: { local: "subscription", vps: "api" },
+  };
+}
+
+function setupModels(config: CliConfig): void {
+  console.log(c.bold("\n▸ MODELS (pack tiers)"));
+  if (config.models) {
+    console.log(c.dim("  Already configured (edit with: wolfpack config)."));
+    return;
+  }
+  const models = defaultPackModels();
+  savePackModels(models);
+  console.log(
+    c.green(
+      `  ✓ Wrote models: main ${models.main!.model}, smart ${models.smart!.model}, fast ${models.fast!.model}; ` +
+        `transport local=${models.transport!.local}, vps=${models.transport!.vps}`,
+    ),
+  );
+  console.log(c.dim("    Change tiers, thinking or transports with: wolfpack config"));
 }
 
 // ── LIBRARIAN ────────────────────────────────────────────────────────────────

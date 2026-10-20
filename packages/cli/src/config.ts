@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { parse as yamlParse, parseDocument, stringify as yamlStringify } from "yaml";
 import type { PackModels } from "@wolfpack/engine";
 
 export interface HostEntry {
@@ -107,6 +107,24 @@ export function librarianDir(config: CliConfig): string {
 export function saveConfig(config: CliConfig): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, yamlStringify(config));
+}
+
+/**
+ * Write (or, with undefined, remove) the pack's `models:` block, leaving the
+ * rest of config.yaml — keys, order and comments — untouched.
+ */
+export function savePackModels(models: PackModels | undefined, file: string = CONFIG_FILE): void {
+  let raw = "";
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    // new file
+  }
+  const doc = parseDocument(raw);
+  if (models === undefined) doc.delete("models");
+  else doc.set("models", doc.createNode(models));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, doc.toString());
 }
 
 export function getHost(config: CliConfig, name?: string): HostEntry | undefined {

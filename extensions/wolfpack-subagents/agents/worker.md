@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose subagent with full capabilities, isolated context
-model: claude-sonnet-4-5
+model: smart
 auto-exit: true
 system-prompt: append
 ---

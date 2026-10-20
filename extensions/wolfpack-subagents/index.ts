@@ -14,6 +14,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { isTier, loadModelTable, TIERS, type Tier } from "@wolfpack/engine";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -106,7 +107,13 @@ const SubagentParams = Type.Object({
         "Has no effect on which agent runs — use `agent` for that.",
     }),
   ),
-  model: Type.Optional(Type.String({ description: "Model override (overrides agent default)" })),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Model tier override: main | smart | fast (overrides the agent's tier). " +
+        "Tiers resolve to the pack's configured models; a model ID is rejected.",
+    }),
+  ),
   cwd: Type.Optional(
     Type.String({
       description:
@@ -118,10 +125,10 @@ const SubagentParams = Type.Object({
 type SubagentSessionMode = "standalone" | "lineage-only" | "fork";
 
 interface AgentDefaults {
+  /** Model tier (main | smart | fast); resolved through the model table at spawn. */
   model?: string;
   tools?: string;
   skills?: string;
-  thinking?: string;
   /**
    * If set (non-empty), this agent is granted the full subagent spawning
    * toolset and may only spawn the listed agents. Presence of this field —
@@ -244,6 +251,28 @@ const PROVIDER_PACKAGES: Record<string, string> = {
   "claude-bridge": "pi-claude-bridge",
 };
 
+/**
+ * Resolve a subagent's tier (agent file `model:` or the tool's `model` param)
+ * through the wolf's model table (WOLFPACK_MODELS_FILE from launch, else the
+ * pack config). Thinking comes only from the tier. Throws on a non-tier value
+ * or when no table can be resolved, so the spawn fails with that message.
+ */
+function resolveSubagentModel(requested: string | undefined): {
+  tier: Tier;
+  /** Bare model ID (for the Claude Code CLI path). */
+  modelId: string;
+  /** pi model string `<provider>/<id>`, without the thinking suffix. */
+  piModel: string;
+  thinking: string | null;
+} {
+  const tier = requested ?? "smart";
+  if (!isTier(tier)) {
+    throw new Error(`subagent model must be a tier (${TIERS.join("|")}), got ${JSON.stringify(tier)}`);
+  }
+  const resolved = loadModelTable().table.tiers[tier];
+  return { tier, modelId: resolved.model, piModel: resolved.piModel, thinking: resolved.thinking ?? null };
+}
+
 /** Extension entry file(s) that register the provider of `model`, if any. */
 function getProviderExtensionPaths(model: string | null): string[] {
   const provider = model?.includes("/") ? model.slice(0, model.indexOf("/")) : null;
@@ -275,6 +304,43 @@ function getBundledAgentsDir(): string {
   // Flattened wolfpack layout: index.ts sits at the extension root, so the
   // package-bundled agents live in ./agents (amos's repo had them two levels up).
   return join(SUBAGENTS_DIR, "agents");
+}
+
+/**
+ * Agent dirs shipped by packages: this extension's own, then every local
+ * package in the wolf's settings.json that declares `pi.agents` (e.g.
+ * wolfpack-visual-tools' svg-maker / mermaid-maker). Agents load straight from
+ * the repo, so no copy in the wolf's agent dir can drift from them.
+ */
+function getPackageAgentsDirs(): string[] {
+  const dirs = [getBundledAgentsDir()];
+  const configDir = getAgentConfigDir();
+  let packages: unknown[] = [];
+  try {
+    const settings = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+    if (Array.isArray(settings?.packages)) packages = settings.packages;
+  } catch {
+    return dirs;
+  }
+  for (const entry of packages) {
+    const source = typeof entry === "string" ? entry : (entry as { source?: unknown })?.source;
+    if (typeof source !== "string" || source.startsWith("npm:") || source.includes("://")) continue;
+    const pkgDir = resolve(configDir, source);
+    let globs: unknown;
+    try {
+      globs = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"))?.pi?.agents;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(globs)) continue;
+    for (const glob of globs) {
+      if (typeof glob !== "string") continue;
+      // Manifests declare `<dir>/*.md`; take the dir.
+      const dir = resolve(pkgDir, glob.endsWith("*.md") ? dirname(glob) : glob);
+      if (!dirs.includes(dir)) dirs.push(dir);
+    }
+  }
+  return dirs;
 }
 
 function getFrontmatterValue(frontmatter: string, key: string): string | undefined {
@@ -320,7 +386,6 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
           ? "append"
           : undefined,
     skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
-    thinking: getFrontmatterValue(frontmatter, "thinking"),
     subagentAgents: parseCommaList(getFrontmatterValue(frontmatter, "subagent_agents")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
@@ -336,7 +401,7 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
 function discoverAgentDefinitions(): ListedAgentDefinition[] {
   const agents = new Map<string, ListedAgentDefinition>();
   const dirs: Array<{ path: string; source: AgentSource }> = [
-    { path: getBundledAgentsDir(), source: "package" },
+    ...getPackageAgentsDirs().map((path) => ({ path, source: "package" as AgentSource })),
     { path: join(getAgentConfigDir(), "agents"), source: "global" },
     { path: join(process.cwd(), ".pi", "agents"), source: "project" },
   ];
@@ -435,7 +500,7 @@ function loadAgentDefaults(agentName: string): AgentDefaults | null {
   const paths = [
     join(process.cwd(), ".pi", "agents", `${agentName}.md`),
     join(configDir, "agents", `${agentName}.md`),
-    join(getBundledAgentsDir(), `${agentName}.md`),
+    ...getPackageAgentsDirs().map((dir) => join(dir, `${agentName}.md`)),
   ];
 
   for (const p of paths) {
@@ -1205,10 +1270,11 @@ async function launchSubagent(
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-  const effectiveModel = params.model ?? agentDefs?.model;
+  // Resolve the tier first: it fails the spawn on a non-tier / missing table,
+  // and the sandbox below needs the resolved provider.
+  const resolvedModel = resolveSubagentModel(params.model ?? agentDefs?.model);
   const effectiveTools = agentDefs?.tools;
   const effectiveSkills = agentDefs?.skills;
-  const effectiveThinking = agentDefs?.thinking;
   const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
 
   const sessionFile = ctx.sessionManager.getSessionFile();
@@ -1288,9 +1354,7 @@ async function launchSubagent(
       cmdParts.push("--plugin-dir", shellEscape(pluginDir));
     }
 
-    if (effectiveModel) {
-      cmdParts.push("--model", shellEscape(effectiveModel));
-    }
+    cmdParts.push("--model", shellEscape(resolvedModel.modelId));
 
     const sp = agentDefs.body;
     if (sp) {
@@ -1372,8 +1436,8 @@ async function launchSubagent(
   const loadout: SubagentLoadout = {
     agent: params.agent ?? null,
     toolAllowlist,
-    model: effectiveModel ?? null,
-    thinking: effectiveThinking ?? null,
+    model: resolvedModel.piModel,
+    thinking: resolvedModel.thinking,
     systemPromptMode: systemPromptMode ?? null,
     identity: identityInSystemPrompt ? identity : null,
     spawnable: agentDefs?.subagentAgents ?? null,
@@ -1989,12 +2053,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       label: "List Subagents",
       description:
         "List all available subagent definitions. " +
-        "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
-        "Project-local agents override global ones with the same name.",
+        "Scans agents shipped by loaded packages, the wolf's agent dir (agents/), and project-local .pi/agents/. " +
+        "Project-local agents override global ones, which override package ones, by name.",
       promptSnippet:
         "List all available subagent definitions. " +
-        "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
-        "Project-local agents override global ones with the same name.",
+        "Scans agents shipped by loaded packages, the wolf's agent dir (agents/), and project-local .pi/agents/. " +
+        "Project-local agents override global ones, which override package ones, by name.",
       parameters: Type.Object({}),
 
       async execute() {

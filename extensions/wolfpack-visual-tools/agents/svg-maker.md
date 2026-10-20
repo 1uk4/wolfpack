@@ -2,7 +2,7 @@
 name: svg-maker
 description: Authors ONE hand-written SVG from a brief, renders it to a PNG, LOOKS at the result, iterates until it is correct and clean, publishes the PNG (ephemeral by default), and returns the filename. For spatial/geometric visuals Mermaid can't express — coordinate geometry, number lines, vectors, function plots, physical layouts, custom shapes with exact positions.
 tools: write_svg, edit_svg, render_svg, read
-model: claude-sonnet-4-5
+model: smart
 auto-exit: true
 system-prompt: append
 ---

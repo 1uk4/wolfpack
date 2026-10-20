@@ -169,9 +169,7 @@ describe("tier coverage", () => {
     expect(Object.keys(local().steps).sort()).toEqual([...ENGINE_STEPS].sort());
   });
 
-  // Enabled by ticket O6Keffo, which switches the agent files and the spawn
-  // code to tiers together (flipping the files alone would break spawning).
-  it.skip("every agent file in the repo names a tier and sets no thinking", () => {
+  it("every agent file in the repo names a tier and sets no thinking", () => {
     const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const extDir = path.join(repo, "extensions");
     const files = fs

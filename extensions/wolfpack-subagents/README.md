@@ -55,14 +55,29 @@ fallback, so it is backend-independent.
 Discovered from (priority: project > global > package):
 
 - **project** — `<cwd>/.pi/agents/*.md`
-- **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (e.g. the visual makers)
-- **package** — this extension's bundled `agents/` (`worker`, `scout`, `planner`, `reviewer`)
+- **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (wolf-specific agents only)
+- **package** — this extension's bundled `agents/` (`worker`, `scout`, `planner`,
+  `reviewer`), plus the `pi.agents` dirs of every local package in the wolf's
+  `settings.json` (e.g. `wolfpack-visual-tools` → `mermaid-maker`, `svg-maker`).
+  Repo agents load from the repo; don't copy them into the wolf's agent dir, or
+  the copy shadows (and drifts from) the repo file.
 
 Autonomous agents should set `auto-exit: true` so they exit when done and their
 result steers back; `system-prompt: append` passes the body as the child's
 appended system prompt. Key frontmatter: `name`, `description`, `model`,
-`tools` (strict allowlist), `thinking`, `auto-exit`, `system-prompt`,
+`tools` (strict allowlist), `auto-exit`, `system-prompt`,
 `subagent_agents` (grant + restrict nested spawning), `cwd`, `session-mode`.
+
+### Models are tiers
+
+`model:` (and the `subagent` tool's `model` param, which overrides it) must be a
+tier: `main`, `smart` or `fast`; no `model:` means `smart`. Anything else fails
+the spawn. The tier resolves at spawn through the wolf's model table
+(`WOLFPACK_MODELS_FILE`, written by `wolfpack launch`; else the pack config) to
+`<provider>/<id>`, with the tier's thinking level, if any, as the `:thinking`
+suffix. Agent files can't set thinking. When a sandboxed spawn passes
+`--no-extensions`, the extension that registers the resolved model's provider
+(e.g. `pi-claude-bridge`) is re-enabled.
 
 ## Custom tools in subagents (bridge)
 

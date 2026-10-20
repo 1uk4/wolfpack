@@ -20,11 +20,13 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
+import { writeModelTable, type ModelTable } from "@wolfpack/engine";
 import {
   getExtension,
   extensionsDir,
   type WolfExtension,
 } from "./extensions.js";
+import { MODELS_FILE_NAME, modelTableHash } from "./models.js";
 
 /**
  * Packages Pi supplies to extensions at load time — never bundle these.
@@ -59,7 +61,9 @@ export interface BundleWolfConfig {
 
 /** Config fields for pi-durable harness bundle (includes extra config for wolf.yaml). */
 export interface HarnessBundleConfig extends BundleWolfConfig {
-  model?: string;
+  /** The wolf's model table, resolved on this machine (location vps). Shipped
+   *  as models.json — the VPS never resolves models itself. */
+  models: ModelTable;
   extraConfig?: Record<string, unknown>;
 }
 
@@ -79,6 +83,8 @@ export interface ExtensionStamp {
 export interface BundleManifest {
   builtAt: string;
   extensions: ExtensionStamp[];
+  /** modelTableHash of the shipped models.json (pi-durable bundles; drift). */
+  modelTableHash?: string;
 }
 
 export interface BuiltBundle {
@@ -352,6 +358,10 @@ export interface BuiltHarnessBundle {
   wolfYamlPath: string;
   /** Path to the generated AGENTS.md */
   agentsMdPath: string;
+  /** Path to the resolved model table (models.json) */
+  modelsPath: string;
+  /** Manifest recorded in wolf.yaml `bundle:` (extension stamps + model table hash) */
+  manifest: BundleManifest;
   /** Extension keys that were missing (skipped) */
   missing: string[];
   /** Extension keys actually included */
@@ -367,6 +377,7 @@ export interface BuiltHarnessBundle {
  * - harness.cjs (~1.2-2.4MB) from packages/harness/src/bin/harness.ts
  * - Extensions bundled separately in extensions/<name>/index.js
  * - wolf.yaml config file
+ * - models.json (the resolved model table)
  * - AGENTS.md persona file
  *
  * Returns file paths — caller reads, base64-encodes, and ships to VPS.
@@ -447,8 +458,6 @@ export async function buildHarnessBundle(
     `id: ${wolfId}`,
     `name: ${cfg.name}`,
     `runtime: pi-durable`,
-    `model: ${cfg.model ?? "claude-sonnet-4-5"}`,
-    `provider: anthropic`,
     `role: ${cfg.role}`,
   ];
   if (cfg.specialty) wolfYamlLines.push(`specialty: ${cfg.specialty}`);
@@ -463,22 +472,26 @@ export async function buildHarnessBundle(
   wolfYamlLines.push(`harness:`);
   wolfYamlLines.push(`  storage: session.sqlite`);
 
-  // Bundle manifest for drift detection
-  const stamps: Array<{ key: string; name: string; version: string; hash: string }> = [];
+  // Bundle manifest for drift detection: extension stamps + model table hash.
+  const stamps: ExtensionStamp[] = [];
   for (const key of included) {
     const stamp = await stampExtension(key);
     if (stamp) stamps.push(stamp);
   }
-  if (stamps.length) {
-    wolfYamlLines.push(`bundle:`);
-    wolfYamlLines.push(`  builtAt: "${new Date().toISOString()}"`);
-    wolfYamlLines.push(`  extensions:`);
-    for (const s of stamps) {
-      wolfYamlLines.push(`    - key: ${s.key}`);
-      wolfYamlLines.push(`      name: ${s.name}`);
-      wolfYamlLines.push(`      version: ${s.version}`);
-      wolfYamlLines.push(`      hash: "${s.hash}"`);
-    }
+  const manifest: BundleManifest = {
+    builtAt: new Date().toISOString(),
+    extensions: stamps,
+    modelTableHash: modelTableHash(cfg.models),
+  };
+  wolfYamlLines.push(`bundle:`);
+  wolfYamlLines.push(`  builtAt: "${manifest.builtAt}"`);
+  wolfYamlLines.push(`  modelTableHash: "${manifest.modelTableHash}"`);
+  wolfYamlLines.push(stamps.length ? `  extensions:` : `  extensions: []`);
+  for (const s of stamps) {
+    wolfYamlLines.push(`    - key: ${s.key}`);
+    wolfYamlLines.push(`      name: ${s.name}`);
+    wolfYamlLines.push(`      version: ${s.version}`);
+    wolfYamlLines.push(`      hash: "${s.hash}"`);
   }
 
   // Include extra config (memory, telegram, etc.)
@@ -495,7 +508,11 @@ export async function buildHarnessBundle(
   const wolfYamlPath = path.join(outDir, "wolf.yaml");
   fs.writeFileSync(wolfYamlPath, wolfYamlLines.join("\n") + "\n");
 
-  // 4. Generate AGENTS.md persona
+  // 4. Resolved model table, next to wolf.yaml on the VPS
+  const modelsPath = path.join(outDir, MODELS_FILE_NAME);
+  writeModelTable(modelsPath, cfg.models);
+
+  // 5. Generate AGENTS.md persona
   const agentsMdPath = path.join(outDir, "AGENTS.md");
   fs.writeFileSync(agentsMdPath, renderPersona(cfg));
 
@@ -503,6 +520,8 @@ export async function buildHarnessBundle(
     harnessPath,
     wolfYamlPath,
     agentsMdPath,
+    modelsPath,
+    manifest,
     missing,
     included,
     tmpDir: outDir,

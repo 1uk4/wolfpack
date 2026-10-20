@@ -29,7 +29,7 @@ import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
-import { resolveLocalWolfModels } from "../models.js";
+import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine";
 
 interface SyncOpts {
@@ -48,6 +48,8 @@ interface RemoteWolf {
     domains?: string[];
     extensions?: string[];
     telegram?: { ownerId?: number };
+    transport?: string;
+    models?: unknown;
   };
 }
 
@@ -80,7 +82,7 @@ export async function wolfSync(
     }
 
     const hostName = opts.host ?? config.defaultHost!;
-    await syncOne(host, hostName, name);
+    await syncOne(config, host, hostName, name);
   }
 
   await runMeshReconcile();
@@ -137,6 +139,7 @@ function syncLocal(config: CliConfig, name: string): void {
 
 /** Rebuild + push the bundle for one pi-durable wolf. */
 async function syncPiDurable(
+  config: CliConfig,
   host: HostEntry,
   hostName: string,
   wolf: RemoteWolf,
@@ -149,13 +152,36 @@ async function syncPiDurable(
 
   console.log(c.bold(`Syncing ${cfg.name} (pi-durable) on ${hostName}...`));
 
-  // Collect extra config (everything except base keys)
+  // Resolve the model table here (location vps) and ship it; the VPS never
+  // reads ~/.wolfpack. The wolf layer is its own transport / models: keys.
+  const models = resolveModelsOrExit(() => resolveRemoteWolfModels(config, cfg));
+  console.log(
+    c.dim(`  Models:  main=${models.tiers.main.model} smart=${models.tiers.smart.model} fast=${models.tiers.fast.model} (${models.transport})`),
+  );
+
+  // Collect extra config (everything except base keys). transport / models
+  // pass through; the removed model:/provider: keys are dropped so a stale
+  // remote wolf.yaml is cleaned on the first sync, as are memory.model /
+  // memory.fastModel.
   const baseKeys = new Set(["id", "name", "runtime", "model", "provider", "role", "specialty", "domains", "extensions", "harness", "bundle"]);
   const extraConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(cfg as Record<string, unknown>)) {
     if (!baseKeys.has(key) && value !== undefined) {
       extraConfig[key] = value;
     }
+  }
+  // null means unset for the model keys (the agent clears overrides that way).
+  if (extraConfig.transport === null) delete extraConfig.transport;
+  if (extraConfig.models && typeof extraConfig.models === "object") {
+    const tiers = Object.entries(extraConfig.models as Record<string, unknown>).filter(([, v]) => v !== null);
+    if (tiers.length) extraConfig.models = Object.fromEntries(tiers);
+    else delete extraConfig.models;
+  } else if (extraConfig.models === null) {
+    delete extraConfig.models;
+  }
+  if (extraConfig.memory && typeof extraConfig.memory === "object") {
+    const { model: _model, fastModel: _fastModel, ...memory } = extraConfig.memory as Record<string, unknown>;
+    extraConfig.memory = memory;
   }
 
   const built = await buildHarnessBundle(
@@ -165,6 +191,7 @@ async function syncPiDurable(
       specialty: cfg.specialty,
       domains: cfg.domains ?? [],
       extensions: cfg.extensions ?? [],
+      models,
       extraConfig: Object.keys(extraConfig).length > 0 ? extraConfig : undefined,
     },
     wolf.id,
@@ -178,6 +205,7 @@ async function syncPiDurable(
   const harnessB64 = fs.readFileSync(built.harnessPath).toString("base64");
   const wolfYamlB64 = fs.readFileSync(built.wolfYamlPath).toString("base64");
   const agentsMdB64 = fs.readFileSync(built.agentsMdPath).toString("base64");
+  const modelsB64 = fs.readFileSync(built.modelsPath).toString("base64");
 
   // Package extensions as a map of name -> base64 content
   const extBundleDir = path.join(built.tmpDir, "extensions");
@@ -198,6 +226,7 @@ async function syncPiDurable(
       harness: harnessB64,
       wolfYaml: wolfYamlB64,
       agentsMd: agentsMdB64,
+      models: modelsB64,
       extensions,
     });
     console.log(
@@ -236,6 +265,7 @@ async function syncPiDurable(
 
 /** Rebuild + push the bundle for one wolf on one host. */
 async function syncOne(
+  config: CliConfig,
   host: HostEntry,
   hostName: string,
   nameOrId: string,
@@ -261,7 +291,7 @@ async function syncOne(
 
   // Use pi-durable sync for pi-durable wolves
   if ((cfg as Record<string, unknown>).runtime === "pi-durable") {
-    await syncPiDurable(host, hostName, wolf);
+    await syncPiDurable(config, host, hostName, wolf);
     return;
   }
 
@@ -335,7 +365,7 @@ async function syncAll(config: CliConfig): Promise<void> {
       continue;
     }
     for (const w of wolves) {
-      await syncOne(host, hostName, w.id);
+      await syncOne(config, host, hostName, w.id);
     }
   }
 

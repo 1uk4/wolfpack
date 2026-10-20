@@ -36,7 +36,6 @@ export async function kbCmd(argv: string[]): Promise<void> {
     "export KB_OPS=/var/wolfpack/kb/ops",
     `export WOLF_DEN=/home/wolf-${lib.id}/den`,
     `export ANTHROPIC_API_KEY=$(grep ANTHROPIC_API_KEY /home/wolf-${lib.id}/.env | cut -d= -f2)`,
-    "export WOLFPACK_KB_PROVIDER=anthropic",
   ].join(" && ");
 
   const kbCli = "/opt/wolfpack-kb/cli.cjs";

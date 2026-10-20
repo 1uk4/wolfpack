@@ -234,6 +234,32 @@ function getToolExtensionPath(tool: string): string | undefined {
 }
 
 /**
+ * Model providers that come from an extension rather than pi itself, keyed by
+ * the provider prefix of a model id (`claude-bridge/claude-sonnet-4-5`), mapped
+ * to the npm package installed in the agent dir. `--no-extensions` drops them,
+ * so a sandboxed subagent on such a model fails with "Model not found" unless
+ * the provider extension is re-enabled. Its tools stay gated by `--tools`.
+ */
+const PROVIDER_PACKAGES: Record<string, string> = {
+  "claude-bridge": "pi-claude-bridge",
+};
+
+/** Extension entry file(s) that register the provider of `model`, if any. */
+function getProviderExtensionPaths(model: string | null): string[] {
+  const provider = model?.includes("/") ? model.slice(0, model.indexOf("/")) : null;
+  const pkg = provider ? PROVIDER_PACKAGES[provider] : undefined;
+  if (!pkg) return [];
+  const pkgDir = join(getAgentConfigDir(), "npm", "node_modules", pkg);
+  try {
+    const manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+    const entries: string[] = manifest?.pi?.extensions ?? [];
+    return entries.map((e) => resolve(pkgDir, e)).filter((p) => existsSync(p));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * When this process was spawned as a restricted subagent, the parent pins the
  * set of agents it may itself spawn via PI_SUBAGENT_ALLOWED. `null` means no
  * restriction (top-level session, or an unrestricted child).
@@ -872,6 +898,8 @@ function applySandboxToParts(
       const extPath = getToolExtensionPath(tool);
       if (extPath && existsSync(extPath)) extPaths.add(extPath);
     }
+    // The model's provider, when an extension supplies it (e.g. claude-bridge).
+    for (const extPath of getProviderExtensionPaths(loadout.model)) extPaths.add(extPath);
     for (const extPath of extPaths) {
       parts.push("-e", shellEscape(extPath));
     }

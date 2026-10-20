@@ -29,6 +29,8 @@ import { provisionKbEngine } from "../deployer.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
+import { resolveLocalWolfModels } from "../models.js";
+import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine";
 
 interface SyncOpts {
   host?: string;
@@ -120,10 +122,14 @@ function syncLocal(config: CliConfig, name: string): void {
   const lines = [...Object.entries(managed).map(([k, v]) => `${k}=${v}`), ...kept];
   fs.writeFileSync(envPath, lines.join("\n") + "\n", { mode: 0o600 });
 
-  const missing = writePiSettings(dir, wolf.extensions ?? []);
+  // pi's default model follows the resolved main tier (launch also passes
+  // --model; this covers pi started without `wolfpack launch`).
+  const table = resolveModelsOrExit(() => resolveLocalWolfModels(config, name));
+  const missing = writePiSettings(dir, wolf.extensions ?? [], table.tiers.main);
   console.log(c.green(`\u2713 Reconciled local wolf ${wolf.name} from config`));
   console.log(c.dim(`  .env:    ${Object.keys(managed).join(", ")} (+${kept.length} preserved)`));
   console.log(c.dim(`  Exts:    ${wolf.extensions?.length ? wolf.extensions.join(", ") : "(none)"}`));
+  console.log(c.dim(`  Model:   ${piModelArg(table.tiers.main)} (pi settings.json default)`));
   if (missing.length) {
     console.log(c.yellow(`  ! Not installed: ${missing.join(", ")}`));
   }
@@ -368,6 +374,22 @@ async function reportDrift(
   } else if (deployed.size > 0) {
     console.log(c.dim("  Extensions: all up to date"));
   }
+}
+
+/** Resolve a model table, printing warnings; a config error aborts with its fix. */
+function resolveModelsOrExit(resolve: () => ModelTable): ModelTable {
+  let table: ModelTable;
+  try {
+    table = resolve();
+  } catch (err) {
+    if (err instanceof ModelConfigError) {
+      console.error(c.red(err.message));
+      process.exit(1);
+    }
+    throw err;
+  }
+  for (const w of table.warnings) console.log(c.yellow(`  ! models: ${w}`));
+  return table;
 }
 
 async function runMeshReconcile(): Promise<void> {

@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ResolvedTier } from "@wolfpack/engine";
 
 export interface WolfExtension {
   /** Stable key stored in wolf.yaml `extensions: [...]` */
@@ -202,8 +203,13 @@ export function agentDir(wolfDir: string): string {
  * selected extensions regardless of the working directory. This lives in the
  * wolf's agent dir (PI_CODING_AGENT_DIR), not a project `.pi/`, so you can run
  * as the wolf inside any project. Returns keys whose package dir was missing.
+ *
+ * With `main` (the resolved table's main tier), also sets pi's
+ * `defaultProvider` / `defaultModel` (and `defaultThinkingLevel` when the tier
+ * sets thinking), so pi started without `wolfpack launch` lands on the right
+ * model. All other keys are preserved.
  */
-export function writePiSettings(wolfDir: string, keys: string[]): string[] {
+export function writePiSettings(wolfDir: string, keys: string[], main?: ResolvedTier): string[] {
   const dir = agentDir(wolfDir);
   fs.mkdirSync(dir, { recursive: true });
 
@@ -227,6 +233,8 @@ export function writePiSettings(wolfDir: string, keys: string[]): string[] {
   );
   settings.packages = [...localNpm, ...dirs];
 
+  if (main) setPiModelDefaults(settings, main);
+
   // Inline images under a multiplexer: pi's `auto` protocol detection fails
   // through Herdr/tmux (they report TERM=xterm-256color), so diagrams never
   // render in the TUI. When this wolf runs its subagents under Herdr
@@ -243,6 +251,32 @@ export function writePiSettings(wolfDir: string, keys: string[]): string[] {
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   return missing;
+}
+
+/**
+ * Set only the model defaults in the wolf's pi `settings.json` (launch uses
+ * this; everything else in the file is left as is).
+ */
+export function writePiModelDefaults(wolfDir: string, main: ResolvedTier): void {
+  const dir = agentDir(wolfDir);
+  fs.mkdirSync(dir, { recursive: true });
+  const settingsPath = path.join(dir, "settings.json");
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    // start fresh
+  }
+  setPiModelDefaults(settings, main);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+}
+
+/** pi's model defaults from the main tier: `<provider>/<id>` split in two. */
+function setPiModelDefaults(settings: Record<string, unknown>, main: ResolvedTier): void {
+  const slash = main.piModel.indexOf("/");
+  settings.defaultProvider = main.piModel.slice(0, slash);
+  settings.defaultModel = main.piModel.slice(slash + 1);
+  if (main.thinking) settings.defaultThinkingLevel = main.thinking;
 }
 
 /** Read the wolf's configured subagent multiplexer from its `.env`, if any. */

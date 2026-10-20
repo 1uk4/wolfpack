@@ -16,8 +16,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { parse as yamlParse } from "yaml";
+import { ModelConfigError, MODELS_FILE_ENV, piModelArg, writeModelTable, type ModelTable } from "@wolfpack/engine";
 import { loadConfig, getHost, localWolfDir } from "../config.js";
-import { agentDir } from "../extensions.js";
+import { agentDir, writePiModelDefaults } from "../extensions.js";
+import { MODELS_FILE_NAME, resolveLocalWolfModels } from "../models.js";
 import { c } from "../render.js";
 
 /** Parse a minimal KEY=VALUE .env file (ignores blanks and # comments). */
@@ -45,31 +47,6 @@ function parseEnvFile(file: string): Record<string, string> {
     out[key] = val;
   }
   return out;
-}
-
-/** True when the wolf runs on a Claude subscription (OAuth or bridge) and must
- *  not be handed a billable ANTHROPIC_API_KEY. Checks two signals:
- *  1. auth.json → anthropic.type === "oauth" (direct subscription login)
- *  2. settings.json → defaultProvider === "claude-bridge" (bridge extension)
- *  Either means the wolf is subscription-backed. */
-function hasSubscriptionOAuth(agentDirPath: string): boolean {
-  try {
-    const auth = JSON.parse(
-      fs.readFileSync(path.join(agentDirPath, "auth.json"), "utf8"),
-    );
-    if (auth?.anthropic?.type === "oauth") return true;
-  } catch {
-    /* no auth.json or unreadable */
-  }
-  try {
-    const settings = JSON.parse(
-      fs.readFileSync(path.join(agentDirPath, "settings.json"), "utf8"),
-    );
-    if (settings?.defaultProvider === "claude-bridge") return true;
-  } catch {
-    /* no settings.json or unreadable */
-  }
-  return false;
 }
 
 export async function wolfLaunch(
@@ -127,6 +104,24 @@ export async function wolfLaunch(
     process.exit(1);
   }
 
+  // Resolve the wolf's model table once for the whole session: written to
+  // <wolfDir>/models.json and handed to pi, memory and subagents through
+  // WOLFPACK_MODELS_FILE. Unknown IDs only warn; missing config aborts.
+  let table: ModelTable;
+  try {
+    table = resolveLocalWolfModels(config, name);
+  } catch (err) {
+    if (err instanceof ModelConfigError) {
+      console.error(c.red(err.message));
+      process.exit(1);
+    }
+    throw err;
+  }
+  for (const w of table.warnings) console.error(c.yellow(`⚠ models: ${w}`));
+  const modelsFile = path.join(wolfDir, MODELS_FILE_NAME);
+  writeModelTable(modelsFile, table);
+  writePiModelDefaults(wolfDir, table.tiers.main);
+
   // Env precedence: process env < global secrets < per-wolf .env.
   // PI_CODING_AGENT_DIR makes Pi load the wolf's identity (extensions,
   // persona, sessions) regardless of the working directory.
@@ -137,29 +132,23 @@ export async function wolfLaunch(
     ...globalEnv,
     ...wolfEnv,
     PI_CODING_AGENT_DIR: agentDir(wolfDir),
+    [MODELS_FILE_ENV]: modelsFile,
   };
 
-  // When a local wolf is logged into the Claude subscription (OAuth in its
-  // auth.json), it runs on the subscription bridge — the main agent via the
-  // bridge provider, and memory/subagents over the same transport. A raw
-  // ANTHROPIC_API_KEY in the env would override that and silently bill the API,
-  // so strip it here. The key stays in ~/.wolfpack/.env purely so VPS
-  // provisioning (`wolfpack add wolf --host …`, which reads your shell env) can
-  // ship it to remote wolves — the local agent never uses it.
-  if (hasSubscriptionOAuth(agentDir(wolfDir))) {
+  // A wolf on the subscription transport runs everything over the bridge —
+  // the main agent via the bridge provider, memory/subagents via the Agent
+  // SDK. A raw ANTHROPIC_API_KEY in the env would override that and silently
+  // bill the API, so strip it here. The key stays in ~/.wolfpack/.env purely
+  // so VPS provisioning (`wolfpack add wolf --host …`, which reads your shell
+  // env) can ship it to remote wolves — the local agent never uses it.
+  if (table.transport === "subscription") {
     delete env.ANTHROPIC_API_KEY;
-    console.log(
-      c.dim("Local wolf on Claude subscription (OAuth) — API key withheld."),
-    );
+    console.log(c.dim("Local wolf on the Claude subscription — API key withheld."));
   } else if (!env.ANTHROPIC_API_KEY) {
     console.error(
-      c.yellow(
-        "⚠ No subscription login and no ANTHROPIC_API_KEY — the agent has no credentials.",
-      ),
+      c.yellow("⚠ transport: api but no ANTHROPIC_API_KEY — the agent has no credentials."),
     );
-    console.error(
-      c.dim("  Run `/login` inside pi for the subscription, or add ANTHROPIC_API_KEY to ~/.wolfpack/.env."),
-    );
+    console.error(c.dim("  Add ANTHROPIC_API_KEY to ~/.wolfpack/.env (or the wolf's .env)."));
   }
 
   // Pi-durable wolves run the harness directly
@@ -186,11 +175,12 @@ export async function wolfLaunch(
     return;
   }
 
+  const mainModel = piModelArg(table.tiers.main);
   console.log(
-    c.dim(`Launching as ${wolf.name} (${wolf.id}) in ${workDir}...`),
+    c.dim(`Launching as ${wolf.name} (${wolf.id}) on ${mainModel} in ${workDir}...`),
   );
 
-  const child = spawn("pi", [], {
+  const child = spawn("pi", ["--model", mainModel], {
     cwd: workDir,
     env,
     stdio: "inherit",

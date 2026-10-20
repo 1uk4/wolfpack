@@ -204,6 +204,47 @@ export function registerToolExtension(name: string, extensionPath: string): void
   EXTRA_TOOL_EXTENSIONS.set(name, extensionPath);
 }
 
+/**
+ * /main, /smart, /fast — switch this session's main model to the tier's
+ * resolved model (and its thinking level, when the tier sets one) from the
+ * wolf's model table. Session-only, like /model. Lives here rather than in the
+ * memory extension; both load in every local wolf.
+ */
+function registerTierCommands(pi: ExtensionAPI): void {
+  for (const tier of TIERS) {
+    pi.registerCommand(tier, {
+      description: `Switch the main model to the ${tier} tier (from the wolf's model table)`,
+      handler: async (_args, ctx) => {
+        let resolved;
+        try {
+          resolved = loadModelTable().table.tiers[tier];
+        } catch (err) {
+          ctx.ui.notify(`/${tier}: no model table — ${(err as Error).message}`, "error");
+          return;
+        }
+        const slash = resolved.piModel.indexOf("/");
+        const provider = resolved.piModel.slice(0, slash);
+        const id = resolved.piModel.slice(slash + 1);
+        const model = ctx.modelRegistry.find(provider, id);
+        if (!model) {
+          ctx.ui.notify(
+            `/${tier}: model ${resolved.piModel} is not registered (is the ${provider} provider loaded?)`,
+            "error",
+          );
+          return;
+        }
+        if (!(await pi.setModel(model))) {
+          ctx.ui.notify(`/${tier}: no auth configured for ${provider}`, "error");
+          return;
+        }
+        if (resolved.thinking) pi.setThinkingLevel(resolved.thinking);
+        const thinking = resolved.thinking ? ` · thinking ${pi.getThinkingLevel()}` : "";
+        ctx.ui.notify(`${tier} → ${resolved.piModel}${thinking}`, "info");
+      },
+    });
+  }
+}
+
 // Expose registration on a process-global so project-local extensions loaded
 // via jiti (separate module instances) can reach this shared map. Set at module
 // load so it's available before any `session_start` listener runs.
@@ -2417,6 +2458,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         };
       },
     });
+
+  registerTierCommands(pi);
 
   // /subagent command — spawn a subagent by name
   pi.registerCommand("subagent", {

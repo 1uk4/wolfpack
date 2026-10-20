@@ -79,6 +79,12 @@ suffix. Agent files can't set thinking. When a sandboxed spawn passes
 `--no-extensions`, the extension that registers the resolved model's provider
 (e.g. `pi-claude-bridge`) is re-enabled.
 
+## Tier commands
+
+`/main`, `/smart` and `/fast` switch this session's main model (and thinking, if
+the tier sets one) to that tier's resolved model, for the session only, like
+`/model`.
+
 ## Custom tools in subagents (bridge)
 
 Children launch default-deny: `--no-extensions` + `--tools <allowlist>` +

@@ -163,7 +163,6 @@ export class WolfManager {
       name: req.name,
       runtime: req.runtime ?? "pi",
       profile: req.profile,
-      model: req.model,
       role: req.role,
       specialty: req.specialty,
       domains: req.domains,
@@ -173,7 +172,7 @@ export class WolfManager {
     };
     await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(config));
 
-    // 5. Env (secrets + runtime vars). WOLF_DEN/model drive the launcher + pi.
+    // 5. Env (secrets + runtime vars). WOLF_DEN drives the launcher + pi.
     await this.writeEnv(home, id, req);
 
     // 6. Launcher + systemd unit.
@@ -201,7 +200,6 @@ export class WolfManager {
       `WOLF_ID=${id}`,
       `WOLF_NAME=${req.name}`,
       `WOLF_DEN=${path.join(home, "den")}`,
-      `WOLF_MODEL=${req.model}`,
       // KB paths for the memory extension's emit/read (host-relative layout).
       `KB_OPS=${path.join(home, "librarian")}`,
       `KB_BASE=${path.join(home, "knowledge", "base")}`,
@@ -245,10 +243,7 @@ sleep infinity > "$FIFO" &
 KEEPALIVE=$!
 trap 'kill "$KEEPALIVE" 2>/dev/null' EXIT INT TERM
 
-MODEL_ARG=()
-[ -n "\${WOLF_MODEL:-}" ] && MODEL_ARG=(--model "$WOLF_MODEL")
-
-exec pi --mode rpc "\${MODEL_ARG[@]}" < "$FIFO"
+exec pi --mode rpc < "$FIFO"
 `;
     }
     
@@ -358,6 +353,7 @@ WantedBy=multi-user.target
     wolfYamlB64: string,
     agentsMdB64: string,
     extensionsMap?: Record<string, string>,
+    modelsB64?: string,
   ): Promise<WolfConfig> {
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
@@ -392,12 +388,20 @@ WantedBy=multi-user.target
     const agentsPath = path.join(agentDir, "AGENTS.md");
     await fs.writeFile(agentsPath, Buffer.from(agentsMdB64, "base64"));
 
+    // Resolved model table (resolved by the CLI), next to wolf.yaml — the
+    // harness refuses to start without it.
+    if (modelsB64) {
+      await fs.writeFile(path.join(home, "models.json"), Buffer.from(modelsB64, "base64"));
+    }
+
     // Update wolf.yaml from bundle (contains updated config)
     const wolfYamlContent = Buffer.from(wolfYamlB64, "base64").toString("utf-8");
     const newConfig = yamlParse(wolfYamlContent) as WolfConfig;
 
-    // Merge: keep existing fields, update from bundle
-    const merged: WolfConfig = { ...config, ...newConfig, id: config.id, runtime: "pi-durable" };
+    // Merge: keep existing fields, update from bundle. The removed model:/
+    // provider: keys are dropped so they can't linger from an older config.
+    const { model: _model, provider: _provider, ...kept } = config as WolfConfig & { model?: unknown; provider?: unknown };
+    const merged: WolfConfig = { ...kept, ...newConfig, id: config.id, runtime: "pi-durable" };
     await fs.writeFile(path.join(home, "wolf.yaml"), yamlStringify(merged));
     this.wolvesIndex.set(id, merged);
 
@@ -426,6 +430,7 @@ WantedBy=multi-user.target
     // Fix ownership
     await exec("chown", ["-R", `${user}:${user}`, agentDir]);
     await exec("chown", ["-R", `${user}:${user}`, denDir]);
+    if (modelsB64) await exec("chown", [`${user}:${user}`, path.join(home, "models.json")]);
 
     await this.restart(id);
     return merged;
@@ -465,6 +470,8 @@ WantedBy=multi-user.target
         since,
         bundle: config.bundle,
         domains: config.domains,
+        transport: config.transport,
+        models: config.models,
       };
     } catch {
       return {
@@ -476,6 +483,8 @@ WantedBy=multi-user.target
         serviceState: "unknown",
         bundle: config.bundle,
         domains: config.domains,
+        transport: config.transport,
+        models: config.models,
         error: "Failed to probe status",
       };
     }
@@ -501,13 +510,23 @@ WantedBy=multi-user.target
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
 
-    // Deep-merge nested objects (memory, telegram, harness) instead of replacing
+    // Deep-merge nested objects (memory, telegram, harness, models) instead of
+    // replacing. A null value clears: the key is deleted (top level or one
+    // level down, e.g. `models: { fast: null }`), and a nested object left
+    // empty is dropped, so wolf.yaml never carries `null`.
     const runtime = ((updates as Record<string, unknown>).runtime ?? config.runtime ?? "pi") as WolfConfig["runtime"];
     const merged: Record<string, unknown> = { ...config as unknown as Record<string, unknown> };
     for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
-      if (value && typeof value === "object" && !Array.isArray(value)
-          && merged[key] && typeof merged[key] === "object" && !Array.isArray(merged[key])) {
-        merged[key] = { ...(merged[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
+      if (value === null) {
+        delete merged[key];
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        const base = merged[key] && typeof merged[key] === "object" && !Array.isArray(merged[key])
+          ? (merged[key] as Record<string, unknown>)
+          : {};
+        const next: Record<string, unknown> = { ...base, ...(value as Record<string, unknown>) };
+        for (const [k, v] of Object.entries(next)) if (v === null) delete next[k];
+        if (Object.keys(next).length > 0) merged[key] = next;
+        else delete merged[key];
       } else {
         merged[key] = value;
       }

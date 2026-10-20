@@ -30,10 +30,10 @@ export function wolvesRouter(manager: WolfManager): Router {
   router.post("/", async (req: Request, res: Response) => {
     try {
       const body = req.body as CreateWolfRequest;
-      if (!body.name || !body.runtime || !body.model || !body.role) {
+      if (!body.name || !body.runtime || !body.role) {
         res
           .status(400)
-          .json({ error: "name, runtime, model, and role are required" });
+          .json({ error: "name, runtime, and role are required" });
         return;
       }
       const wolf = await manager.create(body);
@@ -69,7 +69,7 @@ export function wolvesRouter(manager: WolfManager): Router {
       }
       const body = req.body as Record<string, unknown>;
       
-      // Detect pi-durable format: {runtime, harness, wolfYaml, agentsMd, extensions}
+      // Detect pi-durable format: {runtime, harness, wolfYaml, agentsMd, models, extensions}
       if (body.runtime === "pi-durable" && body.harness) {
         const updated = await manager.updatePiDurableBundle(
           config.id,
@@ -77,6 +77,7 @@ export function wolvesRouter(manager: WolfManager): Router {
           body.wolfYaml as string,
           body.agentsMd as string,
           body.extensions as Record<string, string> | undefined,
+          body.models as string | undefined,
         );
         res.json({ wolf: updated });
         return;

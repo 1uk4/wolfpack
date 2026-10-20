@@ -17,12 +17,15 @@ export interface WolfConfig {
   runtime: WolfRuntime;
   /** Usage profile: worker (local) | assistant (24/7 VPS) */
   profile?: WolfProfile;
-  model: string;
   role: string;
   specialty?: string;
   domains: string[];
   telegram?: TelegramConfig;
   extensions?: string[];
+  /** Model transport override (subscription | api); resolved by the CLI. */
+  transport?: string;
+  /** Per-tier model overrides; resolved by the CLI into models.json. */
+  models?: Record<string, unknown>;
   /** Manifest of the last identity bundle applied (versions + hashes). */
   bundle?: BundleManifest;
 }
@@ -44,6 +47,8 @@ export interface ExtensionStamp {
 export interface BundleManifest {
   builtAt: string;
   extensions: ExtensionStamp[];
+  /** Hash of the shipped models.json (pi-durable; drift detection). */
+  modelTableHash?: string;
 }
 
 export interface TelegramConfig {
@@ -68,6 +73,9 @@ export interface WolfStatus {
   bundle?: BundleManifest;
   /** KB domains this wolf subscribes to (from wolf.yaml). */
   domains?: string[];
+  /** wolf.yaml model keys, so the CLI can re-resolve the table for drift. */
+  transport?: string;
+  models?: Record<string, unknown>;
   /** Error message if probe failed */
   error?: string;
 }
@@ -103,7 +111,6 @@ export interface CreateWolfRequest {
   name: string;
   runtime: WolfRuntime;
   profile?: WolfProfile;
-  model: string;
   role: string;
   specialty?: string;
   domains: string[];
@@ -128,7 +135,10 @@ export interface UpdateBundleRequest {
 export interface UpdateWolfConfigRequest {
   name?: string;
   profile?: WolfProfile;
-  model?: string;
+  /** null clears the override. */
+  transport?: string | null;
+  /** Per-tier overrides, merged one level deep; null clears a tier or the block. */
+  models?: Record<string, unknown> | null;
   role?: string;
   specialty?: string;
   domains?: string[];

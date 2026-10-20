@@ -167,6 +167,9 @@ export class WorkClient {
       domain,
       title: "Inbox",
       assignee,
+      // Without the flag this Inbox is an ordinary feature that the lookup
+      // above never finds, so every move-to-Inbox would create another one.
+      container: true,
     });
     return result.item;
   }

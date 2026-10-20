@@ -14,6 +14,7 @@ import { wolfStatus } from "../commands/wolf-status.js";
 import { wolfLogs } from "../commands/wolf-logs.js";
 import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
+import { wolfModels } from "../commands/wolf-models.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
@@ -30,7 +31,7 @@ const c = {
 const HELP = `${c.bold("wolfpack")} — wolf management CLI
 
 ${c.bold("COMMANDS")}
-  setup                           First-time setup (hub + librarian)
+  setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
   launch <wolf> [dir]             Run a wolf locally in a project dir
@@ -38,7 +39,8 @@ ${c.bold("COMMANDS")}
   list                            Show all wolves grouped by host
   status <wolf>                   Wolf health and service state
   logs <wolf>                     View wolf logs
-  config <wolf>                   Configure wolf (domains, extensions, model)
+  models [wolf]                   Resolved model per use (tier, model, thinking, source)
+  config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
   --host <name>       Target host (default from config)
@@ -53,7 +55,7 @@ ${c.bold("FLAGS")}
 const HELP_ALL = `${c.bold("wolfpack")} — full command reference
 
 ${c.bold("WORKFLOW COMMANDS")}
-  setup                           First-time setup (hub + librarian)
+  setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
   launch <wolf> [dir]             Run a wolf locally in a project dir
@@ -62,7 +64,11 @@ ${c.bold("WORKFLOW COMMANDS")}
   list [--json]                   Show all wolves grouped by host
   status <wolf> [--host <h>]      Wolf health and service state
   logs <wolf> [-f] [--lines N]    View wolf logs
+  models [wolf] [--host <h>] [--json]
+                                  Resolved model table per wolf (all wolves if none)
   config <wolf> [--set key=val]   Configure wolf (interactive or scripted)
+                                    models: --set transport=api --set models.fast.model=<id>
+  config [--set models.<k>=val]   Pack models: tiers, thinking, local/VPS transports
 
 ${c.bold("HOST (advanced)")}
   host add <name> [--ip <ip>]     Interactive VPS setup + agent deploy
@@ -95,7 +101,6 @@ ${c.bold("ADD WOLF FLAGS")}
   --ext a,b           Attach these extensions (skip picker)
   --telegram-token <t>  Telegram bot token (assistant profile)
   --telegram-owner <id> Telegram owner user id
-  --model <m>         Model id
   -y, --yes           Non-interactive: accept defaults
 
 ${c.bold("GLOBAL FLAGS")}
@@ -132,8 +137,6 @@ function parseArgs(argv: string[]) {
       flags.port = argv[++i]!;
     } else if (arg === "--lines" && argv[i + 1]) {
       flags.lines = argv[++i]!;
-    } else if (arg === "--model" && argv[i + 1]) {
-      flags.model = argv[++i]!;
     } else if (arg === "--ext" && argv[i + 1]) {
       flags.ext = argv[++i]!;
     } else if (arg === "--profile" && argv[i + 1]) {
@@ -236,7 +239,6 @@ async function main(): Promise<void> {
         }
         await wolfAdd(positional[2], {
           host: flags.host as string | undefined,
-          model: flags.model as string | undefined,
           role: flags.role as string | undefined,
           profile: flags.profile as string | undefined,
           yes: flags.yes as boolean | undefined,
@@ -307,11 +309,14 @@ async function main(): Promise<void> {
         });
         break;
 
+      case "models":
+        await wolfModels(positional[1], {
+          host: flags.host as string | undefined,
+          json: flags.json as boolean | undefined,
+        });
+        break;
+
       case "config":
-        if (!positional[1]) {
-          console.error("Usage: wolfpack config <wolf> --set key=value");
-          process.exit(1);
-        }
         await wolfConfig(positional[1], {
           host: flags.host as string | undefined,
           set: sets.length ? sets : undefined,

@@ -35,7 +35,6 @@ const TELEGRAM_TOKEN_ENV = "TELEGRAM_BOT_TOKEN";
 interface AddWolfOpts {
   host?: string;
   runtime?: string;
-  model?: string;
   role?: string;
   specialty?: string;
   domains?: string[];
@@ -61,13 +60,16 @@ interface ResolvedChoices {
   host?: string;
   runtime: string;
   profile: WolfProfile;
-  model: string;
   extensions: string[];
   domains: string[];
   telegram?: TelegramChoice;
 }
 
-/** Decide host, runtime, profile, extensions, model, domains, and Telegram config. */
+/**
+ * Decide host, runtime, profile, extensions, domains, and Telegram config.
+ * No model choice: models come from the pack's tiers (transport from the
+ * host's pack default); per-wolf overrides are added later with `wolfpack config`.
+ */
 async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
   const interactive = !opts.yes && process.stdin.isTTY;
   const config = loadConfig();
@@ -120,16 +122,6 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     );
   } else {
     extensions = defaultExtensionKeys(profile);
-  }
-
-  // Model
-  let model: string;
-  if (opts.model) {
-    model = opts.model;
-  } else if (interactive) {
-    model = await prompt("Model ID", "claude-sonnet-4-5");
-  } else {
-    model = "claude-sonnet-4-5";
   }
 
   // Telegram config (only if the telegram extension is attached)
@@ -186,7 +178,7 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     domains = [];
   }
 
-  return { host, runtime, profile, model, extensions, domains, telegram };
+  return { host, runtime, profile, extensions, domains, telegram };
 }
 
 export async function wolfAdd(name: string, opts: AddWolfOpts): Promise<void> {
@@ -227,7 +219,6 @@ function addLocal(
     name,
     runtime: choices.runtime,
     profile: choices.profile,
-    model: choices.model,
     role: opts.role ?? name,
     specialty: opts.specialty,
     domains: choices.domains,
@@ -285,8 +276,6 @@ async function addRemote(
 
   console.log(c.bold(`Creating wolf '${name}' on ${opts.host}...`));
 
-  const model = choices.model;
-
   // Build the portable identity bundle (single source of truth) locally.
   console.log(c.dim("Building identity bundle (extensions + settings)..."));
   const built = await buildRemoteBundle({
@@ -317,7 +306,6 @@ async function addRemote(
       name,
       runtime: choices.runtime,
       profile: choices.profile,
-      model,
       role: opts.role ?? name,
       specialty: opts.specialty,
       domains: choices.domains,

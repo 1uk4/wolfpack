@@ -28,7 +28,6 @@ export { createTelegramClient, type TelegramClient } from "./telegram/index.js";
 
 // Legacy exports for backward compatibility
 export { loadExtensions, listBundledExtensions } from "./extensions.js";
-export { createMemoryExtension, type MemoryExtensionConfig } from "./memory/index.js";
 
 // Unified extension API
 export {

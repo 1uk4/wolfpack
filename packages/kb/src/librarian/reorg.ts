@@ -1116,12 +1116,15 @@ if (existsSync(eDir)) {
   }
 }
 
-// Build section→members map
+// Build section→members map. An entry whose section isn't in this domain's
+// tree (another domain's section, or a deleted one) counts as unplaced, so the
+// placement pass below re-homes it.
+const domainSectionIds = new Set(sections.filter((s) => s.domain === domain).map((s) => s.id as string));
 const sectionMembers = new Map<string, EntryWithVector[]>();
 const unplaced: EntryWithVector[] = [];
 for (const v of domainVectors) {
   const sec = entrySectionMap.get(v.entryId);
-  if (sec) {
+  if (sec && domainSectionIds.has(sec)) {
     if (!sectionMembers.has(sec)) sectionMembers.set(sec, []);
     sectionMembers.get(sec)!.push({
       entryId: v.entryId,
@@ -1224,7 +1227,8 @@ if (!opts.touchedSections && unplaced.length > 0) {
       const { fields } = parseFrontmatter(readFileSync(entryFile, "utf-8"));
       meta = { kind: fields.kind ? String(fields.kind) : undefined, maturity: fields.maturity ? String(fields.maturity) : undefined };
     }
-    const decision = placeEntryFn(entry.vector, meta, sections, domainCentroid, sectionMembers);
+    // Live filter: splits above may have added sections to this domain's tree.
+    const decision = placeEntryFn(entry.vector, meta, sections.filter((s) => s.domain === domain), domainCentroid, sectionMembers);
     if (decision.sectionId !== "_unplaced") {
       const targetSec = sections.find((s) => s.id === decision.sectionId);
       if (targetSec) {

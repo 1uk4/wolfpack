@@ -23,6 +23,7 @@ import {
   observe,
   renderDenContext,
   renderKbAccess,
+  reconcileDen,
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
@@ -155,7 +156,12 @@ export default function createMemoryExtension(
   // Librarian mode
   const isLibrarian = config.librarian === true;
   
-
+  // Archive den topics Dewey has absorbed (receipt-driven, silent). Daemon
+  // wolves only do this at startup; between restarts renderDenContext still
+  // hides absorbed topics, so wolf_memory stays lean either way.
+  try {
+    reconcileDen(wolfDen, kbRoots ?? undefined, wolfName);
+  } catch { /* never block startup */ }
 
   return defineExtension({
     name: "wolfpack-memory",
@@ -660,7 +666,7 @@ export default function createMemoryExtension(
 
     sections: [
       section("wolf_memory", (ctx) => {
-        const content = renderDenContext(ctx.wolfDen, ctx.wolfName);
+        const content = renderDenContext(ctx.wolfDen, ctx.wolfName, kbRoots ?? undefined);
         return content ?? undefined;
       }),
       section("kb_access", (ctx) => {

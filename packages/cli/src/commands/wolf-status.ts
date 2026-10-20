@@ -6,6 +6,8 @@
 
 import { resolveBackend } from "../backend/index.js";
 import { stampExtension } from "../bundle.js";
+import { loadConfig } from "../config.js";
+import { checkModelDrift } from "../model-drift.js";
 import { c } from "../render.js";
 
 export async function wolfStatus(
@@ -49,6 +51,15 @@ export async function wolfStatus(
       if (drift > 0) {
         console.log(c.yellow(`  ${drift} extension(s) out of date — run: wolfpack sync ${s.name}`));
       }
+    }
+    if (s.host !== "local" && s.runtime === "pi-durable") {
+      const models = checkModelDrift(loadConfig(), {
+        config: s.modelConfig,
+        deployedHash: s.modelTableHash,
+      });
+      console.log(
+        `  Models:   ${models.stale ? c.yellow(`${models.reason} — run: wolfpack sync ${s.name}`) : c.green("up to date")}`,
+      );
     }
     if (s.domains !== undefined) {
       console.log(

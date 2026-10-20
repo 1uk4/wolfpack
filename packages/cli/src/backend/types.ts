@@ -19,6 +19,16 @@ export interface WolfSummary {
   status: string;
   /** Deployed extension hashes (remote wolves) for drift detection in list. */
   bundleHashes?: Record<string, string>;
+  /** Remote wolf.yaml model keys (transport / models), to re-resolve its table. */
+  modelConfig?: RemoteModelConfig;
+  /** modelTableHash recorded in the deployed bundle manifest (pi-durable). */
+  modelTableHash?: string;
+}
+
+/** The model keys of a remote wolf.yaml, as the agent reports them. */
+export interface RemoteModelConfig {
+  transport?: unknown;
+  models?: unknown;
 }
 
 /** Snapshot of the memory extension's status, read from den/status.json. */
@@ -57,6 +67,10 @@ export interface WolfStatusInfo {
   bundle?: InstalledExtension[];
   /** KB domains this wolf subscribes to (from wolf.yaml). */
   domains?: string[];
+  /** Remote wolf.yaml model keys (transport / models), to re-resolve its table. */
+  modelConfig?: RemoteModelConfig;
+  /** modelTableHash recorded in the deployed bundle manifest (pi-durable). */
+  modelTableHash?: string;
 }
 
 export interface LogOptions {

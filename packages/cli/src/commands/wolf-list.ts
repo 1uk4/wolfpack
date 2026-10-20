@@ -5,6 +5,8 @@
 import { allBackends } from "../backend/index.js";
 import type { WolfSummary } from "../backend/types.js";
 import { stampExtension } from "../bundle.js";
+import { loadConfig, type CliConfig } from "../config.js";
+import { checkModelDrift } from "../model-drift.js";
 import { c } from "../render.js";
 
 export async function wolfList(opts: { json?: boolean }): Promise<void> {
@@ -44,6 +46,7 @@ export async function wolfList(opts: { json?: boolean }): Promise<void> {
     return;
   }
 
+  const config = loadConfig();
   const cols = process.stdout.columns || 80;
   let total = 0;
 
@@ -56,8 +59,8 @@ export async function wolfList(opts: { json?: boolean }): Promise<void> {
       const status = formatStatus(w.status);
       const rt = formatRuntime(w.runtime);
       const id = w.id ? c.dim(w.id) : "";
-      const drift = await checkDrift(w);
-      const driftTag = drift.length > 0 ? c.yellow(` [${drift.length} stale]`) : "";
+      const drift = await checkDrift(config, w);
+      const driftTag = drift.length > 0 ? c.yellow(` [stale: ${drift.join(", ")}]`) : "";
 
       console.log(`    ${c.bold(w.name.padEnd(12))} ${rt.padEnd(8)} ${status}${driftTag}  ${id}`);
 
@@ -107,9 +110,14 @@ function wrapDomains(domains: string[], maxWidth: number): string[] {
   return lines;
 }
 
-async function checkDrift(w: WolfSummary): Promise<string[]> {
-  if (!w.bundleHashes) return [];
+/** Stale extension keys, plus "models" when a pi-durable wolf's table drifted. */
+async function checkDrift(config: CliConfig, w: WolfSummary): Promise<string[]> {
   const stale: string[] = [];
+  if (w.host !== "local" && w.runtime === "pi-durable") {
+    const models = checkModelDrift(config, { config: w.modelConfig, deployedHash: w.modelTableHash });
+    if (models.stale) stale.push("models");
+  }
+  if (!w.bundleHashes) return stale;
   for (const [key, deployedHash] of Object.entries(w.bundleHashes)) {
     try {
       const local = await stampExtension(key);

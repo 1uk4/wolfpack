@@ -36,7 +36,7 @@ export class RemoteBackend implements WolfBackend {
     return (result.wolves ?? []).map((w) => {
       const raw = w as Record<string, unknown>;
       const bundle = raw.bundle as
-        | { extensions?: Array<{ key: string; hash: string }> }
+        | { extensions?: Array<{ key: string; hash: string }>; modelTableHash?: string }
         | undefined;
       const bundleHashes: Record<string, string> = {};
       for (const e of bundle?.extensions ?? []) {
@@ -51,6 +51,8 @@ export class RemoteBackend implements WolfBackend {
         domains: raw.domains as string[] | undefined,
         status: w.active ? "active" : w.serviceState,
         bundleHashes: Object.keys(bundleHashes).length ? bundleHashes : undefined,
+        modelConfig: { transport: raw.transport, models: raw.models },
+        modelTableHash: bundle?.modelTableHash,
       };
     });
   }
@@ -58,7 +60,10 @@ export class RemoteBackend implements WolfBackend {
   async status(nameOrId: string): Promise<WolfStatusInfo> {
     const s = (await this.client.wolfStatus(nameOrId)) as Record<string, unknown>;
     const manifest = s.bundle as
-      | { extensions?: Array<{ key: string; name: string; version: string; hash: string }> }
+      | {
+          extensions?: Array<{ key: string; name: string; version: string; hash: string }>;
+          modelTableHash?: string;
+        }
       | undefined;
     return {
       id: String(s.id),
@@ -71,6 +76,8 @@ export class RemoteBackend implements WolfBackend {
       error: s.error as string | undefined,
       bundle: manifest?.extensions,
       domains: s.domains as string[] | undefined,
+      modelConfig: { transport: s.transport, models: s.models },
+      modelTableHash: manifest?.modelTableHash,
     };
   }
 

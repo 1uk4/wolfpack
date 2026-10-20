@@ -152,24 +152,12 @@ export function detectTransition(
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SHIPPED → LIVE: deployed
+    // SHIPPED → LIVE: explicit only (task_stage live, or /task). Keyword
+    // guessing matched words like "live" in ordinary notes, including the
+    // "Stage: shipped → live" note this prompt itself wrote, and looped.
     // ─────────────────────────────────────────────────────────────────────────
-    case "shipped": {
-      const deployed = recentActivity.some(a => 
-        a.includes("deployed") || a.includes("live") || a.includes("production")
-      );
-      
-      if (deployed) {
-        return {
-          from: "shipped",
-          to: "live",
-          confidence: "medium",
-          reason: "Deployment detected",
-          prompt: `🚀 "${item.title}" appears deployed. Mark as live?`,
-        };
-      }
+    case "shipped":
       break;
-    }
   }
 
   return null;

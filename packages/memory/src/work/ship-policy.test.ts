@@ -39,6 +39,12 @@ describe("detectTransition (in_build)", () => {
     expect(detectTransition(feature, ctx({ childCount: 2, completedChildCount: 2 }))).toBeNull();
   });
 
+  it("never guesses shipped → live from note keywords (it looped on its own note)", () => {
+    const task = { kind: "task", stage: "shipped", title: "t" } as WorkItem;
+    const notes = ["Verified live in 1uk4", "deployed to production", "Stage: shipped → live"];
+    expect(detectTransition(task, ctx({ recentActivity: notes }))).toBeNull();
+  });
+
 });
 
 describe("readyToGraduate", () => {

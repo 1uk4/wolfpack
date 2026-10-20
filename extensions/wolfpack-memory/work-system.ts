@@ -494,6 +494,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // ── Lifecycle ───────────────────────────────────────────────────────────
 
   let lastCtx: any = null;
+  /** Transitions the user said No to ("<id>:<from>-><to>"); not offered again this session. */
+  const declinedTransitions = new Set<string>();
 
   pi.on("session_start", async (_event: unknown, ctx: any) => {
     lastCtx = ctx;
@@ -519,11 +521,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         const transitionCtx = extractTransitionContext(activeItem, body, children, recentNotes);
         const signal = detectTransition(activeItem, transitionCtx);
 
-        if (signal && signal.confidence !== "low") {
+        const key = signal ? `${activeTask.workId}:${signal.from}->${signal.to}` : "";
+        if (signal && signal.confidence !== "low" && !declinedTransitions.has(key)) {
           // Show transition prompt
           const confirm = await ctx.ui.confirm(signal.prompt, signal.reason ?? "");
+          if (!confirm) declinedTransitions.add(key);
           if (confirm) {
-            if (signal.to === "shipped" || signal.to === "live") {
+            if (signal.to === "shipped") {
               await shipWithRollup(activeTask.workId);
             } else {
               await client.stage(activeTask.workId, signal.to);

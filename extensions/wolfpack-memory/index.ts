@@ -7,15 +7,16 @@
  * Environment variables:
  *   WOLF_NAME           — wolf identity (e.g. "1uk4")
  *   WOLF_DEN            — path to wolf den (e.g. ~/wolves/local/1uk4/den)
- *   ANTHROPIC_API_KEY   — for LLM calls (observer, consolidator, claims)
+ *   WOLFPACK_MODELS_FILE — resolved model table (set by `wolfpack launch`;
+ *                          without it the table is resolved from config and
+ *                          the status bar shows "models: not from launch")
+ *   ANTHROPIC_API_KEY   — for LLM calls when the wolf's transport is api
  *   KB_OPS              — librarian-ops root (optional, enables KB delta emit)
  *   KB_BASE             — knowledge-base root (optional, enables entry resolve)
  *   WOLFPACK_DOMAIN     — default domain for claims (default: wolfpack)
- *   WOLFPACK_MODEL      — model for consolidation (default: claude-sonnet-4-6)
- *   WOLFPACK_FAST_MODEL — model for observers/classification (default: claude-haiku-4-5-20251001)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createEngine, type Engine } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type Engine, type ModelTable } from "@wolfpack/engine";
 import {
   createOrchestrator,
   sortObservations,
@@ -1155,18 +1156,24 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Soft fail if not configured — extension is invisible
   if (!wolfName || !wolfDen) return;
 
-  // Transport for memory LLM calls. Default to the Claude Agent SDK bridge so
-  // consolidation/promote run on the user's Claude subscription (MAX/Pro OAuth)
-  // instead of a raw ANTHROPIC_API_KEY — no per-token billing and no key to
-  // expire. Set WOLFPACK_MEMORY_PROVIDER=anthropic to force the API path.
-  const memProvider = (process.env.WOLFPACK_MEMORY_PROVIDER ?? "claude-agent-sdk").toLowerCase();
-  const useBridge = memProvider === "claude-agent-sdk" || memProvider === "claude-bridge";
-  // The bridge speaks Claude Code model aliases (undated); the API path wants
-  // dated ids. Pick defaults to match whichever transport is active.
-  const model     = process.env.WOLFPACK_MODEL      ?? (useBridge ? "claude-sonnet-4-5" : "claude-sonnet-4-6");
-  const fastModel = process.env.WOLFPACK_FAST_MODEL  ?? (useBridge ? "claude-haiku-4-5" : "claude-haiku-4-5-20251001");
-  // Credentials are satisfied either by the bridge (no key) or an API key.
-  const credsOk = useBridge || !!apiKey;
+  // Models and transport come from the resolved model table: the one
+  // `wolfpack launch` handed over, else resolved from the pack config +
+  // wolf.yaml (flagged in the status bar). A broken config turns memory's LLM
+  // features off with the error shown, rather than crashing pi.
+  let modelTable: ModelTable | null = null;
+  let modelsFromLaunch = false;
+  let modelError: string | null = null;
+  try {
+    ({ table: modelTable, fromLaunch: modelsFromLaunch } = loadModelTable());
+  } catch (err) {
+    modelError = err instanceof Error ? err.message : String(err);
+  }
+  const provider = modelTable?.tiers.smart.provider;
+  const model = modelTable?.tiers.smart.model;
+  const useApi = provider === "anthropic";
+  // Credentials: the subscription bridge needs none; the API needs a key.
+  const credsOk = !!modelTable && (!useApi || !!apiKey);
+  let modelErrorShown = false;
   // KB roots come from the environment — set explicitly in each wolf's .env by
   // the CLI (KB_BASE/KB_OPS). No path math: the old `../../` derivation silently
   // broke whenever the den layout changed (old ~/wolves/dens vs new host-first
@@ -1309,15 +1316,17 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   function initOrchestrator(ctx: any): void {
     if (!runtime || !credsOk) return;
 
+    const table = modelTable!;
+    const steps = engineSteps(table);
     engine = createEngine({
-      provider: useBridge ? "claude-agent-sdk" : "anthropic",
-      ...(useBridge ? {} : { apiKey }),
-      defaultModel: model,
+      provider: table.tiers.smart.provider,
+      ...(useApi ? { apiKey } : {}),
+      defaultModel: table.tiers.smart.model,
       steps: {
-        classify:    { model: fastModel },
+        ...steps,
         // Large pools produce large action lists; give the output real headroom
         // so the JSON isn't truncated (the default 4096 is far too small).
-        consolidate: { model, maxTokens: 16000 },
+        consolidate: { ...steps.consolidate, maxTokens: 16000 },
       },
     });
 
@@ -1400,6 +1409,15 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     // already written above, so never let the UI refresh crash the process.
     try {
       if (!ctx.hasUI) return;
+      if (modelError) {
+        ctx.ui.setStatus("wolfpack-models", "\x1b[31m🐺 models: config error\x1b[0m");
+        if (!modelErrorShown) {
+          modelErrorShown = true;
+          ctx.ui.notify(`🐺 Memory LLM features off — ${modelError}`, "error");
+        }
+      } else if (!modelsFromLaunch) {
+        ctx.ui.setStatus("wolfpack-models", "\x1b[33m🐺 models: not from launch\x1b[0m");
+      }
       if (!enabled) {
         ctx.ui.setStatus("wolfpack-memory", "\x1b[2m🐺 mem off\x1b[0m");
         return;
@@ -1643,7 +1661,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     description: "Toggle wolfpack memory (/wolf:memory on, /wolf:memory off)",
     handler: async (args: string, ctx: any) => {
       if (!credsOk) {
-        if (ctx.hasUI) ctx.ui.notify("🐺 ANTHROPIC_API_KEY not set — cannot enable memory", "error");
+        const why = modelError
+          ? `model config error — ${modelError}`
+          : "ANTHROPIC_API_KEY not set (this wolf's transport is api)";
+        if (ctx.hasUI) ctx.ui.notify(`🐺 Cannot enable memory: ${why}`, "error");
         return;
       }
 
@@ -1709,9 +1730,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         `Wolf: ${wolfName}`,
         `Memory: ${enabled ? "ON" : "OFF"}`,
         `Den: ${wolfDen}`,
-        `Transport: ${useBridge ? "claude-bridge (subscription)" : "anthropic api"}`,
-        `Model: ${model}`,
-        `API key: ${useBridge ? "n/a (bridge)" : apiKey ? "set" : "MISSING"}`,
+        `Transport: ${modelTable ? `${modelTable.transport} (${provider})` : "—"}`,
+        `Model: ${model ?? "—"}${modelTable && !modelsFromLaunch ? " (not from launch)" : ""}`,
+        ...(modelError ? [`Model config error: ${modelError}`] : []),
+        `API key: ${!useApi ? "n/a (subscription)" : apiKey ? "set" : "MISSING"}`,
       ];
 
       if (enabled && orchestrator) {

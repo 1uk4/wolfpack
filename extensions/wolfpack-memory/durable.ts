@@ -16,9 +16,6 @@ import createTasksExtension, { type TasksConfig } from "./unified-tasks.js";
 export interface WolfpackMemoryConfig {
   // Memory settings
   enabled?: boolean;
-  fastModel?: string;
-  model?: string;
-  provider?: "anthropic" | "claude-agent-sdk";
   minTextLength?: number;
   consolidation?: {
     trigger?: "threshold" | "timer" | "hybrid" | "manual";
@@ -40,9 +37,6 @@ export default function createWolfpackMemoryExtension(
   // Build individual extensions
   const memoryConfig: MemoryConfig = {
     enabled: config.enabled,
-    fastModel: config.fastModel,
-    model: config.model,
-    provider: config.provider,
     minTextLength: config.minTextLength,
     consolidation: config.consolidation,
     librarian: config.librarian,

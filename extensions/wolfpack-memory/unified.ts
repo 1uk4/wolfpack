@@ -28,18 +28,12 @@ import {
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { createEngine, type Engine } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type EngineStep, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
 export interface MemoryConfig {
   enabled?: boolean;
-  /** Model for observation extraction (default: claude-haiku-4-5) */
-  fastModel?: string;
-  /** Model for consolidation (default: claude-sonnet-4-6) */
-  model?: string;
-  /** Provider (default: anthropic) */
-  provider?: "anthropic" | "claude-agent-sdk";
   /** Minimum text length to trigger observation (default: 100) */
   minTextLength?: number;
   /** Consolidation settings */
@@ -118,9 +112,6 @@ export default function createMemoryExtension(
 ): ReturnType<typeof defineExtension> {
   const { wolfDen, wolfName, domains } = context;
   const {
-    fastModel = "claude-haiku-4-5",
-    model = "claude-sonnet-4-6",
-    provider = "anthropic",
     minTextLength = 100,
     consolidation,
   } = config;
@@ -128,19 +119,37 @@ export default function createMemoryExtension(
   const consolidationThreshold = consolidation?.threshold ?? 15000;
   const consolidationTrigger = consolidation?.trigger ?? "threshold";
 
+  // Models come from the wolf's resolved table (the harness points
+  // WOLFPACK_MODELS_FILE at the shipped models.json before loading us).
+  // Loaded lazily so a broken table surfaces as a tool error, not a crash.
+  let table: ModelTable | null = null;
+  function getTable(): ModelTable {
+    if (!table) table = loadModelTable().table;
+    return table;
+  }
+  function apiKeyFor(t: ModelTable): string | undefined {
+    return t.tiers.smart.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : undefined;
+  }
+  /** Engine on the table's models/transport; `knobs` layers non-model settings per step. */
+  function makeEngine(knobs: Partial<Record<EngineStep, { maxTokens?: number }>> = {}): Engine {
+    const t = getTable();
+    const steps: NonNullable<EngineConfig["steps"]> = engineSteps(t);
+    for (const [step, extra] of Object.entries(knobs) as Array<[EngineStep, { maxTokens?: number }]>) {
+      steps[step] = { ...steps[step]!, ...extra };
+    }
+    const apiKey = apiKeyFor(t);
+    return createEngine({
+      provider: t.tiers.smart.provider,
+      ...(apiKey ? { apiKey } : {}),
+      defaultModel: t.tiers.smart.model,
+      steps,
+    });
+  }
+
   // Lazy-init engine
   let engine: Engine | null = null;
   function getEngine(): Engine {
-    if (!engine) {
-      engine = createEngine({
-        provider,
-        defaultModel: model,
-        steps: {
-          classify: { model: fastModel },
-          consolidate: { model, maxTokens: 16000 },
-        },
-      });
-    }
+    if (!engine) engine = makeEngine({ consolidate: { maxTokens: 16000 } });
     return engine;
   }
 
@@ -186,8 +195,8 @@ export default function createMemoryExtension(
             const result = await consolidatePool({
               wolfDen: ctx.wolfDen,
               wolfName: ctx.wolfName,
-              model,
-              provider,
+              table: getTable(),
+              apiKey: apiKeyFor(getTable()),
               kbRoots: kbRoots ?? undefined,
               defaultDomain: domains[0] ?? "wolfpack",
               domains,
@@ -455,18 +464,8 @@ export default function createMemoryExtension(
           async execute(args: { domain?: string; rebuild?: boolean }, ctx: ToolContext): Promise<ToolResult> {
             try {
               const { reorg } = await import("@wolfpack/kb/librarian");
-              const { createEngine } = await import("@wolfpack/engine");
-              
-              const engine = createEngine({
-                provider: provider ?? "anthropic",
-                defaultModel: model,
-                steps: {
-                  classify: { model: fastModel },
-                  produce: { model },
-                  sectionSummary: { model },
-                  labelSection: { model },
-                },
-              });
+              // Every step on its tier (section summaries/labels on fast).
+              const engine = makeEngine();
               
               const roots = {
                 kbBase: kbRoots.kbBase,
@@ -608,14 +607,7 @@ export default function createMemoryExtension(
               }
 
               // Lazy engine
-              const { createEngine } = await import("@wolfpack/engine");
-              const splitEngine = createEngine({
-                provider: provider ?? "anthropic",
-                defaultModel: model,
-                steps: {
-                  consolidate: { model, maxTokens: 16_000 },
-                },
-              });
+              const splitEngine = makeEngine({ consolidate: { maxTokens: 16_000 } });
               const notify = (m: string) => console.log(`[librarian] ${m}`);
 
               // Single-entry split
@@ -706,8 +698,8 @@ export default function createMemoryExtension(
                     const consResult = await consolidatePool({
                       wolfDen: ctx.wolfDen,
                       wolfName: ctx.wolfName,
-                      model,
-                      provider,
+                      table: getTable(),
+                      apiKey: apiKeyFor(getTable()),
                       kbRoots: kbRoots ?? undefined,
                       defaultDomain: domains[0] ?? "wolfpack",
               domains,

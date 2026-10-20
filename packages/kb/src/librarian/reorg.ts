@@ -1241,6 +1241,18 @@ if (!opts.touchedSections && unplaced.length > 0) {
         result.placements++;
         notify?.(`  placed: ${entry.entryId} → ${decision.sectionId}`);
       }
+    } else {
+      // Nothing in this domain is close enough: give it its own root section
+      // (as the sweep does for a NEW pick), named by the labeler and absorbed
+      // or merged by the tree passes below. Never leave it outside the tree.
+      const newId = mkSectionId(domain);
+      sections.push(mkChildSection({ id: newId, domain, parent: null, depth: 0, centroid: entry.vector, memberCount: 1 }));
+      writeEntrySection(eDir, entry.entryId, newId, opts.dryRun);
+      sectionMembers.set(newId as string, [entry]);
+      events.push(ev.sectionCreated({ sectionId: newId, domain, parent: null, label: String(newId).slice(-7) }));
+      events.push(ev.entryPlaced({ entryId: entry.entryId, sectionId: newId, basis: "crystallized", fit: Math.max(0, Math.min(1, decision.fit || 0)) }));
+      result.placements++;
+      notify?.(`  placed: ${entry.entryId} → ${newId} (new section)`);
     }
   }
 }

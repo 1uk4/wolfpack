@@ -49,4 +49,18 @@ describe("reorg: entries are re-homed into their own domain's tree", () => {
     expect(notes).toContain("  placed: kb-personal-MISPLCD → sec-personal-bbbbbb");
     expect(notes.some((n) => n.includes("kb-personal-BBBBBBB") && n.includes("placed:"))).toBe(false);
   });
+
+  it("gives an entry nothing in its domain is close to a new section of its own domain", async () => {
+    writeSections(roots, [root("sec-snapjack-aaaaaa", "snapjack"), { ...root("sec-personal-bbbbbb", "personal"), centroid: [0, 0, 1] } as Section]);
+    entry("snapjack", "kb-snapjack-AAAAAAA", "sec-snapjack-aaaaaa");
+    entry("personal", "kb-personal-MISPLCD", "sec-snapjack-aaaaaa");
+
+    const notes: string[] = [];
+    const engine = { call: vi.fn(), usage: { summarize: () => ({}) } } as unknown as Engine;
+    await reorg({ engine, roots, domains: ["personal"], dryRun: true, notify: (m) => notes.push(m) });
+
+    const line = notes.find((n) => n.includes("placed: kb-personal-MISPLCD"));
+    expect(line).toMatch(/→ sec-personal-\S+ \(new section\)$/);
+  });
 });
+

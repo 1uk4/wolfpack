@@ -15,7 +15,7 @@
  *   WOLFPACK_FAST_MODEL — model for observers/classification (default: claude-haiku-4-5-20251001)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createEngine, DIGEST, type Engine } from "@wolfpack/engine";
+import { createEngine, type Engine } from "@wolfpack/engine";
 import {
   createOrchestrator,
   sortObservations,
@@ -32,6 +32,8 @@ import {
   type MemoryEventHandler,
   type LedgerEvent,
   type DenConfig,
+  renderDenContext as renderDenContextShared,
+  renderKbAccess as renderKbAccessShared,
 } from "@wolfpack/memory";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -1409,101 +1411,25 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   // ── Den context injection ──────────────────────────────────────────────
 
-  function renderDenContext(): string | null {
-    try {
-      const topicsDir = path.join(wolfDen, "memory", "topics");
-      if (!fs.existsSync(topicsDir)) return null;
+  // Same renderers as pi-durable (@wolfpack/memory prompt-context), so both
+  // runtimes brief the wolf identically. KB access is scoped by what's mirrored
+  // on disk (no subscription filter).
+  const renderDenContext = () => renderDenContextShared(wolfDen, wolfName);
+  const renderKbAccess = () => (kbEnabled ? renderKbAccessShared(kbRoots.kbBase, []) : null);
 
-      const files: string[] = (fs.readdirSync(topicsDir) as string[]).filter((f: string) => f.endsWith(".md"));
-      if (files.length === 0) return null;
-
-      const topics: Array<{ id: string; summary: string; filePath: string }> = [];
-      for (const file of files) {
-        const raw = fs.readFileSync(path.join(topicsDir, file), "utf-8");
-        const idMatch = raw.match(/^id:\s*(.+)$/m);
-        const summaryMatch = raw.match(/^summary:\s*(.+)$/m);
-        topics.push({
-          id: idMatch?.[1]?.trim() ?? file.replace(/\.md$/, ""),
-          summary: summaryMatch?.[1]?.trim() ?? "(no summary)",
-          filePath: path.join(topicsDir, file),
-        });
-      }
-
-      const lines = [
-        `Wolf ${wolfName} has persistent memory from previous sessions (${topics.length} topic${topics.length !== 1 ? "s" : ""}).`,
-        "Read a topic file when you need full details.",
-        "",
-        ...topics.map(t => `- \`${t.filePath}\` -- ${t.summary}`),
-      ];
-      return lines.join("\n");
-    } catch {
-      return null;
-    }
-  }
-
-
-  // Lightweight discovery header: list the KB domains this wolf can see (its
-  // mirrored domain folders) with each domain's entry count and top-level
-  // section titles from Dewey's _digest.json, and point at INDEX.md. Enough to
-  // tell WHEN a domain is relevant, without dumping the KB into context.
-  // Access-scoped by what's on disk.
-  function domainOutline(dir: string): string {
-    let entries = 0;
-    try {
-      entries = fs.readdirSync(path.join(dir, "entries")).filter((f) => f.endsWith(".md")).length;
-    } catch { /* no entries dir */ }
-    let titles: string[] = [];
-    try {
-      const digest = JSON.parse(fs.readFileSync(path.join(dir, "_digest.json"), "utf-8"));
-      titles = (digest.sections ?? [])
-        .map((s: { title?: string }) => (s.title ?? "").replace(/^#+\s*/, "").trim())
-        .filter(Boolean);
-    } catch { /* no digest yet: count only */ }
-    const shown = titles
-      .slice(0, DIGEST.maxPointerSections)
-      .map((t) => (t.length > 60 ? t.slice(0, 59) + "…" : t));
-    const more = titles.length > shown.length ? `; +${titles.length - shown.length} more` : "";
-    return `(${entries} entries)${shown.length ? ": " + shown.join("; ") + more : ""}`;
-  }
-
-  function renderKbAccess(): string | null {
-    if (!kbEnabled) return null;
-    try {
-      const domainsRoot = path.join(kbRoots.kbBase, "domains");
-      const names = fs
-        .readdirSync(domainsRoot, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-        .map((d) => d.name)
-        .sort();
-      if (!names.length) return null;
-      return [
-        `You have access to ${names.length} shared knowledge domain(s):`,
-        ...names.map((n) => `- ${n} ${domainOutline(path.join(domainsRoot, n))}`),
-        `Each lives at ${domainsRoot}/<domain>/. When a question touches one of these`,
-        `topics, read <domain>/INDEX.md, then entries/<id>.md on demand.`,
-        `Trust entries (authority: curated).`,
-      ].join("\n");
-    } catch {
-      return null;
-    }
-  }
-
+  // Use the sections API (Pi wraps each in a tag), not string-appending to
+  // event.systemPrompt: providers like pi-claude-bridge rebuild the prompt from
+  // systemPromptOptions and silently drop raw appended text.
   pi.on("before_agent_start", (event: any, _ctx: any) => {
-    const parts: string[] = [];
+    const sections = event.systemPromptOptions.sections;
 
     const denContext = renderDenContext();
-    if (denContext) parts.push("<wolf_memory>", denContext, "</wolf_memory>");
+    if (denContext) sections["wolf_memory"] = denContext;
+    else delete sections["wolf_memory"];
 
     const kbAccess = renderKbAccess();
-    if (kbAccess) parts.push("<kb_access>", kbAccess, "</kb_access>");
-
-
-    if (parts.length === 0) return;
-
-    const injection = "\n" + parts.join("\n") + "\n";
-    return {
-      systemPrompt: event.systemPrompt + injection,
-    };
+    if (kbAccess) sections["kb_access"] = kbAccess;
+    else delete sections["kb_access"];
   });
 
   // ── Observer trigger (fire-and-forget, like OM) ─────────────────────────
@@ -1554,15 +1480,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
     const observations = orchestrator.getActiveObservations();
     const memoryRoot = orchestrator.getMemoryRoot();
-    let summary = renderCompactionSummary(memoryRoot, observations);
-
-    // Include den knowledge in compaction summary
-    const denContext = renderDenContext();
-    if (denContext) {
-      const denSection = `## Wolf memory (persistent across sessions)\n${denContext}`;
-      summary = summary ? `${summary}\n\n${denSection}` : denSection;
-    }
-
+    // Den topics are not repeated here: the wolf_memory section re-injects them
+    // into the system prompt every turn, compaction or not.
+    const summary = renderCompactionSummary(memoryRoot, observations);
     if (!summary) return undefined;
 
     // Supply tokensBefore so the compaction summary renders correctly on resume.

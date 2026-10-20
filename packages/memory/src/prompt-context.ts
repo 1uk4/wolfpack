@@ -42,18 +42,37 @@ export function renderDenContext(wolfDen: string, wolfName: string): string | nu
   }
 }
 
+type DigestNode = { title?: string; summary?: string; entryIds?: string[]; children?: DigestNode[] };
+
+/** Entries in a section and all its descendants. */
+function subtreeEntries(s: DigestNode): number {
+  return (s.entryIds?.length ?? 0) + (s.children ?? []).reduce((n, c) => n + subtreeEntries(c), 0);
+}
+
+/** Indented section tree: `- Title (N) — summary`, one line per section. */
+function renderSectionTree(secs: DigestNode[], depth: number): string {
+  let result = "";
+  for (const s of secs) {
+    const title = (s.title ?? "").replace(/^#+\s*/, "").trim();
+    if (!title) continue;
+    const summary = (s.summary ?? "").trim();
+    result += `\n${"  ".repeat(depth + 1)}- ${title} (${subtreeEntries(s)})${summary ? " — " + summary : ""}`;
+    if (s.children?.length) result += renderSectionTree(s.children, depth + 1);
+  }
+  return result;
+}
+
 /**
  * Render KB access context for system prompt injection.
- * Lists subscribed domains with entry counts and section titles.
- * 
+ * Lists subscribed domains with entry counts and Dewey's full section tree
+ * (title, entry count, summary per section) from each domain's _digest.json.
+ *
  * @param kbBase - Path to knowledge base root
  * @param subscribedDomains - Domain names the wolf is subscribed to (empty = show all)
- * @param maxSections - Max section titles to show per domain (default: 5)
  */
 export function renderKbAccess(
   kbBase: string | undefined,
   subscribedDomains: string[],
-  maxSections: number = 5
 ): string | null {
   if (!kbBase) return null;
 
@@ -69,7 +88,7 @@ export function renderKbAccess(
         .sort();
     } else {
       names = readdirSync(domainsRoot, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
+        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
         .map((d) => d.name)
         .sort();
     }
@@ -94,19 +113,7 @@ export function renderKbAccess(
         const digestPath = join(domainDir, "_digest.json");
         if (existsSync(digestPath)) {
           const digest = JSON.parse(readFileSync(digestPath, "utf-8"));
-          function walkSections(secs: Array<{ title?: string; children?: unknown[] }>, depth: number): string {
-            let result = "";
-            for (const s of secs) {
-              const title = (s.title ?? "").replace(/^#+\s*/, "").trim();
-              if (!title) continue;
-              result += "\n" + "  ".repeat(depth + 1) + "- " + title;
-              if (s.children && Array.isArray(s.children)) {
-                result += walkSections(s.children as typeof secs, depth + 1);
-              }
-            }
-            return result;
-          }
-          sectionTree = walkSections(digest.sections ?? [], 0);
+          sectionTree = renderSectionTree(digest.sections ?? [], 0);
         }
       } catch { /* no digest */ }
 
@@ -117,8 +124,10 @@ export function renderKbAccess(
     return [
       `You have access to ${names.length} shared knowledge domain(s):`,
       ...domainOutlines,
-      `Each lives at ${domainsRoot}/<domain>/. When a question touches one of these`,
-      `topics, read <domain>/INDEX.md, then entries/<id>.md on demand.`,
+      `(N) = entries in that section. Each domain lives at ${domainsRoot}/<domain>/.`,
+      `When a question touches one of these sections, find its entry ids in`,
+      `<domain>/_digest.json (sections[].entryIds) or browse <domain>/INDEX.md (every`,
+      `entry with title + summary), then read entries/<id>.md on demand.`,
       `Trust entries (authority: curated).`,
     ].join("\n");
   } catch {

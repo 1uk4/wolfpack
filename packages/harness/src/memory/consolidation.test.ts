@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -60,4 +60,23 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
     expect(prompt).toContain("pending body");
     expect(prompt).not.toContain("absorbed body");
   });
+
+  it("keeps only subscribed domains as the hint; invented tags fall back to the default", async () => {
+    pool(6);
+    const engine = {
+      call: async (_s: string, schema: { parse: (v: unknown) => unknown }) =>
+        schema.parse({ actions: [
+          { sessionTopicId: "lift", action: "create", reasoning: "r", result: { id: "lift", title: "Lift", summary: "s", body: "b1", domain: "fitness" } },
+          { sessionTopicId: "plan", action: "create", reasoning: "r", result: { id: "plan", title: "Plan", summary: "s", body: "b2", domain: "personal" } },
+        ] }),
+    } as unknown as Engine;
+
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, kbRoots: roots, defaultDomain: "personal", domains: ["personal"], engine });
+
+    const inbox = join(roots.opsRoot, "inbox", WOLF);
+    const hints = readdirSync(inbox).map((f) => /domain_hint: (\S+)/.exec(readFileSync(join(inbox, f), "utf8"))?.[1]);
+    expect(hints).toEqual(["personal", "personal"]);
+    expect(readFileSync(join(den, "memory", "topics", "lift.md"), "utf8")).toContain("domain: personal");
+  });
 });
+

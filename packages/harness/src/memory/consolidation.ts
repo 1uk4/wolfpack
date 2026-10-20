@@ -243,6 +243,13 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     change: "create" | "merge";
   }> = [];
 
+  // The LLM's domain is only a hint, and Dewey quarantines undeclared domains
+  // as unclassified. Observers on single-domain wolves get no domain list and
+  // invent tags ("fitness", "telegram"), so only a subscribed domain survives;
+  // anything else falls back to the wolf's default domain.
+  const allowedDomains = new Set(config.domains?.length ? config.domains : [defaultDomain]);
+  const domainOf = (d: string | undefined) => (d && allowedDomains.has(d) ? d : defaultDomain);
+
   for (const action of result.actions) {
     if (action.action === "skip" || !action.result) {
       skipped++;
@@ -259,6 +266,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       summary: action.result.summary,
       updated: now,
       body: action.result.body,
+      domain: domainOf(action.result.domain),
     });
 
     updatedTopics.push({
@@ -266,7 +274,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       title: action.result.title,
       summary: action.result.summary,
       body: action.result.body,
-      domain: action.result.domain,
+      domain: domainOf(action.result.domain),
       change,
     });
 

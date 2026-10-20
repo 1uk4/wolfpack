@@ -190,6 +190,7 @@ export default function createMemoryExtension(
               provider,
               kbRoots: kbRoots ?? undefined,
               defaultDomain: domains[0] ?? "wolfpack",
+              domains,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
             });
 
@@ -709,6 +710,7 @@ export default function createMemoryExtension(
                       provider,
                       kbRoots: kbRoots ?? undefined,
                       defaultDomain: domains[0] ?? "wolfpack",
+              domains,
                       onProgress: (msg) => console.log(`[memory] ${msg}`),
                     });
                     console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);

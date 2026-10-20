@@ -283,7 +283,7 @@ function getToolExtensionPath(tool: string): string | undefined {
 
 /**
  * Model providers that come from an extension rather than pi itself, keyed by
- * the provider prefix of a model id (`claude-bridge/claude-sonnet-4-5`), mapped
+ * the provider prefix of a model id (`claude-bridge/claude-sonnet-5-5`), mapped
  * to the npm package installed in the agent dir. `--no-extensions` drops them,
  * so a sandboxed subagent on such a model fails with "Model not found" unless
  * the provider extension is re-enabled. Its tools stay gated by `--tools`.

@@ -3,7 +3,7 @@
  *
  * Mirrors Pi-CLI's consolidateSession but skips the session topics step:
  *   1. Read observations from .memory/pool/observations.jsonl
- *   2. Read existing den topics for context
+ *   2. Archive den topics the KB has absorbed, then read the rest for context
  *   3. LLM consolidation (same prompt/schema as Pi-CLI)
  *   4. Write topics directly to $WOLF_DEN/memory/topics/
  *   5. Emit deltas to KB inbox (same as Pi-CLI promote)
@@ -12,7 +12,7 @@
 import { readFile, mkdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createEngine, CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
+import { createEngine, CONSOLIDATE_SYSTEM, type Engine } from "@wolfpack/engine";
 import {
   ConsolidationResultSchema,
   writeDenTopic,
@@ -20,6 +20,7 @@ import {
   ensureDenDirs,
   readDenTopics,
   buildDomainContext,
+  reconcileDen,
 } from "@wolfpack/memory";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -53,6 +54,8 @@ export interface ConsolidationConfig {
   minTokens?: number;
   /** Optional progress callback */
   onProgress?: (msg: string) => void;
+  /** Engine override (tests); built from model/provider when omitted. */
+  engine?: Engine;
 }
 
 export interface ConsolidationResult {
@@ -162,7 +165,20 @@ export async function consolidatePool(
   // Ensure den structure exists
   ensureDenDirs(wolfDen);
 
-  // Read existing den topics for context (pi-durable uses den directly, no session topics)
+  // Daemon wolves promote here, not via consolidateSession, so reconcile here
+  // too: absorbed topics leave the den before the LLM sees it. New observations
+  // on an absorbed subject start a fresh small topic instead of regrowing the
+  // old one; the sweep's alias merges it into the same entry.
+  if (kbRoots) {
+    try {
+      const r = reconcileDen(wolfDen, kbRoots, wolfName);
+      onProgress?.(`reconciled: ${r.archived.length} archived, ${r.pending.length} pending`);
+    } catch (err) {
+      onProgress?.(`reconcile skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Read the remaining (unabsorbed) den topics for context
   const existingTopics = readDenTopics(wolfDen);
   const existingSection =
     existingTopics.length > 0
@@ -192,7 +208,7 @@ Fold the observations into topics. For each group of related observations, decid
 Domain tags [domain] appear on observations. When creating or merging topics, set the domain field to the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.`;
 
   // Create engine for consolidation
-  const engine = createEngine({
+  const engine = config.engine ?? createEngine({
     provider,
     defaultModel: model,
     steps: {

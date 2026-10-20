@@ -338,16 +338,23 @@ export interface LoadModelTableOptions {
 }
 
 /**
- * The one loader both runtimes call. Prefers a handed-over table (launch /
- * bundle); otherwise resolves from the pack config and the wolf's wolf.yaml.
- * `fromLaunch` is false for the fallback so a pi session can flag it.
+ * The one loader both runtimes call. Prefers a handed-over table: an explicit
+ * file or WOLFPACK_MODELS_FILE, else the models.json beside the wolf's
+ * wolf.yaml (written by launch, shipped by sync — so a VPS CLI run with only
+ * WOLF_DEN set finds it). Otherwise resolves from the pack config and the
+ * wolf's wolf.yaml. `fromLaunch` is false for that fallback so a pi session
+ * can flag it.
  */
 export function loadModelTable(opts: LoadModelTableOptions = {}): { table: ModelTable; fromLaunch: boolean } {
   const env = opts.env ?? process.env;
   const file = opts.file ?? env[MODELS_FILE_ENV];
   if (file) return { table: readModelTable(file), fromLaunch: true };
 
-  const wolfYaml = opts.wolfYaml ?? (env.WOLF_DEN ? path.join(env.WOLF_DEN, "..", "wolf.yaml") : undefined);
+  const wolfHome = env.WOLF_DEN ? path.join(env.WOLF_DEN, "..") : undefined;
+  const besideWolf = wolfHome ? path.join(wolfHome, "models.json") : undefined;
+  if (besideWolf && fs.existsSync(besideWolf)) return { table: readModelTable(besideWolf), fromLaunch: true };
+
+  const wolfYaml = opts.wolfYaml ?? (wolfHome ? path.join(wolfHome, "wolf.yaml") : undefined);
   const table = resolveModelTable({
     pack: readPackModels(opts.packConfigFile ?? packConfigPath()),
     wolf: wolfYaml ? readWolfModels(wolfYaml) : undefined,

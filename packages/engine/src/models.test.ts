@@ -225,6 +225,16 @@ describe("loadModelTable", () => {
     expect(table.transport).toBe("subscription");
   });
 
+  it("uses the models.json beside wolf.yaml when only WOLF_DEN is set (VPS CLIs)", () => {
+    const dir = tmp();
+    fs.mkdirSync(path.join(dir, "den"));
+    const shipped = resolveModelTable({ pack: PACK, location: "vps" });
+    writeModelTable(path.join(dir, "models.json"), shipped);
+    const { table, fromLaunch } = loadModelTable({ env: { WOLF_DEN: path.join(dir, "den") }, packConfigFile: "/nonexistent" });
+    expect(fromLaunch).toBe(true);
+    expect(table.transport).toBe("api");
+  });
+
   it("errors clearly when the pack config has no models: block", () => {
     const dir = tmp();
     const packFile = path.join(dir, "config.yaml");

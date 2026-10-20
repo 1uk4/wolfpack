@@ -409,7 +409,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           }
         }
         const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain).map((e) => e.vector));
-        const decision = placeEntry(vec, {}, sections, domainCentroid, sectionMembers);
+        // placeEntry descends from the roots of its first section's domain, so it
+        // must only see this domain's tree (it once routed personal entries into
+        // snapjack sections).
+        const domainSections = sections.filter((s) => s.domain === domain);
+        const decision = placeEntry(vec, {}, domainSections, domainCentroid, sectionMembers);
         if (decision.sectionId !== "_unplaced") {
           sectionId = decision.sectionId as SectionId;
           placement = { basis: "routed", fit: clampFit(decision.fit) };

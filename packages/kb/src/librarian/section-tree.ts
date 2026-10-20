@@ -544,7 +544,7 @@ export function placeEntry(
   // Clamp to [0, 1]
   abstractionScore = Math.max(0, Math.min(1, abstractionScore));
 
-  // Find domain from first section (assume all sections belong to same domain)
+  // Callers pass ONE domain's sections; the domain is read from the first.
   if (sections.length === 0) {
     return { sectionId: "_unplaced", fit: 0, depth: 0 };
   }

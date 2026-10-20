@@ -12,7 +12,14 @@
 import { readFile, mkdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createEngine, CONSOLIDATE_SYSTEM, type Engine } from "@wolfpack/engine";
+import {
+  createEngine,
+  engineSteps,
+  loadModelTable,
+  CONSOLIDATE_SYSTEM,
+  type Engine,
+  type ModelTable,
+} from "@wolfpack/engine";
 import {
   ConsolidationResultSchema,
   writeDenTopic,
@@ -36,10 +43,11 @@ export interface PoolObservation {
 export interface ConsolidationConfig {
   wolfDen: string;
   wolfName: string;
-  /** Model for consolidation (default: claude-sonnet-4-6) */
-  model?: string;
-  /** Provider (default: anthropic) */
-  provider?: "anthropic" | "claude-agent-sdk";
+  /** The wolf's resolved model table (default: loadModelTable(), i.e. the
+   *  WOLFPACK_MODELS_FILE handed over by launch / the harness). */
+  table?: ModelTable;
+  /** API key for the api transport (default: the SDK's ANTHROPIC_API_KEY lookup). */
+  apiKey?: string;
   /** KB roots for emitting deltas to Dewey (optional) */
   kbRoots?: KbRoots;
   /** Default domain hint for KB emissions (default: wolfpack) */
@@ -54,7 +62,7 @@ export interface ConsolidationConfig {
   minTokens?: number;
   /** Optional progress callback */
   onProgress?: (msg: string) => void;
-  /** Engine override (tests); built from model/provider when omitted. */
+  /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
 }
 
@@ -126,8 +134,6 @@ export async function consolidatePool(
   const {
     wolfDen,
     wolfName,
-    model = "claude-sonnet-4-6",
-    provider = "anthropic",
     kbRoots,
     defaultDomain = "wolfpack",
     skipClaims = false,
@@ -208,13 +214,7 @@ Fold the observations into topics. For each group of related observations, decid
 Domain tags [domain] appear on observations. When creating or merging topics, set the domain field to the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.`;
 
   // Create engine for consolidation
-  const engine = config.engine ?? createEngine({
-    provider,
-    defaultModel: model,
-    steps: {
-      consolidate: { model, maxTokens: 16000 },
-    },
-  });
+  const engine = config.engine ?? createConsolidationEngine(config.table ?? loadModelTable().table, config.apiKey);
 
   onProgress?.("Running LLM consolidation...");
   let consolidateSystem = CONSOLIDATE_SYSTEM;
@@ -322,4 +322,16 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     topicsSkipped: skipped,
     claimsSubmitted,
   };
+}
+
+/** Consolidation engine from the table: the consolidate step on its tier (smart). */
+function createConsolidationEngine(table: ModelTable, apiKey: string | undefined): Engine {
+  const step = engineSteps(table).consolidate;
+  const tier = table.tiers[table.steps.consolidate.tier];
+  return createEngine({
+    provider: tier.provider,
+    apiKey,
+    defaultModel: step.model,
+    steps: { consolidate: { ...step, maxTokens: 16000 } },
+  });
 }

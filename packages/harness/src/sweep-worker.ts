@@ -6,6 +6,7 @@
  * Status can be queried at any time while sweep is running.
  */
 import { join } from "node:path";
+import type { ModelTable } from "@wolfpack/engine";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -34,9 +35,10 @@ export interface SweepWorkerConfig {
   denLocal: string;
   embedUrl?: string;
   embedModel?: string;
-  provider?: "anthropic" | "claude-agent-sdk";
-  model?: string;
-  fastModel?: string;
+  /** The wolf's resolved model table (shipped models.json). */
+  models: ModelTable;
+  /** Required by the api transport; unused on subscription. */
+  apiKey?: string;
 }
 
 // ─── Sweep Manager ─────────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ export class SweepManager {
       this.updateProgress("Loading KB engine...");
 
       // Dynamic imports to keep startup fast
-      const { createEngine } = await import("@wolfpack/engine");
+      const { createEngine, engineSteps } = await import("@wolfpack/engine");
       const { sweep } = await import("@wolfpack/kb/librarian");
 
       const roots = {
@@ -175,17 +177,13 @@ export class SweepManager {
       // produce: large merge outputs can run 10–20k chars. The adapter's 4096
       // default truncates them mid-JSON, which then can't be parsed and parks
       // the item. Keep this in sync with packages/kb/src/cli.ts makeEngine().
+      const table = this.config.models;
+      const steps = engineSteps(table);
       const engine = createEngine({
-        provider: this.config.provider ?? "anthropic",
-        defaultModel: this.config.model ?? "claude-sonnet-4-6",
-        steps: {
-          classify: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-          produce: { model: this.config.model ?? "claude-sonnet-4-6", maxTokens: 16000 },
-          contradict: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-          classifyToSection: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-          sectionSummary: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-          labelSection: { model: this.config.fastModel ?? "claude-haiku-4-5" },
-        },
+        provider: table.tiers.smart.provider,
+        apiKey: this.config.apiKey,
+        defaultModel: table.tiers.smart.model,
+        steps: { ...steps, produce: { ...steps.produce, maxTokens: 16000 } },
       });
 
       this.updateProgress("Loading entry vectors...");

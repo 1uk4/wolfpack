@@ -2,17 +2,17 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 
 // TODO: Claude Agent SDK provider for MAX/Pro subscription support
 // Requires pi-claude-bridge to export a pi-ai provider, or implementing
 // the full pi-ai AssistantMessageEventStream protocol (~500-1000 lines).
-// For now, use provider: "anthropic" with ANTHROPIC_API_KEY.
+// Until then a pi-durable wolf must resolve to `transport: api`.
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { loadWolfConfig, type WolfConfig } from "./config.js";
+import type { ModelTable } from "@wolfpack/engine";
+import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 import { createFileToolsExtension } from "./extensions/file-tools.js";
@@ -55,6 +55,7 @@ export { loadExtensions as loadUnifiedExtensions, type LoadResult } from "./load
 export interface HarnessInstance {
   harness: Harness;
   config: WolfConfig;
+  models: ModelTable;
   telegram?: TelegramClient;
   consolidationTimer?: ReturnType<typeof setInterval>;
   sweepTimer?: ReturnType<typeof setInterval>;
@@ -81,15 +82,20 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   const config = await loadWolfConfig();
   const wolfDen = process.env.WOLF_DEN!;
 
-  // Provider setup (anthropic requires ANTHROPIC_API_KEY)
-  console.log(`[harness] Provider: ${config.provider ?? 'anthropic'}`);
+  // Resolved model table, shipped next to wolf.yaml by `wolfpack sync`. Must
+  // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
+  const table = loadWolfModels(config);
+  if (table.transport !== "api") {
+    throw new Error(
+      `${config.name} resolves to transport: ${table.transport}, but the Max subscription isn't available on pi-durable (VPS) yet — set transport: api for this wolf (or the pack's models.transport.vps) and run \`wolfpack sync ${config.name}\``,
+    );
+  }
+  const main = table.tiers.main;
+  console.log(`[harness] Models: main=${main.model} smart=${table.tiers.smart.model} fast=${table.tiers.fast.model} (transport ${table.transport})`);
+  for (const w of table.warnings) console.warn(`[harness] models: ${w}`);
   console.log(`[harness] API key set: ${!!process.env.ANTHROPIC_API_KEY}`);
   const models = createModels();
-  if (config.provider === "openai") {
-    models.setProvider(openaiProvider());
-  } else {
-    models.setProvider(anthropicProvider());
-  }
+  models.setProvider(anthropicProvider());
 
   // Registry with CodingTools + wolf identity + wolf extensions
   const registry = createRegistry();
@@ -97,7 +103,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   
   // Wolf identity extension — provides AGENTS.md, CLAUDE.md sections
   const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(wolfDen, "..", "agent");
-  registry.install(createWolfIdentityExtension({ config, wolfDen, agentDir }));
+  registry.install(createWolfIdentityExtension({ config, wolfDen, model: main.model, agentDir }));
   registry.install(createFileToolsExtension(wolfDen));
   
   // Memory config for timer-based consolidation
@@ -128,9 +134,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       denLocal: kbRoots.denLocal,
       embedUrl: process.env.WOLFPACK_EMBED_URL,
       embedModel: process.env.WOLFPACK_EMBED_MODEL,
-      provider: config.provider === "openai" ? "anthropic" : config.provider,
-      model: config.memory?.model ?? config.model,
-      fastModel: config.memory?.fastModel,
+      models: table,
+      apiKey: process.env.ANTHROPIC_API_KEY,
     });
     console.log("[librarian] Sweep manager initialized");
   }
@@ -192,17 +197,13 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     context
   );
 
-  // Root conversation with wolf identity
-  // Model ID should be just the model name, provider is separate
-  const providerName = config.provider ?? "anthropic";
-  // Extract just the model name if it includes provider prefix
-  const modelName = config.model.includes("/") 
-    ? config.model.split("/").pop()! 
-    : config.model;
-  console.log(`[harness] Creating root: provider=${providerName}, model=${modelName}`);
+  // Root conversation with wolf identity. Table IDs carry no provider prefix;
+  // the api transport means pi-ai's anthropic provider.
+  console.log(`[harness] Creating root: provider=anthropic, model=${main.model}`);
   await harness.root(context, {
     agent: {
-      model: { provider: providerName, modelId: modelName },
+      model: { provider: "anthropic", modelId: main.model },
+      ...(main.thinking ? { thinkingLevel: main.thinking } : {}),
       cwd: wolfDen,
     },
   });
@@ -210,7 +211,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Resume interrupted work
   harness.resume();
 
-  console.log(`Wolf harness started: ${config.name} (${config.model})`);
+  console.log(`Wolf harness started: ${config.name} (${main.model})`);
   console.log(`Storage: ${storagePath}`);
 
   // Set up consolidation timer if configured (timer or hybrid mode)
@@ -229,8 +230,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         const result = await consolidatePool({
           wolfDen,
           wolfName: config.name,
-          model: config.memory?.model ?? config.model,
-          provider: config.provider === "openai" ? "anthropic" : config.provider,
+          table,
+          apiKey: process.env.ANTHROPIC_API_KEY,
           kbRoots,
           defaultDomain,
           onProgress: (msg: string) => console.log(`[memory] ${msg}`),
@@ -296,6 +297,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   return {
     harness,
     config,
+    models: table,
     telegram,
     consolidationTimer,
     sweepTimer,

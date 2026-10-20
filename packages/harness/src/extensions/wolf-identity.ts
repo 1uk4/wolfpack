@@ -13,6 +13,8 @@ import type { WolfConfig } from "../config.js";
 export interface WolfIdentityOptions {
   config: WolfConfig;
   wolfDen: string;
+  /** Main model ID (the resolved table's main tier). */
+  model: string;
   agentDir?: string; // defaults to wolfDen/../agent
 }
 
@@ -20,7 +22,7 @@ export interface WolfIdentityOptions {
  * Create the wolf identity extension with the given config.
  */
 export function createWolfIdentityExtension(options: WolfIdentityOptions) {
-  const { config, wolfDen } = options;
+  const { config, wolfDen, model } = options;
   const agentDir = options.agentDir ?? join(wolfDen, "..", "agent");
 
   return defineExtension({
@@ -32,7 +34,7 @@ export function createWolfIdentityExtension(options: WolfIdentityOptions) {
           `# ${config.name}`,
           "",
           `**Role:** ${config.role ?? config.name}`,
-          `**Model:** ${config.model}`,
+          `**Model:** ${model}`,
         ];
         
         if (config.specialty) {

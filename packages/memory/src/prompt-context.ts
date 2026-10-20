@@ -3,40 +3,38 @@
  * into the system prompt. Used by both Pi-CLI and Pi-durable extensions.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import type { KbRoots } from "@wolfpack/kb/shared";
+import { denTopicStates, describeStatus, type DenTopicState, type DenTopicStatus } from "./den-reconcile.js";
 
 /**
  * Render den topics context for system prompt injection.
- * Lists topics with paths and summaries — wolves read full files on demand.
+ *
+ * Lists only den topics the KB has NOT absorbed yet (see den-reconcile.ts);
+ * everything else is reachable through kb_access. Returns null when nothing is
+ * pending, so the section is omitted. Without KB roots every topic is pending.
  */
-export function renderDenContext(wolfDen: string, wolfName: string): string | null {
+export function renderDenContext(
+  wolfDen: string,
+  wolfName: string,
+  kbRoots?: KbRoots,
+): string | null {
   try {
+    const pending = denTopicStates(wolfDen, kbRoots, wolfName).filter(
+      (s): s is DenTopicState & { status: Exclude<DenTopicStatus, { kind: "absorbed" }> } =>
+        s.status.kind !== "absorbed",
+    );
+    if (pending.length === 0) return null;
+
     const topicsDir = join(wolfDen, "memory", "topics");
-    if (!existsSync(topicsDir)) return null;
-
-    const files = readdirSync(topicsDir).filter((f) => f.endsWith(".md"));
-    if (files.length === 0) return null;
-
-    const topics: Array<{ id: string; summary: string; filePath: string }> = [];
-    for (const file of files) {
-      const filePath = join(topicsDir, file);
-      const raw = readFileSync(filePath, "utf-8");
-      const idMatch = raw.match(/^id:\s*(.+)$/m);
-      const summaryMatch = raw.match(/^summary:\s*(.+)$/m);
-      topics.push({
-        id: idMatch?.[1]?.trim() ?? file.replace(/\.md$/, ""),
-        summary: summaryMatch?.[1]?.trim() ?? "(no summary)",
-        filePath,
-      });
-    }
-
-    const lines = [
-      `Wolf ${wolfName} has persistent memory from previous sessions (${topics.length} topic${topics.length !== 1 ? "s" : ""}).`,
-      "Read a topic file when you need full details.",
-      "",
-      ...topics.map((t) => `- \`${t.filePath}\` -- ${t.summary}`),
-    ];
-    return lines.join("\n");
+    return [
+      `Wolf ${wolfName}'s den topics not yet in the shared KB (${pending.length}), in ${topicsDir}/:`,
+      ...pending.map(
+        ({ topic, status }) =>
+          `- ${basename(topic.filePath)} [${describeStatus(status)}] -- ${topic.summary || "(no summary)"}`,
+      ),
+      "Read a topic file when you need its details. Everything else lives in the KB.",
+    ].join("\n");
   } catch {
     return null;
   }

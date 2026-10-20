@@ -1,0 +1,134 @@
+/**
+ * Den reconcile — the den is a staging buffer, the KB is the source of truth.
+ *
+ * A den topic lives in the den until Dewey's sweep absorbs it. Dewey writes a
+ * receipt per contribution to librarian-ops/receipts/<wolf>/<topic>-<hash10>.md,
+ * keyed by the hash of the exact body emitted. When a receipt for a topic's
+ * CURRENT body says create / merge / reject, the KB has that content (or newer
+ * truth), so the topic moves to den/memory/archive/ and is no longer injected.
+ *
+ * Deterministic: no LLM, no network. Idempotent: a second run is a no-op.
+ * A returning subject simply starts a fresh den topic under the same id; the
+ * sweep's alias (wolf + den topic id) merges it into the same entry.
+ */
+import { existsSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWrite } from "@wolfpack/engine";
+import { contentHash, inboxDir, receiptsDir, type KbRoots } from "@wolfpack/kb/shared";
+import { readDenTopics, type DenTopic } from "./den.js";
+
+/** Receipt outcomes meaning the KB holds this content (or deliberately newer truth). */
+const ABSORBED = new Set(["create", "merge", "reject"]);
+
+export type DenTopicStatus =
+  | { kind: "absorbed"; entryId: string | null; absorbedAt: string }
+  | { kind: "awaiting-domain"; domain: string }
+  | { kind: "parked" }
+  | { kind: "awaiting-sweep" }
+  | { kind: "pending-promote" };
+
+export interface DenTopicState {
+  topic: DenTopic;
+  status: DenTopicStatus;
+}
+
+export interface ReconcileResult {
+  archived: Array<{ id: string; entryId: string | null }>;
+  pending: Array<{ id: string; status: Exclude<DenTopicStatus, { kind: "absorbed" }> }>;
+}
+
+export const denArchiveDir = (denRoot: string) => join(denRoot, "memory", "archive");
+
+/** Receipt name stem for a topic body, as written by the sweep (`<id>-<hex[0..10]>`). */
+function receiptStem(id: string, body: string): string {
+  return `${id}-${contentHash(body).slice(7, 17)}`;
+}
+
+function readReceipt(path: string): { outcome: string; processed: string; detail: string } | null {
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf-8");
+  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+  if (!m) return null;
+  const field = (k: string) => new RegExp(`^${k}:\\s*(.*)$`, "m").exec(m[1])?.[1]?.trim() ?? "";
+  return { outcome: field("outcome"), processed: field("processed"), detail: m[2].trim() };
+}
+
+function readEmittedMap(roots: KbRoots): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(join(roots.denLocal, "emitted.json"), "utf-8")) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Where each den topic stands relative to the KB. Pure read; moves nothing.
+ * Without KB roots nothing can be absorbed, so every topic is pending promote.
+ */
+export function denTopicStates(denRoot: string, roots: KbRoots | undefined, wolf: string): DenTopicState[] {
+  const topics = readDenTopics(denRoot);
+  if (!roots) return topics.map((topic) => ({ topic, status: { kind: "pending-promote" } }));
+
+  const receipts = receiptsDir(roots, wolf);
+  const inbox = inboxDir(roots, wolf);
+  const emitted = readEmittedMap(roots);
+
+  return topics.map((topic): DenTopicState => {
+    const stem = receiptStem(topic.id, topic.body);
+    const r = readReceipt(join(receipts, `${stem}.md`));
+    if (r && ABSORBED.has(r.outcome)) {
+      // create/merge receipts name the entry; reject names the reason instead.
+      const entryId = /^kb-\S+$/.test(r.detail) ? r.detail : null;
+      return { topic, status: { kind: "absorbed", entryId, absorbedAt: r.processed } };
+    }
+    if (r?.outcome === "unclassified") {
+      const domain = /pending domain:\s*(\S+)/.exec(r.detail)?.[1] ?? "unknown";
+      return { topic, status: { kind: "awaiting-domain", domain } };
+    }
+    if (r?.outcome === "parked") return { topic, status: { kind: "parked" } };
+    const wasEmitted =
+      emitted[topic.id] === contentHash(topic.body) || existsSync(join(inbox, `${stem}.md`));
+    return { topic, status: { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" } };
+  });
+}
+
+/** Add absorbed_into / absorbed_at to a topic file's frontmatter. */
+function annotate(raw: string, entryId: string | null, absorbedAt: string): string {
+  const extra = `absorbed_into: ${entryId ?? "null"}\nabsorbed_at: ${absorbedAt}`;
+  const m = /^(---\n[\s\S]*?)\n---\n/.exec(raw);
+  return m ? `${m[1]}\n${extra}\n---\n${raw.slice(m[0].length)}` : `---\n${extra}\n---\n\n${raw}`;
+}
+
+/**
+ * Archive every den topic the KB has absorbed; report the rest as pending.
+ * An archived file keeps its original content plus absorbed_into/absorbed_at.
+ */
+export function reconcileDen(denRoot: string, roots: KbRoots | undefined, wolf: string): ReconcileResult {
+  const result: ReconcileResult = { archived: [], pending: [] };
+  const archive = denArchiveDir(denRoot);
+
+  for (const { topic, status } of denTopicStates(denRoot, roots, wolf)) {
+    if (status.kind !== "absorbed") {
+      result.pending.push({ id: topic.id, status });
+      continue;
+    }
+    mkdirSync(archive, { recursive: true });
+    // A subject archived before keeps its earlier file; this one gets a hash suffix.
+    let dest = join(archive, `${topic.id}.md`);
+    if (existsSync(dest)) dest = join(archive, `${receiptStem(topic.id, topic.body)}.md`);
+    atomicWrite(dest, annotate(readFileSync(topic.filePath, "utf-8"), status.entryId, status.absorbedAt));
+    unlinkSync(topic.filePath);
+    result.archived.push({ id: topic.id, entryId: status.entryId });
+  }
+  return result;
+}
+
+/** Short human label for a pending status, as shown to the wolf. */
+export function describeStatus(status: Exclude<DenTopicStatus, { kind: "absorbed" }>): string {
+  switch (status.kind) {
+    case "awaiting-domain": return `awaiting domain: ${status.domain}`;
+    case "parked": return "parked by sweep";
+    case "awaiting-sweep": return "awaiting sweep";
+    case "pending-promote": return "pending promote";
+  }
+}

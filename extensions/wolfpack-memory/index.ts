@@ -34,6 +34,7 @@ import {
   type DenConfig,
   renderDenContext as renderDenContextShared,
   renderKbAccess as renderKbAccessShared,
+  reconcileDen,
 } from "@wolfpack/memory";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -1400,6 +1401,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     runtime = new PiRuntime(pi, ctx);
     enabled = readGate(ctx.sessionManager.getBranch());
     if (enabled) initOrchestrator(ctx);
+    // Archive den topics Dewey has absorbed since last time (receipt-driven, silent).
+    if (kbEnabled) {
+      try { reconcileDen(wolfDen, kbRoots, wolfName); } catch { /* never block startup */ }
+    }
     refreshStatus(ctx);
   });
 
@@ -1414,7 +1419,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Same renderers as pi-durable (@wolfpack/memory prompt-context), so both
   // runtimes brief the wolf identically. KB access is scoped by what's mirrored
   // on disk (no subscription filter).
-  const renderDenContext = () => renderDenContextShared(wolfDen, wolfName);
+  const renderDenContext = () => renderDenContextShared(wolfDen, wolfName, kbEnabled ? kbRoots : undefined);
   const renderKbAccess = () => (kbEnabled ? renderKbAccessShared(kbRoots.kbBase, []) : null);
 
   // Use the sections API (Pi wraps each in a tag), not string-appending to

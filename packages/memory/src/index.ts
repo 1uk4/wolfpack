@@ -113,3 +113,14 @@ export {
 
 // Prompt context — shared rendering for system prompt injection
 export { renderDenContext, renderKbAccess } from "./prompt-context.js";
+
+// Den reconcile — archive den topics the KB has absorbed (receipt-driven)
+export {
+  reconcileDen,
+  denTopicStates,
+  describeStatus,
+  denArchiveDir,
+  type DenTopicStatus,
+  type DenTopicState,
+  type ReconcileResult,
+} from "./den-reconcile.js";

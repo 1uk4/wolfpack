@@ -9,7 +9,7 @@
  * the generic exit poller (which only needs a backend's async screen read).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -60,6 +60,33 @@ export function hasCommand(command: string): boolean {
 
 export function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Wolf environment a subagent must inherit. A subagent pane is a fresh
+ * multiplexer shell (it only gets the user's shell profile), not a child of
+ * pi, so the env `wolfpack launch` loaded from the wolf's .env (den, KB roots,
+ * Work API) never reaches it. ANTHROPIC_API_KEY is deliberately not forwarded:
+ * launch withholds it from subscription wolves so they don't bill the API.
+ */
+const FORWARDED_ENV = /^(WOLF_|KB_|WORK_|WOLFPACK_)/;
+
+/**
+ * Snapshot the forwarded wolf env into a private (0600) file and return the
+ * shell prefix that loads it. The prefix deletes the file once sourced, so the
+ * Work API token is never left on disk; launch scripts themselves are 0755.
+ * Returns "" when there is nothing to forward.
+ */
+export function wolfEnvPrefix(path: string, env: NodeJS.ProcessEnv = process.env): string {
+  const lines = Object.entries(env)
+    .filter(([k, v]) => FORWARDED_ENV.test(k) && v !== undefined)
+    .map(([k, v]) => `export ${k}=${shellEscape(v as string)}`);
+  if (lines.length === 0) return "";
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, lines.join("\n") + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600); // mode only applies on create
+  const p = shellEscape(path);
+  return `. ${p} && rm -f ${p} && `;
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   pollForExitWith,
   sendLongCommandWith,
   shellEscape as sharedShellEscape,
+  wolfEnvPrefix,
 } from "./shared.ts";
 import { tmuxBackend } from "./tmux.ts";
 import { herdrBackend } from "./herdr.ts";
@@ -119,6 +120,7 @@ export function pollForExit(
 }
 
 export const shellEscape = sharedShellEscape;
+export { wolfEnvPrefix };
 
 /** Which backend is active (for diagnostics/logging). */
 export function activeMuxName(): string {

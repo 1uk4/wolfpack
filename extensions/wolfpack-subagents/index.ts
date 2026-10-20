@@ -24,6 +24,7 @@ import {
   closeSurface,
   shellEscape,
   readScreen,
+  wolfEnvPrefix,
 } from "./mux/index.ts";
 
 import {
@@ -1415,7 +1416,10 @@ async function launchSubagent(
   // This was already computed above so session placement, PI_CODING_AGENT_DIR, and cd agree.
   const cdPrefix = effectiveCwd ? `cd ${shellEscape(effectiveCwd)} && ` : "";
 
-  const piCommand = cdPrefix + envPrefix + parts.join(" ");
+  // Wolf env (den, KB roots, Work API) from a private file, before cd so the
+  // explicit PI_SUBAGENT_* prefix below still wins.
+  const wolfEnv = wolfEnvPrefix(join(artifactDir, "subagent-env", `${id}.env`));
+  const piCommand = wolfEnv + cdPrefix + envPrefix + parts.join(" ");
   const command = `${piCommand}; echo '__SUBAGENT_DONE_'$?'__'`;
   const launchScriptName = `${(params.name || "subagent")
     .toLowerCase()
@@ -2214,7 +2218,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // operate where they did before.
         const resumeCdPrefix = loadout.cwd ? `cd ${shellEscape(loadout.cwd)} && ` : "";
 
-        const command = `${resumeCdPrefix}${resumeEnvPrefix}${parts.join(" ")}; echo '__SUBAGENT_DONE_'$?'__'`;
+        const resumeWolfEnv = wolfEnvPrefix(join(artifactDir, "subagent-env", `${id}-resume-${Date.now()}.env`));
+        const command = `${resumeWolfEnv}${resumeCdPrefix}${resumeEnvPrefix}${parts.join(" ")}; echo '__SUBAGENT_DONE_'$?'__'`;
         const launchScriptFile = join(
           artifactDir,
           "subagent-scripts",

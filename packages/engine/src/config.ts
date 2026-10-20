@@ -2,47 +2,32 @@
  * Engine configuration — provider, models, and per-step overrides.
  *
  * The engine default model is the fallback. Individual pipeline steps
- * can override to use cheaper/faster or stronger models as needed.
+ * override it; in practice every step's model comes from the resolved model
+ * table (see models.ts → `engineSteps(table)`), not from literals.
  *
  * Example:
+ *   const { table } = loadModelTable();
  *   const config: EngineConfig = {
- *     provider: "anthropic",
- *     apiKey: process.env.ANTHROPIC_API_KEY!,
- *     defaultModel: "claude-sonnet-4-20250514",
- *     steps: {
- *       classify:    { model: "claude-haiku-4-5-20250507" },   // cheap + fast
- *       consolidate: { model: "claude-sonnet-4-20250514" },    // needs judgment
- *       produce:     { model: "claude-sonnet-4-20250514" },    // needs writing quality
- *       contradict:  { model: "claude-haiku-4-5-20250507" },   // fast yes/no
- *     },
+ *     provider: table.tiers.smart.provider,   // "claude-agent-sdk" | "anthropic"
+ *     defaultModel: table.tiers.smart.model,  // e.g. "claude-sonnet-5-5"
+ *     steps: engineSteps(table),              // each step on its tier's model
  *   };
  */
+import type { EngineStep, ThinkingLevel } from "./models.js";
 
 export interface ModelConfig {
-  /** Model identifier (e.g. "claude-sonnet-4-20250514", "gpt-4o") */
+  /** Model identifier (e.g. "claude-sonnet-5-5") */
   model: string;
+  /** Thinking level (pi's names); unset = the model's default */
+  thinking?: ThinkingLevel;
   /** Temperature override for this step */
   temperature?: number;
   /** Max tokens for this step's response */
   maxTokens?: number;
 }
 
-export interface StepConfigs {
-  /** Memory: classify observations during the observer pass */
-  classify?: ModelConfig;
-  /** Memory: consolidate observations into topic files */
-  consolidate?: ModelConfig;
-  /** KB: produce a curated entry from a contribution (needs writing quality) */
-  produce?: ModelConfig;
-  /** KB: detect contradiction between a contribution and an existing entry (fast) */
-  contradict?: ModelConfig;
-  /** KB: route a contribution to a section from a closed enum (fast, Phase 3a) */
-  classifyToSection?: ModelConfig;
-  /** KB: summarize a section from child summaries (fast, Phase 3b) */
-  sectionSummary?: ModelConfig;
-  /** KB: name a section with a short title from its summary (fast) */
-  labelSection?: ModelConfig;
-}
+/** Per-step overrides, keyed by the engine steps in models.ts (ENGINE_STEPS). */
+export type StepConfigs = Partial<Record<EngineStep, ModelConfig>>;
 
 export interface EngineConfig {
   /** Provider name — determines which adapter is used */
@@ -69,7 +54,7 @@ export interface EngineConfig {
   steps?: StepConfigs;
 }
 
-export type PipelineStep = keyof StepConfigs;
+export type PipelineStep = EngineStep;
 
 /**
  * Resolve the model config for a specific pipeline step.
@@ -78,10 +63,11 @@ export type PipelineStep = keyof StepConfigs;
 export function resolveModel(
   config: EngineConfig,
   step: PipelineStep
-): { model: string; temperature: number; maxTokens: number } {
+): { model: string; thinking?: ThinkingLevel; temperature: number; maxTokens: number } {
   const stepConfig = config.steps?.[step];
   return {
     model: stepConfig?.model ?? config.defaultModel,
+    thinking: stepConfig?.thinking,
     temperature: stepConfig?.temperature ?? config.defaultTemperature ?? 0,
     maxTokens: stepConfig?.maxTokens ?? config.defaultMaxTokens ?? 4096,
   };

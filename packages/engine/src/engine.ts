@@ -6,17 +6,14 @@
  * and tracks usage automatically.
  *
  * Usage:
+ *   const { table } = loadModelTable();
  *   const engine = createEngine({
- *     provider: "anthropic",
- *     apiKey: process.env.ANTHROPIC_API_KEY!,
- *     defaultModel: "claude-sonnet-4-20250514",
- *     steps: {
- *       classify: { model: "claude-haiku-4-5-20250507" },
- *     },
+ *     provider: table.tiers.smart.provider,
+ *     defaultModel: table.tiers.smart.model,
+ *     steps: engineSteps(table),
  *   });
  *
- *   const result = await engine.classify(observations);
- *   const assessment = await engine.assess(claim, relatedEntries);
+ *   const result = await engine.call("classify", Schema, { system, prompt });
  *   console.log(engine.usage.summarize());
  */
 import type { z } from "zod";
@@ -67,6 +64,7 @@ export function createEngine(config: EngineConfig): Engine {
       system: options.system,
       prompt: options.prompt,
       model: modelConfig.model,
+      thinking: modelConfig.thinking,
       temperature: modelConfig.temperature,
       maxTokens: modelConfig.maxTokens,
       signal: options.signal,

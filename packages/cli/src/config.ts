@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import type { PackModels } from "@wolfpack/engine";
 
 export interface HostEntry {
   /** Tailscale or public IP */
@@ -42,6 +43,12 @@ export interface CliConfig {
    * this hub machine (launchd sweep); otherwise it's a registered host name.
    */
   librarian?: { name: string; id?: string; host: string };
+  /**
+   * Pack model tiers and default transports — the pack layer of model
+   * resolution (wolf.yaml `models:` overrides it per wolf). Shape and
+   * resolution live in @wolfpack/engine (models.ts).
+   */
+  models?: PackModels;
   /** Registered hosts */
   hosts: Record<string, HostEntry>;
 }

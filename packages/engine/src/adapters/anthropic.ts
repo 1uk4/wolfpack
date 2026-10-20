@@ -16,6 +16,7 @@ import type {
   UsageRecord,
 } from "../adapter.js";
 import { buildSystemWithSchema, extractJSON } from "./json-extract.js";
+import { effortFor } from "../models.js";
 
 export interface AnthropicAdapterOptions {
   /** Omit to fall back to the SDK's ANTHROPIC_API_KEY env lookup. */
@@ -83,7 +84,7 @@ export class AnthropicAdapter implements KnowledgeAdapter {
           {
             model: options.model,
             max_tokens: options.maxTokens ?? 4096,
-            temperature: options.temperature ?? 0,
+            ...thinkingParams(options),
             system: systemWithSchema,
             messages,
           },
@@ -148,5 +149,22 @@ export class AnthropicAdapter implements KnowledgeAdapter {
         `Last error: ${lastError?.message}`
     );
   }
+}
+
+/**
+ * Thinking → request params. Unset keeps today's request (temperature 0, no
+ * thinking). `off` disables thinking explicitly; any other level turns on
+ * adaptive thinking at that effort, and drops temperature (the API only
+ * accepts the default temperature while thinking).
+ */
+export function thinkingParams(options: Pick<ExtractOptions, "thinking" | "temperature">): {
+  temperature?: number;
+  thinking?: Anthropic.ThinkingConfigParam;
+  output_config?: Anthropic.OutputConfig;
+} {
+  const level = options.thinking;
+  if (!level) return { temperature: options.temperature ?? 0 };
+  if (level === "off") return { temperature: options.temperature ?? 0, thinking: { type: "disabled" } };
+  return { thinking: { type: "adaptive" }, output_config: { effort: effortFor(level) } };
 }
 

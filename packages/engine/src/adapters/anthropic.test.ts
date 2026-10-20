@@ -53,3 +53,36 @@ describe("AnthropicAdapter (streamed)", () => {
     expect(Date.now() - started).toBeLessThan(600); // stopped, not run to completion
   });
 });
+
+describe("AnthropicAdapter thinking", () => {
+  const schema = z.object({ ok: z.boolean() });
+  const bodyFor = async (thinking?: any) => {
+    let sent: any;
+    const fetch = vi.fn(async (_u: unknown, init: any) => {
+      sent = JSON.parse(init.body);
+      return sse('{"ok": true}');
+    });
+    const adapter = new AnthropicAdapter({ apiKey: "k", fetch: fetch as any });
+    await adapter.extract(schema, { system: "s", prompt: "p", model: "m", thinking });
+    return sent;
+  };
+
+  it("unset: temperature 0, no thinking params (today's request)", async () => {
+    const body = await bodyFor();
+    expect(body.temperature).toBe(0);
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+  });
+
+  it("a level: adaptive thinking at that effort, no temperature", async () => {
+    const body = await bodyFor("high");
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config).toEqual({ effort: "high" });
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it("minimal maps to low effort; off disables thinking", async () => {
+    expect((await bodyFor("minimal")).output_config).toEqual({ effort: "low" });
+    expect((await bodyFor("off")).thinking).toEqual({ type: "disabled" });
+  });
+});

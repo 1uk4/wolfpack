@@ -23,6 +23,7 @@ import type {
   UsageRecord,
 } from "../adapter.js";
 import { buildSystemWithSchema, extractJSON } from "./json-extract.js";
+import { effortFor } from "../models.js";
 
 export interface ClaudeAgentSdkAdapterOptions {
   /** Absolute path to the `claude` executable. Omit to let the SDK resolve it. */
@@ -181,6 +182,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
         // preset, which is what we want for pure extraction.
         systemPrompt,
         model: options.model,
+        ...sdkThinkingOptions(options.thinking),
         maxTurns: 1,
         tools: [],
         skills: [],
@@ -235,3 +237,11 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     };
   }
 }
+
+/** Thinking → Agent SDK options: `off` disables it; a level is adaptive thinking at that effort. */
+export function sdkThinkingOptions(level: ExtractOptions["thinking"]): Record<string, unknown> {
+  if (!level) return {};
+  if (level === "off") return { thinking: { type: "disabled" } };
+  return { thinking: { type: "adaptive" }, effort: effortFor(level) };
+}
+

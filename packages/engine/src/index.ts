@@ -19,6 +19,9 @@ export {
   resolveModel,
 } from "./config.js";
 
+// Models — tiers, the resolver and the one loader every runtime calls
+export * from "./models.js";
+
 // Prompts — central registry of all system prompts
 export * from "./prompts.js";
 

@@ -8,6 +8,7 @@
  * Usage tracking is built in — every call records tokens and cost.
  */
 import type { z } from "zod";
+import type { ThinkingLevel } from "./models.js";
 
 export interface ExtractOptions {
   /** System prompt for the LLM */
@@ -16,7 +17,9 @@ export interface ExtractOptions {
   prompt: string;
   /** Model to use (resolved from config) */
   model: string;
-  /** Temperature (resolved from config) */
+  /** Thinking level (pi's names); unset = the model's default */
+  thinking?: ThinkingLevel;
+  /** Temperature (resolved from config; not sent while thinking is on) */
   temperature?: number;
   /** Max tokens for the response */
   maxTokens?: number;

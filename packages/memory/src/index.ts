@@ -117,6 +117,7 @@ export { renderDenContext, renderKbAccess } from "./prompt-context.js";
 // Den reconcile — archive den topics the KB has absorbed (receipt-driven)
 export {
   reconcileDen,
+  isAbsorbed,
   denTopicStates,
   describeStatus,
   denArchiveDir,

@@ -32,7 +32,7 @@ import {
   type DenConfig,
 } from "./den.js";
 import { renderDenIndex } from "./den-index.js";
-import { reconcileDen } from "./den-reconcile.js";
+import { isAbsorbed, reconcileDen } from "./den-reconcile.js";
 
 export interface ConsolidateOptions {
   /** The engine instance (with provider + model config) */
@@ -139,7 +139,7 @@ export async function consolidateSession(
 
   let merged = 0;
   let created = 0;
-  const skipped = 0;
+  let skipped = 0;
   const updatedTopics: Array<{
     id: string;
     title: string;
@@ -152,6 +152,11 @@ export async function consolidateSession(
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
 
   for (const t of sessionTopics) {
+    // Already in the KB with exactly this content: nothing to stage.
+    if (kbRoots && isAbsorbed(kbRoots, den.wolfName, t.id, t.body)) {
+      skipped++;
+      continue;
+    }
     // "merge" = updating an existing den topic with the same id; "create" = new.
     const change: "create" | "merge" = existsSync(join(topicsDir, `${t.id}.md`))
       ? "merge"
@@ -172,6 +177,7 @@ export async function consolidateSession(
     if (change === "merge") merged++;
     else created++;
   }
+  if (skipped > 0) onProgress?.(`  unchanged and already in the KB: ${skipped} skipped`);
 
   // Step 5: Emit contribution deltas to the KB (deterministic, NO LLM).
   // The wolf just reports what changed about each den topic; Dewey's sweep

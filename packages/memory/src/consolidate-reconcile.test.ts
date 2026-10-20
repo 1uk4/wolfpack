@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -133,5 +133,32 @@ describe("consolidateSession reconcile", () => {
     expect(result.topicsCreated).toBe(1);
     const topics = readdirSync(join(den, "memory", "topics")).filter((f) => f.endsWith(".md"));
     expect(topics).toEqual(["new.md"]);
+  });
+
+  it("skips session topics the KB already absorbed unchanged, and stages the rest", async () => {
+    sessionTopic("old", "old", "s", "old body");
+    receipt("old", "old body", "merge", "kb-wolfpack-AAAAAAA");
+    sessionTopic("edited", "edited", "s", "edited body v2");
+    receipt("edited", "edited body v1", "merge", "kb-wolfpack-BBBBBBB");
+    sessionTopic("brand-new");
+
+    const progress: string[] = [];
+    const result = await consolidateSession({
+      engine: stubEngine,
+      den: { denRoot: den, wolfName: WOLF },
+      memoryRoot,
+      sessionId: "sess-1",
+      kbRoots: roots,
+      skipClaims: true,
+      onProgress: (m) => progress.push(m),
+    });
+
+    const topics = readdirSync(join(den, "memory", "topics")).filter((f) => f.endsWith(".md"));
+    expect(topics.sort()).toEqual(["brand-new.md", "edited.md"]);
+    expect(result.topicsSkipped).toBe(1);
+    expect(progress).toContain("  unchanged and already in the KB: 1 skipped");
+    // A second promote archives nothing new: the absorbed topic was never staged.
+    await consolidateSession({ engine: stubEngine, den: { denRoot: den, wolfName: WOLF }, memoryRoot, sessionId: "sess-1", kbRoots: roots, skipClaims: true });
+    expect(existsSync(join(den, "memory", "archive"))).toBe(false);
   });
 });

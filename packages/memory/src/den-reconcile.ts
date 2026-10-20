@@ -76,11 +76,8 @@ export function denTopicStates(denRoot: string, roots: KbRoots | undefined, wolf
   return topics.map((topic): DenTopicState => {
     const stem = receiptStem(topic.id, topic.body);
     const r = readReceipt(join(receipts, `${stem}.md`));
-    if (r && ABSORBED.has(r.outcome)) {
-      // create/merge receipts name the entry; reject names the reason instead.
-      const entryId = /^kb-\S+$/.test(r.detail) ? r.detail : null;
-      return { topic, status: { kind: "absorbed", entryId, absorbedAt: r.processed } };
-    }
+    const absorbed = r ? asAbsorbed(r) : null;
+    if (absorbed) return { topic, status: absorbed };
     if (r?.outcome === "unclassified") {
       const domain = /pending domain:\s*(\S+)/.exec(r.detail)?.[1] ?? "unknown";
       return { topic, status: { kind: "awaiting-domain", domain } };
@@ -90,6 +87,23 @@ export function denTopicStates(denRoot: string, roots: KbRoots | undefined, wolf
       emitted[topic.id] === contentHash(topic.body) || existsSync(join(inbox, `${stem}.md`));
     return { topic, status: { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" } };
   });
+}
+
+function asAbsorbed(r: { outcome: string; processed: string; detail: string }): Extract<DenTopicStatus, { kind: "absorbed" }> | null {
+  if (!ABSORBED.has(r.outcome)) return null;
+  // create/merge receipts name the entry; reject names the reason instead.
+  const entryId = /^kb-\S+$/.test(r.detail) ? r.detail : null;
+  return { kind: "absorbed", entryId, absorbedAt: r.processed };
+}
+
+/**
+ * True when the KB already absorbed exactly this content for this topic. Promote
+ * uses it to skip re-writing unchanged session topics into the den (a long-lived
+ * session would otherwise resurrect every absorbed topic on each promote).
+ */
+export function isAbsorbed(roots: KbRoots, wolf: string, id: string, body: string): boolean {
+  const r = readReceipt(join(receiptsDir(roots, wolf), `${receiptStem(id, body.trim())}.md`));
+  return !!(r && asAbsorbed(r));
 }
 
 /** Add absorbed_into / absorbed_at to a topic file's frontmatter. */

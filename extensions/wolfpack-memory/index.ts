@@ -35,6 +35,7 @@ import {
   renderDenContext as renderDenContextShared,
   renderKbAccess as renderKbAccessShared,
   reconcileDen,
+  denTopicStates,
 } from "@wolfpack/memory";
 import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -102,6 +103,8 @@ interface MemoryStatus {
   /** Seconds elapsed in the current long op (consolidate/promote). */
   activityElapsedS?: number;
   totalCostUsd: number;
+  /** Pending den topics (not yet absorbed by the KB). */
+  pendingTopics?: number;
 }
 
 function renderStatusBar(status: MemoryStatus): string {
@@ -134,7 +137,8 @@ function renderStatusBar(status: MemoryStatus): string {
   const cost = `$${status.totalCostUsd.toFixed(3)}`;
 
   const domLabel = (status as any).currentDomain ?? "";
-  return `\x1b[2m«\x1b[0m ${oActive}${status.observations}${oReset} ${oColor}${oBar}\x1b[0m ${cLabel} \x1b[2m|\x1b[0m ${pool} \x1b[2m|\x1b[0m ${cost}${domLabel ? ` \x1b[2m|\x1b[0m \x1b[36m${domLabel}\x1b[0m` : ""}`;
+  const pendingLabel = status.pendingTopics !== undefined ? ` \x1b[2m|\x1b[0m \x1b[33m${status.pendingTopics} pending\x1b[0m` : "";
+  return `\x1b[2m«\x1b[0m ${oActive}${status.observations}${oReset} ${oColor}${oBar}\x1b[0m ${cLabel} \x1b[2m|\x1b[0m ${pool} \x1b[2m|\x1b[0m ${cost}${domLabel ? ` \x1b[2m|\x1b[0m \x1b[36m${domLabel}\x1b[0m` : ""}${pendingLabel}`;
 }
 
 function renderBar(pct: number, width: number): string {
@@ -1358,6 +1362,16 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     const observations = orchestrator?.getActiveObservations() ?? [];
     const tokens = observations.reduce((s: number, o: Observation) => s + o.tokenCount, 0);
 
+    let pendingTopics: number | undefined;
+    if (kbEnabled) {
+      try {
+        const states = denTopicStates(wolfDen, kbRoots, wolfName);
+        pendingTopics = states.filter((s) => s.status.kind !== "absorbed").length;
+      } catch {
+        // ignore errors — status bar must never crash
+      }
+    }
+
     const status: MemoryStatus = {
       enabled,
       observations: observations.length,
@@ -1371,6 +1385,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         ? Math.round((Date.now() - activityStartMs) / 1000)
         : 0,
       totalCostUsd,
+      pendingTopics,
     };
 
     // Always persist the sidechannel (works headless)

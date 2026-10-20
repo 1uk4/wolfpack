@@ -32,6 +32,7 @@ import {
   type DenConfig,
 } from "./den.js";
 import { renderDenIndex } from "./den-index.js";
+import { reconcileDen } from "./den-reconcile.js";
 
 export interface ConsolidateOptions {
   /** The engine instance (with provider + model config) */
@@ -89,6 +90,17 @@ export async function consolidateSession(
   // the expensive O(den) LLM merge, which no longer exists — and it silently
   // stranded every topic created after the first promote.
   ensureDenDirs(den.denRoot);
+
+  // Step 0: Reconcile den topics the KB has absorbed
+  if (kbRoots) {
+    try {
+      const r = reconcileDen(den.denRoot, kbRoots, den.wolfName);
+      onProgress?.(`reconciled: ${r.archived.length} archived, ${r.pending.length} pending`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onProgress?.(`reconcile skipped: ${msg}`);
+    }
+  }
 
   // Step 1: Read session memory
   const sessionDir = join(memoryRoot, sessionId);

@@ -51,7 +51,7 @@ function parseEnvFile(file: string): Record<string, string> {
 
 export async function wolfLaunch(
   name: string,
-  opts: { host?: string; dir?: string },
+  opts: { host?: string; dir?: string; session?: string },
 ): Promise<void> {
   const config = loadConfig();
 
@@ -180,7 +180,9 @@ export async function wolfLaunch(
     c.dim(`Launching as ${wolf.name} (${wolf.id}) on ${mainModel} in ${workDir}...`),
   );
 
-  const child = spawn("pi", ["--model", mainModel], {
+  // --session resumes a specific pi session (file or partial UUID) as this wolf.
+  const piArgs = ["--model", mainModel, ...(opts.session ? ["--session", opts.session] : [])];
+  const child = spawn("pi", piArgs, {
     cwd: workDir,
     env,
     stdio: "inherit",

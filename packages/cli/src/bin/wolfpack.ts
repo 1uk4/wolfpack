@@ -34,7 +34,7 @@ ${c.bold("COMMANDS")}
   setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
-  launch <wolf> [dir]             Run a wolf locally in a project dir
+  launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf>                     Deploy wolf to host (bundle + mesh)
   list                            Show all wolves grouped by host
   status <wolf>                   Wolf health and service state
@@ -58,7 +58,7 @@ ${c.bold("WORKFLOW COMMANDS")}
   setup                           First-time setup (hub + librarian + pack models)
   add wolf <name>                 Create a new wolf (interactive wizard)
   add domain <name>               Declare a new knowledge domain
-  launch <wolf> [dir]             Run a wolf locally in a project dir
+  launch <wolf> [dir] [--session <id>]  Run a wolf locally (resume a pi session)
   sync <wolf> [--host <h>]        Deploy wolf to host (bundle + mesh)
   sync --all                      Sync every wolf on every host
   list [--json]                   Show all wolves grouped by host
@@ -155,6 +155,8 @@ function parseArgs(argv: string[]) {
       flags.description = argv[++i]!;
     } else if (arg === "--domains" && argv[i + 1]) {
       flags.domains = argv[++i]!;
+    } else if (arg === "--session" && argv[i + 1]) {
+      flags.session = argv[++i]!;
     } else if (arg === "--set" && argv[i + 1]) {
       sets.push(argv[++i]!);
     } else if (!arg.startsWith("-")) {
@@ -257,12 +259,13 @@ async function main(): Promise<void> {
 
       case "launch":
         if (!positional[1]) {
-          console.error("Usage: wolfpack launch <wolf> [project-dir]");
+          console.error("Usage: wolfpack launch <wolf> [project-dir] [--session <id>]");
           process.exit(1);
         }
         await wolfLaunch(positional[1], {
           host: flags.host as string | undefined,
           dir: positional[2],
+          session: flags.session as string | undefined,
         });
         break;
 

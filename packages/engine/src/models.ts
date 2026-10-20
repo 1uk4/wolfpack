@@ -94,6 +94,17 @@ export const KNOWN_MODELS: readonly string[] = [
   "claude-haiku-4-5-20251001",
 ];
 
+/**
+ * The `models:` block `wolfpack setup` writes into a new pack config. Not a
+ * runtime fallback — the resolver never reads this; it only seeds config.
+ */
+export const STARTER_PACK_MODELS = {
+  main: { model: "claude-opus-5-5" },
+  smart: { model: "claude-sonnet-5-5" },
+  fast: { model: "claude-haiku-5-5" },
+  transport: { local: "subscription", vps: "api" },
+} as const satisfies PackModels;
+
 /** Engine provider and pi provider per transport. The model ID is identical. */
 const TRANSPORT_PROVIDERS: Record<Transport, { engine: string; pi: string }> = {
   subscription: { engine: "claude-agent-sdk", pi: "claude-bridge" },

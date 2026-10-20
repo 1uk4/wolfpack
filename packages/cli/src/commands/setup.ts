@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { KNOWN_MODELS, type PackModels } from "@wolfpack/engine";
+import { STARTER_PACK_MODELS, type PackModels } from "@wolfpack/engine";
 import {
   loadConfig,
   saveConfig,
@@ -97,21 +97,9 @@ async function setupHub(config: CliConfig, opts: { yes?: boolean }): Promise<voi
 
 // ── MODELS ───────────────────────────────────────────────────────────────────
 
-/** Newest model of a family — KNOWN_MODELS lists newest first. */
-function newest(family: "opus" | "sonnet" | "haiku"): string {
-  const id = KNOWN_MODELS.find((m) => m.startsWith(`claude-${family}-`));
-  if (!id) throw new Error(`No claude-${family} model in the engine's KNOWN_MODELS`);
-  return id;
-}
-
-/** The block `wolfpack setup` writes: main on Opus, smart on Sonnet, fast on Haiku. */
+/** The block `wolfpack setup` writes (the engine's starter tiers and transports). */
 export function defaultPackModels(): PackModels {
-  return {
-    main: { model: newest("opus") },
-    smart: { model: newest("sonnet") },
-    fast: { model: newest("haiku") },
-    transport: { local: "subscription", vps: "api" },
-  };
+  return structuredClone(STARTER_PACK_MODELS) as PackModels;
 }
 
 function setupModels(config: CliConfig): void {

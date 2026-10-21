@@ -114,6 +114,8 @@ export interface SubagentLoadout {
   cwd: string | null;
   /** PI_CODING_AGENT_DIR the subagent resolved config/extensions from, or null. */
   agentDir: string | null;
+  /** True when it ran in a multiplexer pane; absent/false means background (resume mirrors this). */
+  pane?: boolean;
 }
 
 /** Path of the loadout sidecar written next to a subagent session file. */

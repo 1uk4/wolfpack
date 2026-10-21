@@ -23,6 +23,7 @@ import {
 } from "./shared.ts";
 import { tmuxBackend } from "./tmux.ts";
 import { herdrBackend } from "./herdr.ts";
+import { backgroundBackend, isBackgroundSurface } from "./background.ts";
 
 const noneBackend: MuxBackend = {
   name: "none",
@@ -82,12 +83,21 @@ export function muxSetupHint(): string {
   return active.setupHint();
 }
 
-export function createSurface(name: string): string {
-  return active.createSurface(name);
+/** Backend owning a surface: background surfaces are routed by id prefix. */
+function backendFor(surface: string): MuxBackend {
+  return isBackgroundSurface(surface) ? backgroundBackend : active;
+}
+
+export function createSurface(name: string, opts?: { background?: boolean }): string {
+  return opts?.background ? backgroundBackend.createSurface(name) : active.createSurface(name);
+}
+
+export function isBackgroundSurfaceId(surface: string): boolean {
+  return isBackgroundSurface(surface);
 }
 
 export function sendCommand(surface: string, command: string): void {
-  active.sendCommand(surface, command);
+  backendFor(surface).sendCommand(surface, command);
 }
 
 export function sendLongCommand(
@@ -95,15 +105,15 @@ export function sendLongCommand(
   command: string,
   options?: { scriptPath?: string; scriptPreamble?: string },
 ): string {
-  return sendLongCommandWith(active, surface, command, options);
+  return sendLongCommandWith(backendFor(surface), surface, command, options);
 }
 
 export function readScreen(surface: string, lines?: number): string {
-  return active.readScreen(surface, lines);
+  return backendFor(surface).readScreen(surface, lines);
 }
 
 export function closeSurface(surface: string): void {
-  active.closeSurface(surface);
+  backendFor(surface).closeSurface(surface);
 }
 
 export function pollForExit(
@@ -116,7 +126,7 @@ export function pollForExit(
     onTick?: (elapsed: number) => void;
   },
 ): Promise<PollResult> {
-  return pollForExitWith(active, surface, signal, options);
+  return pollForExitWith(backendFor(surface), surface, signal, options);
 }
 
 export const shellEscape = sharedShellEscape;

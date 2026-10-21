@@ -17,8 +17,8 @@ import { homedir } from "node:os";
 import { isTier, loadModelTable, TIERS, type Tier } from "@wolfpack/engine";
 import {
   isMuxAvailable,
-  muxSetupHint,
   createSurface,
+  isBackgroundSurfaceId,
   sendCommand,
   sendLongCommand,
   pollForExit,
@@ -99,7 +99,11 @@ const SubagentParams = Type.Object({
       "Which agent to spawn (e.g. 'worker', 'scout', 'researcher'). This loads the agent's " +
       "fixed profile — its model, tool loadout, and system prompt. Must be one of the available agents.",
   }),
-  task: Type.String({ description: "Task/prompt for the sub-agent" }),
+  task: Type.String({
+    description:
+      "The brief. The agent starts with zero context, so include: goal; relevant paths/context; " +
+      "constraints (incl. files not to touch); done-when; exactly what to return.",
+  }),
   name: Type.Optional(
     Type.String({
       description:
@@ -110,8 +114,16 @@ const SubagentParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Model tier override: main | smart | fast (overrides the agent's tier). " +
-        "Tiers resolve to the pack's configured models; a model ID is rejected.",
+        "Rare edge cases only: tier override (main | smart | fast) for a task needing extra attention. " +
+        "Prefer the agent's own tier. A model ID is rejected.",
+    }),
+  ),
+  pane: Type.Optional(
+    Type.Boolean({
+      description:
+        "true = run in a terminal pane the user can watch and you can steer live; false = background " +
+        "process (no pane, can't be steered mid-run). Default: the agent's own setting. Use true only " +
+        "when the user wants to watch, or for long risky work.",
     }),
   ),
   cwd: Type.Optional(
@@ -138,6 +150,8 @@ interface AgentDefaults {
   subagentAgents?: string[];
   autoExit?: boolean;
   interactive?: boolean;
+  /** Run in a multiplexer pane (true) or as a background process (false/absent). */
+  pane?: boolean;
   systemPromptMode?: "append" | "replace";
   sessionMode?: SubagentSessionMode;
   cwd?: string;
@@ -430,6 +444,7 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
     subagentAgents: parseCommaList(getFrontmatterValue(frontmatter, "subagent_agents")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
+    pane: parseOptionalBoolean(getFrontmatterValue(frontmatter, "pane")),
     sessionMode: parseSessionMode(getFrontmatterValue(frontmatter, "session-mode")),
     cwd: getFrontmatterValue(frontmatter, "cwd"),
     cli: getFrontmatterValue(frontmatter, "cli"),
@@ -536,6 +551,14 @@ function resolveEffectiveInteractive(
   return !(agentDefs?.autoExit ?? false);
 }
 
+/** Effective pane: explicit param, else the agent's frontmatter, else background. */
+function resolveEffectivePane(
+  params: { pane?: boolean },
+  agentDefs: AgentDefaults | null,
+): boolean {
+  return params.pane ?? agentDefs?.pane ?? false;
+}
+
 function loadAgentDefaults(agentName: string): AgentDefaults | null {
   const configDir = getAgentConfigDir();
   const paths = [
@@ -636,18 +659,6 @@ function getShellReadyDelayMs(): number {
   const raw = process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 500;
-}
-
-function muxUnavailableResult() {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Subagents require a terminal multiplexer. ${muxSetupHint()}`,
-      },
-    ],
-    details: { error: "mux not available" },
-  };
 }
 
 /**
@@ -1170,6 +1181,15 @@ function handleSubagentSteer(
   }
 
   const running = resolved.running;
+  if (isBackgroundSurfaceId(running.surface)) {
+    const err =
+      `${running.name} runs in the background and can't be steered mid-run; message it again after it ` +
+      `finishes to resume it, or spawn with pane: true to steer live.`;
+    return {
+      content: [{ type: "text" as const, text: err }],
+      details: { error: err, id: running.id, name: running.name },
+    };
+  }
   const now = Date.now();
   observeRunningSubagent(running, now);
 
@@ -1265,6 +1285,7 @@ export const __test__ = {
   resolveEffectiveSessionMode,
   resolveLaunchBehavior,
   resolveEffectiveInteractive,
+  resolveEffectivePane,
   buildSubagentToolAllowlist,
   applySandboxToParts,
   buildPiPromptArgs,
@@ -1316,7 +1337,10 @@ async function launchSubagent(
   const resolvedModel = resolveSubagentModel(params.model ?? agentDefs?.model);
   const effectiveTools = agentDefs?.tools;
   const effectiveSkills = agentDefs?.skills;
-  const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
+  // No multiplexer: pane agents fall back to background (the caller announces it).
+  const effectivePane = resolveEffectivePane(params, agentDefs) && isMuxAvailable();
+  // Background agents are autonomous (print mode): never "interactive" for stall pings.
+  const effectiveInteractive = effectivePane && resolveEffectiveInteractive(params, agentDefs);
 
   const sessionFile = ctx.sessionManager.getSessionFile();
   if (!sessionFile) throw new Error("No session file");
@@ -1342,8 +1366,8 @@ async function launchSubagent(
   // Use pre-created surface (parallel mode) or create a new one.
   // For new surfaces, pause briefly so the shell is ready before sending the command.
   const surfacePreCreated = !!options?.surface;
-  const surface = options?.surface ?? createSurface(params.name);
-  if (!surfacePreCreated) {
+  const surface = options?.surface ?? createSurface(params.name, { background: !effectivePane });
+  if (!surfacePreCreated && effectivePane) {
     await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
   }
 
@@ -1365,10 +1389,11 @@ async function launchSubagent(
   // Build the task message
   // Only full-context fork mode inherits prior conversation state.
   // Blank-session modes need the wrapper instructions and artifact-backed handoff.
-  const modeHint = agentDefs?.autoExit
+  const autonomous = !!agentDefs?.autoExit || !effectivePane;
+  const modeHint = autonomous
     ? "Complete your task autonomously. When you are finished, simply stop — your session ends automatically."
     : "Complete your task. The user can interact with you at any time, and the session ends when the user exits the pane.";
-  const summaryInstruction = agentDefs?.autoExit
+  const summaryInstruction = autonomous
     ? "Your FINAL assistant message should summarize what you accomplished."
     : "Your FINAL assistant message (before the user exits) should summarize what you accomplished.";
   // An agent with a non-empty subagent_agents list is granted the spawning
@@ -1485,6 +1510,7 @@ async function launchSubagent(
     autoExit: agentDefs?.autoExit ?? false,
     cwd: effectiveCwd ?? null,
     agentDir: resolvedAgentDir,
+    pane: effectivePane,
   };
   writeSubagentLoadout(subagentSessionFile, loadout);
 
@@ -1506,7 +1532,7 @@ async function launchSubagent(
   if (params.agent) {
     envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
   }
-  if (agentDefs?.autoExit) {
+  if (autonomous) {
     envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
   }
   envParts.push(`PI_SUBAGENT_SESSION=${shellEscape(subagentSessionFile)}`);
@@ -1779,8 +1805,28 @@ async function watchSubagent(
   }
 }
 
+const ORCHESTRATOR_RULES = `You are the orchestrator: the user's point of contact. Decide, delegate, review. Delegate anything that takes more than a couple of reads or commands, so the main context stays small (call subagents_list for the roster):
+- find or understand code, KB entries, library types → scout
+- diagnose logs, services, VPS, a stuck wolf → investigator (for wolfpack hosts, pass the path of extensions/wolfpack-subagents/reference/ops.md in the brief)
+- external docs, READMEs, web pages → researcher
+- a plan from requirements → planner
+- implement an agreed change, run build/tests, commit → worker
+- review a diff or commits → reviewer
+- visualize a system or flow → visualizer
+- independent pieces → spawn in parallel
+Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
+Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
+Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
+Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. Use \`pane: true\` only when the user wants to watch, or for long risky work. Background agents (the default) can't be steered mid-run; message them after they finish to resume.`;
+
 export default function subagentsExtension(pi: ExtensionAPI) {
   latestPi = pi;
+  // Orchestrator routing rules go into the main agent's prompt only, never a subagent's own.
+  if (!process.env.PI_SUBAGENT_AGENT) {
+    pi.on("before_agent_start", (event: any) => {
+      event.systemPromptOptions.sections["orchestrator_rules"] = ORCHESTRATOR_RULES;
+    });
+  }
   // Capture the UI context for widget updates
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
@@ -1824,19 +1870,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagent",
       label: "Subagent",
       description:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate, assume, or summarize results after calling this tool. " +
-        "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
+        "Delegate a task to a specialist sub-agent (see `subagents_list` for the roster, tiers and pane/background). " +
+        "Delegate anything that needs more than a couple of reads or commands, so your context stays small; spawn independent pieces in parallel. " +
+        "Fire-and-forget: returns immediately; the result arrives automatically as a steer message. " +
+        "Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work.",
       promptSnippet:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate, assume, or summarize results after calling this tool. " +
-        "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
+        "Delegate to a specialist sub-agent (roster: subagents_list). Use for anything beyond a couple of reads/commands; parallelize independent pieces. " +
+        "Returns immediately; the result arrives as a steer message. Don't poll or fabricate results.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1897,11 +1937,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           };
         }
 
-        // Validate prerequisites (need mux + a session file to derive the
-        // artifact dir that hosts this session's name registry).
-        if (!isMuxAvailable()) {
-          return muxUnavailableResult();
-        }
+        // Validate prerequisites (a session file to derive the artifact dir
+        // that hosts this session's name registry). No multiplexer is fine:
+        // pane agents fall back to background.
+        const wantsPane = resolveEffectivePane(params, loadAgentDefaults(params.agent));
+        const paneFallback = wantsPane && !isMuxAvailable();
 
         if (!ctx.sessionManager.getSessionFile()) {
           return {
@@ -2009,7 +2049,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             {
               type: "text",
               text:
-                `Sub-agent "${params.name}" launched and is now running in the background. ` +
+                (paneFallback
+                  ? `Notice: no terminal multiplexer is available, so this pane agent runs in the background instead (it can't be steered live). `
+                  : "") +
+                `Sub-agent "${params.name}" launched and is now running${isBackgroundSurfaceId(running.surface) ? " in the background" : " in a pane"}. ` +
                 `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
                 `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
                 `Until then, move on to other work or tell the user you're waiting.`,
@@ -2022,6 +2065,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             agent: params.agent,
             sessionFile: running.sessionFile,
             launchScriptFile: running.launchScriptFile,
+            pane: !isBackgroundSurfaceId(running.surface),
             status: "started",
           },
         };
@@ -2093,13 +2137,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagents_list",
       label: "List Subagents",
       description:
-        "List all available subagent definitions. " +
-        "Scans agents shipped by loaded packages, the wolf's agent dir (agents/), and project-local .pi/agents/. " +
-        "Project-local agents override global ones, which override package ones, by name.",
-      promptSnippet:
-        "List all available subagent definitions. " +
-        "Scans agents shipped by loaded packages, the wolf's agent dir (agents/), and project-local .pi/agents/. " +
-        "Project-local agents override global ones, which override package ones, by name.",
+        "List the subagent roster: each agent's tier, pane/background mode and role. Project-local agents override global ones, which override package ones.",
+      promptSnippet: "List available sub-agents with tier, pane/background and role.",
       parameters: Type.Object({}),
 
       async execute() {
@@ -2115,8 +2154,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const lines = list.map((a) => {
           const badge = a.source === "project" ? " (project)" : "";
           const desc = a.description ? ` — ${a.description}` : "";
-          const model = a.model ? ` [${a.model}]` : "";
-          return `• ${a.name}${badge}${model}${desc}`;
+          const model = a.model ? `${a.model}, ` : "";
+          const mode = a.pane ? "pane" : "background";
+          return `• ${a.name}${badge} [${model}${mode}]${desc}`;
         });
 
         return {
@@ -2134,7 +2174,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const lines = agents.map((a: any) => {
           const badge = a.source === "project" ? theme.fg("accent", " (project)") : "";
           const desc = a.description ? theme.fg("dim", ` — ${a.description}`) : "";
-          const model = a.model ? theme.fg("dim", ` [${a.model}]`) : "";
+          const model = theme.fg("dim", ` [${a.model ? `${a.model}, ` : ""}${a.pane ? "pane" : "background"}]`);
           return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${desc}`;
         });
         return new Text(lines.join("\n"), 0, 0);
@@ -2148,18 +2188,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagent_message",
       label: "Message Subagent",
       description:
-        "Send a message to a subagent by name. Names are unique within your session and persist after a subagent finishes, " +
-        "so the SAME name works whether the subagent is running or finished: if it is still running, your message steers its live session; " +
-        "if it has finished, your message resumes that session and continues it. " +
-        "`name` and `message` are both required. " +
-        "Steering a running subagent returns immediately with a local acknowledgement and does NOT, by itself, emit a new result. " +
-        "Resuming is a fire-and-forget async call: when the resumed sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up. " +
-        "DO NOT poll, sleep, tail logs, or read session files to detect completion — the harness handles delivery. " +
-        "DO NOT fabricate or assume results. After calling, either end your turn or work on other independent tasks.",
+        "Message a sub-agent by name (names persist after it finishes). Running pane agent: steers it live. " +
+        "Running background agent: refused (can't be steered mid-run). Finished agent: resumes its session with your message " +
+        "(in a pane only if it was a pane agent). Resuming is fire-and-forget; the result arrives as a steer message. Don't poll.",
       promptSnippet:
-        "Message a subagent by name: steers it if running, resumes it if finished (same name either way). " +
-        "`name` and `message` are required. Steering returns immediately; resuming delivers its result later as a steer message. " +
-        "Do not poll or fabricate results.",
+        "Message a sub-agent by name: steers a running pane agent, resumes a finished one. Result arrives as a steer message.",
       parameters: Type.Object({
         name: Type.String({
           description:
@@ -2215,10 +2248,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         if (!requestedName) {
           const err = "Provide the subagent's `name` to steer (if running) or resume (if finished).";
           return { content: [{ type: "text" as const, text: err }], details: { error: err } };
-        }
-
-        if (!isMuxAvailable()) {
-          return muxUnavailableResult();
         }
 
         // ── Steer a running subagent ──
@@ -2288,8 +2317,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // transcript doesn't block the UI.
         const entryCountBefore = countSessionEntryLines(sessionPath);
 
-        const surface = createSurface(name);
-        await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
+        // Resume where it ran: pane agents in a pane (if a multiplexer exists),
+        // everything else in the background.
+        const resumeInPane = loadout.pane === true && isMuxAvailable();
+        const surface = createSurface(name, { background: !resumeInPane });
+        if (resumeInPane) {
+          await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
+        }
 
         // Build pi resume command
         const parts = ["pi", "--session", shellEscape(sessionPath)];
@@ -2486,7 +2520,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
       const taskText = task || `You are the ${agentName} agent. Wait for instructions.`;
       const displayName = agentName[0].toUpperCase() + agentName.slice(1);
-      const toolCall = `Use subagent with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
+      const toolCall = `Use subagent with agent: "${agentName}", name: "${displayName}", pane: true, task: ${JSON.stringify(taskText)}`;
       pi.sendUserMessage(toolCall);
     },
   });

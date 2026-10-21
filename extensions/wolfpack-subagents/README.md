@@ -18,7 +18,7 @@ The pane backend is selected by `WOLFPACK_SUBAGENT_MUX`:
 | `auto`  | **default** — Herdr if `HERDR_ENV=1`, else tmux if `$TMUX`, else headless |
 | `herdr` | force Herdr (`herdr pane split/run/read/close`) |
 | `tmux`  | force tmux (`split-window` / `send-keys` / `capture-pane`) |
-| `none`  | headless — panes disabled; `subagent` reports the mux is unavailable |
+| `none`  | headless — panes disabled; pane agents fall back to background (with a notice) |
 
 `auto` already does the right thing (macOS wolf under Herdr → herdr; Linux wolf
 under tmux → tmux). To pin it, add to the wolf's `.env` (merged by `wolf launch`):
@@ -37,9 +37,9 @@ engine only ever talks to `mux/index.ts`.
 
 | Tool | Description |
 | --- | --- |
-| `subagent` | Spawn a sub-agent in a dedicated pane (async; result steered back) |
-| `subagent_message` | Message a sub-agent by name — steers it if running, resumes its session if finished |
-| `subagents_list` | List available agent definitions |
+| `subagent` | Delegate to a sub-agent, in a pane or in the background (async; result steered back) |
+| `subagent_message` | Message a sub-agent by name — steers a running pane agent, resumes a finished one; refused for a running background agent |
+| `subagents_list` | The roster: each agent's tier, pane/background and role |
 | `ask_question` | *(sub-agent sessions only)* Ask the orchestrator and wait for a reply |
 
 ```json
@@ -49,6 +49,33 @@ engine only ever talks to `mux/index.ts`.
 Fan out by emitting several `subagent` calls in one turn. Completion detection
 is file-based (`.exit` sidecar + activity file) with a terminal sentinel
 fallback, so it is backend-independent.
+
+## Pane vs background
+
+Each agent has a `pane: true|false` frontmatter key (default `false`); the
+`subagent` tool's `pane` param overrides it per spawn, and the user's
+`/subagent <agent> <task>` command always opens a pane.
+
+- **pane** — a multiplexer pane the user can watch; `subagent_message` steers it live.
+- **background** — the *same* generated launch script
+  (`artifacts/<id>/subagent-scripts/*.sh`, same env forwarding and sandbox) runs as a
+  detached child (`mux/background.ts`, a `bg:<n>` surface routed by `mux/index.ts`)
+  with stdout/stderr in a sibling `.log`. With no TTY pi runs in print mode: one
+  autonomous run, then exit. Completion detection (`__SUBAGENT_DONE_n__` in the log,
+  `.exit` sidecar), result extraction, widget rows, status and steer delivery are
+  shared with panes. The process group is killed on cancel / session shutdown.
+- Steering a running background agent is refused with an explanatory message;
+  message it after it finishes to resume it (in the background, unless it was a pane
+  agent — recorded in the `.loadout.json`). An `ask_question` from a background
+  agent ends its run; the reply resumes it.
+- No multiplexer available: pane agents run in the background with a notice.
+
+## Orchestrator rules
+
+In pi CLI sessions the main agent gets an `orchestrator_rules` system-prompt section
+(delegate recon/diagnosis/research/planning/implementation/review/visualization,
+keep decisions and work-item state in the main agent, brief template, when to use
+`model` / `pane`). It is skipped inside subagents (`PI_SUBAGENT_AGENT` set).
 
 ## Agents
 
@@ -66,7 +93,8 @@ Autonomous agents should set `auto-exit: true` so they exit when done and their
 result steers back; `system-prompt: append` passes the body as the child's
 appended system prompt. Key frontmatter: `name`, `description`, `model`,
 `tools` (strict allowlist), `auto-exit`, `system-prompt`,
-`subagent_agents` (grant + restrict nested spawning), `cwd`, `session-mode`.
+`subagent_agents` (grant + restrict nested spawning), `cwd`, `session-mode`,
+`pane` (run in a pane vs background).
 
 ### Models are tiers
 
@@ -116,6 +144,7 @@ wolfpack-subagents/
 ├── mux/
 │   ├── index.ts        # backend selection + the surface API the engine imports
 │   ├── shared.ts       # MuxBackend contract, shellEscape, pollForExit
+│   ├── background.ts   # no-pane backend: detached child + log file
 │   ├── tmux.ts         # tmux backend
 │   └── herdr.ts        # Herdr backend (herdr pane verbs)
 ├── tools/safe-bash.ts  # bash with dangerous-command blocking (loaded on demand)

@@ -99,7 +99,6 @@
   roles:
     - tailscale
     - bun
-    - workspace
     - syncthing
     # repos: clones anything in inventory's `wolf_repos: [...]` list to
     # {{ wolf_repos_dir }}/ (outside the den). No-ops when unset.

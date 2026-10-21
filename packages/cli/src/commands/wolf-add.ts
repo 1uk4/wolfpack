@@ -232,6 +232,14 @@ function addLocal(
   }
   fs.writeFileSync(path.join(wolfDir, "wolf.yaml"), yamlStringify(wolfConfig));
 
+  // Optional NOTES.md stub — the harness appends it to the system prompt.
+  fs.writeFileSync(
+    path.join(wolfDir, "den", "NOTES.md"),
+    "# Notes\n\n" +
+      "<!-- Optional. Anything here is added to this wolf's system prompt:\n" +
+      "     standing instructions, owner preferences, working style. Delete if unused. -->\n",
+  );
+
   // Write .env — memory extension reads WOLF_DEN and emits KB contribution
   // deltas to the librarian-ops inbox (KB_OPS), and resolves curated entries
   // from the KB base mirror (KB_BASE). ANTHROPIC_API_KEY is expected from your

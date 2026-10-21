@@ -275,10 +275,39 @@ export function readEnvValue(file: string, key: string): string | undefined {
 }
 
 async function fetchBridgeModels(): Promise<string[]> {
-  const { stdout } = await execFileAsync("pi", ["--list-models"], { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+  // The bridge is installed per wolf (its agent dir), not in ~/.pi/agent, so a
+  // plain `pi` from the user's shell lists no claude-bridge models.
+  const agentDir = bridgeAgentDir();
+  const { stdout } = await execFileAsync("pi", ["--list-models"], {
+    timeout: 60_000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: agentDir ? { ...process.env, PI_CODING_AGENT_DIR: agentDir } : process.env,
+  });
   const ids = parseBridgeModels(stdout);
   if (ids.length === 0) throw new Error("`pi --list-models` listed no claude-bridge models");
   return ids;
+}
+
+/** Agent dir of the first local wolf whose pi settings install pi-claude-bridge. */
+function bridgeAgentDir(): string | undefined {
+  if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
+  const localRoot = path.join(loadConfig().wolvesRoot, LOCAL_HOST);
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(localRoot);
+  } catch {
+    return undefined;
+  }
+  for (const name of names) {
+    const agentDir = path.join(localRoot, name, "agent");
+    try {
+      const settings = fs.readFileSync(path.join(agentDir, "settings.json"), "utf8");
+      if (settings.includes("pi-claude-bridge")) return agentDir;
+    } catch {
+      /* not a wolf with pi settings */
+    }
+  }
+  return undefined;
 }
 
 async function fetchApiModels(): Promise<string[]> {

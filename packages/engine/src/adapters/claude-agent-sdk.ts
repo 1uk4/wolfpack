@@ -23,6 +23,9 @@ import type {
   UsageRecord,
 } from "../adapter.js";
 import { buildSystemWithSchema, extractJSON } from "./json-extract.js";
+import { createRequire } from "node:module";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { effortFor } from "../models.js";
 
 export interface ClaudeAgentSdkAdapterOptions {
@@ -36,6 +39,17 @@ const CC_CHILD_ENV = {
   ENABLE_CLAUDEAI_MCP_SERVERS: "0",
   DISABLE_AUTO_COMPACT: "1",
 } as const;
+
+/**
+ * Env for the `claude` child. This adapter *is* the subscription transport, so
+ * API credentials are removed: Claude Code prefers ANTHROPIC_API_KEY over the
+ * OAuth login / CLAUDE_CODE_OAUTH_TOKEN, and VPS wolves carry the key for their
+ * main agent — leaving it in would silently bill the API.
+ */
+export function claudeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
+  return { ...rest, ...CC_CHILD_ENV };
+}
 
 // Keep the extraction call hermetic: don't let Claude Code load CLAUDE.md /
 // AGENTS.md on top of our prompt.
@@ -51,17 +65,25 @@ let cachedQuery: QueryFn | null = null;
 async function loadQuery(): Promise<QueryFn> {
   if (cachedQuery) return cachedQuery;
   // Indirect specifier so TS doesn't statically require the module at build time;
-  // it is resolved from node_modules at runtime.
+  // it is resolved from node_modules at runtime — the caller's tree first, then
+  // the global install (VPS bundles ship without node_modules; the deployer
+  // installs the SDK globally, which import() alone wouldn't find).
   const specifier = "@anthropic-ai/claude-agent-sdk";
   let mod: any;
   try {
     mod = await import(specifier);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `claude-agent-sdk provider selected but @anthropic-ai/claude-agent-sdk ` +
-        `could not be loaded (${msg}). Install it or set a different provider.`
-    );
+    const global = globalSdkUrl(specifier);
+    try {
+      if (!global) throw err;
+      mod = await import(global);
+    } catch {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `claude-agent-sdk provider selected but @anthropic-ai/claude-agent-sdk ` +
+          `could not be loaded (${msg}). Install it (npm i -g ${specifier}) or use transport: api.`
+      );
+    }
   }
   const query = mod.query ?? mod.default?.query;
   if (typeof query !== "function") {
@@ -71,6 +93,17 @@ async function loadQuery(): Promise<QueryFn> {
   }
   cachedQuery = query as QueryFn;
   return cachedQuery;
+}
+
+/** file:// URL of a globally installed package (<node prefix>/lib/node_modules), if present. */
+function globalSdkUrl(specifier: string): string | undefined {
+  const globalRoot = path.join(path.dirname(process.execPath), "..", "lib", "node_modules");
+  try {
+    const resolved = createRequire(path.join(globalRoot, "noop.js")).resolve(specifier);
+    return pathToFileURL(resolved).href;
+  } catch {
+    return undefined;
+  }
 }
 
 export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
@@ -177,7 +210,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       options: {
         abortController,
         cwd: process.cwd(),
-        env: { ...process.env, ...CC_CHILD_ENV },
+        env: claudeChildEnv(),
         // A plain string systemPrompt is a *custom* prompt — no coding-agent
         // preset, which is what we want for pure extraction.
         systemPrompt,

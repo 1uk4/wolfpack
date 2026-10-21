@@ -17,7 +17,7 @@ import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 import { createFileToolsExtension } from "./extensions/file-tools.js";
-import { startPlannerTimer } from "./extensions/planner-timer.js";
+import { startLifecycles } from "./lifecycle.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
@@ -37,6 +37,8 @@ export {
   type Extension,
   type ExtensionFactory,
   type ExtensionContext,
+  type ExtensionLifecycle,
+  type LifecycleContext,
   type Tool,
   type Section,
   type Hooks,
@@ -47,6 +49,7 @@ export {
   type HookContext,
   type AssistantMessage,
 } from "./extension-api.js";
+export { startLifecycles } from "./lifecycle.js";
 export { adaptToDurable } from "./adapters/durable.js";
 export { loadExtensions as loadUnifiedExtensions, type LoadResult } from "./loader.js";
 
@@ -308,10 +311,12 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     }
   }
 
-  // Opt-in day-planner pings (wolf.yaml: planner.enabled)
-  const stopPlanner = config.planner?.enabled
-    ? startPlannerTimer(wolfDen, telegramState, config.planner.timezone)
-    : () => {};
+  // Extension lifecycles start last, so telegram.botApi is already wired.
+  const stopLifecycles = await startLifecycles(loadResult.lifecycles, {
+    wolfDen,
+    wolfName: config.name,
+    telegram: telegramState,
+  });
 
   return {
     harness,
@@ -322,7 +327,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     sweepTimer,
     close: async () => {
       console.log("Closing harness...");
-      stopPlanner();
+      await stopLifecycles();
       if (consolidationTimer) clearInterval(consolidationTimer);
       if (sweepTimer) clearInterval(sweepTimer);
       if (telegram) await telegram.stop();

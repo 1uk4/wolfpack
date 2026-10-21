@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { kbBase, kbOps, wolfHome, wolfUser } from "./paths.js";
+import { writeDenExtensions } from "./den-extensions.js";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import type {
   WolfConfig,
@@ -365,19 +366,12 @@ WantedBy=multi-user.target
     const harnessPath = path.join(agentDir, "harness.cjs");
     await fs.writeFile(harnessPath, Buffer.from(harnessB64, "base64"));
 
-    // Write extensions to den/extensions/<name>/index.js
-    if (extensionsMap && Object.keys(extensionsMap).length > 0) {
-      const extDir = path.join(denDir, "extensions");
-      await fs.rm(extDir, { recursive: true, force: true });
-      await fs.mkdir(extDir, { recursive: true });
-      for (const [name, contentB64] of Object.entries(extensionsMap)) {
-        const extPath = path.join(extDir, name);
-        await fs.mkdir(extPath, { recursive: true });
-        await fs.writeFile(
-          path.join(extPath, "index.js"),
-          Buffer.from(contentB64, "base64"),
-        );
-      }
+    // Write shipped extensions to den/extensions/<name>/index.js. The den also
+    // holds the owner's own extensions, so never wipe the directory: remove
+    // only what an earlier sync shipped (recorded in .managed.json) and no
+    // longer ships, and leave every other name alone.
+    if (extensionsMap) {
+      await writeDenExtensions(denDir, extensionsMap);
     }
 
     // Write AGENTS.md

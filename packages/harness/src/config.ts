@@ -27,11 +27,6 @@ export interface WolfConfig {
     /** Sweep interval (e.g., "15m", "1h") - auto-triggers sweep on timer */
     sweepInterval?: string;
   };
-  /** Opt-in day-planner Telegram pings (off unless `enabled: true`). */
-  planner?: {
-    enabled?: boolean;
-    timezone?: string;  // IANA zone for block times (default: system zone)
-  };
   harness?: {
     storage?: string;
     compaction?: {

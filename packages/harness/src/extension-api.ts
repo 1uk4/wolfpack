@@ -168,6 +168,34 @@ export interface ExtensionContext {
   sweep?: SweepManager;
 }
 
+/**
+ * Context handed to an extension's `lifecycle.start`. Runtime-agnostic: the
+ * harness fills it after Telegram is up, so `telegram.botApi` is populated.
+ */
+export interface LifecycleContext {
+  /** Wolf den path */
+  wolfDen: string;
+  /** Wolf name */
+  wolfName: string;
+  /** The extension's own wolf.yaml block (`<name>:`), `{}` when absent */
+  config: Record<string, unknown>;
+  /** Shared telegram state (if telegram is enabled) */
+  telegram?: TelegramSharedState;
+  /**
+   * Send a message to the owner's Telegram chat. Resolves false when there is
+   * no Telegram or no chat yet (the owner hasn't written), true once sent.
+   */
+  send(text: string): Promise<boolean>;
+}
+
+/** Long-running behavior of an extension: timers, watchers, pings. */
+export interface ExtensionLifecycle {
+  /** Called once the harness is up (after Telegram starts). */
+  start?(ctx: LifecycleContext): void | Promise<void>;
+  /** Called on shutdown, in reverse start order. Errors are logged, not thrown. */
+  stop?(): void | Promise<void>;
+}
+
 export interface Extension {
   /** Unique extension name */
   name: string;
@@ -183,6 +211,9 @@ export interface Extension {
   
   /** Lifecycle hooks */
   hooks?: Hooks;
+
+  /** Start/stop hooks for background work (timers, watchers) */
+  lifecycle?: ExtensionLifecycle;
 }
 
 /** Extension factory function signature */

@@ -12,6 +12,7 @@ import type {
   Section,
   ToolContext,
   SectionContext,
+  LifecycleContext,
 } from "../extension-api.js";
 
 /**
@@ -77,6 +78,27 @@ export function generatePiExtensionCode(ext: Extension): string {
   lines.push(`});`);
 
   return lines.join("\n");
+}
+
+/**
+ * Map a unified extension's lifecycle onto pi's session events:
+ * start → session_start, stop → session_shutdown. Returns only the handlers
+ * the extension defines; register with `pi.on(event, handler)`.
+ */
+export function lifecycleToPiHandlers(
+  ext: Extension,
+  ctx: Omit<LifecycleContext, "send"> & Partial<Pick<LifecycleContext, "send">>,
+): { session_start?: () => Promise<void>; session_shutdown?: () => Promise<void> } {
+  const handlers: { session_start?: () => Promise<void>; session_shutdown?: () => Promise<void> } = {};
+  const lifecycle = ext.lifecycle;
+  if (lifecycle?.start) {
+    const full: LifecycleContext = { send: async () => false, ...ctx };
+    handlers.session_start = async () => { await lifecycle.start!(full); };
+  }
+  if (lifecycle?.stop) {
+    handlers.session_shutdown = async () => { await lifecycle.stop!(); };
+  }
+  return handlers;
 }
 
 /**

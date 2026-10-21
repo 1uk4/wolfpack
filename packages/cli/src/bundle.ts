@@ -26,6 +26,7 @@ import {
   extensionsDir,
   type WolfExtension,
 } from "./extensions.js";
+import { buildDenExtension, findDenExtension } from "./den-extensions.js";
 import { MODELS_FILE_NAME, modelTableHash } from "./models.js";
 
 /**
@@ -65,6 +66,11 @@ export interface HarnessBundleConfig extends BundleWolfConfig {
    *  as models.json — the VPS never resolves models itself. */
   models: ModelTable;
   extraConfig?: Record<string, unknown>;
+  /**
+   * The wolf's den `extensions/` dir on this machine. Keys that aren't repo
+   * extensions are looked up here (index.ts is built, index.js shipped as is).
+   */
+  denExtensionsDir?: string;
 }
 
 /** Version + content identity of one bundled extension (drift detection). */
@@ -413,7 +419,19 @@ export async function buildHarnessBundle(
 
   for (const key of cfg.extensions) {
     const ext = getExtension(key);
-    if (!ext) { missing.push(key); continue; }
+    if (!ext) {
+      // Not a repo extension: an owner extension from the wolf's den?
+      const denSrc = cfg.denExtensionsDir ? findDenExtension(cfg.denExtensionsDir, key) : undefined;
+      if (!denSrc) { missing.push(key); continue; }
+      try {
+        await buildDenExtension(denSrc, path.join(extDir, key, "index.js"));
+        included.push(key);
+      } catch (err) {
+        console.warn(`Den extension ${key}: build failed: ${err instanceof Error ? err.message : err}`);
+        missing.push(key);
+      }
+      continue;
+    }
     const srcDir = path.join(base, ext.dir);
     if (!fs.existsSync(srcDir)) { missing.push(key); continue; }
 

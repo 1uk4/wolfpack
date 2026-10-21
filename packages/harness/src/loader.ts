@@ -7,7 +7,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { Extension as PiDurableExtension } from "@earendil-works/pi-durable";
-import type { Extension, Runtime, ExtensionContext, ExtensionFactory, TelegramSharedState, SweepManager } from "./extension-api.js";
+import type { Extension, ExtensionLifecycle, Runtime, ExtensionContext, ExtensionFactory, TelegramSharedState, SweepManager } from "./extension-api.js";
 import { supportsRuntime } from "./extension-api.js";
 import { adaptToDurable } from "./adapters/durable.js";
 
@@ -49,6 +49,15 @@ export interface LoadResult {
   failed: Array<{ name: string; error: string }>;
   /** Extensions that don't support the runtime */
   unsupported: string[];
+  /** Lifecycle hooks of loaded extensions, in load order */
+  lifecycles: LoadedLifecycle[];
+}
+
+export interface LoadedLifecycle {
+  name: string;
+  /** The extension's own wolf.yaml block */
+  config: Record<string, unknown>;
+  lifecycle: ExtensionLifecycle;
 }
 
 /**
@@ -65,6 +74,7 @@ export async function loadExtensions(
     extensions: [],
     failed: [],
     unsupported: [],
+    lifecycles: [],
   };
 
   if (!names || names.length === 0) {
@@ -128,6 +138,15 @@ export async function loadExtensions(
       if (runtime === "pi-durable") {
         const adapted = adaptToDurable(ext, { wolfDen, wolfName });
         result.extensions.push(adapted);
+        // Read from the original: the adapter's copy doesn't carry lifecycle
+        if (ext.lifecycle) {
+          const block = wolfConfig[shortName] ?? wolfConfig[name];
+          result.lifecycles.push({
+            name,
+            config: block && typeof block === "object" ? (block as Record<string, unknown>) : {},
+            lifecycle: ext.lifecycle,
+          });
+        }
       } else {
         // Pi runtime extensions are loaded by pi CLI, not the harness
         result.failed.push({ 

@@ -20,6 +20,7 @@ import {
   loadConfig,
   getHost,
   localWolfDir,
+  wolfDir,
   kbBaseDir,
   librarianDir,
   type CliConfig,
@@ -216,6 +217,8 @@ async function syncPiDurable(
       extensions: cfg.extensions ?? [],
       models,
       extraConfig: Object.keys(extraConfig).length > 0 ? extraConfig : undefined,
+      // Owner extensions live in the den; this is the hub's copy of it.
+      denExtensionsDir: path.join(wolfDir(config, hostName, cfg.name), "den", "extensions"),
     },
     wolf.id,
   );

@@ -35,7 +35,9 @@ export async function kbCmd(argv: string[]): Promise<void> {
     "export KB_BASE=/var/wolfpack/kb/base",
     "export KB_OPS=/var/wolfpack/kb/ops",
     `export WOLF_DEN=/home/wolf-${lib.id}/den`,
-    `export ANTHROPIC_API_KEY=$(grep ANTHROPIC_API_KEY /home/wolf-${lib.id}/.env | cut -d= -f2)`,
+    `export ANTHROPIC_API_KEY=$(grep ^ANTHROPIC_API_KEY= /home/wolf-${lib.id}/.env | cut -d= -f2-)`,
+    // Max transport: the Agent SDK authenticates with this token.
+    `export CLAUDE_CODE_OAUTH_TOKEN=$(grep ^CLAUDE_CODE_OAUTH_TOKEN= /home/wolf-${lib.id}/.env | cut -d= -f2-)`,
   ].join(" && ");
 
   const kbCli = "/opt/wolfpack-kb/cli.cjs";

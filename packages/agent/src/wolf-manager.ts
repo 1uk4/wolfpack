@@ -83,6 +83,7 @@ export class WolfManager {
     home: string,
     id: string,
     name: string,
+    extra: Record<string, string> = {},
   ): Promise<void> {
     const envPath = path.join(home, ".env");
     let existing: string[] = [];
@@ -99,6 +100,7 @@ export class WolfManager {
       WOLF_DEN: path.join(home, "den"),
       KB_BASE: "/var/wolfpack/kb/base",
       KB_OPS: "/var/wolfpack/kb/ops",
+      ...extra,
     };
 
     // Keep existing env vars that aren't managed
@@ -354,6 +356,7 @@ WantedBy=multi-user.target
     agentsMdB64: string,
     extensionsMap?: Record<string, string>,
     modelsB64?: string,
+    env?: Record<string, string>,
   ): Promise<WolfConfig> {
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
@@ -415,8 +418,8 @@ WantedBy=multi-user.target
       }
     }
 
-    // Ensure standard env vars are set
-    await this.ensureEnvVars(home, id, config.name);
+    // Ensure standard env vars are set, plus any secrets the sync ships
+    await this.ensureEnvVars(home, id, config.name, syncedEnv(env));
 
     // Disable old sweep timer (silently ignore errors)
     try { await exec("systemctl", ["stop", `${user}-kb-sweep.timer`]).catch(() => {}); } catch {}
@@ -563,3 +566,15 @@ WantedBy=multi-user.target
     await this.saveIndex();
   }
 }
+
+/** Env keys a sync may set in a wolf's .env (secrets the CLI ships). */
+const SYNCED_ENV_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN"]);
+
+function syncedEnv(env: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (SYNCED_ENV_KEYS.has(k) && typeof v === "string" && v && !/[\r\n]/.test(v)) out[k] = v;
+  }
+  return out;
+}
+

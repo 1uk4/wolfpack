@@ -168,9 +168,17 @@ printf '\\n\\033[32m  \\u2713 KB engine ready (ollama + ${KB_EMBED_MODEL} + /opt
  * authentication (tailscale up / syncthing config) is left to the operator
  * unless TAILSCALE_AUTHKEY is provided.
  */
+/** Exact Agent SDK version this repo builds and tests against — the VPS gets the same one. */
+function claudeAgentSdkVersion(): string {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pkg = path.join(repoRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json");
+  return (JSON.parse(fs.readFileSync(pkg, "utf8")) as { version: string }).version;
+}
+
 async function installPrereqs(host: HostEntry): Promise<void> {
   console.log(c.bold("\n\u25b8 Installing host prerequisites") + c.dim(" (streamed live below)"));
   const authkey = process.env.TAILSCALE_AUTHKEY ?? "";
+  const CLAUDE_AGENT_SDK_VERSION = claudeAgentSdkVersion();
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 step() { printf '\\n\\033[1m  \\u2192 %s\\033[0m\\n' "$1"; }
@@ -199,6 +207,16 @@ if command -v pi >/dev/null 2>&1; then
 else
   npm install -g @earendil-works/pi-coding-agent
   echo "    installed pi $(pi --version 2>/dev/null | head -1)"
+fi
+
+step "Claude Agent SDK (global; Max transport for engine steps)"
+SDK_WANT="${CLAUDE_AGENT_SDK_VERSION}"
+SDK_HAVE=$(node -p "require('$(npm root -g)/@anthropic-ai/claude-agent-sdk/package.json').version" 2>/dev/null || true)
+if [ "$SDK_HAVE" = "$SDK_WANT" ]; then
+  echo "    already @anthropic-ai/claude-agent-sdk $SDK_HAVE"
+else
+  npm install -g "@anthropic-ai/claude-agent-sdk@$SDK_WANT" >/dev/null
+  echo "    installed @anthropic-ai/claude-agent-sdk $SDK_WANT"
 fi
 
 step "Tailscale"

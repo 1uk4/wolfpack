@@ -11,6 +11,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
@@ -30,6 +31,7 @@ import { deployDomainsRegistry } from "../librarian-registry.js";
 import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
+import { readEnvValue } from "./wolf-models.js";
 import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine";
 
 interface SyncOpts {
@@ -159,6 +161,23 @@ async function syncPiDurable(
     c.dim(`  Models:  main=${models.tiers.main.model} smart=${models.tiers.smart.model} fast=${models.tiers.fast.model} (${models.transport})`),
   );
 
+  // Subscription on a VPS wolf: engine steps run on the Max plan through the
+  // Agent SDK, authenticated by a long-lived OAuth token shipped into the
+  // wolf's .env. Switching back to api needs no cleanup — the api engines
+  // never read it.
+  const env: Record<string, string> = {};
+  if (models.transport === "subscription") {
+    const token = readEnvValue(path.join(os.homedir(), ".wolfpack", ".env"), "CLAUDE_CODE_OAUTH_TOKEN");
+    if (!token) {
+      console.error(c.red(`${cfg.name} is on transport: subscription, but ~/.wolfpack/.env has no CLAUDE_CODE_OAUTH_TOKEN.`));
+      console.error(c.dim("  Run `claude setup-token` and add CLAUDE_CODE_OAUTH_TOKEN=<token> to ~/.wolfpack/.env,"));
+      console.error(c.dim(`  or switch back: wolfpack config ${cfg.name} --set transport=api`));
+      process.exit(1);
+    }
+    env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    console.log(c.dim("  Max:     memory + sweep on the subscription; main agent stays on the API key"));
+  }
+
   // Collect extra config (everything except base keys). transport / models
   // pass through; the removed model:/provider: keys are dropped so a stale
   // remote wolf.yaml is cleaned on the first sync, as are memory.model /
@@ -228,6 +247,7 @@ async function syncPiDurable(
       agentsMd: agentsMdB64,
       models: modelsB64,
       extensions,
+      ...(Object.keys(env).length ? { env } : {}),
     });
     console.log(
       c.green(

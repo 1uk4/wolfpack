@@ -78,6 +78,7 @@ export function wolvesRouter(manager: WolfManager): Router {
           body.agentsMd as string,
           body.extensions as Record<string, string> | undefined,
           body.models as string | undefined,
+          body.env as Record<string, string> | undefined,
         );
         res.json({ wolf: updated });
         return;

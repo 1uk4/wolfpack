@@ -22,6 +22,7 @@ import {
   sendCommand,
   sendLongCommand,
   pollForExit,
+  probeExit,
   closeSurface,
   shellEscape,
   readScreen,
@@ -1162,9 +1163,14 @@ function steerSubagent(
   }
 }
 
-function handleSubagentSteer(
+/** Has this pane agent's process exited? Throws if that can't be determined. */
+const probeRunningExit = (running: RunningSubagent) =>
+  probeExit(running.surface, { sessionFile: running.sessionFile, sentinelFile: running.sentinelFile });
+
+async function handleSubagentSteer(
   params: { name?: string; message?: string },
   send: (surface: string, command: string) => void = sendCommand,
+  probe: (running: RunningSubagent) => Promise<unknown | null> = probeRunningExit,
 ) {
   const message = params.message?.trim();
   if (!message) {
@@ -1190,6 +1196,31 @@ function handleSubagentSteer(
       details: { error: err, id: running.id, name: running.name },
     };
   }
+
+  // Never type into a pane whose agent has exited: the keystrokes would land
+  // at the bare shell prompt and Enter would run them as a command.
+  let exited: unknown | null;
+  try {
+    exited = await probe(running);
+  } catch (error: any) {
+    const err =
+      `Can't tell whether "${running.name}" is still running (${error?.message ?? String(error)}), ` +
+      `so the message was NOT sent: typing into a pane whose agent has exited would run it as a shell command. Try again shortly.`;
+    return {
+      content: [{ type: "text" as const, text: err }],
+      details: { error: err, id: running.id, name: running.name },
+    };
+  }
+  if (exited) {
+    const err =
+      `Subagent "${running.name}" has already exited, so the message was NOT typed into its pane. ` +
+      `Its result is delivered as a steer message; message it again to resume its session.`;
+    return {
+      content: [{ type: "text" as const, text: err }],
+      details: { error: err, id: running.id, name: running.name, exited: true },
+    };
+  }
+
   const now = Date.now();
   observeRunningSubagent(running, now);
 
@@ -2254,7 +2285,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // A name that matches a currently-running subagent always steers it.
         const runningMatch = Array.from(runningSubagents.values()).find((r) => r.name === requestedName);
         if (runningMatch) {
-          return handleSubagentSteer({ name: requestedName, message: params.message });
+          const steered = await handleSubagentSteer({ name: requestedName, message: params.message });
+          if (!(steered.details as any)?.exited) return steered;
+          // The agent already exited but its watcher hasn't reaped it yet (the
+          // watcher still delivers the result). Drop the stale entry and resume.
+          runningSubagents.delete(runningMatch.id);
+          updateWidget();
         }
 
         // ── Resume a finished session by name ──
@@ -2293,7 +2329,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         for (const r of runningSubagents.values()) {
           if (resolve(r.sessionFile) === resolve(sessionPath)) {
             const err = `Subagent "${requestedName}" is still running as "${r.name}". Your message will steer it; resending as a steer.`;
-            return handleSubagentSteer({ name: r.name, message: params.message });
+            return await handleSubagentSteer({ name: r.name, message: params.message });
           }
         }
 

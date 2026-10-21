@@ -144,6 +144,49 @@ function interpretExitSidecar(data: any): PollResult {
 export const __pollForExitTest__ = { interpretExitSidecar };
 
 /**
+ * How many trailing screen lines to scan for the done marker. The marker is
+ * followed by the shell's timing line and prompt (often multi-line, with blank
+ * lines), and narrow panes wrap each of those over several rows, so a tiny
+ * window (it used to be 5) misses the marker and the exit is never seen.
+ */
+export const EXIT_SCAN_LINES = 200;
+
+const DONE_MARKER = /__SUBAGENT_DONE_(\d+)__/g;
+
+/** Last done marker on a screen (the newest run wins), or null. */
+export function findDoneMarker(screen: string): number | null {
+  let last: number | null = null;
+  for (const m of screen.matchAll(DONE_MARKER)) last = parseInt(m[1], 10);
+  return last;
+}
+
+/**
+ * One non-consuming look at whether a subagent has exited: error sidecar,
+ * Claude sentinel file, then the done marker on the pane. Returns null when
+ * there is no sign of exit. Throws if the pane can't be read and no file
+ * evidence exists, so callers can tell "alive" from "unknown".
+ */
+export async function probeExitWith(
+  backend: MuxBackend,
+  surface: string,
+  options: { sessionFile?: string; sentinelFile?: string },
+): Promise<PollResult | null> {
+  if (options.sessionFile) {
+    try {
+      const exitFile = `${options.sessionFile}.exit`;
+      if (existsSync(exitFile)) return interpretExitSidecar(JSON.parse(readFileSync(exitFile, "utf-8")));
+    } catch {}
+  }
+  if (options.sentinelFile) {
+    try {
+      if (existsSync(options.sentinelFile)) return { reason: "sentinel", exitCode: 0 };
+    } catch {}
+  }
+  const exitCode = findDoneMarker(await backend.readScreenAsync(surface, EXIT_SCAN_LINES));
+  return exitCode === null ? null : { reason: "sentinel", exitCode };
+}
+
+/**
  * Poll until the subagent exits. Checks for a `.exit` sidecar file first
  * (written by the error path), then the Claude sentinel file, then falls back
  * to scraping the pane for the terminal sentinel (crash detection). The
@@ -183,9 +226,9 @@ export async function pollForExitWith(
     }
 
     try {
-      const screen = await backend.readScreenAsync(surface, 5);
-      const match = screen.match(/__SUBAGENT_DONE_(\d+)__/);
-      if (match) return { reason: "sentinel", exitCode: parseInt(match[1], 10) };
+      const screen = await backend.readScreenAsync(surface, EXIT_SCAN_LINES);
+      const exitCode = findDoneMarker(screen);
+      if (exitCode !== null) return { reason: "sentinel", exitCode };
     } catch {
       if (options.sessionFile) {
         try {

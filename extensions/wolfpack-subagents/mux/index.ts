@@ -17,6 +17,7 @@ import {
   type MuxBackend,
   type PollResult,
   pollForExitWith,
+  probeExitWith,
   sendLongCommandWith,
   shellEscape as sharedShellEscape,
   wolfEnvPrefix,
@@ -127,6 +128,14 @@ export function pollForExit(
   },
 ): Promise<PollResult> {
   return pollForExitWith(backendFor(surface), surface, signal, options);
+}
+
+/** Non-consuming exit check; throws if the pane can't be read. */
+export function probeExit(
+  surface: string,
+  options: { sessionFile?: string; sentinelFile?: string },
+): Promise<PollResult | null> {
+  return probeExitWith(backendFor(surface), surface, options);
 }
 
 export const shellEscape = sharedShellEscape;

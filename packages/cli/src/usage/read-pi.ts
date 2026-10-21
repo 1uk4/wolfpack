@@ -14,12 +14,15 @@ export interface SessionFiles {
   files: string[];
   /** Session files a subagent registry lists. */
   subagent: Set<string>;
+  /** Agent name per subagent session file, where a launch script names it. */
+  agents: Map<string, string>;
 }
 
 /** Every session .jsonl under a sessions dir, skipping artifacts/ (whose registries mark subagents). */
 export function findSessionFiles(sessionsDir: string): SessionFiles {
   const files: string[] = [];
   const subagent = new Set<string>();
+  const agents = new Map<string, string>();
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
     try {
@@ -30,7 +33,10 @@ export function findSessionFiles(sessionsDir: string): SessionFiles {
     for (const d of entries) {
       const p = path.join(dir, d.name);
       if (d.isDirectory()) {
-        if (d.name === "artifacts") readRegistries(p, subagent);
+        if (d.name === "artifacts") {
+          readRegistries(p, subagent);
+          readLaunchScripts(p, agents);
+        }
         else walk(p);
       } else if (d.isFile() && d.name.endsWith(".jsonl")) {
         files.push(p);
@@ -38,7 +44,7 @@ export function findSessionFiles(sessionsDir: string): SessionFiles {
     }
   };
   walk(sessionsDir);
-  return { files: files.sort(), subagent };
+  return { files: files.sort(), subagent, agents };
 }
 
 function readRegistries(artifactsDir: string, into: Set<string>): void {
@@ -61,6 +67,46 @@ function readRegistries(artifactsDir: string, into: Set<string>): void {
       /* no registry in this run */
     }
   }
+}
+
+/**
+ * Launch scripts (artifacts/<run>/subagent-scripts/*.sh) carry the session
+ * file (`# Session: <path>`) and the agent (`PI_SUBAGENT_AGENT='<name>'`).
+ */
+function readLaunchScripts(artifactsDir: string, into: Map<string, string>): void {
+  let runs: string[];
+  try {
+    runs = fs.readdirSync(artifactsDir);
+  } catch {
+    return;
+  }
+  for (const run of runs) {
+    const dir = path.join(artifactsDir, run, "subagent-scripts");
+    let scripts: string[];
+    try {
+      scripts = fs.readdirSync(dir).filter((f) => f.endsWith(".sh"));
+    } catch {
+      continue;
+    }
+    for (const f of scripts) {
+      try {
+        const text = fs.readFileSync(path.join(dir, f), "utf8");
+        const session = text.match(/^# Session: (.+)$/m)?.[1];
+        const agent = text.match(/PI_SUBAGENT_AGENT='?([A-Za-z0-9_.-]+)'?/)?.[1];
+        if (session && agent) into.set(path.resolve(session.trim()), agent);
+      } catch {
+        /* unreadable script */
+      }
+    }
+  }
+}
+
+/** The usage `use` of a session file: main, subagent, or subagent:<agent>. */
+export function sessionUse(file: string, sf: SessionFiles): string {
+  const p = path.resolve(file);
+  const agent = sf.agents.get(p);
+  if (agent) return `subagent:${agent}`;
+  return sf.subagent.has(p) ? "subagent" : "main";
 }
 
 /**

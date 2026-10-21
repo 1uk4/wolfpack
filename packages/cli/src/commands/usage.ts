@@ -1,5 +1,6 @@
 /**
- * wolfpack usage [wolf] [--since 7d|30d|24h|YYYY-MM-DD|all] [--by wolf|model|billing|source|day] [--json] [--no-ingest]
+ * wolfpack usage [wolf] [--since 7d|30d|24h|YYYY-MM-DD|all] [--by wolf|model|billing|source|use|day] [--json] [--no-ingest]
+ * wolfpack usage context [--since 7d] [--json]
  * wolfpack usage ingest
  * wolfpack usage install-schedule | uninstall-schedule
  *
@@ -9,11 +10,18 @@
  * ledger (~/.wolfpack/usage); the report reads only the ledger, so deleted
  * sessions never shrink history. Reading, ingest and grouping live in
  * ../usage/; this file only prints.
+ *
+ * --by use splits main / subagent[:<agent>] / step:<step>. The ledger keeps old
+ * events as ingested (plain "subagent"); only new ingests carry the agent name.
+ * `usage context` reads live session files (not the ledger): per tool, how
+ * much result text landed in the main agent's context, vs subagent sessions.
  */
 import { loadConfig, LOCAL_HOST } from "../config.js";
 import { c } from "../render.js";
 import { aggregate, isGroupBy, parseSince, GROUP_BYS, type UsageReport, type UsageRow } from "../usage/aggregate.js";
 import type { SourceReport } from "../usage/collect.js";
+import type { ContextGroup } from "../usage/context.js";
+import { collectContext } from "../usage/context-read.js";
 import { formatIngest, ingestUsage, type IngestResult } from "../usage/ingest.js";
 import { defaultLedgerDir, readLedger } from "../usage/ledger.js";
 import { installUsageSchedule, uninstallUsageSchedule } from "../usage-schedule.js";
@@ -104,6 +112,34 @@ export async function ingestUsageQuietly(): Promise<void> {
   }
 }
 
+export function formatContextGroup(title: string, g: ContextGroup, top = 15): string {
+  const head = `${title}: ${g.sessions} session file(s), ${g.toolCalls} tool calls (${g.spawns} subagent spawns), ${shortNumber(g.resultChars)} chars of tool output`;
+  if (g.tools.length === 0) return c.bold(head);
+  const rows = g.tools.slice(0, top).map((t) => [t.tool, String(t.calls), `${t.callShare.toFixed(1)}%`, shortNumber(t.chars), `${t.charShare.toFixed(1)}%`]);
+  const headers = ["TOOL", "CALLS", "CALL %", "CHARS", "CHAR %"];
+  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]!.length)));
+  const line = (r: string[]) => r.map((x, i) => (i === 0 ? x.padEnd(widths[i]!) : x.padStart(widths[i]!))).join("  ");
+  const more = g.tools.length > top ? [c.dim(`… ${g.tools.length - top} more tools (--json for all)`)] : [];
+  return [c.bold(head), c.dim(line(headers)), ...rows.map(line), ...more].join("\n");
+}
+
+async function contextCmd(opts: UsageOptions): Promise<void> {
+  const sinceArg = opts.since ?? "7d";
+  const since = parseSince(sinceArg);
+  const config = loadConfig();
+  const report = await collectContext({ wolvesRoot: config.wolvesRoot, hosts: [], localHost: LOCAL_HOST }, since);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+  const spawnShare = report.main.toolCalls > 0 ? ((report.main.spawns / report.main.toolCalls) * 100).toFixed(1) : "0";
+  console.log(`\n  ${c.bold(`Main-context share — local wolves, ${since ? `since ${sinceArg}` : "all time"}`)}\n`);
+  console.log(formatContextGroup("MAIN sessions", report.main).replace(/^/gm, "  ") + "\n");
+  console.log(`  Subagent spawns: ${report.main.spawns} of ${report.main.toolCalls} main tool calls (${spawnShare}%)\n`);
+  console.log(formatContextGroup("SUBAGENT sessions (for comparison)", report.subagent).replace(/^/gm, "  ") + "\n");
+  console.log(c.dim("  Reads live session files, not the ledger. Chars = tool-result text in context.") + "\n");
+}
+
 export async function usageCmd(arg: string | undefined, opts: UsageOptions): Promise<void> {
   const ledgerDir = opts.ledgerDir ?? defaultLedgerDir();
   switch (arg) {
@@ -113,6 +149,8 @@ export async function usageCmd(arg: string | undefined, opts: UsageOptions): Pro
       else console.log(`${new Date().toISOString()} ${formatIngest(r)}`);
       return;
     }
+    case "context":
+      return contextCmd(opts);
     case "install-schedule":
       for (const note of installUsageSchedule()) console.log(`  ${note}`);
       return;

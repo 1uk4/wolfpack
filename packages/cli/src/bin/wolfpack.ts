@@ -41,7 +41,7 @@ ${c.bold("COMMANDS")}
   status <wolf>                   Wolf health and service state
   logs <wolf>                     View wolf logs
   models [wolf]                   Resolved model per use (tier, model, thinking, source)
-  usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|day)
+  usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -68,8 +68,12 @@ ${c.bold("WORKFLOW COMMANDS")}
   logs <wolf> [-f] [--lines N]    View wolf logs
   models [wolf] [--host <h>] [--json]
                                   Resolved model table per wolf (all wolves if none)
-  usage [wolf] [--since 7d|30d|24h|YYYY-MM-DD|all] [--by wolf|model|billing|source|day] [--json] [--no-ingest]
+  usage [wolf] [--since 7d|30d|24h|YYYY-MM-DD|all] [--by wolf|model|billing|source|use|day] [--json] [--no-ingest]
                                   Model calls, tokens and cost for all wolves (ingests, then reads the ledger)
+                                  --by use: main / subagent[:<agent>] / step:<step>; the ledger keeps old
+                                  events as ingested, so only new ones carry the agent name
+  usage context [--since 7d] [--json]
+                                  Which tools' output lands in the main agent's context (live sessions)
   usage ingest                    Append new calls from local logs to ~/.wolfpack/usage
   usage install-schedule          Hourly ingest via launchd (uninstall-schedule removes it)
   config <wolf> [--set key=val]   Configure wolf (interactive or scripted)

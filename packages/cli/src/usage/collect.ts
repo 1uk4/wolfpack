@@ -11,7 +11,7 @@ import { parse as yamlParse } from "yaml";
 import type { UsageEvent, UsageSource } from "@wolfpack/engine";
 import { readDurableStore } from "./read-durable.js";
 import { engineLogFiles, readEngineLog } from "./read-engine.js";
-import { findSessionFiles, readPiSessionFile } from "./read-pi.js";
+import { findSessionFiles, readPiSessionFile, sessionUse } from "./read-pi.js";
 
 export interface CollectOptions {
   wolvesRoot: string;
@@ -30,7 +30,7 @@ export interface SourceFile {
   file: string;
   /** Files whose size + mtime tell whether the source changed (a store's -wal too). */
   watch: string[];
-  /** pi: `main` or `subagent`. */
+  /** pi: `main`, `subagent` or `subagent:<agent>`. */
   use?: string;
 }
 
@@ -81,9 +81,9 @@ export function listSources(opts: CollectOptions): { sources: SourceFile[]; skip
     const dir = path.join(localRoot, dirName);
     const wolf = localWolfName(dir);
     if (!wolf || (opts.wolf && wolf !== opts.wolf)) continue;
-    const { files, subagent } = findSessionFiles(path.join(dir, "agent", "sessions"));
-    for (const file of files) {
-      const use = subagent.has(path.resolve(file)) ? "subagent" : "main";
+    const sf = findSessionFiles(path.join(dir, "agent", "sessions"));
+    for (const file of sf.files) {
+      const use = sessionUse(file, sf);
       sources.push({ kind: "pi", wolf, host: localHost, file, watch: [file], use });
     }
     engine(path.join(dir, "den"), localHost, wolf);

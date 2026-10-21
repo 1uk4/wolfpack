@@ -40,7 +40,15 @@ export interface AgentModelRef {
   /** Extension package the agent file lives in (e.g. wolfpack-subagents). */
   extension: string;
   model: string | undefined;
+  /** The agent file. */
+  path?: string;
+  /** Where it lives (default repo). Precedence: repo < wolf < project. */
+  origin?: AgentOrigin;
+  /** Set when this agent overrides a repo agent of the same name: the repo file it shadows. */
+  shadows?: string;
 }
+
+export type AgentOrigin = "repo" | "wolf" | "project";
 
 export interface ModelRow {
   use: string;
@@ -49,6 +57,63 @@ export interface ModelRow {
   model: string;
   thinking: string;
   source: string;
+}
+
+function readAgentFile(file: string, extension: string, origin: AgentOrigin): AgentModelRef {
+  const raw = fs.readFileSync(file, "utf8");
+  const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const meta = (fm ? yamlParse(fm[1]!) : undefined) as { name?: unknown; model?: unknown } | undefined;
+  return {
+    name: typeof meta?.name === "string" ? meta.name : path.basename(file).replace(/\.md$/, ""),
+    extension,
+    model: typeof meta?.model === "string" ? meta.model : undefined,
+    path: file,
+    origin,
+  };
+}
+
+/** Read the agent files (*.md) directly in a dir — a wolf's agent/agents or a project's .pi/agents. */
+export function readAgentsDir(dir: string, origin: AgentOrigin): AgentModelRef[] {
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return [];
+  }
+  const out: AgentModelRef[] = [];
+  for (const f of files) {
+    try {
+      out.push(readAgentFile(path.join(dir, f), origin, origin));
+    } catch {
+      /* unreadable agent file */
+    }
+  }
+  return out;
+}
+
+/**
+ * The agents a wolf actually gets: repo agents, overridden by same-named wolf
+ * agents, overridden by same-named project agents (the subagents extension's
+ * precedence). An override records the lower-precedence file it shadows.
+ */
+export function effectiveAgents(repo: AgentModelRef[], wolf: AgentModelRef[], project: AgentModelRef[]): AgentModelRef[] {
+  const byName = new Map<string, AgentModelRef>();
+  for (const layer of [repo, wolf, project]) {
+    for (const a of layer) {
+      const prev = byName.get(a.name);
+      byName.set(a.name, prev ? { ...a, shadows: prev.shadows ?? prev.path } : a);
+    }
+  }
+  return [...byName.values()];
+}
+
+/** Repo agents plus this wolf's and the project's (cwd) overrides and additions. */
+export function agentsForWolf(repo: AgentModelRef[], wolfAgentDir: string | undefined, cwd: string = process.cwd()): AgentModelRef[] {
+  return effectiveAgents(
+    repo,
+    wolfAgentDir ? readAgentsDir(path.join(wolfAgentDir, "agents"), "wolf") : [],
+    readAgentsDir(path.join(cwd, ".pi", "agents"), "project"),
+  );
 }
 
 /** Read every repo subagent file (extensions/*\/agents/*.md) and its `model:`. */
@@ -68,16 +133,7 @@ export function readRepoAgents(dir: string = extensionsDir()): AgentModelRef[] {
     } catch {
       continue;
     }
-    for (const file of files) {
-      const raw = fs.readFileSync(path.join(agentsDir, file), "utf8");
-      const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      const meta = (fm ? yamlParse(fm[1]!) : undefined) as { name?: unknown; model?: unknown } | undefined;
-      agents.push({
-        name: typeof meta?.name === "string" ? meta.name : file.replace(/\.md$/, ""),
-        extension: ext,
-        model: typeof meta?.model === "string" ? meta.model : undefined,
-      });
-    }
+    for (const file of files) agents.push(readAgentFile(path.join(agentsDir, file), ext, "repo"));
   }
   return agents;
 }
@@ -91,21 +147,30 @@ function tierRow(table: ModelTable, use: string, tier: Tier): ModelRow {
   return { use, tier, model: t.model, thinking: t.thinking ?? "—", source };
 }
 
+/** Origin note for an agent that isn't a plain repo agent. */
+function agentNote(a: AgentModelRef): string | undefined {
+  if (a.shadows) return `⚠ shadows repo agent (${a.shadows})`;
+  if (a.origin === "wolf" || a.origin === "project") return `${a.origin} agent (${a.path})`;
+  return undefined;
+}
+
 /** One row per model use: main, each engine step, each subagent. */
 export function modelRows(table: ModelTable, agents: AgentModelRef[]): ModelRow[] {
   const rows: ModelRow[] = [tierRow(table, "main", "main")];
   for (const [step, { tier }] of Object.entries(table.steps)) rows.push(tierRow(table, step, tier));
   for (const agent of agents) {
     const use = `agent:${agent.name}`;
+    const note = agentNote(agent);
     if (isTier(agent.model)) {
-      rows.push(tierRow(table, use, agent.model));
+      const row = tierRow(table, use, agent.model);
+      rows.push(note ? { ...row, source: `${row.source}; ${note}` } : row);
     } else {
       rows.push({
         use,
         tier: "—",
         model: `${agent.model ?? "(none)"} (not a tier)`,
         thinking: "—",
-        source: `${agent.extension}/agents`,
+        source: note ?? `${agent.extension}/agents`,
       });
     }
   }
@@ -140,14 +205,18 @@ export async function wolfModels(
     return;
   }
 
-  const agents = readRepoAgents();
+  const repoAgents = readRepoAgents();
+  const agentsOf = (r: WolfRef): AgentModelRef[] =>
+    r.host === LOCAL_HOST
+      ? agentsForWolf(repoAgents, path.join(localWolfDir(config, r.name), "agent"))
+      : agentsForWolf(repoAgents, undefined);
   const results: Array<WolfRef & Resolved> = [];
   for (const ref of refs) results.push({ ...ref, ...(await resolveWolf(config, ref)) });
 
   if (opts.json) {
     const out = results.map((r) =>
       r.ok
-        ? { wolf: r.name, host: r.host, table: r.table, rows: modelRows(r.table, agents) }
+        ? { wolf: r.name, host: r.host, table: r.table, rows: modelRows(r.table, agentsOf(r)) }
         : { wolf: r.name, host: r.host, error: r.error },
     );
     process.stdout.write(JSON.stringify(out, null, 2) + "\n");
@@ -164,7 +233,7 @@ export async function wolfModels(
         console.log(c.dim("  main agent: API key (no Max provider on pi-durable yet); memory + sweep: Max"));
       }
       console.log("");
-      console.log(indent(formatModelRows(modelRows(r.table, agents)), "  "));
+      console.log(indent(formatModelRows(modelRows(r.table, agentsOf(r))), "  "));
       for (const w of r.table.warnings) console.log(c.yellow(`  ⚠ ${w}`));
     }
     console.log("");

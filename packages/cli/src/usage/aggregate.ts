@@ -4,7 +4,7 @@
  */
 import type { UsageEvent } from "@wolfpack/engine";
 
-export const GROUP_BYS = ["wolf", "model", "billing", "source", "day"] as const;
+export const GROUP_BYS = ["wolf", "model", "billing", "source", "use", "day"] as const;
 export type GroupBy = (typeof GROUP_BYS)[number];
 
 export function isGroupBy(v: unknown): v is GroupBy {
@@ -72,6 +72,8 @@ function keyOf(e: UsageEvent, by: GroupBy): string {
       return e.billing;
     case "source":
       return e.source;
+    case "use":
+      return e.use;
     case "day":
       return localDay(e.ts);
   }

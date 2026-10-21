@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { resolveModelTable, type PackModels } from "@wolfpack/engine";
-import { modelRows, parseBridgeModels, readEnvValue, readRepoAgents } from "./wolf-models.js";
+import { agentsForWolf, modelRows, parseBridgeModels, readEnvValue, readRepoAgents } from "./wolf-models.js";
 import { deepMerge, remoteModelUpdates, setTierOverride } from "./wolf-config.js";
 import { defaultPackModels } from "./setup.js";
 import { savePackModels } from "../config.js";
@@ -53,13 +53,51 @@ describe("readRepoAgents", () => {
     fs.writeFileSync(path.join(dir, "ext-a", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\nbody\n");
     fs.writeFileSync(path.join(dir, "ext-a", "agents", "bare.md"), "no frontmatter\n");
     expect(readRepoAgents(dir)).toEqual([
-      { name: "bare", extension: "ext-a", model: undefined },
-      { name: "scout", extension: "ext-a", model: "fast" },
+      { name: "bare", extension: "ext-a", model: undefined, path: path.join(dir, "ext-a", "agents", "bare.md"), origin: "repo" },
+      { name: "scout", extension: "ext-a", model: "fast", path: path.join(dir, "ext-a", "agents", "scout.md"), origin: "repo" },
     ]);
   });
 
   it("finds the repo's own agent files", () => {
     expect(readRepoAgents().map((a) => a.name)).toContain("scout");
+  });
+});
+
+describe("shadowed agents", () => {
+  const table = resolveModelTable({ pack, location: "local" });
+
+  function setup() {
+    const root = tmpDir();
+    const ext = path.join(root, "ext");
+    const wolf = path.join(root, "wolf-agent");
+    const proj = path.join(root, "proj");
+    for (const d of [path.join(ext, "wolfpack-subagents", "agents"), path.join(wolf, "agents"), path.join(proj, ".pi", "agents")]) {
+      fs.mkdirSync(d, { recursive: true });
+    }
+    const w = (f: string, body: string) => fs.writeFileSync(f, body);
+    w(path.join(ext, "wolfpack-subagents", "agents", "scout.md"), "---\nname: scout\nmodel: fast\n---\n");
+    w(path.join(ext, "wolfpack-subagents", "agents", "worker.md"), "---\nname: worker\nmodel: smart\n---\n");
+    w(path.join(wolf, "agents", "scout.md"), "---\nname: scout\nmodel: smart\n---\n");
+    w(path.join(wolf, "agents", "mine.md"), "---\nname: mine\nmodel: fast\n---\n");
+    w(path.join(proj, ".pi", "agents", "worker.md"), "---\nname: worker\nmodel: claude-x\n---\n");
+    return { ext, wolf, proj };
+  }
+
+  it("marks wolf and project agents that shadow repo agents, and lists extras by origin", () => {
+    const { ext, wolf, proj } = setup();
+    const agents = agentsForWolf(readRepoAgents(ext), wolf, proj);
+    const rows = Object.fromEntries(modelRows(table, agents).map((r) => [r.use, r]));
+    expect(rows["agent:scout"]!.tier).toBe("smart");
+    expect(rows["agent:scout"]!.source).toContain(`⚠ shadows repo agent (${path.join(ext, "wolfpack-subagents", "agents", "scout.md")})`);
+    expect(rows["agent:worker"]!.model).toBe("claude-x (not a tier)");
+    expect(rows["agent:worker"]!.source).toContain("⚠ shadows repo agent");
+    expect(rows["agent:mine"]!.source).toContain("wolf agent (");
+  });
+
+  it("leaves repo agents alone when nothing shadows them", () => {
+    const { ext } = setup();
+    const agents = agentsForWolf(readRepoAgents(ext), undefined, path.join(tmpDir(), "none"));
+    expect(modelRows(table, agents).find((r) => r.use === "agent:scout")!.source).toBe("pack");
   });
 });
 

@@ -210,8 +210,16 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // root() applies `agent` only when it creates the conversation; an existing
   // root keeps the model it was created with. Re-apply it on every start so
   // the shipped table (models.json) decides the model, not history.
-  await root.configure({ model: agent.model, thinkingLevel: main.thinking ?? null }, context);
-  await repairEmptyToolErrors(root, context);
+  try {
+    await root.configure({ model: agent.model, thinkingLevel: main.thinking ?? null }, context);
+  } catch (err) {
+    console.error(`[harness] Could not re-apply the main model to the root: ${err instanceof Error ? err.message : err}`);
+  }
+  try {
+    await repairEmptyToolErrors(root, context);
+  } catch (err) {
+    console.error(`[harness] Tool-result repair failed: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Resume interrupted work
   harness.resume();

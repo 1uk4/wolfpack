@@ -14,12 +14,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Legacy build artifacts
-legacy/**/*.js
-legacy/**/*.js.map
-legacy/**/*.d.ts
-legacy/**/*.d.ts.map
-
 # Syncthing metadata
 **/.stfolder
 **/.stversions/
@@ -30,9 +24,6 @@ legacy/**/*.d.ts.map
 
 # OM session memory
 .memory/
-
-# Ephemeral/persistent visual-tools renders (never commit)
-viz/
 
 # compiled test artifacts accidentally emitted into src by ad-hoc tsc
 packages/*/src/**/*.test.js
@@ -45,3 +36,9 @@ packages/*/src/**/*.test.d.ts.map
 vitest.config.js
 vitest.config.d.ts
 vitest.config.*.map
+
+# Logs, coverage, editor dirs
+*.log
+coverage/
+.idea/
+.vscode/

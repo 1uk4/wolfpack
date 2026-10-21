@@ -4,9 +4,6 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadModelTable, MODELS_FILE_ENV, type ModelTable } from "@wolfpack/engine";
 
-// Re-export extension loader
-export { loadExtensions, listBundledExtensions } from "./extensions.js";
-
 export interface WolfConfig {
   id?: string;
   name: string;

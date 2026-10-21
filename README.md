@@ -271,7 +271,7 @@ This verifies Node 22+, installs dependencies, builds all packages, links the
 ```bash
 npm install
 npm run build         # Build all packages
-npm run typecheck     # Type check without emit
+npm run build         # Type check + compile
 npm run install:cli   # Rebuild + relink CLI
 ```
 

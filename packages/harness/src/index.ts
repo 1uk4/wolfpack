@@ -27,9 +27,6 @@ export { loadWolfConfig, type WolfConfig };
 export { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 export { createTelegramClient, type TelegramClient } from "./telegram/index.js";
 
-// Legacy exports for backward compatibility
-export { loadExtensions, listBundledExtensions } from "./extensions.js";
-
 // Unified extension API
 export {
   defineExtension,

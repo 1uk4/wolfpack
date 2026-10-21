@@ -1431,6 +1431,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // ── Lifecycle ───────────────────────────────────────────────────────────
 
   pi.on("session_start", (_event: unknown, ctx: any) => {
+    // Subagent child: its result reaches memory via the main chat. Leave memory off
+    // (no runtime/observer/status/reconcile); work tools and den-context injection stay.
+    if (process.env.PI_SUBAGENT_AGENT) return;
     runtime = new PiRuntime(pi, ctx);
     enabled = readGate(ctx.sessionManager.getBranch());
     if (enabled) initOrchestrator(ctx);

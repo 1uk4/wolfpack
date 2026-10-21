@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 import type { HostEntry } from "./config.js";
 import { execSsh, execSshStream, scpToHost } from "./ssh-helper.js";
 import { c } from "./render.js";
+import { remotePaths } from "./paths.js";
 
 /**
  * Generate a secure API key for the agent
@@ -104,8 +105,9 @@ export async function provisionKbEngine(
   const repoRoot = findRepoRoot();
   if (!repoRoot) throw new Error("Could not find wolfpack repo root for KB CLI bundle.");
 
-  const user = `wolf-${wolf.id}`;
-  const home = `/home/${user}`;
+  const rp = remotePaths();
+  const user = rp.user(wolf.id);
+  const home = rp.home(wolf.id);
   void wolf.ownerId; // owner id was only used by the removed systemd sweep service
 
   // 1. Bundle + ship the CLI.

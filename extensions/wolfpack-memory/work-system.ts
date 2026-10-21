@@ -54,11 +54,12 @@ import {
   firstTask,
   progress,
   isBlocked,
-  NEW_WORK_PROMPT,
+  newWorkPrompt,
   type SelectorState,
   type SelectorKey,
   type SelectorEffect,
 } from "@wolfpack/memory";
+import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -298,7 +299,7 @@ export interface WorkSystemConfig {
 
 export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): void {
   const wolfDen = process.env.WOLF_DEN;
-  const wolfName = process.env.WOLF_NAME ?? "owner";
+  const wolfName = process.env.WOLF_NAME ?? "wolf";
   const kbBase = process.env.KB_BASE;
 
   if (!wolfDen) {
@@ -887,9 +888,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if (action === "new") {
         // Conversational flow: let the agent ask questions and create the task
         try {
-          pi.sendUserMessage(NEW_WORK_PROMPT);
+          pi.sendUserMessage(newWorkPrompt(listSubscribedDomains(kbBase)));
         } catch {
-          ctx.ui.pasteToEditor(NEW_WORK_PROMPT);
+          ctx.ui.pasteToEditor(newWorkPrompt(listSubscribedDomains(kbBase)));
         }
       } else if (action === "bind" && activeItem) {
         await promptTaskIteration(pi, ctx, client, activeItem);
@@ -1253,12 +1254,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         "Create a new work item. Hierarchy: initiative > feature > task/issue/spike; tasks need a feature parent. " +
         "A task/issue/spike with no partOf goes into the current workspace (the bound task's feature, or the last feature worked in this session), else the domain's Inbox. " +
         "Features may be standalone or under an initiative. " +
-        "PARENT MUST BE IN THE SAME DOMAIN: a task with domain=wolfpack cannot sit under a feature with domain=personal. " +
+        "PARENT MUST BE IN THE SAME DOMAIN: a task in one domain cannot sit under a feature in another. " +
         "If no feature in the same domain fits, OMIT partOf — the item lands in that domain's Inbox and can be moved later. " +
-        "Pick domain by SUBJECT: a fix to a Hal skill is domain=wolfpack (code change), an actual workout is domain=personal.",
+        "Pick domain by SUBJECT: a fix to a skill is a code change in the domain that owns the code, even if the skill is about something else.",
       parameters: Type.Object({
         kind: Type.String({ description: "idea | initiative | feature | task | issue | spike" }),
-        domain: Type.String({ description: "Domain: snapjack | wolfpack | personal" }),
+        domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains(kbBase))}` }),
         title: Type.String({ description: "Short title for the work item" }),
         area: Type.Optional(Type.String({ description: "Horizontal area: marketing, engineering, analysis…" })),
         successCriteria: Type.Optional(Type.String({ description: "Done-condition (required for tasks)" })),

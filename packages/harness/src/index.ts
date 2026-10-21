@@ -124,6 +124,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         denLocal: join(wolfDen, "kb"),
       }
     : undefined;
+  // Expose the wolf.yaml subscription to extensions (listSubscribedDomains).
+  if (config.domains?.length) process.env.WOLF_DOMAINS ??= config.domains.join(",");
   const defaultDomain = config.domains?.[0] ?? process.env.WOLFPACK_DOMAIN ?? "wolfpack";
 
   // Initialize sweep manager if librarian mode is enabled

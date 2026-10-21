@@ -45,7 +45,7 @@ export interface ConsolidateOptions {
   sessionId: string;
   /** KB storage roots; enables emitting contribution deltas to the librarian. */
   kbRoots?: KbRoots;
-  /** Default domain hint for emitted deltas (e.g. "snapjack", "wolfpack"). */
+  /** Default domain hint for emitted deltas (a declared domain name). */
   defaultDomain?: string;
   /** Skip emitting deltas to the KB. */
   skipClaims?: boolean;

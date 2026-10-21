@@ -20,7 +20,12 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 // These are APPENDED to the inherited PATH, never prepended: prepending them can
 // shadow the correct `node` (e.g. an ancient /usr/local/bin/node v4) and break
 // shebang-launched Node CLIs like mmdc (`#!/usr/bin/env node`).
-export const EXTRA_PATH = ["/opt/local/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+// Override with WOLFPACK_EXTRA_PATH (colon-separated) for other layouts.
+export const EXTRA_PATH = process.env.WOLFPACK_EXTRA_PATH?.split(":").filter(Boolean) ?? [
+  "/opt/local/bin",
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+]
 
 // Transient session/preview files live under the OS temp dir.
 export const STAGING_ROOT = join(tmpdir(), "pi-visual-tools")

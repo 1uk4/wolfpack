@@ -4,7 +4,7 @@
  * current set of domains.
  *
  *   • local librarian  → copy into the hub's knowledge/base (same filesystem)
- *   • remote librarian → scp into /home/wolf-<id>/knowledge/base (owned by the
+ *   • remote librarian → scp into <wolf home>/knowledge/base (owned by the
  *                        wolf user) over SSH
  *
  * The registry lives at the KB-base ROOT (not inside any domains/<x>/ folder),
@@ -17,6 +17,7 @@ import { loadConfig, getHost, kbBaseDir, type CliConfig } from "./config.js";
 import { registryPath } from "./domains.js";
 import { AgentClient } from "./agent-client.js";
 import { scpToHost, execSsh } from "./ssh-helper.js";
+import { remotePaths } from "./paths.js";
 
 export interface DeployResult {
   ok: boolean;
@@ -45,7 +46,7 @@ export async function deployDomainsRegistry(
     return { ok: true, note: `local: ${dest}` };
   }
 
-  // Remote librarian: scp to /home/wolf-<id>/knowledge/base/domains.yaml.
+  // Remote librarian: scp to <wolf home>/knowledge/base/domains.yaml.
   const host = getHost(config, lib.host);
   if (!host) return { ok: false, note: `host '${lib.host}' not registered` };
 
@@ -62,8 +63,9 @@ export async function deployDomainsRegistry(
   }
   if (!id) return { ok: false, note: "could not resolve librarian wolf id" };
 
-  const user = `wolf-${id}`;
-  const dest = `/home/${user}/knowledge/base/domains.yaml`;
+  const rp = remotePaths();
+  const user = rp.user(id);
+  const dest = `${rp.kbBase(id)}/domains.yaml`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-reg-"));
   const file = path.join(tmp, "domains.yaml");
   try {
@@ -71,7 +73,7 @@ export async function deployDomainsRegistry(
     scpToHost(host, file, "/tmp/wolfpack-domains.yaml");
     const res = execSsh(
       host,
-      `mkdir -p /home/${user}/knowledge/base && ` +
+      `mkdir -p ${rp.kbBase(id)} && ` +
         `install -o ${user} -g ${user} -m 644 /tmp/wolfpack-domains.yaml ${dest} && ` +
         `rm -f /tmp/wolfpack-domains.yaml`,
     );

@@ -18,6 +18,7 @@ import { loadConfig, saveConfig, getHost } from "../config.js";
 import { c } from "../render.js";
 import { deployAgent } from "../deployer.js";
 import { execSsh } from "../ssh-helper.js";
+import { remotePaths } from "../paths.js";
 
 export async function hostRedeploy(name?: string, opts: { rotateKey?: boolean } = {}): Promise<void> {
   const config = loadConfig();
@@ -49,18 +50,19 @@ export async function hostRedeploy(name?: string, opts: { rotateKey?: boolean } 
   // Mac-side (local) wolves can't be mutated here; the user must relaunch pi
   // after `wolfpack sync <wolf>` ships them the new token.
   if (willRotate) {
+    const rp = remotePaths();
     try {
       const script =
         `set -e
         NEW_KEY='${host.apiKey}'
         found=0
-        for env in /home/wolf-*/.env; do
+        for env in ${rp.homeGlob}/.env; do
           [ -f "$env" ] || continue
           found=1
           cp "$env" "$env.bak-pre-rotate-$(date +%s)" || true
           sed -i "s|^WORK_TOKEN=.*|WORK_TOKEN=$NEW_KEY|" "$env"
           wolfdir=$(dirname "$env")
-          id=$(basename "$wolfdir" | sed 's/^wolf-//')
+          id=$(basename "$wolfdir" | sed 's/^${rp.user("")}//')
           systemctl restart "wolf-$id" 2>/dev/null && echo "restarted wolf-$id" || echo "could not restart wolf-$id"
         done
         [ $found -eq 1 ] || echo 'no VPS wolves to re-token'
@@ -69,7 +71,7 @@ export async function hostRedeploy(name?: string, opts: { rotateKey?: boolean } 
       if (out) console.log(c.dim(out.split("\n").map((l: string) => `  ${l}`).join("\n")));
     } catch (err) {
       console.error(c.yellow(`⚠ Key propagation to VPS wolves failed: ${err instanceof Error ? err.message : err}`));
-      console.error(c.dim("  Fix: ssh root@<host> and edit WORK_TOKEN in each /home/wolf-*/.env, then restart each wolf-*.service."));
+      console.error(c.dim(`  Fix: ssh root@<host> and edit WORK_TOKEN in each ${rp.homeGlob}/.env, then restart each wolf-*.service.`));
     }
   }
 

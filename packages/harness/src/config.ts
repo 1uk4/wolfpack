@@ -48,7 +48,7 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
   }
 
   // wolf.yaml is in the home directory (parent of den), not in den itself
-  // VPS layout: /home/wolf-<id>/{wolf.yaml, den/, agent/}
+  // VPS layout: <wolf home>/{wolf.yaml, den/, agent/}
   const homeDir = join(wolfDen, "..");
   const configPath = join(homeDir, "wolf.yaml");
   const content = await readFile(configPath, "utf-8");

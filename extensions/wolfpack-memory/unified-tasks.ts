@@ -22,6 +22,7 @@ import {
   STAGE_ORDER,
   isComplete,
 } from "@wolfpack/kb/client";
+import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
 import { WorkClient } from "./work-client.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
@@ -450,12 +451,12 @@ Domains: ${domainList}`;
         name: "task_create",
         description:
           "Create a new work item. Tasks/issues/spikes default to the bound task's feature if partOf is not specified. " +
-          "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task with domain=wolfpack cannot sit under a feature with domain=personal. " +
+          "PARENT MUST BE IN THE SAME DOMAIN as the new item — a task in one domain cannot sit under a feature in another. " +
           "If no fitting feature exists in that domain, OMIT partOf and the item lands in the domain's Inbox. " +
-          "Pick domain by SUBJECT: a code change to a skill is wolfpack even if the skill is about fitness; an actual workout is personal.",
+          "Pick domain by SUBJECT: a code change to a skill belongs to the domain that owns the code, even if the skill is about something else.",
         parameters: Type.Object({
           kind: Type.String({ description: "Type: initiative, feature, task, issue, spike" }),
-          domain: Type.String({ description: "Domain for the work item" }),
+          domain: Type.String({ description: `Domain: ${formatDomainChoices(listSubscribedDomains())}` }),
           title: Type.String({ description: "Short title" }),
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
           successCriteria: Type.Optional(Type.String({ description: "Done condition (required for tasks)" })),
@@ -491,7 +492,7 @@ Domains: ${domainList}`;
           // Cross-domain guard: parent must be in the same domain as the new
           // item. The server enforces this (placementError), but failing fast
           // here gives a clearer error AND prevents the bound-feature default
-          // from silently misparenting a wolfpack task under a personal feature.
+          // from silently misparenting a task under a feature in another domain.
           if (partOf) {
             const parent = await findItem(partOf);
             if (parent && parent.item.domain !== args.domain) {

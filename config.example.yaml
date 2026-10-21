@@ -1,0 +1,61 @@
+# Wolfpack CLI config — copy to ~/.wolfpack/config.yaml and edit.
+# Secrets (API keys, bot tokens) belong in .env files, not here;
+# apiKey below is the agent key for that host only.
+# Domains live in ~/.wolfpack/domains.yaml (managed by `wolfpack domain`).
+
+# Root of the host-first wolves tree: <root>/<host>/<wolf>/ (default ~/wolves)
+wolvesRoot: ~/wolves
+
+# Host used by remote commands when none is given
+defaultHost: vps-01
+
+# Registered hosts (VPS running the wolfpack agent)
+hosts:
+  vps-01:
+    address: 100.64.0.1        # Tailscale or public IP
+    port: 3141                 # agent port
+    apiKey: CHANGE_ME          # agent API key for this host
+    ssh:
+      user: root
+      key: ~/.ssh/wolfpack     # SSH private key
+      port: 22
+
+# The pack librarian that curates the shared KB (required for memory/KB)
+librarian:
+  name: librarian              # wolf name
+  host: vps-01                 # a registered host, or "local" for this machine
+  id: AbC123                   # wolf id (remote librarians only)
+
+# Pack model tiers and default transports (wolf.yaml `models:` overrides per wolf)
+models:
+  main:  { model: claude-opus-5-5 }
+  smart: { model: claude-sonnet-5-5 }
+  fast:  { model: claude-haiku-5-5 }
+  transport:
+    local: subscription        # how wolves on this machine authenticate
+    vps: api                   # how wolves on hosts authenticate
+
+# Who owns this pack (all optional)
+owner:
+  name: Your Name              # display name
+  tz: America/New_York         # IANA timezone
+  telegramId: 123456789        # your Telegram user id (alerts / pairing)
+
+# On-host layout of remote hosts (optional; these are the defaults).
+# The agent reads the matching env vars: WOLFPACK_HOME_ROOT,
+# WOLFPACK_USER_PREFIX, WOLFPACK_KB_ROOT (plus KB_BASE / KB_OPS / WORK_LEDGER_DIR).
+remote:
+  wolfHomeRoot: /home          # parent of per-wolf homes
+  wolfUserPrefix: wolf-        # per-wolf unix user prefix
+  kbRoot: /var/wolfpack/kb     # shared KB root on the host
+
+# Extra dirs searched for helper binaries (tailscale…) and added to launchd PATH
+binDirs:
+  - /opt/homebrew/bin
+  - /usr/local/bin
+
+# Environment variables (set in a wolf's .env or the service unit, not here):
+#   KB_BASE, KB_OPS            knowledge-base roots (required on wolves with KB)
+#   WOLF_DOMAINS               comma list of subscribed domains (set by the harness from wolf.yaml)
+#   WOLFPACK_EXTRA_PATH        colon list appended to PATH for visual tools
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID

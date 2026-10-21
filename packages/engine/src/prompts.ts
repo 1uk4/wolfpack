@@ -252,7 +252,7 @@ Rules:
 - 2 to 6 words. Title Case. No trailing punctuation.
 - Name the TOPIC specifically. Do NOT use generic words like "Section" or "Overview".
 - NEVER prefix the title with the domain name. The domain is already implicit in
-  the tree — "Snapjack Platform Authentication" should just be "Platform Authentication".
+  the tree — "Acme Platform Authentication" should just be "Platform Authentication".
   Member entry titles often include the domain for provenance; strip it from your output.
 - If a parent title or sibling sections are given, make THIS title DISTINCT: do not
   repeat the parent's wording wholesale — name what is specific to this subsection

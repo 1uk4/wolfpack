@@ -94,6 +94,7 @@ RULES:
 // of the package keeps its import surface (`@wolfpack/memory`).
 export {
   NEW_WORK_PROMPT,
+  newWorkPrompt,
   GRILLING_PROTOCOL,
   TO_SPEC_PROTOCOL,
   TO_TICKETS_PROTOCOL,

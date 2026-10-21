@@ -1432,7 +1432,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event: unknown, ctx: any) => {
     // Subagent child: its result reaches memory via the main chat. Leave memory off
-    // (no runtime/observer/status/reconcile); work tools and den-context injection stay.
+    // (no runtime/observer/status/reconcile); work tools stay.
     if (process.env.PI_SUBAGENT_AGENT) return;
     runtime = new PiRuntime(pi, ctx);
     enabled = readGate(ctx.sessionManager.getBranch());
@@ -1463,6 +1463,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // systemPromptOptions and silently drop raw appended text.
   pi.on("before_agent_start", (event: any, _ctx: any) => {
     const sections = event.systemPromptOptions.sections;
+
+    // Subagent child: its brief carries the context it needs; no den/KB blocks.
+    if (process.env.PI_SUBAGENT_AGENT) {
+      delete sections["wolf_memory"];
+      delete sections["kb_access"];
+      return;
+    }
 
     const denContext = renderDenContext();
     if (denContext) sections["wolf_memory"] = denContext;

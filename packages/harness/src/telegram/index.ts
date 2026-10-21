@@ -45,6 +45,13 @@ export async function createTelegramClient(
 ): Promise<TelegramClient> {
   const context = BACKGROUND_CONTEXT;
   const bot = new Bot(config.botToken);
+
+  /** An error as one line with the bot token masked (request URLs carry it). */
+  const describe = (err: unknown): string => {
+    const cause = err instanceof Error && err.cause instanceof Error ? ` (${err.cause.message})` : "";
+    const text = (err instanceof Error ? err.message : String(err)) + cause;
+    return text.split(config.botToken).join("<bot-token>");
+  };
   const tempDir = config.tempDir ?? join(process.env.WOLF_DEN ?? "/tmp", "telegram");
   
   // Use provided shared state or create internal (for backwards compat)
@@ -187,7 +194,7 @@ export async function createTelegramClient(
           await bot.api.sendDocument(chatId, inputFile);
         }
       } catch (err) {
-        console.error(`[telegram] Failed to send attachment ${attachment.fileName}:`, err);
+        console.error(`[telegram] Failed to send attachment ${attachment.fileName}: ${describe(err)}`);
         await bot.api.sendMessage(chatId, `Failed to send: ${attachment.fileName}`);
       }
     }
@@ -228,7 +235,7 @@ export async function createTelegramClient(
           state.messageId = msgId;
           state.lastSentText = state.pendingText;
         } catch (err) {
-          console.error("[telegram] flush error:", err);
+          console.error(`[telegram] flush error: ${describe(err)}`);
         }
       }
     }, PREVIEW_THROTTLE_MS);
@@ -455,7 +462,7 @@ export async function createTelegramClient(
         }
       }
     } catch (err) {
-      console.error("[telegram] error handling message:", err);
+      console.error(`[telegram] error handling message: ${describe(err)}`);
       try {
         await ctx.reply("Error processing message.");
       } catch {
@@ -511,7 +518,7 @@ export async function createTelegramClient(
       // Submit callback data as a message to the harness
       await handleMessage(ctx as unknown as GrammyContext, data, ctx.callbackQuery?.message?.message_id);
     } catch (err) {
-      console.error("[telegram] callback_query error:", err);
+      console.error(`[telegram] callback_query error: ${describe(err)}`);
     }
   });
 
@@ -585,7 +592,7 @@ export async function createTelegramClient(
         await handleMessage(ctx, text, messageId, [imageData]);
       }
     } catch (err) {
-      console.error("[telegram] photo download error:", err);
+      console.error(`[telegram] photo download error: ${describe(err)}`);
       await ctx.reply("Failed to process photo.");
     }
   });
@@ -604,7 +611,7 @@ export async function createTelegramClient(
         : `[Attached file: ${localPath}]`;
       await handleMessage(ctx, text, ctx.message?.message_id);
     } catch (err) {
-      console.error("[telegram] document download error:", err);
+      console.error(`[telegram] document download error: ${describe(err)}`);
       await ctx.reply("Failed to process document.");
     }
   });
@@ -644,7 +651,7 @@ export async function createTelegramClient(
       const json = (await resp.json()) as { text?: string };
       return json.text ?? "";
     } catch (err) {
-      console.error("[telegram] transcribe failed:", err instanceof Error ? err.message : err);
+      console.error(`[telegram] transcribe failed: ${describe(err)}`);
       return null;
     }
   }
@@ -695,34 +702,50 @@ export async function createTelegramClient(
 
   // Global error handler to prevent crashes
   bot.catch((err) => {
-    console.error("[telegram] Bot error:", err.message);
+    console.error(`[telegram] Bot error: ${describe(err)}`);
   });
+
+  let stopped = false;
+
+  /**
+   * Verify the token and start polling, retrying until it works: a network
+   * blip at startup used to leave the bot off until the next restart. Runs in
+   * the background so a slow Telegram never holds up the harness.
+   */
+  async function connect(): Promise<void> {
+    let delayMs = 5_000;
+    while (!stopped) {
+      try {
+        const me = await bot.api.getMe();
+        console.log(`[telegram] Bot verified: @${me.username}`);
+        break;
+      } catch (err) {
+        console.error(`[telegram] Failed to verify bot (${describe(err)}); retrying in ${delayMs / 1000}s`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        delayMs = Math.min(delayMs * 2, 300_000);
+      }
+    }
+    if (stopped) return;
+    bot.start({
+      onStart: (info) => {
+        console.log(`[telegram] Bot @${info.username} connected and polling`);
+      },
+    }).catch((err) => {
+      console.error(`[telegram] Polling stopped (${describe(err)})${stopped ? "" : "; reconnecting in 30s"}`);
+      if (!stopped) setTimeout(() => void connect(), 30_000);
+    });
+  }
 
   return {
     async start() {
       root = await harness.root(context);
       console.log("[telegram] Bot starting with token:", config.botToken.slice(0, 10) + "...");
       console.log("[telegram] Owner ID:", config.ownerId);
-      
-      // Test the token first
-      try {
-        const me = await bot.api.getMe();
-        console.log(`[telegram] Bot verified: @${me.username}`);
-      } catch (err) {
-        console.error("[telegram] Failed to verify bot:", err);
-        return;
-      }
-      
-      bot.start({
-        onStart: (info) => {
-          console.log(`[telegram] Bot @${info.username} connected and polling`);
-        },
-      }).catch((err) => {
-        console.error("[telegram] Bot error:", err);
-      });
+      void connect();
     },
 
     async stop() {
+      stopped = true;
       console.log("[telegram] Bot stopping...");
       for (const [, state] of activeStreams) {
         if (state.flushTimer) clearTimeout(state.flushTimer);
@@ -736,7 +759,7 @@ export async function createTelegramClient(
       try {
         await bot.api.sendMessage(config.ownerId, message);
       } catch (err) {
-        console.error("[telegram] notify failed:", err instanceof Error ? err.message : err);
+        console.error(`[telegram] notify failed: ${describe(err)}`);
       }
     },
   };

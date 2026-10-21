@@ -20,6 +20,11 @@ export type UsageBilling = "api" | "subscription" | (string & {});
 export type CostSource = "reported" | "computed" | "notional" | "unknown";
 
 export interface UsageEvent {
+  /**
+   * Stable id, set when the event enters the usage ledger (`pi:<session>:<entry>`,
+   * `durable:<host>/<wolf>:<entry>:<index>`, `engine:<wolf>:<sha256 of the log line>`).
+   */
+  id?: string;
   /** ISO timestamp of the call. */
   ts: string;
   wolf: string;

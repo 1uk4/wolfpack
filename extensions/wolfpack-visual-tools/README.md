@@ -17,16 +17,14 @@ source file:
 - `write_svg` / `edit_svg` / `render_svg` — same shape for hand-written SVG,
   rendered via `rsvg-convert` (fallback: ImageMagick `magick`).
 
-Plus two subagents (`agents/`):
-
-- **mermaid-maker** — structural/relational visuals (graphs, flows, sequences,
-  state machines, trees, ER, timelines).
-- **svg-maker** — spatial/geometric visuals (coordinate geometry, number lines,
-  vectors, plots, custom shapes).
+Plus one subagent (`agents/visualizer.md`): **visualizer** reads the real
+code/config/KB, picks the diagram type and format (Mermaid for structural,
+SVG for spatial/custom), runs the render-and-inspect loop, and returns the PNG
+plus a short explanation. It replaces the former mermaid-maker and svg-maker.
 
 ## How it works with wolfpack-subagents
 
-`wolfpack-subagents` launches each maker in its own pane as a **default-deny**
+`wolfpack-subagents` launches the visualizer in its own pane as a **default-deny**
 child (`pi --no-extensions --tools <allowlist> -e <toolfile>`). So the tool
 files are **not** loaded as ordinary always-on extensions — instead this
 package's `index.ts` registers them on `session_start` through the bridge the
@@ -38,14 +36,13 @@ subagents engine exposes:
 );
 ```
 
-That teaches the engine the `name → tool-file` mapping, so when a maker lists
+That teaches the engine the `name → tool-file` mapping, so when the visualizer lists
 `write_mermaid` / `render_svg` / … in its `tools:` frontmatter, the engine adds
 the right `-e <toolfile>` to the child. The main session only loads the thin
 bridge, not the six tools. Delegate via:
 
 ```
-subagent(agent: "mermaid-maker", task: "<brief>")
-subagent(agent: "svg-maker",     task: "<brief>")
+subagent(agent: "visualizer", task: "<brief>")
 ```
 
 ## Where PNGs go (ephemeral by default)
@@ -56,7 +53,7 @@ Most visuals explain a point once and are never reused, so renders are
 - **Ephemeral** (default) — published to a temp dir (`$TMPDIR/wolfpack-viz/`),
   auto-cleaned, never committed or synced. Right for throwaway explainers.
 - **Persistent** (opt-in) — pass `persist: true` to `render_*` (or ask the
-  maker to "save/keep" it) to write it under the wolf directory:
+  visualizer to "save/keep" it) to write it under the wolf directory:
   `WOLFPACK_VIZ_DIR` if set, else `$WOLF_DEN/viz`, else `<cwd>/viz`.
 
 Preview renders (no `save_as`) always stay in the per-session staging dir.
@@ -76,7 +73,7 @@ Renders fail gracefully with error text when a binary is missing.
 
 ## Inline display in the TUI
 
-The maker returns a path; the orchestrator `read`s it and pi renders it inline
+The visualizer returns a path; the orchestrator `read`s it and pi renders it inline
 when the terminal supports a graphics protocol. Through a multiplexer pi's
 auto-detection fails, so force it: `terminal.images: "kitty"` in pi settings.
 Under **Herdr** also enable `experimental.kitty_graphics = true` in
@@ -87,4 +84,4 @@ Under **Herdr** also enable `experimental.kitty_graphics = true` in
 
 `wolfpack-subagents` discovers agents from the package's bundled `agents/`, the
 wolf's agent dir (`$PI_CODING_AGENT_DIR/agents`), and the nearest `.pi/agents`.
-The canonical source for the maker agents lives here under `agents/`.
+The canonical source for the visualizer agent lives here under `agents/`.

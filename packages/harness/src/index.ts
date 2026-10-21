@@ -7,7 +7,8 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 // Requires pi-claude-bridge to export a pi-ai provider, or implementing
 // the full pi-ai AssistantMessageEventStream protocol (~500-1000 lines).
 // Until then a pi-durable wolf must resolve to `transport: api`.
-import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type Conversation, type ContextEdit } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord/context";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -200,13 +201,17 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Root conversation with wolf identity. Table IDs carry no provider prefix;
   // the api transport means pi-ai's anthropic provider.
   console.log(`[harness] Creating root: provider=anthropic, model=${main.model}`);
-  await harness.root(context, {
-    agent: {
-      model: { provider: "anthropic", modelId: main.model },
-      ...(main.thinking ? { thinkingLevel: main.thinking } : {}),
-      cwd: wolfDen,
-    },
-  });
+  const agent = {
+    model: { provider: "anthropic", modelId: main.model },
+    ...(main.thinking ? { thinkingLevel: main.thinking } : {}),
+    cwd: wolfDen,
+  } as const;
+  const root = await harness.root(context, { agent });
+  // root() applies `agent` only when it creates the conversation; an existing
+  // root keeps the model it was created with. Re-apply it on every start so
+  // the shipped table (models.json) decides the model, not history.
+  await root.configure({ model: agent.model, thinkingLevel: main.thinking ?? null }, context);
+  await repairEmptyToolErrors(root, context);
 
   // Resume interrupted work
   harness.resume();
@@ -311,3 +316,32 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     },
   };
 }
+
+/**
+ * Replace error tool results that carry no content. The API rejects them
+ * ("content cannot be empty if is_error is true"), so one such entry makes
+ * every later request in the conversation fail. Older harness builds wrote
+ * them (tool results went out on `content`, which pi-durable ignores). The
+ * repair is a context edit: the stored entry stays, the model sees text.
+ */
+async function repairEmptyToolErrors(root: Conversation, context: Context): Promise<void> {
+  const view = await root.context(context);
+  const edits: ContextEdit[] = [];
+  view.entries.forEach((entry, i) => {
+    const messages = view.contributions[i] ?? [];
+    let changed = false;
+    const fixed = messages.map((m) => {
+      if (m.role !== "toolResult" || !m.isError) return m;
+      const hasContent = m.content.some((c) => c.type !== "text" || c.text.trim() !== "");
+      if (hasContent) return m;
+      changed = true;
+      return { ...m, content: [{ type: "text" as const, text: "Tool failed without an error message." }] };
+    });
+    if (changed) edits.push({ target: entry.id, action: "replace", messages: fixed });
+  });
+  if (edits.length === 0) return;
+  const submission = await root.submit({ type: "write", entry: { kind: "wolfpack.repair", edits } }, context);
+  await submission.wait(context);
+  console.log(`[harness] Repaired ${edits.length} empty tool error result(s) in the root conversation`);
+}
+

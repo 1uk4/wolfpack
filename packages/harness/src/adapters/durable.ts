@@ -17,9 +17,28 @@ import type {
   Tool,
   Section,
   ToolContext,
+  ToolResult,
   SectionContext,
   HookContext,
 } from "../extension-api.js";
+
+/**
+ * Unified tool result → pi-durable's result. pi-durable reads the model-facing
+ * text from `output` (not `content`); passing `content` through left every
+ * extension tool's output empty, and an empty error result is rejected by the
+ * API ("content cannot be empty if is_error is true"), wedging the
+ * conversation. An error always carries text.
+ */
+export function toDurableResult(result: ToolResult): { output: ToolResult["content"]; isError?: boolean } {
+  const content = (result.content ?? []).filter((c) => c.type !== "text" || c.text.trim() !== "");
+  if (result.isError) {
+    return {
+      output: content.length ? content : [{ type: "text", text: "Tool failed without an error message." }],
+      isError: true,
+    };
+  }
+  return { output: content };
+}
 
 interface AdapterConfig {
   wolfDen: string;
@@ -48,7 +67,7 @@ export function adaptToDurable(
           wolfName,
           conversationId: Number(api.conversationId),
         };
-        return tool.execute(args, context);
+        return toDurableResult(await tool.execute(args, context));
       },
     })
   );

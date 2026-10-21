@@ -9,12 +9,12 @@
  *
  * Contract:
  *   Parent body:
- *     ## Sessions
+ *     ## Entries
  *     <!-- rollup:children -->
  *     <!-- /rollup:children -->
  *
  *     ## Totals
- *     <!-- rollup:totals keys="Sets,Volume,Duration" -->
+ *     <!-- rollup:totals keys="Tasks,Files,Duration" -->
  *     <!-- /rollup:totals -->
  *
  *   Child body: either a `## Rollup` section (preferred) or the whole body
@@ -109,7 +109,7 @@ export function stripRollupMarkers(body: string): string {
 
 /**
  * One-line summary from the totals block, e.g.
- * "Sessions 4 · Sets 74 · Volume 63,783 lb · Duration 6:32". Null when the
+ * "Entries 4 · Tasks 74 · Files 63 · Duration 6:32". Null when the
  * body has no populated totals block.
  */
 export function totalsSummary(body: string): string | null {

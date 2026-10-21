@@ -76,7 +76,7 @@ export const ContributionSchema = z.object({
    *  still run. Defaults to false (observational contributions go through
    *  the normal LLM consolidation path).
    *
-   *  Set by graduated work (features) so a deliberately-authored week record
+   *  Set by graduated work (features) so a deliberately-authored sprint record
    *  isn't paraphrased away. Hubs ignore this — they're meant to be LLM-
    *  produced short overviews. */
   preserveBody: z.boolean().optional(),

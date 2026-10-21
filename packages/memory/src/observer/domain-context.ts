@@ -74,8 +74,8 @@ export function buildDomainContext(
     "",
     "Classify by SUBJECT. Work on software itself (its code, prompts, skills, agents, " +
       "tools, infrastructure) belongs to the domain that owns that software, even when " +
-      "the software serves another domain: changing how a fitness skill logs workouts " +
-      "is a software change; the workout itself is a fitness fact."
+      "the software serves another domain: changing how a billing skill records invoices " +
+      "is a software change; the invoice itself is a billing fact."
   );
 
   return lines.join("\n");

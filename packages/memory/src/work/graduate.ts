@@ -273,7 +273,7 @@ export function graduationFiles(opts: {
     ];
   }
 
-  // A feature whose body is maintained by rollup (a fitness week, a spec with
+  // A feature whose body is maintained by rollup (a sprint log, a spec with
   // its delivered tasks) is already the finished record: send it verbatim.
   // Otherwise the LLM writes the entry from the dossier (task notes + plan).
   const body = bodyOf(item);
@@ -301,7 +301,7 @@ export function graduationFiles(opts: {
 /** The initiative whose hub a feature's graduation updates, if any. */
 export function hubOf(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
   const parent = feature.partOf ? all.find((p) => p.id === feature.partOf) : undefined;
-  // A standing initiative (Fitness, Daily Planning) has no hub: its features
+  // A standing initiative (Releases, Maintenance) has no hub: its features
   // graduate as standalone entries.
   return parent?.kind === "initiative" && !parent.standing ? parent : undefined;
 }

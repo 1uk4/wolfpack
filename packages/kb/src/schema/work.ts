@@ -36,7 +36,7 @@ export const WorkId = z
   .brand<"WorkId">();
 export type WorkId = z.infer<typeof WorkId>;
 
-/** A wolf identity used as an assignee: owner | hal | dewey | <autonomous wolf>.
+/** A wolf identity used as an assignee: owner | <assistant wolf> | <librarian wolf> | <autonomous wolf>.
  *  Lower-kebab-ish; may start with a digit (e.g. "owner"). */
 export const WolfId = z
   .string()
@@ -81,8 +81,8 @@ export const WorkItem = z.object({
   graduated: IsoDate.nullable().default(null),
   /** A holding container (the per-domain Inbox): never ships or graduates. */
   container: z.boolean().default(false),
-  /** Initiative that never completes (e.g. Fitness, which gains a new week
-   *  feature every week). Its features graduate into its hub as usual; the
+  /** Initiative that never completes (e.g. Releases, which gains a new sprint
+   *  feature every sprint). Its features graduate into its hub as usual; the
    *  initiative itself is never offered for completion. */
   standing: z.boolean().default(false),
   /** When this task is scheduled to run. ISO-ish "YYYY-MM-DD HH:MM" in local

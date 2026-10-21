@@ -31,7 +31,7 @@ const domainAndParent = (domains: SubscribedDomain[]) => `## Domain and parent �
 Every work item belongs to exactly ONE domain. The domain names what the item is ABOUT, not who is doing it:
 ${domainLines(domains)}
 
-Pick domain by SUBJECT. A change to a tool or skill is a code change in the domain that owns that code, even when the tool is about something else (e.g. a fitness skill's bug fix belongs with the code, not with fitness). Doing the activity itself belongs to the domain of that activity.
+Pick domain by SUBJECT. A change to a tool or skill is a code change in the domain that owns that code, even when the tool is about something else (e.g. a billing skill's bug fix belongs with the code, not with billing). Doing the activity itself belongs to the domain of that activity.
 
 partOf MUST point at a feature in the SAME domain, or omit partOf to land in that domain's Inbox. The system rejects cross-domain parenting.
 
@@ -42,7 +42,7 @@ const ROUTING = `## Routing
 First, use \`ask_user_question\` to find out what the user is creating. The four paths:
 
 - **Idea**: unformed; just capture title + 1-sentence description via \`task_create kind=idea\`. Done. Can be promoted to feature/initiative later.
-- **Initiative**: a large goal. Ask for the goal (one sentence) + why it matters, and whether it is **standing**: it never completes and keeps gaining features (Fitness gets a new week every week; Admin keeps its category features open). \`task_create kind=initiative\`, with \`standing=true\` if so. Done. Features created under it later get the full pipeline each.
+- **Initiative**: a large goal. Ask for the goal (one sentence) + why it matters, and whether it is **standing**: it never completes and keeps gaining features (Releases gets a new sprint every sprint; Admin keeps its category features open). \`task_create kind=initiative\`, with \`standing=true\` if so. Done. Features created under it later get the full pipeline each.
 - **Task | issue | spike** (one-off under the current workspace): quick path — title + \`successCriteria\` + \`task_create\` under the bound workspace's feature. No grilling, no spec, no tickets.
 - **Feature**: run the FULL three-stage pipeline below. Grill → spec → tickets.
 

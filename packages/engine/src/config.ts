@@ -46,7 +46,7 @@ export interface EngineConfig {
   requestTimeoutMs?: number;
   /** Default model — used when a step doesn't specify its own */
   defaultModel: string;
-  /** Default temperature */
+  /** Default temperature — leave unset for Claude 5 models, which reject it */
   defaultTemperature?: number;
   /** Default max tokens */
   defaultMaxTokens?: number;
@@ -63,12 +63,13 @@ export type PipelineStep = EngineStep;
 export function resolveModel(
   config: EngineConfig,
   step: PipelineStep
-): { model: string; thinking?: ThinkingLevel; temperature: number; maxTokens: number } {
+): { model: string; thinking?: ThinkingLevel; temperature?: number; maxTokens: number } {
   const stepConfig = config.steps?.[step];
   return {
     model: stepConfig?.model ?? config.defaultModel,
     thinking: stepConfig?.thinking,
-    temperature: stepConfig?.temperature ?? config.defaultTemperature ?? 0,
+    // No default: Claude 5 models reject an explicit temperature.
+    temperature: stepConfig?.temperature ?? config.defaultTemperature,
     maxTokens: stepConfig?.maxTokens ?? config.defaultMaxTokens ?? 4096,
   };
 }

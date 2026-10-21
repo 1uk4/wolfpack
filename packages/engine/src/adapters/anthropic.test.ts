@@ -67,9 +67,9 @@ describe("AnthropicAdapter thinking", () => {
     return sent;
   };
 
-  it("unset: temperature 0, no thinking params (today's request)", async () => {
+  it("unset: no temperature and no thinking params (Claude 5 rejects temperature)", async () => {
     const body = await bodyFor();
-    expect(body.temperature).toBe(0);
+    expect("temperature" in body).toBe(false);
     expect(body.thinking).toBeUndefined();
     expect(body.output_config).toBeUndefined();
   });

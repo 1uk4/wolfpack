@@ -152,10 +152,11 @@ export class AnthropicAdapter implements KnowledgeAdapter {
 }
 
 /**
- * Thinking → request params. Unset keeps today's request (temperature 0, no
- * thinking). `off` disables thinking explicitly; any other level turns on
- * adaptive thinking at that effort, and drops temperature (the API only
- * accepts the default temperature while thinking).
+ * Thinking → request params. Temperature is sent only when a caller sets it:
+ * Claude 5 models reject `temperature` outright ("deprecated for this
+ * model"), so the default request carries none. `off` disables thinking
+ * explicitly; any other level turns on adaptive thinking at that effort and
+ * never sends temperature (the API only accepts the default while thinking).
  */
 export function thinkingParams(options: Pick<ExtractOptions, "thinking" | "temperature">): {
   temperature?: number;
@@ -163,8 +164,8 @@ export function thinkingParams(options: Pick<ExtractOptions, "thinking" | "tempe
   output_config?: Anthropic.OutputConfig;
 } {
   const level = options.thinking;
-  if (!level) return { temperature: options.temperature ?? 0 };
-  if (level === "off") return { temperature: options.temperature ?? 0, thinking: { type: "disabled" } };
+  const temperature = options.temperature === undefined ? {} : { temperature: options.temperature };
+  if (!level) return temperature;
+  if (level === "off") return { ...temperature, thinking: { type: "disabled" } };
   return { thinking: { type: "adaptive" }, output_config: { effort: effortFor(level) } };
 }
-

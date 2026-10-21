@@ -106,6 +106,7 @@ export * from "./work/index.js";
 // Task prompts
 export {
   NEW_WORK_PROMPT,
+  newWorkPrompt,
   GRILLING_PROTOCOL,
   TO_SPEC_PROTOCOL,
   TO_TICKETS_PROTOCOL,

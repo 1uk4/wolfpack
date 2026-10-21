@@ -30,7 +30,7 @@ import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 
 /** Per-domain metadata as declared in the registry. */
 export interface DomainEntry {
-  /** Human label, e.g. "Snapjack". */
+  /** Human label, e.g. "Acme". */
   label: string;
   /** One-line description of what belongs here. */
   description: string;

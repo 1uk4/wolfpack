@@ -297,7 +297,7 @@ async function addRemote(
   if (choices.telegram?.ownerId) env.TELEGRAM_OWNER_ID = String(choices.telegram.ownerId);
   const providerKey = process.env.ANTHROPIC_API_KEY;
   if (providerKey) env.ANTHROPIC_API_KEY = providerKey;
-  // KB paths for remote wolves are host-relative (/home/wolf-<id>/...), so the
+  // KB paths for remote wolves are host-relative (<wolf home>/...), so the
   // agent fills KB_OPS/KB_BASE when it writes the wolf's .env.
 
   const client = new AgentClient(host);

@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response } from "express";
 import type { WolfManager } from "../wolf-manager.js";
+import { wolfDen } from "../paths.js";
 import type {
   CreateWolfRequest,
   UpdateWolfConfigRequest,
@@ -129,7 +130,7 @@ export function wolvesRouter(manager: WolfManager): Router {
       if (req.body?.clearSession && config.runtime === "pi-durable") {
         const { unlink } = await import("node:fs/promises");
         const { join } = await import("node:path");
-        const sessionPath = join(`/home/wolf-${config.id}/den`, "session.sqlite");
+        const sessionPath = join(wolfDen(config.id), "session.sqlite");
         try {
           await unlink(sessionPath);
         } catch {

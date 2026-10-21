@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { remotePaths } from "./paths.js";
 
 // ── Registry (devices.yaml) ──────────────────────────────────────────────────
 
@@ -131,8 +132,8 @@ export interface InstancePlan {
 }
 
 // Path conventions (single source — change here only).
-const vpsKbBase = (id: string) => `/home/wolf-${id}/knowledge/base`;
-const vpsDen = (id: string) => `/home/wolf-${id}/den`;
+const vpsKbBase = (id: string) => remotePaths().kbBase(id);
+const vpsDen = (id: string) => remotePaths().den(id);
 const hubKbBase = (root: string) => path.join(root, "knowledge", "base");
 const hubDenBackup = (root: string, host: string, name: string) =>
   path.join(root, host, name, "den");
@@ -170,7 +171,7 @@ export function planMesh(input: PlanInput): InstancePlan[] {
   const libOps = librarian
     ? librarian.host === "local"
       ? `${wolvesRoot}/librarian`
-      : `/home/wolf-${librarian.id}/librarian`
+      : remotePaths().librarianOps(librarian.id)
     : "";
 
   // Only VPS wolves are their own Syncthing devices; local wolves ride the hub.
@@ -268,7 +269,7 @@ export function planMesh(input: PlanInput): InstancePlan[] {
       } else {
         if (!registry.devices[w.id]) continue;
         senderKey = w.id;
-        senderOps = `/home/wolf-${w.id}/librarian`;
+        senderOps = remotePaths().librarianOps(w.id);
       }
       // Local wolf + local librarian = same hub device, no lane needed.
       if (senderKey === libKey) continue;

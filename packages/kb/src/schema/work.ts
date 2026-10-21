@@ -59,9 +59,9 @@ export const WorkItem = z.object({
   id: WorkId,
   nodeType: z.literal("work"),
   kind: WorkKind, // idea | initiative | feature | task | issue | spike
-  domain: DomainId, // personal | snapjack | wolfpack …   (hard boundary)
+  domain: DomainId, // one of the declared domains …   (hard boundary)
   /** Horizontal grouping within the domain (marketing, analysis…). Inherits from
-   *  the partOf parent at creation time; null for personal/light work. Becomes the
+   *  the partOf parent at creation time; null for light work. Becomes the
    *  entry's `subsystem` facet on graduation. */
   area: Slug.nullable().default(null),
   title: z.string().min(1).max(200),

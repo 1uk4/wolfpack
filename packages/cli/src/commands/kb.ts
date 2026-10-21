@@ -10,6 +10,7 @@
 import { loadConfig, getHost } from "../config.js";
 import { c } from "../render.js";
 import { spawn } from "node:child_process";
+import { remotePaths } from "../paths.js";
 
 export async function kbCmd(argv: string[]): Promise<void> {
   const config = loadConfig();
@@ -31,15 +32,17 @@ export async function kbCmd(argv: string[]): Promise<void> {
   // the remote CLI so flags actually reach the KB engine.
   const extraFlags = argv.slice(2).join(" ");
 
+  const rp = remotePaths();
+  const libId = lib.id ?? "";
   const envSetup = [
-    "export KB_BASE=/var/wolfpack/kb/base",
-    "export KB_OPS=/var/wolfpack/kb/ops",
-    `export WOLF_DEN=/home/wolf-${lib.id}/den`,
+    `export KB_BASE=${rp.sharedKbBase}`,
+    `export KB_OPS=${rp.sharedKbOps}`,
+    `export WOLF_DEN=${rp.den(libId)}`,
     // Usage events from manual runs are attributed to the librarian by name.
-    `export WOLF_NAME=$(grep ^WOLF_NAME= /home/wolf-${lib.id}/.env | cut -d= -f2-)`,
-    `export ANTHROPIC_API_KEY=$(grep ^ANTHROPIC_API_KEY= /home/wolf-${lib.id}/.env | cut -d= -f2-)`,
+    `export WOLF_NAME=$(grep ^WOLF_NAME= ${rp.home(libId)}/.env | cut -d= -f2-)`,
+    `export ANTHROPIC_API_KEY=$(grep ^ANTHROPIC_API_KEY= ${rp.home(libId)}/.env | cut -d= -f2-)`,
     // Max transport: the Agent SDK authenticates with this token.
-    `export CLAUDE_CODE_OAUTH_TOKEN=$(grep ^CLAUDE_CODE_OAUTH_TOKEN= /home/wolf-${lib.id}/.env | cut -d= -f2-)`,
+    `export CLAUDE_CODE_OAUTH_TOKEN=$(grep ^CLAUDE_CODE_OAUTH_TOKEN= ${rp.home(libId)}/.env | cut -d= -f2-)`,
   ].join(" && ");
 
   const kbCli = "/opt/wolfpack-kb/cli.cjs";

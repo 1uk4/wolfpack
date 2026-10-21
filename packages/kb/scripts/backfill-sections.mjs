@@ -7,7 +7,7 @@
  * frontmatter (preserving currency/maturity) + the domain digest.
  *
  * Run it to (a) migrate a domain to v2, or (b) build/refresh the tree after a
- * CRAWL has populated a domain with flat entries (e.g. a fresh snapjack crawl).
+ * CRAWL has populated a domain with flat entries (e.g. a fresh crawl).
  * The sweep commits entries flat (singleton sections); this organizes them.
  *
  * Runs where the vectors + authority live (Dewey / sfo-01). Dry-run by default:

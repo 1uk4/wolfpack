@@ -40,6 +40,7 @@ import {
 import { AgentClient } from "./agent-client.js";
 import { scpToHost, execSsh } from "./ssh-helper.js";
 import { c } from "./render.js";
+import { remotePaths } from "./paths.js";
 
 // ── gather wolves across all hosts ───────────────────────────────────────────
 
@@ -181,7 +182,7 @@ function applyRemote(
 
   const script = `#!/usr/bin/env bash
 set -euo pipefail
-CFG=/home/wolf-${instanceKey}/.local/state/syncthing/config.xml
+CFG=${remotePaths().home(instanceKey)}/.local/state/syncthing/config.xml
 API=$(grep -o '<apikey>[^<]*</apikey>' "$CFG" | sed 's/<[^>]*>//g')
 BASE=http://127.0.0.1:${self.guiPort}
 put() { curl -fsS -X PUT -H "X-API-Key: $API" -H 'Content-Type: application/json' -d "$2" "$BASE/rest/config/$1" >/dev/null; }
@@ -459,7 +460,7 @@ function diff(instance: string, desired: Set<string>, live: Set<string>): MeshDr
 function remoteFolderIds(host: HostEntry, instanceKey: string, guiPort: number): string[] {
   const script = `#!/usr/bin/env bash
 set -euo pipefail
-CFG=/home/wolf-${instanceKey}/.local/state/syncthing/config.xml
+CFG=${remotePaths().home(instanceKey)}/.local/state/syncthing/config.xml
 API=$(grep -o '<apikey>[^<]*</apikey>' "$CFG" | sed 's/<[^>]*>//g')
 curl -fsS -H "X-API-Key: $API" http://127.0.0.1:${guiPort}/rest/config/folders | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//'
 `;

@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { binDirs } from "./paths.js";
 
 const LABEL = "com.wolfpack.usage-ingest";
 const INGEST_INTERVAL_S = 3600;
@@ -25,7 +26,7 @@ const cliEntry = () => fileURLToPath(new URL("./bin/wolfpack.js", import.meta.ur
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function usagePlist(node: string = process.execPath, entry: string = cliEntry()): string {
-  const pathEnv = [path.dirname(node), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":");
+  const pathEnv = [path.dirname(node), ...binDirs(), "/usr/bin", "/bin"].join(":");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

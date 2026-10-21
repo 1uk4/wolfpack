@@ -3,7 +3,7 @@
  *
  * PI-only, headless. Each wolf gets:
  *   - Unix user: wolf-<id>  (isolation: own files, own secrets, own systemd)
- *   - Home dir:  /home/wolf-<id>/{agent,den,logs}
+ *   - Home dir:  <WOLFPACK_HOME_ROOT>/wolf-<id>/{agent,den,logs}  (see paths.ts)
  *       agent/   PI identity (PI_CODING_AGENT_DIR) — unpacked from the CLI bundle
  *       den/     WOLF_DEN — memory + tasks (authoritative on the VPS)
  *   - Systemd:   wolf-<id>.service → launch.sh → `pi --mode rpc`
@@ -22,6 +22,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { nanoid } from "nanoid";
+import { kbBase, kbOps, wolfHome, wolfUser } from "./paths.js";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import type {
   WolfConfig,
@@ -37,14 +38,6 @@ const exec = promisify(execFile);
 /** Generate a 6-char wolf ID */
 function generateId(): string {
   return nanoid(6);
-}
-
-function wolfUser(id: string): string {
-  return `wolf-${id}`;
-}
-
-function wolfHome(id: string): string {
-  return `/home/${wolfUser(id)}`;
 }
 
 function wolfService(id: string): string {
@@ -98,8 +91,8 @@ export class WolfManager {
       WOLF_ID: id,
       WOLF_NAME: name,
       WOLF_DEN: path.join(home, "den"),
-      KB_BASE: "/var/wolfpack/kb/base",
-      KB_OPS: "/var/wolfpack/kb/ops",
+      KB_BASE: kbBase(),
+      KB_OPS: kbOps(),
       ...extra,
     };
 
@@ -117,7 +110,7 @@ export class WolfManager {
     await fs.writeFile(envPath, lines.join("\n") + "\n", { mode: 0o600 });
 
     // Ensure shared KB directories are writable (follow symlinks with -L)
-    for (const dir of ["/var/wolfpack/kb/ops", "/var/wolfpack/kb/base"]) {
+    for (const dir of [kbOps(), kbBase()]) {
       try {
         // Use find to follow symlinks and chmod each file
         await exec("find", ["-L", dir, "-exec", "chmod", "a+rwX", "{}", ";"]);
@@ -192,7 +185,7 @@ export class WolfManager {
     return config;
   }
 
-  /** Write /home/wolf-<id>/.env (mode 600). Standard vars + request env. */
+  /** Write <wolf home>/.env (mode 600). Standard vars + request env. */
   private async writeEnv(
     home: string,
     id: string,

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import os from "node:os";
 import type { WolfManager } from "../wolf-manager.js";
 import { checkServices } from "../services.js";
+import { kbBase, kbOps } from "../paths.js";
 
 const exec = promisify(execFile);
 
@@ -16,7 +17,7 @@ export function healthRouter(manager: WolfManager): Router {
 
   router.post("/fix-kb-permissions", async (_req: Request, res: Response) => {
     try {
-      const dirs = ["/var/wolfpack/kb/ops", "/var/wolfpack/kb/base"];
+      const dirs = [kbOps(), kbBase()];
       const results: string[] = [];
       for (const dir of dirs) {
         try {

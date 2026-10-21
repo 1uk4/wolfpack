@@ -2,8 +2,8 @@
  * Work API routes — shared task/work item management.
  *
  * All wolves hit these routes over Tailscale. Storage:
- *   - Event ledger: /var/wolfpack/kb/work-events.jsonl
- *   - Materialized .md: /var/wolfpack/kb/base/domains/<domain>/work/<id>.md
+ *   - Event ledger: <kbRoot>/work-events.jsonl
+ *   - Materialized .md: <KB_BASE>/domains/<domain>/work/<id>.md
  *
  * Auth: same agent API key (X-API-Key header).
  */
@@ -33,14 +33,15 @@ import {
   type WorkQuery,
 } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { kbBase, kbOps, workLedgerDir } from "../paths.js";
 
-const KB_BASE = process.env.KB_BASE ?? "/var/wolfpack/kb/base";
-const WORK_LEDGER_DIR = process.env.WORK_LEDGER_DIR ?? "/var/wolfpack/kb/work";
+const KB_BASE = kbBase();
+const WORK_LEDGER_DIR = workLedgerDir();
 
 function makeRoots(): KbRoots {
   return {
     kbBase: KB_BASE,
-    opsRoot: "/var/wolfpack/kb/ops",
+    opsRoot: kbOps(),
     denLocal: WORK_LEDGER_DIR,
   };
 }

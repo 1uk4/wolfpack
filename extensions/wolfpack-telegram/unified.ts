@@ -199,7 +199,7 @@ Never ask a multiple-choice question without first calling telegram_buttons.
 
       defineTool({
         name: "telegram_send",
-        description: "Send a standalone message separate from your reply. Use for the workout card or any message that must be its own message (e.g. to pin independently).",
+        description: "Send a standalone message separate from your reply. Use for a summary card or any message that must be its own message (e.g. to pin independently).",
         parameters: Type.Object({
           text: Type.String({ description: "Message text" }),
           parse_mode: Type.Optional(Type.String({ description: "Parse mode: MarkdownV2 or HTML (optional)" })),

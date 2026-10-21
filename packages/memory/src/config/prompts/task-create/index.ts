@@ -14,20 +14,24 @@
  * context without any additional tool calls.
  */
 
+import type { SubscribedDomain } from "@wolfpack/kb";
 import { GRILLING_PROTOCOL } from "./grilling.js";
 import { TO_SPEC_PROTOCOL } from "./to-spec.js";
 import { TO_TICKETS_PROTOCOL } from "./to-tickets.js";
 
 export { GRILLING_PROTOCOL, TO_SPEC_PROTOCOL, TO_TICKETS_PROTOCOL };
 
-const DOMAIN_AND_PARENT = `## Domain and parent — pick carefully
+const domainLines = (domains: SubscribedDomain[]): string =>
+  domains.length
+    ? domains.map((d) => `- **${d.name}**${d.description ? ` — ${d.description}` : ""}`).join("\n")
+    : "- (use one of the domains this wolf is subscribed to)";
+
+const domainAndParent = (domains: SubscribedDomain[]) => `## Domain and parent — pick carefully
 
 Every work item belongs to exactly ONE domain. The domain names what the item is ABOUT, not who is doing it:
-- **wolfpack** — changes to this codebase (CLI, agent, memory, kb, extensions), pack infra, agent prompts, developer docs
-- **snapjack** — the Snapjack iOS/web app, its features, bugs, growth
-- **personal** — the user's life: fitness, admin, finance, planning, non-work
+${domainLines(domains)}
 
-Pick domain by SUBJECT. A fix to a Hal skill is **wolfpack** (code change), even though it's about fitness. An actual workout is **personal**.
+Pick domain by SUBJECT. A change to a tool or skill is a code change in the domain that owns that code, even when the tool is about something else (e.g. a fitness skill's bug fix belongs with the code, not with fitness). Doing the activity itself belongs to the domain of that activity.
 
 partOf MUST point at a feature in the SAME domain, or omit partOf to land in that domain's Inbox. The system rejects cross-domain parenting.
 
@@ -58,13 +62,13 @@ Each stage's full protocol follows verbatim.
 
 `;
 
-export const NEW_WORK_PROMPT = `The user wants to create a new work item. Work items have this hierarchy:
+export const newWorkPrompt = (domains: SubscribedDomain[] = []) => `The user wants to create a new work item. Work items have this hierarchy:
 - **Idea**: an unformed thought; captured now, promoted later.
 - **Initiative**: a large goal with multiple features (e.g., "Dockerize Wolfpack").
 - **Feature**: a capability to build; standalone or under an initiative.
 - **Task | issue | spike**: a unit of work under a feature.
 
-${DOMAIN_AND_PARENT}
+${domainAndParent(domains)}
 
 ${ROUTING}
 
@@ -78,3 +82,6 @@ ${TO_SPEC_PROTOCOL}
 
 ${TO_TICKETS_PROTOCOL}
 `;
+
+/** Domain-agnostic form (no subscribed domains listed). */
+export const NEW_WORK_PROMPT = newWorkPrompt();

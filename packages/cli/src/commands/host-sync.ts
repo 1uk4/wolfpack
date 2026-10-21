@@ -2,7 +2,7 @@
  * wolfpack host sync [host]
  *
  * Wire up (or re-apply) Syncthing den mirrors for every wolf on a host:
- *   VPS /home/wolf-<id>/den  (send-only, authoritative)
+ *   VPS <wolf home>/den  (send-only, authoritative)
  *     → Mac ~/wolves/<host>/<wolf>/den  (receive-only backup)
  *
  * Idempotent: per-item REST/PUT config on both ends, additive, safe to re-run
@@ -17,6 +17,7 @@ import { loadConfig, getHost, type HostEntry } from "../config.js";
 import { c } from "../render.js";
 import { AgentClient } from "../agent-client.js";
 import { scpToHost, execSsh } from "../ssh-helper.js";
+import { remotePaths } from "../paths.js";
 import {
   readLocalSyncthing,
   localTailscaleIp,
@@ -79,7 +80,7 @@ export async function ensureDenMirror(
   const macAddr = macIp ? `tcp://${macIp}:22000` : "dynamic";
 
   const folderId = `${hostName}-${wolf.id}-den`;
-  const vpsDen = `/home/wolf-${wolf.id}/den`;
+  const vpsDen = remotePaths().den(wolf.id);
   const macDen = path.join(config.wolvesRoot, hostName, wolf.name, "den");
 
   // VPS side: pair Mac + create send-only folder; returns VPS device id.

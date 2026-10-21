@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { runBin } from "./paths.js";
 
 export interface SyncthingLocal {
   url: string;
@@ -45,16 +45,8 @@ export function readLocalSyncthing(): SyncthingLocal {
 
 /** The Mac's Tailscale IPv4 (for the VPS to reach us), or undefined. */
 export function localTailscaleIp(): string | undefined {
-  for (const bin of ["/opt/homebrew/bin/tailscale", "tailscale"]) {
-    try {
-      const out = execFileSync(bin, ["ip", "-4"], { encoding: "utf8" }).trim();
-      const ip = out.split("\n")[0]?.trim();
-      if (ip) return ip;
-    } catch {
-      // try next
-    }
-  }
-  return undefined;
+  const ip = runBin("tailscale", ["ip", "-4"])?.trim().split("\n")[0]?.trim();
+  return ip || undefined;
 }
 
 /** Device config object for a Syncthing REST PUT. */

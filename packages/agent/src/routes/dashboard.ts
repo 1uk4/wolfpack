@@ -9,8 +9,9 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { kbBase } from "../paths.js";
 
-const KB_BASE = process.env.KB_BASE ?? "/var/wolfpack/kb/base";
+const KB_BASE = kbBase();
 
 function parseFrontmatter(text: string): { meta: Record<string, any>; body: string } {
   const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);

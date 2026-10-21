@@ -51,6 +51,33 @@ export interface CliConfig {
   models?: PackModels;
   /** Registered hosts */
   hosts: Record<string, HostEntry>;
+  /** Who owns this pack. All optional; consumers fall back to generic behaviour. */
+  owner?: OwnerConfig;
+  /**
+   * On-host layout of remote (VPS) hosts. Defaults match the standard layout;
+   * the agent honours the same values via WOLFPACK_* env (see agent/src/paths.ts).
+   */
+  remote?: RemoteLayout;
+  /** Extra directories searched for helper binaries (tailscale, …) and put on launchd PATH. */
+  binDirs?: string[];
+}
+
+export interface OwnerConfig {
+  /** Display name of the owner. */
+  name?: string;
+  /** IANA timezone, e.g. "Europe/Berlin". */
+  tz?: string;
+  /** Telegram user id of the owner (default recipient for alerts / pairing). */
+  telegramId?: number | string;
+}
+
+export interface RemoteLayout {
+  /** Parent of per-wolf homes (default "/home"). */
+  wolfHomeRoot?: string;
+  /** Per-wolf unix user prefix (default "wolf-"). */
+  wolfUserPrefix?: string;
+  /** Shared KB root on the host (default "/var/wolfpack/kb"). */
+  kbRoot?: string;
 }
 
 /** Namespace for wolves that run on this machine. */
@@ -73,6 +100,9 @@ export function loadConfig(): CliConfig {
       ...parsed,
       wolvesRoot: parsed.wolvesRoot ?? DEFAULT_CONFIG.wolvesRoot,
       hosts: { ...DEFAULT_CONFIG.hosts, ...parsed.hosts },
+      owner: parsed.owner,
+      remote: parsed.remote,
+      binDirs: parsed.binDirs,
     };
   } catch {
     return { ...DEFAULT_CONFIG };

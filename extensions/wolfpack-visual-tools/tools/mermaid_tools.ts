@@ -1,5 +1,5 @@
 /**
- * Mermaid authoring loop for the mermaid-maker subagent — three tools that
+ * Mermaid authoring loop for the visualizer subagent — three tools that
  * share one session-scoped source file:
  *
  *   write_mermaid   — write the full Mermaid source to the session's file
@@ -8,7 +8,7 @@
  *                     with `save_as`, also publish it into <cwd>/viz
  *
  * Part of the wolfpack-visual-tools package. The tools register in any pi
- * process that loads the package; the mermaid-maker subagent (spawned by
+ * process that loads the package; the visualizer subagent (spawned by
  * wolfpack-subagents with `--tools write_mermaid,edit_mermaid,render_mermaid,read`)
  * is the intended caller, but the main session loads them too.
  *

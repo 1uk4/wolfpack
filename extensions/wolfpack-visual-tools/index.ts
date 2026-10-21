@@ -5,13 +5,13 @@
  * globally-loaded `interactive-subagents` extension — and does nothing else:
  *
  *   • write_mermaid / edit_mermaid / render_mermaid
- *       (tools/mermaid_tools.ts) — the mermaid-maker's authoring loop: write a
+ *       (tools/mermaid_tools.ts) — the visualizer's Mermaid authoring loop: write a
  *       Mermaid source, exact-match edit it, render whatever is currently in
  *       the managed file to a PNG (via the bundled @mermaid-js/mermaid-cli and
  *       an installed Chrome), return the PNG inline for inspection, and — when
  *       given `save_as` — publish it into <cwd>/viz with a unique name.
  *   • write_svg / edit_svg / render_svg
- *       (tools/svg_tools.ts) — the svg-maker's authoring loop: same shape, but
+ *       (tools/svg_tools.ts) — the visualizer's SVG authoring loop: same shape, but
  *       renders hand-written SVG to a PNG via rsvg-convert (fallback: magick).
  *
  * Each trio maps to ONE file so interactive-subagents loads it once and
@@ -22,8 +22,8 @@
  * on `globalThis.__pi_interactive_subagents`. A child subagent is launched with
  * `--no-extensions` plus an explicit `-e <path>` only for tools whose name →
  * path mapping it knows; this extension teaches it about the six names above so
- * mermaid-maker / svg-maker (which list them in their `tools:` frontmatter) get
- * them loaded into their child process.
+ * the visualizer (which lists them in its `tools:` frontmatter) gets
+ * them loaded into its child process.
  *
  * pi loads PROJECT-local extensions (this one) BEFORE global ones, so
  * `globalThis.__pi_interactive_subagents` does not exist yet when this factory

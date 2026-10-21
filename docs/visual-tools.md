@@ -6,7 +6,7 @@ Wolves can explain things with rendered diagrams. The pieces:
   pane (Herdr on macOS, tmux on Linux) and steer their result back into the
   session. Backend is per-wolf via `WOLFPACK_SUBAGENT_MUX` (`auto` default).
 - **wolfpack-visual-tools** — Mermaid/SVG render tools used by the
-  `mermaid-maker` / `svg-maker` subagents. They publish a PNG and return its
+  `visualizer` subagent. They publish a PNG and return its
   path; the orchestrator `read`s it to show it inline.
 
 ## Enabling inline images (Herdr + kitty)
@@ -40,7 +40,7 @@ things are required:
    Newer Herdr builds use `terminal.kitty_graphics` instead; 0.8.x uses the
    `[experimental]` key above.
 
-Verify end to end: ask a wolf to visualize something; the `mermaid-maker` pane
+Verify end to end: ask a wolf to visualize something; the `visualizer`
 spawns, renders, and the diagram appears inline. If it shows a blank **gap**,
 the client hasn't re-attached since enabling `kitty_graphics`.
 

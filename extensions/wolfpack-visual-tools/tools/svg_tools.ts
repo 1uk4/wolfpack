@@ -1,5 +1,5 @@
 /**
- * SVG authoring loop for the svg-maker subagent — three tools that share one
+ * SVG authoring loop for the visualizer subagent — three tools that share one
  * session-scoped source file:
  *
  *   write_svg   — write the full SVG source to the session's file
@@ -8,7 +8,7 @@
  *                 `save_as`, also publish it into <cwd>/viz
  *
  * Part of the wolfpack-visual-tools package. The tools register in any pi
- * process that loads the package; the svg-maker subagent (spawned by
+ * process that loads the package; the visualizer subagent (spawned by
  * wolfpack-subagents with `--tools write_svg,edit_svg,render_svg,read`) is the
  * intended caller, but the main session loads them too.
  *

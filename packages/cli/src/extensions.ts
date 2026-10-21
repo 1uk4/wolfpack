@@ -93,7 +93,7 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     key: "visual-tools",
     label: "Visual tools (Mermaid + SVG makers)",
     description:
-      "Mermaid + SVG authoring tools for the mermaid-maker/svg-maker subagents — render-and-inspect diagram loops that publish PNGs into <cwd>/viz (wolfpack-visual-tools)",
+      "Mermaid + SVG authoring tools for the visualizer subagent — render-and-inspect diagram loops that publish PNGs into <cwd>/viz (wolfpack-visual-tools)",
     dir: "wolfpack-visual-tools",
     runtimes: ["pi"],
   },

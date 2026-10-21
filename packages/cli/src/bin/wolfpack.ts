@@ -15,6 +15,7 @@ import { wolfLogs } from "../commands/wolf-logs.js";
 import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
+import { usageCmd } from "../commands/usage.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
@@ -40,6 +41,7 @@ ${c.bold("COMMANDS")}
   status <wolf>                   Wolf health and service state
   logs <wolf>                     View wolf logs
   models [wolf]                   Resolved model per use (tier, model, thinking, source)
+  usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|day)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -66,6 +68,10 @@ ${c.bold("WORKFLOW COMMANDS")}
   logs <wolf> [-f] [--lines N]    View wolf logs
   models [wolf] [--host <h>] [--json]
                                   Resolved model table per wolf (all wolves if none)
+  usage [wolf] [--since 7d|30d|24h|YYYY-MM-DD|all] [--by wolf|model|billing|source|day] [--json] [--no-ingest]
+                                  Model calls, tokens and cost for all wolves (ingests, then reads the ledger)
+  usage ingest                    Append new calls from local logs to ~/.wolfpack/usage
+  usage install-schedule          Hourly ingest via launchd (uninstall-schedule removes it)
   config <wolf> [--set key=val]   Configure wolf (interactive or scripted)
                                     models: --set transport=api --set models.fast.model=<id>
   config [--set models.<k>=val]   Pack models: tiers, thinking, local/VPS transports
@@ -157,6 +163,12 @@ function parseArgs(argv: string[]) {
       flags.domains = argv[++i]!;
     } else if (arg === "--session" && argv[i + 1]) {
       flags.session = argv[++i]!;
+    } else if (arg === "--since" && argv[i + 1]) {
+      flags.since = argv[++i]!;
+    } else if (arg === "--by" && argv[i + 1]) {
+      flags.by = argv[++i]!;
+    } else if (arg === "--no-ingest") {
+      flags.noIngest = true;
     } else if (arg === "--set" && argv[i + 1]) {
       sets.push(argv[++i]!);
     } else if (!arg.startsWith("-")) {
@@ -316,6 +328,15 @@ async function main(): Promise<void> {
         await wolfModels(positional[1], {
           host: flags.host as string | undefined,
           json: flags.json as boolean | undefined,
+        });
+        break;
+
+      case "usage":
+        await usageCmd(positional[1], {
+          since: flags.since as string | undefined,
+          by: flags.by as string | undefined,
+          json: flags.json as boolean | undefined,
+          noIngest: flags.noIngest as boolean | undefined,
         });
         break;
 

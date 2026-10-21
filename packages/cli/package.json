@@ -15,7 +15,8 @@
     "yaml": "^2.6.0",
     "nanoid": "^5.1.0",
     "esbuild": "^0.28.0",
-    "@wolfpack/engine": "*"
+    "@wolfpack/engine": "*",
+    "@earendil-works/pi-ai": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

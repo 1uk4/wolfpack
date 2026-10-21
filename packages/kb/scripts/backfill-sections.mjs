@@ -10,7 +10,7 @@
  * CRAWL has populated a domain with flat entries (e.g. a fresh snapjack crawl).
  * The sweep commits entries flat (singleton sections); this organizes them.
  *
- * Runs where the vectors + authority live (Dewey / sfo-01). Dry-run by default:
+ * Runs where the vectors + authority live (Dewey / the VPS host). Dry-run by default:
  * prints the proposed tree for REVIEW; --apply writes _sections.json, stamps
  * entries, and regenerates the domain digest.
  *

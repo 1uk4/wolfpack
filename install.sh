@@ -118,10 +118,10 @@ if ! grep -q '^ANTHROPIC_API_KEY=.\+' "$HOME/.wolfpack/.env" 2>/dev/null; then
 fi
 bold "Next steps (see docs/SETUP.md for the full walkthrough):"
 echo "  $(dim '# Provision a VPS host (guided wizard)')"
-echo "  wolfpack host add wolf-01"
+echo "  wolfpack host add <host>"
 echo
 echo "  $(dim '# Create a 24/7 assistant wolf on it')"
-echo "  wolfpack add wolf aide --host wolf-01"
+echo "  wolfpack add wolf aide --host <host>"
 echo
 echo "  $(dim '# Or a local worker wolf')"
 echo "  wolfpack add wolf my-wolf && wolfpack launch my-wolf"

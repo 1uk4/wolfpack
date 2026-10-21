@@ -29,7 +29,7 @@ describe("graduationFiles", () => {
   const t = w("task", "Write Dockerfile", f2.id, { log: [{ at: "x", text: "added Dockerfile" }] } as any);
   const solo = w("feature", "Standalone", null);
   const all = [init, f1, f2, f3, t, solo];
-  const files = (item: WorkItem) => graduationFiles({ item, all, bodyOf: () => "", from: "1uk4", now: new Date(1000) });
+  const files = (item: WorkItem) => graduationFiles({ item, all, bodyOf: () => "", from: "owner", now: new Date(1000) });
 
   it("a feature under an initiative sends its entry, then the hub listing delivered features only", () => {
     const [feat, hub] = files(f2);
@@ -61,7 +61,7 @@ describe("graduationFiles", () => {
   it("a feature under a standing initiative sends only its own entry: no hub, no part_of", () => {
     const fitness = w("initiative", "Fitness", null, { stage: "in_build", standing: true } as any);
     const week = w("feature", "Week 43", fitness.id);
-    const out = graduationFiles({ item: week, all: [fitness, week], bodyOf: () => "", from: "1uk4", now: new Date(1000) });
+    const out = graduationFiles({ item: week, all: [fitness, week], bodyOf: () => "", from: "owner", now: new Date(1000) });
     expect(out).toHaveLength(1);
     expect(out[0].content).toContain("graduation: feature");
     expect(out[0].content).not.toContain("part_of:");
@@ -95,7 +95,7 @@ describe("graduationFiles", () => {
       "- Duration: **1:44**",
       "<!-- /rollup:totals -->",
     ].join("\n");
-    const [feat] = graduationFiles({ item: week, all: [init, week], bodyOf: () => body, from: "1uk4", now: new Date(1000) });
+    const [feat] = graduationFiles({ item: week, all: [init, week], bodyOf: () => body, from: "owner", now: new Date(1000) });
     expect(feat.content).toContain("preserve_body: true");
     expect(feat.content).toContain('summary: "Sessions 1 · Sets 20 · Volume 21,300 lb · Duration 1:44"');
     expect(feat.content).toContain("### Wed 10/15 — Lower A");
@@ -127,7 +127,7 @@ describe("graduation flow through the real sweep", () => {
   beforeEach(() => {
     calls.length = 0;
     base = mkdtempSync(join(tmpdir(), "grad-flow-"));
-    mkdirSync(join(base, "ops", "inbox", "1uk4"), { recursive: true });
+    mkdirSync(join(base, "ops", "inbox", "owner"), { recursive: true });
     mkdirSync(join(base, "base", "domains", "wp", "entries"), { recursive: true });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
   });
@@ -137,8 +137,8 @@ describe("graduation flow through the real sweep", () => {
   });
 
   const graduate = async (item: WorkItem, all: WorkItem[]) => {
-    for (const f of graduationFiles({ item, all, bodyOf: () => "", from: "1uk4", now: new Date() })) {
-      writeFileSync(join(base, "ops", "inbox", "1uk4", f.name), f.content);
+    for (const f of graduationFiles({ item, all, bodyOf: () => "", from: "owner", now: new Date() })) {
+      writeFileSync(join(base, "ops", "inbox", "owner", f.name), f.content);
     }
     return sweep({ engine, roots: roots(), loadEntryVectors: async () => [], notify: () => {} });
   };

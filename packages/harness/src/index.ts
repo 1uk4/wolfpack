@@ -306,8 +306,10 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     }
   }
 
-  // Start planner timer for day-planner skill
-  const stopPlanner = startPlannerTimer(wolfDen, telegramState);
+  // Opt-in day-planner pings (wolf.yaml: planner.enabled)
+  const stopPlanner = config.planner?.enabled
+    ? startPlannerTimer(wolfDen, telegramState, config.planner.timezone)
+    : () => {};
 
   return {
     harness,

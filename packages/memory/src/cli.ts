@@ -3,9 +3,9 @@
  * Wolf consolidator CLI — consolidate OM session memory into a wolf's den.
  *
  * Usage:
- *   wolfpack-consolidate --wolf 1uk4 --den ~/wolves/dens/1uk4 --memory .memory
- *   wolfpack-consolidate --wolf 1uk4 --den ~/wolves/dens/1uk4 --memory .memory --session <id>
- *   wolfpack-consolidate --wolf 1uk4 --den ~/wolves/dens/1uk4 --memory .memory --all
+ *   wolfpack-consolidate --wolf owner --den ~/wolves/dens/owner --memory .memory
+ *   wolfpack-consolidate --wolf owner --den ~/wolves/dens/owner --memory .memory --session <id>
+ *   wolfpack-consolidate --wolf owner --den ~/wolves/dens/owner --memory .memory --all
  *
  * Environment:
  *   ANTHROPIC_API_KEY     — required only when the wolf's transport is api

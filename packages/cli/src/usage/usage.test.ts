@@ -106,11 +106,11 @@ describe("pi session reader", () => {
   it("reads one event per assistant message with usage", async () => {
     const file = path.join(tmp, "s.jsonl");
     fs.writeFileSync(file, piSession("sess-1", [bridgeMsg, apiMsg]));
-    const events = await readPiSessionFile(file, "1uk4", "main");
+    const events = await readPiSessionFile(file, "owner", "main");
     expect(events).toHaveLength(2);
     expect(events.map((e) => e.id)).toEqual(["pi:sess-1:m0", "pi:sess-1:m1"]);
     expect(events[0]).toMatchObject({
-      wolf: "1uk4",
+      wolf: "owner",
       source: "pi",
       session: "sess-1",
       use: "main",

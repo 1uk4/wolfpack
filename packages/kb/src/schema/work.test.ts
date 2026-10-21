@@ -30,7 +30,7 @@ const events: WorkEvent[] = [
     kind: "feature",
     domain: dom("snapjack"),
     title: "referral program",
-    assignee: wolf("1uk4"),
+    assignee: wolf("owner"),
     area: Slug.parse("marketing"),
     partOf: null,
     successCriteria: null,
@@ -44,7 +44,7 @@ const events: WorkEvent[] = [
     kind: "task",
     domain: dom("snapjack"),
     title: "wire referral codes",
-    assignee: wolf("1uk4"),
+    assignee: wolf("owner"),
     area: Slug.parse("marketing"),
     partOf: feature,
     successCriteria: "code redeems → credit applied",
@@ -74,7 +74,7 @@ describe("foldWork", () => {
     expect(t.stage).toBe("in_build"); // last staged event wins
     expect(t.partOf).toBe(feature); // the work tree
     expect(t.area).toBe("marketing"); // inherited (set at creation)
-    expect(t.assignee).toBe("hal"); // reassigned from 1uk4 → hal
+    expect(t.assignee).toBe("hal"); // reassigned from owner → hal
     expect(t.log).toHaveLength(1);
     expect(t).not.toHaveProperty("references");
     expect(t.graduated).toBeNull();
@@ -118,7 +118,7 @@ describe("assertAdvanceable", () => {
     title: "x",
     summary: null,
     stage: "plan",
-    assignee: wolf("1uk4"),
+    assignee: wolf("owner"),
     successCriteria: null,
     partOf: null,
     dependsOn: [],

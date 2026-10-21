@@ -1,25 +1,25 @@
-# Wolfpack ops reference (for investigators)
+# Wolfpack ops reference (example — copy to ~/.wolfpack/ops.md and edit)
 
 Pass this file's path in an investigator brief. Commands marked **[RO]** are read-only; anything unmarked changes state — do not run it. Never print `.env`, `apiKey` or token values.
 
 ## Hosts and ssh
-- Registered hosts live in `~/.wolfpack/config.yaml` (`hosts:`; **read it only for names/addresses, it contains API keys**). Current host: `sfo-01` (address `100.120.154.69`, Tailscale; agent port 3141).
-- ssh: `ssh -i ~/.ssh/wolfpack -o BatchMode=yes -o ConnectTimeout=5 root@100.120.154.69 '<cmd>'` — user `root`, port 22. Keep remote commands bounded and non-interactive.
+- Registered hosts live in `~/.wolfpack/config.yaml` (`hosts:`; **read it only for names/addresses, it contains API keys**). Current host: `host-a` (address `100.64.0.1`, Tailscale; agent port 3141).
+- ssh: `ssh -i ~/.ssh/<key> -o BatchMode=yes -o ConnectTimeout=5 root@100.64.0.1 '<cmd>'` — user `root`, port 22. Keep remote commands bounded and non-interactive.
 
 ## Wolves (id ↔ name)
 | name | id | runtime | host |
 |---|---|---|---|
-| hal | ETAy7b | pi-durable | sfo-01 |
-| dewey (librarian) | W1hOrJ | pi-durable | sfo-01 |
-| 1uk4 | ddkyhT | pi (local) | this Mac |
+| hal | abc123 | pi-durable | host-a |
+| dewey (librarian) | def456 | pi-durable | host-a |
+| owner | ghi789 | pi (local) | this Mac |
 
 Service/user/home names use the **id**, not the name: `wolf-<id>`.
 
 ## Local first (check before ssh) **[RO]**
-- Syncthing mirrors of VPS dens: `~/wolves/<host>/<wolf>/den/` e.g. `~/wolves/sfo-01/hal/den/`. Contains `session.sqlite` (+ `-wal`/`-shm`; open read-only, e.g. `sqlite3 -readonly`), `status.json`, `memory/`, `tasks/`, `kb/`, `usage/<YYYY-MM>.jsonl` (engine usage).
-- Local wolf 1uk4: `~/wolves/local/1uk4/{wolf.yaml,models.json,den/,agent/,logs/}`; den has `usage/`, `status.json`, `work-system.log`.
+- Syncthing mirrors of VPS dens: `~/wolves/<host>/<wolf>/den/` e.g. `~/wolves/host-a/hal/den/`. Contains `session.sqlite` (+ `-wal`/`-shm`; open read-only, e.g. `sqlite3 -readonly`), `status.json`, `memory/`, `tasks/`, `kb/`, `usage/<YYYY-MM>.jsonl` (engine usage).
+- Local wolf owner: `~/wolves/local/owner/{wolf.yaml,models.json,den/,agent/,logs/}`; den has `usage/`, `status.json`, `work-system.log`.
 - Mirror freshness: compare file mtimes (`ls -l`) with now; a stale mirror means sync is lagging, not that the wolf is idle.
-- CLI (local, talks to the agent API): `wolfpack list`, `wolfpack status`, `wolfpack logs <wolf> [--lines N] [--host sfo-01]` **[RO]** (do not use `--follow` unless bounded). `wolfpack restart|sync|launch|redeploy` change state — don't.
+- CLI (local, talks to the agent API): `wolfpack list`, `wolfpack status`, `wolfpack logs <wolf> [--lines N] [--host host-a]` **[RO]** (do not use `--follow` unless bounded). `wolfpack restart|sync|launch|redeploy` change state — don't.
 
 ## VPS layout (per wolf)
 `/home/wolf-<id>/`:
@@ -39,8 +39,8 @@ Service/user/home names use the **id**, not the name: `wolf-<id>`.
 
 ## Knowledge base on the VPS
 - `/var/wolfpack/kb/base` — curated KB (`domains/<domain>/entries`, `INDEX.md`, `_registry.md`); `/var/wolfpack/kb/ops` — Syncthing lanes: `inbox/<wolf>/` (contributions waiting for the next sweep), `parked/<wolf>/` (contributions that failed and need attention), `receipts/`, `rejected/`; `/var/wolfpack/kb/work` — work-item ledger. **[RO]** `ls`, `head`.
-- KB admin CLI `/opt/wolfpack-kb/cli.cjs`, run as the librarian's user (dewey = `wolf-W1hOrJ`) with its env:
-  `sudo -u wolf-W1hOrJ bash -c 'node /opt/wolfpack-kb/cli.cjs status'` **[RO]** (health dashboard, lists parked items; needs the wolf's env vars exported from its `.env` — the local `wolfpack kb status` does this for you and is preferred).
+- KB admin CLI `/opt/wolfpack-kb/cli.cjs`, run as the librarian's user (dewey = `wolf-def456`) with its env:
+  `sudo -u wolf-def456 bash -c 'node /opt/wolfpack-kb/cli.cjs status'` **[RO]** (health dashboard, lists parked items; needs the wolf's env vars exported from its `.env` — the local `wolfpack kb status` does this for you and is preferred).
   `... cli.cjs unpark --list` **[RO]**; `unpark <wolf>/<file>|--all` moves parked items back to the inbox (state change — don't). `sweep`, `reorg`, `rebuild`, `reindex`, `retire` change state — don't.
 
 ## Agent API (port 3141, `X-API-Key` header required except dashboard)

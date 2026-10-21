@@ -16,12 +16,12 @@ A framework for running personalized AI agents with persistent, shared knowledge
 │    • wolfpack host add <vps> --ip <ip>      │               │
 │                                             │  HTTP :3141   │
 │  ~/wolves/  (host-first)                    │  (Tailscale)  │
-│    local/1uk4/     (local wolf, authoritative) │            │
-│    wolf-01/aide/   (VPS wolf, backup mirror)│               │
+│    local/owner/     (local wolf, authoritative) │            │
+│    host-a/aide/   (VPS wolf, backup mirror)│               │
 │    shared/         (KB + librarian, later)  │               │
 │                                             ▼               │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  VPS (wolf-01)                                       │   │
+│  │  VPS (host-a)                                       │   │
 │  │                                                      │   │
 │  │  wolfpack-agent  ←── manages all wolves on this host │   │
 │  │    │                                                 │   │
@@ -105,7 +105,7 @@ New wolves pick a **profile** that bundles sensible extension defaults:
 
 | Profile | Default extensions | For |
 |---|---|---|
-| `worker` | memory, subagents | Local, keyboard-driven working agent (e.g. `1uk4`) |
+| `worker` | memory, subagents | Local, keyboard-driven working agent (e.g. `owner`) |
 | `assistant` | memory, subagents, **telegram** | 24/7 VPS assistant reached via Telegram |
 
 Local wolves default to `worker`; remote (`--host`) wolves default to `assistant`.
@@ -136,13 +136,13 @@ telegram: { tokenEnv: TELEGRAM_BOT_TOKEN, ownerId: 123456 }
 ```
 ~/wolves/
   local/                 # wolves running on this machine (authoritative)
-    1uk4/
+    owner/
       wolf.yaml          # identity + config
       .env               # secrets (WOLF_ID, TELEGRAM_BOT_TOKEN, ...)
       agent/settings.json # PI_CODING_AGENT_DIR: packages[] -> extensions PI loads
       den/memory/        # persistent memory (topics, items, JOURNEY)
       logs/
-  wolf-01/               # a VPS host
+  host-a/               # a VPS host
     aide/                # read-only backup mirror (VPS den is authoritative)
   shared/                # cross-wolf shared memory (librarian), added later
 ```
@@ -188,17 +188,17 @@ Syncthing's deeper check is enabled by setting these in the agent's environment:
 
 ```bash
 # Host management
-wolfpack host add wolf-01 --ip 100.105.247.31
+wolfpack host add host-a --ip <tailscale-ip>
 wolfpack host list
-wolfpack host status wolf-01   # CPU/mem/disk + Tailscale & Syncthing health + wolves
+wolfpack host status host-a   # CPU/mem/disk + Tailscale & Syncthing health + wolves
 
 # Wolf management (PI runtime only)
-wolfpack add wolf 1uk4                          # local worker: memory,subagents
-wolfpack add wolf aide --host wolf-01          # remote assistant: +telegram (prompts for token)
-wolfpack add wolf aide --host wolf-01 \
+wolfpack add wolf owner                          # local worker: memory,subagents
+wolfpack add wolf aide --host host-a          # remote assistant: +telegram (prompts for token)
+wolfpack add wolf aide --host host-a \
   --profile assistant --telegram-token <t> --telegram-owner <id> --yes
 wolfpack add wolf test-wolf --ext memory       # specific extension set (skip picker)
-wolfpack launch 1uk4                            # launch a local wolf's PI (env auto-loaded)
+wolfpack launch owner                            # launch a local wolf's PI (env auto-loaded)
 wolfpack list [--json]                          # every backend: local + each host
 wolfpack status <wolf> [--host <h>]            # local or remote (shows memory snapshot)
 wolfpack logs <wolf> [-f] [--host <h>]         # local tails files; remote via agent
@@ -247,8 +247,8 @@ shell env < `~/.wolfpack/.env` (shared secrets) < the wolf's own `.env`.
 ```bash
 # Per-wolf (~/wolves/local/<wolf>/.env, written at creation)
 WOLF_ID=FHfgZV                              # stable id
-WOLF_NAME=1uk4                              # wolf identity
-WOLF_DEN=~/wolves/local/1uk4/den            # den path (memory extension)
+WOLF_NAME=owner                              # wolf identity
+WOLF_DEN=~/wolves/local/owner/den            # den path (memory extension)
 WOLFPACK_LIBRARIAN=~/wolves/shared/librarian/inbox
 
 # Shared (~/.wolfpack/.env — set once for all wolves)
@@ -258,7 +258,7 @@ ANTHROPIC_API_KEY=sk-ant-...                # for memory LLM calls
 ## Installation
 
 ```bash
-git clone git@github.com:1uk4/wolfpack.git
+git clone https://github.com/<your-org>/wolfpack.git
 cd wolfpack
 ./install.sh
 ```

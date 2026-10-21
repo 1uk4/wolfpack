@@ -34,7 +34,7 @@ describe("graduation contributions", () => {
   });
 
   it("file names its entry and graduation kind", () => {
-    const f = graduationFile({ from: "1uk4", item: item({}), graduation: "hub", body: "b", final: true, submitted: new Date(0) });
+    const f = graduationFile({ from: "owner", item: item({}), graduation: "hub", body: "b", final: true, submitted: new Date(0) });
     expect(f.name).toBe("grad-hub-work-wp-Feat001-0.md");
     expect(f.content).toMatch(/graduation: hub\nentry_id: kb-wp-Feat001\nfinal: true\n/);
     expect(f.content).toContain("den_topic_id: work-wp-Feat001");

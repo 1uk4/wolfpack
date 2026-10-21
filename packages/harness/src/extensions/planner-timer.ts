@@ -1,5 +1,5 @@
 /**
- * Planner timer — checks den/planner/state.json every minute and sends
+ * Planner timer (opt-in via wolf.yaml `planner.enabled`) — checks den/planner/state.json every minute and sends
  * Telegram pings when block transitions are due.
  *
  * Sends messages to the wolf's own Telegram chat via the bot API,
@@ -28,6 +28,7 @@ interface PlannerState {
 export function startPlannerTimer(
   wolfDen: string,
   telegram: TelegramSharedState | undefined,
+  timeZone?: string,
 ): () => void {
   const statePath = join(wolfDen, "planner", "state.json");
 
@@ -50,7 +51,7 @@ export function startPlannerTimer(
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-      timeZone: "America/Los_Angeles",
+      timeZone,
     });
   }
 

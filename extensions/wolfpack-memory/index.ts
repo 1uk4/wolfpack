@@ -5,8 +5,8 @@
  * Replaces observational-memory + mac-librarian-bridge.
  *
  * Environment variables:
- *   WOLF_NAME           — wolf identity (e.g. "1uk4")
- *   WOLF_DEN            — path to wolf den (e.g. ~/wolves/local/1uk4/den)
+ *   WOLF_NAME           — wolf identity (e.g. "owner")
+ *   WOLF_DEN            — path to wolf den (e.g. ~/wolves/local/owner/den)
  *   WOLFPACK_MODELS_FILE — resolved model table (set by `wolfpack launch`;
  *                          without it the table is resolved from config and
  *                          the status bar shows "models: not from launch")

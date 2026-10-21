@@ -37,6 +37,7 @@ export { createAdapter } from "./adapters/index.js";
 
 // Usage tracking
 export { UsageTracker, type UsageSummary } from "./usage.js";
+export * from "./usage-log.js";
 
 // Pipeline — parse, search, commit, index
 export * from "./pipeline/index.js";

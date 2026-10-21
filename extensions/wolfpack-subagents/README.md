@@ -85,7 +85,7 @@ Discovered from (priority: project > global > package):
 - **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (wolf-specific agents only)
 - **package** — this extension's bundled `agents/` (`worker`, `scout`, `planner`,
   `reviewer`), plus the `pi.agents` dirs of every local package in the wolf's
-  `settings.json` (e.g. `wolfpack-visual-tools` → `mermaid-maker`, `svg-maker`).
+  `settings.json` (e.g. `wolfpack-visual-tools` → `visualizer`).
   Repo agents load from the repo; don't copy them into the wolf's agent dir, or
   the copy shadows (and drifts from) the repo file.
 
@@ -129,8 +129,8 @@ bridge this extension exposes:
 ```
 
 `wolfpack-visual-tools` uses exactly this to make `write/edit/render_mermaid`
-and `write/edit/render_svg` available to the `mermaid-maker` / `svg-maker`
-sub-agents.
+and `write/edit/render_svg` available to the `visualizer`
+sub-agent.
 
 ## Layout
 

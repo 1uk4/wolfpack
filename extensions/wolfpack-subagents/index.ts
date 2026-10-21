@@ -364,7 +364,7 @@ function getBundledAgentsDir(): string {
 /**
  * Agent dirs shipped by packages: this extension's own, then every local
  * package in the wolf's settings.json that declares `pi.agents` (e.g.
- * wolfpack-visual-tools' svg-maker / mermaid-maker). Agents load straight from
+ * wolfpack-visual-tools' visualizer). Agents load straight from
  * the repo, so no copy in the wolf's agent dir can drift from them.
  */
 function getPackageAgentsDirs(): string[] {

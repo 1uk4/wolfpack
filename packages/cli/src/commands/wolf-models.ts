@@ -158,7 +158,12 @@ export async function wolfModels(
         console.log(c.red(`  ${r.error}`));
         continue;
       }
-      console.log(c.dim(`  transport: ${r.table.transport} (${r.table.transportSource})\n`));
+      console.log(c.dim(`  transport: ${r.table.transport} (${r.table.transportSource})`));
+      if (r.table.location === "vps" && r.table.transport === "subscription") {
+        // pi-durable has no Max provider for the main agent yet (phase 2).
+        console.log(c.dim("  main agent: API key (no Max provider on pi-durable yet); memory + sweep: Max"));
+      }
+      console.log("");
       console.log(indent(formatModelRows(modelRows(r.table, agents)), "  "));
       for (const w of r.table.warnings) console.log(c.yellow(`  ⚠ ${w}`));
     }

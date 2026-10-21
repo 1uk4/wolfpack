@@ -86,13 +86,18 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Resolved model table, shipped next to wolf.yaml by `wolfpack sync`. Must
   // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
   const table = loadWolfModels(config);
-  if (table.transport !== "api") {
+  // On subscription, engine steps (memory, consolidation, KB sweep) run on the
+  // Max plan through the Agent SDK; the main agent has no Max provider on
+  // pi-durable yet, so it stays on the API key either way.
+  if (table.transport === "subscription" && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     throw new Error(
-      `${config.name} resolves to transport: ${table.transport}, but the Max subscription isn't available on pi-durable (VPS) yet — set transport: api for this wolf (or the pack's models.transport.vps) and run \`wolfpack sync ${config.name}\``,
+      `${config.name} is on transport: subscription but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
     );
   }
   const main = table.tiers.main;
+  const mainVia = table.transport === "subscription" ? "API key (no Max provider for the main agent on pi-durable yet)" : "API key";
   console.log(`[harness] Models: main=${main.model} smart=${table.tiers.smart.model} fast=${table.tiers.fast.model} (transport ${table.transport})`);
+  console.log(`[harness] Main agent via ${mainVia}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
   for (const w of table.warnings) console.warn(`[harness] models: ${w}`);
   console.log(`[harness] API key set: ${!!process.env.ANTHROPIC_API_KEY}`);
   const models = createModels();

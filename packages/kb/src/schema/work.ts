@@ -36,8 +36,8 @@ export const WorkId = z
   .brand<"WorkId">();
 export type WorkId = z.infer<typeof WorkId>;
 
-/** A wolf identity used as an assignee: 1uk4 | hal | dewey | <autonomous wolf>.
- *  Lower-kebab-ish; may start with a digit (e.g. "1uk4"). */
+/** A wolf identity used as an assignee: owner | hal | dewey | <autonomous wolf>.
+ *  Lower-kebab-ish; may start with a digit (e.g. "owner"). */
 export const WolfId = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]*$/, "must be a wolf id (lower-alnum, hyphens)")

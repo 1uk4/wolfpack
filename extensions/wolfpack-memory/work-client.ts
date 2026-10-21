@@ -2,7 +2,7 @@
  * Work API client — typed HTTP client for the shared work API.
  *
  * Reads WORK_ENDPOINT and WORK_TOKEN from env. All wolves hit the same
- * endpoint on the wolfpack agent (sfo-01:3141/work).
+ * endpoint on the wolfpack agent (the VPS host:3141/work).
  */
 
 import type { WorkItem, CreateWorkInput, WorkQuery } from "@wolfpack/kb/client";

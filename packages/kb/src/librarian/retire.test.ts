@@ -15,7 +15,7 @@ describe("retireEntries", () => {
   function seed(topics: Record<string, string[]>): void {
     const events = Object.entries(topics).flatMap(([canonical, entries]) => [
       ...entries.map((e) => ev.entryWritten(e, canonical, "create")),
-      ev.aliased("1uk4", `topic-${canonical}`, canonical, "h"),
+      ev.aliased("owner", `topic-${canonical}`, canonical, "h"),
     ]);
     appendLedger(roots, events);
     for (const e of Object.values(topics).flat()) {

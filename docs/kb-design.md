@@ -20,13 +20,13 @@
 ---
 
 ## Where it runs
-- **Authority:** Dewey, the librarian wolf, on **sfo-01** (wolf id `W1hOrJ`).
-  KB at `/home/wolf-W1hOrJ/knowledge/base`; den-local state (ledger, sections,
-  vectors) at `/var/lib/wolfpack-kb/W1hOrJ`. A systemd timer runs the sweep every
+- **Authority:** Dewey, the librarian wolf, on **the VPS host** (wolf id `<wolf-id>`).
+  KB at `/home/wolf-<wolf-id>/knowledge/base`; den-local state (ledger, sections,
+  vectors) at `/var/lib/wolfpack-kb/<wolf-id>`. A systemd timer runs the sweep every
   15 minutes; the CLI is bundled to `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
 - **Mirrors:** every other wolf gets each `domains/<domain>/` folder as a
   **receive-only** Syncthing share. Edits or deletions on a mirror never reach
-  Dewey — change the KB on sfo-01 (e.g. `kb retire`), never by editing the mirror.
+  Dewey — change the KB on the VPS host (e.g. `kb retire`), never by editing the mirror.
 - **Contributions** flow wolf → `opsRoot/inbox/<wolf>/` → sweep. Wolves produce
   them by promoting den topics (`emitDelta`), crawling documents, or graduating
   shipped work.
@@ -119,7 +119,7 @@ in their subtree are omitted. Consumers:
   merging across wolves is the sweep's job.
 
 ## Removing entries
-`wolfpack-kb retire <entryId...> [--reason=…] [--dry-run]` on sfo-01 deletes the
+`wolfpack-kb retire <entryId...> [--reason=…] [--dry-run]` on the VPS host deletes the
 entry files, records `entry_retired` in the ledger (the registry drops the entry,
 and a topic left empty), and re-renders the registry, INDEX and digest. Run
 `reorg <domain>` afterwards to refresh section member counts.
@@ -131,6 +131,6 @@ and a topic left empty), and re-renders the registry, INDEX and digest. Run
   returns `null`, so `assembleEntry` drops every proposed link.
 - **`SWEEP.mergeSim`** (0.72) still needs calibrating against real re-promotes.
 - **Work items are written into the receive-only mirror** on wolves
-  (`domains/<d>/work/`), so they never reach sfo-01.
+  (`domains/<d>/work/`), so they never reach the VPS host.
 - Open cleanup tasks: `reorg` should take `sweep.lock`; KB `appendLedger` should
   validate events before writing; `reorg --dry-run` overstates relabels.

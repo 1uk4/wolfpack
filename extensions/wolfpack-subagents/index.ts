@@ -1836,9 +1836,16 @@ async function watchSubagent(
   }
 }
 
+/** Ops reference for investigator briefs: $WOLFPACK_OPS_REF, then ~/.wolfpack/ops.md, then the tracked example. */
+function resolveOpsRef(): string {
+  const candidates = [process.env.WOLFPACK_OPS_REF, join(homedir(), ".wolfpack", "ops.md")];
+  for (const c of candidates) if (c && existsSync(c)) return c;
+  return join(SUBAGENTS_DIR, "reference", "ops.example.md");
+}
+
 const ORCHESTRATOR_RULES = `You are the orchestrator: the user's point of contact. Decide, delegate, review. Delegate anything that takes more than a couple of reads or commands, so the main context stays small (call subagents_list for the roster):
 - find or understand code, KB entries, library types → scout
-- diagnose logs, services, VPS, a stuck wolf → investigator (for wolfpack hosts, pass the path of extensions/wolfpack-subagents/reference/ops.md in the brief)
+- diagnose logs, services, VPS, a stuck wolf → investigator (for wolfpack hosts, pass the path ${resolveOpsRef()} in the brief)
 - external docs, READMEs, web pages → researcher
 - a plan from requirements → planner
 - implement an agreed change, run build/tests, commit → worker

@@ -41,7 +41,7 @@ describe("detectTransition (in_build)", () => {
 
   it("never guesses shipped → live from note keywords (it looped on its own note)", () => {
     const task = { kind: "task", stage: "shipped", title: "t" } as WorkItem;
-    const notes = ["Verified live in 1uk4", "deployed to production", "Stage: shipped → live"];
+    const notes = ["Verified live in owner", "deployed to production", "Stage: shipped → live"];
     expect(detectTransition(task, ctx({ recentActivity: notes }))).toBeNull();
   });
 

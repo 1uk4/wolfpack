@@ -70,7 +70,7 @@ WorkItem {
   summary         string | null      // ≤140 chars; set on task completion / graduation
   stage           Stage              // idea → plan → feasibility → approved → in_build
                                      //   → shipped → live → archived
-  assignee        WolfId             // 1uk4 | hal | <autonomous wolf>
+  assignee        WolfId             // owner | hal | <autonomous wolf>
   successCriteria string | null      // required before a task leaves "plan"
   partOf          WorkId | null      // the work tree (null = root)
   dependsOn       WorkId[]           // work → work
@@ -107,7 +107,7 @@ work.bound · work.unbound · work.summarized
 
 ## Assignment
 `assignee` is a wolf id with per-wolf meaning:
-- **`1uk4`** — hands-on development in the pi CLI.
+- **`owner`** — hands-on development in the pi CLI.
 - **`hal`** — things you physically do; Hal tracks and reminds over Telegram.
 - **autonomous wolves (future)** — a queue of items assigned to them in an
   actionable stage (`approved`, `in_build`).
@@ -171,6 +171,6 @@ work.bound · work.unbound · work.summarized
 - **Task summaries ignore observations.** Work sessions have an observations
   list, but nothing feeds it (`addWorkObservation` has no caller).
 - **Work files land in the receive-only mirror** on wolves, so they never reach
-  sfo-01 (the ledger in the den is unaffected).
+  the VPS host (the ledger in the den is unaffected).
 - Several helpers in `memory/src/work/` (`processWorkEvent`,
   `processGraduationQueue`, file-pattern detection) are written but not wired.

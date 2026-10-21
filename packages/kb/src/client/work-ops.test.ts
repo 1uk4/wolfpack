@@ -40,7 +40,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "wire referral codes",
-      assignee: "1uk4",
+      assignee: "owner",
       area: "marketing",
       successCriteria: "code redeems → credit applied",
     });
@@ -48,7 +48,7 @@ describe("work-ops", () => {
     expect(result.id).toMatch(/^work-snapjack-/);
     expect(result.item.kind).toBe("task");
     expect(result.item.stage).toBe("plan");
-    expect(result.item.assignee).toBe("1uk4");
+    expect(result.item.assignee).toBe("owner");
 
     // A parentless task is filed in the domain's Inbox (created on first use).
     const events = readWorkLedger(roots);
@@ -64,7 +64,7 @@ describe("work-ops", () => {
         kind: "feature",
         domain: "wolfpack",
         title: `root ${JSON.stringify(partOf)}`,
-        assignee: "1uk4",
+        assignee: "owner",
         partOf,
       });
       expect(item.partOf).toBeNull();
@@ -73,20 +73,20 @@ describe("work-ops", () => {
   });
 
   it("createWork rejects an invalid event without touching the ledger", () => {
-    createWork(roots, { kind: "task", domain: "wolfpack", title: "ok", assignee: "1uk4" });
+    createWork(roots, { kind: "task", domain: "wolfpack", title: "ok", assignee: "owner" });
 
     expect(() =>
-      createWork(roots, { kind: "task", domain: "wolfpack", title: "bad", assignee: "1uk4", partOf: "not-a-work-id" })
+      createWork(roots, { kind: "task", domain: "wolfpack", title: "bad", assignee: "owner", partOf: "not-a-work-id" })
     ).toThrow(/parent work item not-a-work-id not found/);
     expect(() =>
-      createWork(roots, { kind: "task", domain: "wolfpack", title: "", assignee: "1uk4" })
+      createWork(roots, { kind: "task", domain: "wolfpack", title: "", assignee: "owner" })
     ).toThrow(/title/);
 
     expect(readWorkLedger(roots)).toHaveLength(2); // Inbox + "ok"
   });
 
   it("noteWork rejects empty text without touching the ledger", () => {
-    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" });
+    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "owner" });
     expect(() => noteWork(roots, id, "")).toThrow(/Invalid work\.noted event/);
     expect(readWorkLedger(roots)).toHaveLength(2); // Inbox + "t"
   });
@@ -96,7 +96,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "test task",
-      assignee: "1uk4",
+      assignee: "owner",
       successCriteria: "it works",
     });
 
@@ -105,7 +105,7 @@ describe("work-ops", () => {
   });
 
   it("stageWork to the current stage records nothing", () => {
-    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4", successCriteria: "ok" });
+    const { id } = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "owner", successCriteria: "ok" });
     stageWork(roots, id, "shipped");
     const before = readWorkLedger(roots).length;
 
@@ -121,7 +121,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "no criteria task",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     expect(() => stageWork(roots, id, "in_build")).toThrow(/success_criteria/);
@@ -132,7 +132,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "test",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const { item } = assignWork(roots, id, "hal");
@@ -144,7 +144,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "test",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     noteWork(roots, id, "started working on it");
@@ -158,7 +158,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "test",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const before = readWorkLedger(roots).length;
@@ -169,7 +169,7 @@ describe("work-ops", () => {
   });
 
   it("graduateWork records the date once and links nothing", () => {
-    const { id } = createWork(roots, { kind: "feature", domain: "snapjack", title: "f", assignee: "1uk4" });
+    const { id } = createWork(roots, { kind: "feature", domain: "snapjack", title: "f", assignee: "owner" });
     const first = graduateWork(roots, id);
     expect(first.item.graduated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(graduateWork(roots, id).event).toBeNull();
@@ -181,7 +181,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "test",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const { item } = setCriteria(roots, id, "all tests pass");
@@ -193,7 +193,7 @@ describe("work-ops", () => {
       kind: "task",
       domain: "snapjack",
       title: "old title",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const { item } = retitleWork(roots, id, "new title");
@@ -201,12 +201,12 @@ describe("work-ops", () => {
   });
 
   it("queryWork filters by domain and assignee", () => {
-    createWork(roots, { kind: "feature", domain: "snapjack", title: "a", assignee: "1uk4" });
+    createWork(roots, { kind: "feature", domain: "snapjack", title: "a", assignee: "owner" });
     createWork(roots, { kind: "feature", domain: "snapjack", title: "b", assignee: "hal" });
-    createWork(roots, { kind: "feature", domain: "personal", title: "c", assignee: "1uk4" });
+    createWork(roots, { kind: "feature", domain: "personal", title: "c", assignee: "owner" });
 
     expect(queryWork(roots, { domain: "snapjack" })).toHaveLength(2);
-    expect(queryWork(roots, { assignee: "1uk4" })).toHaveLength(2);
+    expect(queryWork(roots, { assignee: "owner" })).toHaveLength(2);
     expect(queryWork(roots, { domain: "snapjack", assignee: "hal" })).toHaveLength(1);
     expect(queryWork(roots)).toHaveLength(3);
   });
@@ -216,20 +216,20 @@ describe("work-ops", () => {
       kind: "initiative",
       domain: "snapjack",
       title: "Q2 launch",
-      assignee: "1uk4",
+      assignee: "owner",
     });
     createWork(roots, {
       kind: "feature",
       domain: "snapjack",
       title: "referral program",
-      assignee: "1uk4",
+      assignee: "owner",
       partOf: parent.id,
     });
     createWork(roots, {
       kind: "task",
       domain: "personal",
       title: "unrelated",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const tree = getWorkTree(roots, parent.id);
@@ -242,20 +242,20 @@ describe("work-ops", () => {
       kind: "initiative",
       domain: "snapjack",
       title: "Q2 launch",
-      assignee: "1uk4",
+      assignee: "owner",
     });
     const child = createWork(roots, {
       kind: "feature",
       domain: "snapjack",
       title: "referral program",
-      assignee: "1uk4",
+      assignee: "owner",
       partOf: parent.id,
     });
     const unrelated = createWork(roots, {
       kind: "task",
       domain: "snapjack",
       title: "unrelated",
-      assignee: "1uk4",
+      assignee: "owner",
     });
 
     const result = deleteWork(roots, parent.id);
@@ -275,7 +275,7 @@ describe("work-ops", () => {
 
   describe("hierarchy", () => {
     const mk = (kind: string, partOf?: string, domain = "wolfpack") =>
-      createWork(roots, { kind: kind as any, domain, title: `${kind} ${Math.random()}`, assignee: "1uk4", partOf }).item;
+      createWork(roots, { kind: kind as any, domain, title: `${kind} ${Math.random()}`, assignee: "owner", partOf }).item;
 
     it("allows initiative → feature → task, and standalone features", () => {
       const init = mk("initiative");
@@ -304,27 +304,27 @@ describe("work-ops", () => {
 
   describe("inbox", () => {
     it("is one container per domain, created on first use", () => {
-      const a = createWork(roots, { kind: "task", domain: "wolfpack", title: "a", assignee: "1uk4" }).item;
-      const b = createWork(roots, { kind: "spike", domain: "wolfpack", title: "b", assignee: "1uk4" }).item;
-      const c = createWork(roots, { kind: "issue", domain: "personal", title: "c", assignee: "1uk4" }).item;
+      const a = createWork(roots, { kind: "task", domain: "wolfpack", title: "a", assignee: "owner" }).item;
+      const b = createWork(roots, { kind: "spike", domain: "wolfpack", title: "b", assignee: "owner" }).item;
+      const c = createWork(roots, { kind: "issue", domain: "personal", title: "c", assignee: "owner" }).item;
 
       expect(a.partOf).toBe(b.partOf);
       expect(c.partOf).not.toBe(a.partOf);
-      expect(ensureInbox(roots, "wolfpack", "1uk4").id).toBe(a.partOf);
+      expect(ensureInbox(roots, "wolfpack", "owner").id).toBe(a.partOf);
       expect([...loadWorkState(roots).values()].filter((i) => i.container)).toHaveLength(2);
     });
 
     it("never ships", () => {
-      const inbox = ensureInbox(roots, "wolfpack", "1uk4");
+      const inbox = ensureInbox(roots, "wolfpack", "owner");
       expect(() => stageWork(roots, inbox.id, "shipped")).toThrow(/never ships/);
     });
   });
 
   describe("standing", () => {
     it("is set on create or toggled later, survives a reload, and is written to the file", () => {
-      const fit = createWork(roots, { kind: "initiative", domain: "personal", title: "Fitness", assignee: "1uk4", standing: true }).item;
+      const fit = createWork(roots, { kind: "initiative", domain: "personal", title: "Fitness", assignee: "owner", standing: true }).item;
       expect(fit.standing).toBe(true);
-      const plan = createWork(roots, { kind: "initiative", domain: "personal", title: "Planning", assignee: "1uk4" }).item;
+      const plan = createWork(roots, { kind: "initiative", domain: "personal", title: "Planning", assignee: "owner" }).item;
       expect(plan.standing).toBe(false);
 
       expect(setStanding(roots, plan.id, true).item.standing).toBe(true);
@@ -334,16 +334,16 @@ describe("work-ops", () => {
     });
 
     it("only applies to initiatives", () => {
-      const f = createWork(roots, { kind: "feature", domain: "personal", title: "Week 43", assignee: "1uk4" }).item;
+      const f = createWork(roots, { kind: "feature", domain: "personal", title: "Week 43", assignee: "owner" }).item;
       expect(() => setStanding(roots, f.id, true)).toThrow(/only an initiative/);
-      expect(() => createWork(roots, { kind: "feature", domain: "personal", title: "x", assignee: "1uk4", standing: true })).toThrow(/only an initiative/);
+      expect(() => createWork(roots, { kind: "feature", domain: "personal", title: "x", assignee: "owner", standing: true })).toThrow(/only an initiative/);
     });
   });
 
   describe("moveWork", () => {
     it("re-parents a task, keeps its body, and records one event", () => {
-      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "1uk4" }).item;
-      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" }).item;
+      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "owner" }).item;
+      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "owner" }).item;
       commitWorkItem(roots, task, "## Plan\nkeep me");
 
       const { item } = moveWork(roots, task.id, feat.id);
@@ -355,8 +355,8 @@ describe("work-ops", () => {
     });
 
     it("validates the target and refuses to move the Inbox", () => {
-      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "1uk4" }).item;
-      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "1uk4" }).item;
+      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "owner" }).item;
+      const task = createWork(roots, { kind: "task", domain: "wolfpack", title: "t", assignee: "owner" }).item;
       const before = readWorkLedger(roots).length;
 
       expect(() => moveWork(roots, task.id, init.id)).toThrow(/only sit under a feature/);
@@ -366,8 +366,8 @@ describe("work-ops", () => {
     });
 
     it("moves a feature under an initiative and back to standalone", () => {
-      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "1uk4" }).item;
-      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "1uk4" }).item;
+      const init = createWork(roots, { kind: "initiative", domain: "wolfpack", title: "i", assignee: "owner" }).item;
+      const feat = createWork(roots, { kind: "feature", domain: "wolfpack", title: "f", assignee: "owner" }).item;
       expect(moveWork(roots, feat.id, init.id).item.partOf).toBe(init.id);
       expect(moveWork(roots, feat.id, null).item.partOf).toBeNull();
     });
@@ -375,7 +375,7 @@ describe("work-ops", () => {
 
   describe("dependencies", () => {
     const mk = (kind: string, partOf?: string) =>
-      createWork(roots, { kind: kind as any, domain: "wolfpack", title: `${kind}-${Math.random().toString(36).slice(2, 6)}`, assignee: "1uk4", partOf }).item;
+      createWork(roots, { kind: kind as any, domain: "wolfpack", title: `${kind}-${Math.random().toString(36).slice(2, 6)}`, assignee: "owner", partOf }).item;
 
     it("allows tasks in the same feature and features under the same initiative", () => {
       const init = mk("initiative");

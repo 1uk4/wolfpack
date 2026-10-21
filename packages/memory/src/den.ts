@@ -25,7 +25,7 @@ export interface DenTopic {
 }
 
 export interface DenConfig {
-  /** Path to the wolf's den root (e.g. ~/wolves/dens/1uk4/) */
+  /** Path to the wolf's den root (e.g. ~/wolves/dens/owner/) */
   denRoot: string;
   /** Wolf name */
   wolfName: string;

@@ -9,7 +9,7 @@
  *
  * Pipeline: input bytes → ffmpeg → mono 16kHz WAV → whisper.cpp → JSON.
  *
- * Config (all have sensible defaults for the sfo-01 install path):
+ * Config (all have sensible defaults for the the VPS host install path):
  *   WHISPER_BIN       — whisper.cpp CLI (default /opt/whisper-cpp/build/bin/whisper-cli)
  *   WHISPER_MODEL     — ggml model path (default .../models/ggml-large-v3-turbo.bin)
  *   WHISPER_LANGUAGE  — "auto" (default) | ISO code (e.g. "en") to force language

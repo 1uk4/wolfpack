@@ -298,7 +298,7 @@ export interface WorkSystemConfig {
 
 export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): void {
   const wolfDen = process.env.WOLF_DEN;
-  const wolfName = process.env.WOLF_NAME ?? "1uk4";
+  const wolfName = process.env.WOLF_NAME ?? "owner";
   const kbBase = process.env.KB_BASE;
 
   if (!wolfDen) {

@@ -9,5 +9,8 @@ export default defineConfig({
   test: {
     include: ["packages/*/src/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
+    // Tests run from inside a wolf's shell; never let them log usage (or
+    // anything else keyed off the den) into that wolf's real den.
+    env: { WOLF_DEN: "", WOLF_NAME: "" },
   },
 });

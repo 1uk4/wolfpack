@@ -25,6 +25,8 @@ import {
   resolveModel,
 } from "./config.js";
 import { UsageTracker } from "./usage.js";
+import * as path from "node:path";
+import { appendUsageEvent, billingFor, type UsageEvent } from "./usage-log.js";
 
 export interface Engine {
   /** The underlying adapter (for advanced use) */
@@ -52,6 +54,7 @@ export interface Engine {
 export function createEngine(config: EngineConfig): Engine {
   const adapter = createAdapter(config);
   const usage = new UsageTracker();
+  const log = usageLogTarget(config);
 
   async function call<T>(
     step: PipelineStep,
@@ -73,9 +76,41 @@ export function createEngine(config: EngineConfig): Engine {
     // Tag the usage record with the step name
     const tagged: UsageRecord = { ...result.usage, step };
     usage.record(tagged);
+    if (log) appendUsageEvent(log.den, usageEvent(tagged, config.provider, log.wolf));
 
     return result.data;
   }
 
   return { adapter, usage, config, call };
 }
+
+/** The den to log usage to: explicit config, else WOLF_DEN / WOLF_NAME, else none. */
+function usageLogTarget(config: EngineConfig): { den: string; wolf: string } | undefined {
+  if (config.usageLog === false) return undefined;
+  if (config.usageLog) return config.usageLog;
+  const den = process.env.WOLF_DEN;
+  if (!den) return undefined;
+  return { den, wolf: process.env.WOLF_NAME || path.basename(path.dirname(den)) };
+}
+
+function usageEvent(r: UsageRecord, provider: string, wolf: string): UsageEvent {
+  const billing = billingFor(provider);
+  const reported = typeof r.costUsd === "number" && r.costUsd > 0;
+  return {
+    ts: r.timestamp,
+    wolf,
+    source: "engine",
+    use: `step:${r.step}`,
+    provider,
+    billing,
+    model: r.model,
+    input: r.inputTokens,
+    output: r.outputTokens,
+    cacheRead: r.cacheReadTokens ?? 0,
+    cacheWrite: r.cacheWriteTokens ?? 0,
+    ...(reported ? { costUsd: r.costUsd } : {}),
+    // The Agent SDK's cost is the API equivalent; on the Max plan it's notional.
+    costSource: reported ? (billing === "subscription" ? "notional" : "reported") : "unknown",
+  };
+}
+

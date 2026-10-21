@@ -48,6 +48,8 @@ export class AnthropicAdapter implements KnowledgeAdapter {
     let lastError: Error | null = null;
     let totalInput = 0;
     let totalOutput = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
 
     // Build the system prompt with schema instructions
     const systemWithSchema = buildSystemWithSchema(options.system, schema);
@@ -95,6 +97,8 @@ export class AnthropicAdapter implements KnowledgeAdapter {
       // Track usage
       totalInput += response.usage.input_tokens;
       totalOutput += response.usage.output_tokens;
+      totalCacheRead += response.usage.cache_read_input_tokens ?? 0;
+      totalCacheWrite += response.usage.cache_creation_input_tokens ?? 0;
 
       // Extract text content
       const text = response.content
@@ -131,6 +135,8 @@ export class AnthropicAdapter implements KnowledgeAdapter {
             model: options.model,
             inputTokens: totalInput,
             outputTokens: totalOutput,
+            cacheReadTokens: totalCacheRead,
+            cacheWriteTokens: totalCacheWrite,
             timestamp: new Date().toISOString(),
           },
         };

@@ -37,6 +37,11 @@ export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** Prompt-cache reads / writes (input tokens billed at cache rates). */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Cost the provider reported for the call (the Agent SDK's is API-equivalent). */
+  costUsd?: number;
   timestamp: string;
 }
 

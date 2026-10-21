@@ -52,6 +52,12 @@ export interface EngineConfig {
   defaultMaxTokens?: number;
   /** Per-step model overrides */
   steps?: StepConfigs;
+  /**
+   * Where to log one usage event per call (<den>/usage/<YYYY-MM>.jsonl).
+   * Default: the wolf's den from WOLF_DEN (name from WOLF_NAME). `false`
+   * turns logging off (tests, throwaway engines).
+   */
+  usageLog?: { den: string; wolf: string } | false;
 }
 
 export type PipelineStep = EngineStep;

@@ -124,6 +124,9 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     let lastError: Error | null = null;
     let totalInput = 0;
     let totalOutput = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
+    let totalCost = 0;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       options.signal?.throwIfAborted();
@@ -140,11 +143,14 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
               "Please try again. Respond with valid JSON only.",
             ].join("\n");
 
-      const { text, inputTokens, outputTokens, resultError } =
+      const { text, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, resultError } =
         await this.runQuery(query, systemWithSchema, prompt, options);
 
       totalInput += inputTokens;
       totalOutput += outputTokens;
+      totalCacheRead += cacheReadTokens;
+      totalCacheWrite += cacheWriteTokens;
+      totalCost += costUsd;
 
       if (resultError) {
         // Transport/model error (rate limit, overload, etc.) — surface it.
@@ -169,6 +175,9 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
             model: options.model,
             inputTokens: totalInput,
             outputTokens: totalOutput,
+            cacheReadTokens: totalCacheRead,
+            cacheWriteTokens: totalCacheWrite,
+            costUsd: totalCost,
             timestamp: new Date().toISOString(),
           },
         };
@@ -196,6 +205,9 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     text: string;
     inputTokens: number;
     outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
     resultError?: string;
   }> {
     // Tie the SDK's own controller to the caller's signal, so aborting stops
@@ -234,6 +246,9 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     let resultError: string | undefined;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let costUsd = 0;
 
     try {
     for await (const message of sdkQuery) {
@@ -247,6 +262,10 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
         const usage = message.usage ?? {};
         inputTokens = usage.input_tokens ?? 0;
         outputTokens = usage.output_tokens ?? 0;
+        cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+        cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+        // API-equivalent cost Claude Code computes (notional on a subscription).
+        costUsd = typeof message.total_cost_usd === "number" ? message.total_cost_usd : 0;
         if (message.subtype === "success") {
           finalText = message.result || assistantText;
         } else {
@@ -266,6 +285,9 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       text: finalText || assistantText,
       inputTokens,
       outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      costUsd,
       resultError,
     };
   }

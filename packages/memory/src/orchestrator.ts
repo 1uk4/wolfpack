@@ -207,7 +207,25 @@ export function createOrchestrator(
     }
   }
 
-  async function runConsolidation(forceAll: boolean = false): Promise<void> {
+  // Consolidation and promotion mutate the same session topics on disk, and
+  // each snapshots the pool when it starts. Run them one at a time so a
+  // background /wolf:promote, the auto-consolidation trigger and a shutdown
+  // save can't consolidate the same observations twice or interleave topic
+  // writes. Each run re-folds the ledger when it gets the lock, and tombstones
+  // only the observations it consolidated, so observations recorded meanwhile
+  // stay in the pool.
+  let memoryOpTail: Promise<unknown> = Promise.resolve();
+  function serialized<T>(op: () => Promise<T>): Promise<T> {
+    const run = memoryOpTail.then(op, op);
+    memoryOpTail = run.catch(() => {});
+    return run;
+  }
+
+  function runConsolidation(forceAll: boolean = false): Promise<void> {
+    return serialized(() => consolidatePool(forceAll));
+  }
+
+  async function consolidatePool(forceAll: boolean): Promise<void> {
     const folded = foldLedger(ledgerEvents);
 
     let promote: typeof folded.activeObservations;
@@ -311,9 +329,11 @@ export function createOrchestrator(
     await runConsolidation(true);
   }
 
-  async function promoteToWolfMemory(
-    denConfig: DenConfig
-  ): Promise<ConsolidateResult> {
+  function promoteToWolfMemory(denConfig: DenConfig): Promise<ConsolidateResult> {
+    return serialized(() => promoteSession(denConfig));
+  }
+
+  async function promoteSession(denConfig: DenConfig): Promise<ConsolidateResult> {
     runtime.notify?.("memory: promoting session to wolf memory", "info");
 
     const result = await consolidateSession({

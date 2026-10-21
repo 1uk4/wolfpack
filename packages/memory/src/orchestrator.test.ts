@@ -125,3 +125,51 @@ describe("orchestrator domain stamping", () => {
     expect(topics["tagged-topic"]).toBe("wolfpack");
   });
 });
+
+describe("orchestrator concurrent observation", () => {
+  let cwd: string;
+  beforeEach(() => { cwd = mkdtempSync(join(tmpdir(), "orch-")); });
+  afterEach(() => rmSync(cwd, { recursive: true, force: true }));
+
+  it("observations recorded while consolidation runs survive it", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started!: () => void;
+    const consolidating = new Promise<void>((r) => (started = r));
+    const queue: RawObs[][] = [
+      [{ timestamp: "2026-10-19 10:00", content: "early" }],
+      [{ timestamp: "2026-10-19 10:05", content: "late" }],
+    ];
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+        if (step === "classify") return schema.parse({ observations: queue.shift() ?? [] });
+        started();
+        await gate;
+        return schema.parse({ actions: [] });
+      },
+    } as unknown as Engine;
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9 });
+    await orch.processChunks([chunk("c1")]);
+
+    const running = orch.consolidateNow();
+    await consolidating;
+    await orch.processChunks([chunk("c2")]); // observer fires mid-consolidation
+    release();
+    await running;
+
+    expect(orch.getActiveObservations().map((o) => o.content)).toEqual(["late"]);
+  });
+
+  it("serializes consolidation runs so one pool snapshot is never consolidated twice", async () => {
+    let consolidateCalls = 0;
+    const engine = makeEngine(
+      [[{ timestamp: "2026-10-19 10:00", content: "only" }]],
+      () => { consolidateCalls++; return []; }
+    );
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9 });
+    await orch.processChunks([chunk("c1")]);
+    await Promise.all([orch.consolidateNow(), orch.consolidateNow()]);
+    expect(consolidateCalls).toBe(1);
+    expect(orch.getActiveObservations()).toEqual([]);
+  });
+});

@@ -1284,7 +1284,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     if (kind === "promote") promoterPending = true;
     else consolidatorPending = true;
     activityStartMs = Date.now();
-    if (ctx.hasUI && !activityTimer) {
+    let hasUI = false;
+    try { hasUI = !!ctx.hasUI; } catch {} // stale ctx (background promote after reload)
+    if (hasUI && !activityTimer) {
       activityTimer = setInterval(() => refreshStatus(ctx), 1000);
     }
     refreshStatus(ctx);
@@ -1908,71 +1910,102 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("wolf:promote", {
-    description: "Consolidate + promote session memory to wolf den",
-    handler: async (_args: string, ctx: any) => {
-      if (!enabled || !orchestrator) {
-        if (ctx.hasUI) ctx.ui.notify("🐺 memory not enabled", "error");
-        return;
-      }
+  // Stale-ctx-safe notify: a captured ctx can go stale after a session
+  // replace or /reload while a background promote is still running.
+  function safeNotify(ctx: any, msg: string, level: "info" | "warning" | "error"): void {
+    try {
+      if (ctx.hasUI) ctx.ui.notify(msg, level);
+    } catch {
+      // stale ctx — nothing to show it on
+    }
+  }
 
-      // Step 1: Consolidate observations into session topics first
-      const obs = orchestrator.getActiveObservations();
-      if (obs.length > 0) {
-        if (ctx.hasUI) ctx.ui.notify(`🐺 consolidating ${obs.length} observations first...`, "info");
-        beginActivity(ctx, "consolidate");
-        try {
-          await orchestrator.consolidateNow();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (ctx.hasUI) ctx.ui.notify(`🐺 consolidation failed: ${msg}`, "error");
-          endActivity(ctx, "consolidate");
-          return;
-        }
-        endActivity(ctx, "consolidate");
-      }
+  let promoting = false;
 
-      // Step 2: Promote session topics to wolf den
-      if (ctx.hasUI) ctx.ui.notify("🐺 promoting session to den...", "info");
-
-      beginActivity(ctx, "promote");
+  async function runPromote(ctx: any, orch: NonNullable<typeof orchestrator>): Promise<void> {
+    // Step 1: Consolidate observations into session topics first
+    const obs = orch.getActiveObservations();
+    if (obs.length > 0) {
+      safeNotify(ctx, `🐺 consolidating ${obs.length} observations first...`, "info");
+      beginActivity(ctx, "consolidate");
       try {
-        const denConfig: DenConfig = { denRoot: wolfDen, wolfName: wolfName };
-        const result = await orchestrator.promoteToWolfMemory(denConfig);
-        if (engine) {
-          const usage = engine.usage.summarize();
-          totalCostUsd = estimateCost(usage);
-        }
-
-        // Report what was written
-        const denTopicsDir = wolfDen + "/memory/topics";
-        let denTopicCount = 0;
-        try {
-          const { readdirSync } = require("node:fs");
-          denTopicCount = readdirSync(denTopicsDir).filter((f: string) => f.endsWith(".md")).length;
-        } catch {}
-
-        if (ctx.hasUI) {
-          const { topicsProcessed, topicsCreated, topicsMerged, topicsSkipped, claimsSubmitted, details } = result;
-          if (topicsProcessed === 0) {
-            ctx.ui.notify(`🐺 nothing new to promote (den has ${denTopicCount} topic(s))`, "info");
-          } else {
-            const lines = [
-              `🐺 promoted to den — ${topicsCreated} created, ${topicsMerged} updated` +
-                (topicsSkipped ? `, ${topicsSkipped} skipped` : ``),
-              ...details.map((d) => `   ${d.change === "merge" ? "⤵ updated" : "✦ created"}: ${d.title}`),
-              `   KB deltas emitted: ${claimsSubmitted} (sweep merges → registry)`,
-              `   Den: ${wolfDen}/memory/ (${denTopicCount} topic(s) total)`,
-            ];
-            ctx.ui.notify(lines.join("\n"), "info");
-          }
-        }
+        await orch.consolidateNow();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (ctx.hasUI) ctx.ui.notify(`🐺 promote failed: ${msg}`, "error");
-      } finally {
-        endActivity(ctx, "promote");
+        safeNotify(ctx, `🐺 consolidation failed: ${msg}`, "error");
+        endActivity(ctx, "consolidate");
+        return;
       }
+      endActivity(ctx, "consolidate");
+    }
+
+    // Step 2: Promote session topics to wolf den
+    safeNotify(ctx, "🐺 promoting session to den...", "info");
+
+    beginActivity(ctx, "promote");
+    try {
+      const denConfig: DenConfig = { denRoot: wolfDen, wolfName: wolfName };
+      const result = await orch.promoteToWolfMemory(denConfig);
+      if (engine) {
+        const usage = engine.usage.summarize();
+        totalCostUsd = estimateCost(usage);
+      }
+
+      // Report what was written
+      const denTopicsDir = wolfDen + "/memory/topics";
+      let denTopicCount = 0;
+      try {
+        const { readdirSync } = require("node:fs");
+        denTopicCount = readdirSync(denTopicsDir).filter((f: string) => f.endsWith(".md")).length;
+      } catch {}
+
+      {
+        const { topicsProcessed, topicsCreated, topicsMerged, topicsSkipped, claimsSubmitted, details } = result;
+        if (topicsProcessed === 0) {
+          safeNotify(ctx, `🐺 nothing new to promote (den has ${denTopicCount} topic(s))`, "info");
+        } else {
+          const lines = [
+            `🐺 promoted to den — ${topicsCreated} created, ${topicsMerged} updated` +
+              (topicsSkipped ? `, ${topicsSkipped} skipped` : ``),
+            ...details.map((d) => `   ${d.change === "merge" ? "⤵ updated" : "✦ created"}: ${d.title}`),
+            `   KB deltas emitted: ${claimsSubmitted} (sweep merges → registry)`,
+            `   Den: ${wolfDen}/memory/ (${denTopicCount} topic(s) total)`,
+          ];
+          safeNotify(ctx, lines.join("\n"), "info");
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      safeNotify(ctx, `🐺 promote failed: ${msg}`, "error");
+    } finally {
+      endActivity(ctx, "promote");
+    }
+  }
+
+  pi.registerCommand("wolf:promote", {
+    description: "Consolidate + promote session memory to wolf den (runs in background)",
+    handler: async (_args: string, ctx: any) => {
+      if (!enabled || !orchestrator) {
+        safeNotify(ctx, "🐺 memory not enabled", "error");
+        return;
+      }
+      if (promoting) {
+        safeNotify(ctx, "🐺 promote already running", "warning");
+        return;
+      }
+      // Don't await: pi runs command handlers inline and queues prompts until
+      // they return. The orchestrator serializes consolidation/promote and only
+      // tombstones the observations it snapshotted, so turns observed meanwhile
+      // stay in the pool.
+      promoting = true;
+      void runPromote(ctx, orchestrator)
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          safeNotify(ctx, `🐺 promote failed: ${msg}`, "error");
+        })
+        .finally(() => {
+          promoting = false;
+        });
     },
   });
 

@@ -90,6 +90,20 @@ async function ingest(ledgerDir: string): Promise<IngestResult> {
   });
 }
 
+/**
+ * Ingest new usage into the ledger as a side step of another command (launch,
+ * sync) — the ledger stays current without a background job. Never fails or
+ * delays the caller beyond the ingest itself (~0.3s when nothing changed).
+ */
+export async function ingestUsageQuietly(): Promise<void> {
+  try {
+    const r = await ingest(defaultLedgerDir());
+    console.log(c.dim(`  ${formatIngest(r).split("\n")[0]}`));
+  } catch (err) {
+    console.log(c.dim(`  usage ingest skipped: ${err instanceof Error ? err.message : err}`));
+  }
+}
+
 export async function usageCmd(arg: string | undefined, opts: UsageOptions): Promise<void> {
   const ledgerDir = opts.ledgerDir ?? defaultLedgerDir();
   switch (arg) {

@@ -21,6 +21,7 @@ import { loadConfig, getHost, localWolfDir } from "../config.js";
 import { agentDir, writePiModelDefaults } from "../extensions.js";
 import { MODELS_FILE_NAME, resolveLocalWolfModels } from "../models.js";
 import { c } from "../render.js";
+import { ingestUsageQuietly } from "./usage.js";
 
 /** Parse a minimal KEY=VALUE .env file (ignores blanks and # comments). */
 function parseEnvFile(file: string): Record<string, string> {
@@ -162,6 +163,7 @@ export async function wolfLaunch(
       process.exit(1);
     }
     console.log(c.dim(`Launching ${wolf.name} (pi-durable) in ${workDir}...`));
+    await ingestUsageQuietly();
     const child = spawn("node", [harnessEntry], {
       cwd: workDir,
       env: { ...env, WOLF_DEN: path.join(wolfDir, "den") },
@@ -182,6 +184,7 @@ export async function wolfLaunch(
 
   // --session resumes a specific pi session (file or partial UUID) as this wolf.
   const piArgs = ["--model", mainModel, ...(opts.session ? ["--session", opts.session] : [])];
+  await ingestUsageQuietly();
   const child = spawn("pi", piArgs, {
     cwd: workDir,
     env,

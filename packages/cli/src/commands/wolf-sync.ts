@@ -32,6 +32,7 @@ import { reconcileMesh } from "../mesh-reconcile.js";
 import { c } from "../render.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { readEnvValue } from "./wolf-models.js";
+import { ingestUsageQuietly } from "./usage.js";
 import { ModelConfigError, piModelArg, type ModelTable } from "@wolfpack/engine";
 
 interface SyncOpts {
@@ -60,6 +61,9 @@ export async function wolfSync(
   opts: SyncOpts,
 ): Promise<void> {
   const config = loadConfig();
+
+  // Capture usage into the ledger before anything is rebuilt or restarted.
+  await ingestUsageQuietly();
 
   if (opts.all) {
     await syncAll(config);

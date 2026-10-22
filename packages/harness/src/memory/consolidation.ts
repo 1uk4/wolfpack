@@ -26,10 +26,11 @@ import {
   renderDenIndex,
   ensureDenDirs,
   readDenTopics,
+  gateDenTopic,
   buildDomainContext,
   reconcileDen,
 } from "@wolfpack/memory";
-import { tryEmitDelta } from "@wolfpack/kb/client";
+import { isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 /** Observation stored in pool JSONL */
@@ -232,6 +233,8 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   let created = 0;
   let merged = 0;
   let skipped = 0;
+  let held = 0;
+  let trivialSkipped = 0;
 
   const topicsDir = join(wolfDen, "memory", "topics");
   const updatedTopics: Array<{
@@ -259,7 +262,8 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
 
     const isUpdate = existsSync(join(topicsDir, `${action.result.id}.md`));
     const change: "create" | "merge" = isUpdate ? "merge" : "create";
-    
+
+    const gate = gateDenTopic(action.result);
     writeDenTopic(wolfDen, {
       id: action.result.id,
       title: action.result.title,
@@ -267,7 +271,17 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       updated: now,
       body: action.result.body,
       domain: domainOf(action.result.domain),
+      ...gate,
     });
+
+    onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
+    if (isUpdate) merged++;
+    else created++;
+    if (!gate.promotable) {
+      held++;
+      onProgress?.(`  held back (not promotable): ${action.result.id} — ${gate.promotableReason}`);
+      continue;
+    }
 
     updatedTopics.push({
       id: action.result.id,
@@ -277,10 +291,6 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       domain: domainOf(action.result.domain),
       change,
     });
-
-    onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
-    if (isUpdate) merged++;
-    else created++;
   }
 
   // Emit contribution deltas to the KB (same as Pi-CLI promote)
@@ -290,6 +300,10 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     onProgress?.("Emitting deltas to KB...");
     for (const topic of updatedTopics) {
+      if (isTrivialRepromote(kbRoots, topic.id, topic.body)) {
+        trivialSkipped++;
+        continue;
+      }
       const hint = topic.domain || defaultDomain;
       const emitted = tryEmitDelta({
         roots: kbRoots,
@@ -313,7 +327,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   // Archive processed observations (move to .memory/archive/)
   await archivePool(wolfDen);
 
-  onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${claimsSubmitted} emitted to KB`);
+  onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 
   return {
     observationsProcessed: observations.length,

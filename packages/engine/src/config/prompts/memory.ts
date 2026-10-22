@@ -64,7 +64,10 @@ Group related observations, then emit one action per group:
 Set sessionTopicId to the id of the topic the group lands in (the new id for CREATE).
 
 Rules:
-- Write current-state prose, not a changelog. If new info supersedes old info, REWRITE to reflect the new truth.
+- A topic is durable knowledge: what is true, how it works, what was decided and why. Write it as current-state prose, never as a log.
+- NEVER write dated headings ("## Oct 21", "Week 43 planning"), session diaries, "today/yesterday/this session", commit hashes, or step-by-step accounts of what was done.
+- When a fact changes, REWRITE it to the new truth. Do not append a history of how it changed.
+- One-off tasks, daily plans, individual workouts and debugging blow-by-blow are NOT topics: SKIP them (they belong in work items). Keep only the lasting rule, decision or pattern they reveal.
 - Preserve distinguishing detail: file paths, identifiers, names, error codes, exact numbers.
 - Keep prose tight and skimmable. Headings and short paragraphs are fine.
 - The summary field is load-bearing — it's the ONLY thing the wolf sees until it opens the file. Make it specific and current.

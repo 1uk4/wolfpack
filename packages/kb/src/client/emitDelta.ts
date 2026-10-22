@@ -16,6 +16,7 @@ import {
   hashTag,
   type KbRoots,
 } from "../shared/index.js";
+import { isTrivialChange } from "./topicQuality.js";
 
 /** Wolf-local map denTopicId → last-emitted content hash. Lives in the wolf's
  *  non-synced den/kb so dedup survives inbox drain (the sweep moves inbox files
@@ -32,6 +33,26 @@ function readEmittedMap(roots: KbRoots): Record<string, string> {
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+/** Last emitted body per den topic, so a later near-identical re-promote can be skipped. */
+function emittedBodyPath(roots: KbRoots, denTopicId: string): string {
+  return join(roots.denLocal, "emitted-bodies", `${safeSegment(denTopicId, "den topic id")}.md`);
+}
+
+/**
+ * True when the topic was emitted before and `body` differs from that emitted
+ * version only trivially (whitespace/punctuation/case, or a few lines). Callers
+ * skip those re-promotes: a hash change alone is not a meaningful change.
+ */
+export function isTrivialRepromote(roots: KbRoots, denTopicId: string, body: string): boolean {
+  try {
+    const p = emittedBodyPath(roots, denTopicId);
+    if (!existsSync(p)) return false;
+    return isTrivialChange(readFileSync(p, "utf-8"), body);
+  } catch {
+    return false;
   }
 }
 
@@ -100,6 +121,8 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   try {
     mkdirSync(roots.denLocal, { recursive: true });
     emitted[input.denTopicId] = hash;
+    mkdirSync(join(roots.denLocal, "emitted-bodies"), { recursive: true });
+    atomicWrite(emittedBodyPath(roots, input.denTopicId), input.body);
     atomicWrite(emittedMapPath(roots), JSON.stringify(emitted, null, 2) + "\n");
   } catch {
     /* dedup map is an optimization — never fail an emit over it */

@@ -2896,7 +2896,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       // 1) Every den memory topic (the wolf's accumulated knowledge).
-      let denTopics: { id: string; summary: string; body: string }[] = [];
+      let denTopics: { id: string; summary: string; body: string; promotable?: boolean }[] = [];
       try {
         denTopics = readDenTopics(wolfDen);
       } catch {
@@ -2960,6 +2960,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // Emit den topics.
       let denEmitted = 0;
       for (const t of denTopics) {
+        if (t.promotable === false) continue; // held in the den as a session log
         try {
           const d = emitDelta({
             roots: kbRoots,

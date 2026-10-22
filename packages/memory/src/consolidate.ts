@@ -18,7 +18,7 @@
  *   6. Mark session as consolidated
  */
 import type { Engine } from "@wolfpack/engine";
-import { tryEmitDelta } from "@wolfpack/kb/client";
+import { isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
 import {
   readDenJourney,
   writeDenTopic,
+  gateDenTopic,
   writeDenJourney,
   markSessionConsolidated,
   ensureDenDirs,
@@ -61,6 +62,10 @@ export interface ConsolidateResult {
   topicsCreated: number;
   topicsSkipped: number;
   claimsSubmitted: number;
+  /** Topics held in the den (log-like, `promotable: false`) and not emitted. */
+  topicsHeld: number;
+  /** Re-promotes skipped because the change since the last emitted version is trivial. */
+  trivialSkipped: number;
   /** Per-topic outcomes for the topics that were written (create/merge). */
   details: Array<{ title: string; change: "create" | "merge" }>;
 }
@@ -116,6 +121,8 @@ export async function consolidateSession(
       topicsCreated: 0,
       topicsSkipped: 0,
       claimsSubmitted: 0,
+      topicsHeld: 0,
+      trivialSkipped: 0,
       details: [],
     };
   }
@@ -140,6 +147,7 @@ export async function consolidateSession(
   let merged = 0;
   let created = 0;
   let skipped = 0;
+  let held = 0;
   const updatedTopics: Array<{
     id: string;
     title: string;
@@ -176,9 +184,15 @@ export async function consolidateSession(
       domain: t.domain,
     };
 
-    writeDenTopic(den.denRoot, topic);
-    updatedTopics.push({ ...topic, change });
+    const gate = gateDenTopic(t);
+    writeDenTopic(den.denRoot, { ...topic, ...gate });
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${t.title}`);
+    if (!gate.promotable) {
+      held++;
+      onProgress?.(`  held back (not promotable): ${t.id} — ${gate.promotableReason}`);
+      continue;
+    }
+    updatedTopics.push({ ...topic, change });
 
     if (change === "merge") merged++;
     else created++;
@@ -190,9 +204,14 @@ export async function consolidateSession(
   // decides whether/where it lands. Hash-guarded, so unchanged re-promotes
   // are no-ops.
   let claimsSubmitted = 0;
+  let trivialSkipped = 0;
 
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     for (const topic of updatedTopics) {
+      if (isTrivialRepromote(kbRoots, topic.id, topic.body)) {
+        trivialSkipped++;
+        continue;
+      }
       const hint = topic.domain || defaultDomain;
       const emitted = tryEmitDelta({
         roots: kbRoots,
@@ -210,6 +229,9 @@ export async function consolidateSession(
       }
     }
   }
+
+  if (held > 0) onProgress?.(`  held back as session logs: ${held}`);
+  if (trivialSkipped > 0) onProgress?.(`  trivial change since last emit: ${trivialSkipped} skipped`);
 
   // Step 6: Update journey
   if (sessionJourney) {
@@ -235,6 +257,8 @@ export async function consolidateSession(
     topicsCreated: created,
     topicsSkipped: skipped,
     claimsSubmitted,
+    topicsHeld: held,
+    trivialSkipped,
     details: updatedTopics.map((t) => ({ title: t.title, change: t.change })),
   };
 }

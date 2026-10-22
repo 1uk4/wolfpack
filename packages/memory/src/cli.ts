@@ -93,6 +93,7 @@ async function main(): Promise<void> {
     const topics = readDenTopics(resolvedDen);
     let emitted = 0;
     for (const t of topics) {
+      if (!t.promotable) continue; // held in the den as a session log
       const d = tryEmitDelta({
         roots: kbRoots,
         wolf: wolfName,

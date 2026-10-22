@@ -72,6 +72,7 @@ export {
   readDenTopics,
   readDenJourney,
   writeDenTopic,
+  gateDenTopic,
   writeDenJourney,
   getConsolidatedSessions,
   markSessionConsolidated,

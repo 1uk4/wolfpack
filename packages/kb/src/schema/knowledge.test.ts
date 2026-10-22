@@ -304,3 +304,17 @@ describe("Relation with bad section id", () => {
     ).toThrow();
   });
 });
+
+describe("LlmOpinion kind coercion", () => {
+  const opinion = { title: "Some title", summary: "s", detail: "d", confidence: "high" };
+  it("lifts a bare known kind string to the object form", () => {
+    expect(LlmOpinion.parse({ ...opinion, kind: "architecture" }).kind).toEqual({ type: "architecture" });
+  });
+  it("still accepts the object form", () => {
+    expect(LlmOpinion.parse({ ...opinion, kind: { type: "api" } }).kind).toEqual({ type: "api" });
+  });
+  it("rejects an unknown kind string", () => {
+    expect(LlmOpinion.safeParse({ ...opinion, kind: "banana" }).success).toBe(false);
+    expect(LlmOpinion.safeParse({ ...opinion, kind: "other" }).success).toBe(false); // other needs a tag
+  });
+});

@@ -291,6 +291,8 @@ existing entry, changing only what the contribution affects.
 
 FRONTMATTER RULES (the entry is machine-read — be disciplined):
 - type MUST be exactly one of: ${[...ENTRY_KINDS, "other"].join(", ")}.
+  Return it as an object, e.g. "kind": {"type": "architecture"} (for 'other':
+  "kind": {"type": "other", "tag": "migration-guide"}), never a bare string.
   Pick the single best fit. Prefer a precise type over a generic one
   (e.g. an API surface is 'api', a timeline/changelog is 'changelog',
   a settled choice is 'decision', a runbook is 'process', terms/privacy is

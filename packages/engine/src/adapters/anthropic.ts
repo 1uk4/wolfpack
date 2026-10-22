@@ -17,6 +17,7 @@ import type {
 } from "../adapter.js";
 import { buildSystemWithSchema, extractJSON } from "./json-extract.js";
 import { effortFor } from "../models.js";
+import { OutputTruncatedError } from "./errors.js";
 
 export interface AnthropicAdapterOptions {
   /** Omit to fall back to the SDK's ANTHROPIC_API_KEY env lookup. */
@@ -105,6 +106,11 @@ export class AnthropicAdapter implements KnowledgeAdapter {
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
         .map((block) => block.text)
         .join("");
+
+      // A reply cut off at the cap can't be valid JSON, and re-asking gives the same cut.
+      if (response.stop_reason === "max_tokens") {
+        throw new OutputTruncatedError(options.model, options.maxTokens ?? 4096, text.length);
+      }
 
       // Parse JSON from response
       const json = extractJSON(text);

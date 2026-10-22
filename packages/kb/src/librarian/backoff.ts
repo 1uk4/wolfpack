@@ -14,7 +14,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SWEEP } from "@wolfpack/engine";
+import { SWEEP, OutputTruncatedError } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import { BudgetExceeded } from "./park.js";
 
@@ -30,7 +30,7 @@ export type ErrorClass = "infra" | "item";
 
 const INFRA_CODES = /^(ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|EHOSTUNREACH|ENETUNREACH|UND_ERR_\w+)$/;
 const INFRA_MESSAGE =
-  /overloaded|rate.?limit|too many requests|fetch failed|socket hang up|network|connection (error|refused|reset)|timed? ?out|timeout|service unavailable|bad gateway|gateway timeout|internal server error|unauthori[sz]ed|authentication|forbidden|invalid x-api-key|invalid api key|credit balance|\b(429|500|502|503|504|529)\b|\b(401|403)\b/i;
+  /overloaded|rate.?limit|too many requests|fetch failed|socket hang up|network|connection (error|refused|reset)|timed? ?out|timeout|service unavailable|bad gateway|gateway timeout|internal server error|unauthori[sz]ed|authentication|forbidden|invalid x-api-key|invalid api key|credit balance|usage limit|hit your (session |weekly |usage )?limit|limit reached|\/login|oauth|\b(429|500|502|503|504|529)\b|\b(401|403)\b/i;
 
 /**
  * The one place errors are classified. Infra: LLM API down/5xx/overloaded/429,
@@ -41,8 +41,10 @@ const INFRA_MESSAGE =
 export function classifyError(err: unknown): ErrorClass {
   if (err instanceof BudgetExceeded) return "item";
   if (err instanceof InfraError) return "infra";
+  if (err instanceof OutputTruncatedError) return "item";
   for (let e: unknown = err, depth = 0; e && depth < 4; depth++) {
-    const o = e as { name?: unknown; code?: unknown; status?: unknown; statusCode?: unknown; cause?: unknown };
+    const o = e as { errorClass?: unknown; name?: unknown; code?: unknown; status?: unknown; statusCode?: unknown; cause?: unknown };
+    if (o.errorClass === "infra" || o.errorClass === "item") return o.errorClass;
     if (o.name === "TimeoutError" || o.name === "APIConnectionError" || o.name === "APIConnectionTimeoutError") return "infra";
     if (typeof o.code === "string" && INFRA_CODES.test(o.code)) return "infra";
     const status = Number(o.status ?? o.statusCode);
@@ -53,6 +55,18 @@ export function classifyError(err: unknown): ErrorClass {
   // A schema/JSON failure is about the item even if its text mentions a status.
   if (/^Failed to extract valid output/.test(msg)) return "item";
   return INFRA_MESSAGE.test(msg) ? "infra" : "item";
+}
+
+/**
+ * True when retrying the item cannot help (the model's output was cut off at
+ * its cap), so the sweep should park it now instead of counting attempts.
+ */
+export function shouldParkNow(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 4; depth++) {
+    if (e instanceof OutputTruncatedError || (e as { parkNow?: unknown }).parkNow === true) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 // ── persisted backoff state ─────────────────────────────────────────────────

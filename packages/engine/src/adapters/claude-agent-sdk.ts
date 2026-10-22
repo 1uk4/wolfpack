@@ -27,10 +27,13 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { effortFor } from "../models.js";
+import { LlmInfraError, OutputTruncatedError } from "./errors.js";
 
 export interface ClaudeAgentSdkAdapterOptions {
   /** Absolute path to the `claude` executable. Omit to let the SDK resolve it. */
   pathToClaudeCodeExecutable?: string;
+  /** Replaces the lazily loaded SDK `query` (tests). */
+  query?: QueryFn;
 }
 
 // Child-process env hardening, matching pi-claude-bridge: keep the one-shot call
@@ -46,16 +49,43 @@ const CC_CHILD_ENV = {
  * OAuth login / CLAUDE_CODE_OAUTH_TOKEN, and VPS wolves carry the key for their
  * main agent — leaving it in would silently bill the API.
  */
-export function claudeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function claudeChildEnv(env: NodeJS.ProcessEnv = process.env, maxTokens?: number): NodeJS.ProcessEnv {
   const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
-  return { ...rest, ...CC_CHILD_ENV };
+  // The SDK has no max-output option; Claude Code reads this env var instead.
+  return { ...rest, ...CC_CHILD_ENV, ...(maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens) } : {}) };
+}
+
+/** Assistant-message `error` values (SDKAssistantMessageError) that mean the transport, not the item, failed. */
+const INFRA_ASSISTANT_ERRORS = new Set([
+  "authentication_failed",
+  "oauth_org_not_allowed",
+  "account_on_hold",
+  "verification_required",
+  "billing_error",
+  "rate_limit",
+  "overloaded",
+  "server_error",
+  "cloud_credential_error",
+  "model_not_found",
+]);
+
+/** Result text the claude CLI emits for usage/rate limits and expired logins. */
+const INFRA_RESULT_TEXT =
+  /usage limit|hit your (session |weekly |usage )?limit|limit reached|limit will reset|rate.?limit|overloaded|\/login|oauth|token (has )?expired|invalid api key|authentication|credit balance|\b(401|403|429|500|502|503|529)\b/i;
+
+/** True when a failed SDK result/assistant error is a transport problem (limits, auth, overload, 5xx). */
+export function isSdkInfraFailure(info: { assistantError?: string; apiStatus?: number | null; text?: string }): boolean {
+  if (info.assistantError && INFRA_ASSISTANT_ERRORS.has(info.assistantError)) return true;
+  const s = info.apiStatus;
+  if (typeof s === "number" && (s === 401 || s === 403 || s === 408 || s === 429 || s >= 500)) return true;
+  return INFRA_RESULT_TEXT.test(info.text ?? "");
 }
 
 // Keep the extraction call hermetic: don't let Claude Code load CLAUDE.md /
 // AGENTS.md on top of our prompt.
 const CLAUDE_MD_EXCLUDES = ["**/CLAUDE.md", "**/AGENTS.md", "**/.claude/rules/**"];
 
-type QueryFn = (params: { prompt: string; options?: any }) => AsyncIterable<any> & {
+export type QueryFn = (params: { prompt: string; options?: any }) => AsyncIterable<any> & {
   interrupt?: () => Promise<void>;
   close?: () => void;
 };
@@ -108,8 +138,10 @@ function globalSdkUrl(specifier: string): string | undefined {
 
 export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
   private pathToClaudeCodeExecutable?: string;
+  private injectedQuery?: QueryFn;
 
   constructor(options: ClaudeAgentSdkAdapterOptions = {}) {
+    this.injectedQuery = options.query;
     this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
   }
 
@@ -117,7 +149,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     schema: z.ZodType<T>,
     options: ExtractOptions
   ): Promise<{ data: T; usage: UsageRecord }> {
-    const query = await loadQuery();
+    const query = this.injectedQuery ?? (await loadQuery());
     const maxRetries = options.maxRetries ?? 2;
     const systemWithSchema = buildSystemWithSchema(options.system, schema);
 
@@ -143,8 +175,10 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
               "Please try again. Respond with valid JSON only.",
             ].join("\n");
 
-      const { text, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, resultError } =
-        await this.runQuery(query, systemWithSchema, prompt, options);
+      const {
+        text, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd,
+        resultError, infraFailure, truncated,
+      } = await this.runQuery(query, systemWithSchema, prompt, options);
 
       totalInput += inputTokens;
       totalOutput += outputTokens;
@@ -152,8 +186,17 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       totalCacheWrite += cacheWriteTokens;
       totalCost += costUsd;
 
+      if (truncated) {
+        throw new OutputTruncatedError(options.model, options.maxTokens ?? 4096, text.length);
+      }
+
+      if (resultError && infraFailure) {
+        // Usage/rate limit, auth, overload: retrying now only burns the limit.
+        throw new LlmInfraError(`claude-agent-sdk: ${resultError}`);
+      }
+
       if (resultError) {
-        // Transport/model error (rate limit, overload, etc.) — surface it.
+        // Task failure (error_max_turns etc.) — retried, then fails as an item error.
         lastError = new Error(resultError);
         continue;
       }
@@ -209,6 +252,8 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     cacheWriteTokens: number;
     costUsd: number;
     resultError?: string;
+    infraFailure?: boolean;
+    truncated?: boolean;
   }> {
     // Tie the SDK's own controller to the caller's signal, so aborting stops
     // the claude subprocess rather than leaving it running.
@@ -222,7 +267,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       options: {
         abortController,
         cwd: process.cwd(),
-        env: claudeChildEnv(),
+        env: claudeChildEnv(process.env, options.maxTokens),
         // A plain string systemPrompt is a *custom* prompt — no coding-agent
         // preset, which is what we want for pure extraction.
         systemPrompt,
@@ -249,10 +294,15 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
     let costUsd = 0;
+    let assistantError: string | undefined;
+    let apiStatus: number | null | undefined;
+    let truncated = false;
 
     try {
     for await (const message of sdkQuery) {
       if (message.type === "assistant") {
+        if (typeof message.error === "string") assistantError = message.error;
+        if (message.error === "max_output_tokens" || message.message?.stop_reason === "max_tokens") truncated = true;
         for (const block of message.message?.content ?? []) {
           if (block.type === "text" && typeof block.text === "string") {
             assistantText += block.text;
@@ -266,16 +316,28 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
         cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
         // API-equivalent cost Claude Code computes (notional on a subscription).
         costUsd = typeof message.total_cost_usd === "number" ? message.total_cost_usd : 0;
-        if (message.subtype === "success") {
+        if (message.stop_reason === "max_tokens") truncated = true;
+        apiStatus = message.api_error_status;
+        // The CLI reports API failures (usage limit, 401, overload) as is_error
+        // results, often with subtype "success" and the error text as `result`.
+        if (message.subtype === "success" && !message.is_error) {
           finalText = message.result || assistantText;
         } else {
+          const errs = Array.isArray(message.errors) ? message.errors.join("; ") : message.errors;
           resultError =
             message.result ||
-            message.errors ||
+            errs ||
             `claude-agent-sdk query failed (${message.subtype ?? "unknown"})`;
         }
       }
     }
+    } catch (err) {
+      // Aborts propagate untouched; anything else from the child (spawn failure,
+      // exit code, broken pipe) is the transport failing.
+      if (options.signal?.aborted) throw err;
+      throw err instanceof LlmInfraError
+        ? err
+        : new LlmInfraError(`claude-agent-sdk: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
     } finally {
       options.signal?.removeEventListener("abort", onAbort);
     }
@@ -289,6 +351,10 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       cacheWriteTokens,
       costUsd,
       resultError,
+      truncated,
+      infraFailure: resultError
+        ? isSdkInfraFailure({ assistantError, apiStatus, text: String(resultError) })
+        : undefined,
     };
   }
 }

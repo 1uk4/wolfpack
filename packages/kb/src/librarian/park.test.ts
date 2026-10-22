@@ -82,10 +82,16 @@ describe("sweep: one bad contribution never blocks the queue", () => {
     drop("slow", "HANG on purpose", "2026-10-10T01:00:00Z");
     drop("fine", "the second one", "2026-10-10T02:00:00Z");
 
+    // The first overrun is retried (stays in the inbox); the second parks it.
     const first = await run(fakeEngine());
-    expect(first.parked).toEqual([{ from: "w1", denTopicId: "slow", reason: "over its 0s time budget" }]);
-    expect(first.created).toBe(0);
-    expect(first.remaining).toBe(1);
+    expect(first.parked).toEqual([]);
+    expect(first.failures).toHaveLength(1);
+    expect(readdirSync(inbox()).filter((f) => f.endsWith(".md")).sort()).toEqual(["fine.md", "slow.md"]);
+
+    const second = await run(fakeEngine());
+    expect(second.parked).toEqual([{ from: "w1", denTopicId: "slow", reason: "over its 0s time budget (2 times)" }]);
+    expect(second.created).toBe(0);
+    expect(second.remaining).toBe(1);
     expect(readdirSync(inbox()).filter((f) => f.endsWith(".md"))).toEqual(["fine.md"]);
 
     const r = await run(fakeEngine());

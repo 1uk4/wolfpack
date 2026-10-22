@@ -30,6 +30,18 @@ export {
   gitCommit,
 } from "./commit.js";
 export { renderRegistry } from "./registry.js";
+export {
+  classifyError,
+  InfraError,
+  readBackoff,
+  backoffRemainingMs,
+  backoffDelayMs,
+  noteInfraFailure,
+  noteSweepSuccess,
+  type BackoffState,
+  type ErrorClass,
+  type Alert,
+} from "./backoff.js";
 export { withBudget, BudgetExceeded, park, unpark, listParked, type ParkedItem } from "./park.js";
 export {
   readDeclaredDomains,

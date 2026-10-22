@@ -44,7 +44,7 @@ export async function withBudget<T>(ms: number, fn: (signal: AbortSignal) => Pro
 
 // ── attempt tracking (den-local, never synced) ──────────────────────────────
 
-type Attempts = Record<string, { attempts: number; lastReason: string }>;
+type Attempts = Record<string, { attempts: number; lastReason: string; overruns?: number }>;
 const attemptsFile = (roots: KbRoots) => join(roots.denLocal, "sweep-attempts.json");
 
 function readAttempts(roots: KbRoots): Attempts {
@@ -64,9 +64,19 @@ function writeAttempts(roots: KbRoots, a: Attempts): void {
 export function recordFailure(roots: KbRoots, c: ParsedContribution, reason: string): number {
   const a = readAttempts(roots);
   const prev = a[c.contentHash]?.attempts ?? 0;
-  a[c.contentHash] = { attempts: prev + 1, lastReason: reason };
+  a[c.contentHash] = { ...a[c.contentHash], attempts: prev + 1, lastReason: reason };
   writeAttempts(roots, a);
   return prev + 1;
+}
+
+/** Record a budget overrun (not an attempt); returns the overrun count so far. */
+export function recordOverrun(roots: KbRoots, c: ParsedContribution, reason: string): number {
+  const a = readAttempts(roots);
+  const prev = a[c.contentHash];
+  const overruns = (prev?.overruns ?? 0) + 1;
+  a[c.contentHash] = { attempts: prev?.attempts ?? 0, lastReason: reason, overruns };
+  writeAttempts(roots, a);
+  return overruns;
 }
 
 /** Forget attempts for a contribution (after success, park, or unpark). */

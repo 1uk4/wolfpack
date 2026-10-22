@@ -34,7 +34,8 @@ import {
 } from "./commit.js";
 import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, isDeclared } from "./domains.js";
 import { readSections, writeSections } from "./sections.js";
-import { withBudget, BudgetExceeded, recordFailure, clearAttempts, park } from "./park.js";
+import { withBudget, BudgetExceeded, recordFailure, recordOverrun, clearAttempts, park } from "./park.js";
+import { classifyError, backoffRemainingMs, noteInfraFailure, noteSweepSuccess, type Alert } from "./backoff.js";
 import { writeCurrent, clearCurrent } from "./progress.js";
 import {
   DomainId,
@@ -55,6 +56,9 @@ export interface SweepContext {
   /** Load current entry vectors (from cache). Injected for testability. */
   loadEntryVectors: () => Promise<EntryVector[]>;
   notify?: (msg: string) => void;
+  /** Messages worth a human's attention (sweep paused/recovered, item parked).
+   *  Unlike notify (progress chatter), these are sent to Telegram. */
+  alert?: Alert;
   /** Time budget for the run's one contribution (default SWEEP.runBudgetMs).
    *  A test seam: lets tests exercise parking without waiting minutes. */
   budgetMs?: number;
@@ -83,6 +87,9 @@ export interface SweepResult {
   parked: SweepFailure[];
   /** Contributions left in the inbox after this run (await next tick). */
   remaining: number;
+  /** Set when the tick did no work because of an outage: skipped inside the
+   *  backoff window, or an infrastructure error just started/extended it. */
+  paused?: string;
 }
 
 /** Turn a thrown error — especially a ZodError — into a short, readable reason.
@@ -200,11 +207,27 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   );
   if (pending.length === 0) return emptyResult();
 
+  // An outage backoff is in force: skip the tick (the CLI path is a new process
+  // each minute, so the state lives in KB_OPS).
+  const waitMs = backoffRemainingMs(roots);
+  if (waitMs > 0) {
+    return { ...emptyResult(), remaining: pending.length, paused: `backing off, ${Math.ceil(waitMs / 1000)}s left` };
+  }
+
   const embedder = createEmbedder(roots);
   const log = readLedger(roots);
   let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
   const seen = seenHashes(log);
-  const entryVectors = await ctx.loadEntryVectors();
+  // Ollama failing here is an outage, not a bad item: back off instead of throwing.
+  let entryVectors: EntryVector[];
+  try {
+    entryVectors = await ctx.loadEntryVectors();
+  } catch (err) {
+    if (classifyError(err) !== "infra") throw err;
+    const state = await noteInfraFailure(roots, err, ctx.alert);
+    ctx.notify?.(`sweep: infrastructure error, backing off (${state.consecutive} in a row): ${cleanError(err)}`);
+    return { ...emptyResult(), remaining: pending.length, paused: state.reason };
+  }
   // Section tree, folded from the ledger / _sections.json.
   let sections: Section[] = readSections(roots);
 
@@ -225,6 +248,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
   const unseen = pending.filter((c) => !seen.has(c.contentHash));
   const contributions = unseen.slice(0, 1);
+  // Set once the entry is live and its ledger events are written.
+  let committed = false;
   result.remaining = unseen.length - contributions.length;
 
   // The contribution gets the whole run budget. The merge threshold derives from
@@ -482,6 +507,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       commitEntry(roots, entry);
+      committed = true;
 
       batch.push(ev.contribution({
         from: c.from,
@@ -506,26 +532,51 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         reg = foldRegistry([...log, ...batch]);
       }
 
+      // The entry is live: record it in the ledger BEFORE anything else, so a
+      // crash can't leave a live entry with no ledger record.
+      appendLedger(roots, batch);
+      log.push(...batch);
+      batch.length = 0;
+      touchedDomains.add(domain);
+
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);
-      touchedDomains.add(domain);
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
       else result.merged++;
       });
       clearAttempts(roots, c.contentHash);
+      await noteSweepSuccess(roots, ctx.alert);
     } catch (err) {
       const reason = cleanError(err);
       result.processed--;
       result.errors++;
-      const attempts = err instanceof BudgetExceeded ? SWEEP.maxAttempts : recordFailure(roots, c, reason);
-      if (attempts >= SWEEP.maxAttempts) {
-        // Over budget (expensive and likely to repeat) or out of attempts: park it.
-        const why = err instanceof BudgetExceeded ? reason : `failed ${attempts} times: ${reason}`;
+      if (classifyError(err) === "infra") {
+        // Not the item's fault: no attempt is counted, the item stays queued,
+        // and the sweeper backs off until the outage clears.
+        const state = await noteInfraFailure(roots, err, ctx.alert);
+        result.paused = state.reason;
+        outcome = `infrastructure error, backing off (${state.consecutive} in a row): ${reason}`;
+        ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} not counted, ${outcome}`);
+        continue;
+      }
+      // A budget overrun is retried SWEEP.budgetRetries times (no attempt
+      // counted), then parked; other item errors count toward maxAttempts.
+      const overrun = err instanceof BudgetExceeded;
+      const overruns = overrun ? recordOverrun(roots, c, reason) : 0;
+      const attempts = overrun ? 0 : recordFailure(roots, c, reason);
+      if (overrun ? overruns > SWEEP.budgetRetries : attempts >= SWEEP.maxAttempts) {
+        // Over budget twice or out of attempts: park it.
+        const why = overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
+        await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });
+      } else if (overrun) {
+        outcome = `skipped, over budget (${overruns}/${SWEEP.budgetRetries + 1}), will retry: ${reason}`;
+        ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} — ${outcome}`);
+        result.failures.push({ from: c.from, denTopicId: c.denTopicId, reason });
       } else {
         outcome = `skipped, attempt ${attempts}/${SWEEP.maxAttempts}: ${reason}`;
         ctx.notify?.(`sweep: skipped ${c.from}/${c.denTopicId} (attempt ${attempts}/${SWEEP.maxAttempts}) — ${reason}`);
@@ -541,15 +592,21 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
 
   // ── INDEX + DIGEST per touched domain ─────────────────────────────────────
-  if (touchedDomains.size > 0 && sections.length > 0) writeSections(roots, sections);
-  for (const domain of touchedDomains) {
-    renderDomainIndex(roots, domain);
-    renderDomainDigest(roots, domain);
+  // The ledger already has this run's events; if rendering fails, the next tick
+  // or a reorg re-renders, so log it and carry on to the registry and commit.
+  try {
+    if (touchedDomains.size > 0 && sections.length > 0) writeSections(roots, sections);
+    for (const domain of touchedDomains) {
+      renderDomainIndex(roots, domain);
+      renderDomainDigest(roots, domain);
+    }
+  } catch (err) {
+    ctx.notify?.(`sweep: index/digest rendering failed (ledger is written; next tick or reorg re-renders): ${cleanError(err)}`);
   }
 
   // ── PERSIST ────────────────────────────────────────────────────────────────
-  if (batch.length > 0) {
-    appendLedger(roots, batch);
+  if (batch.length > 0 || committed) {
+    if (batch.length > 0) appendLedger(roots, batch);
     renderRegistry(roots, foldRegistry([...log, ...batch]));
     gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
   }

@@ -6,7 +6,7 @@
  * Status can be queried at any time while sweep is running.
  */
 import { join } from "node:path";
-import type { ModelTable } from "@wolfpack/engine";
+import { SWEEP, type ModelTable } from "@wolfpack/engine";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +48,8 @@ export class SweepManager {
   private config: SweepWorkerConfig;
   private abortController: AbortController | null = null;
   private onComplete?: (message: string) => void;
+  /** Last unexpected-failure text alerted, so a persistent one alerts once. */
+  private lastFailureAlert?: string;
 
   constructor(config: SweepWorkerConfig, onComplete?: (message: string) => void) {
     this.config = config;
@@ -166,6 +168,12 @@ export class SweepManager {
           this.status = { state: "idle" };
           return;
         }
+        // Outage backoff (shared with the CLI path via KB_OPS): skip the tick.
+        const { backoffRemainingMs } = await import("@wolfpack/kb/librarian");
+        if (backoffRemainingMs(idleRoots) > 0) {
+          this.status = { state: "idle" };
+          return;
+        }
       }
 
       this.updateProgress("Loading KB engine...");
@@ -208,12 +216,18 @@ export class SweepManager {
       const loadEntryVectors = () => buildEntryVectors(roots, registry, embedder);
 
       this.updateProgress("Running sweep...");
-      const result = await sweep({
-        engine,
-        roots,
-        loadEntryVectors,
-        notify: (msg: string) => this.updateProgress(msg),
-      });
+      // A hung call must never keep isRunning() true: past the run budget plus
+      // slack, give up on this tick (the KB lock still guards against overlap).
+      const { withBudget } = await import("@wolfpack/kb/librarian");
+      const result = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
+        sweep({
+          engine,
+          roots,
+          loadEntryVectors,
+          notify: (msg: string) => this.updateProgress(msg),
+          alert: (msg: string) => this.onComplete?.(msg),
+        })
+      );
 
       const duration = Date.now() - startTime;
 
@@ -232,10 +246,8 @@ export class SweepManager {
         },
       };
 
+      this.lastFailureAlert = undefined;
       console.log(`[librarian] Sweep completed: ${result.processed} processed, ${result.created} created, ${result.merged} merged`);
-      if (result.processed > 0) {
-        this.onComplete?.(`📚 Sweep complete: ${result.processed} processed, ${result.created} created, ${result.merged} merged${result.remaining > 0 ? `, ${result.remaining} remaining` : ""}`);
-      }
 
       // Post-sweep reorg: check if any touched sections need splitting
       if (result.created + result.merged > 0) {
@@ -249,7 +261,6 @@ export class SweepManager {
           });
           if (reorgResult.splits > 0 || reorgResult.merges > 0 || reorgResult.crystallized > 0) {
             console.log(`[librarian] Reorg: ${reorgResult.splits} splits, ${reorgResult.merges} merges, ${reorgResult.crystallized} crystallized`);
-            this.onComplete?.(`📐 Post-sweep reorg: ${reorgResult.splits} splits, ${reorgResult.merges} merges, ${reorgResult.crystallized} crystallized`);
           }
         } catch (reorgErr) {
           console.error("[librarian] Post-sweep reorg failed:", reorgErr instanceof Error ? reorgErr.message : reorgErr);
@@ -258,7 +269,17 @@ export class SweepManager {
 
     } catch (err) {
       console.error("[librarian] Sweep failed:", err instanceof Error ? err.message : err);
-      this.onComplete?.(`❌ Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      const text = err instanceof Error ? err.message : String(err);
+      const { classifyError, noteInfraFailure } = await import("@wolfpack/kb/librarian");
+      const roots = { kbBase: this.config.kbBase, opsRoot: this.config.kbOps, denLocal: this.config.denLocal };
+      if (classifyError(err) === "infra") {
+        // An outage outside sweep() (e.g. engine setup): same backoff and one alert.
+        await noteInfraFailure(roots, err, (msg) => this.onComplete?.(msg));
+      } else if (text !== this.lastFailureAlert) {
+        // Unexpected failure: alert once per distinct message, not every tick.
+        this.lastFailureAlert = text;
+        this.onComplete?.(`❌ Sweep failed: ${text}`);
+      }
       
       this.status = {
         state: "failed",

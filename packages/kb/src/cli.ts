@@ -243,14 +243,6 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
     const embedder = createEmbedder(roots);
 
     const pending = countPending(roots.opsRoot);
-    if (pending.total > 0) {
-      await tg(
-        `\u{1F9F9} *Dewey KB sweep* starting \u2014 ${pending.total} pending ` +
-          `contribution(s) from ${pending.wolves.join(", ")}${
-            opts.drain ? " (drain)" : ""
-          }\u2026`
-      );
-    }
 
     // Aggregate across passes. In drain mode we loop until the inbox is truly
     // empty OR a pass makes no net progress (persistent failures must not spin
@@ -275,6 +267,7 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
         loadEntryVectors: () =>
           buildEntryVectors(roots, foldRegistry(readLedger(roots)), embedder),
         notify: (msg) => console.log(msg),
+        alert: tg,
       });
       const after = countPending(roots.opsRoot).total;
       stillPending = after;
@@ -336,35 +329,9 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
     if (parked.length) {
       console.log(`\n⛔ ${parked.length} contribution(s) parked (run \`wolfpack-kb unpark\` to retry):`);
       for (const p of parked) console.log(`  • ${p.from}/${p.denTopicId} — ${p.reason}`);
-      await tg(
-        [
-          `\u26d4 *Dewey KB sweep* parked ${parked.length} contribution(s)`,
-          ...parked.map((p) => `\u2022 ${p.from}/${p.denTopicId}: ${p.reason}`),
-          `Retry with \`wolfpack-kb unpark\` once fixed.`,
-        ].join("\n")
-      );
     }
 
     console.log(engine.usage.summarize());
-
-    if (tot.processed > 0) {
-      const u = engine.usage.summarize();
-      await tg(
-        [
-          `\u2705 *Dewey KB sweep* complete`,
-          `\u2022 processed: ${tot.processed}`,
-          `\u2022 created: ${tot.created}  merged: ${tot.merged}  rejected: ${tot.rejected}  errors: ${tot.errors}`,
-          `\u2022 crystallized: ${tot.crystallized}`,
-          stillPending > 0 ? `\u2022 still pending: ${stillPending}` : null,
-          suggested.size > 0
-            ? `\u2022 \u26a0 recommend domain(s): ${[...suggested].join(", ")}`
-            : null,
-          `\u2022 tokens: ${u.totalTokens}`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-    }
   } finally {
     releaseLock(roots);
   }

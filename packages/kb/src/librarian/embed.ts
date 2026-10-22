@@ -17,7 +17,8 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, EMBED } from "@wolfpack/engine";
+import { parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
+import { InfraError } from "./backoff.js";
 import {
   type KbRoots,
   type Registry,
@@ -123,19 +124,29 @@ export function createEmbedder(
   }
 
   async function callOllama(text: string): Promise<Vector> {
-    const res = await fetch(`${config.baseUrl}/api/embeddings`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: config.model, prompt: text }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${config.baseUrl}/api/embeddings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: config.model, prompt: text }),
+        signal: AbortSignal.timeout(SWEEP.embedTimeoutMs),
+      });
+    } catch (err) {
+      const why = err instanceof Error && err.name === "TimeoutError"
+        ? `timed out after ${Math.round(SWEEP.embedTimeoutMs / 1000)}s`
+        : `unreachable (${err instanceof Error ? err.message : String(err)})`;
+      throw new InfraError(`Ollama ${why}`, { cause: err });
+    }
     if (!res.ok) {
-      throw new Error(
-        `Ollama embeddings failed (${res.status}): ${await res.text()}`
-      );
+      const msg = `Ollama embeddings failed (${res.status}): ${await res.text()}`;
+      // Server-side trouble or a missing model is not the contribution's fault.
+      if (res.status >= 500 || [404, 408, 429].includes(res.status)) throw new InfraError(msg);
+      throw new Error(msg);
     }
     const json = (await res.json()) as { embedding?: number[] };
     if (!json.embedding || json.embedding.length === 0) {
-      throw new Error("Ollama returned no embedding — is the model pulled?");
+      throw new InfraError("Ollama returned no embedding — is the model pulled?");
     }
     return normalize(json.embedding);
   }

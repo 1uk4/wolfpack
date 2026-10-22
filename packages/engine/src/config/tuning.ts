@@ -58,6 +58,15 @@ export const SWEEP = {
    *  run always ends (and writes its ledger) well inside systemd's 15-minute
    *  limit. Merge threshold: 600s * 0.6 / 15ms = 24,000 chars. */
   runBudgetMs: 600_000,
+  /** Times a contribution may run over its budget and be retried; the next
+   *  overrun parks it. */
+  budgetRetries: 1,
+  /** Outage backoff: first delay after an infra failure; doubles per
+   *  consecutive failed tick (1m, 2m, 4m, 8m) up to the cap. */
+  backoffBaseMs: 60_000,
+  backoffMaxMs: 900_000,
+  /** Timeout for one Ollama embedding call, so a hung server can't hold a tick. */
+  embedTimeoutMs: 30_000,
 } as const;
 
 export const HIERARCHY = {

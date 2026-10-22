@@ -1,7 +1,8 @@
 /**
  * selector — the /task workspace browser, as pure state + a key reducer.
  *
- *   left pane   workspaces: the Inbox, initiatives (collapsed by default) with
+ *   left pane   workspaces: the Inbox, the Ideas folder (kind `idea` items,
+ *               collapsed by default), initiatives (collapsed by default) with
  *               their features, and standalone features
  *   right pane  the open feature's tasks (task · issue · spike)
  *
@@ -51,6 +52,23 @@ export type SelectorEffect =
 const STAGE_RANK = ["in_build", "approved", "feasibility", "plan", "idea", "shipped", "live", "archived"];
 const byStage = (a: WorkItem, b: WorkItem) => STAGE_RANK.indexOf(a.stage) - STAGE_RANK.indexOf(b.stage);
 
+/** Id prefix of the synthetic per-domain Ideas folder (UI-only, never in the ledger). */
+export const IDEAS_FOLDER_PREFIX = "ideas:";
+
+export const isIdeasFolder = (i: WorkItem | undefined): boolean => !!i && String(i.id).startsWith(IDEAS_FOLDER_PREFIX);
+
+/** Synthetic folder row for a domain's ideas. A container, so Inbox-style guards (no move/ship/graduate) apply. */
+function ideasFolder(domain: string): WorkItem {
+  return {
+    id: `${IDEAS_FOLDER_PREFIX}${domain}`, kind: "feature", stage: "in_build", partOf: null, title: "Ideas",
+    domain, dependsOn: [], container: true, log: [],
+  } as unknown as WorkItem;
+}
+
+/** Top-level items of kind `idea` (kind, not stage `idea`) in a domain. */
+const ideasOf = (live: WorkItem[], domain: string) =>
+  live.filter((i) => i.kind === "idea" && !i.partOf && !i.container && i.domain === domain).sort(byStage);
+
 const isWorkspace = (i: WorkItem) => i.kind === "feature" || i.kind === "initiative";
 
 /**
@@ -95,23 +113,37 @@ export function isBlocked(item: WorkItem, all: WorkItem[]): boolean {
   });
 }
 
-/** Left pane rows: the Inbox, then top-level items by stage — initiatives (with
- *  their features when expanded), standalone features, and ideas. */
+/** Left pane rows: each domain's Inbox then its Ideas folder (ideas when expanded),
+ *  then top-level items by stage — initiatives (with their features when
+ *  expanded) and standalone features. */
 export function leftRows(all: WorkItem[], expanded: string[]): LeftRow[] {
   const live = all.filter((i) => i.stage !== "archived");
   const rows: LeftRow[] = [];
-  for (const inbox of live.filter((i) => i.container)) rows.push({ item: inbox, depth: 0, chain: 0, extra: 0 });
-  const tops = live
-    .filter((i) => !i.container && !i.partOf && (isWorkspace(i) || i.kind === "idea"))
-    .sort(byStage);
+  const row = (item: WorkItem, depth: 0 | 1 = 0): LeftRow => ({ item, depth, chain: 0, extra: 0 });
+  const inboxes = live.filter((i) => i.container);
+  const domains = [...new Set([...inboxes.map((i) => i.domain as string), ...live.filter((i) => i.kind === "idea").map((i) => i.domain as string)])];
+  for (const domain of domains) {
+    for (const inbox of inboxes.filter((i) => i.domain === domain)) rows.push(row(inbox));
+    const ideas = ideasOf(live, domain);
+    if (ideas.length === 0) continue;
+    const folder = ideasFolder(domain);
+    rows.push(row(folder));
+    if (expanded.includes(folder.id as string)) for (const idea of ideas) rows.push(row(idea, 1));
+  }
+  const tops = live.filter((i) => !i.container && !i.partOf && isWorkspace(i)).sort(byStage);
   for (const top of tops) {
-    rows.push({ item: top, depth: 0, chain: 0, extra: 0 });
+    rows.push(row(top));
     if (top.kind === "initiative" && expanded.includes(top.id as string)) {
       const features = live.filter((i) => i.partOf === top.id && i.kind === "feature").sort(byStage);
       for (const r of dependencyTree(features)) rows.push({ ...r, depth: 1 });
     }
   }
   return rows;
+}
+
+/** Number of ideas in a folder row. */
+export function ideaCount(folder: WorkItem, all: WorkItem[]): number {
+  return ideasOf(all.filter((i) => i.stage !== "archived"), folder.domain as string).length;
 }
 
 /** Right pane rows with chain info: open tasks in dependency order, shipped last. */
@@ -208,7 +240,8 @@ export function reduce(
     case "left": {
       if (!row) return { state: s };
       const initiativeId =
-        row.item.kind === "initiative" ? (row.item.id as string) : row.depth === 1 ? (row.item.partOf as string) : null;
+        row.item.kind === "initiative" || isIdeasFolder(row.item) ? (row.item.id as string)
+        : row.depth === 1 ? (row.item.kind === "idea" ? `${IDEAS_FOLDER_PREFIX}${row.item.domain}` : (row.item.partOf as string)) : null;
       if (!initiativeId || !s.expanded.includes(initiativeId)) return { state: s };
       const expanded = s.expanded.filter((e) => e !== initiativeId);
       const leftIdx = Math.max(0, leftRows(all, expanded).findIndex((r) => r.item.id === initiativeId));
@@ -218,7 +251,7 @@ export function reduce(
     case "enter": {
       if (!row) return { state: s };
       const id = row.item.id as string;
-      if (row.item.kind === "initiative") {
+      if (row.item.kind === "initiative" || isIdeasFolder(row.item)) {
         return s.expanded.includes(id)
           ? { state: { ...s, leftIdx: clamp(s.leftIdx + 1, leftRows(all, s.expanded).length) } }
           : { state: { ...s, expanded: [...s.expanded, id] } };

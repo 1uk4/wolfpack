@@ -38,6 +38,8 @@ export {
   type LeftRow,
   type TaskRow,
   type Pane,
+  isIdeasFolder,
+  ideaCount,
 } from "./selector.js";
 
 // Workspace context for the agent

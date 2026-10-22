@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { WorkItem } from "@wolfpack/kb/client";
-import { initialState, reduce, leftRows, rightRows, rightTree, dependencyTree, relatedTo, firstTask, progress, type SelectorState } from "./selector.js";
+import { initialState, reduce, leftRows, isIdeasFolder, ideaCount, rightRows, rightTree, dependencyTree, relatedTo, firstTask, progress, type SelectorState } from "./selector.js";
 
 let n = 0;
 const w = (kind: string, stage: string, partOf: string | null = null, extra: Partial<WorkItem> = {}) =>
@@ -8,7 +8,7 @@ const w = (kind: string, stage: string, partOf: string | null = null, extra: Par
 
 // Fixture: Inbox, initiative (in_build) > feature A (in_build: t1 shipped, t2 open, t3 open) + feature B (plan: t4),
 // standalone feature C (plan), idea.
-const inbox = w("feature", "in_build", null, { container: true, title: "Inbox" });
+const inbox = w("feature", "in_build", null, { container: true, title: "Inbox", domain: "wolfpack" as any });
 const init = w("initiative", "in_build");
 const fa = w("feature", "in_build", init.id);
 const fb = w("feature", "plan", init.id);
@@ -17,9 +17,13 @@ const t2 = w("task", "plan", fa.id);
 const t3 = w("task", "in_build", fa.id);
 const t4 = w("task", "plan", fb.id);
 const fc = w("feature", "plan");
-const idea = w("idea", "idea");
-const all = [inbox, init, fa, fb, t1, t2, t3, t4, fc, idea];
+const idea = w("idea", "idea", null, { domain: "wolfpack" as any });
+const planIdea = w("idea", "plan", null, { domain: "wolfpack" as any }); // kind idea, stage plan: still an idea
+const otherIdea = w("idea", "idea", null, { domain: "snapjack" as any });
+const folderId = "ideas:wolfpack";
+const all = [inbox, init, fa, fb, t1, t2, t3, t4, fc, idea, planIdea, otherIdea];
 
+const folderIdea = () => w("idea", "idea", null, { domain: "wolfpack" as any });
 const press = (s: SelectorState, keys: string[], bound: string | null = null) => {
   let effect;
   for (const k of keys) ({ state: s, effect } = reduce(s, k as any, all, bound));
@@ -27,11 +31,41 @@ const press = (s: SelectorState, keys: string[], bound: string | null = null) =>
 };
 
 describe("selector rows", () => {
-  it("left: Inbox, initiatives collapsed, standalone features and ideas", () => {
-    expect(leftRows(all, []).map((r) => r.item.id)).toEqual([inbox.id, init.id, fc.id, idea.id]);
+  it("left: Inbox, Ideas folder (collapsed), initiatives, standalone features", () => {
+    expect(leftRows(all, []).map((r) => r.item.id)).toEqual([inbox.id, folderId, "ideas:snapjack", init.id, fc.id]);
     expect(leftRows(all, [init.id]).map((r) => [r.item.id, r.depth])).toEqual([
-      [inbox.id, 0], [init.id, 0], [fa.id, 1], [fb.id, 1], [fc.id, 0], [idea.id, 0],
+      [inbox.id, 0], [folderId, 0], ["ideas:snapjack", 0], [init.id, 0], [fa.id, 1], [fb.id, 1], [fc.id, 0],
     ]);
+  });
+
+  it("Ideas folder: groups by kind, expands to depth-1 ideas, counts, never a real item", () => {
+    const rows = leftRows(all, [folderId]);
+    expect(rows.map((r) => [r.item.id, r.depth])).toEqual([
+      [inbox.id, 0], [folderId, 0], [planIdea.id, 1], [idea.id, 1], ["ideas:snapjack", 0], [init.id, 0], [fc.id, 0],
+    ]);
+    const folder = rows[1].item;
+    expect(isIdeasFolder(folder)).toBe(true);
+    expect(folder.container).toBe(true);
+    expect(ideaCount(folder, all)).toBe(2);
+    expect(isIdeasFolder(idea)).toBe(false);
+  });
+
+  it("Ideas folder: no folder without ideas; promoted (parented) ideas leave it", () => {
+    expect(leftRows([inbox, init, fc], []).some((r) => isIdeasFolder(r.item))).toBe(false);
+    const promoted = { ...idea, partOf: fc.id } as WorkItem;
+    expect(leftRows([...all.filter((i) => i !== idea), promoted], [folderId]).map((r) => r.item.id)).not.toContain(idea.id);
+    const asTask = { ...idea, kind: "task" } as WorkItem;
+    expect(ideaCount(leftRows([inbox, folderIdea(), asTask], [])[1].item, [asTask, folderIdea()])).toBe(1);
+  });
+
+  it("Ideas folder: enter expands, h collapses back onto the folder", () => {
+    const start: SelectorState = { pane: "left", leftIdx: 1, rightIdx: 0, expanded: [], openId: null };
+    let r = press(start, ["enter"]);
+    expect(r.s.expanded).toEqual([folderId]);
+    r = press(r.s, ["down", "left"]); // on an idea, h collapses the folder
+    expect(r.s.expanded).toEqual([]);
+    expect(leftRows(all, r.s.expanded)[r.s.leftIdx].item.id).toBe(folderId);
+    expect(r.effect).toBeUndefined();
   });
 
   it("right: open tasks first (in_build before plan), shipped last", () => {
@@ -51,14 +85,15 @@ describe("selector rows", () => {
 });
 
 describe("selector keys", () => {
-  const start = initialState(all, null);
+  const start0 = initialState(all, null);
+  const start = { ...start0, leftIdx: 3 }; // on the initiative (Inbox and the two Ideas folders sit above)
 
   it("starts collapsed on the left with nothing bound", () => {
-    expect(start).toEqual({ pane: "left", leftIdx: 0, rightIdx: 0, expanded: [], openId: null });
+    expect(start0).toEqual({ pane: "left", leftIdx: 0, rightIdx: 0, expanded: [], openId: null });
   });
 
   it("l expands an initiative, h collapses it back onto the initiative", () => {
-    let { s } = press(start, ["down", "right"]);
+    let { s } = press(start, ["right"]);
     expect(s.expanded).toEqual([init.id]);
     ({ s } = press(s, ["down", "down", "left"])); // on feature B → collapse parent
     expect(s.expanded).toEqual([]);
@@ -66,21 +101,21 @@ describe("selector keys", () => {
   });
 
   it("opening an in_build feature with nothing bound auto-binds its first task", () => {
-    const { s, effect } = press(start, ["down", "right", "down", "enter"]);
+    const { s, effect } = press(start, ["right", "down", "enter"]);
     expect(s).toMatchObject({ pane: "right", openId: fa.id });
     expect(effect).toEqual({ type: "bind", id: t3.id });
     expect(rightRows(all, s.openId)[s.rightIdx].id).toBe(t3.id);
   });
 
   it("opening a plan feature, or any feature while something is bound, binds nothing", () => {
-    expect(press(start, ["down", "right", "down", "down", "enter"]).effect).toBeUndefined(); // feature B is plan
-    const { s, effect } = press(start, ["down", "right", "down", "enter"], t4.id); // t4 bound elsewhere
+    expect(press(start, ["right", "down", "down", "enter"]).effect).toBeUndefined(); // feature B is plan
+    const { s, effect } = press(start, ["right", "down", "enter"], t4.id); // t4 bound elsewhere
     expect(effect).toBeUndefined();
     expect(s.openId).toBe(fa.id);
   });
 
   it("j/k move focus without binding; Space binds, Space again unbinds", () => {
-    const opened = press(start, ["down", "right", "down", "enter"]).s;
+    const opened = press(start, ["right", "down", "enter"]).s;
     const moved = press(opened, ["down"], t3.id);
     expect(moved.effect).toBeUndefined();
     expect(press(moved.s, ["space"], t3.id).effect).toEqual({ type: "bind", id: t2.id });
@@ -88,9 +123,9 @@ describe("selector keys", () => {
   });
 
   it("shipped tasks and workspaces are never bound; h returns left", () => {
-    const opened = press(start, ["down", "right", "down", "enter"], t2.id).s;
+    const opened = press(start, ["right", "down", "enter"], t2.id).s;
     expect(press(opened, ["down", "down", "space"], t2.id).effect).toBeUndefined(); // t1 shipped
-    expect(press(start, ["space"]).effect).toBeUndefined();
+    expect(press(start0, ["space"]).effect).toBeUndefined();
     expect(press(opened, ["left"], t2.id).s.pane).toBe("left");
   });
 

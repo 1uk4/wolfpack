@@ -53,6 +53,8 @@ import {
   relatedTo,
   firstTask,
   progress,
+  isIdeasFolder,
+  ideaCount,
   isBlocked,
   newWorkPrompt,
   type SelectorState,
@@ -714,6 +716,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (data === "n") return done("new");
             const focused = focusedItem();
             if (!focused) return;
+            if (isIdeasFolder(focused)) return; // synthetic folder: nothing to act on
             if (data === "x") return done({ type: "delete", id: focused.id as string });
             if (data === "D") return done({ type: "depend", id: focused.id as string });
             if (data === "m" && !focused.container) return done({ type: "move", id: focused.id as string });
@@ -801,10 +804,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (rows.length === 0) out.push(theme.fg("dim", "No workspaces yet \u2014 n to create"));
             rows.forEach(({ item, depth, chain, extra }, i) => {
               const cursor = sel.pane === "left" && i === sel.leftIdx;
-              const fold = item.kind === "initiative" ? (sel.expanded.includes(item.id as string) ? "\u25be " : "\u25b8 ") : "  ";
-              const icon = item.container ? "\ud83d\udce5" : kindIcon(item);
-              const { done: d, total } = progress(item, items);
-              const count = total ? theme.fg("dim", ` ${d}/${total}`) : "";
+              const fold = item.kind === "initiative" || isIdeasFolder(item) ? (sel.expanded.includes(item.id as string) ? "\u25be " : "\u25b8 ") : "  ";
+              const folder = isIdeasFolder(item);
+              const icon = folder ? KIND_ICONS.idea : item.container ? "\ud83d\udce5" : kindIcon(item);
+              const { done: d, total } = folder ? { done: 0, total: ideaCount(item, items) } : progress(item, items);
+              const count = total ? theme.fg("dim", folder ? ` ${total}` : ` ${d}/${total}`) : "";
               const open = item.id === sel.openId;
               const title = isComplete(item) ? theme.fg("dim", item.title)
                 : cursor || open ? theme.fg("accent", item.title) : item.title;

@@ -523,9 +523,22 @@ async function cmdHistory(): Promise<void> {
   for (const v of versions) console.log(`${v.timestamp}  ${String(v.size).padStart(7)}B  ${v.firstLine}`);
 }
 
+const USAGE =
+  "Usage: wolfpack-kb <command>\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]\n" +
+  "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run]\n" +
+  "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const cmd = argv[0] ?? "sweep";
+  // No implicit default: a bare `wolfpack-kb` used to run a full sweep +
+  // reorg against whatever KB_BASE/KB_OPS the shell had, which is how a
+  // mirror got written to by accident. Every caller names its command.
+  const cmd = argv[0];
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    console.error(USAGE);
+    process.exit(cmd ? 0 : 2);
+  }
   const drain = argv.includes("--drain") || argv.includes("--all");
   switch (cmd) {
     case "sweep":
@@ -557,9 +570,7 @@ async function main(): Promise<void> {
       await cmdHistory();
       break;
     default:
-      console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run] | unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]`
-      );
+      console.error(`Unknown command: ${cmd}.\n${USAGE}`);
       process.exit(1);
   }
 }

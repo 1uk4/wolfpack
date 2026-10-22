@@ -134,6 +134,23 @@ describe("entry versions", () => {
     expect(out).not.toMatch(/orphan|missing/i);
   });
 
+  it("bare CLI prints usage and writes nothing (no implicit sweep)", () => {
+    const cli = resolve(__dirname, "../../dist/cli.js");
+    if (!existsSync(cli)) return; // needs `npm run build`
+    const env = { ...process.env, KB_BASE: tmp, KB_OPS: roots.opsRoot, WOLF_DEN: join(tmp, "wolfden") };
+    let status = 0;
+    let stderr = "";
+    try {
+      execFileSync("node", [cli], { env, encoding: "utf-8", stdio: "pipe" });
+    } catch (e: unknown) {
+      status = (e as { status?: number }).status ?? -1;
+      stderr = String((e as { stderr?: string }).stderr ?? "");
+    }
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/Usage: wolfpack-kb <command>/);
+    expect(existsSync(join(tmp, "wolfden"))).toBe(false);
+  });
+
   it("history CLI lists versions and --show prints one", () => {
     commitEntry(roots, entry());
     commitEntry(roots, entry({ detail: "Changed" }));

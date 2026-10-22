@@ -15,6 +15,15 @@ import registerBashTools from "./tools/safe-bash.ts";
 const blocked = (cmd: string) => checkReadOnlyCommand(cmd);
 
 describe("guarded_bash: blocks writes", () => {
+  it.each([
+    ["git clone https://github.com/a/b"],
+    ["git clone https://github.com/a/b ./b"],
+    ["git clone https://github.com/a/b /tmp/../etc/b"],
+    ["ssh host 'git clone https://github.com/a/b /tmp/b'"],
+  ])("blocks git clone outside a local /tmp/ destination: %s", (cmd) => {
+    expect(blocked(cmd)).toMatch(/git clone/);
+  });
+
   it("blocks the incident command", () => {
     const reason = blocked(
       "ssh root@host 'journalctl -u x | grep y; rm -f /dev/null 2>/dev/null; grep z /var/log/a'",
@@ -115,6 +124,8 @@ describe("guarded_bash: blocks writes", () => {
 describe("guarded_bash: allows read-only investigation", () => {
   it.each([
     ["ssh host 'journalctl -u x | grep y | tail'"],
+    ["git clone --depth 1 https://github.com/a/b /tmp/b-src"],
+    ["mkdir -p /tmp/b-src && git clone --depth 1 -b main https://github.com/a/b /tmp/b-src"],
     ["ssh host 'grep -c foo /tmp/x 2>/dev/null'"],
     ["ssh -i k -o BatchMode=yes wolfpack-ro@host 'systemctl status wolf-1 --no-pager -n 20; df -h; free -m'"],
     [`python3 -c "import json; print(json.dumps({'a': 1}))"`],

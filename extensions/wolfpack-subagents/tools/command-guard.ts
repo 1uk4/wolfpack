@@ -458,8 +458,21 @@ function checkWords(all: Word[], ctx: Ctx): void {
 				}
 			}
 			const rest = sub === undefined ? [] : argText.slice(argText.indexOf(sub) + 1);
-			const bad = ["commit", "push", "reset", "checkout", "clean", "rebase", "merge", "cherry-pick", "revert", "pull", "restore", "switch", "rm", "mv", "apply", "am", "gc", "prune", "init", "clone", "fetch", "add", "bisect", "filter-branch"];
+			const bad = ["commit", "push", "reset", "checkout", "clean", "rebase", "merge", "cherry-pick", "revert", "pull", "restore", "switch", "rm", "mv", "apply", "am", "gc", "prune", "init", "fetch", "add", "bisect", "filter-branch"];
 			if (sub && bad.includes(sub)) deny(`git ${sub} changes the repository (only log/show/diff/status-style reads are allowed)`);
+			// Researchers read repos via a shallow clone into scratch space: allow it
+			// locally, into an explicit /tmp/ destination only.
+			if (sub === "clone") {
+				if (ctx.remote) deny("git clone writes files on the host");
+				const withValue = ["--depth", "--branch", "-b", "--origin", "-o", "--config", "-c", "--reference", "--separate-git-dir", "--shallow-since", "--shallow-exclude", "--filter", "-j", "--jobs", "--template", "-u", "--upload-pack"];
+				const positional: string[] = [];
+				for (let k = 0; k < rest.length; k++) {
+					if (withValue.includes(rest[k])) k++;
+					else if (!rest[k].startsWith("-")) positional.push(rest[k]);
+				}
+				const dest = positional[1];
+				if (!dest || !dest.startsWith("/tmp/") || dest.split("/").includes("..")) deny("git clone is only allowed into an explicit /tmp/ destination");
+			}
 			if (sub === "stash" && !["list", "show"].includes(rest[0] ?? "")) deny("git stash changes the repository");
 			if (sub === "branch" && rest.some((a) => /^(-d|-D|-m|-M|-c|-C|-f|-u|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|--edit-description)/.test(a))) deny("git branch changes branches");
 			if (sub === "tag" && rest.some((a) => /^(-d|-f|-a|-s|-m|--delete|--force|--annotate|--sign)/.test(a))) deny("git tag changes tags");

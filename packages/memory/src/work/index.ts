@@ -110,3 +110,16 @@ export {
 
 // A feature follows its tasks into build
 export { syncFeatureStage, BEFORE_BUILD, type StageSyncClient } from "./stage-sync.js";
+
+// Binding: rules text, unbound notice, auto-bind, heads-up
+export {
+  UNBOUND_CONTEXT,
+  BINDING_RULES,
+  shouldBindOnCreate,
+  notBoundReason,
+  bindingLabel,
+  headsUp,
+  withHeadsUp,
+  recordFeatureId,
+  type AutoBindInput,
+} from "./binding.js";

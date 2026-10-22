@@ -297,4 +297,29 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.consolidate[0]).toContain("TTL cache");
     expect(orch.getActiveObservations()).toEqual([]);
   });
+
+  it("observations of two tasks of one feature fold into one Record on the feature; an Inbox task keeps its own", async () => {
+    const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]], [{ timestamp: "2026-10-19 10:02", content: "inbox chore done" }]]);
+    const s = store({
+      "work-f1": { title: "The feature", kind: "feature", stage: "in_build", body: "## Plan\n\nfeature plan" },
+      "work-inbox": { title: "Inbox", kind: "feature", stage: "plan", body: "", container: true } as Item,
+      "work-t1": { title: "T1", kind: "task", stage: "in_build", body: "" },
+      "work-t2": { title: "T2", kind: "task", stage: "in_build", body: "" },
+      "work-t3": { title: "T3", kind: "task", stage: "in_build", body: "" },
+    });
+    let bound: { taskId: string; featureId?: string } = { taskId: "work-t1", featureId: "work-f1" };
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => bound, workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]);
+    bound = { taskId: "work-t2", featureId: "work-f1" };
+    await orch.processChunks([chunk("c2")]);
+    bound = { taskId: "work-t3", featureId: "work-inbox" }; // pending line from before: feature is the container
+    await orch.processChunks([chunk("c3")]);
+    await orch.consolidateNow();
+
+    expect(s.writes.map((w) => w.id).sort()).toEqual(["work-f1", "work-t3"]);
+    expect(prompts.record.find((p) => p.includes("The feature"))).toContain("unrelated chatter");
+    expect(prompts.record.find((p) => p.includes("The feature"))).toContain("TTL cache");
+    expect(prompts.consolidate).toEqual([]);
+    expect(orch.getActiveObservations()).toEqual([]);
+  });
 });

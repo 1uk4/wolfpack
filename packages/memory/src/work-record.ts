@@ -1,10 +1,16 @@
 /**
- * Work Record — the curated knowledge of ONE work item, kept in the item's
- * working document while it is worked on (not in den topics).
+ * Work Record — the curated knowledge of a body of work, kept in a working
+ * document while it is worked on (not in den topics).
  *
- * Observations extracted while a task is bound carry `work: <task id>`. Den
- * consolidation skips them; this module folds them into the item's
- * `## Record` section instead, one rewrite per work id:
+ * Observations extracted while a task is bound carry `work: <task id>` and,
+ * when the task sits under a real feature, `feature: <feature id>`. Den
+ * consolidation skips them; this module folds them into a `## Record`
+ * section instead, one rewrite per GROUPING KEY: the feature id when the
+ * parent is a real feature (all its tasks share one Record), else the item's
+ * own id (an Inbox or standalone item keeps its own and can graduate alone).
+ * Old pending lines with only `work` group on the item.
+ * A Record written on a task by an earlier version stays there, untouched:
+ * it is harmless (the task's document still shows it) and not folded.
  *
  *   input   the current Record, the item's title / done-when / plan, the new
  *           observations
@@ -107,6 +113,21 @@ export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP):
   return [plan ? clip(plan, planRoom) : "", record ? clip(record, recordRoom) : ""].filter(Boolean).join("\n\n");
 }
 
+/**
+ * The feature's Record as the agent sees it while bound to one of its tasks:
+ * the section under a heading naming the feature, capped. "" when it has none.
+ */
+export function renderFeatureRecord(featureTitle: string, featureBody: string, cap: number = DOCUMENT_CAP): string {
+  const record = extractRecord(featureBody);
+  if (!record) return "";
+  const text = record.slice(RECORD_HEADING.length).trim();
+  if (!text) return "";
+  const head = `## Feature Record — ${featureTitle} (shared by all its tasks; kept up to date by memory)`;
+  const room = Math.max(0, cap - head.length - 2);
+  const body = text.length <= room ? text : text.slice(0, Math.max(0, room - 5)).trimEnd() + " […]";
+  return `${head}\n\n${body}`;
+}
+
 // ── the Record's shape ───────────────────────────────────────────────────────
 
 export const WorkRecordSchema = z.object({
@@ -154,6 +175,8 @@ export interface WorkRecordItem {
   title: string;
   kind: string;
   stage: string;
+  /** Holding container (the domain Inbox): never a Record's home. */
+  container?: boolean;
   successCriteria?: string;
   /** The working document ("" when none written yet). */
   body: string;
@@ -200,6 +223,7 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       title: String(it.title ?? ""),
       kind: String(it.kind ?? ""),
       stage: String(it.stage ?? ""),
+      container: it.container === true,
       successCriteria: typeof it.successCriteria === "string" ? it.successCriteria : undefined,
       body: data.body ?? "",
     };
@@ -219,15 +243,21 @@ export interface WorkObservation {
   id: string;
   content: string;
   work: string;
+  /** The task's parent feature when it was tagged. */
+  feature?: string;
 }
+
+/** A real feature can hold a shared Record; the Inbox and other containers cannot. */
+export const isRecordFeature = (it: WorkRecordItem | null): it is WorkRecordItem =>
+  !!it && it.kind === "feature" && !it.container && it.stage !== "archived";
 
 export type WorkRecordOutcome =
   /** Record written: the observations are consumed. */
-  | { work: string; status: "written"; chars: number }
+  | { work: string; ids: string[]; status: "written"; chars: number }
   /** Item archived, deleted or no store: the observations go to den consolidation. */
-  | { work: string; status: "fallback"; reason: string }
+  | { work: string; ids: string[]; status: "fallback"; reason: string }
   /** Infra error: the observations stay pending for the next run. */
-  | { work: string; status: "pending"; reason: string };
+  | { work: string; ids: string[]; status: "pending"; reason: string };
 
 export interface ConsolidateWorkOptions {
   engine: Engine;
@@ -260,19 +290,33 @@ function buildPrompt(item: WorkRecordItem, current: string | null, obs: WorkObse
 const isInfra = (err: unknown) => err instanceof LlmInfraError || (err instanceof Error && err.cause instanceof LlmInfraError);
 
 /**
- * Fold tagged observations into their items' Records, one rewrite per work id.
- * Never throws for one item: the outcome says what happened to its observations.
+ * Fold tagged observations into Records, one rewrite per grouping key (see the
+ * header). In an outcome, `work` is that key (the item that holds the Record)
+ * and `ids` are the observations it covers. Never throws for one group: the
+ * outcome says what happened to its observations.
  */
 export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Promise<WorkRecordOutcome[]> {
   const { engine, store, onProgress } = opts;
   const groups = new Map<string, WorkObservation[]>();
-  for (const o of opts.observations) groups.set(o.work, [...(groups.get(o.work) ?? []), o]);
+  // The key is the feature when it is a real, live feature; anything else
+  // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
+  const featureOk = new Map<string, boolean>();
+  for (const o of opts.observations) {
+    let key = o.work;
+    if (o.feature && store) {
+      if (!featureOk.has(o.feature)) {
+        try { featureOk.set(o.feature, isRecordFeature(await store.get(o.feature))); } catch { featureOk.set(o.feature, false); }
+      }
+      if (featureOk.get(o.feature)) key = o.feature;
+    }
+    groups.set(key, [...(groups.get(key) ?? []), o]);
+  }
 
   const outcomes: WorkRecordOutcome[] = [];
   for (const [work, obs] of groups) {
     if (!store) {
       onProgress?.(`  work ${work}: no Work API configured, ${obs.length} observation(s) go to the den`);
-      outcomes.push({ work, status: "fallback", reason: "no Work API configured" });
+      outcomes.push({ work, ids: obs.map((o) => o.id), status: "fallback", reason: "no Work API configured" });
       continue;
     }
     try {
@@ -280,7 +324,7 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       if (!item || item.stage === "archived") {
         const reason = item ? "archived" : "deleted";
         onProgress?.(`  work ${work}: item is ${reason}, ${obs.length} observation(s) go to the den`);
-        outcomes.push({ work, status: "fallback", reason });
+        outcomes.push({ work, ids: obs.map((o) => o.id), status: "fallback", reason });
         continue;
       }
 
@@ -306,11 +350,11 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       const fresh = (await store.get(work)) ?? item;
       await store.setBody(work, replaceRecordSection(fresh.body, rendered));
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
-      outcomes.push({ work, status: "written", chars: rendered.length });
+      outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: rendered.length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
-      outcomes.push({ work, status: "pending", reason });
+      outcomes.push({ work, ids: obs.map((o) => o.id), status: "pending", reason });
     }
   }
   return outcomes;

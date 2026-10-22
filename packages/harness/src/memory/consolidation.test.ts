@@ -149,4 +149,16 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
     expect(m.prompts.consolidate).toEqual([]);
   });
+
+  it("tasks of one feature share one Record on the feature; a legacy line with only `work` keeps its item", async () => {
+    poolWith([o(1, { work: "work-t1", feature: "work-f1" }), o(2, { work: "work-t2", feature: "work-f1" }), o(3, { work: "work-t9" })]);
+    const m = mocks();
+    const get = m.workStore.get;
+    m.workStore.get = async (id: string) => (id === "work-f1" ? { id, title: "F", kind: "feature", stage: "in_build", body: "" } : get(id));
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    expect(r.recordsWritten).toBe(2);
+    expect(m.writes.map((w) => w.id).sort()).toEqual(["work-f1", "work-t9"]);
+    expect(m.prompts.record.find((p) => p.includes("observation 1"))).toContain("observation 2");
+    expect(poolLines()).toEqual([]);
+  });
 });

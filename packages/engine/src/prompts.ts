@@ -331,7 +331,7 @@ Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body"}
  * The Record is the curated knowledge of ONE work item, kept inside the item
  * while it is worked on. Graduation (distill) later turns it into a KB entry.
  */
-export const WORK_RECORD_SYSTEM = `You maintain the RECORD of ONE work item: the curated knowledge produced while working on it. You are given the item (title, done-when, plan), its CURRENT RECORD (may be empty) and NEW OBSERVATIONS from the working sessions. Return the complete rewritten Record.
+export const WORK_RECORD_SYSTEM = `You maintain the RECORD of ONE work item: the curated knowledge produced while working on it. The item may be a feature: then the observations come from several of its tasks and subagents, and the Record covers the feature as a whole. You are given the item (title, done-when, plan), its CURRENT RECORD (may be empty) and NEW OBSERVATIONS from the working sessions. Return the complete rewritten Record.
 
 The Record is NOT a log. It is what a colleague needs to understand this work later, in four fixed groups:
 - decisions: what was decided AND why (the reason is required; a decision without a reason is not worth keeping). Say what was rejected only when that is the point.

@@ -6,6 +6,7 @@ import {
   extractRecord,
   renderRecord,
   renderWorkingDocument,
+  renderFeatureRecord,
   replaceRecordSection,
   withoutRecord,
   RECORD_CAP,
@@ -164,7 +165,7 @@ describe("consolidateWorkRecords", () => {
     const engine = fakeEngine([rec({ decisions: [{ decision: "Use TTL", why: "simplest" }], findings: ["old finding"] })], prompts);
     const out = await consolidateWorkRecords({ engine, store, observations: obs("work-a", "chose a TTL cache because invalidation is hard") });
 
-    expect(out).toEqual([{ work: "work-a", status: "written", chars: expect.any(Number) }]);
+    expect(out).toEqual([{ work: "work-a", ids: ["work-a-0"], status: "written", chars: expect.any(Number) }]);
     expect(prompts[0]).toContain("Fix cache");
     expect(prompts[0]).toContain("no stale reads");
     expect(prompts[0]).toContain("step one");
@@ -205,8 +206,8 @@ describe("consolidateWorkRecords", () => {
     const lines: string[] = [];
     const out = await consolidateWorkRecords({ engine: fakeEngine([]), store, observations: [...obs("arch", "x"), ...obs("gone", "y")], onProgress: (m) => lines.push(m) });
     expect(out).toEqual([
-      { work: "arch", status: "fallback", reason: "archived" },
-      { work: "gone", status: "fallback", reason: "deleted" },
+      { work: "arch", ids: ["arch-0"], status: "fallback", reason: "archived" },
+      { work: "gone", ids: ["gone-0"], status: "fallback", reason: "deleted" },
     ]);
     expect(lines.join("\n")).toContain("archived");
     const none = await consolidateWorkRecords({ engine: fakeEngine([]), observations: obs("a", "x") });
@@ -222,5 +223,73 @@ describe("consolidateWorkRecords", () => {
     expect(prompts[1]).toContain("Your previous answer rendered");
     expect(out[0].status).toBe("written");
     expect(extractRecord(writes[0].body)!.length).toBeLessThanOrEqual(RECORD_CAP);
+  });
+});
+
+describe("Record per feature", () => {
+  const withFeature = (feature: string | undefined, work: string, ...contents: string[]) =>
+    contents.map((c, i) => ({ id: `${work}-${i}`, content: c, work, ...(feature ? { feature } : {}) }));
+
+  it("two tasks of one feature fold into ONE Record on the feature", async () => {
+    const { store, writes } = fakeStore({ f1: { kind: "feature", title: "The feature" }, t1: {}, t2: {} });
+    const prompts: string[] = [];
+    const out = await consolidateWorkRecords({
+      engine: fakeEngine([rec({ findings: ["shared"] })], prompts),
+      store,
+      observations: [...withFeature("f1", "t1", "from task one"), ...withFeature("f1", "t2", "from task two")],
+    });
+    expect(out).toEqual([{ work: "f1", ids: ["t1-0", "t2-0"], status: "written", chars: expect.any(Number) }]);
+    expect(writes.map((w) => w.id)).toEqual(["f1"]);
+    expect(prompts[0]).toContain("The feature");
+    expect(prompts[0]).toContain("from task one");
+    expect(prompts[0]).toContain("from task two");
+  });
+
+  it("an Inbox task (feature is a container) keeps its own Record", async () => {
+    const { store, writes } = fakeStore({ inbox: { kind: "feature", container: true }, t3: {} });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: withFeature("inbox", "t3", "inbox work") });
+    expect(out.map((o) => o.work)).toEqual(["t3"]);
+    expect(writes.map((w) => w.id)).toEqual(["t3"]);
+  });
+
+  it("pending lines with only `work` group on the item", async () => {
+    const { store, writes } = fakeStore({ t1: {}, t2: {} });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["a"] }), rec({ findings: ["b"] })]), store, observations: [...obs("t1", "x"), ...obs("t2", "y")] });
+    expect(out.map((o) => o.work)).toEqual(["t1", "t2"]);
+    expect(writes.map((w) => w.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("a deleted, archived or unreadable feature falls back to the item's own Record", async () => {
+    for (const items of [{ t: {} }, { f: { kind: "feature", stage: "archived" }, t: {} }]) {
+      const { store, writes } = fakeStore(items as Record<string, Partial<WorkRecordItem>>);
+      const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["a"] })]), store, observations: withFeature("f", "t", "x") });
+      expect(out[0].work).toBe("t");
+      expect(writes.map((w) => w.id)).toEqual(["t"]);
+    }
+    const { store } = fakeStore({ f: { kind: "feature" }, t: {} }, { failGet: true });
+    const out = await consolidateWorkRecords({ engine: fakeEngine([]), store, observations: withFeature("f", "t", "x") });
+    expect(out[0]).toMatchObject({ work: "t", status: "pending" });
+  });
+
+  it("a Record already on a task is left alone", async () => {
+    const { store, writes } = fakeStore({ f1: { kind: "feature" }, t1: { body: "## Plan\n\np\n\n## Record\n\n- old" } });
+    await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["n"] })]), store, observations: withFeature("f1", "t1", "x") });
+    expect(writes.map((w) => w.id)).toEqual(["f1"]);
+  });
+});
+
+describe("renderFeatureRecord", () => {
+  it("names the feature, drops the Record heading, and is capped", () => {
+    const out = renderFeatureRecord("Big feature", `## Plan\n\np\n\n${REC}\n`);
+    expect(out.startsWith("## Feature Record — Big feature")).toBe(true);
+    expect(out).toContain("- Use X — why: Y");
+    expect(out).not.toContain("## Record");
+    const huge = renderFeatureRecord("F", `## Record\n\n${"- long bullet text\n".repeat(500)}`, 1000);
+    expect(huge.length).toBeLessThanOrEqual(1000);
+    expect(huge.endsWith("[…]")).toBe(true);
+  });
+  it("is empty when the feature has no Record", () => {
+    expect(renderFeatureRecord("F", "## Plan\n\nx")).toBe("");
+    expect(renderFeatureRecord("F", "")).toBe("");
   });
 });

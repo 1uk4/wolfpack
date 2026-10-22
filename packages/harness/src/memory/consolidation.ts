@@ -211,12 +211,12 @@ export async function consolidatePool(
     const outcomes = await consolidateWorkRecords({
       engine,
       store,
-      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: o.work! })),
+      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
-    const status = new Map(outcomes.map((o) => [o.work, o.status]));
+    const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o.status] as const)));
     for (const o of workObs) {
-      const st = status.get(o.work!);
+      const st = status.get(poolKey(o));
       if (st === "written") handled.push(o);
       else if (st === "pending") pending++;
       else denObs.push(o);

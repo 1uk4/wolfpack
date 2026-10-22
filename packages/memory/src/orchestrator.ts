@@ -272,12 +272,12 @@ export function createOrchestrator(
       const outcomes = await consolidateWorkRecords({
         engine,
         store: cfg.workRecordStore,
-        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: o.work! })),
+        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
-      const status = new Map(outcomes.map((o) => [o.work, o.status]));
+      const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o.status] as const)));
       for (const o of tagged) {
-        const st = status.get(o.work!);
+        const st = status.get(o.timestamp);
         if (st === "written") consumedWork.add(o.timestamp);
         else if (st === "pending") heldWork.add(o.timestamp);
       }

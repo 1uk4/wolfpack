@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { consolidateSession } from "./consolidate.js";
-import { writeDenTopic, type DenConfig } from "./den.js";
+import { writeDenTopic, readDenTopics, type DenConfig } from "./den.js";
 
 const WOLF = "w1";
 let root: string;
@@ -186,5 +186,59 @@ describe("consolidateSession reconcile", () => {
     expect(readdirSync(join(den, "memory", "topics")).filter((f) => f.endsWith(".md"))).toEqual(["good.md"]);
     expect(readdirSync(join(roots.opsRoot, "inbox", WOLF)).length).toBe(1);
     expect(existsSync(join(root, "escape.md"))).toBe(false);
+  });
+});
+
+describe("consolidateSession durability gate", () => {
+  const denConfig = (): DenConfig => ({ denRoot: den, wolfName: WOLF });
+  const run = (progress: string[] = []) =>
+    consolidateSession({
+      engine: stubEngine,
+      den: denConfig(),
+      memoryRoot,
+      sessionId: "sess-1",
+      kbRoots: roots,
+      onProgress: (m) => progress.push(m),
+    });
+  const inbox = () => {
+    const dir = join(roots.opsRoot, "inbox", WOLF);
+    return existsSync(dir) ? readdirSync(dir) : [];
+  };
+
+  it("keeps a session-log topic in the den as promotable: false and does not emit it", async () => {
+    sessionTopic(
+      "workout-log-oct21",
+      "Workout Log — Monday Upper Push (Oct 21, 2026)",
+      "Mon Oct 21 Upper Push",
+      "## Session: mon-upper-push-oct21\n\n**Date:** 2026-10-21\n**Started:** ~8:04 PM\n\n- DB flat press: 4×6-8 at 70 lb/hand",
+    );
+    sessionTopic("dashboard", "KB Dashboard", "served at :3141", "The dashboard is served by wolfpack-agent at :3141.");
+
+    const progress: string[] = [];
+    const result = await run(progress);
+
+    expect(result.topicsHeld).toBe(1);
+    expect(result.claimsSubmitted).toBe(1);
+    expect(inbox().filter((f) => f.startsWith("workout-log-oct21"))).toEqual([]);
+    expect(inbox().some((f) => f.startsWith("dashboard"))).toBe(true);
+    const held = readDenTopics(den).find((t) => t.id === "workout-log-oct21")!;
+    expect(held.promotable).toBe(false);
+    expect(held.promotableReason).toMatch(/session log/);
+    expect(progress.some((m) => m.includes("held back (not promotable): workout-log-oct21"))).toBe(true);
+  });
+
+  it("skips a trivial re-promote and counts it", async () => {
+    sessionTopic("dashboard", "KB Dashboard", "served", "The dashboard is served at :3141.");
+    expect((await run()).claimsSubmitted).toBe(1);
+
+    sessionTopic("dashboard", "KB Dashboard", "served", "The dashboard is served at :3141");
+    const progress: string[] = [];
+    const again = await run(progress);
+    expect(again.claimsSubmitted).toBe(0);
+    expect(again.trivialSkipped).toBe(1);
+    expect(progress.some((m) => m.includes("trivial change since last emit: 1 skipped"))).toBe(true);
+
+    sessionTopic("dashboard", "KB Dashboard", "served", "The dashboard is served at :4000.");
+    expect((await run()).claimsSubmitted).toBe(1);
   });
 });

@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter, atomicWrite } from "@wolfpack/engine";
+import { assessTopic } from "@wolfpack/kb/client";
 
 export interface DenTopic {
   id: string;
@@ -22,6 +23,9 @@ export interface DenTopic {
   related: string[];
   body: string;
   filePath: string;
+  /** false = held back as private working memory: never emitted to the KB. */
+  promotable: boolean;
+  promotableReason?: string;
 }
 
 export interface DenConfig {
@@ -62,6 +66,8 @@ export function readDenTopics(denRoot: string): DenTopic[] {
       related: Array.isArray(fields.related) ? (fields.related as string[]) : [],
       body: body.trim(),
       filePath,
+      promotable: String(fields.promotable) !== "false",
+      promotableReason: fields.promotable_reason ? String(fields.promotable_reason) : undefined,
     });
   }
 
@@ -91,6 +97,9 @@ export function writeDenTopic(
     related?: string[];
     body: string;
     domain?: string;
+    /** Set false (with a reason) to keep the topic in the den but out of the KB. */
+    promotable?: boolean;
+    promotableReason?: string;
   }
 ): void {
   ensureDenDirs(denRoot);
@@ -104,6 +113,9 @@ export function writeDenTopic(
     `summary: ${topic.summary}`,
     `updated: ${topic.updated}`,
     ...(topic.domain ? [`domain: ${topic.domain}`] : []),
+    ...(topic.promotable === false
+      ? ["promotable: false", `promotable_reason: ${(topic.promotableReason ?? "").replace(/\s+/g, " ").trim()}`]
+      : []),
   ];
 
   if (relatedArr.length > 0) {
@@ -172,4 +184,17 @@ export function markSessionConsolidated(
     join(denRoot, "memory", "sessions.json"),
     JSON.stringify(records, null, 2) + "\n"
   );
+}
+
+/**
+ * Durability gate for a topic about to be written to the den. A session-log
+ * topic stays in the den (`promotable: false`, with a reason) but is never
+ * emitted to the KB. Rewriting the topic as current-state prose clears it.
+ */
+export function gateDenTopic(topic: { id: string; title: string; summary: string; body: string }): {
+  promotable: boolean;
+  promotableReason?: string;
+} {
+  const q = assessTopic(topic);
+  return q.promotable ? { promotable: true } : { promotable: false, promotableReason: q.reason };
 }

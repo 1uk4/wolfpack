@@ -49,6 +49,7 @@ import {
   buildEntryVectors,
 } from "./librarian/index.js";
 import { retireEntries } from "./librarian/retire.js";
+import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
@@ -244,17 +245,11 @@ async function cmdStatus(): Promise<void> {
   }
 
   const events = readLedger(roots);
-  const written = new Map<string, Set<string>>();
   let lastAt = "";
   for (const e of events as Array<Record<string, unknown>>) {
     if (typeof e.at === "string" && e.at > lastAt) lastAt = e.at;
-    if (e.t === "entry_written" && typeof e.entryId === "string") {
-      const m = /^kb-([a-z0-9-]+)-[^-]+$/.exec(e.entryId);
-      const domain = m ? m[1] : "?";
-      if (!written.has(domain)) written.set(domain, new Set());
-      written.get(domain)!.add(e.entryId);
-    }
   }
+  const written = ledgeredByDomain(events as Array<Record<string, unknown>>);
 
   const pending = countPending(roots.opsRoot);
   const uncDir = unclassifiedDir(roots);
@@ -309,8 +304,7 @@ async function cmdStatus(): Promise<void> {
   for (const domain of domains) {
     const files = new Set(entryFilesOnDisk(roots, domain));
     const led = written.get(domain) ?? new Set<string>();
-    const orphans = [...files].filter((e) => !led.has(e));
-    const missing = [...led].filter((e) => !files.has(e));
+    const { orphans, missing } = driftOf(files, led);
     if (orphans.length || missing.length) anyDrift = true;
     const drift =
       orphans.length || missing.length
@@ -324,9 +318,10 @@ async function cmdStatus(): Promise<void> {
   }
   if (anyDrift)
     console.log(
-      `\n  ⚠ drift — orphan = entry file with no ledger record (crashed/raced ` +
-        `sweep debris); missing = ledgered entry whose file is gone. Reconcile ` +
-        `before trusting those domains.`
+      `\n  ⚠ drift — orphan = entry file with no live ledger record (written ` +
+        `outside the ledger, or retired but still on disk); missing = entry ` +
+        `written to the ledger, never retired, whose file is gone. Retired ` +
+        `entries are not counted. Investigate before trusting those domains.`
     );
   else if (domains.length)
     console.log(`\n  ✓ files and ledger agree across all domains.`);

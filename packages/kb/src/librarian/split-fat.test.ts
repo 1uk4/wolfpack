@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import { scanFat, splitFatEntry, splitFatAuto, SPLIT_FAT } from "./split-fat.js";
 import type { KbRoots } from "../shared/index.js";
+import { readLedger, foldRegistry } from "./ledger.js";
+import { ledgeredByDomain, driftOf } from "./drift.js";
 
 let tmp: string;
 let roots: KbRoots;
@@ -33,7 +35,7 @@ function writeEntry(domain: string, id: string, size: number): string {
     `id: ${id}`,
     `title: "Fat Entry ${id}"`,
     `domain: ${domain}`,
-    `section: sec-${domain}-foo`,
+    `section: sec-${domain}-abc123`,
     `placement:`,
     `  basis: routed`,
     `  fit: 0.800`,
@@ -123,6 +125,21 @@ describe("splitFatEntry", () => {
     expect(r.retired).toBe(true);
     expect(r.shards.length).toBe(2);
 
+    // Shards are first-class ledger members; the parent is retired.
+    const events = readLedger(roots) as Array<Record<string, unknown>>;
+    for (const s of r.shards) {
+      expect(events).toContainEqual(expect.objectContaining({ t: "entry_written", entryId: s.entryId, canonicalId: s.entryId, action: "create" }));
+      expect(events).toContainEqual(expect.objectContaining({ t: "entry_placed", entryId: s.entryId, sectionId: "sec-testdom-abc123" }));
+    }
+    expect(events).toContainEqual(expect.objectContaining({ t: "entry_retired", entryId: "kb-testdom-parent1" }));
+    const members = [...foldRegistry(readLedger(roots)).values()].flatMap((t) => t.entries);
+    expect(members.sort()).toEqual(r.shards.map((s) => s.entryId).sort());
+
+    // Drift: 0 orphans and 0 missing after the split.
+    const onDisk = readdirSync(join(roots.kbBase, "domains", "testdom", "entries")).map((f) => f.slice(0, -3));
+    const led = ledgeredByDomain(readLedger(roots) as Array<Record<string, unknown>>).get("testdom") ?? new Set<string>();
+    expect(driftOf(onDisk, led)).toEqual({ orphans: [], missing: [] });
+
     const parentPath = join(roots.kbBase, "domains", "testdom", "entries", "kb-testdom-parent1.md");
     expect(existsSync(parentPath)).toBe(false);
 
@@ -133,7 +150,7 @@ describe("splitFatEntry", () => {
       expect(raw).toContain(`title: "${s.title}"`);
       expect(raw).toContain("relations:");
       expect(raw).toContain("kind: see_also");
-      expect(raw).not.toContain("section: sec-testdom-foo");
+      expect(raw).not.toContain("section: sec-testdom-abc123");
       expect(raw).not.toContain("placement:");
       expect(raw).not.toContain("properties:");
       // Core domain + kind + maturity fields are preserved

@@ -141,6 +141,8 @@ describe("sweep: missing alias target creates fresh entry", () => {
     expect(result.created).toBe(1);
     expect(result.merged).toBe(0);
 
+    expect(notes.some((n) => n.includes("aliased entry kb-wp-ALIASED1 has no file"))).toBe(true);
+
     // Step 6: Assert a new entry was created (with a different ID)
     const entryFiles = require("fs").readdirSync(entries());
     expect(entryFiles).toHaveLength(1);

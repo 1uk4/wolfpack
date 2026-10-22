@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { sweep, graduationEntryId, graduationOwnedIds } from "./sweep.js";
+import { sweep, graduationEntryId, graduationOwnedIds, hasGraduationMarker } from "./sweep.js";
 import { scrubGraduation } from "./produce.js";
 import { readLedger, appendLedger } from "./ledger.js";
 import { ev } from "../shared/index.js";
@@ -127,6 +127,36 @@ describe("sweep: graduated work creates its own entry", () => {
     drop("old-topic", "b1", "an update to an old topic");
     expect(await onlyGrad()).toMatchObject({ created: 1, merged: 0 });
     expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-Feat002)");
+  });
+
+  it("a graduated entry with no ledger contribution is protected by its frontmatter marker", async () => {
+    writeFileSync(
+      join(entries(), "kb-wp-OldGrad.md"),
+      "---\nid: kb-wp-OldGrad\nsection: sec-wp-aaaaaa\nproperties:\n  graduation-commits: \"f32e6c0\"\n---\nan old record"
+    );
+    const onlyOld = () =>
+      sweep({
+        engine, roots, notify: () => {},
+        loadEntryVectors: async () => [{ entryId: "kb-wp-OldGrad", domain: "wp", vector: [1, 0, 0] } as any],
+      });
+
+    // By similarity: a new entry is created, the record is untouched.
+    drop("memory-topic", "a5", "notes that look like the record");
+    expect(await onlyOld()).toMatchObject({ created: 1, merged: 0 });
+    expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-OldGrad)");
+
+    // By a stale alias: ignored too.
+    appendLedger(roots, [ev.aliased("w1", "stale-topic", "kb-wp-OldGrad", "b0")]);
+    drop("stale-topic", "b5", "an update to a stale topic");
+    expect(await onlyOld()).toMatchObject({ created: 1, merged: 0 });
+    expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-OldGrad)");
+    expect(readFileSync(join(entries(), "kb-wp-OldGrad.md"), "utf8")).toContain("an old record");
+  });
+
+  it("hasGraduationMarker reads only the frontmatter property", () => {
+    expect(hasGraduationMarker('---\nid: x\nproperties:\n  graduation-commits: "a"\n---\nbody')).toBe(true);
+    expect(hasGraduationMarker("---\nid: x\n---\ngraduation-commits: in the body")).toBe(false);
+    expect(hasGraduationMarker(null)).toBe(false);
   });
 
   it("non-work contributions still merge by similarity", async () => {

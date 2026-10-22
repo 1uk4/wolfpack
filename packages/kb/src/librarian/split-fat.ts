@@ -17,9 +17,12 @@ import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { Engine } from "@wolfpack/engine";
-import { atomicWrite } from "@wolfpack/engine";
-import { entriesDir, type KbRoots } from "../shared/index.js";
+import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
+import { entriesDir, ev, type KbRoots } from "../shared/index.js";
+import { SectionId } from "../schema/knowledge.js";
 import { retireEntries } from "./retire.js";
+import { appendLedger } from "./ledger.js";
+import { withKbLock } from "./lock.js";
 
 // ── Tunables ──────────────────────────────────────────────────────────────
 export const SPLIT_FAT = {
@@ -326,30 +329,46 @@ export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResu
     return { entryId, parentSize: raw.length, shards: written, retired: false };
   }
 
-  for (let i = 0; i < shards.length; i++) {
-    const shard = shards[i];
-    const shardId = shardIds[i];
-    const siblings = shardIds.filter((_, j) => j !== i);
-    const bodyHash = createHash("sha256").update(shard.body).digest("hex");
-    const newYaml = rewriteShardFrontmatter(
-      yaml,
-      shardId,
-      shard.title,
-      shard.summary,
-      bodyHash,
-      siblings
-    );
-    const content = `---\n${newYaml}\n---\n\n${shard.body.replace(/\s+$/, "")}\n`;
-    atomicWrite(join(entriesDir(roots, domain), `${shardId}.md`), content);
-    written.push({ entryId: shardId, title: shard.title, size: shard.body.length });
-    notify?.(`[split-fat] ${entryId}: wrote ${shardId} (${shard.body.length} chars)`);
-  }
+  // Shards inherit the parent's section in the ledger (their files drop it;
+  // a reorg repaints both).
+  const parentSection = String(parseFrontmatter(raw).fields.section ?? "");
 
-  const retire = retireEntries(roots, [entryId], {
-    reason: `split into ${shardIds.join(",")}`,
-  });
-  const retired = retire.retired.length > 0;
-  notify?.(`[split-fat] ${entryId}: ${retired ? "retired" : "retire failed"}`);
+  // Hold the KB lock so a sweep can't interleave with the writes and the
+  // retirement. Each shard's ledger events follow its file immediately, as in
+  // the sweep, so a crash can't leave a live shard with no ledger record.
+  const retired = await withKbLock(roots, async () => {
+    for (let i = 0; i < shards.length; i++) {
+      const shard = shards[i];
+      const shardId = shardIds[i];
+      const siblings = shardIds.filter((_, j) => j !== i);
+      const bodyHash = createHash("sha256").update(shard.body).digest("hex");
+      const newYaml = rewriteShardFrontmatter(
+        yaml,
+        shardId,
+        shard.title,
+        shard.summary,
+        bodyHash,
+        siblings
+      );
+      const content = `---\n${newYaml}\n---\n\n${shard.body.replace(/\s+$/, "")}\n`;
+      atomicWrite(join(entriesDir(roots, domain), `${shardId}.md`), content);
+      appendLedger(roots, [
+        ev.entryWritten(shardId, shardId, "create"),
+        ...(SectionId.safeParse(parentSection).success
+          ? [ev.entryPlaced({ entryId: shardId, sectionId: parentSection, basis: "routed", fit: 1 })]
+          : []),
+      ]);
+      written.push({ entryId: shardId, title: shard.title, size: shard.body.length });
+      notify?.(`[split-fat] ${entryId}: wrote ${shardId} (${shard.body.length} chars)`);
+    }
+
+    const retire = retireEntries(roots, [entryId], {
+      reason: `split into ${shardIds.join(",")}`,
+    });
+    const ok = retire.retired.length > 0;
+    notify?.(`[split-fat] ${entryId}: ${ok ? "retired" : "retire failed"}`);
+    return ok;
+  }, { waitMs: 15 * 60_000 });
 
   return { entryId, parentSize: raw.length, shards: written, retired };
 }

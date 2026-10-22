@@ -161,6 +161,17 @@ export function graduationOwnedIds(log: Array<{ t: string; denTopicId?: string }
   return owned;
 }
 
+/**
+ * Graduated entries that predate (or lack) a ledger contribution from a
+ * `work-…` den topic still carry the `graduation-commits` property in their
+ * frontmatter; that is the one marker found on real graduated entries.
+ */
+export function hasGraduationMarker(markdown: string | null): boolean {
+  if (!markdown) return false;
+  const fm = /^---\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
+  return /^[ \t]+graduation-commits:/m.test(fm);
+}
+
 /** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
 export function listedEntryIds(body: string): string[] {
   const ids = [...body.matchAll(/\[\[(kb-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\]\]/g)].map((m) => m[1]);
@@ -330,14 +341,32 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // alias that points at a graduated entry is ignored, so that den topic
       // gets its own entry and the alias is re-pointed on commit.
       const ownId = graduationEntryId(c, domain);
-      const protectedIds = graduationOwnedIds([...log, ...batch] as any);
+      const ledgerOwned = graduationOwnedIds([...log, ...batch] as any);
+      // Owned by the ledger, or marked as graduated in its own frontmatter.
+      const markerCache = new Map<string, boolean>();
+      const protectedIds = {
+        has: (id: string): boolean => {
+          if (ledgerOwned.has(id)) return true;
+          let marked = markerCache.get(id);
+          if (marked === undefined) {
+            marked = hasGraduationMarker(readEntryMarkdown(roots, domain, id));
+            markerCache.set(id, marked);
+          }
+          return marked;
+        },
+      };
       if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
       for (const topic of ownId ? [] : reg.values()) {
         const alias = topic.aliases.find(
           (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
         );
         if (alias) {
-          if (!protectedIds.has(topic.entries[0])) targetId = topic.entries[0];
+          const aliased = topic.entries[0];
+          if (!readEntryMarkdown(roots, domain, aliased)) {
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
+          } else if (!protectedIds.has(aliased)) {
+            targetId = aliased;
+          }
           break;
         }
       }

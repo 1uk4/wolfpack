@@ -25,6 +25,9 @@ import {
   foldLedger,
   poolTokens,
   HttpWorkRecordStore,
+  serializeBranchEntries,
+  WORK_OBSERVATIONS_CHANNEL,
+  type WorkObservationsMessage,
   type MemoryOrchestrator,
   type Observation,
   type AgentRuntime,
@@ -286,55 +289,6 @@ class PiRuntime implements AgentRuntime {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function serializeBranchEntries(entries: any[]): Array<{ id: string; text: string; tokens: number }> {
-  const chunks: Array<{ id: string; text: string; tokens: number }> = [];
-
-  for (const entry of entries) {
-    // Pi session entries: { type: "message", message: { role, content, ... } }
-    // Also: "custom", "compaction", "model_change", "thinking_level_change", etc.
-    if (entry.type !== "message") continue;
-
-    const msg = entry.message;
-    if (!msg) continue;
-
-    const role: string = msg.role ?? "unknown";
-    let text = "";
-
-    if (role === "user" || role === "assistant") {
-      if (typeof msg.content === "string") {
-        text = msg.content;
-      } else if (Array.isArray(msg.content)) {
-        text = msg.content
-          .filter((b: any) => b.type === "text")
-          .map((b: any) => b.text)
-          .join("\n");
-      }
-      // Assistant messages may have tool_use blocks
-      if (role === "assistant" && Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "tool_use") {
-            text += `\n[Tool call: ${block.name}(${JSON.stringify(block.input).slice(0, 500)})]`;
-          }
-        }
-      }
-    } else if (role === "tool") {
-      // Tool result message
-      const content = typeof msg.content === "string"
-        ? msg.content.slice(0, 2000)
-        : Array.isArray(msg.content)
-          ? msg.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").slice(0, 2000)
-          : JSON.stringify(msg.content).slice(0, 2000);
-      text = `[Tool result: ${content}]`;
-    }
-
-    if (text.length > 0) {
-      chunks.push({ id: entry.id, text: `[${role}] ${text}`, tokens: Math.ceil(text.length / 4) });
-    }
-  }
-
-  return chunks;
-}
 
 // ── Compaction rendering ────────────────────────────────────────────────────
 
@@ -1490,6 +1444,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Each observer gets its own chunk (watermarked) so no double-processing.
 
   const observerTasks = new Set<Promise<void>>();
+
+  // Work observations handed over by other extensions: a subagent's report on
+  // a work item becomes tagged pool lines, the same ledger path as the observer's.
+  pi.events?.on(WORK_OBSERVATIONS_CHANNEL, (data: unknown) => {
+    if (!enabled || !orchestrator) return;
+    const msg = data as WorkObservationsMessage;
+    if (!msg || typeof msg.work !== "string" || !Array.isArray(msg.contents)) return;
+    try {
+      orchestrator.recordWorkObservations(msg);
+    } catch (err) {
+      runtime?.notify(`work observations from ${msg.source}: ${err instanceof Error ? err.message : String(err)}`, "warning");
+    }
+  });
 
   pi.on("turn_end", (_event: unknown, ctx: any) => {
     // Den-corruption guard: never observe while building a crawl plan.

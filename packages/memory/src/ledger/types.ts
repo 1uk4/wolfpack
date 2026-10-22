@@ -17,6 +17,8 @@ export interface Observation {
   work?: string;
   /** The bound task's parent feature, when it had one. */
   feature?: string;
+  /** Where it came from when not the observer: `subagent:<name>`. */
+  source?: string;
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { deliverWorkReport, fetchWorkItemRef, prependWorkItem, type WorkItemRef } from "./work-attribution.ts";
 import { isTier, loadModelTable, TIERS, type Tier } from "@wolfpack/engine";
 import {
   isMuxAvailable,
@@ -125,6 +126,13 @@ const SubagentParams = Type.Object({
         "true = run in a terminal pane the user can watch and you can steer live; false = background " +
         "process (no pane, can't be steered mid-run). Default: the agent's own setting (shown in " +
         "subagents_list). Usually omit this; set it only when the user asks to watch or not to watch.",
+    }),
+  ),
+  workItem: Type.Optional(
+    Type.String({
+      description:
+        "Work item id this subagent works on. Pass it whenever you delegate work on a work item: the subagent is told which item it is on, " +
+        "and its final report is kept in that item's Record (its feature's, when it has one) when it finishes.",
     }),
   ),
   cwd: Type.Optional(
@@ -1856,6 +1864,7 @@ const ORCHESTRATOR_RULES = `You are the orchestrator: the user's point of contac
 Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
 Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
 Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
+Work items: bind the item you are working on before you start (task_bind; one bound item per session, rebind when you switch). When you delegate work on an item, pass workItem: the subagent is told which item it is on and its report is kept in that item's Record.
 Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. Each agent has its own pane/background default (see subagents_list); omit \`pane\` to use it, and override it only when the user asks. Background agents can't be steered mid-run; message them after they finish to resume.`;
 
 export default function subagentsExtension(pi: ExtensionAPI) {
@@ -1912,10 +1921,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         "Delegate a task to a specialist sub-agent (see `subagents_list` for the roster, tiers and pane/background). " +
         "Delegate anything that needs more than a couple of reads or commands, so your context stays small; spawn independent pieces in parallel. " +
         "Fire-and-forget: returns immediately; the result arrives automatically as a steer message. " +
-        "Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work.",
+        "Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work. " +
+        "When the work is on a work item, pass workItem (its id): the subagent is told which item it is on and its report is kept in the item's Record.",
       promptSnippet:
         "Delegate to a specialist sub-agent (roster: subagents_list). Use for anything beyond a couple of reads/commands; parallelize independent pieces. " +
-        "Returns immediately; the result arrives as a steer message. Don't poll or fabricate results.",
+        "Returns immediately; the result arrives as a steer message. Don't poll or fabricate results. Pass workItem when delegating work on a work item.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -2017,9 +2027,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Launch the subagent (creates pane, sends command). Release the name
         // reservation once it registers in runningSubagents (or launch fails) —
         // from then on uniqueRunningName tracks it via the running map.
+        // workItem: tell the subagent which item it is on (the title is skipped
+        // when the Work API does not answer quickly) and remember it for the report.
+        let workRef: WorkItemRef | null = null;
+        const workItemId = params.workItem?.trim();
+        if (workItemId) workRef = (await fetchWorkItemRef(workItemId)) ?? { id: workItemId };
+
         let running;
         try {
-          running = await launchSubagent(params, ctx);
+          running = await launchSubagent(workRef ? { ...params, task: prependWorkItem(params.task, workRef) } : params, ctx);
         } finally {
           if (reservedName) reservedNames.delete(reservedName);
         }
@@ -2047,6 +2063,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             updateWidget(); // reflect removal from Map immediately
 
             const presentation = resolveResultPresentation(result, running.name);
+            // With a workItem the report becomes Record material for that item and
+            // this steer message is marked, so the observer does not extract it again.
+            const workDetails = workRef ? deliverWorkReport(pi.events, workRef, running.name, result) : {};
 
             pi.sendMessage(
               {
@@ -2054,6 +2073,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 content: presentation,
                 display: true,
                 details: {
+                  ...workDetails,
                   name: running.name,
                   task: running.task,
                   agent: running.agent,

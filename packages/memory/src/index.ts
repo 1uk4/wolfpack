@@ -21,10 +21,15 @@ export type {
   MemoryEventHandler,
 } from "./runtime.js";
 
+// What the observer reads of a session branch (and what it must skip)
+export { serializeBranchEntries, isRecordedReport, RECORDED_REPORT_KEY } from "./serialize-branch.js";
+
 // Orchestrator — the main API
 export {
   createOrchestrator,
   DEFAULT_CONFIG,
+  WORK_OBSERVATIONS_CHANNEL,
+  type WorkObservationsMessage,
   type MemoryOrchestrator,
   type OrchestratorConfig,
   type BoundWork,

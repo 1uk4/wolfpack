@@ -322,4 +322,41 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.consolidate).toEqual([]);
     expect(orch.getActiveObservations()).toEqual([]);
   });
+
+  it("recordWorkObservations adds tagged pool lines (work, feature, source) that the Record consolidation picks up", async () => {
+    const { engine, prompts } = engineWithRecord([]);
+    const s = store({
+      "work-f1": { title: "The feature", kind: "feature", stage: "in_build", body: "" },
+    });
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, workRecordStore: s.store });
+    const n = orch.recordWorkObservations({ work: "work-t1", feature: "work-f1", source: "subagent:worker-1", contents: ["Decided X because Y", "  ", "Found Z"] });
+    expect(n).toBe(2);
+    const pool = orch.getActiveObservations();
+    expect(pool).toHaveLength(2);
+    expect(pool[0]).toMatchObject({ work: "work-t1", feature: "work-f1", source: "subagent:worker-1", content: "Decided X because Y" });
+    expect(new Set(pool.map((o) => o.timestamp)).size).toBe(2);
+
+    await orch.consolidateNow();
+    expect(s.writes.map((w) => w.id)).toEqual(["work-f1"]);
+    expect(prompts.record[0]).toContain("Decided X because Y");
+    expect(prompts.consolidate).toEqual([]);
+    expect(orch.getActiveObservations()).toEqual([]);
+  });
+
+  it("recordWorkObservations ignores empty input and keeps the observer's watermark", async () => {
+    const { engine } = engineWithRecord([[OBS[0]]]);
+    const runtime = makeRuntime(cwd);
+    const entries: LedgerEntry[] = [];
+    const orig = runtime.appendLedger;
+    runtime.appendLedger = (e) => { entries.push(e); orig(e); };
+    const orch = createOrchestrator(engine, runtime, { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }) });
+    expect(orch.recordWorkObservations({ work: "", source: "s", contents: ["x"] })).toBe(0);
+    expect(orch.recordWorkObservations({ work: "w", source: "s", contents: [" "] })).toBe(0);
+    expect(entries).toEqual([]);
+    await orch.processChunks([chunk("c1")]);
+    orch.recordWorkObservations({ work: "w", source: "s", contents: ["x"] });
+    const covers = entries.map((e) => (e.data as { coversUpToId: string }).coversUpToId);
+    expect(covers).toEqual(["c1", "c1"]);
+    expect(orch.getActiveObservations()).toHaveLength(2);
+  });
 });

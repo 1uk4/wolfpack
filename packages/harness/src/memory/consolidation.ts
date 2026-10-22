@@ -9,7 +9,7 @@
  *   5. Emit deltas to KB inbox (same as Pi-CLI promote)
  *   6. Archive processed observations
  */
-import { readFile, mkdir, rename } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -30,7 +30,10 @@ import {
   buildDomainContext,
   reconcileDen,
   promoteTopics,
+  consolidateWorkRecords,
+  HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
+  type WorkRecordStore,
 } from "@wolfpack/memory";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
@@ -40,6 +43,10 @@ export interface PoolObservation {
   content: string;
   recordedAt: string;
   domain?: string;
+  /** Task bound when this was observed: it feeds that item's Record, not the den. */
+  work?: string;
+  /** The bound task's parent feature. */
+  feature?: string;
 }
 
 export interface ConsolidationConfig {
@@ -66,6 +73,8 @@ export interface ConsolidationConfig {
   onProgress?: (msg: string) => void;
   /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
+  /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
+  workStore?: WorkRecordStore;
 }
 
 export interface ConsolidationResult {
@@ -74,6 +83,10 @@ export interface ConsolidationResult {
   topicsMerged: number;
   topicsSkipped: number;
   claimsSubmitted: number;
+  /** Work Records rewritten from tagged observations. */
+  recordsWritten?: number;
+  /** Tagged observations left in the pool (the Work API or model was unavailable). */
+  observationsPending?: number;
 }
 
 /**
@@ -106,21 +119,32 @@ export async function getPoolStats(wolfDen: string): Promise<{ count: number; to
   return { count: observations.length, tokens };
 }
 
+const poolKey = (o: PoolObservation) => `${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`;
+
 /**
- * Archive the pool by moving to timestamped file.
+ * Archive the observations this run handled and leave the rest in the pool:
+ * tagged observations that stay pending, and anything appended while the
+ * consolidation was running.
  */
-async function archivePool(wolfDen: string): Promise<void> {
-  const poolDir = join(wolfDen, ".memory", "pool");
-  const poolFile = join(poolDir, "observations.jsonl");
-  if (!existsSync(poolFile)) return;
+async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<void> {
+  const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
+  if (!existsSync(poolFile) || handled.length === 0) return;
+
+  const done = new Set(handled.map(poolKey));
+  const lines = (await readFile(poolFile, "utf-8")).split("\n").filter((l) => l.trim());
+  const archived: string[] = [];
+  const kept: string[] = [];
+  for (const line of lines) {
+    let key: string | null = null;
+    try { key = poolKey(JSON.parse(line) as PoolObservation); } catch { /* keep unparsable lines */ }
+    (key !== null && done.has(key) ? archived : kept).push(line);
+  }
 
   const archiveDir = join(wolfDen, ".memory", "archive");
   await mkdir(archiveDir, { recursive: true });
-
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const archiveFile = join(archiveDir, `observations-${timestamp}.jsonl`);
-
-  await rename(poolFile, archiveFile);
+  await writeFile(join(archiveDir, `observations-${timestamp}.jsonl`), archived.map((l) => l + "\n").join(""));
+  await writeFile(poolFile, kept.map((l) => l + "\n").join(""));
 }
 
 /**
@@ -150,7 +174,8 @@ export async function consolidatePool(
     : "";
 
   // Read pool
-  const observations = await readPool(wolfDen);
+  const pool = await readPool(wolfDen);
+  const observations = pool;
   if (observations.length === 0) {
     onProgress?.("No observations to consolidate");
     return { observationsProcessed: 0, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0 };
@@ -163,12 +188,47 @@ export async function consolidatePool(
   );
 
   // Check minimum thresholds (skip if pool too small)
-  if (observations.length < minObservations && totalTokens < minTokens) {
+  // (Work-tagged observations bypass it: a Record rewrite is cheap and the den pass re-checks its own share.)
+  if (observations.length < minObservations && totalTokens < minTokens && !observations.some((o) => o.work)) {
     onProgress?.(`Pool too small (${observations.length} obs, ~${totalTokens} tokens) — skipping`);
     return { observationsProcessed: 0, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0 };
   }
 
   onProgress?.(`Consolidating ${observations.length} observations (~${totalTokens} tokens)`);
+
+  const engine = config.engine ?? createConsolidationEngine(config.table ?? loadModelTable().table, config.apiKey);
+
+  // Observations tagged with a work item feed that item's Record, not the den.
+  // written → consumed; fallback (item archived/deleted, no Work API) → den;
+  // pending (Work API or model unavailable) → stays in the pool for the next run.
+  const handled: PoolObservation[] = [];
+  const denObs = observations.filter((o) => !o.work);
+  let recordsWritten = 0;
+  let pending = 0;
+  const workObs = observations.filter((o) => o.work);
+  if (workObs.length > 0) {
+    const store = config.workStore ?? defaultWorkStore();
+    const outcomes = await consolidateWorkRecords({
+      engine,
+      store,
+      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: o.work! })),
+      onProgress,
+    });
+    const status = new Map(outcomes.map((o) => [o.work, o.status]));
+    for (const o of workObs) {
+      const st = status.get(o.work!);
+      if (st === "written") handled.push(o);
+      else if (st === "pending") pending++;
+      else denObs.push(o);
+    }
+    recordsWritten = outcomes.filter((o) => o.status === "written").length;
+    if (pending > 0) onProgress?.(`${pending} work observation(s) stay pending`);
+  }
+  const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
+  if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
+    await settlePool(wolfDen, handled);
+    return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending };
+  }
 
   // Ensure den structure exists
   ensureDenDirs(wolfDen);
@@ -196,7 +256,7 @@ export async function consolidatePool(
       : "(empty — no topics yet)";
 
   // Build prompt (same format as Pi-CLI orchestrator)
-  const obsLines = observations
+  const obsLines = denObs
     .map((o) => {
       const domainTag = o.domain ? ` [${o.domain}]` : "";
       return `${o.timestamp}${domainTag}  ${o.content}`;
@@ -214,9 +274,6 @@ ${existingSection}
 Fold the observations into topics. For each group of related observations, decide MERGE (into existing topic), CREATE (new topic), or SKIP (not worth persisting).
 
 Domain tags [domain] appear on observations. When creating or merging topics, set the domain field to the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.`;
-
-  // Create engine for consolidation
-  const engine = config.engine ?? createConsolidationEngine(config.table ?? loadModelTable().table, config.apiKey);
 
   onProgress?.("Running LLM consolidation...");
   let consolidateSystem = CONSOLIDATE_SYSTEM;
@@ -321,16 +378,18 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   renderDenIndex(wolfDen);
 
   // Archive processed observations (move to .memory/archive/)
-  await archivePool(wolfDen);
+  await settlePool(wolfDen, [...handled, ...denObs]);
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 
   return {
-    observationsProcessed: observations.length,
+    observationsProcessed: handled.length + denObs.length,
     topicsCreated: created,
     topicsMerged: merged,
     topicsSkipped: skipped,
     claimsSubmitted,
+    recordsWritten,
+    observationsPending: pending,
   };
 }
 
@@ -342,6 +401,12 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
     provider: tier.provider,
     apiKey,
     defaultModel: steps.consolidate.model,
-    steps: { consolidate: steps.consolidate, distill: steps.distill },
+    steps: { consolidate: steps.consolidate, distill: steps.distill, workRecord: steps.workRecord },
   });
+}
+
+/** The Work API from the environment; undefined when it is not configured (tagged observations then go to the den). */
+function defaultWorkStore(): WorkRecordStore | undefined {
+  const store = new HttpWorkRecordStore();
+  return store.configured ? store : undefined;
 }

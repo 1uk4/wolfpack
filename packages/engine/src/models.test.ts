@@ -176,6 +176,13 @@ describe("tier coverage", () => {
     expect(engineSteps(t).distill.model).toBe("claude-opus-5-5");
   });
 
+  it("workRecord is a smart step that resolves with no config edits", () => {
+    expect(STEP_TIERS.workRecord).toBe("smart");
+    const t = local({ models: { smart: { model: "claude-opus-5-5" } } });
+    expect(t.steps.workRecord).toEqual({ tier: "smart" });
+    expect(engineSteps(t).workRecord.model).toBe("claude-opus-5-5");
+  });
+
   it("a table file written before a step existed still loads: the step falls back to its fixed tier", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "models-old-"));
     const file = path.join(dir, "models.json");

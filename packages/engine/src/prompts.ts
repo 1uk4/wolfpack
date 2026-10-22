@@ -326,6 +326,30 @@ If CHECK FAILURES are listed, your previous answer broke those rules: rewrite th
 Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body"}]}.`;
 
 /**
+ * stage: workRecord · model: smart · in: a work item's current Record + its title/criteria/plan + new observations · out: the rewritten Record
+ *
+ * The Record is the curated knowledge of ONE work item, kept inside the item
+ * while it is worked on. Graduation (distill) later turns it into a KB entry.
+ */
+export const WORK_RECORD_SYSTEM = `You maintain the RECORD of ONE work item: the curated knowledge produced while working on it. You are given the item (title, done-when, plan), its CURRENT RECORD (may be empty) and NEW OBSERVATIONS from the working sessions. Return the complete rewritten Record.
+
+The Record is NOT a log. It is what a colleague needs to understand this work later, in four fixed groups:
+- decisions: what was decided AND why (the reason is required; a decision without a reason is not worth keeping). Say what was rejected only when that is the point.
+- changes: what is now different (files, modules, behaviours, interfaces, config), in present tense.
+- findings: facts learned about the system, the data or the problem that stay true.
+- problems: a problem hit and how it was fixed or worked around, as one item (problem, then fix). Include an open problem only when it is still unresolved.
+
+REWRITE, DO NOT APPEND:
+- Start from the CURRENT RECORD and fold the new observations in. When an observation changes or reverses a decision, REPLACE the old decision with the new one (say "was X, now Y because Z" in that single item only if the change itself matters). Never keep both versions.
+- Merge items about the same subject. Drop items the new observations show to be wrong or obsolete. Fold older detail into shorter lines to stay within about 3,500 characters in total.
+- Short bullets, at most two sentences each. Concrete names (paths, identifiers, error codes, numbers that are part of the design) stay.
+
+LEAVE OUT: session narrative ("we then", "the user asked"), test counts and "N tests pass", build/deploy/verified status, who did what, next-step lists, dates (except where a decision's timing is what matters), and anything the plan already says. A commit hash may be kept sparingly, only on a change that is hard to find otherwise.
+Do not invent facts that neither the current record nor the observations state. If nothing in the new observations is worth recording, return the current record unchanged.
+
+Respond with valid JSON: {"decisions": [{"decision": string, "why": string}], "changes": [string], "findings": [string], "problems": [string]}. An empty group is an empty array.`;
+
+/**
  * stage: produce (KB sweep) · model: smart · in: contribution + existing (if merge) · out: entry
  *
  * Write a curated KB entry from a contribution, integrating with existing if merging.

@@ -82,3 +82,71 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
   });
 });
 
+
+describe("consolidatePool work-tagged observations (pi-durable)", () => {
+  function poolWith(lines: object[]): void {
+    const dir = join(den, ".memory", "pool");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "observations.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+  const o = (n: number, extra: object = {}) => ({ timestamp: `2026-10-20T10:0${n}:00Z`, recordedAt: `2026-10-20T11:0${n}:00Z`, content: `observation ${n}`, ...extra });
+  const poolLines = () => readFileSync(join(den, ".memory", "pool", "observations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+
+  function mocks(opts: { failSet?: boolean } = {}) {
+    const prompts = { consolidate: [] as string[], record: [] as string[] };
+    const writes: Array<{ id: string; body: string }> = [];
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => {
+        if (step === "workRecord") {
+          prompts.record.push(p.prompt);
+          return schema.parse({ decisions: [], changes: ["Added the thing"], findings: [], problems: [] });
+        }
+        prompts.consolidate.push(p.prompt);
+        return schema.parse({ actions: [] });
+      },
+    } as unknown as Engine;
+    const workStore = {
+      get: async (id: string) => (id === "gone" ? null : { id, title: "T", kind: "task", stage: "in_build", body: "## Plan\n\np" }),
+      setBody: async (id: string, body: string) => {
+        if (opts.failSet) throw new Error("HTTP 502");
+        writes.push({ id, body });
+      },
+    };
+    return { engine, workStore, prompts, writes };
+  }
+
+  it("writes the Record, keeps tagged content out of the den prompt and off the pool", async () => {
+    poolWith([o(0), o(1, { work: "work-t1", feature: "work-f1" }), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+
+    expect(r.recordsWritten).toBe(1);
+    expect(m.prompts.record[0]).toContain("observation 1");
+    expect(m.prompts.consolidate[0]).not.toContain("observation 1");
+    expect(m.prompts.consolidate[0]).toContain("observation 2");
+    expect(m.writes[0].body).toContain("## Record\n\n### Changes\n\n- Added the thing");
+    expect(m.writes[0].body.startsWith("## Plan\n\np")).toBe(true);
+    expect(poolLines()).toEqual([]);
+  });
+
+  it("an infra failure leaves only the tagged observations in the pool", async () => {
+    poolWith([o(0), o(1, { work: "work-t1" }), o(2), o(3), o(4), o(5)]);
+    const m = mocks({ failSet: true });
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+
+    expect(r.observationsPending).toBe(1);
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 1"]);
+    expect(readdirSync(join(den, ".memory", "archive"))).toHaveLength(1);
+  });
+
+  it("tagged observations for a deleted item are consolidated into the den; few tagged observations still get their Record", async () => {
+    poolWith([o(0, { work: "gone" }), o(1, { work: "work-t1" })]);
+    const m = mocks();
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    expect(r.recordsWritten).toBe(1);
+    expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
+    // the den share (1 observation, below the minimum) waits in the pool
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(m.prompts.consolidate).toEqual([]);
+  });
+});

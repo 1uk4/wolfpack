@@ -27,6 +27,7 @@ export {
   DEFAULT_CONFIG,
   type MemoryOrchestrator,
   type OrchestratorConfig,
+  type BoundWork,
 } from "./orchestrator.js";
 
 // Observer
@@ -143,3 +144,24 @@ export {
   type DistilledContribution,
 } from "./distill.js";
 export { TOPIC_SOFT_CAP } from "./consolidate.js";
+
+// Work Record — curated per-item knowledge kept in the work item itself
+export {
+  consolidateWorkRecords,
+  HttpWorkRecordStore,
+  extractRecord,
+  withoutRecord,
+  replaceRecordSection,
+  renderRecord,
+  WorkRecordSchema,
+  RECORD_HEADING,
+  RECORD_CAP,
+  DOCUMENT_CAP,
+  renderWorkingDocument,
+  type WorkRecord,
+  type WorkRecordStore,
+  type WorkRecordItem,
+  type WorkObservation,
+  type WorkRecordOutcome,
+  type ConsolidateWorkOptions,
+} from "./work-record.js";

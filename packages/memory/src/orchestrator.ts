@@ -31,6 +31,13 @@ import {
 import { consolidateSession, type ConsolidateResult } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { consolidateWorkRecords, type WorkRecordStore } from "./work-record.js";
+
+/** The work item a session is bound to right now. */
+export interface BoundWork {
+  taskId: string;
+  featureId?: string | null;
+}
 
 export interface OrchestratorConfig {
   /** Tokens per observer chunk */
@@ -49,6 +56,14 @@ export interface OrchestratorConfig {
   domains?: string[];
   /** Path to KB base directory (for building domain context). */
   kbBasePath?: string;
+  /**
+   * The task the session is bound to, read at observation time. While one is
+   * bound, observations are stamped `work: <task id>`; they feed that item's
+   * Record instead of den topics.
+   */
+  getBoundWork?: () => BoundWork | null | undefined;
+  /** Where Records are written (the Work API). Absent: tagged observations fall back to the den. */
+  workRecordStore?: WorkRecordStore;
 }
 
 export const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -180,11 +195,14 @@ export function createOrchestrator(
         const uniqueObs = assignUniqueTimestamps(result.observations);
         // Stamp untagged observations with the domain current at observe
         // time, so a later domain switch can't reroute them at promote.
+        let bound: BoundWork | null | undefined;
+        try { bound = cfg.getBoundWork?.(); } catch { bound = undefined; }
         const observations: Observation[] = uniqueObs.map((o) => ({
           timestamp: o.timestamp,
           content: o.content,
           tokenCount: estimateTokens(o.content),
           domain: o.domain || cfg.defaultDomain,
+          ...(bound?.taskId ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
         }));
 
         appendEvent({
@@ -240,6 +258,39 @@ export function createOrchestrator(
       ));
     }
 
+    if (promote.length === 0) return;
+
+    // Observations tagged with a work item feed that item's Record, not the
+    // den. Their outcome decides what the den pass sees: written → consumed;
+    // fallback (item archived/deleted, no Work API) → den like any other;
+    // pending (infra error) → left in the pool for the next run.
+    const consumedWork = new Set<string>();
+    const heldWork = new Set<string>();
+    const tagged = promote.filter((o) => o.work);
+    if (tagged.length > 0) {
+      runtime.notify?.(`memory: updating Records from ${tagged.length} work observation(s)`, "info");
+      const outcomes = await consolidateWorkRecords({
+        engine,
+        store: cfg.workRecordStore,
+        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: o.work! })),
+        onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
+      });
+      const status = new Map(outcomes.map((o) => [o.work, o.status]));
+      for (const o of tagged) {
+        const st = status.get(o.work!);
+        if (st === "written") consumedWork.add(o.timestamp);
+        else if (st === "pending") heldWork.add(o.timestamp);
+      }
+      if (consumedWork.size > 0) {
+        appendEvent({
+          type: "observations_dropped",
+          observationTimestamps: [...consumedWork],
+          coversUpToId: folded.latestCoverageId ?? "",
+        });
+      }
+    }
+    // Fallback observations are consolidated as plain den observations.
+    promote = promote.filter((o) => !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
     if (promote.length === 0) return;
 
     runtime.notify?.(

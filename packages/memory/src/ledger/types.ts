@@ -12,6 +12,11 @@ export interface Observation {
   content: string;
   tokenCount: number;
   domain?: string;
+  /** Work item (task) that was bound when this was observed. Tagged
+   *  observations feed that item's Record, not the den. */
+  work?: string;
+  /** The bound task's parent feature, when it had one. */
+  feature?: string;
 }
 
 /**

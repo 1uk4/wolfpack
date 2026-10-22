@@ -6,6 +6,7 @@
  *   denLocal — Dewey-local, never synced (ledger/vectors/clusters) — Dewey's brain
  */
 import { join } from "node:path";
+import { safeSegment } from "./safe-path.js";
 
 export interface KbRoots {
   /** knowledge/base — authoritative entries + registry + indexes. */
@@ -38,12 +39,12 @@ export const domainRegistryFile = (r: KbRoots, domain: string) =>
 
 // ── librarian-ops (per-wolf lanes) ──────────────────────────────────────────
 export const inboxDir = (r: KbRoots, wolf: string) =>
-  join(r.opsRoot, "inbox", wolf);
+  join(r.opsRoot, "inbox", safeSegment(wolf, "wolf name"));
 export const receiptsDir = (r: KbRoots, wolf: string) =>
-  join(r.opsRoot, "receipts", wolf);
+  join(r.opsRoot, "receipts", safeSegment(wolf, "wolf name"));
 /** Contributions the sweep gave up on (over budget / repeated failures). Not synced. */
 export const parkedDir = (r: KbRoots, wolf: string) =>
-  join(r.opsRoot, "parked", wolf);
+  join(r.opsRoot, "parked", safeSegment(wolf, "wolf name"));
 
 // ── den-local (Dewey's brain, never synced) ─────────────────────────────────
 export const ledgerFile = (r: KbRoots) =>

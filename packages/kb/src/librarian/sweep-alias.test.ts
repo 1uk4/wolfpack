@@ -108,12 +108,12 @@ describe("sweep: missing alias target creates fresh entry", () => {
       ev.contribution({
         from: "w1",
         denTopicId: "t1",
-        hash: "hash-initial-abc123",
+        hash: "abc123",
         prevHash: null,
         domainHint: "wp",
       }),
       ev.entryWritten(initialEntryId, initialEntryId, "create"),
-      ev.aliased("w1", "t1", initialEntryId, "hash-initial-abc123"),
+      ev.aliased("w1", "t1", initialEntryId, "abc123"),
     ]);
 
     // Verify the alias is established
@@ -129,7 +129,7 @@ describe("sweep: missing alias target creates fresh entry", () => {
     expect(existsSync(join(entries(), `${initialEntryId}.md`))).toBe(false);
 
     // Step 3: Drop a new contribution from w1/t1
-    drop("t1", "hash-new-xyz789", "Updated content for this memory topic");
+    drop("t1", "aaa789", "Updated content for this memory topic");
 
     // Step 4: Run sweep
     const result = await run([]);
@@ -171,7 +171,7 @@ describe("sweep: missing alias target creates fresh entry", () => {
       (a) => a.wolf === "w1" && a.denTopicId === "t1"
     );
     expect(aliasInNewTopic).toBeDefined();
-    expect(aliasInNewTopic!.lastHash).toBe("hash-new-xyz789");
+    expect(aliasInNewTopic!.lastHash).toBe("aaa789");
 
     // Verify the new aliased event was recorded
     const ledger = readLedger(roots);
@@ -183,7 +183,7 @@ describe("sweep: missing alias target creates fresh entry", () => {
       wolf: "w1",
       denTopicId: "t1",
       canonicalId: newEntryId,
-      hash: "hash-new-xyz789",
+      hash: "aaa789",
     });
   });
 
@@ -208,16 +208,16 @@ describe("sweep: missing alias target creates fresh entry", () => {
       ev.contribution({
         from: "w1",
         denTopicId: "t2",
-        hash: "hash-orig-def456",
+        hash: "def456",
         prevHash: null,
         domainHint: "wp",
       }),
       ev.entryWritten(existingEntryId, existingEntryId, "create"),
-      ev.aliased("w1", "t2", existingEntryId, "hash-orig-def456"),
+      ev.aliased("w1", "t2", existingEntryId, "def456"),
     ]);
 
     // Drop new contribution from same wolf/topic
-    drop("t2", "hash-update-uvw321", "Updated content for existing entry");
+    drop("t2", "bcd321", "Updated content for existing entry");
 
     // Run sweep with the existing entry in vectors
     const result = await run([

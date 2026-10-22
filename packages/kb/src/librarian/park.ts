@@ -7,9 +7,10 @@
  * parked/<wolf>/ (never synced back to wolves), get a receipt with the reason,
  * and wait for `wolfpack-kb unpark`.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { type KbRoots, type ParsedContribution, inboxDir, parkedDir } from "../shared/index.js";
+import { atomicWrite } from "@wolfpack/engine";
 import { writeReceipt } from "./commit.js";
 
 /** Thrown when a contribution runs past its time budget. */
@@ -48,16 +49,22 @@ type Attempts = Record<string, { attempts: number; lastReason: string; overruns?
 const attemptsFile = (roots: KbRoots) => join(roots.denLocal, "sweep-attempts.json");
 
 function readAttempts(roots: KbRoots): Attempts {
+  const file = attemptsFile(roots);
+  if (!existsSync(file)) return {};
   try {
-    return JSON.parse(readFileSync(attemptsFile(roots), "utf-8"));
-  } catch {
+    const parsed = JSON.parse(readFileSync(file, "utf-8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Attempts;
+    throw new Error("not an object");
+  } catch (err) {
+    // Resetting counts lets a poison item retry forever: say so.
+    console.warn(`sweep: ${file} is unreadable (${err instanceof Error ? err.message : err}); attempt counts reset`);
     return {};
   }
 }
 
 function writeAttempts(roots: KbRoots, a: Attempts): void {
   mkdirSync(dirname(attemptsFile(roots)), { recursive: true });
-  writeFileSync(attemptsFile(roots), JSON.stringify(a, null, 2));
+  atomicWrite(attemptsFile(roots), JSON.stringify(a, null, 2));
 }
 
 /** Record a failed attempt; returns the attempt count so far. */

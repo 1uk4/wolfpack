@@ -11,13 +11,12 @@
 import {
   existsSync,
   readFileSync,
-  writeFileSync,
   appendFileSync,
   mkdirSync,
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
+import { atomicWrite, parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
 import { InfraError } from "./backoff.js";
 import {
   type KbRoots,
@@ -162,7 +161,7 @@ export function createEmbedder(
       // Persist incrementally (append the vector) + keep meta current.
       appendFileSync(cachePath, JSON.stringify({ hash, vec }) + "\n");
       meta = { model: config.model, dim: vec.length, updated: now() };
-      writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+      atomicWrite(metaPath, JSON.stringify(meta, null, 2));
       return vec;
     },
   };

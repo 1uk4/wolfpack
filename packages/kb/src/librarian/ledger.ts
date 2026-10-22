@@ -24,9 +24,20 @@ export function readLedger(roots: KbRoots): KbEvent[] {
   const file = ledgerFile(roots);
   if (!existsSync(file)) return [];
   const out: KbEvent[] = [];
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  const lines = readFileSync(file, "utf-8").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!line.trim()) continue;
-    const parsed = KbEventSchema.safeParse(JSON.parse(line));
+    let json: unknown;
+    try {
+      json = JSON.parse(line);
+    } catch (err) {
+      // A torn or garbage line (crash mid-append, bad merge) must not break
+      // every sweep, reorg and status call.
+      console.warn(`ledger: skipping unparseable line ${i + 1} of ${file}: ${err instanceof Error ? err.message : err}`);
+      continue;
+    }
+    const parsed = KbEventSchema.safeParse(json);
     if (parsed.success) out.push(parsed.data);
   }
   return out;

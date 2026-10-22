@@ -39,7 +39,7 @@ describe("SweepManager alerts", () => {
     mkdirSync(join(base, "kb", "domains", "wp", "entries"), { recursive: true });
     writeFileSync(
       join(inbox(), "bad.md"),
-      "---\nfrom: w1\nden_topic_id: bad\nchange: create\ncontent_hash: h-bad\nprev_hash: null\ndomain_hint: wp\nsubmitted: 2026-10-10T01:00:00Z\n---\n\n# bad\n\nbody\n"
+      "---\nfrom: w1\nden_topic_id: bad\nchange: create\ncontent_hash: ba0d\nprev_hash: null\ndomain_hint: wp\nsubmitted: 2026-10-10T01:00:00Z\n---\n\n# bad\n\nbody\n"
     );
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
     vi.spyOn(console, "log").mockImplementation(() => {});

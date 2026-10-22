@@ -79,7 +79,7 @@ describe("sweep resilience", () => {
   const drop = (name: string, body: string, submitted = "2026-10-10T01:00:00Z") =>
     writeFileSync(
       join(inbox(), `${name}.md`),
-      `---\nfrom: w1\nden_topic_id: ${name}\nchange: create\ncontent_hash: h-${name}\nprev_hash: null\ndomain_hint: wp\nsubmitted: ${submitted}\n---\n\n# ${name}\n\n${body}\n`
+      `---\nfrom: w1\nden_topic_id: ${name}\nchange: create\ncontent_hash: ${Buffer.from(name).toString("hex")}\nprev_hash: null\ndomain_hint: wp\nsubmitted: ${submitted}\n---\n\n# ${name}\n\n${body}\n`
     );
   const queued = () => readdirSync(inbox()).filter((f) => f.endsWith(".md"));
 
@@ -120,6 +120,18 @@ describe("sweep resilience", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     rmSync(base, { recursive: true, force: true });
+  });
+
+  it("moves poison and path-traversal files to _bad/ and still processes the next valid item", async () => {
+    writeFileSync(join(inbox(), "a-torn.md"), "---\nfrom: w1\n");
+    writeFileSync(join(inbox(), "b-evil.md"), "---\nfrom: w1\nden_topic_id: ../../../escape\ncontent_hash: abc1\n---\n\nbody\n");
+    drop("good", "body");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await run();
+    expect(r.processed).toBe(1);
+    expect(queued()).toEqual([]);
+    expect(readdirSync(join(inbox(), "_bad")).filter((f) => f.endsWith(".md")).sort()).toEqual(["a-torn.md", "b-evil.md"]);
+    expect(existsSync(join(base, "escape"))).toBe(false);
   });
 
   it("an infra error doesn't count an attempt, sets backoff, and skips ticks until it expires", async () => {

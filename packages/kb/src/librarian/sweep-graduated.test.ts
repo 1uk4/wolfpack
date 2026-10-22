@@ -90,7 +90,7 @@ describe("sweep: graduated work creates its own entry", () => {
     });
 
   it("creates its named entry instead of merging into a similar one, then updates it", async () => {
-    drop("work-wp-Feat001", "h1", "first graduation", featureGrad("kb-wp-Feat001"));
+    drop("work-wp-Feat001", "a1", "first graduation", featureGrad("kb-wp-Feat001"));
     const first = await run();
     expect(first).toMatchObject({ created: 1, merged: 0 });
     expect(existsSync(join(entries(), "kb-wp-Feat001.md"))).toBe(true);
@@ -100,7 +100,7 @@ describe("sweep: graduated work creates its own entry", () => {
     // The registry never records the work item id.
     expect(readLedger(roots).filter((e) => e.t === "aliased")).toEqual([]);
 
-    drop("work-wp-Feat001", "h2", "graduated again", featureGrad("kb-wp-Feat001"));
+    drop("work-wp-Feat001", "a2", "graduated again", featureGrad("kb-wp-Feat001"));
     const second = await run();
     expect(second).toMatchObject({ created: 0, merged: 1 });
     // Regenerated from the dossier, never from its previous text.
@@ -109,7 +109,7 @@ describe("sweep: graduated work creates its own entry", () => {
   });
 
   it("nothing else merges into a graduated entry: similarity skips it, a stale alias is ignored", async () => {
-    drop("work-wp-Feat002", "g1", "the record", featureGrad("kb-wp-Feat002"));
+    drop("work-wp-Feat002", "e1", "the record", featureGrad("kb-wp-Feat002"));
     await run();
     const onlyGrad = () =>
       sweep({
@@ -118,19 +118,19 @@ describe("sweep: graduated work creates its own entry", () => {
       });
 
     // Maximally similar memory topic: gets its own entry, the record is untouched.
-    drop("memory-topic", "m1", "notes that look like the record");
+    drop("memory-topic", "a4", "notes that look like the record");
     expect(await onlyGrad()).toMatchObject({ created: 1, merged: 0 });
     expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-Feat002)");
 
     // A den topic aliased to the record before this guard existed: alias ignored.
-    appendLedger(roots, [ev.aliased("w1", "old-topic", "kb-wp-Feat002", "o0")]);
-    drop("old-topic", "o1", "an update to an old topic");
+    appendLedger(roots, [ev.aliased("w1", "old-topic", "kb-wp-Feat002", "b0")]);
+    drop("old-topic", "b1", "an update to an old topic");
     expect(await onlyGrad()).toMatchObject({ created: 1, merged: 0 });
     expect(prompts.at(-1)).not.toContain("EXISTING ENTRY (kb-wp-Feat002)");
   });
 
   it("non-work contributions still merge by similarity", async () => {
-    drop("some-den-topic", "h3", "a memory topic");
+    drop("some-den-topic", "a3", "a memory topic");
     const r = await run();
     expect(r.merged).toBe(1);
     expect(prompts[0]).toContain("EXISTING ENTRY (kb-wp-BIGBIG1)");
@@ -160,7 +160,7 @@ describe("sweep: never merges into oversized entries", () => {
     mkdirSync(entries(), { recursive: true });
     vi.stubEnv("KB_MAX_MERGE_TARGET_CHARS", "500");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
-    writeFileSync(join(inbox(), "t.md"), "---\nfrom: w1\nden_topic_id: some-topic\ncontent_hash: hx\nprev_hash: null\ndomain_hint: wp\n---\n\n# t\n\nbody\n");
+    writeFileSync(join(inbox(), "t.md"), "---\nfrom: w1\nden_topic_id: some-topic\ncontent_hash: c0de\nprev_hash: null\ndomain_hint: wp\n---\n\n# t\n\nbody\n");
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -180,7 +180,7 @@ describe("sweep: never merges into oversized entries", () => {
 
   it("still updates a graduation's own entry when it is over the limit", async () => {
     writeFileSync(join(entries(), "kb-wp-OWNHUB1.md"), "---\nid: kb-wp-OWNHUB1\nsection: sec-wp-aaaaaa\n---\n" + "x".repeat(600));
-    writeFileSync(join(inbox(), "g.md"), "---\nfrom: w1\nden_topic_id: work-wp-OWNHUB1\ncontent_hash: hg\nprev_hash: null\ndomain_hint: wp\ngraduation: hub\nentry_id: kb-wp-OWNHUB1\n---\n\n# hub\n\nbody\n");
+    writeFileSync(join(inbox(), "g.md"), "---\nfrom: w1\nden_topic_id: work-wp-OWNHUB1\ncontent_hash: d1d1\nprev_hash: null\ndomain_hint: wp\ngraduation: hub\nentry_id: kb-wp-OWNHUB1\n---\n\n# hub\n\nbody\n");
     rmSync(join(inbox(), "t.md"));
     expect(await run()).toMatchObject({ created: 0, merged: 1 });
     expect(notes.some((n) => n.includes("→ new entry (target"))).toBe(false);

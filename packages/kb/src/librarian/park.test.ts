@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
-import { withBudget, BudgetExceeded, unpark, listParked } from "./park.js";
-import type { KbRoots } from "../shared/index.js";
+import { withBudget, BudgetExceeded, unpark, listParked, recordFailure } from "./park.js";
+import type { KbRoots, ParsedContribution } from "../shared/index.js";
 
 const opinion = (title: string) => ({
   title,
@@ -58,7 +58,7 @@ describe("sweep: one bad contribution never blocks the queue", () => {
   const drop = (name: string, body: string, submitted: string) =>
     writeFileSync(
       join(inbox(), `${name}.md`),
-      `---\nfrom: w1\nden_topic_id: ${name}\nchange: create\ncontent_hash: h-${name}\nprev_hash: null\ndomain_hint: wp\nsubmitted: ${submitted}\n---\n\n# ${name}\n\n${body}\n`
+      `---\nfrom: w1\nden_topic_id: ${name}\nchange: create\ncontent_hash: ${Buffer.from(name).toString("hex")}\nprev_hash: null\ndomain_hint: wp\nsubmitted: ${submitted}\n---\n\n# ${name}\n\n${body}\n`
     );
 
   beforeEach(() => {
@@ -160,7 +160,7 @@ describe("sweep: per-item log line and in-progress state", () => {
     const inbox = join(roots.opsRoot, "inbox", "w1");
     mkdirSync(inbox, { recursive: true });
     mkdirSync(join(roots.kbBase, "domains", "wp", "entries"), { recursive: true });
-    writeFileSync(join(inbox, "t.md"), "---\nfrom: w1\nden_topic_id: topic-a\ncontent_hash: ha\nprev_hash: null\ndomain_hint: wp\n---\n\n# a\n\nbody\n");
+    writeFileSync(join(inbox, "t.md"), "---\nfrom: w1\nden_topic_id: topic-a\ncontent_hash: a1\nprev_hash: null\ndomain_hint: wp\n---\n\n# a\n\nbody\n");
     expect(oldestInbox(roots)?.file).toBe("t.md");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
 
@@ -182,5 +182,25 @@ describe("sweep: per-item log line and in-progress state", () => {
     expect(oldestInbox(roots)).toBeNull();
     vi.unstubAllGlobals();
     rmSync(base, { recursive: true, force: true });
+  });
+});
+
+describe("attempt tracking", () => {
+  it("logs when sweep-attempts.json is corrupt, then rewrites it atomically", () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-attempts-"));
+    const roots: KbRoots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    mkdirSync(roots.denLocal, { recursive: true });
+    const file = join(roots.denLocal, "sweep-attempts.json");
+    writeFileSync(file, '{"torn":');
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(recordFailure(roots, { contentHash: "abc1" } as ParsedContribution, "boom")).toBe(1);
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/sweep-attempts\.json is unreadable/);
+      expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ abc1: { attempts: 1, lastReason: "boom" } });
+      expect(readdirSync(roots.denLocal)).toEqual(["sweep-attempts.json"]);
+    } finally {
+      warn.mockRestore();
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

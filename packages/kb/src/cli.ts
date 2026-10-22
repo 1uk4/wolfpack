@@ -33,6 +33,7 @@ import {
   readFileSync,
   writeFileSync,
   unlinkSync,
+  statSync,
   mkdirSync,
 } from "node:fs";
 import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
@@ -56,6 +57,7 @@ import {
 import { retireEntries } from "./librarian/retire.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
 import { unpark, listParked } from "./librarian/park.js";
+import { acquireKbLock, kbLockFile, pidAlive } from "./librarian/lock.js";
 import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
 
 function resolveRoots(): KbRoots {
@@ -174,57 +176,26 @@ function countPending(opsRoot: string): { total: number; wolves: string[] } {
 // overnight duplicate entries + ledger/registry drift). A den-local lock makes
 // a second local sweep refuse rather than corrupt state. Stale locks (dead
 // owner, or absurdly old) are reclaimed so a crash never wedges future runs.
-const LOCK_STALE_MS = 30 * 60_000;
 /** Path of a lock this process currently holds, so signal handlers can clean
  *  it up (SIGINT/SIGTERM skip the try/finally in cmdSweep). */
 let heldLock: string | null = null;
+let releaseHeld: (() => void) | null = null;
 
 function lockPath(roots: KbRoots): string {
-  return join(roots.denLocal, "sweep.lock");
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM: the process exists but belongs to another user (e.g. a root CLI
-    // run seen from the wolf's sweep). Only ESRCH means it is gone.
-    return (err as NodeJS.ErrnoException)?.code === "EPERM";
-  }
+  return kbLockFile(roots);
 }
 
 function acquireLock(roots: KbRoots): boolean {
-  const p = lockPath(roots);
-  mkdirSync(dirname(p), { recursive: true });
-  if (existsSync(p)) {
-    try {
-      const info = JSON.parse(readFileSync(p, "utf-8")) as {
-        pid: number;
-        at: number;
-      };
-      const fresh = Date.now() - info.at < LOCK_STALE_MS;
-      if (pidAlive(info.pid) && fresh) return false; // a live sweep holds it
-      console.error(
-        `reclaiming stale sweep lock (pid ${info.pid}, ${Math.round(
-          (Date.now() - info.at) / 1000
-        )}s old)`
-      );
-    } catch {
-      /* unreadable lock → treat as stale and reclaim */
-    }
-  }
-  writeFileSync(p, JSON.stringify({ pid: process.pid, at: Date.now() }));
-  heldLock = p;
+  const release = acquireKbLock(roots);
+  if (!release) return false;
+  releaseHeld = release;
+  heldLock = lockPath(roots);
   return true;
 }
 
-function releaseLock(roots: KbRoots): void {
-  try {
-    unlinkSync(lockPath(roots));
-  } catch {
-    /* already gone */
-  }
+function releaseLock(_roots: KbRoots): void {
+  releaseHeld?.();
+  releaseHeld = null;
   heldLock = null;
 }
 
@@ -362,8 +333,9 @@ async function cmdStatus(): Promise<void> {
     try {
       const info = JSON.parse(readFileSync(lp, "utf-8")) as { pid: number; at: number };
       const ageS = Math.round((Date.now() - info.at) / 1000);
+      const beatS = Math.round((Date.now() - statSync(lp).mtimeMs) / 1000);
       lockLine = pidAlive(info.pid)
-        ? `RUNNING (pid ${info.pid}, started ${ageS}s ago)`
+        ? `RUNNING (pid ${info.pid}, started ${ageS}s ago, heartbeat ${beatS}s ago)`
         : `STALE lock (pid ${info.pid} dead, ${ageS}s old) — next sweep reclaims`;
     } catch {
       lockLine = "lock present but unreadable — will be reclaimed";

@@ -12,6 +12,8 @@ import {
   entriesDir,
   receiptsDir,
   unclassifiedDir,
+  safeSegment,
+  hashTag,
   now,
 } from "../shared/index.js";
 import type { Entry } from "../schema/knowledge.js";
@@ -46,7 +48,7 @@ export function writeReceipt(
     detail,
     "",
   ].join("\n");
-  atomicWrite(join(dir, `${c.denTopicId}-${c.contentHash.slice(7, 17)}.md`), body);
+  atomicWrite(join(dir, `${safeSegment(c.denTopicId, "den topic id")}-${hashTag(c.contentHash)}.md`), body);
 }
 
 /** Move a handled contribution out of the inbox into a sibling _processed/. */
@@ -83,7 +85,7 @@ export function quarantine(
     c.body,
     "",
   ].join("\n");
-  atomicWrite(join(dir, `${c.denTopicId}-${c.contentHash.slice(7, 17)}.md`), body);
+  atomicWrite(join(dir, `${safeSegment(c.denTopicId, "den topic id")}-${hashTag(c.contentHash)}.md`), body);
 }
 
 /** Single commit per sweep. Best-effort; no-op if not a git repo. */

@@ -12,6 +12,8 @@ import {
   contentHash,
   inboxDir,
   now,
+  safeSegment,
+  hashTag,
   type KbRoots,
 } from "../shared/index.js";
 
@@ -89,7 +91,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     origin: input.origin,
   };
 
-  const file = join(dir, `${input.denTopicId}-${hash.slice(7, 17)}.md`);
+  const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
   atomicWrite(file, render(contribution));
 
   // Record what we emitted so a later unchanged re-promote is a true no-op

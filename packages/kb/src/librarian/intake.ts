@@ -1,12 +1,14 @@
 /**
  * intake — drain all wolf inboxes, parse + validate contributions. Pure code.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
 import {
   type ParsedContribution,
   contentHash,
+  hashHex,
+  safeSegment,
   type KbRoots,
 } from "../shared/index.js";
 
@@ -19,31 +21,52 @@ function inboxWolves(opsRoot: string): string[] {
     .map((d) => d.name);
 }
 
-/** Drain every inbox into parsed contributions. */
+/** Drain every inbox into parsed contributions. A bad file is quarantined; it never fails the drain. */
 export function drainInbox(roots: KbRoots): ParsedContribution[] {
   const out: ParsedContribution[] = [];
   for (const wolf of inboxWolves(roots.opsRoot)) {
     const dir = join(roots.opsRoot, "inbox", wolf);
     for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
       const filePath = join(dir, file);
-      const parsed = parseContribution(filePath);
-      if (parsed) out.push(parsed);
+      try {
+        // The sender is the inbox directory, never the frontmatter.
+        out.push(parseContribution(filePath, safeSegment(wolf, "inbox directory name")));
+      } catch (err) {
+        quarantineBad(filePath, err instanceof Error ? err.message : String(err));
+      }
     }
   }
   return out;
 }
 
-function parseContribution(filePath: string): ParsedContribution | null {
+/**
+ * Move a malformed inbox file to `<inbox>/<wolf>/_bad/` with a `<file>.reason.txt`
+ * sidecar, so it stops being retried and a human can see why.
+ */
+function quarantineBad(filePath: string, reason: string): void {
+  try {
+    const dir = join(dirname(filePath), "_bad");
+    mkdirSync(dir, { recursive: true });
+    const dest = join(dir, basename(filePath));
+    renameSync(filePath, dest);
+    writeFileSync(`${dest}.reason.txt`, reason + "\n");
+    console.warn(`intake: moved ${filePath} to _bad/ — ${reason}`);
+  } catch (err) {
+    console.warn(`intake: could not quarantine ${filePath} (${reason}): ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+function parseContribution(filePath: string, from: string): ParsedContribution {
   const raw = readFileSync(filePath, "utf-8");
   const { fields, body } = parseFrontmatter(raw);
-  const from = fields.from ? String(fields.from) : null;
-  const denTopicId = fields.den_topic_id ? String(fields.den_topic_id) : null;
-  if (!from || !denTopicId) return null; // malformed — skip
+  if (!fields.den_topic_id) throw new Error("missing den_topic_id");
+  const denTopicId = safeSegment(String(fields.den_topic_id), "den_topic_id");
 
   const content = body.trim();
   const hash = fields.content_hash
     ? String(fields.content_hash)
     : contentHash(content);
+  hashHex(hash); // reject a non-hex hash now, before it reaches a file name
 
   return {
     from,

@@ -1,33 +1,13 @@
 /**
- * What the observer reads of a session branch.
- *
- * Only conversation messages (user / assistant / tool results) are
- * serialized. Extension-injected entries (`custom_message`, such as a
- * subagent's report delivered as a steer message) are not conversation, so
- * they are not read.
- *
- * A subagent report that was handed to the work Record explicitly
- * (the subagent was started with a workItem) additionally carries
- * `details[RECORDED_REPORT_KEY]` on its message. That marker is the contract:
- * whatever shape a pi version gives such an entry (a custom_message entry, or
- * a message with role "custom"), an entry that carries it is skipped, so the
- * report is never extracted a second time from the steer message.
+ * What the observer reads of a session branch: conversation messages only
+ * (user / assistant / tool results). Extension-injected `custom_message`
+ * entries (subagent reports, status, notifications) are not read; the
+ * orchestrator relays what matters in its own words.
  */
-
-/** Set (true) in the `details` of a steer message whose content was recorded as work observations. */
-export const RECORDED_REPORT_KEY = "recordedToWork";
-
-/** True for a branch entry carrying the "already recorded" marker. */
-export function isRecordedReport(entry: any): boolean {
-  return entry?.details?.[RECORDED_REPORT_KEY] === true || entry?.message?.details?.[RECORDED_REPORT_KEY] === true;
-}
-
 export function serializeBranchEntries(entries: any[]): Array<{ id: string; text: string; tokens: number }> {
   const chunks: Array<{ id: string; text: string; tokens: number }> = [];
 
   for (const entry of entries) {
-    if (isRecordedReport(entry)) continue;
-
     // Pi session entries: { type: "message", message: { role, content, ... } }
     // Also: "custom", "compaction", "model_change", "thinking_level_change", etc.
     if (entry.type !== "message") continue;

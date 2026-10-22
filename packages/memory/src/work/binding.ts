@@ -18,7 +18,7 @@ export const BINDING_RULES = [
   "Work item binding:",
   "- Bind (task_bind) the item you are working on BEFORE you start: it decides where what you learn is kept.",
   "- One bound item per session. Rebind (task_bind) when you switch to another item.",
-  "- When you delegate work on an item to a subagent, pass workItem: its report is then kept in that item's Record.",
+  "- When a subagent finishes, relay the decisions and findings that matter to the user in your own words; the raw report is not kept in memory.",
 ].join("\n");
 
 /** An item that can be worked on directly (a workspace such as a feature cannot be bound). */

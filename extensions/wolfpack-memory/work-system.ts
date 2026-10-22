@@ -1118,7 +1118,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       name: "task_bind",
       description:
         "Bind this session to the work item you are working on (task, issue or spike). Do it BEFORE you start: the bound item decides where what you learn is kept " +
-        "(its feature's Record, not den topics). One bound item per session; call it again to switch. When you delegate work on an item to a subagent, pass workItem.",
+        "(its feature's Record, not den topics). One bound item per session; call it again to switch.",
       parameters: Type.Object({
         id: Type.String({ description: "Work item ID to bind to" }),
       }),

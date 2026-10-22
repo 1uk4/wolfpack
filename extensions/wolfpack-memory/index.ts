@@ -26,8 +26,6 @@ import {
   poolTokens,
   HttpWorkRecordStore,
   serializeBranchEntries,
-  WORK_OBSERVATIONS_CHANNEL,
-  type WorkObservationsMessage,
   type MemoryOrchestrator,
   type Observation,
   type AgentRuntime,
@@ -1444,19 +1442,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Each observer gets its own chunk (watermarked) so no double-processing.
 
   const observerTasks = new Set<Promise<void>>();
-
-  // Work observations handed over by other extensions: a subagent's report on
-  // a work item becomes tagged pool lines, the same ledger path as the observer's.
-  pi.events?.on(WORK_OBSERVATIONS_CHANNEL, (data: unknown) => {
-    if (!enabled || !orchestrator) return;
-    const msg = data as WorkObservationsMessage;
-    if (!msg || typeof msg.work !== "string" || !Array.isArray(msg.contents)) return;
-    try {
-      orchestrator.recordWorkObservations(msg);
-    } catch (err) {
-      runtime?.notify(`work observations from ${msg.source}: ${err instanceof Error ? err.message : String(err)}`, "warning");
-    }
-  });
 
   pi.on("turn_end", (_event: unknown, ctx: any) => {
     // Den-corruption guard: never observe while building a crawl plan.

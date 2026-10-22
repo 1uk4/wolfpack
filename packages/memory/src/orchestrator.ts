@@ -33,24 +33,6 @@ import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { consolidateWorkRecords, type WorkRecordStore } from "./work-record.js";
 
-/**
- * The event-bus channel on which other extensions hand work observations to
- * the memory extension (see MemoryOrchestrator.recordWorkObservations). The
- * subagents extension carries its own copy of this string; a test keeps them equal.
- */
-export const WORK_OBSERVATIONS_CHANNEL = "wolfpack:work-observations";
-
-/** Payload on WORK_OBSERVATIONS_CHANNEL. */
-export interface WorkObservationsMessage {
-  /** The work item the material is about. */
-  work: string;
-  /** Its parent feature, when it has one (consolidation decides if that is a real one). */
-  feature?: string;
-  /** `subagent:<name>` */
-  source: string;
-  contents: string[];
-}
-
 /** The work item a session is bound to right now. */
 export interface BoundWork {
   taskId: string;
@@ -109,14 +91,6 @@ export interface MemoryOrchestrator {
    * Resolves with the consolidation result (counts + per-topic details).
    */
   promoteToWolfMemory(denConfig: DenConfig): Promise<ConsolidateResult>;
-
-  /**
-   * Add observations from outside the observer (a subagent's report) to the
-   * pool, tagged with the work item and source. Same ledger event as the
-   * observer's, so Record consolidation picks them up unchanged. Returns how
-   * many were recorded.
-   */
-  recordWorkObservations(msg: WorkObservationsMessage): number;
 
   /**
    * Get the current observation buffer for context injection.
@@ -428,27 +402,6 @@ export function createOrchestrator(
     return result;
   }
 
-  function recordWorkObservations(msg: WorkObservationsMessage): number {
-    const contents = msg.contents.map((c) => c.trim()).filter(Boolean);
-    if (!msg.work || contents.length === 0) return 0;
-    const now = new Date();
-    const pad = (n: number) => n.toString().padStart(2, "0");
-    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const observations: Observation[] = assignUniqueTimestamps(contents.map((content) => ({ timestamp: stamp, content }))).map((o) => ({
-      timestamp: o.timestamp,
-      content: o.content,
-      tokenCount: estimateTokens(o.content),
-      domain: cfg.defaultDomain,
-      work: msg.work,
-      ...(msg.feature ? { feature: msg.feature } : {}),
-      source: msg.source,
-    }));
-    // The watermark stays where the observer left it.
-    appendEvent({ type: "observations_recorded", observations, coversUpToId: foldLedger(ledgerEvents).latestCoverageId ?? "" });
-    runtime.notify?.(`memory: +${observations.length} from ${msg.source}`, "info");
-    return observations.length;
-  }
-
   function getActiveObservations(): Observation[] {
     return foldLedger(ledgerEvents).activeObservations;
   }
@@ -465,7 +418,6 @@ export function createOrchestrator(
     processChunks,
     consolidateNow,
     promoteToWolfMemory,
-    recordWorkObservations,
     getActiveObservations,
     getMemoryRoot,
     setDefaultDomain,

@@ -225,7 +225,7 @@ describe("context", () => {
     const event: any = { systemPrompt: "BASE", systemPromptOptions: { sections: {} } };
     const r = await h.handlers["before_agent_start"](event, ctx);
     expect(r.systemPrompt).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
-    expect(r.systemPrompt).toContain("pass workItem");
+    expect(r.systemPrompt).not.toContain("workItem");
   });
 
   it("bound: the rules are there and the unbound notice is not", async () => {

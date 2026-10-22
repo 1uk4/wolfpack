@@ -61,7 +61,7 @@ describe("durable task tools: binding", () => {
   it("has bind, unbind and current; the section says where learning goes while unbound", async () => {
     for (const t of ["task_bind", "task_unbind", "task_current"]) expect(tool(t)).toBeDefined();
     expect(sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
-    expect(sectionText("task_tools")).toContain("pass workItem");
+    expect(sectionText("task_tools")).not.toContain("workItem");
   });
 
   it("task_create binds a new task when nothing is bound (feature = a real parent), and not twice", async () => {

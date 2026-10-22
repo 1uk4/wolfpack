@@ -56,8 +56,8 @@ describe("texts", () => {
       "No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).",
     );
   });
-  it("rules cover bind-first, one per session, rebind, workItem for subagents", () => {
-    for (const w of ["BEFORE", "One bound item per session", "Rebind", "workItem"]) expect(BINDING_RULES).toContain(w);
+  it("rules cover bind-first, one per session, rebind, relay subagent reports", () => {
+    for (const w of ["BEFORE", "One bound item per session", "Rebind", "relay the decisions and findings", "not kept in memory"]) expect(BINDING_RULES).toContain(w);
   });
   it("status label: short title or unbound", () => {
     expect(bindingLabel(null)).toBe("⛓ unbound");

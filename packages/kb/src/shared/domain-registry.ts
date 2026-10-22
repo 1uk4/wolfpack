@@ -9,8 +9,6 @@ import { parse as yamlParse } from "yaml";
 export interface DomainRegistryEntry {
   label?: string;
   description?: string;
-  /** Merge style: `history` keeps dated snapshots on merge; `current` (default) rewrites to current state. */
-  style?: string;
 }
 
 /** Domain name → label/description. Empty when the registry is missing or unreadable. */
@@ -26,7 +24,6 @@ export function readDomainRegistry(kbBase: string): Record<string, DomainRegistr
       out[name] = {
         label: v?.label ? String(v.label) : undefined,
         description: v?.description ? String(v.description).trim() : undefined,
-        style: v?.style ? String(v.style).trim() : undefined,
       };
     }
     return out;

@@ -402,15 +402,13 @@ describe("produceEntry: knowledge lint", () => {
     expect(r.lint?.after).toEqual([]);
   });
 
-  it("oversize keeps the entry but reports it; history-style domains are exempt", async () => {
+  it("oversize keeps the entry but reports it, in every domain", async () => {
     const big = "## How\n" + "word ".repeat(1500);
     const call = vi.fn().mockResolvedValue(op({ detail: big }));
     const r = await produceEntry({ call } as unknown as Engine, input());
     expect(r.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
-    call.mockClear();
-    const h = await produceEntry({ call } as unknown as Engine, { ...input(), style: "history" });
-    expect(call).toHaveBeenCalledTimes(1);
-    expect(h.lint?.after).toEqual([]);
+    const sj = await produceEntry({ call } as unknown as Engine, { ...input(), domain: "snapjack" });
+    expect(sj.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
   });
 });
 

@@ -312,7 +312,7 @@ For each contribution write:
 CONVERT, DO NOT LOG:
 - When the topic records that a fact CHANGED (it says what was before and what is now, or when it was changed), write the new fact in the body and add one line to a final "## History" section:
   - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <why, if the topic says>.
-  Use the date the topic gives for the change; if it gives none, use the TOPIC DATE. Each line at most two sentences, dated, with a reason only when known. Omit the section when nothing changed.
+  Use the date the topic gives for the change; if it gives none, use the TOPIC DATE. Each line at most two sentences, dated, with a reason only when known. A line keeps the dated substance (what the old fact was, when, why it changed), never a vague "updated". When History would pass about 15 lines, fold the oldest lines into one summary line saying the full earlier text is in versions/, for example "- Earlier history (before <YYYY-MM-DD>): <summary>; see versions/ for prior text." Omit the section when nothing changed.
 - LEAVE OUT, entirely: commit hashes, task ids, work ids, "N tests pass" lines, "deployed" / "verified" / "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
 - Never put a date in a heading or in the body outside History. Never put a hash or id in History.
 - Do not add facts the topic does not state.
@@ -350,9 +350,12 @@ WRITING RULES:
   "because" clause when the reason is not known. Keep each line to at most two
   sentences. Keep every existing History line exactly as written (never rewrite
   them) and do not add a line for a change already recorded. History lines
-  carry dates and reasons only: never a commit hash, task id or work id. When History would
-  pass about 15 lines, fold the oldest lines into a single summary line. Omit
-  the section when there is nothing to record. Do not put a History section
+  carry dates and reasons only: never a commit hash, task id or work id. A History line for a replaced fact keeps the
+  dated substance (what it was, when, why it changed), never a vague "updated".
+  When History would pass about 15 lines, fold the oldest lines into one
+  summary line that says the full earlier text is in versions/, for example
+  "- Earlier history (before <YYYY-MM-DD>): <summary>; see versions/ for prior text."
+  Omit the section when there is nothing to record. Do not put a History section
   anywhere but last, and do not use the \`context\` field for it.
 - DECISION entries: when the EXISTING ENTRY has kind "decision", never change
   its body. If the contribution contradicts or changes the decision, set
@@ -406,23 +409,6 @@ FRONTMATTER RULES (the entry is machine-read — be disciplined):
   (e.g. \`#2E7D32\`) so Obsidian does not misread them as tags.
 
 Output JSON matching the entry schema.`;
-
-/**
- * Appended to PRODUCE_SYSTEM for a domain with the `history` merge style
- * (domains.yaml `style: history`, default: snapjack). Overrides the
- * "current state only" rules above.
- */
-export const PRODUCE_HISTORY_RULES = `DOMAIN STYLE: this domain is an intentional development history. These rules
-override the "current state" and "dates only in History" rules above:
-- On merge, do NOT replace dated content with current state. Keep the existing
-  dated snapshots ("As of <date>, …"), plans and change-log rows in the body.
-- Add what the contribution brings as dated content: "As of <CONTRIBUTION
-  DATE>, …", plus a change-log row when the entry has a change log.
-- Mark snapshot-like claims with their date; never rewrite history into
-  present tense.
-- Delete historical content only when it is clearly wrong; otherwise keep it.
-- Still add a "- Until <YYYY-MM-DD>: …" line to the final "## History" section
-  for each fact that stopped being true, and keep every existing History line.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CRAWL: OBSERVER (document mode)

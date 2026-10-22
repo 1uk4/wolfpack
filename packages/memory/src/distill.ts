@@ -20,14 +20,13 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { atomicWrite, DISTILL_SYSTEM, LlmInfraError, SWEEP, type Engine } from "@wolfpack/engine";
+import { atomicWrite, DISTILL_SYSTEM, LlmInfraError, type Engine } from "@wolfpack/engine";
 import { isTrivialChange, isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import {
   contentHash,
   describeFindings,
   hardFindings,
   lintKnowledge,
-  readDomainRegistry,
   safeSegment,
   stripDetailHeading,
   stripLedeRepeat,
@@ -107,8 +106,6 @@ export interface DistillInput {
   previous?: Array<{ slug: string; title: string }>;
   /** YYYY-MM-DD used for History lines the topic does not date. */
   date: string;
-  /** Domain merge style; `history` domains are exempt from the size cap. */
-  style?: string;
 }
 
 export interface DistillResult {
@@ -158,7 +155,7 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
     return DistillOutputSchema.parse(raw).contributions;
   };
   const lint = (c: { title: string; summary: string; body: string }) =>
-    lintKnowledge({ title: c.title, summary: c.summary, body: cleanBody(c.summary, c.body), style: input.style });
+    lintKnowledge({ title: c.title, summary: c.summary, body: cleanBody(c.summary, c.body) });
 
   let contributions = await run();
   const before = contributions.flatMap(lint);
@@ -235,7 +232,6 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
   const { engine, roots, wolf, defaultDomain, onProgress, force } = opts;
   const stats: PromoteStats = { distilled: 0, split: 0, held: 0, trivialSkipped: 0, pending: 0, emitted: 0 };
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
-  const styles = roots.kbBase ? readDomainRegistry(roots.kbBase) : {};
 
   for (const topic of topics) {
     const domain = topic.domain || defaultDomain;
@@ -269,7 +265,6 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
           domain,
           previous: rec?.slugs,
           date: today,
-          style: styles[domain]?.style ?? (SWEEP.historyDomains.includes(domain) ? "history" : undefined),
         });
         stats.distilled++;
         outputs = r.outputs;

@@ -4,7 +4,7 @@
  * call stays bounded and cheap (don't re-generate unchanged prose).
  */
 import type { Engine } from "@wolfpack/engine";
-import { parseFrontmatter, PRODUCE_SYSTEM, PRODUCE_HISTORY_RULES, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
+import { parseFrontmatter, PRODUCE_SYSTEM, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
@@ -51,8 +51,6 @@ export interface ProduceEntryInput {
   /** The entry being replaced when it is not fed to the model (a graduation
    *  regenerated from its dossier): its History lines and relations are kept. */
   previousMarkdown?: string;
-  /** Merge style of the domain: `history` keeps dated snapshots (default `current`). */
-  style?: "history" | "current";
   /** `created` date of the entry being updated, kept on merge (read from
    *  existingMarkdown when not given). */
   existingCreated?: string;
@@ -80,12 +78,12 @@ export interface ProduceEntryResult {
  * Lint what the model wrote, ignoring lines the entry already carried (a merge
  * keeps old History lines verbatim, so their content is not the model's fault).
  */
-export function lintOpinion(o: LlmOpinion, previous: string | undefined, style: string | undefined): LintFinding[] {
+export function lintOpinion(o: LlmOpinion, previous: string | undefined): LintFinding[] {
   const old = new Set((previous ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
   const body = o.detail.split("\n").filter((l) => !old.has(l.trim())).join("\n");
   // Content checks look at what is new; size counts the whole entry the reader gets.
-  const fresh = lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, style, cap: Infinity });
-  const size = lintKnowledge({ body: o.detail, style, extraChars: o.summary.length }).filter((f) => f.code === "oversize");
+  const fresh = lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, cap: Infinity });
+  const size = lintKnowledge({ body: o.detail, extraChars: o.summary.length }).filter((f) => f.code === "oversize");
   return [...fresh, ...size];
 }
 
@@ -175,7 +173,7 @@ export async function produceEntry(
   engine: Engine,
   input: ProduceEntryInput
 ): Promise<ProduceEntryResult> {
-  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, previousMarkdown, style, existingCreated, resolve, overrides, context } = input;
+  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, previousMarkdown, existingCreated, resolve, overrides, context } = input;
   const previous = existingMarkdown ?? previousMarkdown;
   const graduation = contribution.graduation;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
@@ -209,7 +207,6 @@ export async function produceEntry(
     // model output (the confinement firewall — nothing invalid reaches assemble).
     const system = [
       PRODUCE_SYSTEM,
-      style === "history" ? PRODUCE_HISTORY_RULES : "",
       graduation ? (graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES) : "",
     ].filter(Boolean).join("\n\n");
     const shape = (raw: unknown): LlmOpinion => {
@@ -225,7 +222,7 @@ export async function produceEntry(
     // findings, then strip what can be stripped safely. Graduations are
     // deliberate records of work and are not linted.
     if (!graduation) {
-      const before = lintOpinion(opinion, previous, style);
+      const before = lintOpinion(opinion, previous);
       let retried = false;
       if (hardFindings(before).length || before.some((f) => f.code === "oversize")) {
         retried = true;
@@ -242,7 +239,7 @@ export async function produceEntry(
         properties: stripProperties(opinion.properties),
         detail: stripLedeRepeat(opinion.summary, stripDetailHeading(opinion.detail)),
       });
-      lint = { retried, before, after: lintOpinion(opinion, previous, style) };
+      lint = { retried, before, after: lintOpinion(opinion, previous) };
     }
   }
 

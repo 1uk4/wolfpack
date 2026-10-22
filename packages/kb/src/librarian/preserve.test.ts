@@ -3,10 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { PRODUCE_HISTORY_RULES } from "@wolfpack/engine";
 import { historyLines, preserveHistory, normalizeDetail, foldIntro, existingRelations, supersededIds } from "./preserve.js";
 import { produceEntry } from "./produce.js";
-import { sweep, domainMergeStyle } from "./sweep.js";
+import { sweep } from "./sweep.js";
 import { type KbRoots, type ParsedContribution } from "../shared/index.js";
 import { SectionId } from "../schema/knowledge.js";
 
@@ -143,17 +142,18 @@ describe("produceEntry guards", () => {
     expect(r.entry.relations).toEqual([{ kind: "supersedes", target: "kb-wolfpack-abc1234", source: "code", weight: 1 }]);
   });
 
-  it("the history style adds the history rules to the prompt; the default does not", async () => {
-    const a = engineReturning({});
-    await produceEntry(a.engine, { ...input, contribution: contribution(), style: "history" });
-    expect(a.call.mock.calls[0][2].system).toContain(PRODUCE_HISTORY_RULES);
-    const b = engineReturning({});
-    await produceEntry(b.engine, { ...input, contribution: contribution() });
-    expect(b.call.mock.calls[0][2].system).not.toContain("DOMAIN STYLE");
+  it("every domain gets the same prompt: current state plus History", async () => {
+    for (const domain of ["snapjack", "wolfpack"]) {
+      const a = engineReturning({});
+      await produceEntry(a.engine, { ...input, domain, contribution: contribution() });
+      const sys = a.call.mock.calls[0][2].system as string;
+      expect(sys).not.toContain("DOMAIN STYLE");
+      expect(sys).toContain("see versions/ for prior text");
+    }
   });
 });
 
-describe("domain merge style and superseded decisions", () => {
+describe("superseded decisions and snapjack merges", () => {
   let base: string;
   let roots: KbRoots;
   beforeEach(() => {
@@ -163,14 +163,6 @@ describe("domain merge style and superseded decisions", () => {
     mkdirSync(join(roots.opsRoot, "inbox", "w1"), { recursive: true });
   });
   afterEach(() => rmSync(base, { recursive: true, force: true }));
-
-  it("domains.yaml style wins; snapjack defaults to history", () => {
-    expect(domainMergeStyle(roots, "snapjack")).toBe("history");
-    expect(domainMergeStyle(roots, "wolfpack")).toBe("current");
-    writeFileSync(join(roots.kbBase, "domains.yaml"), "domains:\n  wp:\n    style: history\n  snapjack:\n    style: current\n");
-    expect(domainMergeStyle(roots, "wp")).toBe("history");
-    expect(domainMergeStyle(roots, "snapjack")).toBe("current");
-  });
 
   it("supersededIds maps an old decision to the entry that replaced it", () => {
     const dir = join(roots.kbBase, "domains", "wp", "entries");
@@ -206,5 +198,36 @@ describe("domain merge style and superseded decisions", () => {
     });
     expect(prompts[0]).toContain("EXISTING ENTRY (kb-wp-NEWNEWN)");
     expect(readFileSync(join(dir, "kb-wp-OLDOLDO.md"), "utf-8")).toContain("We do A.");
+  });
+
+  it("a snapjack merge replaces the superseded fact in the body and records it in History", async () => {
+    const dir = join(roots.kbBase, "domains", "snapjack", "entries");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "kb-snapjack-GAMEGAM.md"), "---\nid: kb-snapjack-GAMEGAM\ntitle: Game rooms\nkind: architecture\nsection: sec-snapjack-aaaaaa\ncreated: 2026-03-01\nupdated: 2026-03-01\n---\n\n# Game rooms\n\nA room holds players.\n\n## Limits\n\nA room holds at most 4 players.\n");
+    mkdirSync(join(roots.opsRoot, "inbox", "w1"), { recursive: true });
+    writeFileSync(join(roots.opsRoot, "inbox", "w1", "t.md"), "---\nfrom: w1\nden_topic_id: t\ncontent_hash: c1\nprev_hash: null\ndomain_hint: snapjack\n---\n\n# Game rooms\n\nA room now holds at most 6 players.\n");
+    const systems: string[] = [];
+    const engine = {
+      call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { system: string }) => {
+        if (step === "produce") systems.push(opts.system);
+        return schema.parse({
+          title: "Game rooms", kind: { type: "architecture" }, summary: "A room holds players.",
+          detail: "## Limits\n\nA room holds at most 6 players.\n\n## History\n\n- Until 2026-10-22: a room held at most 4 players. Now it holds 6, because the product raised the cap.",
+          confidence: "high", facets: {}, properties: {}, proposedRelations: [],
+        });
+      }),
+      usage: { summarize: () => ({}) },
+    } as unknown as Engine;
+    await sweep({
+      engine, roots, notify: () => {},
+      getEmbedder: () => ({ embed: async () => [1, 0, 0] }),
+      loadEntryVectors: async () => [{ entryId: "kb-snapjack-GAMEGAM", domain: "snapjack", vector: [1, 0, 0] }] as any,
+    });
+    expect(systems[0]).not.toContain("DOMAIN STYLE");
+    const md = readFileSync(join(dir, "kb-snapjack-GAMEGAM.md"), "utf-8");
+    const [body, history] = md.split("## History");
+    expect(body).toContain("at most 6 players");
+    expect(body).not.toContain("at most 4 players");
+    expect(history).toContain("Until 2026-10-22: a room held at most 4 players. Now it holds 6");
   });
 });

@@ -24,7 +24,6 @@ import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
 import { supersededIds } from "./preserve.js";
-import { readDomainRegistry } from "../shared/index.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
 import {
   commitEntry,
@@ -172,13 +171,6 @@ export function hasGraduationMarker(markdown: string | null): boolean {
   if (!markdown) return false;
   const fm = /^---\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
   return /^[ \t]+graduation-commits:/m.test(fm);
-}
-
-/** The merge style of a domain: `style:` in domains.yaml, else the tuning default. */
-export function domainMergeStyle(roots: KbRoots, domain: string): "history" | "current" {
-  const declared = readDomainRegistry(roots.kbBase)[domain]?.style;
-  if (declared) return declared === "history" ? "history" : "current";
-  return SWEEP.historyDomains.includes(domain) ? "history" : "current";
 }
 
 /** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
@@ -618,7 +610,6 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         newEntryId: ownId ?? undefined,
         existingMarkdown,
         previousMarkdown: targetMd ?? undefined,
-        style: domainMergeStyle(roots, domain),
         existingCreated,
         context,
         resolve,

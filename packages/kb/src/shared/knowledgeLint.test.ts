@@ -31,15 +31,14 @@ describe("lintKnowledge: positives (text from real den topics)", () => {
     expect(codes("Deployed to the VPS with the Oct 22 sync.")).toContain("deploy-status");
     expect(codes("Verified live on a real inbox item.")).toContain("deploy-status");
   });
-  it("dated headings, but not in history-style domains", () => {
+  it("dated headings", () => {
     expect(codes("## Session 2026-10-22\ntext")).toContain("dated-heading");
     expect(codes("## Week 43 planning\ntext")).toContain("dated-heading");
-    expect(codes("## As of 2026-10-22\ntext", { style: "history" })).not.toContain("dated-heading");
+    expect(codes("## As of 2026-10-22\ntext")).toContain("dated-heading");
   });
-  it("oversize body (History excluded), exempt for history style", () => {
+  it("oversize body (History excluded), no domain exempt", () => {
     const big = "word ".repeat(1500);
     expect(codes(big)).toContain("oversize");
-    expect(codes(big, { style: "history" })).not.toContain("oversize");
     expect(codes("short\n\n## History\n\n" + "- Until 2026-10-01: x. Now y.\n".repeat(400))).not.toContain("oversize");
     expect(codes(big, { cap: 10000 })).not.toContain("oversize");
   });

@@ -37,8 +37,6 @@ export interface LintInput {
   summary?: string;
   body: string;
   properties?: Record<string, unknown>;
-  /** Merge style of the domain; `history` domains keep dated content and any size. */
-  style?: string;
   /** Body cap override (chars, History excluded). */
   cap?: number;
   /** Chars outside `body` that count toward the cap (the rendered lede). */
@@ -103,7 +101,6 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
   const add = (code: LintCode, message: string, sample?: string) =>
     findings.push({ code, message, ...(sample ? { sample: clip(sample) } : {}) });
   const { main } = splitHistory(input.body);
-  const history_style = input.style === "history";
 
   // Commit hashes and work ids are noise anywhere, History included.
   const all = proseLines(input.body);
@@ -125,14 +122,12 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
   if (testLine) add("test-count", "test-count / suite-status line", testLine.trim());
   const deployLine = lines.find((l) => DEPLOY_STATUS.some((r) => r.test(l)));
   if (deployLine) add("deploy-status", "deploy/verified status line", deployLine.trim());
-  if (!history_style) {
-    const heads = lines.filter((l) => DATED_HEADING.test(l));
-    if (heads.length) add("dated-heading", `${heads.length} dated heading(s) in the body (dates belong in History)`, heads[0].trim());
-  }
+  const heads = lines.filter((l) => DATED_HEADING.test(l));
+  if (heads.length) add("dated-heading", `${heads.length} dated heading(s) in the body (dates belong in History)`, heads[0].trim());
 
   const cap = input.cap ?? DEFAULT_BODY_CAP;
   const size = main.length + (input.extraChars ?? 0);
-  if (!history_style && size > cap) add("oversize", `body is ${size} chars (History excluded), cap is ${cap}`);
+  if (size > cap) add("oversize", `body is ${size} chars (History excluded), cap is ${cap}`);
 
   if (input.summary && ledeRepeated(input.summary, main)) add("lede-repeat", "the lede paragraph is repeated in the body", input.summary);
 

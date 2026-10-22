@@ -54,6 +54,7 @@ beforeEach(() => {
   kb = { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") };
   items = new Map();
   n = 0;
+  vi.stubEnv("PI_SUBAGENT_AGENT", ""); // these tests run as the main session
   vi.stubEnv("WORK_ENDPOINT", "http://127.0.0.1:1");
   vi.stubEnv("WORK_TOKEN", "t");
   vi.stubGlobal("fetch", fetchImpl);

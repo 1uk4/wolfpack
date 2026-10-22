@@ -81,6 +81,7 @@ const run = (name: string, params: Record<string, unknown> = {}) => h.tools[name
 
 beforeEach(async () => {
   den = mkdtempSync(join(tmpdir(), "bind-"));
+  vi.stubEnv("PI_SUBAGENT_AGENT", ""); // these tests run as the main session
   vi.stubEnv("WOLF_DEN", den);
   vi.stubEnv("WOLF_NAME", "1uk4");
   vi.stubEnv("WORK_ENDPOINT", "http://127.0.0.1:1");
@@ -248,5 +249,53 @@ describe("context", () => {
     const section = event.systemPromptOptions.sections["active_task"];
     expect(section).toContain("## Feature Record — The feature");
     expect(section).toContain("- Use X — why: Y");
+  });
+});
+
+describe("subagent sessions (PI_SUBAGENT_AGENT): no binding", () => {
+  it("no status, no injected context, no auto-bind, no heads-up; task_bind / task_unbind refuse; other tools work", async () => {
+    // The orchestrator's binding, in the shared den.
+    const mine = task({ title: "Mine" });
+    await run("task_bind", { id: mine.id });
+    const { readFileSync } = await import("node:fs");
+    const file = join(den, "factory", "sessions", "sess-1", "active-task.json");
+    const before = readFileSync(file, "utf8");
+
+    // The subagent child: same den, the env var set before the extension loads.
+    vi.stubEnv("PI_SUBAGENT_AGENT", "worker");
+    const sub = fakePi();
+    initWorkSystem(sub.pi, { domains: ["wolfpack"] });
+    statuses.length = 0;
+    await sub.handlers["session_start"]({}, ctx);
+    await sub.handlers["turn_end"]({}, ctx);
+    expect(statuses).toEqual([]); // no ⛓ status, bound or unbound
+
+    const event: any = { systemPrompt: "BASE", systemPromptOptions: { sections: {} } };
+    expect(await sub.handlers["before_agent_start"](event, ctx)).toBeUndefined();
+    expect(event.systemPromptOptions.sections["active_task"]).toBeUndefined();
+
+    const call = (name: string, p: Record<string, unknown> = {}) => sub.tools[name].execute("call", p, undefined, undefined, ctx);
+    for (const [tool, p] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
+      const r = await call(tool, p as any);
+      expect(r.isError, tool).toBe(true);
+      expect(text(r)).toBe("Subagents don't bind: the orchestrator owns the binding.");
+    }
+
+    // auto-bind paths do not bind, and no heads-up lines
+    const created = text(await call("task_create", { kind: "task", domain: "wolfpack", title: "From the subagent" }));
+    expect(created).toContain("Created");
+    expect(created).not.toMatch(/Bound to it|Not bound/);
+    const other = task({ title: "Other", stage: "approved" });
+    const staged = text(await call("task_stage", { id: other.id, to: "in_build" }));
+    expect(staged).toContain("→ in_build");
+    expect(staged).not.toMatch(/bound now|Heads-up/);
+    const noted = text(await call("task_note", { id: other.id, text: "found X" }));
+    expect(noted).toContain("Logged: found X");
+    expect(noted).not.toContain("Heads-up");
+    expect(other.log.at(-1).text).toBe("found X"); // other work tools keep working
+
+    // the orchestrator's binding was never touched
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(statuses).toEqual([]);
   });
 });

@@ -332,6 +332,16 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   const client = new WorkClient();
 
+  /**
+   * A subagent child (PI_SUBAGENT_AGENT) never binds: the binding belongs to the
+   * orchestrator. No status, no binding context or rules, no auto-bind, no
+   * heads-up; task_bind / task_unbind refuse. The other work tools keep working.
+   */
+  const isSubagent = () => !!process.env.PI_SUBAGENT_AGENT;
+  const SUBAGENT_NO_BIND = "Subagents don't bind: the orchestrator owns the binding.";
+  const headsUp = (reply: string, working: { id: string; title?: string }) =>
+    isSubagent() ? reply : withHeadsUp(reply, working, boundRef());
+
   // ── Outcomes: a shipped child is folded into its feature's ## Outcomes ──
   // Every feature keeps the section (the Inbox does not). Errors are logged —
   // a bad rollup never blocks the ship.
@@ -364,7 +374,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       debugLog('ensureSessionLoaded: session change', { sid, prev: sessionId });
       sessionId = sid;
     }
-    activeTask = readActiveTask(wolfDen, sessionId);
+    activeTask = isSubagent() ? null : readActiveTask(wolfDen, sessionId);
   }
   function getBoundWork(): { taskId: string; featureId?: string } | null {
     const t = sessionId ? readActiveTask(wolfDen!, sessionId) : activeTask;
@@ -422,7 +432,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   function updateWidget(ctx: any): void {
     try {
-      if (!ctx?.hasUI) return;
+      if (!ctx?.hasUI || isSubagent()) return;
       if (!activeItem) {
         ctx.ui.setWidget("wolfpack-task", undefined);
         ctx.ui.setStatus("wolfpack-task", `\x1b[2m${bindingLabel(null)}\x1b[0m`);
@@ -440,6 +450,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   /** Bind to a work item with full tracking. Only tasks/issues/spikes bind. */
   async function bindToTask(item: WorkItem, ctx: any): Promise<boolean> {
+    if (isSubagent()) return false;
     ensureSessionLoaded(ctx);
     if (!sessionId) return false;
     if (!isBindable(item)) {
@@ -540,6 +551,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // ── System prompt injection ─────────────────────────────────────────────
 
   pi.on("before_agent_start", async (event: any, ctx: any) => {
+    if (isSubagent()) return;
     ensureSessionLoaded(ctx);
     await refreshActiveItem();
     debugLog('before_agent_start', { activeTask: activeTask?.workId, activeItem: activeItem?.title });
@@ -1103,6 +1115,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.String({ description: "Work item ID to bind to" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
         let item: WorkItem;
         try { item = await client.get(params.id); } catch { return text(`Work item ${params.id} not found.`, true); }
         if (!isBindable(item)) return text(`Cannot bind to ${item.kind} ${item.id}: bind one of its tasks.`, true);
@@ -1120,6 +1133,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       description: "Unbind from the current work item without shipping it. What you learn afterwards goes to den topics until you bind again.",
       parameters: Type.Object({}),
       async execute(_id, _params, _signal, _onUpdate, ctx) {
+        if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
         ensureSessionLoaded(ctx);
         if (!activeTask) return text("No work item bound.");
         const was = activeTask.workId;
@@ -1162,7 +1176,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           const { item, body: current } = await client.getWithBody(target);
           const record = extractRecord(current ?? "");
           await client.updateBody(target, record ? replaceRecordSection(params.body, record) : params.body);
-          return text(withHeadsUp(`Updated working document for: ${item.title}`, { id: item.id, title: item.title }, boundRef()));
+          return text(headsUp(`Updated working document for: ${item.title}`, { id: item.id, title: item.title }));
         } catch (e: any) {
           return text(e.message, true);
         }
@@ -1186,7 +1200,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           if (target === activeTask?.workId) activeItem = item;
           await syncFeatureStage(client, item).catch(() => {});
           updateWidget(ctx);
-          return text(withHeadsUp(`Logged: ${params.text} (${item.log.length} entries)`, { id: item.id, title: item.title }, boundRef()));
+          return text(headsUp(`Logged: ${params.text} (${item.log.length} entries)`, { id: item.id, title: item.title }));
         } catch (e: any) {
           return text(e.message, true);
         }
@@ -1218,7 +1232,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             reply += `\nNothing was bound, so it is bound now: what you learn goes to its Record.`;
           }
           updateWidget(ctx);
-          return text(withHeadsUp(reply, { id: item.id, title: item.title }, boundRef()));
+          return text(headsUp(reply, { id: item.id, title: item.title }));
         } catch (e: any) {
           return text(e.message, true);
         }
@@ -1406,7 +1420,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           const result = await client.create(input);
           let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
           const bindInput = { kind: params.kind, assignee: input.assignee, wolf: wolfName, bound: !!activeTask, bind: params.bind };
-          if (shouldBindOnCreate(bindInput)) {
+          if (isSubagent()) {
+            // a subagent never binds
+          } else if (shouldBindOnCreate(bindInput)) {
             reply += (await bindToTask(result.item, ctx)) ? `\nBound to it.` : `\nNot bound: could not bind it.`;
           } else {
             reply += `\nNot bound: ${notBoundReason(bindInput)}.`;
@@ -1457,7 +1473,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             }
             const shippedOther = await shipWithRollup(params.id);
             await client.note(params.id, "Completed.");
-            return text(withHeadsUp(`✓ Shipped: ${shippedOther.title}`, { id: shippedOther.id, title: shippedOther.title }, boundRef()));
+            return text(headsUp(`✓ Shipped: ${shippedOther.title}`, { id: shippedOther.id, title: shippedOther.title }));
           } catch (e: any) {
             return text(`Failed to ship: ${e.message}`, true);
           }

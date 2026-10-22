@@ -46,6 +46,7 @@ beforeEach(() => {
   den = mkdtempSync(join(tmpdir(), "bind-d-"));
   items = new Map();
   n = 0;
+  vi.stubEnv("PI_SUBAGENT_AGENT", ""); // these tests run as the main session
   vi.stubEnv("WORK_ENDPOINT", "http://127.0.0.1:1");
   vi.stubEnv("WORK_TOKEN", "t");
   vi.stubGlobal("fetch", fetchImpl);
@@ -116,5 +117,36 @@ describe("durable task tools: Outcomes on ship", () => {
     const s = add({ kind: "task", title: "Stray", partOf: inbox.id });
     await run("task_stage", { id: s.id, to: "shipped" });
     expect(items.get(inbox.id)!.body).toBe("# Inbox");
+  });
+});
+
+describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
+  it("no binding context or rules, no auto-bind, no heads-up; task_bind / task_unbind refuse", async () => {
+    const mine = add({ kind: "task", title: "Mine" });
+    await run("task_bind", { id: mine.id });
+    expect(readBoundTask(den)?.taskId).toBe(mine.id);
+
+    vi.stubEnv("PI_SUBAGENT_AGENT", "worker");
+    const sub = createTasksExtension({}, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {} });
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      sub.tools!.find((t) => t.name === name)!.execute(args, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
+    const section = (name: string) => sub.sections!.find((s) => s.name === name)!.render({} as any) as string;
+
+    expect(section("active_task")).toBe("");
+    expect(section("task_tools")).not.toContain("Work item binding");
+    for (const [tool, args] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
+      const r = await call(tool, args);
+      expect(r.isError, tool).toBe(true);
+      expect(r.content[0].text).toBe("Subagents don't bind: the orchestrator owns the binding.");
+    }
+    const created = (await call("task_create", { kind: "task", domain: "wolfpack", title: "Sub task" })).content[0].text as string;
+    expect(created).not.toMatch(/Bound to it|Not bound/);
+    const other = add({ kind: "task", title: "Other", stage: "approved" });
+    expect((await call("task_stage", { id: other.id, to: "in_build" })).content[0].text).toBe(`${other.id} → in_build`);
+    const noted = (await call("task_note", { id: other.id, text: "x" })).content[0].text as string;
+    expect(noted).not.toContain("Heads-up");
+    expect(other.log.at(-1).text).toBe("x");
+    // the orchestrator's binding is untouched
+    expect(readBoundTask(den)?.taskId).toBe(mine.id);
   });
 });

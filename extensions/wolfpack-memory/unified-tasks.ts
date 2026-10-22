@@ -74,11 +74,22 @@ interface ActiveBinding {
 
 // ─── Binding State ─────────────────────────────────────────────────────────
 
+/**
+ * A subagent child (PI_SUBAGENT_AGENT) never binds: the binding file lives in
+ * the orchestrator's den and is theirs. No binding context or rules, no
+ * auto-bind, no heads-up; task_bind / task_unbind refuse. Other tools keep working.
+ */
+const isSubagent = () => !!process.env.PI_SUBAGENT_AGENT;
+const SUBAGENT_NO_BIND = "Subagents don't bind: the orchestrator owns the binding.";
+const heads = (reply: string, working: { id: string; title?: string }, bound: { id: string; title?: string } | null) =>
+  isSubagent() ? reply : withHeadsUp(reply, working, bound);
+
 function bindingPath(wolfDen: string): string {
   return join(wolfDen, "tasks", "active.json");
 }
 
 async function readBinding(wolfDen: string): Promise<ActiveBinding | null> {
+  if (isSubagent()) return null;
   const path = bindingPath(wolfDen);
   if (!existsSync(path)) return null;
   try {
@@ -105,6 +116,7 @@ export function readBoundTask(wolfDen: string): { taskId: string; featureId?: st
 }
 
 async function writeBinding(wolfDen: string, taskId: string, domain: string, featureId?: string): Promise<void> {
+  if (isSubagent()) return;
   const path = bindingPath(wolfDen);
   await mkdir(dirname(path), { recursive: true });
   const binding: ActiveBinding = {
@@ -117,6 +129,7 @@ async function writeBinding(wolfDen: string, taskId: string, domain: string, fea
 }
 
 async function clearBinding(wolfDen: string): Promise<void> {
+  if (isSubagent()) return;
   const path = bindingPath(wolfDen);
   if (existsSync(path)) {
     await writeFile(path, "null");
@@ -310,13 +323,12 @@ export default function createTasksExtension(
 
 Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
-Domains: ${domainList}
-
-${BINDING_RULES}`;
+Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context
       section("active_task", () => {
+        if (isSubagent()) return "";
         try {
           const bp = bindingPath(wolfDen);
           if (!existsSync(bp)) {
@@ -379,6 +391,7 @@ ${BINDING_RULES}`;
           id: Type.String({ description: "Work item ID to bind to" }),
         }),
         async execute(args: { id: string }, ctx: ToolContext): Promise<ToolResult> {
+          if (isSubagent()) return { content: [{ type: "text", text: SUBAGENT_NO_BIND }], isError: true };
           const found = await findItem(args.id);
           if (!found) {
             return {
@@ -417,6 +430,7 @@ ${BINDING_RULES}`;
         description: "Unbind from the current task without shipping it.",
         parameters: Type.Object({}),
         async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
+          if (isSubagent()) return { content: [{ type: "text", text: SUBAGENT_NO_BIND }], isError: true };
           const binding = await readBinding(ctx.wolfDen);
           if (!binding) {
             return {
@@ -650,7 +664,9 @@ ${BINDING_RULES}`;
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
             const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx.wolfDen)), bind: args.bind };
-            if (shouldBindOnCreate(bindInput)) {
+            if (isSubagent()) {
+              // a subagent never binds
+            } else if (shouldBindOnCreate(bindInput)) {
               await writeBinding(ctx.wolfDen, result.item.id, args.domain, await recordFeatureId(client, result.item));
               await writeCache(result.item);
               await syncFeatureStage(client, result.item).catch(() => {});
@@ -690,7 +706,7 @@ ${BINDING_RULES}`;
             const noted = await client.note(target, args.text);
             await syncFeatureStage(client, noted).catch(() => {});
             return {
-              content: [{ type: "text", text: withHeadsUp(`Note added to ${target}.`, { id: target, title: noted.title }, boundRef(binding)) }],
+              content: [{ type: "text", text: heads(`Note added to ${target}.`, { id: target, title: noted.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -735,7 +751,7 @@ ${BINDING_RULES}`;
             await client.updateBody(found.item.id, record ? replaceRecordSection(args.body, record) : args.body);
             if (found.item.id === binding?.taskId) await writeCache(found.item);
             return {
-              content: [{ type: "text", text: withHeadsUp(`Updated working document for: ${found.item.title}`, { id: found.item.id, title: found.item.title }, boundRef(binding)) }],
+              content: [{ type: "text", text: heads(`Updated working document for: ${found.item.title}`, { id: found.item.id, title: found.item.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -769,14 +785,14 @@ ${BINDING_RULES}`;
             const moved = args.to === "shipped" ? await ship(target) : await client.stage(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
-            if (moved.stage === "in_build" && !binding && ["task", "issue", "spike"].includes(moved.kind)) {
+            if (moved.stage === "in_build" && !binding && !isSubagent() && ["task", "issue", "spike"].includes(moved.kind)) {
               await writeBinding(ctx.wolfDen, moved.id, moved.domain as string, await recordFeatureId(client, moved));
               await writeCache(moved);
               binding = await readBinding(ctx.wolfDen);
               reply += "\nNothing was bound, so it is bound now: what you learn goes to its Record.";
             }
             return {
-              content: [{ type: "text", text: withHeadsUp(reply, { id: target, title: moved.title }, boundRef(binding)) }],
+              content: [{ type: "text", text: heads(reply, { id: target, title: moved.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -805,7 +821,7 @@ ${BINDING_RULES}`;
             try {
               const shippedOther = await ship(args.id);
               return {
-                content: [{ type: "text", text: withHeadsUp(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
+                content: [{ type: "text", text: heads(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
               };
             } catch (err) {
               return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };

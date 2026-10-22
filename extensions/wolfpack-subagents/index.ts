@@ -123,8 +123,8 @@ const SubagentParams = Type.Object({
     Type.Boolean({
       description:
         "true = run in a terminal pane the user can watch and you can steer live; false = background " +
-        "process (no pane, can't be steered mid-run). Default: the agent's own setting. Use true only " +
-        "when the user wants to watch, or for long risky work.",
+        "process (no pane, can't be steered mid-run). Default: the agent's own setting (shown in " +
+        "subagents_list). Usually omit this; set it only when the user asks to watch or not to watch.",
     }),
   ),
   cwd: Type.Optional(
@@ -1856,7 +1856,7 @@ const ORCHESTRATOR_RULES = `You are the orchestrator: the user's point of contac
 Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
 Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
 Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
-Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. Use \`pane: true\` only when the user wants to watch, or for long risky work. Background agents (the default) can't be steered mid-run; message them after they finish to resume.`;
+Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. Each agent has its own pane/background default (see subagents_list); omit \`pane\` to use it, and override it only when the user asks. Background agents can't be steered mid-run; message them after they finish to resume.`;
 
 export default function subagentsExtension(pi: ExtensionAPI) {
   latestPi = pi;

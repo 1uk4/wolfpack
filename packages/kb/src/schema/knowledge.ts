@@ -256,6 +256,13 @@ export const Kind = z.discriminatedUnion("type", [
 ]);
 export type Kind = z.infer<typeof Kind>;
 
+/** Models sometimes return `kind: "architecture"` instead of `{type: "architecture"}`. Known kind strings are lifted; others still fail validation. */
+export function coerceKind(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const type = raw.trim().toLowerCase();
+  return (ENTRY_KINDS as readonly string[]).includes(type) ? { type } : raw;
+}
+
 /** A single typed edge. `weight` present only for embedding-derived edges. */
 export const Relation = z.object({
   kind: RelationKind,
@@ -277,7 +284,7 @@ export type Relation = z.infer<typeof Relation>;
  */
 export const LlmOpinion = z.object({
   title: z.string().min(3).max(140),
-  kind: Kind,
+  kind: z.preprocess(coerceKind, Kind),
   summary: z.string().min(1), // one paragraph
   detail: z.string().min(1), // body
   context: z.string().optional(),

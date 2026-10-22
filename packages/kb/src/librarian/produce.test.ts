@@ -330,4 +330,24 @@ describe("LlmOpinion schema enforcement (firewall test)", () => {
       })
     ).rejects.toThrow();
   });
+
+  it("keeps the original created date on merge, and uses today on create", async () => {
+    const base = {
+      contribution: mockContribution(),
+      domain: "wolfpack",
+      section: SectionId.parse("sec-wolfpack-abc123"),
+      placement: { basis: "routed" as const, fit: 1 },
+      resolve: (() => null) as RelationResolver,
+    };
+    const merged = await produceEntry(mockEngine(), {
+      ...base,
+      entryId: "kb-wolfpack-AAAAAAA",
+      existingMarkdown: "---\nid: kb-wolfpack-AAAAAAA\ncreated: 2025-01-02\n---\nold",
+    });
+    expect(merged.entry.created).toBe("2025-01-02");
+    const viaField = await produceEntry(mockEngine(), { ...base, entryId: "kb-wolfpack-AAAAAAA", existingCreated: "2024-05-06" });
+    expect(viaField.entry.created).toBe("2024-05-06");
+    const created = await produceEntry(mockEngine(), { ...base, existingCreated: "2024-05-06" });
+    expect(created.entry.created).not.toBe("2024-05-06");
+  });
 });

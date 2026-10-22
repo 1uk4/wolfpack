@@ -13,7 +13,7 @@
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
-import { type KbEvent, type ParsedContribution, ev, now } from "../shared/index.js";
+import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, cosine, type Embedder } from "./embed.js";
@@ -178,6 +178,31 @@ export function listedEntryIds(body: string): string[] {
   return [...new Set(ids)];
 }
 
+/** The contribution's title: the first H1 of the den topic, else its den topic id. */
+export function contributionTitle(c: Pick<ParsedContribution, "body" | "denTopicId">): string {
+  const h1 = /^#\s+(.+)$/m.exec(c.body ?? "");
+  return (h1?.[1] ?? c.denTopicId.replace(/[-_]+/g, " ")).trim();
+}
+
+/** What to do with a contribution that has no alias: from the top-3 scores. */
+export type MergeBand =
+  | { kind: "create" }
+  | { kind: "merge"; id: string }
+  | { kind: "ask" };
+
+/**
+ * The score band (SWEEP.mergeLow/mergeHigh/mergeMargin): clearly different →
+ * create; clearly the same with a clear lead over the runner-up → merge; else
+ * ask the LLM. `ranked` is best first.
+ */
+export function mergeBand(ranked: Array<{ id: string; score: number }>): MergeBand {
+  const top = ranked[0];
+  if (!top || top.score < SWEEP.mergeLow) return { kind: "create" };
+  const lead = top.score - (ranked[1]?.score ?? 0);
+  if (top.score >= SWEEP.mergeHigh && lead >= SWEEP.mergeMargin) return { kind: "merge", id: top.id };
+  return { kind: "ask" };
+}
+
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
  *  cosine FP overshoot (>1) or a reused _unplaced score (<0) hard-failing the
  *  whole contribution at schema-parse time. */
@@ -325,21 +350,23 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
 
       // ── EMBED ───────────────────────────────────────────────────────────
-      const vec = await embedder.embed(
-        embedInput({ summary: c.summary, detail: c.body }),
-        c.contentHash
-      );
+      const title = contributionTitle(c);
+      const embedText = embedInput({ title, summary: c.summary, role: "query" });
+      const vec = await embedder.embed(embedText, contentHash(embedText));
 
       // ── IDENTITY (deterministic registry) ───────────────────────────────
       // A re-promote of a known den topic UPDATES its entry (never duplicates).
       // 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
-      // content-similarity to the nearest entry (seeds the alias on commit).
+      // the nearest entries by title+summary similarity, with an LLM subject
+      // check when the score is uncertain (seeds the alias on commit).
       let targetId: string | undefined;
       // Graduated work owns exactly one entry, named in the contribution: update
       // it if it exists, otherwise create it. Never similarity-merged, and no
       // other contribution may merge into it (by alias or by similarity): an
-      // alias that points at a graduated entry is ignored, so that den topic
-      // gets its own entry and the alias is re-pointed on commit.
+      // alias that points at a graduated entry is NOT merged and does not fall
+      // through to similarity either, so that den topic gets its own entry and
+      // the alias is re-pointed on commit.
+      let aliasBlocked = false;
       const ownId = graduationEntryId(c, domain);
       const ledgerOwned = graduationOwnedIds([...log, ...batch] as any);
       // Owned by the ledger, or marked as graduated in its own frontmatter.
@@ -366,30 +393,58 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
           } else if (!protectedIds.has(aliased)) {
             targetId = aliased;
+          } else {
+            aliasBlocked = true;
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} is graduated)`);
           }
           break;
         }
       }
-      if (!targetId && !ownId) {
-        let near: { id: string; score: number } | null = null;
+      // The size limit also keeps an oversized entry out of the candidates:
+      // the merge rewrites the whole entry.
+      const sizeLimit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
+      if (!targetId && !ownId && !aliasBlocked) {
+        const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
           if (protectedIds.has(e.entryId)) continue;
-          const s = cosine(vec, e.vector);
-          if (!near || s > near.score) near = { id: e.entryId, score: s };
+          const md = readEntryMarkdown(roots, domain, e.entryId);
+          if (!md || md.length > sizeLimit) continue;
+          const f = parseFrontmatter(md).fields;
+          ranked.push({
+            id: e.entryId,
+            score: cosine(vec, e.vector),
+            title: String(f.title ?? e.entryId),
+            summary: String(f.summary ?? ""),
+          });
         }
-        if (near && near.score >= SWEEP.mergeSim) targetId = near.id;
+        ranked.sort((x, y) => y.score - x.score);
+        const top = ranked.slice(0, SWEEP.mergeCandidates);
+        const band = mergeBand(top);
+        const scores = top.map((r) => r.score.toFixed(3)).join("/");
+        if (band.kind === "merge") {
+          targetId = band.id;
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${band.id} by similarity (${scores})`);
+        } else if (band.kind === "ask") {
+          const pick = await oracles.matchSubject({ title, summary: c.summary }, top);
+          if (!pick.valid) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check unparseable, creating a new entry`);
+          if (pick.match !== "new") targetId = pick.match;
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check (${scores}) → ${pick.match}`);
+        }
       }
 
       // ── SIZE GUARD ──────────────────────────────────────────────────────
-      // Never merge into an oversized entry (alias or similarity match): the
-      // merge rewrites the whole entry. Create a new one instead; its alias is
-      // re-pointed on commit.
+      // Never merge into an oversized entry: the merge rewrites the whole
+      // entry. Create a new one instead; its alias is re-pointed on commit.
+      // (Similarity candidates were already filtered by size above; this
+      // catches an alias match.) A graduation's own entry (ownId) is exempt by
+      // construction: graduations are regenerated from their dossier and never
+      // fed the previous text, so the rewrite is bounded by the dossier, not by
+      // the old entry, and PRODUCE_SYSTEM asks for a concise entry.
       if (targetId && targetId !== ownId) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
-        const limit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
-        if (size > limit) {
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${limit})`);
+        if (size > sizeLimit) {
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
           targetId = undefined;
         }
       }
@@ -523,6 +578,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       const existingMarkdown = targetId && !c.graduation
         ? readEntryMarkdown(roots, domain, targetId) ?? undefined
         : undefined;
+      // An update keeps the entry's original creation date, graduations included.
+      const targetMd = targetId ? readEntryMarkdown(roots, domain, targetId) : null;
+      const existingCreated = targetMd ? String(parseFrontmatter(targetMd).fields.created ?? "") || undefined : undefined;
       // For a hub: what Dewey actually recorded for each delivered feature.
       const recorded = hubFeatures
         .map((fid) => {
@@ -543,6 +601,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         entryId: targetId,
         newEntryId: ownId ?? undefined,
         existingMarkdown,
+        existingCreated,
         context,
         resolve,
       });

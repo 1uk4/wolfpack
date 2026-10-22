@@ -4,12 +4,15 @@
  * is deferrable. Everything else in the sweep is deterministic code.
  */
 import type { Engine } from "@wolfpack/engine";
-import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM } from "@wolfpack/engine";
+import { classifyError } from "./backoff.js";
+import { BudgetExceeded } from "./park.js";
+import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM, MATCH_SUBJECT_SYSTEM } from "@wolfpack/engine";
 import {
   ContradictResultSchema,
   type ContradictResult,
   SectionPickSchema,
   type SectionPick,
+  MatchSubjectSchema,
 } from "../shared/index.js";
 
 export function createOracles(engine: Engine) {
@@ -70,6 +73,46 @@ export function createOracles(engine: Engine) {
       }
 
       return result;
+    },
+
+    /**
+     * matchSubject — is the contribution the same subject as one of the
+     * candidate entries? Returns a candidate id, or "new".
+     *
+     * CONFINEMENT: an id outside the candidate set (or any answer that does
+     * not parse) is "new" — creating a duplicate is safer than a wrong merge.
+     * Infra errors propagate to the sweep's backoff.
+     */
+    async matchSubject(
+      contribution: { title: string; summary: string },
+      candidates: Array<{ id: string; title: string; summary: string }>
+    ): Promise<{ match: string; valid: boolean }> {
+      const list = candidates
+        .map((c) => `- ${c.id}: ${c.title}\n  ${c.summary}`)
+        .join("\n\n");
+      const prompt =
+        `CONTRIBUTION:\n${contribution.title}\n${contribution.summary}\n\n` +
+        `CANDIDATE ENTRIES (answer one id or "new"):\n${list}`;
+      let result;
+      try {
+        result = await engine.call("matchSubject", MatchSubjectSchema, {
+          system: MATCH_SUBJECT_SYSTEM,
+          prompt,
+        });
+      } catch (err) {
+        // Only an unparseable answer degrades to "new"; infra errors and
+        // budget aborts must reach the sweep's backoff / parking.
+        const msg = err instanceof Error ? err.message : String(err);
+        const unparseable =
+          classifyError(err) === "item" &&
+          !(err instanceof BudgetExceeded) &&
+          (/^Failed to extract valid output/.test(msg) || (err as { name?: string })?.name === "ZodError");
+        if (!unparseable) throw err;
+        return { match: "new", valid: false };
+      }
+      const match = result.match.trim();
+      if (candidates.some((c) => c.id === match)) return { match, valid: true };
+      return { match: "new", valid: match.toLowerCase() === "new" };
     },
   };
 }

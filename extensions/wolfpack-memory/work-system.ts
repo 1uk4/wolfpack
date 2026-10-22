@@ -64,6 +64,14 @@ import {
   extractRecord,
   replaceRecordSection,
   syncFeatureStage,
+  recordFeatureId,
+  renderFeatureRecord,
+  bindingLabel,
+  withHeadsUp,
+  shouldBindOnCreate,
+  notBoundReason,
+  UNBOUND_CONTEXT,
+  BINDING_RULES,
 } from "@wolfpack/memory";
 import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
 import * as fs from "node:fs";
@@ -199,12 +207,9 @@ function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: num
   return lines;
 }
 
+/** `⛓ <short title>` plus the stage, dimmed. */
 function renderStatusBarCompact(item: WorkItem): string {
-  const icon = kindIcon(item);
-  const title = item.title.length > 30
-    ? item.title.slice(0, 30) + "…"
-    : item.title;
-  return `${icon} ${title} \x1b[2m${stageLabel(item.stage)}\x1b[0m`;
+  return `${bindingLabel(item.title)} \x1b[2m${stageLabel(item.stage)}\x1b[0m`;
 }
 
 function renderQueueList(items: WorkItem[]): string {
@@ -444,7 +449,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       if (!ctx?.hasUI) return;
       if (!activeItem) {
         ctx.ui.setWidget("wolfpack-task", undefined);
-        ctx.ui.setStatus("wolfpack-task", undefined);
+        ctx.ui.setStatus("wolfpack-task", `\x1b[2m${bindingLabel(null)}\x1b[0m`);
         return;
       }
       const workspace = cachedWorkspace;
@@ -468,12 +473,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     // Stop tracking previous task if any
     if (activeTask) stopFileTracking(activeTask.workId);
 
-    // Bind to new task
+    // Bind to new task. Its Record lives on the parent when that is a real
+    // feature; under the Inbox (or nothing) it keeps its own.
+    const featureId = await recordFeatureId(client, item);
     activeTask = {
       workId: item.id,
       domain: item.domain as string,
       boundAt: new Date().toISOString(),
-      ...(item.partOf ? { featureId: item.partOf as string } : {}),
+      ...(featureId ? { featureId } : {}),
     };
     writeActiveTask(wolfDen, sessionId, activeTask);
     if (item.partOf) workspaceId = item.partOf as string;
@@ -564,10 +571,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     if (!activeItem || !activeTask) {
       // No task bound: still tell the agent which workspace new tasks go to.
       const header = workspaceHeader(workspaceId, all, null);
-      if (!header) return;
       return {
-        systemPrompt: event.systemPrompt + "\n<workspace>\n" + header +
-          "\nNo task is bound. New tasks created with task_create go into this feature unless partOf is given.\n</workspace>\n",
+        systemPrompt: event.systemPrompt + "\n<workspace>\n" + (header ? header + "\n" : "") +
+          UNBOUND_CONTEXT +
+          (header ? "\nNew tasks created with task_create go into this feature unless partOf is given." : "") +
+          "\n" + BINDING_RULES + "\n</workspace>\n",
       };
     }
 
@@ -578,6 +586,15 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       docBody = renderWorkingDocument(body ?? "");
     } catch {
       // No document this turn; the rest of the context still goes in.
+    }
+
+    // The Record is kept on the feature: show it next to the task's own document.
+    let featureRecord = "";
+    if (activeTask.featureId) {
+      try {
+        const f = await client.getWithBody(activeTask.featureId);
+        featureRecord = renderFeatureRecord(f.item.title, f.body ?? "");
+      } catch { /* the task's own context still goes in */ }
     }
 
     const parts: string[] = [];
@@ -600,6 +617,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       parts.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
     }
 
+    if (featureRecord) {
+      parts.push("");
+      parts.push(featureRecord);
+    }
+
     if (activeItem.log.length > 0) {
       parts.push("");
       parts.push("## Recent Log");
@@ -617,6 +639,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       }
     }
 
+    parts.push("");
+    parts.push(BINDING_RULES);
     parts.push("");
     parts.push("This is your working document for this task. Use task_update to write/update the plan, notes, or findings. Use task_note to log progress. Use task_stage to advance when done.");
     if (shipPolicy() === "auto") {
@@ -1084,24 +1108,83 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   // ── Agent-callable tools ────────────────────────────────────────────────
 
+  /** The bound item as the heads-up line names it. */
+  const boundRef = () => (activeTask ? { id: activeTask.workId, title: activeItem?.title } : null);
+  const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], ...(isError ? { isError: true } : {}) });
+  const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
+
+  pi.registerTool(
+    defineTool({
+      name: "task_bind",
+      description:
+        "Bind this session to the work item you are working on (task, issue or spike). Do it BEFORE you start: the bound item decides where what you learn is kept " +
+        "(its feature's Record, not den topics). One bound item per session; call it again to switch. When you delegate work on an item to a subagent, pass workItem.",
+      parameters: Type.Object({
+        id: Type.String({ description: "Work item ID to bind to" }),
+      }),
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        let item: WorkItem;
+        try { item = await client.get(params.id); } catch { return text(`Work item ${params.id} not found.`, true); }
+        if (!isBindable(item)) return text(`Cannot bind to ${item.kind} ${item.id}: bind one of its tasks.`, true);
+        const previous = boundRef();
+        if (!(await bindToTask(item, ctx))) return text(`Could not bind ${item.id}.`, true);
+        const switched = previous && previous.id !== item.id ? `\nSwitched from ${previous.title ?? previous.id} (${previous.id}).` : "";
+        return text(`Bound to: [${item.id}] ${item.title}\nStage: ${item.stage}${item.successCriteria ? `\nSuccess: ${item.successCriteria}` : ""}${switched}`);
+      },
+    })
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "task_unbind",
+      description: "Unbind from the current work item without shipping it. What you learn afterwards goes to den topics until you bind again.",
+      parameters: Type.Object({}),
+      async execute(_id, _params, _signal, _onUpdate, ctx) {
+        ensureSessionLoaded(ctx);
+        if (!activeTask) return text("No work item bound.");
+        const was = activeTask.workId;
+        unbindTask(ctx);
+        return text(`Unbound from ${was}.`);
+      },
+    })
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "task_current",
+      description: "Show the currently bound work item.",
+      parameters: Type.Object({}),
+      async execute(_id, _params, _signal, _onUpdate, ctx) {
+        ensureSessionLoaded(ctx);
+        if (!activeTask) return text(UNBOUND_CONTEXT);
+        await refreshActiveItem();
+        if (!activeItem) return text(`Bound item ${activeTask?.workId ?? ""} is gone.`, true);
+        const i = activeItem;
+        return text(`ID: ${i.id}\nTitle: ${i.title}\nKind: ${i.kind}\nStage: ${i.stage}\nDomain: ${i.domain}${i.successCriteria ? `\nSuccess: ${i.successCriteria}` : ""}`);
+      },
+    })
+  );
+
   pi.registerTool(
     defineTool({
       name: "task_update",
-      description: "Update the active work item's working document (plan, notes, findings). This replaces the body of the .md file. Read the current content from the system prompt's <active_task> Working Document section, then write back the updated version.",
+      description: "Update the active work item's working document (plan, notes, findings). This replaces the body of the .md file. Read the current content from the system prompt's <active_task> Working Document section, then write back the updated version." + ID_NOTE,
       parameters: Type.Object({
         body: Type.String({ description: "The full updated markdown body for the work item (everything below the frontmatter)" }),
+        id: Type.Optional(Type.String({ description: "Work item to update (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-        if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
+        const target = params.id ?? activeTask?.workId;
+        if (!target || (!params.id && !activeItem)) return text("No active task. Bind one with task_bind.", true);
         try {
           // The Record belongs to memory: whatever the agent writes, the item's
           // current Record section stays as it is.
-          const { body: current } = await client.getWithBody(activeItem.id);
+          const { item, body: current } = await client.getWithBody(target);
           const record = extractRecord(current ?? "");
-          await client.updateBody(activeItem.id, record ? replaceRecordSection(params.body, record) : params.body);
-          return { content: [{ type: "text" as const, text: `Updated working document for: ${activeItem.title}` }] };
+          await client.updateBody(target, record ? replaceRecordSection(params.body, record) : params.body);
+          return text(withHeadsUp(`Updated working document for: ${item.title}`, { id: item.id, title: item.title }, boundRef()));
         } catch (e: any) {
-          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+          return text(e.message, true);
         }
       },
     })
@@ -1110,20 +1193,22 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_note",
-      description: "Add a progress note to the active work item's log.",
+      description: "Add a progress note to the active work item's log." + ID_NOTE,
       parameters: Type.Object({
         text: Type.String({ description: "The progress note text" }),
+        id: Type.Optional(Type.String({ description: "Work item to note (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-        if (!activeTask) return { content: [{ type: "text" as const, text: "No active task. Ask the user to /task use first." }], isError: true };
+        const target = params.id ?? activeTask?.workId;
+        if (!target) return text("No active task. Bind one with task_bind.", true);
         try {
-          const item = await client.note(activeTask.workId, params.text);
-          activeItem = item;
+          const item = await client.note(target, params.text);
+          if (target === activeTask?.workId) activeItem = item;
           await syncFeatureStage(client, item).catch(() => {});
           updateWidget(ctx);
-          return { content: [{ type: "text" as const, text: `Logged: ${params.text} (${item.log.length} entries)` }] };
+          return text(withHeadsUp(`Logged: ${params.text} (${item.log.length} entries)`, { id: item.id, title: item.title }, boundRef()));
         } catch (e: any) {
-          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+          return text(e.message, true);
         }
       },
     })
@@ -1132,22 +1217,30 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_stage",
-      description: "Advance the active work item to a new stage. Stages: idea → plan → feasibility → approved → in_build → shipped → live → archived.",
+      description:
+        "Advance the active work item to a new stage. Stages: idea → plan → feasibility → approved → in_build → shipped → live → archived. " +
+        "Moving an item to in_build binds it when nothing is bound." + ID_NOTE,
       parameters: Type.Object({
         to: Type.String({ description: "Target stage" }),
+        id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-        if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
+        const target = params.id ?? activeTask?.workId;
+        if (!target) return text("No active task. Bind one with task_bind.", true);
         try {
           const item = params.to === "shipped" || params.to === "live"
-            ? await shipWithRollup(activeTask.workId)
-            : await client.stage(activeTask.workId, params.to);
-          activeItem = item;
+            ? await shipWithRollup(target)
+            : await client.stage(target, params.to);
+          if (target === activeTask?.workId) activeItem = item;
           if (item.stage === "in_build") await syncFeatureStage(client, item).catch(() => {});
+          let reply = `${item.title} → ${item.stage}`;
+          if (item.stage === "in_build" && !activeTask && isBindable(item) && (await bindToTask(item, ctx))) {
+            reply += `\nNothing was bound, so it is bound now: what you learn goes to its Record.`;
+          }
           updateWidget(ctx);
-          return { content: [{ type: "text" as const, text: `${item.title} → ${item.stage}` }] };
+          return text(withHeadsUp(reply, { id: item.id, title: item.title }, boundRef()));
         } catch (e: any) {
-          return { content: [{ type: "text" as const, text: e.message }], isError: true };
+          return text(e.message, true);
         }
       },
     })
@@ -1289,8 +1382,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         assignee: Type.Optional(Type.String({ description: "Wolf to assign (default: current wolf)" })),
         partOf: Type.Optional(Type.String({ description: "Parent work item ID (a feature for task/issue/spike; an initiative or none for a feature)" })),
         standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
+        bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
       }),
-      async execute(_id, params, _signal, _onUpdate, _ctx) {
+      async execute(_id, params, _signal, _onUpdate, ctx) {
         // Resolve partOf first so we can check its domain. Keep the current
         // workspace-defaulting behaviour (bound task's feature; last-worked
         // feature in session).
@@ -1330,7 +1424,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         };
         try {
           const result = await client.create(input);
-          return { content: [{ type: "text" as const, text: `Created ${result.id}: ${result.item.title} [${result.item.stage}]` }] };
+          let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
+          const bindInput = { kind: params.kind, assignee: input.assignee, wolf: wolfName, bound: !!activeTask, bind: params.bind };
+          if (shouldBindOnCreate(bindInput)) {
+            reply += (await bindToTask(result.item, ctx)) ? `\nBound to it.` : `\nNot bound: could not bind it.`;
+          } else {
+            reply += `\nNot bound: ${notBoundReason(bindInput)}.`;
+          }
+          return { content: [{ type: "text" as const, text: reply }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
         }
@@ -1362,10 +1463,26 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   pi.registerTool(
     defineTool({
       name: "task_done",
-      description: "Mark the active task as shipped and bind to the next unfinished sibling task. Use this when the current task's success criteria are met. Unless the wolf's ship policy is auto (WOLFPACK_TASK_SHIP=auto), the user is asked to confirm first; if they decline, the task is not shipped.",
-      parameters: Type.Object({}),
-      async execute(_id, _params, _signal, onUpdate, ctx) {
-        if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
+      description: "Mark the active task as shipped and bind to the next unfinished sibling task. Use this when the current task's success criteria are met. Unless the wolf's ship policy is auto (WOLFPACK_TASK_SHIP=auto), the user is asked to confirm first; if they decline, the task is not shipped." + ID_NOTE + " Shipping another item leaves your binding as it is.",
+      parameters: Type.Object({
+        id: Type.Optional(Type.String({ description: "Work item to ship (default: the bound one)" })),
+      }),
+      async execute(_id, params, _signal, onUpdate, ctx) {
+        if (params.id && params.id !== activeTask?.workId) {
+          // Another item than the bound one: ship it, keep the binding.
+          try {
+            const other = await client.get(params.id);
+            if (shouldConfirmShip(shipPolicy(), !!ctx?.hasUI) && !(await ctx.ui.confirm(`📦 Mark "${other.title}" as shipped?`, other.successCriteria ? `Done when: ${other.successCriteria}` : ""))) {
+              return text(`Not shipped: the user declined. "${other.title}" stays in ${other.stage}.`);
+            }
+            const shippedOther = await shipWithRollup(params.id);
+            await client.note(params.id, "Completed.");
+            return text(withHeadsUp(`✓ Shipped: ${shippedOther.title}`, { id: shippedOther.id, title: shippedOther.title }, boundRef()));
+          } catch (e: any) {
+            return text(`Failed to ship: ${e.message}`, true);
+          }
+        }
+        if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task. Bind one with task_bind." }], isError: true };
 
         // Human gate (default) vs. agent loops (auto / no UI attached).
         if (shouldConfirmShip(shipPolicy(), !!ctx?.hasUI)) {

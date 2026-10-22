@@ -158,6 +158,7 @@ export {
   RECORD_CAP,
   DOCUMENT_CAP,
   renderWorkingDocument,
+  renderFeatureRecord,
   type WorkRecord,
   type WorkRecordStore,
   type WorkRecordItem,

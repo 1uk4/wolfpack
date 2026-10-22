@@ -29,6 +29,13 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   readyToGraduate,
+  recordFeatureId,
+  renderFeatureRecord,
+  shouldBindOnCreate,
+  notBoundReason,
+  withHeadsUp,
+  UNBOUND_CONTEXT,
+  BINDING_RULES,
 } from "@wolfpack/memory";
 import { WorkClient } from "./work-client.js";
 
@@ -159,6 +166,8 @@ export default function createTasksExtension(
     siblings?: WorkItem[];
     /** The working document (plan + Record), as of the last refresh. */
     body?: string;
+    /** The feature's Record (shared by its tasks), rendered for the context. */
+    featureRecord?: string;
     fetchedAt?: number;
   }
 
@@ -180,6 +189,7 @@ export default function createTasksExtension(
     let parent: WorkItem | undefined;
     let siblings: WorkItem[] | undefined;
     let body: string | undefined;
+    let featureRecord: string | undefined;
     try {
       body = (await client.getWithBody(task.id as string)).body ?? "";
     } catch { /* best effort: the section just omits the document */ }
@@ -187,9 +197,13 @@ export default function createTasksExtension(
       try {
         parent = await client.get(task.partOf as string);
         siblings = await client.query({ domain: task.domain as string, partOf: task.partOf as string });
+        if (parent.kind === "feature" && !parent.container) {
+          const f = await client.getWithBody(parent.id as string);
+          featureRecord = renderFeatureRecord(parent.title, f.body ?? "") || undefined;
+        }
       } catch { /* best effort */ }
     }
-    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, fetchedAt: Date.now() } satisfies TaskCache));
+    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, featureRecord, fetchedAt: Date.now() } satisfies TaskCache));
   }
 
   /** Sections render synchronously from the cache. The Record changes behind
@@ -236,6 +250,15 @@ export default function createTasksExtension(
     }
   }
 
+  /** The bound item as the heads-up line names it. */
+  function boundRef(binding: ActiveBinding | null): { id: string; title?: string } | null {
+    if (!binding) return null;
+    const cached = readCache();
+    return { id: binding.taskId, title: cached?.task.id === binding.taskId ? cached.task.title : undefined };
+  }
+
+  const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
+
   return defineExtension({
     name: "wolfpack-tasks",
     runtimes: ["pi-durable"],
@@ -246,9 +269,11 @@ export default function createTasksExtension(
         const domainList = domains.join(", ") || "(none configured)";
         return `## Task Tools
 
-Available: task_query, task_bind, task_create, task_done, task_note, task_stage, task_features
+Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_features
 
-Domains: ${domainList}`;
+Domains: ${domainList}
+
+${BINDING_RULES}`;
       }),
 
       // Active task section — shows current binding with feature context
@@ -256,12 +281,12 @@ Domains: ${domainList}`;
         try {
           const bp = bindingPath(wolfDen);
           if (!existsSync(bp)) {
-            return `## Active Task\n\nNo task bound. Use \`task_query\` to see available work, then \`task_bind\` to start.`;
+            return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
 
           const binding = JSON.parse(require("fs").readFileSync(bp, "utf-8")) as ActiveBinding | null;
           if (!binding?.taskId) {
-            return `## Active Task\n\nNo task bound. Use \`task_query\` to see available work, then \`task_bind\` to start.`;
+            return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
 
           const cached = readCache();
@@ -291,6 +316,10 @@ Domains: ${domainList}`;
             lines.push(doc);
             lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
           }
+          if (cached.featureRecord) {
+            lines.push("");
+            lines.push(cached.featureRecord);
+          }
           refreshCacheSoon(cached);
 
           return lines.join("\n");
@@ -304,7 +333,9 @@ Domains: ${domainList}`;
       // ─── task_bind ───────────────────────────────────────────────────────
       defineTool({
         name: "task_bind",
-        description: "Bind to a task to start working on it. The task will appear in your context.",
+        description:
+          "Bind to the task/issue/spike you are working on. Do it BEFORE you start: the bound item decides where what you learn is kept (its feature's Record, not den topics). " +
+          "One bound item per session; call it again to switch. When you delegate work on an item to a subagent, pass workItem.",
         parameters: Type.Object({
           id: Type.String({ description: "Work item ID to bind to" }),
         }),
@@ -327,7 +358,7 @@ Domains: ${domainList}`;
             };
           }
 
-          await writeBinding(ctx.wolfDen, item.id, domain, item.partOf as string | undefined);
+          await writeBinding(ctx.wolfDen, item.id, domain, await recordFeatureId(client, item));
           await writeCache(item);
           // A feature follows its tasks into build
           await syncFeatureStage(client, item).catch(() => {});
@@ -515,6 +546,7 @@ Domains: ${domainList}`;
           partOf: Type.Optional(Type.String({ description: "Parent work item ID" })),
           successCriteria: Type.Optional(Type.String({ description: "Done condition (required for tasks)" })),
           standing: Type.Optional(Type.Boolean({ description: "Initiatives only: never completes; it keeps gaining features (e.g. a new week each week)" })),
+          bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
         }),
         async execute(args: {
           kind: string;
@@ -523,6 +555,7 @@ Domains: ${domainList}`;
           partOf?: string;
           successCriteria?: string;
           standing?: boolean;
+          bind?: boolean;
         }, ctx: ToolContext): Promise<ToolResult> {
           if (!domains.includes(args.domain)) {
             return {
@@ -576,12 +609,17 @@ Domains: ${domainList}`;
             
             const result = await client.create(input);
 
-            return {
-              content: [{
-                type: "text",
-                text: `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`,
-              }],
-            };
+            let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
+            const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx.wolfDen)), bind: args.bind };
+            if (shouldBindOnCreate(bindInput)) {
+              await writeBinding(ctx.wolfDen, result.item.id, args.domain, await recordFeatureId(client, result.item));
+              await writeCache(result.item);
+              await syncFeatureStage(client, result.item).catch(() => {});
+              reply += "\nBound to it.";
+            } else {
+              reply += `\nNot bound: ${notBoundReason(bindInput)}.`;
+            }
+            return { content: [{ type: "text", text: reply }] };
           } catch (err) {
             return {
               content: [{ type: "text", text: `Failed to create: ${err instanceof Error ? err.message : err}` }],
@@ -594,26 +632,26 @@ Domains: ${domainList}`;
       // ─── task_note ───────────────────────────────────────────────────────
       defineTool({
         name: "task_note",
-        description: "Add a progress note to the active task.",
+        description: "Add a progress note to the active task." + ID_NOTE,
         parameters: Type.Object({
           text: Type.String({ description: "Progress note content" }),
+          id: Type.Optional(Type.String({ description: "Work item to note (default: the bound one)" })),
         }),
-        async execute(args: { text: string }, ctx: ToolContext): Promise<ToolResult> {
+        async execute(args: { text: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
           const binding = await readBinding(ctx.wolfDen);
-          if (!binding) {
+          const target = args.id ?? binding?.taskId;
+          if (!target) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
               isError: true,
             };
           }
 
-          
-          
           try {
-            const noted = await client.note(binding.taskId, args.text);
+            const noted = await client.note(target, args.text);
             await syncFeatureStage(client, noted).catch(() => {});
             return {
-              content: [{ type: "text", text: `Note added to ${binding.taskId}.` }],
+              content: [{ type: "text", text: withHeadsUp(`Note added to ${target}.`, { id: target, title: noted.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -627,38 +665,38 @@ Domains: ${domainList}`;
       // ─── task_update ─────────────────────────────────────────────────────
       defineTool({
         name: "task_update",
-        description: "Update the active work item's working document (plan, notes, findings). Replaces the body of the .md file.",
+        description: "Update the active work item's working document (plan, notes, findings). Replaces the body of the .md file." + ID_NOTE,
         parameters: Type.Object({
           body: Type.String({ description: "The full updated markdown body (everything below frontmatter)" }),
+          id: Type.Optional(Type.String({ description: "Work item to update (default: the bound one)" })),
         }),
-        async execute(args: { body: string }, ctx: ToolContext): Promise<ToolResult> {
+        async execute(args: { body: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
           const binding = await readBinding(ctx.wolfDen);
-          if (!binding) {
+          const target = args.id ?? binding?.taskId;
+          if (!target) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
               isError: true,
             };
           }
 
-          const found = await findItem(binding.taskId);
+          const found = await findItem(target);
           if (!found) {
             return {
-              content: [{ type: "text", text: `Task ${binding.taskId} not found.` }],
+              content: [{ type: "text", text: `Task ${target} not found.` }],
               isError: true,
             };
           }
 
-          
-          
           try {
             // The Record belongs to memory: whatever the agent writes, the
             // item's current Record section stays as it is.
             const { body: current } = await client.getWithBody(found.item.id);
             const record = extractRecord(current ?? "");
             await client.updateBody(found.item.id, record ? replaceRecordSection(args.body, record) : args.body);
-            await writeCache(found.item);
+            if (found.item.id === binding?.taskId) await writeCache(found.item);
             return {
-              content: [{ type: "text", text: `Updated working document for: ${found.item.title}` }],
+              content: [{ type: "text", text: withHeadsUp(`Updated working document for: ${found.item.title}`, { id: found.item.id, title: found.item.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -672,26 +710,34 @@ Domains: ${domainList}`;
       // ─── task_stage ──────────────────────────────────────────────────────
       defineTool({
         name: "task_stage",
-        description: "Advance the active task to a new stage.",
+        description:
+          "Advance the active task to a new stage. Moving an item to in_build binds it when nothing is bound." + ID_NOTE,
         parameters: Type.Object({
           to: Type.String({ description: "Target stage: idea, plan, feasibility, approved, in_build, shipped, live, archived" }),
+          id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
-        async execute(args: { to: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
-          if (!binding) {
+        async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
+          let binding = await readBinding(ctx.wolfDen);
+          const target = args.id ?? binding?.taskId;
+          if (!target) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
               isError: true,
             };
           }
 
-          
-          
           try {
-            const moved = await client.stage(binding.taskId, args.to);
+            const moved = await client.stage(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
+            let reply = `${target} → ${args.to}`;
+            if (moved.stage === "in_build" && !binding && ["task", "issue", "spike"].includes(moved.kind)) {
+              await writeBinding(ctx.wolfDen, moved.id, moved.domain as string, await recordFeatureId(client, moved));
+              await writeCache(moved);
+              binding = await readBinding(ctx.wolfDen);
+              reply += "\nNothing was bound, so it is bound now: what you learn goes to its Record.";
+            }
             return {
-              content: [{ type: "text", text: `${binding.taskId} → ${args.to}` }],
+              content: [{ type: "text", text: withHeadsUp(reply, { id: target, title: moved.title }, boundRef(binding)) }],
             };
           } catch (err) {
             return {
@@ -705,13 +751,27 @@ Domains: ${domainList}`;
       // ─── task_done ───────────────────────────────────────────────────────
       defineTool({
         name: "task_done",
-        description: "Ship the active task and optionally bind to the next unfinished sibling.",
+        description: "Ship the active task and optionally bind to the next unfinished sibling." + ID_NOTE + " Shipping another item leaves your binding as it is.",
         parameters: Type.Object({
           confirm: Type.Optional(Type.Boolean({ description: "Override auto-ship policy" })),
           bindNext: Type.Optional(Type.Boolean({ description: "Auto-bind to next unfinished sibling (default: true)" })),
+          id: Type.Optional(Type.String({ description: "Work item to ship (default: the bound one)" })),
         }),
-        async execute(args: { confirm?: boolean; bindNext?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+        async execute(args: { confirm?: boolean; bindNext?: boolean; id?: string }, ctx: ToolContext): Promise<ToolResult> {
           const binding = await readBinding(ctx.wolfDen);
+          if (args.id && args.id !== binding?.taskId) {
+            if (args.confirm ?? !autoShip) {
+              return { content: [{ type: "text", text: `Confirmation required to ship ${args.id}. Call task_done again with confirm: false to ship.` }] };
+            }
+            try {
+              const shippedOther = await client.stage(args.id, "shipped");
+              return {
+                content: [{ type: "text", text: withHeadsUp(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
+              };
+            } catch (err) {
+              return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
+            }
+          }
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
@@ -750,7 +810,7 @@ Domains: ${domainList}`;
               );
               
               if (next) {
-                await writeBinding(ctx.wolfDen, next.id, binding.domain, next.partOf as string | undefined);
+                await writeBinding(ctx.wolfDen, next.id, binding.domain, await recordFeatureId(client, next));
                 await writeCache(next);
                 await syncFeatureStage(client, next).catch(() => {});
                 result.push(`Bound to next: [${next.id}] ${next.title}`);

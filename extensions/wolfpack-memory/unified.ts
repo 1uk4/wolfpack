@@ -367,10 +367,8 @@ export default function createMemoryExtension(
         defineTool({
           name: "kb_sweep_start",
           description: "Start a KB sweep in the background to process pending contributions. Returns immediately - use kb_sweep_status to monitor progress.",
-          parameters: Type.Object({
-            dryRun: Type.Optional(Type.Boolean({ description: "Test sweep without processing inbox (default: false)" })),
-          }),
-          async execute(args: { dryRun?: boolean }, ctx: ToolContext): Promise<ToolResult> {
+          parameters: Type.Object({}),
+          async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
             // Check if sweep manager is available
             if (!context.sweep) {
               return {
@@ -388,7 +386,7 @@ export default function createMemoryExtension(
             }
             
             // Start sweep in background
-            const result = await context.sweep.start({ dryRun: args.dryRun });
+            const result = await context.sweep.start();
             
             if (!result.started) {
               return {
@@ -396,11 +394,10 @@ export default function createMemoryExtension(
               };
             }
             
-            const mode = args.dryRun ? " (DRY RUN)" : "";
             return {
               content: [{
                 type: "text",
-                text: `Sweep started in background${mode} (${inbox.length} items in inbox).\nUse kb_sweep_status to monitor progress.`,
+                text: `Sweep started in background (${inbox.length} items in inbox).\nUse kb_sweep_status to monitor progress.`,
               }],
             };
           },

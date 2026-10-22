@@ -20,7 +20,7 @@ import {
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
 import { buildTreeBottomUp, splitAsParentChild, placeEntry, checkInvariants } from "./section-tree.js";
 import { SECTION_TREE } from "@wolfpack/engine";
-import { createEmbedder, buildEntryVectors, cosine, type EntryVector } from "./embed.js";
+import { createEmbedder, buildEntryVectors, cosine, type Embedder, type EntryVector } from "./embed.js";
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
 import { withKbLock } from "./lock.js";
@@ -51,6 +51,8 @@ interface IncrementalCtx {
 export interface ReorgOptions {
   engine: Engine;
   roots: KbRoots;
+  /** Embedder to reuse (the sweep tick's); default: a new one. */
+  embedder?: Embedder;
   /** Only reorg these domains (default: all) */
   domains?: string[];
   /** Only check these sections (for post-sweep targeted reorg) */
@@ -434,7 +436,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
 
   const log = readLedger(roots);
   const reg = foldRegistry(log);
-  const embedder = createEmbedder(roots);
+  const embedder = opts.embedder ?? createEmbedder(roots);
   const allVectors = await buildEntryVectors(roots, reg, embedder);
   // Read sections from file, or fold from ledger, or bootstrap from entry frontmatter
   let sections = readSections(roots);

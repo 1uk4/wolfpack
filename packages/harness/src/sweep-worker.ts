@@ -1,12 +1,13 @@
 /**
- * KB Sweep Manager — runs sweep asynchronously in the background.
- * 
- * The sweep runs on the main event loop but is fully async/await,
+ * KB Sweep Manager — runs the shared sweep tick (runSweepTick, the same one the
+ * kb CLI runs) asynchronously in the background. "Running" covers the whole
+ * tick, post-sweep reorg included.
+ *
+ * The tick runs on the main event loop but is fully async/await,
  * so it doesn't block Telegram responses (which are I/O-bound).
  * Status can be queried at any time while sweep is running.
  */
-import { join } from "node:path";
-import { SWEEP, type ModelTable } from "@wolfpack/engine";
+import type { ModelTable } from "@wolfpack/engine";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,6 @@ export interface SweepWorkerConfig {
 export class SweepManager {
   private status: SweepStatus = { state: "idle" };
   private config: SweepWorkerConfig;
-  private abortController: AbortController | null = null;
   private onComplete?: (message: string) => void;
   /** Last unexpected-failure text alerted, so a persistent one alerts once. */
   private lastFailureAlert?: string;
@@ -64,27 +64,24 @@ export class SweepManager {
     return { ...this.status };
   }
 
+  /** True for the whole tick: the sweep AND the post-sweep reorg. */
   isRunning(): boolean {
     return this.status.state === "running";
   }
 
-  async start(opts?: { dryRun?: boolean }): Promise<{ started: boolean; reason?: string }> {
+  async start(): Promise<{ started: boolean; reason?: string }> {
     if (this.isRunning()) {
       return { started: false, reason: "Sweep already running" };
     }
 
-    const dryRun = opts?.dryRun ?? false;
-    
     this.status = {
       state: "running",
       startedAt: new Date().toISOString(),
-      progress: dryRun ? "Starting (dry run)..." : "Starting...",
+      progress: "Starting...",
     };
 
-    this.abortController = new AbortController();
-
-    // Run sweep asynchronously (fire-and-forget, but tracked via status)
-    this.runSweep(dryRun).catch((err) => {
+    // Run the tick asynchronously (fire-and-forget, but tracked via status)
+    this.runTick().catch((err) => {
       this.status = {
         state: "failed",
         startedAt: this.status.startedAt,
@@ -96,97 +93,12 @@ export class SweepManager {
     return { started: true };
   }
 
-  async stop(): Promise<void> {
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
-      this.status = {
-        state: "idle",
-        progress: "Stopped by user",
-      };
-    }
-  }
-
-  private async runSweep(dryRun: boolean = false): Promise<void> {
+  private async runTick(): Promise<void> {
     const startTime = Date.now();
 
     try {
-      if (dryRun) {
-        // Dry run: test the machinery without processing
-        this.updateProgress("[DRY RUN] Loading KB engine...");
-        await new Promise(r => setTimeout(r, 500));
-        
-        this.updateProgress("[DRY RUN] Checking inbox...");
-        const { drainInbox } = await import("@wolfpack/kb/librarian");
-        const roots = {
-          kbBase: this.config.kbBase,
-          opsRoot: this.config.kbOps,
-          denLocal: this.config.denLocal,
-        };
-        const inbox = drainInbox(roots);
-        await new Promise(r => setTimeout(r, 500));
-        
-        this.updateProgress(`[DRY RUN] Found ${inbox.length} items in inbox`);
-        await new Promise(r => setTimeout(r, 500));
-        
-        this.updateProgress("[DRY RUN] Simulating sweep...");
-        await new Promise(r => setTimeout(r, 1000));
-        
-        const duration = Date.now() - startTime;
-        
-        this.status = {
-          state: "completed",
-          startedAt: this.status.startedAt,
-          completedAt: new Date().toISOString(),
-          progress: "Dry run completed (no changes made)",
-          result: {
-            processed: 0,
-            created: 0,
-            merged: 0,
-            rejected: 0,
-            parked: 0,
-            remaining: inbox.length,
-            duration,
-          },
-        };
-        
-        console.log(`[librarian] Dry run completed: ${inbox.length} items in inbox (no changes made)`);
-        this.onComplete?.(`📚 Dry run complete: ${inbox.length} items in inbox (no changes made)`);
-        return;
-      }
-      
-      // The timer fires every minute: an empty inbox is a silent no-op (no
-      // engine, no embedder, no ledger read, no log line).
-      {
-        const { drainInbox } = await import("@wolfpack/kb/librarian");
-        const idleRoots = {
-          kbBase: this.config.kbBase,
-          opsRoot: this.config.kbOps,
-          denLocal: this.config.denLocal,
-        };
-        if (drainInbox(idleRoots).length === 0) {
-          this.status = { state: "idle" };
-          return;
-        }
-        // Outage backoff (shared with the CLI path via KB_OPS): skip the tick.
-        const { backoffRemainingMs } = await import("@wolfpack/kb/librarian");
-        if (backoffRemainingMs(idleRoots) > 0) {
-          this.status = { state: "idle" };
-          return;
-        }
-      }
-
-      this.updateProgress("Loading KB engine...");
-
-      // Dynamic imports to keep startup fast
-      const { createEngine, engineSteps } = await import("@wolfpack/engine");
-      const { sweep } = await import("@wolfpack/kb/librarian");
-
-      const roots = {
-        kbBase: this.config.kbBase,
-        opsRoot: this.config.kbOps,
-        denLocal: this.config.denLocal,
-      };
+      // Dynamic import to keep startup fast
+      const { runSweepTick, createLibrarianEngine } = await import("@wolfpack/kb/librarian");
 
       // Set up embedder environment
       if (this.config.embedUrl) {
@@ -196,41 +108,25 @@ export class SweepManager {
         process.env.WOLFPACK_EMBED_MODEL = this.config.embedModel;
       }
 
-      this.updateProgress("Creating engine...");
-      // produce: large merge outputs can run 10–20k chars. The adapter's 4096
-      // default truncates them mid-JSON, which then can't be parsed and parks
-      // the item. Keep this in sync with packages/kb/src/cli.ts makeEngine().
-      const table = this.config.models;
-      const steps = engineSteps(table);
-      const engine = createEngine({
-        provider: table.tiers.smart.provider,
-        apiKey: this.config.apiKey,
-        defaultModel: table.tiers.smart.model,
-        steps: { ...steps, produce: { ...steps.produce, maxTokens: 16000 } },
+      const roots = {
+        kbBase: this.config.kbBase,
+        opsRoot: this.config.kbOps,
+        denLocal: this.config.denLocal,
+      };
+
+      // The timer fires every minute: an idle or backed-off tick is a silent no-op.
+      const tick = await runSweepTick({
+        roots,
+        createEngine: () => createLibrarianEngine(this.config.models, this.config.apiKey),
+        notify: (msg: string) => this.updateProgress(msg),
+        alert: (msg: string) => this.onComplete?.(msg),
       });
+      if (tick.outcome !== "ran") {
+        this.status = { state: "idle" };
+        return;
+      }
 
-      this.updateProgress("Loading entry vectors...");
-      const { readLedger, foldRegistry, createEmbedder, buildEntryVectors } = await import("@wolfpack/kb/librarian");
-      const embedder = createEmbedder(roots);
-      const registry = foldRegistry(readLedger(roots));
-      const loadEntryVectors = () => buildEntryVectors(roots, registry, embedder);
-
-      this.updateProgress("Running sweep...");
-      // A hung call must never keep isRunning() true: past the run budget plus
-      // slack, give up on this tick (the KB lock still guards against overlap).
-      const { withBudget } = await import("@wolfpack/kb/librarian");
-      const result = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-        sweep({
-          engine,
-          roots,
-          loadEntryVectors,
-          notify: (msg: string) => this.updateProgress(msg),
-          alert: (msg: string) => this.onComplete?.(msg),
-        })
-      );
-
-      const duration = Date.now() - startTime;
-
+      const result = tick.sweep;
       this.status = {
         state: "completed",
         startedAt: this.status.startedAt,
@@ -242,50 +138,27 @@ export class SweepManager {
           rejected: result.rejected,
           parked: result.parked.length,
           remaining: result.remaining,
-          duration,
+          duration: Date.now() - startTime,
         },
       };
 
       this.lastFailureAlert = undefined;
       console.log(`[librarian] Sweep completed: ${result.processed} processed, ${result.created} created, ${result.merged} merged`);
-
-      // Post-sweep reorg: check if any touched sections need splitting
-      if (result.created + result.merged > 0) {
-        try {
-          this.updateProgress("Running post-sweep reorg check...");
-          const { reorg } = await import("@wolfpack/kb/librarian");
-          const reorgResult = await reorg({
-            engine,
-            roots,
-            notify: (msg: string) => this.updateProgress(msg),
-          });
-          if (reorgResult.splits > 0 || reorgResult.merges > 0 || reorgResult.crystallized > 0) {
-            console.log(`[librarian] Reorg: ${reorgResult.splits} splits, ${reorgResult.merges} merges, ${reorgResult.crystallized} crystallized`);
-          }
-        } catch (reorgErr) {
-          console.error("[librarian] Post-sweep reorg failed:", reorgErr instanceof Error ? reorgErr.message : reorgErr);
-        }
-      }
-
     } catch (err) {
       console.error("[librarian] Sweep failed:", err instanceof Error ? err.message : err);
       const text = err instanceof Error ? err.message : String(err);
-      const { classifyError, noteInfraFailure } = await import("@wolfpack/kb/librarian");
-      const roots = { kbBase: this.config.kbBase, opsRoot: this.config.kbOps, denLocal: this.config.denLocal };
-      if (classifyError(err) === "infra") {
-        // An outage outside sweep() (e.g. engine setup): same backoff and one alert.
-        await noteInfraFailure(roots, err, (msg) => this.onComplete?.(msg));
-      } else if (text !== this.lastFailureAlert) {
-        // Unexpected failure: alert once per distinct message, not every tick.
+      // Unexpected failure: alert once per distinct message, not every tick.
+      // (Outages never get here: the tick turns them into backoff.)
+      if (text !== this.lastFailureAlert) {
         this.lastFailureAlert = text;
         this.onComplete?.(`❌ Sweep failed: ${text}`);
       }
-      
+
       this.status = {
         state: "failed",
         startedAt: this.status.startedAt,
         completedAt: new Date().toISOString(),
-        error: err instanceof Error ? err.message : String(err),
+        error: text,
       };
     }
   }

@@ -11,9 +11,11 @@
 import {
   existsSync,
   readFileSync,
+  readdirSync,
   appendFileSync,
   mkdirSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite, parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
@@ -95,10 +97,45 @@ interface CacheMeta {
   updated: string;
 }
 
+/** The embedder plus the cache upkeep the sweep tick runs. */
+export interface CachedEmbedder extends Embedder {
+  /** Rewrite the cache keeping only vectors whose hash is in `keep` (atomic).
+   *  Returns how many vectors were dropped. */
+  compact(keep: Set<string>): number;
+  /** True when the cache file holds far more lines than `live` entries need. */
+  shouldCompact(live: number): boolean;
+}
+
+/** Compact once the file holds this many times the live entries, plus slack. */
+const COMPACT_RATIO = 2;
+const COMPACT_SLACK = 50;
+
+/** A parsed cache.jsonl kept across embedders in this process. It is valid while
+ *  the file's mtime and size are unchanged (a writer in another process changes
+ *  both); our own appends and compactions refresh it. */
+interface LoadedCache {
+  mtimeMs: number;
+  size: number;
+  model: string;
+  vectors: Map<string, Vector>;
+  /** Lines in the file, duplicates included. */
+  lines: number;
+}
+const loadedCaches = new Map<string, LoadedCache>();
+
+function statCache(path: string): { mtimeMs: number; size: number } | null {
+  try {
+    const st = statSync(path);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
 export function createEmbedder(
   roots: KbRoots,
   config: EmbedConfig = resolveEmbedConfig()
-): Embedder {
+): CachedEmbedder {
   const dir = vectorsDir(roots);
   const metaPath = join(dir, "meta.json");
   const cachePath = join(dir, "cache.jsonl");
@@ -106,20 +143,39 @@ export function createEmbedder(
 
   // Load cache — but only if it was built with the SAME model. Mixing vectors
   // across models makes cosine meaningless, so a model change = full rebuild.
-  const cache = new Map<string, Vector>();
   let meta: CacheMeta | null = existsSync(metaPath)
     ? (JSON.parse(readFileSync(metaPath, "utf-8")) as CacheMeta)
     : null;
 
   if (meta && meta.model !== config.model) {
     if (existsSync(cachePath)) rmSync(cachePath);
+    loadedCaches.delete(cachePath);
     meta = null;
-  } else if (existsSync(cachePath)) {
+  }
+
+  let loaded = loadedCaches.get(cachePath);
+  const st = statCache(cachePath);
+  if (!st) {
+    loaded = undefined;
+  } else if (!loaded || loaded.model !== config.model || loaded.mtimeMs !== st.mtimeMs || loaded.size !== st.size) {
+    const vectors = new Map<string, Vector>();
+    let lines = 0;
     for (const line of readFileSync(cachePath, "utf-8").split("\n")) {
       if (!line.trim()) continue;
       const { hash, vec } = JSON.parse(line) as { hash: string; vec: Vector };
-      cache.set(hash, vec);
+      vectors.set(hash, vec);
+      lines++;
     }
+    loaded = { ...st, model: config.model, vectors, lines };
+  }
+  const state: LoadedCache = loaded ?? { mtimeMs: 0, size: 0, model: config.model, vectors: new Map(), lines: 0 };
+  loadedCaches.set(cachePath, state);
+  const cache = state.vectors;
+
+  /** Re-stamp the memo after we changed the file ourselves. */
+  function refreshStamp(): void {
+    const now = statCache(cachePath);
+    if (now) Object.assign(state, now);
   }
 
   async function callOllama(text: string): Promise<Vector> {
@@ -160,9 +216,27 @@ export function createEmbedder(
 
       // Persist incrementally (append the vector) + keep meta current.
       appendFileSync(cachePath, JSON.stringify({ hash, vec }) + "\n");
+      state.lines++;
+      refreshStamp();
       meta = { model: config.model, dim: vec.length, updated: now() };
       atomicWrite(metaPath, JSON.stringify(meta, null, 2));
       return vec;
+    },
+
+    compact(keep: Set<string>): number {
+      const kept = [...cache].filter(([hash]) => keep.has(hash));
+      const dropped = cache.size - kept.length;
+      if (dropped === 0 && state.lines === cache.size) return 0;
+      atomicWrite(cachePath, kept.map(([hash, vec]) => JSON.stringify({ hash, vec }) + "\n").join(""));
+      cache.clear();
+      for (const [hash, vec] of kept) cache.set(hash, vec);
+      state.lines = kept.length;
+      refreshStamp();
+      return dropped;
+    },
+
+    shouldCompact(live: number): boolean {
+      return state.lines > live * COMPACT_RATIO + COMPACT_SLACK;
     },
   };
 }
@@ -176,27 +250,17 @@ export interface EntryVector {
   vector: Vector;
 }
 
-/**
- * Build the entry-vector index Dewey routes against. Scans every curated entry
- * in kb-base, embeds a consistent text shape (cached by hash), and tags each
- * with its canonical topic from the registry.
- */
-export async function buildEntryVectors(
-  roots: KbRoots,
-  reg: Registry,
-  embedder: Embedder
-): Promise<EntryVector[]> {
-  const { readdirSync } = await import("node:fs");
+interface ScannedEntry {
+  id: string;
+  domain: string;
+  text: string;
+  hash: string;
+}
+
+/** Every curated entry in kb-base with the text its vector is cached under. */
+function* scanEntries(roots: KbRoots): Generator<ScannedEntry> {
   const domainsRoot = join(roots.kbBase, "domains");
-  if (!existsSync(domainsRoot)) return [];
-
-  // entryId → canonicalId lookup from the registry.
-  const canonicalOf = new Map<string, string>();
-  for (const topic of reg.values()) {
-    for (const id of topic.entries) canonicalOf.set(id, topic.canonicalId);
-  }
-
-  const out: EntryVector[] = [];
+  if (!existsSync(domainsRoot)) return;
   for (const domain of readdirSync(domainsRoot)) {
     const entriesDir = join(domainsRoot, domain, "entries");
     if (!existsSync(entriesDir)) continue;
@@ -213,17 +277,46 @@ export async function buildEntryVectors(
         throw err;
       }
       const { fields, body } = parseFrontmatter(raw);
-      const id = String(fields.id ?? file.replace(/\.md$/, ""));
       const text = embedInput({ title: String(fields.title ?? ""), detail: body });
-      const hash = contentHash(text);
-      const vector = await embedder.embed(text, hash);
-      out.push({
-        entryId: id,
-        canonicalId: canonicalOf.get(id) ?? "",
+      yield {
+        id: String(fields.id ?? file.replace(/\.md$/, "")),
         domain: String(fields.domain ?? domain),
-        vector,
-      });
+        text,
+        hash: contentHash(text),
+      };
     }
+  }
+}
+
+/** Cache keys of the entries on disk now (no embedding): what a compaction keeps. */
+export function currentEntryHashes(roots: KbRoots): Set<string> {
+  return new Set([...scanEntries(roots)].map((e) => e.hash));
+}
+
+/**
+ * Build the entry-vector index Dewey routes against. Scans every curated entry
+ * in kb-base, embeds a consistent text shape (cached by hash), and tags each
+ * with its canonical topic from the registry.
+ */
+export async function buildEntryVectors(
+  roots: KbRoots,
+  reg: Registry,
+  embedder: Embedder
+): Promise<EntryVector[]> {
+  // entryId → canonicalId lookup from the registry.
+  const canonicalOf = new Map<string, string>();
+  for (const topic of reg.values()) {
+    for (const id of topic.entries) canonicalOf.set(id, topic.canonicalId);
+  }
+
+  const out: EntryVector[] = [];
+  for (const e of scanEntries(roots)) {
+    out.push({
+      entryId: e.id,
+      canonicalId: canonicalOf.get(e.id) ?? "",
+      domain: e.domain,
+      vector: await embedder.embed(e.text, e.hash),
+    });
   }
   return out;
 }

@@ -4,7 +4,8 @@
  * When the librarian runs on the hub machine it writes the hub's KB base
  * directly, so there's no Syncthing between librarian and hub. The only moving
  * parts are: the kb-engine CLI, Ollama for embeddings, and a launchd timer that
- * runs the sweep on a schedule (the local equivalent of the VPS systemd timer).
+ * runs the sweep tick every minute (the VPS librarian runs the same tick from
+ * the harness timer).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -76,7 +77,7 @@ export async function installLocalLibrarian(
   for (const d of [kbBase, kbOps, denLocal]) fs.mkdirSync(d, { recursive: true });
   fs.mkdirSync(path.dirname(sweepLog(wolf.name)), { recursive: true });
 
-  // 4. launchd timer (the local systemd-timer equivalent).
+  // 4. launchd timer: `sweep` is one tick, run every minute.
   const node = process.execPath;
   const envFile = path.join(os.homedir(), ".wolfpack", ".env");
   const plist = `<?xml version="1.0" encoding="UTF-8"?>

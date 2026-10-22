@@ -133,7 +133,6 @@ export interface SweepManager {
   getStatus(): SweepStatus;
   isRunning(): boolean;
   start(): Promise<{ started: boolean; reason?: string }>;
-  stop(): Promise<void>;
 }
 
 export interface SweepStatus {

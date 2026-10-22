@@ -22,8 +22,10 @@
 ## Where it runs
 - **Authority:** Dewey, the librarian wolf, on **the VPS host** (wolf id `<wolf-id>`).
   KB at `/home/wolf-<wolf-id>/knowledge/base`; den-local state (ledger, sections,
-  vectors) at `/var/lib/wolfpack-kb/<wolf-id>`. A systemd timer runs the sweep every
-  minute, one contribution per run; the CLI is bundled to `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
+  vectors) at `/var/lib/wolfpack-kb/<wolf-id>`. The harness runs the sweep tick on a
+  1-minute timer, one contribution per tick (on a local Mac, a launchd job runs
+  `wolfpack-kb sweep`, the same tick, every 60s); the admin CLI is bundled to
+  `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
 - **Mirrors:** every other wolf gets each `domains/<domain>/` folder as a
   **receive-only** Syncthing share. Edits or deletions on a mirror never reach
   Dewey — change the KB on the VPS host (e.g. `kb retire`), never by editing the mirror.
@@ -98,10 +100,19 @@ Per contribution, in order:
 
 A single-writer `sweep.lock` prevents concurrent sweeps.
 
+Both triggers run the same tick (`runSweepTick`, `librarian/tick.ts`): outage
+backoff check, then an idle fast path (a directory listing; no engine, embedder,
+cache or ledger read), then the sweep of one item (already-seen duplicates are
+retired first), then a reorg of just the domains that item touched, then
+vector-cache upkeep. One engine and one embedder serve the tick. An outage
+(`sweep-backoff.json` in `KB_OPS`) skips ticks with 1m, 2m, 4m, 8m, 15m delays.
+The vector cache (`cache.jsonl`) is compacted to the vectors of current entries
+after a reorg, or once it holds over twice as many vectors as there are entries.
+
 ## The section tree
 Every entry belongs to exactly one section; sections nest (single parent). Knobs
 live in `tuning.ts → HIERARCHY` (`fitThreshold`, `splitAt`, `mergeBelow`,
-`crystallizeAt`, `minCohesion`, `maxDepth`). **`wolfpack-kb reorg [domain]`**
+`maxDepth`) and `SECTION_TREE`. **`wolfpack-kb reorg [domain]`**
 maintains it: fixes member counts, splits/merges/crystallizes, and re-summarizes
 + re-labels dirty sections (`SECTION_SUMMARY_SYSTEM`: one line ≤140 chars;
 `LABEL_SECTION_SYSTEM`: 2–6 word title). `--resummarize-all` regenerates every

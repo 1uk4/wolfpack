@@ -16,7 +16,7 @@ import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox } from "./intake.js";
-import { createEmbedder, embedInput, cosine } from "./embed.js";
+import { createEmbedder, embedInput, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
@@ -55,6 +55,9 @@ export interface SweepContext {
   roots: KbRoots;
   /** Load current entry vectors (from cache). Injected for testability. */
   loadEntryVectors: () => Promise<EntryVector[]>;
+  /** The tick's embedder, built on first use so a run with nothing to embed
+   *  never reads the vector cache (default: a new one). */
+  getEmbedder?: () => Embedder;
   notify?: (msg: string) => void;
   /** Messages worth a human's attention (sweep paused/recovered, item parked).
    *  Unlike notify (progress chatter), these are sent to Telegram. */
@@ -76,10 +79,10 @@ export interface SweepResult {
   created: number;
   merged: number;
   rejected: number;
-  crystallized: number;
   errors: number;
   unclassified: number;
-  suggestedDomains: string[];
+  /** Domains where an entry was created or merged (the post-sweep reorg's scope). */
+  touchedDomains: string[];
   /** Per-contribution failures (concise reasons), so callers can surface them
    *  instead of leaving them buried in notify() log lines. Still in the inbox. */
   failures: SweepFailure[];
@@ -188,10 +191,10 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   }
 }
 
-function emptyResult(): SweepResult {
+export function emptyResult(): SweepResult {
   return {
-    processed: 0, created: 0, merged: 0, rejected: 0, crystallized: 0, errors: 0,
-    unclassified: 0, suggestedDomains: [], failures: [], parked: [], remaining: 0,
+    processed: 0, created: 0, merged: 0, rejected: 0, errors: 0,
+    unclassified: 0, touchedDomains: [], failures: [], parked: [], remaining: 0,
   };
 }
 
@@ -214,10 +217,17 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     return { ...emptyResult(), remaining: pending.length, paused: `backing off, ${Math.ceil(waitMs / 1000)}s left` };
   }
 
-  const embedder = createEmbedder(roots);
+  // Already-seen duplicates are retired right away, before the embedder and the
+  // vectors load; the first unseen one is this run's contribution. The rest
+  // wait for the next tick.
   const log = readLedger(roots);
-  let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
   const seen = seenHashes(log);
+  for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
+  const unseen = pending.filter((c) => !seen.has(c.contentHash));
+  if (unseen.length === 0) return emptyResult();
+
+  const embedder = ctx.getEmbedder?.() ?? createEmbedder(roots);
+  let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
   // Ollama failing here is an outage, not a bad item: back off instead of throwing.
   let entryVectors: EntryVector[];
   try {
@@ -226,7 +236,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     if (classifyError(err) !== "infra") throw err;
     const state = await noteInfraFailure(roots, err, ctx.alert);
     ctx.notify?.(`sweep: infrastructure error, backing off (${state.consecutive} in a row): ${cleanError(err)}`);
-    return { ...emptyResult(), remaining: pending.length, paused: state.reason };
+    return { ...emptyResult(), remaining: unseen.length, paused: state.reason };
   }
   // Section tree, folded from the ledger / _sections.json.
   let sections: Section[] = readSections(roots);
@@ -243,10 +253,6 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // follow-up; dropping is safe (never invents an id). See §Phase 3b.
   const resolve: RelationResolver = () => null;
 
-  // Already-seen duplicates are retired without work; the first unseen one is
-  // this run's contribution. The rest wait for the next tick.
-  for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
-  const unseen = pending.filter((c) => !seen.has(c.contentHash));
   const contributions = unseen.slice(0, 1);
   // Set once the entry is live and its ledger events are written.
   let committed = false;
@@ -590,6 +596,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       );
     }
   }
+
+  result.touchedDomains = [...touchedDomains];
 
   // ── INDEX + DIGEST per touched domain ─────────────────────────────────────
   // The ledger already has this run's events; if rendering fails, the next tick

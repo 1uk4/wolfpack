@@ -21,6 +21,21 @@ function inboxWolves(opsRoot: string): string[] {
     .map((d) => d.name);
 }
 
+/** Count pending top-level contributions per wolf (excludes _processed/, _bad/).
+ *  Reads directory listings only: no file is opened. */
+export function countPending(opsRoot: string): { total: number; wolves: string[] } {
+  let total = 0;
+  const wolves: string[] = [];
+  for (const wolf of inboxWolves(opsRoot)) {
+    const n = readdirSync(join(opsRoot, "inbox", wolf)).filter((f) => f.endsWith(".md")).length;
+    if (n > 0) {
+      total += n;
+      wolves.push(`${wolf}(${n})`);
+    }
+  }
+  return { total, wolves };
+}
+
 /** Drain every inbox into parsed contributions. A bad file is quarantined; it never fails the drain. */
 export function drainInbox(roots: KbRoots): ParsedContribution[] {
   const out: ParsedContribution[] = [];

@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 /**
- * wolfpack-kb — Dewey's KB engine CLI. Driven by a systemd timer (see
- * infra/roles/kb-sweep) so sweeps run whether or not Dewey is mid-conversation.
+ * wolfpack-kb — the librarian's KB engine CLI. `sweep` is the same tick the
+ * harness timer runs on VPS librarians (runSweepTick); on a local Mac a launchd
+ * job runs it every minute (see packages/cli/src/local-librarian.ts).
  *
  * Commands:
  *   status            read-only health + consistency dashboard (no writes):
  *                     sweep lock, inbox backlog, and file↔ledger drift per
  *                     domain. Start here when something looks off.
- *   sweep [--drain]   route → produce → commit → fan-out. One batch per run
- *                     (for the timer); add --drain to loop until the inbox is
- *                     empty or a pass makes no progress (manual/dev use).
+ *   sweep [--drain]   one tick: route → produce → commit one contribution, then
+ *                     reorg the domains it touched. Add --drain to loop ticks
+ *                     until the inbox is empty, the sweep is paused by an
+ *                     outage, or a tick makes no progress (manual/dev use).
  *   rebuild-vectors   wipe + re-embed the entry-vector cache (model change etc.)
  *
  * A den-local lock (sweep.lock) guarantees a single writer — a second sweep
- * refuses rather than racing (stale locks are auto-reclaimed).
+ * skips its tick rather than racing (stale locks are auto-reclaimed).
  *
  * Environment:
  *   ANTHROPIC_API_KEY     — required only when the wolf's transport is api
@@ -26,17 +28,8 @@
  */
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import {
-  rmSync,
-  existsSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  statSync,
-  mkdirSync,
-} from "node:fs";
-import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
+import { rmSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { loadModelTable, type Engine } from "@wolfpack/engine";
 import type { KbRoots } from "./shared/index.js";
 import {
   vectorsDir,
@@ -46,7 +39,8 @@ import {
   ledgerFile,
 } from "./shared/index.js";
 import {
-  sweep,
+  runSweepTick,
+  createLibrarianEngine,
   readLedger,
   foldRegistry,
   renderRegistry,
@@ -57,8 +51,12 @@ import {
 import { retireEntries } from "./librarian/retire.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
 import { unpark, listParked } from "./librarian/park.js";
-import { acquireKbLock, kbLockFile, pidAlive } from "./librarian/lock.js";
+import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
+import { countPending } from "./librarian/intake.js";
 import { readCurrent, oldestInbox, formatAge } from "./librarian/progress.js";
+
+/** Roots of this run, so the signal handler can drop the lock it holds. */
+let activeRoots: KbRoots | null = null;
 
 function resolveRoots(): KbRoots {
   const home = homedir();
@@ -77,49 +75,20 @@ function resolveRoots(): KbRoots {
     );
     process.exit(1);
   }
-  return {
+  activeRoots = {
     kbBase: resolve(kbBase),
     opsRoot: resolve(opsRoot),
     // den-local KB state (ledger/vectors). Overridable so it can live outside
     // the (user-owned, synced) den when the sweep runs as root.
     denLocal: resolve(process.env.KB_DEN_LOCAL ?? join(denRoot, "kb")),
   };
+  return activeRoots;
 }
 
-function makeEngine() {
-  // Models and transport come from the resolved table: the shipped models.json
-  // beside wolf.yaml on a VPS wolf, else the pack config + wolf.yaml.
-  let table: ModelTable;
-  try {
-    ({ table } = loadModelTable());
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
-  }
-  const provider = table.tiers.smart.provider;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (provider === "anthropic" && !apiKey) {
-    console.error("ANTHROPIC_API_KEY is required (this wolf's transport is api)");
-    process.exit(1);
-  }
-  const steps = engineSteps(table);
-  // Bound a single hanging call (anthropic path only; the bridge has no API
-  // timeout and ignores this). Default 10m is generous enough for a large
-  // 16k-token produce but still caps a wedged request. Tunable per run.
-  const requestTimeoutMs =
-    Number(process.env.WOLFPACK_REQUEST_TIMEOUT_MS) || 600_000;
-  return createEngine({
-    provider,
-    ...(provider === "anthropic" ? { apiKey } : {}),
-    defaultModel: table.tiers.smart.model,
-    requestTimeoutMs,
-    steps: {
-      ...steps,
-      // Entries (esp. merges) produce large JSON; the 4096 default truncates it
-      // and breaks JSON extraction (same lesson as the memory consolidator).
-      produce: { ...steps.produce, maxTokens: 16000 },
-    },
-  });
+/** The librarian engine, built from the resolved model table: the shipped
+ *  models.json beside wolf.yaml on a VPS wolf, else the pack config + wolf.yaml. */
+function makeEngine(): Engine {
+  return createLibrarianEngine(loadModelTable().table);
 }
 
 /** Send a Telegram message as Dewey (best-effort; silent if unconfigured). */
@@ -151,161 +120,93 @@ async function tg(text: string): Promise<void> {
   }
 }
 
-/** Count pending top-level contributions per wolf (excludes _processed/). */
-function countPending(opsRoot: string): { total: number; wolves: string[] } {
-  const inbox = join(opsRoot, "inbox");
-  if (!existsSync(inbox)) return { total: 0, wolves: [] };
-  let total = 0;
-  const wolves: string[] = [];
-  for (const wolf of readdirSync(inbox, { withFileTypes: true })) {
-    if (!wolf.isDirectory()) continue;
-    const n = readdirSync(join(inbox, wolf.name)).filter((f) =>
-      f.endsWith(".md")
-    ).length;
-    if (n > 0) {
-      total += n;
-      wolves.push(`${wolf.name}(${n})`);
-    }
-  }
-  return { total, wolves };
-}
-
-// ── Single-writer lock ──────────────────────────────────────────────────────
-// The sweep writes entries, the ledger, the registry, and moves inbox files.
-// Two concurrent sweeps race all of those (that is exactly what produced the
-// overnight duplicate entries + ledger/registry drift). A den-local lock makes
-// a second local sweep refuse rather than corrupt state. Stale locks (dead
-// owner, or absurdly old) are reclaimed so a crash never wedges future runs.
-/** Path of a lock this process currently holds, so signal handlers can clean
- *  it up (SIGINT/SIGTERM skip the try/finally in cmdSweep). */
-let heldLock: string | null = null;
-let releaseHeld: (() => void) | null = null;
-
-function lockPath(roots: KbRoots): string {
-  return kbLockFile(roots);
-}
-
-function acquireLock(roots: KbRoots): boolean {
-  const release = acquireKbLock(roots);
-  if (!release) return false;
-  releaseHeld = release;
-  heldLock = lockPath(roots);
-  return true;
-}
-
-function releaseLock(_roots: KbRoots): void {
-  releaseHeld?.();
-  releaseHeld = null;
-  heldLock = null;
-}
-
 async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<void> {
   const roots = resolveRoots();
-  if (!acquireLock(roots)) {
-    console.error(
-      "another sweep holds the lock — refusing to run concurrently. " +
-        "Wait for it to finish (or remove a confirmed-stale lock)."
-    );
-    process.exit(1);
-  }
+  // One engine for every tick of this run, so usage adds up.
+  let engine: Engine | undefined;
+  const createEngine = () => (engine ??= makeEngine());
 
-  try {
-    const engine = makeEngine();
-    const embedder = createEmbedder(roots);
+  // Aggregate across ticks. In drain mode we loop until the inbox is empty, the
+  // sweep is paused by an outage, OR a tick makes no net progress (persistent
+  // failures must not spin forever). We count the real inbox each tick —
+  // `remaining` only reflects the one-per-tick cap, not items that failed and
+  // stayed behind.
+  const tot = { processed: 0, created: 0, merged: 0, rejected: 0, unclassified: 0, errors: 0 };
+  const failures: { from: string; denTopicId: string; reason: string }[] = [];
+  const parked: { from: string; denTopicId: string; reason: string }[] = [];
+  let pass = 0;
+  let stillPending = 0;
 
-    const pending = countPending(roots.opsRoot);
-
-    // Aggregate across passes. In drain mode we loop until the inbox is truly
-    // empty OR a pass makes no net progress (persistent failures must not spin
-    // forever). We count the real inbox each pass — `remaining` only reflects
-    // the one-per-run cap, not items that failed and stayed behind.
-    const tot = {
-      processed: 0, created: 0, merged: 0, rejected: 0,
-      unclassified: 0, crystallized: 0, errors: 0,
-    };
-    const suggested = new Set<string>();
-    const failures: { from: string; denTopicId: string; reason: string }[] = [];
-    const parked: { from: string; denTopicId: string; reason: string }[] = [];
-    let pass = 0;
-    let stillPending = pending.total;
-
-    while (true) {
-      pass++;
-      const before = countPending(roots.opsRoot).total;
-      const r = await sweep({
-        engine,
-        roots,
-        loadEntryVectors: () =>
-          buildEntryVectors(roots, foldRegistry(readLedger(roots)), embedder),
-        notify: (msg) => console.log(msg),
-        alert: tg,
-      });
-      const after = countPending(roots.opsRoot).total;
-      stillPending = after;
-
-      tot.processed += r.processed; tot.created += r.created;
-      tot.merged += r.merged; tot.rejected += r.rejected;
-      tot.unclassified += r.unclassified; tot.crystallized += r.crystallized;
-      tot.errors += r.errors;
-      for (const d of r.suggestedDomains) suggested.add(d);
-      for (const f of r.failures) failures.push(f);
-      for (const p of r.parked) parked.push(p);
-
-      console.log(
-        `pass ${pass}: ${r.processed} processed · ${r.created}c ${r.merged}m ` +
-          `${r.rejected}r · ${r.unclassified} unclassified · ` +
-          `${r.crystallized} crystallized · ${after} still pending`
-      );
-
-      if (!opts.drain) break;
-      if (after === 0) break; // inbox fully drained
-      if (after >= before) {
-        console.log(
-          `no net progress (${after} still pending — likely persistent errors); ` +
-            `stopping drain. Re-run after addressing the failures.`
-        );
-        break;
-      }
+  while (true) {
+    pass++;
+    const before = countPending(roots.opsRoot).total;
+    const t = await runSweepTick({ roots, createEngine, notify: (msg) => console.log(msg), alert: tg });
+    if (t.outcome === "idle") {
+      // The launchd job runs every minute: stay silent unless a person is watching.
+      if (pass === 1 && process.stdout.isTTY) console.log("inbox empty");
+      stillPending = 0;
+      break;
     }
+    if (t.outcome === "backoff") {
+      console.log(`sweep paused: ${t.sweep.paused}`);
+      stillPending = countPending(roots.opsRoot).total;
+      break;
+    }
+    const r = t.sweep;
+    stillPending = countPending(roots.opsRoot).total;
+
+    tot.processed += r.processed; tot.created += r.created;
+    tot.merged += r.merged; tot.rejected += r.rejected;
+    tot.unclassified += r.unclassified; tot.errors += r.errors;
+    for (const f of r.failures) failures.push(f);
+    for (const p of r.parked) parked.push(p);
 
     console.log(
-      `done: ${tot.processed} processed · ${tot.created}c ${tot.merged}m ` +
-        `${tot.rejected}r · ${tot.unclassified} unclassified · ` +
-        `${tot.crystallized} crystallized` +
-        (stillPending > 0 ? ` · ${stillPending} still pending` : " · inbox empty")
+      `pass ${pass}: ${r.processed} processed · ${r.created}c ${r.merged}m ` +
+        `${r.rejected}r · ${r.unclassified} unclassified · ${stillPending} still pending`
     );
-    if (suggested.size) {
+
+    if (!opts.drain || r.paused) break;
+    if (stillPending === 0) break; // inbox fully drained
+    if (stillPending >= before) {
       console.log(
-        `recommend new domain(s): ${[...suggested].join(", ")} ` +
-          `(declare with: wolfpack domain add <name>)`
+        `no net progress (${stillPending} still pending — likely persistent errors); ` +
+          `stopping drain. Re-run after addressing the failures.`
       );
+      break;
     }
-
-    // Surface failures grouped by reason — a stuck sweep should be legible at a
-    // glance, not buried in per-contribution log lines.
-    if (failures.length) {
-      const byReason = new Map<string, string[]>();
-      for (const f of failures) {
-        const list = byReason.get(f.reason) ?? [];
-        list.push(`${f.from}/${f.denTopicId}`);
-        byReason.set(f.reason, list);
-      }
-      console.log(`\n⚠ ${failures.length} contribution(s) skipped (still in inbox, will retry):`);
-      for (const [reason, items] of byReason) {
-        console.log(`  • ${reason}`);
-        for (const it of items) console.log(`      - ${it}`);
-      }
-    }
-
-    if (parked.length) {
-      console.log(`\n⛔ ${parked.length} contribution(s) parked (run \`wolfpack-kb unpark\` to retry):`);
-      for (const p of parked) console.log(`  • ${p.from}/${p.denTopicId} — ${p.reason}`);
-    }
-
-    console.log(engine.usage.summarize());
-  } finally {
-    releaseLock(roots);
   }
+
+  if (!engine) return; // idle or paused before any work
+
+  console.log(
+    `done: ${tot.processed} processed · ${tot.created}c ${tot.merged}m ` +
+      `${tot.rejected}r · ${tot.unclassified} unclassified` +
+      (stillPending > 0 ? ` · ${stillPending} still pending` : " · inbox empty")
+  );
+
+  // Surface failures grouped by reason — a stuck sweep should be legible at a
+  // glance, not buried in per-contribution log lines.
+  if (failures.length) {
+    const byReason = new Map<string, string[]>();
+    for (const f of failures) {
+      const list = byReason.get(f.reason) ?? [];
+      list.push(`${f.from}/${f.denTopicId}`);
+      byReason.set(f.reason, list);
+    }
+    console.log(`\n⚠ ${failures.length} contribution(s) skipped (still in inbox, will retry):`);
+    for (const [reason, items] of byReason) {
+      console.log(`  • ${reason}`);
+      for (const it of items) console.log(`      - ${it}`);
+    }
+  }
+
+  if (parked.length) {
+    console.log(`\n⛔ ${parked.length} contribution(s) parked (run \`wolfpack-kb unpark\` to retry):`);
+    for (const p of parked) console.log(`  • ${p.from}/${p.denTopicId} — ${p.reason}`);
+  }
+
+  if (engine) console.log(engine.usage.summarize());
 }
 
 /** Count .md entry files on disk for a domain. */
@@ -327,7 +228,7 @@ function entryFilesOnDisk(roots: KbRoots, domain: string): string[] {
 async function cmdStatus(): Promise<void> {
   const roots = resolveRoots();
 
-  const lp = lockPath(roots);
+  const lp = kbLockFile(roots);
   let lockLine = "idle (no sweep running)";
   if (existsSync(lp)) {
     try {
@@ -483,7 +384,8 @@ async function cmdReorg(): Promise<void> {
   const resummarizeAll = argv.includes("--resummarize-all");
 
   // A real reorg rewrites sections and the ledger: it must not overlap a sweep.
-  if (!dryRun && !acquireLock(roots)) {
+  const release = dryRun ? () => {} : acquireKbLock(roots);
+  if (!release) {
     console.error("a sweep is running (sweep.lock held); retry when it finishes");
     process.exit(1);
   }
@@ -510,7 +412,7 @@ async function cmdReorg(): Promise<void> {
       );
     }
   } finally {
-    if (!dryRun) releaseLock(roots);
+    release();
   }
 }
 
@@ -557,7 +459,8 @@ async function cmdRetire(): Promise<void> {
     console.error("usage: retire <entryId...> [--reason=<text>] [--dry-run]");
     process.exit(1);
   }
-  if (!dryRun && !acquireLock(roots)) {
+  const release = dryRun ? () => {} : acquireKbLock(roots);
+  if (!release) {
     console.error("a sweep is running (sweep.lock held); retry when it finishes");
     process.exit(1);
   }
@@ -574,7 +477,7 @@ async function cmdRetire(): Promise<void> {
       console.log(`section member counts refresh on the next \`reorg\`.`);
     }
   } finally {
-    if (!dryRun) releaseLock(roots);
+    release();
   }
 }
 
@@ -638,13 +541,7 @@ async function main(): Promise<void> {
 // Drop a held lock on interruption so a Ctrl-C never wedges future sweeps.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
-    if (heldLock) {
-      try {
-        unlinkSync(heldLock);
-      } catch {
-        /* best effort */
-      }
-    }
+    if (activeRoots) releaseOwnedLock(activeRoots);
     process.exit(130);
   });
 }

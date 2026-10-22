@@ -1,23 +1,27 @@
 /**
  * @wolfpack/kb/librarian — Dewey's side. The heavy pipeline, oracles, ledger,
- * registry, embeddings. Runs ONLY where Dewey runs (wolfpack-librarian ext + kb
- * CLI). Imports @wolfpack/engine. Never imported by the wolf client.
+ * registry, embeddings. Runs ONLY where Dewey runs (the harness sweep timer or
+ * the kb CLI, both through runSweepTick). Imports @wolfpack/engine. Never imported by the wolf client.
  */
 export { sweep, type SweepContext, type SweepResult } from "./sweep.js";
+export { runSweepTick, type SweepTickOptions, type SweepTickResult } from "./tick.js";
+export { createLibrarianEngine } from "./engine.js";
 export {
   readLedger,
   appendLedger,
   seenHashes,
   foldRegistry,
 } from "./ledger.js";
-export { drainInbox } from "./intake.js";
+export { drainInbox, countPending } from "./intake.js";
 export {
   createEmbedder,
   resolveEmbedConfig,
   embedInput,
   buildEntryVectors,
+  currentEntryHashes,
   cosine,
   type Embedder,
+  type CachedEmbedder,
   type EmbedConfig,
   type Vector,
 } from "./embed.js";
@@ -51,7 +55,7 @@ export {
 export { quarantine } from "./commit.js";
 export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";
 export { retireEntries, type RetireResult } from "./retire.js";
-export { withKbLock, KbLockBusy, kbLockFile } from "./lock.js";
+export { withKbLock, KbLockBusy, kbLockFile, releaseOwnedLock } from "./lock.js";
 export {
   scanFat,
   splitFatEntry,

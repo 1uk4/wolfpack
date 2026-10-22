@@ -151,6 +151,20 @@ export function acquireKbLock(roots: KbRoots): (() => void) | null {
 }
 
 /**
+ * Remove the lock file if THIS process owns it. For signal handlers, where the
+ * try/finally of withKbLock never runs. Never touches another process's lock.
+ */
+export function releaseOwnedLock(roots: KbRoots): void {
+  const file = kbLockFile(roots);
+  try {
+    const info = JSON.parse(readFileSync(file, "utf-8")) as { pid?: number };
+    if (info.pid === process.pid) unlinkSync(file);
+  } catch {
+    /* no lock, unreadable, or already gone */
+  }
+}
+
+/**
  * Run `fn` holding the KB write lock. Waits up to `waitMs` (default 0) for
  * another writer to finish, then throws KbLockBusy.
  */

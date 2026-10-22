@@ -66,6 +66,8 @@ export interface EmitDeltaInput {
   summary: string;
   body: string;
   session?: string;
+  /** Submission time ("YYYY-MM-DD HH:MM"; default now). The sweep takes the oldest first. */
+  submitted?: string;
   // Temporal provenance (crawl ingestion). All optional.
   sourceCreated?: string;
   sourceUpdated?: string;
@@ -101,7 +103,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     domainHint: input.domainHint,
     summary: input.summary,
     session: input.session,
-    submitted: now(),
+    submitted: input.submitted ?? now(),
     body: input.body,
     sourceCreated: input.sourceCreated,
     sourceUpdated: input.sourceUpdated,

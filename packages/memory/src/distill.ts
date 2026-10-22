@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { atomicWrite, DISTILL_SYSTEM, LlmInfraError, type Engine } from "@wolfpack/engine";
+import { atomicWrite, DISTILL_SYSTEM, DISTILL_GRADUATION, LlmInfraError, type Engine } from "@wolfpack/engine";
 import { isTrivialChange, isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import {
   contentHash,
@@ -47,10 +47,12 @@ export const DistillOutputSchema = z.object({
         title: z.string().min(3).max(140),
         summary: z.string().min(1).transform((s) => s.replace(/\s+/g, " ").trim()),
         body: z.string().min(1),
+        /** Graduation only: the one initiative-level contribution. */
+        initiative: z.boolean().optional(),
       })
     )
     .min(1)
-    .max(4),
+    .max(5),
 });
 
 export interface DistilledContribution {
@@ -61,6 +63,8 @@ export interface DistilledContribution {
   summary: string;
   /** Exactly the body emitted (starts with the "# title" line). */
   body: string;
+  /** Graduation: the initiative-level contribution (emitted under the initiative's topic id). */
+  initiative?: boolean;
 }
 
 export interface DistillRecord {
@@ -106,6 +110,18 @@ export interface DistillInput {
   previous?: Array<{ slug: string; title: string }>;
   /** YYYY-MM-DD used for History lines the topic does not date. */
   date: string;
+  /**
+   * Set when the input is a finished work item (DISTILL_GRADUATION is added to
+   * the prompt): its History lines cite `workId`, an initiative contribution is
+   * emitted under `initiativeTopicId`, and every Totals value must survive.
+   */
+  graduation?: {
+    workId: string;
+    initiativeTopicId?: string;
+    totals?: Array<{ key: string; value: string }>;
+    /** The graduating item IS the initiative: keep only its initiative contribution. */
+    only?: "initiative";
+  };
 }
 
 export interface DistillResult {
@@ -116,9 +132,19 @@ export interface DistillResult {
   after: LintFinding[];
   /** Hard finding codes still present: the topic must be held back. */
   heldCodes: string[];
+  /** Graduation: Totals values (`Key: value`) still missing after the retry. */
+  missingTotals: string[];
+  /** Graduation: non-blocking problems for the preview (no History line, no initiative entry…). */
+  warnings: string[];
 }
 
-function buildPrompt(input: DistillInput, failures?: LintFinding[]): string {
+function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: string[] = []): string {
+  const failureLines = [
+    failures?.length ? describeFindings(failures) : "",
+    missing.length
+      ? `- totals: these Totals values are missing or changed; each must appear unchanged (digits and unit) in the body or History: ${missing.join("; ")}`
+      : "",
+  ].filter(Boolean);
   const prev = input.previous?.length
     ? `PREVIOUS CONTRIBUTIONS (slug: title):\n${input.previous.map((p) => `- ${p.slug}: ${p.title}`).join("\n")}`
     : "PREVIOUS CONTRIBUTIONS: none";
@@ -131,7 +157,7 @@ function buildPrompt(input: DistillInput, failures?: LintFinding[]): string {
     "",
     "TOPIC BODY:",
     input.body,
-    failures?.length ? `\nCHECK FAILURES in your previous answer:\n${describeFindings(failures)}` : "",
+    failureLines.length ? `\nCHECK FAILURES in your previous answer:\n${failureLines.join("\n")}` : "",
   ].join("\n");
 }
 
@@ -147,42 +173,94 @@ function cleanBody(summary: string, body: string): string {
  * reported in `heldCodes`.
  */
 export async function distillTopic(engine: Engine, input: DistillInput): Promise<DistillResult> {
-  const run = async (failures?: LintFinding[]) => {
+  const grad = input.graduation;
+  const system = grad ? `${DISTILL_SYSTEM}\n\n${DISTILL_GRADUATION}` : DISTILL_SYSTEM;
+  const run = async (failures?: LintFinding[], missing: string[] = []) => {
     const raw = await engine.call("distill", DistillOutputSchema, {
-      system: DISTILL_SYSTEM,
-      prompt: buildPrompt(input, failures),
+      system,
+      prompt: buildPrompt(input, failures, missing),
     });
-    return DistillOutputSchema.parse(raw).contributions;
+    const all = DistillOutputSchema.parse(raw).contributions;
+    return grad ? all : all.slice(0, 4).map((c) => ({ ...c, initiative: undefined }));
   };
   const lint = (c: { title: string; summary: string; body: string }) =>
-    lintKnowledge({ title: c.title, summary: c.summary, body: cleanBody(c.summary, c.body) });
+    lintKnowledge({ title: c.title, summary: c.summary, body: cleanBody(c.summary, c.body), workIds: grad ? "history" : "none" });
+  const missingOf = (cs: Array<{ title: string; summary: string; body: string }>) =>
+    grad?.totals?.length ? missingTotals(grad.totals, cs.map((c) => `${c.summary}\n${c.body}`).join("\n")) : [];
 
   let contributions = await run();
   const before = contributions.flatMap(lint);
+  let missing = missingOf(contributions);
   let retried = false;
-  if (hardFindings(before).length || before.some((f) => f.code === "oversize")) {
+  if (hardFindings(before).length || before.some((f) => f.code === "oversize") || missing.length) {
     retried = true;
-    contributions = await run(before);
+    contributions = await run(before, missing);
+    missing = missingOf(contributions);
   }
 
   // Deterministic strip, ids, title line. Slugs stay unique; the first keeps the topic id.
   const seen = new Set<string>();
   const outputs: DistilledContribution[] = [];
+  const warnings: string[] = [];
+  let plain = 0;
   for (const c of contributions) {
+    if (grad?.only === "initiative" && outputs.length) {
+      warnings.push(`dropped an extra contribution: "${c.title}"`);
+      continue;
+    }
+    const isInitiative = !!(grad?.initiativeTopicId && (c.initiative || grad.only === "initiative") && !outputs.some((o) => o.initiative));
     let slug = c.slug;
     for (let n = 2; seen.has(slug); n++) slug = `${c.slug}-${n}`;
     seen.add(slug);
+    let body = cleanBody(c.summary, c.body);
+    if (grad) body = citeWork(body, grad.workId);
     outputs.push({
-      id: outputs.length === 0 ? input.id : `${input.id}~${slug}`,
+      id: isInitiative ? grad!.initiativeTopicId! : plain++ === 0 ? input.id : `${input.id}~${slug}`,
       slug,
       title: c.title,
       summary: c.summary,
-      body: `# ${c.title}\n\n${cleanBody(c.summary, c.body)}\n`,
+      body: `# ${c.title}\n\n${body}\n`,
+      ...(isInitiative ? { initiative: true } : {}),
     });
   }
-  const after = outputs.flatMap(lint);
+  if (grad) {
+    for (const o of outputs) if (!/^## History[ \t]*$/m.test(o.body)) warnings.push(`"${o.title}" has no History line citing the work`);
+    if (grad.initiativeTopicId && !outputs.some((o) => o.initiative)) warnings.push("no initiative entry was produced");
+    if (grad.only !== "initiative" && !outputs.some((o) => !o.initiative)) warnings.push("only an initiative entry was produced");
+  }
+  const after = outputs.flatMap((o) => lintKnowledge({ title: o.title, summary: o.summary, body: o.body.replace(/^# [^\n]*\n+/, ""), workIds: grad ? "history" : "none" }));
   const heldCodes = [...new Set(hardFindings(after).map((f) => f.code))];
-  return { outputs, retried, before, after, heldCodes };
+  return { outputs, retried, before, after, heldCodes, missingTotals: missing, warnings };
+}
+
+const WORK_ID_ANY = /\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g;
+
+/**
+ * Totals values (`Key: value`) that do not appear unchanged in `text`: the
+ * value's digits and unit, not part of a longer number.
+ */
+export function missingTotals(totals: Array<{ key: string; value: string }>, text: string): string[] {
+  const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  return totals
+    .filter((t) => !new RegExp(`(?<![\\d.,:])${esc(t.value)}(?![\\d]|[.,]\\d|:\\d)`, "i").test(text))
+    .map((t) => `${t.key}: ${t.value}`);
+}
+
+/**
+ * Graduation History lines cite the work: any History line without the work id
+ * gets it appended, and any other work id is dropped (code, not trust).
+ */
+function citeWork(body: string, workId: string): string {
+  const at = body.search(/^## History[ \t]*$/m);
+  const strip = (t: string) => t.replace(WORK_ID_ANY, (m) => (m === workId ? m : "")).replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ");
+  if (at < 0) return strip(body);
+  const head = strip(body.slice(0, at));
+  const lines = body.slice(at).split("\n").map((l) => {
+    if (!/^\s*- /.test(l)) return strip(l);
+    const t = strip(l).trimEnd();
+    return t.includes(workId) ? t : `${t} (${workId})`;
+  });
+  return head + lines.join("\n");
 }
 
 // ── promote ──────────────────────────────────────────────────────────────────

@@ -50,7 +50,8 @@ import {
   embedTaskInParent,
   areAllChildrenComplete,
   canGraduate,
-  graduationFiles,
+  previewGraduation,
+  confirmGraduation,
   getWorkSession,
   getFileSession,
   summarizeFileChanges,
@@ -1271,17 +1272,21 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     return DEFAULT_ENABLED;
   }
 
-  function initOrchestrator(ctx: any): void {
-    if (!runtime || !credsOk) return;
-
+  /** The engine on the wolf's model table (shared by memory and graduation's distill). */
+  function buildEngine(): Engine {
     const table = modelTable!;
-    const steps = engineSteps(table);
-    engine = createEngine({
+    return createEngine({
       provider: table.tiers.smart.provider,
       ...(useApi ? { apiKey } : {}),
       defaultModel: table.tiers.smart.model,
-      steps,
+      steps: engineSteps(table),
     });
+  }
+
+  function initOrchestrator(ctx: any): void {
+    if (!runtime || !credsOk) return;
+
+    engine = buildEngine();
 
     const orchConfig = {
       chunkTokens: 5000,
@@ -1562,43 +1567,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
     },
 
-    // Handle feature/initiative ready to graduate
-    // Throws on failure, so the caller (g in /task) only archives work that
-    // actually reached the inbox.
-    onReadyToGraduate: async (item) => {
-      if (!kbEnabled) {
-        throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-      }
-
-      if (!canGraduate(item)) {
-        throw new Error(`${item.title} is not eligible to graduate (stage ${item.stage})`);
-      }
-
-      try {
-        const { resolveWorkItem } = await import("@wolfpack/kb/client");
-        const inboxDir = path.join(kbRoots.opsRoot, "inbox", wolfName);
-        fs.mkdirSync(inboxDir, { recursive: true });
-
-        // Feature → its past-tense entry, plus its initiative's hub (created on
-        // the first feature, updated after). Initiative → its final hub.
-        // Nothing is written back into the work items except the date. Query
-        // + graduate go through the shared Work API since the local ledger
-        // isn't the source of truth anymore.
-        const graduationClient = new WorkClient();
-        const all = (await graduationClient.query({})) ?? [];
-        const files = graduationFiles({
-          item,
-          all,
-          bodyOf: (w) => resolveWorkItem(kbRoots, w.domain as string, w.id as string)?.body ?? "",
-          from: wolfName,
-          now: new Date(),
-        });
-        for (const f of files) fs.writeFileSync(path.join(inboxDir, f.name), f.content);
-        await graduationClient.graduate(item.id as string);
-      } catch (e: any) {
-        console.error(`[work] Failed to graduate: ${e.message}`);
-        throw e;
-      }
+    // Graduation (g in /task): distill + preview first, send only after the
+    // owner confirms. Both steps throw on failure, so /task only archives work
+    // that actually reached the inbox.
+    graduation: {
+      preview: async (id) => {
+        if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
+        if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
+        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id });
+      },
+      confirm: async (preview, ship) => {
+        if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
+        return confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship });
+      },
     },
   };
 

@@ -85,15 +85,17 @@ export {
 export {
   canGraduate,
   readyToGraduate,
-  graduationEntryId,
   archiveSet,
-  featureDossier,
-  verbatimFeatureBody,
-  graduationFile,
-  graduationFiles,
-  hubDossier,
-  hubOf,
-  type GraduationFile,
+  initiativeOf,
+  buildGraduationInput,
+  previewGraduation,
+  renderGraduationPreview,
+  confirmGraduation,
+  type GraduationInput,
+  type GraduationClient,
+  type GraduationPreview,
+  type PreviewContribution,
+  type ConfirmedGraduation,
 } from "./graduate.js";
 
 // Session tracking + summarization (prompt text lives in config/prompts/tasks.ts)

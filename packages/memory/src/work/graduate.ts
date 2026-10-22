@@ -1,18 +1,32 @@
 /**
- * graduate.ts — Graduate completed work items to KB entries
- * 
- * Features and initiatives graduate to KB entries when completed.
- * Tasks don't graduate directly - they embed in their parent feature.
- * 
- * Graduation is a one-way handoff: the wolf sends Dewey a contribution that
- * names the entry it owns; the work item records only the date it graduated.
+ * graduate.ts — graduating finished work into the KB
+ *
+ * Graduation is manual (`g` in /task, or the durable task_graduate tool) and
+ * goes through the SAME route as every other piece of knowledge: the item's
+ * plan, Record, Outcomes and tasks are turned into contributions by the normal
+ * distill step (with a short graduation framing in its prompt), shown to the
+ * owner as a preview, and only then written to the wolf's inbox. Dewey's sweep
+ * routes each one by alias or subject check, like any contribution. There are
+ * no owned or special entries.
+ *
+ *   build input   plan (document minus Record/Outcomes) + Record + Outcomes +
+ *                 task titles + the parent initiative's title and goal
+ *   preview       distill locally; contributions, History lines, warnings
+ *   confirm       ship if needed → emit contributions → mark graduated → archive
+ *
+ * Den topic ids: `work-<domain>-<id>` (the item), `…~<slug>` (splits) and the
+ * initiative's own `work-<domain>-<initiativeId>` (a stable alias key).
  */
 import { createHash } from "node:crypto";
-import { isComplete, type WorkItem } from "@wolfpack/kb/client";
-import { hasRollupZone, stripRollupMarkers, totalsSummary } from "./rollup.js";
+import type { Engine } from "@wolfpack/engine";
+import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpack/kb/client";
+import { parseKbNotes, type KbRoots } from "@wolfpack/kb/shared";
+import { distillTopic, type DistilledContribution } from "../distill.js";
+import { extractRecord, withoutRecord } from "../work-record.js";
+import { outcomesText, totalsText, totalsValues, withoutRollup } from "./rollup.js";
 
 // ════════════════════════════════════════════════════════════════════════════
-// 1 · GRADUATION ELIGIBILITY
+// 1 · ELIGIBILITY
 // ════════════════════════════════════════════════════════════════════════════
 
 const GRADUATABLE_KINDS = ["feature", "initiative", "task", "issue", "spike"];
@@ -45,28 +59,14 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
   return false;
 }
 
-/**
- * Check if a work item is eligible for graduation
- */
+/** Check if a work item is eligible for graduation */
 export function canGraduate(item: WorkItem): boolean {
-  // Holding containers (the Inbox) never graduate
   if (item.container) return false;
-
-  // Must be complete
   if (!isComplete(item)) return false;
-  
-  // Must be feature or initiative (tasks embed in parent)
   if (!GRADUATABLE_KINDS.includes(item.kind)) return false;
-  
-  // Must not already be graduated
   if (item.graduated) return false;
-  
   return true;
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// 2 · GRADUATION CONTRIBUTIONS (what the wolf sends Dewey)
-// ════════════════════════════════════════════════════════════════════════════
 
 /**
  * What graduating `item` archives: the item and everything under it that is
@@ -83,225 +83,309 @@ export function archiveSet(item: WorkItem, all: WorkItem[]): WorkItem[] {
   return out;
 }
 
-/** The KB entry a graduated work item owns: kb-<domain>-<its 7-char id>. */
-export function graduationEntryId(item: Pick<WorkItem, "id" | "domain">): string {
-  return `kb-${item.domain}-${String(item.id).split("-").pop()}`;
+/** The initiative a feature belongs to (standing ones included), if any. */
+export function initiativeOf(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
+  const parent = feature.partOf ? all.find((p) => p.id === feature.partOf) : undefined;
+  return parent?.kind === "initiative" ? parent : undefined;
 }
 
-/** Work item ids never reach the KB. */
+// ════════════════════════════════════════════════════════════════════════════
+// 2 · THE GRADUATION INPUT
+// ════════════════════════════════════════════════════════════════════════════
+
 const WORK_ID = /\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g;
-const PROCESS_NOTE = /^(Completed\.|Stage: |Shipped( for graduation)?: )/;
+const SECTION_CAP = 8_000;
+const MAX_INPUT_CHARS = 28_000;
 
-/** Max dossier size, so one graduation stays well inside the sweep's budget. */
-const MAX_DOSSIER_CHARS = 24_000;
+const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n).trimEnd()}\n…(truncated)` : t);
 
-/**
- * The raw material Dewey turns into a past-tense feature entry: what the tasks
- * built (their done-when and latest notes) first, then the feature document
- * labelled as the original plan, since later work often replaced parts of it.
- * Work ids and completion stamps are stripped; the graduation prompt removes
- * the rest.
- */
-export function featureDossier(
-  feature: WorkItem,
-  body: string,
-  tasks: WorkItem[]
-): string {
-  const lines = [`# ${feature.title}`, ""];
-  if (feature.successCriteria) lines.push(`Goal: ${feature.successCriteria}`, "");
-  const doc = body
-    .replace(/^#\s+.*\n+/, "") // the document repeats the title
-    .replace(/_Completed \d{4}-\d{2}-\d{2}_\n?/g, "")
-    .trim();
-  if (tasks.length) {
-    lines.push("## What was built (final state; wins over the plan below)", "");
-    for (const t of tasks) {
-      const notes = (t.log ?? []).map((l) => l.text).filter((n) => !PROCESS_NOTE.test(n)).slice(-3);
-      if (!notes.length) continue;
-      lines.push(`### ${t.title}`);
-      for (const n of notes) lines.push(`- ${n}`);
-      lines.push("");
-    }
-  }
-  // Done-when lines are targets written before the work: plan, not outcome.
-  const targets = tasks.filter((t) => t.successCriteria);
-  if (doc || targets.length) {
-    lines.push("## Original plan (may be outdated; later notes win)", "");
-    if (doc) lines.push(doc, "");
-    if (targets.length) {
-      lines.push("### Task targets (set before the work)", "");
-      for (const t of targets) lines.push(`- ${t.title}: ${t.successCriteria}`);
-      lines.push("");
-    }
-  }
-  const out = lines.join("\n").replace(WORK_ID, "").trim();
-  return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
+export interface GraduationInput {
+  /** What distill reads. */
+  text: string;
+  /** The graduating item, whose id History lines cite. */
+  workId: string;
+  /** Totals values that must survive distill. */
+  totals: Array<{ key: string; value: string }>;
+  /** The initiative whose entry this graduation also updates, if any. */
+  initiative?: WorkItem;
 }
 
 /**
- * A rolled-up feature's body as its KB record: the feature title as H1, the
- * document as written (minus its own H1), rollup markers and work ids removed.
+ * The raw material for distill: the item's plan (its document minus Record and
+ * Outcomes), its Record, its Outcomes (and Totals), its tasks, and the parent
+ * initiative's title and goal. Work ids other than the item's own are removed.
  */
-export function verbatimFeatureBody(feature: WorkItem, body: string): string {
-  // Drop the document's own H1 (the body may start with blank lines).
-  const doc = stripRollupMarkers(body.replace(/^\s*#\s+.*\n+/, ""))
-    .replace(WORK_ID, "")
-    .trim();
-  return `# ${feature.title}\n\n${doc}`;
-}
-
-/**
- * The raw material for an initiative's hub entry: its goal and document, and
- * the features delivered so far, each with the entry id it graduated to. Only
- * graduated features are listed, never remaining ones (more may be added).
- */
-export function hubDossier(initiative: WorkItem, body: string, delivered: WorkItem[]): string {
-  const lines = [`# ${initiative.title}`, ""];
-  if (initiative.successCriteria) lines.push(`Goal: ${initiative.successCriteria}`, "");
-  // Implementation detail belongs to the features' entries, not the hub: drop
-  // any "## Implementation Log" the initiative document collected.
-  const doc = body
-    .replace(/^#\s+.*\n+/, "")
-    .replace(/(^|\n)## Implementation Log\n[\s\S]*?(?=\n## |$)/, "$1")
-    .trim();
-  if (doc) lines.push("## Initiative document", "", doc, "");
-  lines.push("## Delivered features", "");
-  for (const f of delivered) {
-    lines.push(`- [[${graduationEntryId(f)}]] ${f.title}${f.successCriteria ? ` — ${f.successCriteria}` : ""}`);
-  }
-  const out = lines.join("\n").replace(WORK_ID, "").trim();
-  return out.length > MAX_DOSSIER_CHARS ? out.slice(0, MAX_DOSSIER_CHARS) + "\n…(truncated)" : out;
-}
-
-export interface GraduationFile {
-  /** File name for the wolf's ops inbox. */
-  name: string;
-  content: string;
-}
-
-/**
- * Render a graduation contribution for the ops inbox. It names the entry it
- * owns (entry_id), so the KB never needs to interpret work ids.
- */
-export function graduationFile(opts: {
-  from: string;
-  item: Pick<WorkItem, "id" | "domain">;
-  graduation: "feature" | "hub";
+export function buildGraduationInput(opts: {
+  item: WorkItem;
+  all: WorkItem[];
+  /** The item's working document. */
   body: string;
-  final?: boolean;
-  /** Feature under an initiative: the initiative, whose hub it is part_of. */
-  initiative?: Pick<WorkItem, "id" | "domain">;
-  submitted: Date;
-  /** The body is a finished record: Dewey stores it verbatim, no LLM. */
-  preserveBody?: boolean;
-  /** One-line summary for the entry (verbatim graduations). */
-  summary?: string;
-}): GraduationFile {
-  const { from, item, graduation, body, final, initiative, submitted, preserveBody, summary } = opts;
-  // The sweep skips content it has seen: a final hub can have the same body as
-  // the last update, so "final" is part of what is hashed.
-  // part_of is hashed too, so a change of hub re-sends the entry.
-  const partOf = initiative ? graduationEntryId(initiative) : "";
-  const hash = createHash("sha256").update(`${graduation}|${final ? "final" : ""}|${partOf}|${body}`).digest("hex").slice(0, 16);
-  const fm = [
-    "---",
-    `from: ${from}`,
-    `den_topic_id: ${item.id}`,
-    `change: create`,
-    `content_hash: ${hash}`,
-    `prev_hash: null`,
-    `domain_hint: ${item.domain}`,
-    `origin: wolf`,
-    `currency: live`,
-    `graduation: ${graduation}`,
-    `entry_id: ${graduationEntryId(item)}`,
-    ...(final ? ["final: true"] : []),
-    ...(initiative ? [`part_of: ${graduationEntryId(initiative)}`] : []),
-    ...(preserveBody ? ["preserve_body: true"] : []),
-    ...(summary ? [`summary: "${summary.replace(/"/g, "'")}"`] : []),
-    `submitted: ${submitted.toISOString()}`,
-    "---",
-  ];
+}): GraduationInput {
+  const { item, all } = opts;
+  const body = opts.body ?? "";
+  const isInitiative = item.kind === "initiative";
+  const initiative = isInitiative ? item : initiativeOf(item, all);
+  const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
+  const features = isInitiative ? all.filter((f) => f.partOf === item.id && f.kind === "feature") : [];
+
+  const record = extractRecord(body);
+  const plan = withoutRollup(withoutRecord(body)).replace(/^#\s+.*\n+/, "").trim();
+  const outcomes = outcomesText(body);
+  const totals = totalsValues(body);
+
+  // Entries the initiative's earlier graduations already updated (from the link-back notes).
+  const siblings = initiative ? all.filter((f) => f.partOf === initiative.id && f.kind === "feature" && f.graduated && f.id !== item.id) : [];
+  const known = [...new Set(siblings.flatMap((f) => parseKbNotes(f.log).all))];
+
+  const lines: string[] = [`GRADUATION OF ${item.kind}: ${item.title}`, `WORK ID: ${item.id}`];
+  if (item.successCriteria) lines.push(`DONE WHEN: ${item.successCriteria}`);
+  if (initiative) {
+    lines.push(
+      "",
+      `INITIATIVE${isInitiative ? " (THIS ITEM: write ONLY the initiative contribution)" : ""}${initiative.standing ? " (standing: never completes)" : isInitiative ? " (COMPLETE)" : ""}: ${initiative.title}`,
+      ...(initiative.successCriteria ? [`INITIATIVE GOAL: ${initiative.successCriteria}`] : []),
+      ...(known.length ? [`KNOWN ENTRIES (subjects earlier features of this initiative updated): ${known.map((k) => `[[${k}]]`).join(", ")}`] : []),
+    );
+  }
+  if (features.length) {
+    lines.push("", "FEATURES DELIVERED:");
+    for (const f of features) {
+      const kb = parseKbNotes(f.log).all;
+      lines.push(`- ${f.title}${f.successCriteria ? ` — ${f.successCriteria}` : ""}${kb.length ? ` (entries: ${kb.map((k) => `[[${k}]]`).join(", ")})` : ""}`);
+    }
+  }
+  if (plan) lines.push("", "PLAN (written before the work; may be outdated, the Record and Outcomes win):", clip(plan, SECTION_CAP));
+  if (record) lines.push("", clip(record.replace(/^## Record/, "RECORD:"), SECTION_CAP));
+  if (outcomes) lines.push("", "OUTCOMES:", clip(outcomes, SECTION_CAP));
+  if (totals.length) {
+    lines.push("", "TOTALS (each value must appear unchanged in what you write):", ...totals.map((t) => `- ${t.key}: ${t.value}`));
+  } else if (totalsText(body)) {
+    lines.push("", "TOTALS:", totalsText(body));
+  }
+  if (tasks.length) {
+    lines.push("", "TASKS:");
+    for (const t of tasks) lines.push(`- ${t.title} (${t.stage})${t.successCriteria ? `: ${t.successCriteria}` : ""}`);
+  }
+
+  const text = lines.join("\n").replace(WORK_ID, (m) => (m === item.id ? m : "")).replace(/\(\s*\)/g, "");
   return {
-    name: `grad-${graduation}-${item.id}-${submitted.getTime()}.md`,
-    content: `${fm.join("\n")}\n\n${body}\n`,
+    text: clip(text, MAX_INPUT_CHARS),
+    workId: item.id as string,
+    totals,
+    ...(initiative ? { initiative } : {}),
   };
 }
 
-/**
- * The contributions graduating `item` sends, in order:
- *   feature under an initiative → its entry, then the initiative's hub (updated
- *                                 to list it; created on the first feature)
- *   standalone feature          → its entry
- *   initiative (completing it)  → its hub, marked final
- * `item` is treated as graduated (it is being graduated now).
- */
-export function graduationFiles(opts: {
-  item: WorkItem;
-  all: WorkItem[];
-  bodyOf: (item: WorkItem) => string;
-  from: string;
-  now: Date;
-}): GraduationFile[] {
-  const { item, all, bodyOf, from, now } = opts;
-  const at = (ms: number) => new Date(now.getTime() + ms);
-  const delivered = (initiative: WorkItem) =>
-    all.filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id));
-  const hub = (initiative: WorkItem, final: boolean, ms: number) =>
-    graduationFile({
-      from,
-      item: initiative,
-      graduation: "hub",
-      body: hubDossier(initiative, bodyOf(initiative), delivered(initiative)),
-      final,
-      submitted: at(ms),
-    });
+// ════════════════════════════════════════════════════════════════════════════
+// 3 · PREVIEW
+// ════════════════════════════════════════════════════════════════════════════
 
-  if (item.kind === "initiative") return [hub(item, true, 0)];
-
-  // Loose task/issue/spike (Inbox or no parent): one entry, written by the
-  // LLM from its own notes. No hub: the parent is a container or absent.
-  if (STANDALONE_KINDS.includes(item.kind)) {
-    return [
-      graduationFile({
-        from,
-        item,
-        graduation: "feature",
-        body: featureDossier(item, bodyOf(item), [item]),
-        submitted: at(0),
-      }),
-    ];
-  }
-
-  // A feature whose body is maintained by rollup (a sprint log, a spec with
-  // its delivered tasks) is already the finished record: send it verbatim.
-  // Otherwise the LLM writes the entry from the dossier (task notes + plan).
-  const body = bodyOf(item);
-  const verbatim = hasRollupZone(body);
-  const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
-  const parent = hubOf(item, all);
-  const files = [
-    graduationFile({
-      from,
-      item,
-      graduation: "feature",
-      body: verbatim ? verbatimFeatureBody(item, body) : featureDossier(item, body, tasks),
-      initiative: parent,
-      submitted: at(0),
-      preserveBody: verbatim,
-      summary: verbatim ? (item.summary ?? totalsSummary(body) ?? item.successCriteria ?? undefined) : undefined,
-    }),
-  ];
-  // The hub is sent after the feature, so Dewey has written the feature entry
-  // (and can read its summary) by the time it writes the hub.
-  if (parent) files.push(hub(parent, false, 1));
-  return files;
+/** The Work API as graduation needs it (the extensions' WorkClient fits). */
+export interface GraduationClient {
+  query(q?: WorkQuery): Promise<WorkItem[]>;
+  getWithBody(id: string): Promise<{ item: WorkItem; body: string | null }>;
+  graduate(id: string): Promise<WorkItem>;
+  stage(id: string, to: string): Promise<WorkItem>;
+  note(id: string, text: string): Promise<WorkItem>;
 }
 
-/** The initiative whose hub a feature's graduation updates, if any. */
-export function hubOf(feature: WorkItem, all: WorkItem[]): WorkItem | undefined {
-  const parent = feature.partOf ? all.find((p) => p.id === feature.partOf) : undefined;
-  // A standing initiative (Releases, Maintenance) has no hub: its features
-  // graduate as standalone entries.
-  return parent?.kind === "initiative" && !parent.standing ? parent : undefined;
+export interface PreviewContribution {
+  /** Den topic id it is emitted under. */
+  id: string;
+  title: string;
+  summary: string;
+  body: string;
+  initiative: boolean;
+  /** The `- ` lines of its History section (they carry the work id). */
+  history: string[];
+}
+
+export interface GraduationPreview {
+  itemId: string;
+  kind: string;
+  title: string;
+  domain: string;
+  contributions: PreviewContribution[];
+  /** Non-blocking: Totals values not carried over, a missing History line… */
+  warnings: string[];
+  /** Set when distill's output still breaks the knowledge lint: it cannot be sent. */
+  blocked?: string;
+  /** Items archived by a confirmed graduation (the item first, then what it contains). */
+  archive: Array<{ id: string; title: string }>;
+  /** Identifies exactly this preview (the durable confirmation token). */
+  token: string;
+  createdAt: string;
+}
+
+const historyOf = (body: string): string[] => {
+  const at = body.search(/^## History[ \t]*$/m);
+  if (at < 0) return [];
+  return body.slice(at).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("- "));
+};
+
+/**
+ * Build the graduation input, distill it locally and return what would be
+ * sent. Nothing is written anywhere. Throws when the item is not ready.
+ */
+export async function previewGraduation(opts: {
+  client: GraduationClient;
+  engine: Engine;
+  id: string;
+  /** Today (YYYY-MM-DD); tests pin it. */
+  today?: string;
+  onProgress?: (msg: string) => void;
+}): Promise<GraduationPreview> {
+  const { client, engine, id } = opts;
+  const all = (await client.query({})) ?? [];
+  const item = all.find((i) => i.id === id);
+  if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
+
+  const { body } = await client.getWithBody(id);
+  const input = buildGraduationInput({ item, all, body: body ?? "" });
+  const isInitiative = item.kind === "initiative";
+  opts.onProgress?.(`distilling ${input.text.length} chars…`);
+  const r = await distillTopic(engine, {
+    id: item.id as string,
+    title: item.title,
+    summary: item.successCriteria || item.title,
+    body: input.text,
+    domain: item.domain as string,
+    date: opts.today ?? new Date().toISOString().slice(0, 10),
+    graduation: {
+      workId: input.workId,
+      ...(input.initiative ? { initiativeTopicId: input.initiative.id as string } : {}),
+      totals: input.totals,
+      ...(isInitiative ? { only: "initiative" as const } : {}),
+    },
+  });
+
+  const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => ({
+    id: o.id,
+    title: o.title,
+    summary: o.summary,
+    body: o.body,
+    initiative: !!o.initiative,
+    history: historyOf(o.body),
+  }));
+  const warnings = [
+    ...r.missingTotals.map((m) => `Totals: ${m} is not in the distilled text`),
+    ...r.warnings,
+    ...r.after.filter((f) => !["commit-hash", "work-id", "test-count", "deploy-status", "dated-heading"].includes(f.code)).map((f) => `lint: ${f.message}`),
+  ];
+  const blocked = r.heldCodes.length ? `the distilled text still breaks the knowledge lint (${r.heldCodes.join(", ")}); run g again` : undefined;
+  const archive = archiveSet(item, all).map((a) => ({ id: a.id as string, title: a.title }));
+  const token = createHash("sha256")
+    .update(JSON.stringify({ id, c: contributions.map((c) => [c.id, c.body]) }))
+    .digest("hex")
+    .slice(0, 12);
+  return {
+    itemId: id,
+    kind: item.kind,
+    title: item.title,
+    domain: item.domain as string,
+    contributions,
+    warnings,
+    ...(blocked ? { blocked } : {}),
+    archive,
+    token,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+const oneLine = (t: string, n: number) => {
+  const s = t.replace(/\s+/g, " ").trim();
+  return s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s;
+};
+
+/** The preview as text, for the confirm dialog / the agent's reply. */
+export function renderGraduationPreview(p: GraduationPreview): string {
+  const n = p.contributions.length;
+  const out: string[] = [
+    `Graduating "${p.title}" (${p.kind}): ${n} contribution${n === 1 ? "" : "s"} for the ${p.domain} knowledge base.`,
+    "",
+  ];
+  p.contributions.forEach((c, i) => {
+    out.push(`${i + 1}. ${c.initiative ? "[initiative] " : ""}${c.title}`);
+    out.push(`   ${oneLine(c.summary, 280)}`);
+    for (const h of c.history) out.push(`   ${oneLine(h, 240)}`);
+  });
+  if (p.warnings.length) out.push("", "Warnings:", ...p.warnings.map((w) => `- ${w}`));
+  if (p.blocked) out.push("", `Cannot send: ${p.blocked}`);
+  const rest = p.archive.length - 1;
+  out.push(
+    "",
+    "Dewey routes each contribution to the entry it is about (or creates one). " +
+      `Then ${p.kind === "feature" || p.kind === "initiative" ? "it" : "the item"} is marked graduated and archived${rest > 0 ? ` with its ${rest} item(s)` : ""}; history is kept.`,
+  );
+  return out.join("\n");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 4 · CONFIRM
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface ConfirmedGraduation {
+  /** Den topic ids written to the inbox. */
+  sent: string[];
+  /** Items archived. */
+  archived: string[];
+}
+
+/**
+ * Send a previewed graduation: ship the item when it is not complete yet,
+ * write the contributions to the wolf's inbox, mark the item graduated and
+ * archive it with what it contains. Nothing is archived unless every
+ * contribution reached the inbox. Throws on failure.
+ */
+export async function confirmGraduation(opts: {
+  client: GraduationClient;
+  roots: KbRoots;
+  wolf: string;
+  preview: GraduationPreview;
+  /** Ships an item (the caller's runtime folds it into its feature's Outcomes). */
+  ship: (id: string) => Promise<unknown>;
+  session?: string;
+}): Promise<ConfirmedGraduation> {
+  const { client, roots, wolf, preview } = opts;
+  if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
+  const all = (await client.query({})) ?? [];
+  const item = all.find((i) => i.id === preview.itemId);
+  if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? preview.itemId} is no longer ready to graduate`);
+
+  if (!isComplete(item)) {
+    await opts.ship(item.id as string);
+    await client.note(item.id as string, "Shipped for graduation: all tasks complete.");
+  }
+
+  const sent: string[] = [];
+  for (const c of preview.contributions) {
+    let failure: string | undefined;
+    const written = tryEmitDelta(
+      {
+        roots,
+        wolf,
+        denTopicId: c.id,
+        change: c.initiative ? "merge" : "create",
+        domainHint: preview.domain,
+        summary: c.summary,
+        body: c.body,
+        session: opts.session,
+      },
+      (why) => { failure = why; },
+    );
+    if (failure) throw new Error(failure);
+    // `written` is null when the same text was sent before (hash guard): it is already in the inbox or swept.
+    void written;
+    sent.push(c.id);
+  }
+
+  await client.graduate(item.id as string);
+  const archived: string[] = [];
+  for (const a of archiveSet(item, all)) {
+    await client.stage(a.id as string, "archived");
+    archived.push(a.id as string);
+  }
+  const rest = archived.length - 1;
+  await client.note(item.id as string, `Archived on graduation${rest > 0 ? ` with ${rest} item(s)` : ""}.`);
+  return { sent, archived };
 }

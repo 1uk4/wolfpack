@@ -40,8 +40,10 @@ import {
   resolveShipPolicy,
   shouldConfirmShip,
   readyToGraduate,
-  archiveSet,
-  hubOf,
+  initiativeOf,
+  renderGraduationPreview,
+  type GraduationPreview,
+  type ConfirmedGraduation,
   workspaceHeader,
   initialState,
   reduce,
@@ -305,8 +307,11 @@ export interface WorkSystemConfig {
   getStageContext?: (item: WorkItem) => string;
   /** Callback when task completes (for summarization) */
   onTaskComplete?: (taskId: string, item: WorkItem) => Promise<void>;
-  /** Callback when feature/initiative ready to graduate */
-  onReadyToGraduate?: (item: WorkItem) => Promise<void>;
+  /** Graduation: `g` previews the distilled contributions, then sends after the owner confirms. */
+  graduation?: {
+    preview(id: string): Promise<GraduationPreview>;
+    confirm(preview: GraduationPreview, ship: (id: string) => Promise<unknown>): Promise<ConfirmedGraduation>;
+  };
 }
 
 /** What the work system exposes to the rest of the memory extension. */
@@ -996,38 +1001,42 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify("Not ready to graduate.", "warning");
           return;
         }
-        if (!config.onReadyToGraduate) {
+        if (!config.graduation) {
           ctx.ui.notify("Graduation not configured.", "warning");
           return;
         }
-        const archived = archiveSet(item, all);
-        const tasks = archived.length - 1;
-        const hub = item.kind === "feature" ? hubOf(item, all) : undefined;
-        const what = (item.kind === "feature"
-          ? "Ships the feature and sends it to Dewey as its own knowledge base entry" +
-            (hub ? `, and adds it to the "${hub.title}" initiative's hub entry (the initiative stays open).` : ".")
-          : "Completes the initiative: its hub entry gets a final outcome summary.") +
-          ` Then archives it${tasks ? ` and its ${tasks} remaining item(s)` : ""}: they leave /task (history is kept).`;
+        const initiative = item.kind === "feature" ? initiativeOf(item, all) : undefined;
+        let preview: GraduationPreview;
+        try {
+          ctx.ui.notify(`Distilling "${item.title}" for the knowledge base…`, "info");
+          preview = await config.graduation.preview(item.id as string);
+        } catch (e: any) {
+          ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
+          return;
+        }
+        const text = renderGraduationPreview(preview);
+        if (preview.blocked) {
+          ctx.ui.notify(text, "warning");
+          return;
+        }
         const ok = await ctx.ui.confirm(
           item.kind === "initiative" ? `🎓 Complete "${item.title}"?` : `🎓 Graduate "${item.title}" to the knowledge base?`,
-          what
+          text
         );
-        if (!ok) return;
+        if (!ok) {
+          ctx.ui.notify("Graduation cancelled: nothing was sent.", "info");
+          return;
+        }
         try {
-          const shippedItem = isComplete(item) ? item : (await shipWithRollup(item.id));
-          if (!isComplete(item)) await client.note(item.id, "Shipped for graduation: all tasks complete.");
           ctx.ui.notify(`Graduating ${item.title}…`, "info");
-          await config.onReadyToGraduate(shippedItem);
-          // Graduated work is past tense: archive it and what it contained.
-          for (const a of archived) await client.stage(a.id, "archived");
-          await client.note(item.id, `Archived on graduation${tasks ? ` with ${tasks} item(s)` : ""}.`);
-          if (activeTask && archived.some((a) => a.id === activeTask!.workId)) unbindTask(ctx);
+          const done = await config.graduation.confirm(preview, shipWithRollup);
+          if (activeTask && done.archived.includes(activeTask.workId)) unbindTask(ctx);
           await refreshActiveItem();
           updateWidget(ctx);
-          ctx.ui.notify(`🎓 ${item.title} graduated and archived.`, "info");
+          ctx.ui.notify(`🎓 ${item.title} graduated and archived (${done.sent.length} contribution${done.sent.length === 1 ? "" : "s"} sent to Dewey).`, "info");
           // Its last feature delivered → the initiative can be completed (never automatic).
           const after = await client.query({}) ?? [];
-          const parent = hub ? after.find((i) => i.id === hub.id) : undefined;
+          const parent = initiative ? after.find((i) => i.id === initiative.id) : undefined;
           if (readyToGraduate(parent, after)) {
             ctx.ui.notify(`🎓 All features of "${parent.title}" have graduated: press g on it to complete it.`, "info");
           }
@@ -1042,7 +1051,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           const ok = await ctx.ui.confirm(
             next ? `Make "${cur.title}" standing?` : `Stop "${cur.title}" being standing?`,
             next
-              ? "It will never be offered for completion. Its features keep graduating into its hub."
+              ? "It will never be offered for completion. Its features keep updating its entry as they graduate."
               : "Once all its features have graduated, it can be completed with g.",
           );
           if (!ok) return;

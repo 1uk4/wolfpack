@@ -4,8 +4,10 @@
  * Work system tools for agent-managed task workflows.
  * Uses @wolfpack/kb/client for work operations.
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
+import { createEngine, engineSteps, loadModelTable, type Engine } from "@wolfpack/engine";
+import type { KbRoots } from "@wolfpack/kb/shared";
 import { join, dirname } from "node:path";
 import {
   defineExtension,
@@ -29,6 +31,11 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   readyToGraduate,
+  previewGraduation,
+  confirmGraduation,
+  renderGraduationPreview,
+  initiativeOf,
+  type GraduationPreview,
   rollupToParent,
   recordFeatureId,
   renderFeatureRecord,
@@ -48,7 +55,14 @@ type WorkItemStage = typeof STAGE_ORDER[number];
 export interface TasksConfig {
   /** Auto-ship tasks without confirmation (default: true for agent-managed) */
   autoShip?: boolean;
+  /** Engine for graduation's distill (default: the wolf's model table). Test seam. */
+  engine?: () => Engine;
+  /** KB roots for graduation (default: KB_BASE / KB_OPS, den-local state under <den>/kb). Test seam. */
+  kbRoots?: KbRoots;
 }
+
+/** A graduation preview waits this long for the owner's answer. */
+const PREVIEW_TTL_MS = 6 * 60 * 60 * 1000;
 
 interface ActiveBinding {
   taskId: string;
@@ -258,6 +272,27 @@ export default function createTasksExtension(
     return { id: binding.taskId, title: cached?.task.id === binding.taskId ? cached.task.title : undefined };
   }
 
+  // ── Graduation: preview first, send only on the owner's yes ─────────────
+  const previewDir = () => join(wolfDen, "tasks", "graduation");
+  const previewFile = (token: string) => join(previewDir(), `${token.replace(/[^a-f0-9]/g, "")}.json`);
+  function graduationRoots(): KbRoots | null {
+    if (config.kbRoots) return config.kbRoots;
+    const kbBase = process.env.KB_BASE;
+    const kbOps = process.env.KB_OPS;
+    return kbBase && kbOps ? { kbBase, opsRoot: kbOps, denLocal: join(wolfDen, "kb") } : null;
+  }
+  function graduationEngine(): Engine {
+    if (config.engine) return config.engine();
+    const t = loadModelTable().table;
+    const apiKey = t.tiers.smart.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : undefined;
+    return createEngine({
+      provider: t.tiers.smart.provider,
+      ...(apiKey ? { apiKey } : {}),
+      defaultModel: t.tiers.smart.model,
+      steps: engineSteps(t),
+    });
+  }
+
   /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
   const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
 
@@ -273,7 +308,7 @@ export default function createTasksExtension(
         const domainList = domains.join(", ") || "(none configured)";
         return `## Task Tools
 
-Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_features
+Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
 Domains: ${domainList}
 
@@ -836,9 +871,9 @@ ${BINDING_RULES}`;
               const all = await client.query({ domain: binding.domain });
               const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
               if (feature && readyToGraduate(feature, all)) {
-                result.push(`🎓 All tasks under "${feature.title}" are done: it is ready to graduate. Tell the user.`);
+                result.push(`🎓 All tasks under "${feature.title}" are done: it is ready to graduate (task_graduate previews it). Tell the user.`);
               } else if (readyToGraduate(shipped, all)) {
-                result.push(`🎓 "${shipped.title}" is done and ready to graduate on its own. Tell the user.`);
+                result.push(`🎓 "${shipped.title}" is done and ready to graduate on its own (task_graduate previews it). Tell the user.`);
               }
             } catch { /* readiness is advisory */ }
 
@@ -1055,6 +1090,68 @@ ${BINDING_RULES}`;
               content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
               isError: true,
             };
+          }
+        },
+      }),
+
+      // ─── task_graduate ───────────────────────────────────────────────────
+      defineTool({
+        name: "task_graduate",
+        description:
+          "Graduate a finished work item into the knowledge base, in two steps. " +
+          "Step 1: task_graduate(id) distills the item and returns a PREVIEW (what would be sent to the KB) and a confirmation token. Nothing is sent. " +
+          "Show the preview to the owner and ask whether to send it. " +
+          "Step 2, ONLY after the owner has said yes in this conversation: task_graduate(id, confirm=<token>). " +
+          "Never confirm on your own. Eligible: a feature whose tasks are all done, a loose Inbox task, an initiative whose features have all graduated.",
+        parameters: Type.Object({
+          id: Type.String({ description: "Work item to graduate" }),
+          confirm: Type.Optional(Type.String({ description: "The token from the preview, once the owner approved it" })),
+        }),
+        async execute(args: { id: string; confirm?: string }, ctx: ToolContext): Promise<ToolResult> {
+          const fail = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
+          const roots = graduationRoots();
+          if (!roots) return fail("The knowledge base is not configured for this wolf (KB_BASE / KB_OPS).");
+          try {
+            if (!args.confirm) {
+              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id });
+              await mkdir(previewDir(), { recursive: true });
+              await writeFile(previewFile(preview.token), JSON.stringify(preview));
+              const text = renderGraduationPreview(preview);
+              return {
+                content: [{
+                  type: "text",
+                  text: preview.blocked
+                    ? `${text}\n\nNothing can be sent from this preview. Tell the owner and try again later.`
+                    : `${text}\n\nNOTHING HAS BEEN SENT. Ask the owner whether to send this. If they say yes, call task_graduate with id ${args.id} and confirm "${preview.token}".`,
+                }],
+              };
+            }
+
+            const file = previewFile(args.confirm);
+            if (!existsSync(file)) return fail("No such preview (or it was already used). Call task_graduate(id) again to get a fresh preview.");
+            const preview = JSON.parse(await readFile(file, "utf-8")) as GraduationPreview;
+            if (preview.itemId !== args.id) return fail(`That token is for ${preview.itemId}, not ${args.id}.`);
+            if (Date.now() - Date.parse(preview.createdAt) > PREVIEW_TTL_MS) {
+              return fail("That preview is too old. Call task_graduate(id) again for a fresh one and ask the owner again.");
+            }
+            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship });
+            await unlink(file).catch(() => { /* used once */ });
+
+            const binding = await readBinding(ctx.wolfDen);
+            if (binding && done.archived.includes(binding.taskId)) {
+              await clearBinding(ctx.wolfDen);
+              clearCache();
+            }
+            const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
+            try {
+              const all = await client.query({ domain: preview.domain });
+              const item = all.find((i) => i.id === args.id);
+              const parent = item ? initiativeOf(item, all) : undefined;
+              if (readyToGraduate(parent, all)) result.push(`🎓 All features of "${parent.title}" have graduated: it can be completed too. Tell the user.`);
+            } catch { /* advisory */ }
+            return { content: [{ type: "text", text: result.join("\n") }] };
+          } catch (err) {
+            return fail(`Graduation failed: ${err instanceof Error ? err.message : err}`);
           }
         },
       }),

@@ -336,6 +336,11 @@ export function readModelTable(file: string): ModelTable {
   if (!table?.tiers || !table.steps || !table.transport) {
     throw new Error(`${file} is not a resolved model table`);
   }
+  // A table written before a step existed (e.g. `distill`) lacks it. Steps are
+  // a fixed use → tier map, so fill the gap rather than fail until the next sync.
+  for (const step of ENGINE_STEPS) {
+    if (!table.steps[step]) table.steps[step] = { tier: STEP_TIERS[step] };
+  }
   return table;
 }
 

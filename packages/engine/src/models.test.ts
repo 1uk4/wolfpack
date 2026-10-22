@@ -14,6 +14,7 @@ import {
   loadModelTable,
   modelTableFingerprint,
   piModelArg,
+  readModelTable,
   resolveModelTable,
   writeModelTable,
   type PackModels,
@@ -167,6 +168,25 @@ describe("tier coverage", () => {
   it("every engine step has a tier", () => {
     for (const step of ENGINE_STEPS) expect(isTier(STEP_TIERS[step])).toBe(true);
     expect(Object.keys(local().steps).sort()).toEqual([...ENGINE_STEPS].sort());
+  });
+
+  it("distill resolves to the smart tier from a config that never mentions it", () => {
+    const t = local({ models: { smart: { model: "claude-opus-5-5" } } });
+    expect(t.steps.distill).toEqual({ tier: "smart" });
+    expect(engineSteps(t).distill.model).toBe("claude-opus-5-5");
+  });
+
+  it("a table file written before a step existed still loads: the step falls back to its fixed tier", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "models-old-"));
+    const file = path.join(dir, "models.json");
+    const old = local();
+    delete (old.steps as Record<string, unknown>).distill;
+    writeModelTable(file, old);
+    const t = readModelTable(file);
+    expect(t.steps.distill).toEqual({ tier: "smart" });
+    expect(engineSteps(t).distill.model).toBe("claude-sonnet-5-5");
+    expect(modelTableFingerprint(t)).toBe(modelTableFingerprint(local()));
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("every agent file in the repo names a tier and sets no thinking", () => {

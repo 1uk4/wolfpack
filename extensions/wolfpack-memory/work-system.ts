@@ -26,7 +26,7 @@ import {
   type WorkItem,
   type WorkId,
 } from "@wolfpack/kb/client";
-import { WorkClient } from "./work-client.js";
+import { WorkClient, shipAndRollup } from "./work-client.js";
 import {
   startFileTracking,
   stopFileTracking,
@@ -46,7 +46,6 @@ import {
   initialState,
   reduce,
   rollupToParent,
-  type RollupClient,
   leftRows,
   rightRows,
   rightTree,
@@ -328,39 +327,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
   const client = new WorkClient();
 
-  // ── Rollup adapter: fold a shipped child's body into the parent feature ──
-  // Opt-in by parent-body-shape: only runs when the parent has a rollup zone.
-  // Errors are swallowed and logged — a bad rollup never blocks the ship.
-  const rollupClient: RollupClient = {
-    async query({ ids }) {
-      const all = (await client.query({})) ?? [];
-      const want = new Set(ids ?? []);
-      return all.filter((i) => want.has(i.id as string)).map((i) => ({
-        id: i.id as string,
-        kind: i.kind as string,
-        title: i.title,
-        partOf: (i.partOf as string | null) ?? null,
-        updated: i.updated as string,
-        successCriteria: i.successCriteria ?? null,
-      }));
-    },
-    async getBody(id) {
-      const { body } = await client.getWithBody(id);
-      return body ?? "";
-    },
-    async updateBody(id, body) {
-      await client.updateBody(id, body);
-    },
-  };
-
+  // ── Outcomes: a shipped child is folded into its feature's ## Outcomes ──
+  // Every feature keeps the section (the Inbox does not). Errors are logged —
+  // a bad rollup never blocks the ship.
   async function shipWithRollup(id: string): Promise<WorkItem> {
-    const item = await client.stage(id, "shipped");
-    try {
-      await rollupToParent(rollupClient, id);
-    } catch (err) {
-      debugLog("rollupToParent failed", { id, err: String(err) });
-    }
-    return item;
+    return shipAndRollup(client, id, rollupToParent, (err) => debugLog("rollupToParent failed", { id, err: String(err) }));
   }
 
   // Session-specific task binding

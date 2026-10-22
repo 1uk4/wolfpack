@@ -9,6 +9,10 @@ import {
   hasRollupZone,
   stripRollupMarkers,
   totalsSummary,
+  ensureOutcomesZone,
+  outcomesText,
+  totalsValues,
+  withoutRollup,
   type ChildMeta,
   type RollupClient,
 } from "./rollup.js";
@@ -222,17 +226,90 @@ describe("rollupToParent (orchestrator)", () => {
     expect(client.writes["feat-1"]).toContain("- Duration: **2:18**");
   });
 
-  it("no-ops when the parent lacks the rollup zone", async () => {
+  it("a feature without a zone gets an ## Outcomes section: the task's one line", async () => {
+    const doc = "# W\n\n## Plan\n\nkeep   this\texactly\n\n## Record\n\n### Decisions\n\n- x\n";
+    const client = makeClient(
+      [
+        { id: "task-1", kind: "task", title: "Add X", partOf: "feat-1", updated: "2026-10-16T10:00:00Z" },
+        { id: "feat-1", kind: "feature", title: "W", partOf: null, updated: "2026-10-15" },
+      ],
+      { "task-1": "# Add X\n\nlots of notes that are not an outcome", "feat-1": doc }
+    );
+    expect(await rollupToParent(client, "task-1")).toBe("written");
+    const out = client.writes["feat-1"];
+    // the rest of the document is byte for byte
+    expect(out.startsWith(doc)).toBe(true);
+    expect(out.slice(doc.length)).toMatch(/^\n## Outcomes\n\n<!-- rollup:children -->\n/);
+    expect(out).toContain("- Add X, shipped 2026-10-16");
+    expect(out).not.toContain("lots of notes");
+    expect(await rollupToParent(client, "task-1")).toBe("written"); // idempotent
+    expect(client.writes["feat-1"]).toBe(out);
+  });
+
+  it("a task's ## Rollup section is lifted verbatim into Outcomes; totals sum when declared", async () => {
+    const doc = '# W\n\n## Totals\n<!-- rollup:totals keys="Sets,Volume" -->\n<!-- /rollup:totals -->\n';
+    const bodies: Record<string, string> = {
+      t1: "# A\n\n## Rollup\nSets: 20 | Volume: 21,300 lb\n",
+      t2: "# B\n\n## Rollup\nSets: 24 | Volume: 13,543 lb\n",
+      f1: doc,
+    };
+    const writes: Record<string, string> = {};
+    const client: RollupClient = {
+      async query({ ids }) {
+        return [
+          { id: "t1", kind: "task", title: "A", partOf: "f1", updated: "2026-10-15" },
+          { id: "t2", kind: "task", title: "B", partOf: "f1", updated: "2026-10-16" },
+          { id: "f1", kind: "feature", title: "W", partOf: null, updated: "2026-10-15" },
+        ].filter((i) => (ids ?? []).includes(i.id));
+      },
+      async getBody(id) { return writes[id] ?? bodies[id]; },
+      async updateBody(id, body) { writes[id] = body; },
+    };
+    await rollupToParent(client, "t1");
+    await rollupToParent(client, "t2");
+    const out = writes.f1;
+    expect(out).toContain("Sets: 20 | Volume: 21,300 lb");
+    expect(out).toContain("- Sets: **44**");
+    expect(out).toContain("- Volume: **34,843 lb**");
+    expect(out.startsWith("# W\n\n## Totals\n")).toBe(true); // totals stay where the feature put them
+    expect(totalsValues(out)).toEqual([
+      { key: "Sessions", value: "2" }, { key: "Sets", value: "44" }, { key: "Volume", value: "34,843 lb" },
+    ]);
+    expect(outcomesText(out)).toContain("### Thu 10/15 — A");
+    expect(withoutRollup(out)).toBe(""); // nothing but machinery was left
+  });
+
+  it("an existing ## Outcomes section without a zone gets the zone inside it", () => {
+    const body = "# F\n\n## Outcomes\n\nnotes\n\n## Other\n\nx\n";
+    const r = ensureOutcomesZone(body);
+    expect(r.legacy).toBe(false);
+    expect(r.body).toBe("# F\n\n## Outcomes\n\nnotes\n\n<!-- rollup:children -->\n<!-- /rollup:children -->\n\n## Other\n\nx\n");
+  });
+
+  it("the Inbox container gets no Outcomes", async () => {
+    const client = makeClient(
+      [
+        { id: "task-1", kind: "task", title: "T", partOf: "inbox", updated: "2026-10-16" },
+        { id: "inbox", kind: "feature", title: "Inbox", container: true, partOf: null, updated: "2026-10-15" },
+      ],
+      { "task-1": "# T", inbox: "# Inbox" }
+    );
+    expect(await rollupToParent(client, "task-1")).toBe("no-parent");
+    expect(client.writes).toEqual({});
+  });
+
+  it("a legacy zone (outside ## Outcomes) is the Outcomes: the whole task body is lifted, no new section", async () => {
+    const doc = "# W\n\n## Sessions\n<!-- rollup:children -->\n<!-- /rollup:children -->\n";
     const client = makeClient(
       [
         { id: "task-1", kind: "task", title: "T", partOf: "feat-1", updated: "2026-10-16" },
         { id: "feat-1", kind: "feature", title: "W", partOf: null, updated: "2026-10-15" },
       ],
-      { "task-1": "# T\n\nbody", "feat-1": "# W\n\nno zone here" }
+      { "task-1": "# T\n\n### Summary\nSets: 3", "feat-1": doc }
     );
-    const r = await rollupToParent(client, "task-1");
-    expect(r).toBe("no-zone");
-    expect(client.writes).toEqual({});
+    expect(await rollupToParent(client, "task-1")).toBe("written");
+    expect(client.writes["feat-1"]).toContain("### Summary\nSets: 3");
+    expect(client.writes["feat-1"]).not.toContain("## Outcomes");
   });
 
   it("no-ops when the task has no parent feature", async () => {

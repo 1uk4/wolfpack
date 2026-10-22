@@ -1,9 +1,16 @@
 /**
- * rollup — fold a shipped child's distilled content into its parent feature body.
+ * rollup — fold a shipped child's outcome into its parent feature's `## Outcomes`.
  *
- * Document-driven, LLM-free. Any feature that opts in (by including the
- * `<!-- rollup:children -->…<!-- /rollup:children -->` zone in its body) gets
- * child task bodies auto-maintained there when they ship. An optional
+ * Document-driven, LLM-free. EVERY feature gets an `## Outcomes` section
+ * (created at the end of its document on the first ship) holding the
+ * `<!-- rollup:children -->…<!-- /rollup:children -->` zone. A shipped task
+ * contributes its `## Rollup` section verbatim when it has one, else one line
+ * "<title>, shipped <YYYY-MM-DD>". Only that zone is written; the rest of the
+ * document stays byte for byte.
+ *
+ * Legacy features that already carry a children zone elsewhere (a sprint log)
+ * keep it as their Outcomes: there a child without a `## Rollup` section is
+ * lifted whole, as before. An optional
  * `<!-- rollup:totals keys="A,B,C" -->…<!-- /rollup:totals -->` block sums
  * numeric `Key: value [unit]` lines across all rolled-up children.
  *
@@ -31,6 +38,10 @@
  *   Totals rendering reverses H:MM for keys called "Duration" or ending in
  *   "duration" / "time".
  */
+
+import { findSection } from "../work-record.js";
+
+export const OUTCOMES_HEADING = "## Outcomes";
 
 // ── Marker syntax ────────────────────────────────────────────────────────
 const CHILDREN_OPEN = "<!-- rollup:children -->";
@@ -131,6 +142,8 @@ export interface ChildMeta {
   title: string;
   /** ISO date (YYYY-MM-DD). Used for ordering + the header date. */
   when: string;
+  /** Render the block as the single line "<title>, shipped <when>" (no distilled text). */
+  oneLine?: boolean;
 }
 
 /**
@@ -182,6 +195,13 @@ interface Block {
 }
 
 function renderBlock(child: ChildMeta, distilled: string): string {
+  if (child.oneLine) {
+    return [
+      `<!-- rollup:item id=${child.taskId} when=${child.when} -->`,
+      `- ${child.title}, shipped ${child.when}`,
+      ITEM_CLOSE,
+    ].join("\n");
+  }
   return [
     `<!-- rollup:item id=${child.taskId} when=${child.when} -->`,
     `### ${formatDate(child.when)} — ${child.title}`,
@@ -384,6 +404,79 @@ function findZone(body: string, open: string, close: string): Zone | null {
   return { innerStart: headerEnd, innerEnd: closeIdx };
 }
 
+// ── Outcomes section ─────────────────────────────────────────────────────
+
+const CHILDREN_ZONE = `${CHILDREN_OPEN}\n${CHILDREN_CLOSE}`;
+
+/**
+ * The body with a children zone in place, and whether that zone is a LEGACY
+ * one (outside an `## Outcomes` section). A missing zone is created: inside an
+ * existing `## Outcomes` section, else in a new section at the end. Everything
+ * outside the Outcomes section is preserved byte for byte.
+ */
+export function ensureOutcomesZone(body: string): { body: string; legacy: boolean } {
+  const span = findSection(body, OUTCOMES_HEADING);
+  const zone = findZone(body, CHILDREN_OPEN, CHILDREN_CLOSE);
+  if (zone) {
+    return { body, legacy: !(span && zone.innerStart >= span.start && zone.innerEnd <= span.end) };
+  }
+  if (span) {
+    const rest = body.slice(span.end);
+    const next =
+      body.slice(0, span.start) + body.slice(span.start, span.end).trimEnd() + `\n\n${CHILDREN_ZONE}` + (rest ? `\n\n${rest}` : "\n");
+    return { body: next, legacy: false };
+  }
+  const gap = body.endsWith("\n\n") ? "" : body.endsWith("\n") ? "\n" : body ? "\n\n" : "";
+  return { body: `${body}${gap}${OUTCOMES_HEADING}\n\n${CHILDREN_ZONE}\n`, legacy: false };
+}
+
+/** The outcomes written so far: the children zone's text without markers; "" when none. */
+export function outcomesText(body: string): string {
+  const zone = findZone(body, CHILDREN_OPEN, CHILDREN_CLOSE);
+  return zone ? stripRollupMarkers(body.slice(zone.innerStart, zone.innerEnd)).trim() : "";
+}
+
+/** The Totals block of a document (its lines, no markers); "" when it has none or all values are empty. */
+export function totalsText(body: string): string {
+  const t = findTotalsZone(body);
+  if (!t) return "";
+  const lines = body.slice(t.innerStart, t.innerEnd).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("- "));
+  return totalsValues(body).length ? lines.join("\n") : "";
+}
+
+/** Every populated Totals value as {key, value}, e.g. {key: "Volume", value: "21,300 lb"}. */
+export function totalsValues(body: string): Array<{ key: string; value: string }> {
+  const zone = findTotalsZone(body);
+  if (!zone) return [];
+  return body
+    .slice(zone.innerStart, zone.innerEnd)
+    .split("\n")
+    .map((l) => l.match(/^-\s*([^:]+):\s*\*{0,2}([^*]+?)\*{0,2}\s*$/))
+    .filter((m): m is RegExpMatchArray => !!m && m[2].trim() !== "—" && m[2].trim() !== "0")
+    .map((m) => ({ key: m[1].trim(), value: m[2].trim() }));
+}
+
+/**
+ * The document without its rollup machinery: no `## Outcomes` section, no
+ * children zone (a legacy one keeps its section heading only if it has other
+ * content), no totals block, no markers. What the PLAN says.
+ */
+export function withoutRollup(body: string): string {
+  let out = body;
+  const span = findSection(out, OUTCOMES_HEADING);
+  if (span) out = out.slice(0, span.start) + out.slice(span.end);
+  for (const [open, close] of [[CHILDREN_OPEN, CHILDREN_CLOSE]] as const) {
+    const z = findZone(out, open, close);
+    if (z) out = out.slice(0, z.innerStart - open.length) + out.slice(z.innerEnd + close.length);
+  }
+  const t = findTotalsZone(out);
+  if (t) {
+    const start = out.search(TOTALS_OPEN_RE);
+    out = out.slice(0, start) + out.slice(t.innerEnd + TOTALS_CLOSE.length);
+  }
+  return dropEmptySections(out).replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // ── Orchestrator (I/O boundary) ──────────────────────────────────────────
 
 export interface RollupClient {
@@ -394,25 +487,26 @@ export interface RollupClient {
     partOf: string | null;
     updated: string;
     successCriteria?: string | null;
+    /** Holding container (the Inbox): no Outcomes. */
+    container?: boolean;
   }>>;
   getBody(id: string): Promise<string>;
   updateBody(id: string, body: string): Promise<void>;
 }
 
 /**
- * Fold a shipped task into its parent feature's rollup zone. No-op when:
+ * Fold a shipped task into its parent feature's Outcomes. No-op when:
  *   - the task has no parent;
- *   - the parent is not a feature;
- *   - the parent body has no `<!-- rollup:children -->` zone.
+ *   - the parent is not a feature, or is the Inbox container.
  *
- * Totals are recomputed when a `<!-- rollup:totals -->` zone is present.
- * Errors are swallowed into a rejected promise — callers log but should NOT
- * block the ship on a rollup failure.
+ * Totals are recomputed when the feature declares a `<!-- rollup:totals -->`
+ * block. Errors reject — callers log but should NOT block the ship on a
+ * rollup failure.
  */
 export async function rollupToParent(
   client: RollupClient,
   taskId: string
-): Promise<"written" | "no-parent" | "no-zone" | "no-content"> {
+): Promise<"written" | "no-parent" | "no-content"> {
   const items = await client.query({ ids: [taskId] });
   const task = items[0];
   if (!task) return "no-parent";
@@ -420,30 +514,37 @@ export async function rollupToParent(
 
   const parents = await client.query({ ids: [task.partOf] });
   const parent = parents[0];
-  if (!parent || parent.kind !== "feature") return "no-parent";
+  if (!parent || parent.kind !== "feature" || parent.container) return "no-parent";
 
-  const parentBody = await client.getBody(parent.id);
-  if (parentBody.indexOf(CHILDREN_OPEN) < 0) return "no-zone";
+  const original = await client.getBody(parent.id);
+  const { body: parentBody, legacy } = ensureOutcomesZone(original);
 
-  // A task nobody wrote a body for still records what it delivered.
   const taskBody = await client.getBody(task.id);
-  const distilled =
-    extractDistilled(taskBody) ||
-    (task.successCriteria ? `Delivered: ${task.successCriteria}` : "");
-  if (!distilled) return "no-content";
-
   const when = (task.updated || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
-  let next = upsertRollupBlock(parentBody, {
-    taskId: task.id,
-    title: task.title,
-    when,
-  }, distilled);
+  let distilled: string;
+  let oneLine = false;
+  if (legacy) {
+    // A task nobody wrote a body for still records what it delivered.
+    distilled =
+      extractDistilled(taskBody) ||
+      (task.successCriteria ? `Delivered: ${task.successCriteria}` : "");
+    if (!distilled) return "no-content";
+  } else {
+    distilled = extractRollupSection(taskBody);
+    oneLine = !distilled;
+  }
+
+  let next = upsertRollupBlock(parentBody, { taskId: task.id, title: task.title, when, oneLine }, distilled);
   next = recomputeTotals(next);
 
-  if (next !== parentBody) {
+  if (next !== original) {
     await client.updateBody(parent.id, next);
   }
   return "written";
 }
 
-
+/** The task's own `## Rollup` section, or "" when it has none. */
+function extractRollupSection(body: string): string {
+  const h = /(?:^|\n)##\s+Rollup[^\n]*\n/.exec(body ?? "");
+  return h ? extractDistilled(body) : "";
+}

@@ -29,6 +29,7 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   readyToGraduate,
+  rollupToParent,
   recordFeatureId,
   renderFeatureRecord,
   shouldBindOnCreate,
@@ -37,7 +38,7 @@ import {
   UNBOUND_CONTEXT,
   BINDING_RULES,
 } from "@wolfpack/memory";
-import { WorkClient } from "./work-client.js";
+import { WorkClient, shipAndRollup } from "./work-client.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
 type WorkItemStage = typeof STAGE_ORDER[number];
@@ -256,6 +257,9 @@ export default function createTasksExtension(
     const cached = readCache();
     return { id: binding.taskId, title: cached?.task.id === binding.taskId ? cached.task.title : undefined };
   }
+
+  /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
+  const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
 
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
 
@@ -727,7 +731,7 @@ ${BINDING_RULES}`;
           }
 
           try {
-            const moved = await client.stage(target, args.to);
+            const moved = args.to === "shipped" ? await ship(target) : await client.stage(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
             if (moved.stage === "in_build" && !binding && ["task", "issue", "spike"].includes(moved.kind)) {
@@ -764,7 +768,7 @@ ${BINDING_RULES}`;
               return { content: [{ type: "text", text: `Confirmation required to ship ${args.id}. Call task_done again with confirm: false to ship.` }] };
             }
             try {
-              const shippedOther = await client.stage(args.id, "shipped");
+              const shippedOther = await ship(args.id);
               return {
                 content: [{ type: "text", text: withHeadsUp(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
               };
@@ -795,7 +799,7 @@ ${BINDING_RULES}`;
           
           try {
             // Ship the task
-            await client.stage(binding.taskId, "shipped");
+            await ship(binding.taskId);
             
             const found = await findItem(binding.taskId);
             const result: string[] = [`Shipped: ${binding.taskId}`];

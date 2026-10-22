@@ -32,7 +32,7 @@ export const RECORD_HEADING = "## Record";
 /** Total size the Record is kept under (the prompt asks for ~3.5k; this is the hard line). */
 export const RECORD_CAP = 4000;
 
-interface Span {
+export interface Span {
   start: number;
   end: number;
 }
@@ -55,14 +55,16 @@ function headingLines(body: string): Array<{ start: number; text: string }> {
   return out;
 }
 
-/** The `## Record` section: from its heading line to the next H1/H2 (or the end). */
-function findRecord(body: string): Span | null {
+/** A `## <name>` section: from its heading line to the next H1/H2 (or the end). */
+export function findSection(body: string, heading: string): Span | null {
   const lines = headingLines(body);
-  const i = lines.findIndex((l) => /^## Record[ \t]*$/.test(l.text));
+  const i = lines.findIndex((l) => l.text.replace(/[ \t]+$/, "") === heading);
   if (i < 0) return null;
   const next = lines.slice(i + 1).find((l) => /^#{1,2} /.test(l.text));
   return { start: lines[i].start, end: next ? next.start : body.length };
 }
+
+const findRecord = (body: string): Span | null => findSection(body, RECORD_HEADING);
 
 /** The Record section including its heading, or null when the document has none. */
 export function extractRecord(body: string): string | null {

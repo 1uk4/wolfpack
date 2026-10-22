@@ -103,3 +103,18 @@ describe("durable task tools: binding", () => {
     expect(JSON.parse(readFileSync(join(den, "tasks", "active.json"), "utf8"))).toBeNull();
   });
 });
+
+describe("durable task tools: Outcomes on ship", () => {
+  it("task_done folds the shipped task into its feature's ## Outcomes; the Inbox gets none", async () => {
+    const f = add({ kind: "feature", title: "F", body: "# F\n\n## Plan\n\nkeep\n" });
+    const t = add({ kind: "task", title: "Do it", partOf: f.id, updated: "2026-10-22T09:00:00Z" });
+    await run("task_bind", { id: t.id });
+    await run("task_done", { confirm: false });
+    expect(items.get(f.id)!.body).toMatch(/^# F\n\n## Plan\n\nkeep\n\n## Outcomes\n[\s\S]*- Do it, shipped 2026-10-22/);
+
+    const inbox = add({ kind: "feature", title: "Inbox", container: true, body: "# Inbox" });
+    const s = add({ kind: "task", title: "Stray", partOf: inbox.id });
+    await run("task_stage", { id: s.id, to: "shipped" });
+    expect(items.get(inbox.id)!.body).toBe("# Inbox");
+  });
+});

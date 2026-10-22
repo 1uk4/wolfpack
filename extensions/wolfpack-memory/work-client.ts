@@ -6,6 +6,7 @@
  */
 
 import type { WorkItem, CreateWorkInput, WorkQuery } from "@wolfpack/kb/client";
+import type { RollupClient } from "@wolfpack/memory";
 
 export class WorkClient {
   private endpoint: string;
@@ -178,4 +179,50 @@ export class WorkClient {
     const res = await this.request<{ deleted: string[] }>("DELETE", `/${id}`);
     return res.deleted;
   }
+}
+
+/** The Work API as the Outcomes rollup needs it (both runtimes ship tasks through this). */
+export function rollupClientFor(client: WorkClient): RollupClient {
+  return {
+    async query({ ids }) {
+      const out = [];
+      for (const id of ids ?? []) {
+        try {
+          const i = await client.get(id);
+          out.push({
+            id: i.id as string,
+            kind: i.kind as string,
+            title: i.title,
+            partOf: (i.partOf as string | null) ?? null,
+            updated: i.updated as string,
+            successCriteria: i.successCriteria ?? null,
+            container: i.container === true,
+          });
+        } catch { /* gone: the rollup treats it as no parent */ }
+      }
+      return out;
+    },
+    async getBody(id) {
+      return (await client.getWithBody(id)).body ?? "";
+    },
+    async updateBody(id, body) {
+      await client.updateBody(id, body);
+    },
+  };
+}
+
+/** Ship an item and fold it into its feature's Outcomes. A failed rollup never blocks the ship. */
+export async function shipAndRollup(
+  client: WorkClient,
+  id: string,
+  rollup: (client: RollupClient, id: string) => Promise<unknown>,
+  onError?: (err: unknown) => void,
+): Promise<WorkItem> {
+  const item = await client.stage(id, "shipped");
+  try {
+    await rollup(rollupClientFor(client), id);
+  } catch (err) {
+    onError?.(err);
+  }
+  return item;
 }

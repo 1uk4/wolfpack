@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createEmbedder, currentEntryHashes, embedInput, EMBED_INPUT_VERSION } from "./embed.js";
+import { createEmbedder, currentEntryHashes, embedInput, entrySummary, EMBED_INPUT_VERSION } from "./embed.js";
 import { contentHash, vectorsDir, type KbRoots } from "../shared/index.js";
 
 describe("vector cache", () => {
@@ -117,5 +117,18 @@ describe("vector cache", () => {
     fetchMock.mockClear();
     await createEmbedder(roots).embed("a", "a");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("entrySummary", () => {
+  it("prefers the frontmatter summary", () => {
+    expect(entrySummary("---\nid: x\nsummary: \"From frontmatter\"\n---\n\n# T\n\nLede here.\n")).toBe("From frontmatter");
+  });
+  it("falls back to the lede paragraph after the H1", () => {
+    const md = "---\nid: x\ntitle: T\n---\n\n# Work Item Deletion\n\nAdded cascade deletion to the dashboard.\nSecond line.\n\n## Details\n\nMore.\n";
+    expect(entrySummary(md)).toBe("Added cascade deletion to the dashboard.\nSecond line.");
+  });
+  it("is empty when there is no H1 or lede", () => {
+    expect(entrySummary("---\nid: x\n---\n\nJust text.\n")).toBe("");
   });
 });

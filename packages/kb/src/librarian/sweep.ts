@@ -16,7 +16,7 @@ import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
 import { drainInbox } from "./intake.js";
-import { createEmbedder, embedInput, cosine, type Embedder } from "./embed.js";
+import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
@@ -415,7 +415,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             id: e.entryId,
             score: cosine(vec, e.vector),
             title: String(f.title ?? e.entryId),
-            summary: String(f.summary ?? ""),
+            summary: entrySummary(md),
           });
         }
         ranked.sort((x, y) => y.score - x.score);

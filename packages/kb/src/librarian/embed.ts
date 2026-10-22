@@ -103,6 +103,20 @@ export function embedInput(parts: {
   return (prefix + text).slice(0, EMBED.inputMaxChars);
 }
 
+/**
+ * An entry's summary for embedding and the subject check: the frontmatter
+ * `summary` if set, else the lede — the first paragraph after the H1 (most
+ * entries carry their summary there, not in frontmatter). The merge-band
+ * eval measured title + lede.
+ */
+export function entrySummary(markdown: string): string {
+  const { fields, body } = parseFrontmatter(markdown);
+  const fm = String(fields.summary ?? "").trim();
+  if (fm) return fm;
+  const m = /^\s*#\s+[^\n]*\n+([\s\S]*?)(?:\n\s*\n|$)/.exec(body);
+  return (m?.[1] ?? "").trim().slice(0, 600);
+}
+
 // ── Ollama-backed, hash-cached embedder ──────────────────────────────────────
 
 interface CacheMeta {
@@ -296,7 +310,7 @@ function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
       const { fields } = parseFrontmatter(raw);
       const text = embedInput({
         title: String(fields.title ?? ""),
-        summary: String(fields.summary ?? ""),
+        summary: entrySummary(raw),
         role: "document",
         model,
       });

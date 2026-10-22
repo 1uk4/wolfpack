@@ -1324,12 +1324,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       provider: table.tiers.smart.provider,
       ...(useApi ? { apiKey } : {}),
       defaultModel: table.tiers.smart.model,
-      steps: {
-        ...steps,
-        // Large pools produce large action lists; give the output real headroom
-        // so the JSON isn't truncated (the default 4096 is far too small).
-        consolidate: { ...steps.consolidate, maxTokens: 16000 },
-      },
+      steps,
     });
 
     const orchConfig = {

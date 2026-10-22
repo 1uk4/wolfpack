@@ -48,7 +48,7 @@ export interface EngineConfig {
   defaultModel: string;
   /** Default temperature — leave unset for Claude 5 models, which reject it */
   defaultTemperature?: number;
-  /** Default max tokens */
+  /** Default max output tokens (DEFAULT_MAX_TOKENS when unset) */
   defaultMaxTokens?: number;
   /** Per-step model overrides */
   steps?: StepConfigs;
@@ -61,6 +61,11 @@ export interface EngineConfig {
 }
 
 export type PipelineStep = EngineStep;
+
+/** Output cap for every step unless one overrides it. Generous on purpose:
+ *  you pay for tokens written, not for the cap, and a truncated JSON reply
+ *  is a failed call. */
+export const DEFAULT_MAX_TOKENS = 16_000;
 
 /**
  * Resolve the model config for a specific pipeline step.
@@ -76,6 +81,6 @@ export function resolveModel(
     thinking: stepConfig?.thinking,
     // No default: Claude 5 models reject an explicit temperature.
     temperature: stepConfig?.temperature ?? config.defaultTemperature,
-    maxTokens: stepConfig?.maxTokens ?? config.defaultMaxTokens ?? 4096,
+    maxTokens: stepConfig?.maxTokens ?? config.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
   };
 }

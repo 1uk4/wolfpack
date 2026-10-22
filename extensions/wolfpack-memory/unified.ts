@@ -28,7 +28,7 @@ import {
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type EngineStep, type ModelTable } from "@wolfpack/engine";
+import { createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -130,13 +130,10 @@ export default function createMemoryExtension(
   function apiKeyFor(t: ModelTable): string | undefined {
     return t.tiers.smart.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : undefined;
   }
-  /** Engine on the table's models/transport; `knobs` layers non-model settings per step. */
-  function makeEngine(knobs: Partial<Record<EngineStep, { maxTokens?: number }>> = {}): Engine {
+  /** Engine on the table's models/transport. */
+  function makeEngine(): Engine {
     const t = getTable();
     const steps: NonNullable<EngineConfig["steps"]> = engineSteps(t);
-    for (const [step, extra] of Object.entries(knobs) as Array<[EngineStep, { maxTokens?: number }]>) {
-      steps[step] = { ...steps[step]!, ...extra };
-    }
     const apiKey = apiKeyFor(t);
     return createEngine({
       provider: t.tiers.smart.provider,
@@ -149,7 +146,7 @@ export default function createMemoryExtension(
   // Lazy-init engine
   let engine: Engine | null = null;
   function getEngine(): Engine {
-    if (!engine) engine = makeEngine({ consolidate: { maxTokens: 16000 } });
+    if (!engine) engine = makeEngine();
     return engine;
   }
 
@@ -604,7 +601,7 @@ export default function createMemoryExtension(
               }
 
               // Lazy engine
-              const splitEngine = makeEngine({ consolidate: { maxTokens: 16_000 } });
+              const splitEngine = makeEngine();
               const notify = (m: string) => console.log(`[librarian] ${m}`);
 
               // Single-entry split

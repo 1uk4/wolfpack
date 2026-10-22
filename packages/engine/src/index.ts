@@ -17,6 +17,7 @@ export {
   type StepConfigs,
   type PipelineStep,
   resolveModel,
+  DEFAULT_MAX_TOKENS,
 } from "./config.js";
 
 // Models — tiers, the resolver and the one loader every runtime calls

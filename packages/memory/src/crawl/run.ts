@@ -38,11 +38,7 @@ export function createCrawlEngine(): { engine: Engine; fastModel: string; smartM
     provider,
     ...(provider === "anthropic" ? { apiKey } : {}),
     defaultModel: table.tiers.smart.model,
-    steps: {
-      ...steps,
-      classify: { ...steps.classify, maxTokens: 8192 },
-      consolidate: { ...steps.consolidate, maxTokens: 16000 },
-    },
+    steps,
   });
   return { engine, fastModel: steps.classify.model, smartModel: steps.consolidate.model };
 }

@@ -23,11 +23,6 @@ export function createLibrarianEngine(table: ModelTable, apiKey = process.env.AN
     ...(provider === "anthropic" ? { apiKey } : {}),
     defaultModel: table.tiers.smart.model,
     requestTimeoutMs,
-    steps: {
-      ...steps,
-      // Entries (esp. merges) produce large JSON; the 4096 default truncates it
-      // and breaks JSON extraction (same lesson as the memory consolidator).
-      produce: { ...steps.produce, maxTokens: 16000 },
-    },
+    steps,
   });
 }

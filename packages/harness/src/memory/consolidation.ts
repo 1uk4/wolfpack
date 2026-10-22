@@ -332,6 +332,6 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
     provider: tier.provider,
     apiKey,
     defaultModel: step.model,
-    steps: { consolidate: { ...step, maxTokens: 16000 } },
+    steps: { consolidate: step },
   });
 }

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveModel, type EngineConfig } from "./config.js";
+import { resolveModel, DEFAULT_MAX_TOKENS, type EngineConfig } from "./config.js";
 import {
   ENGINE_STEPS,
   ModelConfigError,
@@ -252,5 +252,18 @@ describe("modelTableFingerprint", () => {
     expect(modelTableFingerprint(local({ models: { fast: { model: "claude-sonnet-5-5" } } }))).not.toBe(
       modelTableFingerprint(local()),
     );
+  });
+});
+
+describe("resolveModel — output cap", () => {
+  const cfg: EngineConfig = { provider: "anthropic", defaultModel: "m" };
+  it("defaults every step to 16k output tokens", () => {
+    expect(DEFAULT_MAX_TOKENS).toBe(16_000);
+    expect(resolveModel(cfg, "classify").maxTokens).toBe(16_000);
+    expect(resolveModel(cfg, "produce").maxTokens).toBe(16_000);
+  });
+  it("still honours a step or engine override", () => {
+    expect(resolveModel({ ...cfg, defaultMaxTokens: 2000 }, "classify").maxTokens).toBe(2000);
+    expect(resolveModel({ ...cfg, steps: { classify: { model: "m", maxTokens: 512 } } }, "classify").maxTokens).toBe(512);
   });
 });

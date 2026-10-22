@@ -28,6 +28,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { effortFor } from "../models.js";
 import { LlmInfraError, OutputTruncatedError } from "./errors.js";
+import { DEFAULT_MAX_TOKENS } from "../config.js";
 
 export interface ClaudeAgentSdkAdapterOptions {
   /** Absolute path to the `claude` executable. Omit to let the SDK resolve it. */
@@ -187,7 +188,7 @@ export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {
       totalCost += costUsd;
 
       if (truncated) {
-        throw new OutputTruncatedError(options.model, options.maxTokens ?? 4096, text.length);
+        throw new OutputTruncatedError(options.model, options.maxTokens ?? DEFAULT_MAX_TOKENS, text.length);
       }
 
       if (resultError && infraFailure) {

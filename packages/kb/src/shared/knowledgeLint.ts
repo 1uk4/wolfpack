@@ -41,6 +41,8 @@ export interface LintInput {
   style?: string;
   /** Body cap override (chars, History excluded). */
   cap?: number;
+  /** Chars outside `body` that count toward the cap (the rendered lede). */
+  extraChars?: number;
 }
 
 const HASH_TOKEN = /(?<![\w./~-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])/g;
@@ -129,7 +131,8 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
   }
 
   const cap = input.cap ?? DEFAULT_BODY_CAP;
-  if (!history_style && main.length > cap) add("oversize", `body is ${main.length} chars (History excluded), cap is ${cap}`);
+  const size = main.length + (input.extraChars ?? 0);
+  if (!history_style && size > cap) add("oversize", `body is ${size} chars (History excluded), cap is ${cap}`);
 
   if (input.summary && ledeRepeated(input.summary, main)) add("lede-repeat", "the lede paragraph is repeated in the body", input.summary);
 

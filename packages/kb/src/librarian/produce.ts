@@ -83,7 +83,10 @@ export interface ProduceEntryResult {
 export function lintOpinion(o: LlmOpinion, previous: string | undefined, style: string | undefined): LintFinding[] {
   const old = new Set((previous ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
   const body = o.detail.split("\n").filter((l) => !old.has(l.trim())).join("\n");
-  return lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, style });
+  // Content checks look at what is new; size counts the whole entry the reader gets.
+  const fresh = lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, style, cap: Infinity });
+  const size = lintKnowledge({ body: o.detail, style, extraChars: o.summary.length }).filter((f) => f.code === "oversize");
+  return [...fresh, ...size];
 }
 
 /** True when the entry markdown declares `kind: decision`. */
@@ -229,7 +232,7 @@ export async function produceEntry(
         const again = shape(
           await engine.call("produce", LlmOpinion, {
             system,
-            prompt: `${prompt}\n\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS:\n${describeFindings(before)}\nWrite the entry again and fix every one. Commit hashes, task ids, test counts, deploy status and dated headings are never part of an entry; History lines carry dates and reasons only.`,
+            prompt: `${prompt}\n\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS:\n${describeFindings(before)}\nWrite the entry again and fix every one. If the body is over the size cap, cut redundancy and anything off the entry's subject (never drop History lines). Commit hashes, task ids, test counts, deploy status and dated headings are never part of an entry; History lines carry dates and reasons only.`,
           })
         );
         opinion = again;

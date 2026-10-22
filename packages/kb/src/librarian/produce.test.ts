@@ -413,3 +413,20 @@ describe("produceEntry: knowledge lint", () => {
     expect(h.lint?.after).toEqual([]);
   });
 });
+
+describe("produceEntry: size counts the whole entry on a merge", () => {
+  it("flags an oversize merge even when most lines were already in the entry", async () => {
+    const old = "## How\n" + Array.from({ length: 400 }, (_, i) => `Line ${i} of existing prose.`).join("\n");
+    const prev = `---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\n---\n\n# T\n\nlede\n\n${old}\n`;
+    const call = vi.fn().mockResolvedValue({
+      title: "Sweep pipeline", kind: { type: "architecture" }, summary: "A lede that is long enough to be compared.",
+      detail: old + "\nOne new line.", confidence: "high", facets: {}, properties: {}, proposedRelations: [],
+    });
+    const r = await produceEntry({ call } as unknown as Engine, {
+      contribution: mockContribution(), domain: "wolfpack", section: SectionId.parse("sec-wolfpack-abc123"),
+      placement: { basis: "routed", fit: 0.85 }, resolve: () => null, entryId: "kb-wolfpack-AbC1234", existingMarkdown: prev,
+    });
+    expect(call).toHaveBeenCalledTimes(2); // retried for oversize
+    expect(r.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
+  });
+});

@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { atomicWrite, DISTILL_SYSTEM, LlmInfraError, type Engine } from "@wolfpack/engine";
+import { atomicWrite, DISTILL_SYSTEM, LlmInfraError, SWEEP, type Engine } from "@wolfpack/engine";
 import { isTrivialChange, isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import {
   contentHash,
@@ -269,7 +269,7 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
           domain,
           previous: rec?.slugs,
           date: today,
-          style: styles[domain]?.style,
+          style: styles[domain]?.style ?? (SWEEP.historyDomains.includes(domain) ? "history" : undefined),
         });
         stats.distilled++;
         outputs = r.outputs;

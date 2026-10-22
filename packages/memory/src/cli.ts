@@ -17,7 +17,7 @@
  */
 import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { emitDelta } from "@wolfpack/kb/client";
+import { tryEmitDelta } from "@wolfpack/kb/client";
 import { consolidateSession } from "./consolidate.js";
 import { listSessionIds } from "./session/memory.js";
 import { getConsolidatedSessions, readDenTopics } from "./den.js";
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     const topics = readDenTopics(resolvedDen);
     let emitted = 0;
     for (const t of topics) {
-      const d = emitDelta({
+      const d = tryEmitDelta({
         roots: kbRoots,
         wolf: wolfName,
         denTopicId: t.id,
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
         domainHint: defaultDomain,
         summary: t.summary,
         body: t.body,
-      });
+      }, (why) => console.error(`  ${why}`));
       if (d) {
         emitted++;
         console.log(`  emitted: ${t.id}`);

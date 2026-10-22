@@ -28,8 +28,6 @@ export interface WolfExtension {
   dir: string;
   /** Needs a TelegramConfig (token env + owner id) to function */
   requiresTelegram?: boolean;
-  /** Librarian capability: triggers host KB-engine provisioning (Ollama + sweep). */
-  librarian?: boolean;
   /** Supported runtimes (defaults to all if not specified) */
   runtimes?: string[];
 }
@@ -81,15 +79,6 @@ export const AVAILABLE_EXTENSIONS: WolfExtension[] = [
     runtimes: ["pi-durable"],
   },
   {
-    key: "kb",
-    label: "Librarian (KB engine)",
-    description:
-      "Shared knowledge-base curation: inbox sweep, embeddings, /kb:sweep (wolfpack-librarian)",
-    dir: "wolfpack-librarian",
-    librarian: true,
-    runtimes: ["pi", "pi-durable"],
-  },
-  {
     key: "visual-tools",
     label: "Visual tools (Mermaid + SVG makers)",
     description:
@@ -136,13 +125,20 @@ export function needsTelegram(keys: string[]): boolean {
   return keys.some((k) => getExtension(k)?.requiresTelegram);
 }
 
-/** Is this a librarian wolf? (carries a KB-engine extension) */
+/**
+ * The `kb` key in a wolf's `extensions` marks it as a librarian. It has no
+ * package (the sweep lives in the harness timer and the kb CLI); it only drives
+ * host KB-engine provisioning (Ollama + the admin CLI) and role detection.
+ */
+export const LIBRARIAN_KEY = "kb";
+
+/** Is this a librarian wolf? (carries the `kb` marker key) */
 export function isLibrarian(keys: string[]): boolean {
-  return keys.some((k) => getExtension(k)?.librarian);
+  return keys.includes(LIBRARIAN_KEY);
 }
 
 /**
- * Full librarian detection: either the legacy `kb` extension (used by
+ * Full librarian detection: either the `kb` marker key (used by
  * non-pi-durable wolves) OR a pi-durable wolf whose memory extension declares
  * librarian mode in-config (dewey's pattern since the Oct 2026 migration).
  *

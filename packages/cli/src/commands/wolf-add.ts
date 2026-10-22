@@ -111,7 +111,7 @@ async function resolveChoices(opts: AddWolfOpts): Promise<ResolvedChoices> {
     extensions = opts.extensions;
   } else if (interactive) {
     const seed = defaultExtensionKeys(profile);
-    const available = extensionsForRuntime(runtime).filter((e) => !e.librarian);
+    const available = extensionsForRuntime(runtime);
     extensions = await multiSelect<string>(
       `Select extensions (${runtime} runtime)`,
       available.map((e) => ({

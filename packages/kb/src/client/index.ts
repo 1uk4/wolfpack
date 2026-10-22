@@ -4,7 +4,7 @@
  * MUST NOT import ../librarian or @wolfpack/engine's LLM surface. This is the
  * structural guarantee that wolves carry no pipeline, no embeddings, no LLM.
  */
-export { emitDelta, type EmitDeltaInput } from "./emitDelta.js";
+export { emitDelta, tryEmitDelta, type EmitDeltaInput } from "./emitDelta.js";
 export {
   resolveWorkItem,
   listWorkItems,

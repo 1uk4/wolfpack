@@ -161,4 +161,30 @@ describe("consolidateSession reconcile", () => {
     await consolidateSession({ engine: stubEngine, den: { denRoot: den, wolfName: WOLF }, memoryRoot, sessionId: "sess-1", kbRoots: roots, skipClaims: true });
     expect(existsSync(join(den, "memory", "archive"))).toBe(false);
   });
+
+  it("logs and skips a topic with an unsafe id instead of aborting the promote", async () => {
+    // Session topic whose frontmatter id would escape the topics directory.
+    const dir = join(memoryRoot, "sess-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "weird.md"), "---\nid: ../../escape\ntitle: Weird\nsummary: s\nupdated: 2026-10-20 10:00\n---\n\nweird body\n");
+    sessionTopic("good");
+
+    const progress: string[] = [];
+    const result = await consolidateSession({
+      engine: stubEngine,
+      den: { denRoot: den, wolfName: WOLF },
+      memoryRoot,
+      sessionId: "sess-1",
+      kbRoots: roots,
+      onProgress: (msg) => progress.push(msg),
+    });
+
+    expect(progress.some((l) => l.includes("unsafe id"))).toBe(true);
+    expect(result.topicsCreated).toBe(1);
+    expect(result.topicsSkipped).toBe(1);
+    expect(result.claimsSubmitted).toBe(1);
+    expect(readdirSync(join(den, "memory", "topics")).filter((f) => f.endsWith(".md"))).toEqual(["good.md"]);
+    expect(readdirSync(join(roots.opsRoot, "inbox", WOLF)).length).toBe(1);
+    expect(existsSync(join(root, "escape.md"))).toBe(false);
+  });
 });

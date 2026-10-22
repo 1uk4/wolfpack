@@ -108,6 +108,20 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   return contribution;
 }
 
+/**
+ * emitDelta for callers that emit many topics: one topic that cannot be emitted
+ * (an unsafe id, a write error) is reported through `onSkip` and skipped, so it
+ * never aborts the rest of the promote.
+ */
+export function tryEmitDelta(input: EmitDeltaInput, onSkip: (reason: string) => void): Contribution | null {
+  try {
+    return emitDelta(input);
+  } catch (err) {
+    onSkip(`skipped ${JSON.stringify(input.denTopicId)}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 function render(c: Contribution): string {
   const fm = [
     "---",

@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drainInbox } from "./intake.js";
 import { writeReceipt } from "./commit.js";
-import { emitDelta } from "../client/emitDelta.js";
-import { contentHash, hashTag, safeSegment, type KbRoots } from "../shared/index.js";
+import { emitDelta, tryEmitDelta } from "../client/emitDelta.js";
+import { contentHash, hashTag, isSafeSegment, safeSegment, toTopicId, type KbRoots } from "../shared/index.js";
 
 describe("drainInbox", () => {
   let base: string;
@@ -114,5 +114,30 @@ describe("path joins use the validated values", () => {
     const bare = { ...c, contentHash: c.contentHash.slice(7), from: "w1", filePath: "x", } as never;
     writeReceipt(roots, "w1", bare, "ok", "detail");
     expect(readdirSync(join(roots.opsRoot, "receipts", "w1"))).toEqual([`t1-${c.contentHash.slice(7, 17)}.md`]);
+  });
+});
+
+describe("tryEmitDelta", () => {
+  it("reports an unsafe topic id and skips it, then emits the next one", () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-try-emit-"));
+    const roots: KbRoots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    try {
+      const input = { roots, wolf: "w1", change: "create" as const, body: "b", summary: "s", domainHint: "wp" };
+      const skipped: string[] = [];
+      expect(tryEmitDelta({ ...input, denTopicId: "../../x" }, (why) => skipped.push(why))).toBeNull();
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]).toMatch(/unsafe/);
+      expect(tryEmitDelta({ ...input, denTopicId: "fine" }, (why) => skipped.push(why))).not.toBeNull();
+      expect(skipped).toHaveLength(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("toTopicId keeps safe ids and slugs the rest into safe ones", () => {
+    expect(toTopicId("my_Topic.v2")).toBe("my_Topic.v2");
+    expect(toTopicId("My Topic: ../Draft!")).toBe("my-topic-draft");
+    expect(toTopicId("..")).toMatch(/^topic-[0-9a-f]{10}$/);
+    for (const raw of ["a/b", "日本語", "", " "]) expect(isSafeSegment(toTopicId(raw))).toBe(true);
   });
 });

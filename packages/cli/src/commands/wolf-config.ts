@@ -227,11 +227,7 @@ async function configLocal(
       const current = wolf.extensions ?? defaultExtensionKeys(
         profile === "assistant" ? "assistant" : "worker",
       );
-      const pickable = AVAILABLE_EXTENSIONS.filter((e) => {
-        if (!extensionSupportsRuntime(e, runtime)) return false;
-        if (e.librarian) return false;
-        return true;
-      });
+      const pickable = AVAILABLE_EXTENSIONS.filter((e) => extensionSupportsRuntime(e, runtime));
       wolf.extensions = await multiSelect<string>(
         `Select extensions (${runtime} runtime)`,
         pickable.map((e) => ({
@@ -438,11 +434,7 @@ async function configRemote(
       break;
     }
     case "extensions": {
-      const pickable = AVAILABLE_EXTENSIONS.filter((e) => {
-        if (!extensionSupportsRuntime(e, runtime)) return false;
-        if (e.librarian) return false;
-        return true;
-      });
+      const pickable = AVAILABLE_EXTENSIONS.filter((e) => extensionSupportsRuntime(e, runtime));
       const chosen = await multiSelect<string>(
         `Select extensions (${runtime} runtime)`,
         pickable.map((e) => ({

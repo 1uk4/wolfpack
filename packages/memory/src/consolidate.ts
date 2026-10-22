@@ -18,8 +18,8 @@
  *   6. Mark session as consolidated
  */
 import type { Engine } from "@wolfpack/engine";
-import { emitDelta } from "@wolfpack/kb/client";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { tryEmitDelta } from "@wolfpack/kb/client";
+import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readTopics, readJourney, type TopicFile } from "./session/memory.js";
@@ -152,6 +152,12 @@ export async function consolidateSession(
   const now = new Date().toISOString().replace("T", " ").slice(0, 16);
 
   for (const t of sessionTopics) {
+    // The id names a den file and a KB key: one bad id is skipped, not fatal.
+    if (!isSafeSegment(t.id)) {
+      skipped++;
+      onProgress?.(`  skipped topic with unsafe id ${JSON.stringify(t.id)}`);
+      continue;
+    }
     // Already in the KB with exactly this content: nothing to stage.
     if (kbRoots && isAbsorbed(kbRoots, den.wolfName, t.id, t.body)) {
       skipped++;
@@ -188,7 +194,7 @@ export async function consolidateSession(
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     for (const topic of updatedTopics) {
       const hint = topic.domain || defaultDomain;
-      const emitted = emitDelta({
+      const emitted = tryEmitDelta({
         roots: kbRoots,
         wolf: den.wolfName,
         denTopicId: topic.id,
@@ -197,7 +203,7 @@ export async function consolidateSession(
         summary: topic.summary,
         body: topic.body,
         session: sessionId,
-      });
+      }, (why) => onProgress?.(`  ${why}`));
       if (emitted) {
         claimsSubmitted++;
         onProgress?.(`  emitted: ${topic.title} → ${hint}`);

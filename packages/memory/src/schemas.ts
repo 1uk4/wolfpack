@@ -2,6 +2,7 @@
  * Schemas specific to the wolf consolidator's LLM outputs.
  */
 import { z } from "zod";
+import { toTopicId } from "@wolfpack/kb/shared";
 
 /**
  * A single merge/create/skip decision for one session topic.
@@ -14,7 +15,8 @@ export const TopicActionSchema = z.object({
   /** The resulting topic content (for merge and create; null/absent for skip) */
   result: z
     .object({
-      id: z.string().describe("Topic ID (slug, kebab-case)"),
+      // The id becomes a file name and a KB key: coerce anything unsafe to a slug.
+      id: z.string().describe("Topic ID (slug, kebab-case)").transform(toTopicId),
       title: z.string(),
       // Soft limit: clip rather than reject, so a slightly-long summary never
       // fails (and retries) an expensive consolidation.

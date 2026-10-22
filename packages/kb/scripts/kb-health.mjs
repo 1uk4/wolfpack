@@ -31,7 +31,7 @@ const KB_DEN_LOCAL = process.env.KB_DEN_LOCAL || join(process.env.HOME, "wolves"
 const SECTIONS_FILE = join(KB_DEN_LOCAL, "sections", "_sections.json");
 const OUT = process.env.OUT || join(KB_BASE, "maps");
 
-// HIERARCHY thresholds (mirrored from packages/engine/src/config/tuning.ts)
+// Health thresholds (kb-health's own; tuning.ts HIERARCHY holds the engine's)
 const HIERARCHY = {
   splitAt: 12,
   mergeBelow: 3,

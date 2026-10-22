@@ -4,6 +4,8 @@
  * joined into a path.
  */
 
+import { contentHash } from "./hash.js";
+
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
 
 export function isSafeSegment(value: unknown): value is string {
@@ -16,6 +18,22 @@ export function safeSegment(value: unknown, label = "path segment"): string {
     throw new Error(`unsafe ${label}: ${JSON.stringify(String(value).slice(0, 80))} (allowed: A-Z a-z 0-9 . _ -)`);
   }
   return value;
+}
+
+/**
+ * A den topic id that is always a safe path segment. An id that is already safe
+ * is returned unchanged (so existing topics keep their names); anything else is
+ * slugged to kebab-case, and an id with nothing slug-able gets a stable one
+ * derived from its text.
+ */
+export function toTopicId(raw: string): string {
+  if (raw !== "." && raw !== ".." && SAFE_SEGMENT.test(raw)) return raw;
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || `topic-${hashHex(contentHash(raw)).slice(0, 10)}`;
 }
 
 const HASH_PREFIX = "sha256:";

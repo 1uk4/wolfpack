@@ -29,7 +29,7 @@ import {
   buildDomainContext,
   reconcileDen,
 } from "@wolfpack/memory";
-import { emitDelta } from "@wolfpack/kb/client";
+import { tryEmitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 /** Observation stored in pool JSONL */
@@ -291,7 +291,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     onProgress?.("Emitting deltas to KB...");
     for (const topic of updatedTopics) {
       const hint = topic.domain || defaultDomain;
-      const emitted = emitDelta({
+      const emitted = tryEmitDelta({
         roots: kbRoots,
         wolf: wolfName,
         denTopicId: topic.id,
@@ -299,7 +299,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
         domainHint: hint,
         summary: topic.summary,
         body: topic.body,
-      });
+      }, (why) => onProgress?.(`  ${why}`));
       if (emitted) {
         claimsSubmitted++;
         onProgress?.(`  emitted: ${topic.id} → ${hint}`);

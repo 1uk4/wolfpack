@@ -19,15 +19,11 @@ export const EMBED = {
 } as const;
 
 /**
- * Hierarchical section tree mechanics (KB v2). Controls how entries are placed
- * into the single-parent section backbone, when sections split on overflow, and
- * when novel clusters crystallize into new sections from _unplaced.
- */
-/**
- * Sweep pacing. The sweep timer fires every minute; each run processes exactly
- * one contribution (oldest first), so the next one is picked up within a minute
- * and one run can never exhaust the server (LLM calls, memory, runtime, rate
- * limits). That contribution gets the whole run budget.
+ * Sweep pacing. The sweep tick runs every minute (the harness timer on a VPS
+ * librarian, a launchd job on a local Mac); each tick processes exactly one
+ * contribution (oldest first), so the next one is picked up within a minute and
+ * one tick can never exhaust the server (LLM calls, memory, runtime, rate
+ * limits). That contribution gets the whole tick budget.
  */
 export const SWEEP = {
   /** cosine \u2265 this to an existing entry \u2192 same topic: UPDATE it (and seed its
@@ -54,9 +50,9 @@ export const SWEEP = {
   
   /** Failed attempts (across ticks) before a contribution is parked. */
   maxAttempts: 3,
-  /** Time budget for a run's one contribution: past it the item is parked, so a
-   *  run always ends (and writes its ledger) well inside systemd's 15-minute
-   *  limit. Merge threshold: 600s * 0.6 / 15ms = 24,000 chars. */
+  /** Time budget for a tick's one contribution: past it the item is retried
+   *  once, then parked, so a tick always ends (and writes its ledger).
+   *  Merge threshold: 600s * 0.6 / 15ms = 24,000 chars. */
   runBudgetMs: 600_000,
   /** Times a contribution may run over its budget and be retried; the next
    *  overrun parks it. */
@@ -69,6 +65,11 @@ export const SWEEP = {
   embedTimeoutMs: 30_000,
 } as const;
 
+/**
+ * Hierarchical section tree mechanics (KB v2). Controls how entries are placed
+ * into the single-parent section backbone, when sections split on overflow, and
+ * when novel clusters crystallize into new sections from _unplaced.
+ */
 export const HIERARCHY = {
   /** Below this cosine to any child centroid → park in _unplaced. */
   fitThreshold: 0.78,
@@ -76,14 +77,8 @@ export const HIERARCHY = {
   splitAt: 8,
   /** Section under this count → fold back into parent. */
   mergeBelow: 3,
-  /** Parked entries forming a cohesive cluster → new section. */
-  crystallizeAt: 4,
-  /** Silhouette floor for a crystallized section to be valid. */
-  minCohesion: 0.80,
   /** Cap tree descent depth. */
   maxDepth: 4,
-  /** How often the tree is rebuilt/rebalanced. */
-  rebuildCadence: "weekly" as const,
   /** Max child summaries fed into a section-summary LLM call (bounded context). */
   maxChildSummaries: 12,
 } as const;
@@ -114,7 +109,6 @@ export const HIERARCHY = {
  * INVARIANTS checked after every mutation:
  *   - Weight: total_entries(parent) >= total_entries(child)
  *   - Singleton roots: no root section below minRootRatio of domain entries
- *   - Cohesion: intra-section similarity above cohesion threshold
  *
  * SECTION NAMING:
  *   - Depth 0-2: LLM-generated, weighted by child entry count
@@ -177,19 +171,6 @@ export const SECTION_TREE = {
    * rises because the domain's topics are well-covered.
    */
   isolationThreshold: 0.65,
-
-  /**
-   * Minimum entries in the unplaced pool before attempting crystallization.
-   * Higher = harder to create new sections (more evidence needed).
-   */
-  crystallizeMinEntries: 4,
-
-  /**
-   * Minimum pairwise cosine similarity within the unplaced cluster
-   * for it to qualify as a new section. Must be cohesive, not just
-   * "a pile of things that don't fit elsewhere."
-   */
-  crystallizeCohesion: 0.80,
 
   // ── Splitting (section overflow) ──────────────────────────────────────
 
@@ -263,25 +244,6 @@ export const SECTION_TREE = {
    */
   dominantChildThreshold: 0.80,
 
-  // ── Promotion ─────────────────────────────────────────────────────────
-
-  /**
-   * An entry is a promotion candidate when its cosine similarity to its
-   * PARENT section's centroid exceeds its similarity to its CURRENT
-   * section's centroid by this margin.
-   *
-   * High margin = conservative (rarely promotes).
-   * Low margin = aggressive (entries bubble up easily).
-   */
-  promotionMargin: 0.10,
-
-  /**
-   * Minimum number of entries that must promote together.
-   * Single-entry promotion is noisy; group promotion (community split)
-   * is more meaningful.
-   */
-  promotionMinGroup: 2,
-
   // ── Centroid recalculation (drift detection) ──────────────────────────
 
   /**
@@ -305,29 +267,6 @@ export const SECTION_TREE = {
    * Depth 0 = root sections, depth 1 = first-level children, etc.
    */
   llmNamingMaxDepth: 4,
-
-  /**
-   * When generating a parent section title, child sections are weighted
-   * by their entry count raised to this power.
-   *
-   * 1.0 = linear weighting (7-entry child has 7x influence over 1-entry child)
-   * 0.5 = sqrt weighting (softer, 7-entry child has 2.6x influence)
-   * 0.0 = equal weighting (all children contribute equally, current behavior)
-   */
-  titleWeightExponent: 1.0,
-
-  // ── Embedding model health ────────────────────────────────────────────
-
-  /**
-   * Minimum ratio of mean intra-section similarity to mean inter-section
-   * similarity. Below this, the embedding model isn't capturing domain
-   * distinctions well enough and should be upgraded.
-   *
-   * Above 1.3 = good separation.
-   * 1.1 - 1.3 = marginal.
-   * Below 1.1 = model upgrade recommended.
-   */
-  embeddingHealthMinRatio: 1.3,
 
   // ── Full rebuild ──────────────────────────────────────────────────────
 

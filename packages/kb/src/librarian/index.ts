@@ -55,6 +55,7 @@ export {
 export { quarantine } from "./commit.js";
 export { reorg, type ReorgOptions, type ReorgResult } from "./reorg.js";
 export { retireEntries, type RetireResult } from "./retire.js";
+export { snapshotEntry, snapshotIfChanged, archiveRetiredEntry, listVersions, readVersion, type EntryVersion } from "./versions.js";
 export { withKbLock, KbLockBusy, kbLockFile, releaseOwnedLock } from "./lock.js";
 export {
   scanFat,

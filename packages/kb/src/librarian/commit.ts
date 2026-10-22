@@ -17,6 +17,7 @@ import {
   now,
 } from "../shared/index.js";
 import type { Entry } from "../schema/knowledge.js";
+import { snapshotIfChanged } from "./versions.js";
 
 /** Read an existing entry's raw markdown for merge input. */
 export function readEntryMarkdown(
@@ -212,5 +213,9 @@ function renderEntry(entry: Entry): string {
 export function commitEntry(roots: KbRoots, entry: Entry): void {
   const dir = entriesDir(roots, entry.domain);
   mkdirSync(dir, { recursive: true });
-  atomicWrite(join(dir, `${entry.id}.md`), renderEntry(entry));
+  const file = join(dir, `${entry.id}.md`);
+  const next = renderEntry(entry);
+  // Keep what is being overwritten (content changes only; see versions.ts).
+  if (existsSync(file)) snapshotIfChanged(roots, entry.domain, entry.id, readFileSync(file, "utf-8"), next);
+  atomicWrite(file, next);
 }

@@ -20,6 +20,12 @@ export interface KbRoots {
 // ── kb-base (shared, read-only to wolves) ───────────────────────────────────
 export const entriesDir = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "entries");
+/** Prior versions of entries (and retired ones). A SIBLING of entries/, so no
+ *  entries-dir reader ever sees it; it syncs with the rest of the domain. */
+export const versionsDir = (r: KbRoots, domain: string) =>
+  join(r.kbBase, "domains", domain, "versions");
+export const entryVersionsDir = (r: KbRoots, domain: string, entryId: string) =>
+  join(versionsDir(r, domain), safeSegment(entryId, "entry id"));
 export const workDir = (r: KbRoots, domain: string) =>
   join(r.kbBase, "domains", domain, "work");
 export const domainIndex = (r: KbRoots, domain: string) =>

@@ -89,7 +89,7 @@ function mkSectionId(domain: string): SectionId {
  * missing or if `dryRun` is set. Single site for the pattern that was copy-
  * pasted ~15 times across the rebuild and incremental paths.
  */
-function writeEntrySection(
+export function writeEntrySection(
   eDir: string,
   entryId: string,
   sectionId: SectionId | string,

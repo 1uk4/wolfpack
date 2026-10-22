@@ -12,6 +12,7 @@
  *                     reorg the domains it touched. Add --drain to loop ticks
  *                     until the inbox is empty, the sweep is paused by an
  *                     outage, or a tick makes no progress (manual/dev use).
+ *   history <id>      list an entry's kept versions (`--show <timestamp>` prints one)
  *   rebuild-vectors   wipe + re-embed the entry-vector cache (model change etc.)
  *
  * A den-local lock (sweep.lock) guarantees a single writer — a second sweep
@@ -49,6 +50,8 @@ import {
   buildEntryVectors,
 } from "./librarian/index.js";
 import { retireEntries } from "./librarian/retire.js";
+import { listVersions, readVersion } from "./librarian/versions.js";
+import { EntryId } from "./schema/knowledge.js";
 import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
 import { unpark, listParked } from "./librarian/park.js";
@@ -495,6 +498,31 @@ async function cmdUnpark(): Promise<void> {
   console.log(moved.length ? `${moved.length} back in the inbox; the next sweep retries them` : `no parked item matches ${arg}`);
 }
 
+async function cmdHistory(): Promise<void> {
+  const roots = resolveRoots();
+  const argv = process.argv.slice(3);
+  const showAt = argv.findIndex((a) => a === "--show" || a.startsWith("--show="));
+  const show = showAt < 0 ? undefined : argv[showAt].includes("=") ? argv[showAt].split("=")[1] : argv[showAt + 1];
+  const id = argv.find((a, i) => !a.startsWith("--") && !(showAt >= 0 && !argv[showAt].includes("=") && i === showAt + 1));
+  if (!id || (showAt >= 0 && !show) || !EntryId.safeParse(id).success) {
+    console.error("usage: history <entryId> [--show <timestamp>]");
+    process.exit(1);
+  }
+  const domain = id.split("-")[1];
+  if (show) {
+    const text = readVersion(roots, domain, id, show);
+    if (text === null) {
+      console.error(`no single version of ${id} matches ${show} (run \`history ${id}\` to list)`);
+      process.exit(1);
+    }
+    process.stdout.write(text);
+    return;
+  }
+  const versions = listVersions(roots, domain, id);
+  if (!versions.length) console.log(`no earlier versions of ${id}`);
+  for (const v of versions) console.log(`${v.timestamp}  ${String(v.size).padStart(7)}B  ${v.firstLine}`);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0] ?? "sweep";
@@ -525,9 +553,12 @@ async function main(): Promise<void> {
     case "unpark":
       await cmdUnpark();
       break;
+    case "history":
+      await cmdHistory();
+      break;
     default:
       console.error(
-        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run] | unpark [<wolf>/<file> | <wolf> | --all | --list]`
+        `Unknown command: ${cmd}. Use: status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | retire <entryId...> [--reason=…] [--dry-run] | unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]`
       );
       process.exit(1);
   }

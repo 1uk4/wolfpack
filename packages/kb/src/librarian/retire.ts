@@ -3,16 +3,18 @@
  *
  * The KB is mirrored to wolves as receive-only folders, so deleting an entry
  * file on a wolf's machine never reaches the librarian. Retirement happens
- * here, on the librarian: delete the entry file, record `entry_retired` in the
+ * here, on the librarian: move the entry file into versions/ (kept, not
+ * deleted), record `entry_retired` in the
  * ledger (so the registry stops listing it), and re-render the domain's
  * registry, INDEX, and digest. Section member counts are left for `reorg`.
  */
-import { existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type KbRoots, entriesDir, ev } from "../shared/index.js";
 import { EntryId } from "../schema/knowledge.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { renderRegistry } from "./registry.js";
+import { archiveRetiredEntry } from "./versions.js";
 import { renderDomainIndex, renderDomainDigest } from "./domains.js";
 
 export interface RetireResult {
@@ -54,11 +56,11 @@ export function retireEntries(
   result.domains = [...new Set(result.retired.map((r) => r.domain))].sort();
   if (opts.dryRun || result.retired.length === 0) return result;
 
-  // Ledger first: if a file delete then fails, a re-run still sees the entry
+  // Ledger first: if the file move then fails, a re-run still sees the entry
   // on disk and retires it again (the fold tolerates duplicate retirements).
   appendLedger(roots, result.retired.map((r) => ev.entryRetired(r.entryId, opts.reason)));
   for (const r of result.retired) {
-    if (r.hadFile) rmSync(join(entriesDir(roots, r.domain), `${r.entryId}.md`));
+    if (r.hadFile) archiveRetiredEntry(roots, r.domain, r.entryId, join(entriesDir(roots, r.domain), `${r.entryId}.md`));
   }
 
   renderRegistry(roots, foldRegistry(readLedger(roots)), result.domains);

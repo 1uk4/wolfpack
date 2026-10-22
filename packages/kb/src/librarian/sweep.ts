@@ -593,7 +593,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         .filter(Boolean);
       const context = recorded.length ? `RECORDED FEATURE ENTRIES (what the KB holds for each):\n${recorded.join("\n")}` : undefined;
 
-      const { entry, action } = await produceEntry(itemEngine, {
+      const { entry, action, unchanged, supersedes } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
         section: sectionId,
@@ -607,8 +607,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       });
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
-      commitEntry(roots, entry);
+      // A decision the contribution agrees with is left exactly as it is.
+      if (!unchanged) commitEntry(roots, entry);
       committed = true;
+      if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
 
       batch.push(ev.contribution({
         from: c.from,
@@ -617,13 +619,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         prevHash: c.prevHash,
         domainHint: domain,
       }));
-      batch.push(ev.entryWritten(entry.id, entry.id, action));
-      batch.push(ev.entryPlaced({
-        entryId: entry.id,
-        sectionId,
-        basis: placement.basis,
-        fit: placement.fit,
-      }));
+      if (!unchanged) {
+        batch.push(ev.entryWritten(entry.id, entry.id, action));
+        batch.push(ev.entryPlaced({
+          entryId: entry.id,
+          sectionId,
+          basis: placement.basis,
+          fit: placement.fit,
+        }));
+      }
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
       // Graduations are found by entry_id instead, so the registry never

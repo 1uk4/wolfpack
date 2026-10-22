@@ -303,15 +303,34 @@ Be precise and sourced. On merge, integrate the new information into the
 existing entry, changing only what the contribution affects.
 
 WRITING RULES:
-- Describe the CURRENT state of the subject, in present-tense prose. No session
-  dates, no commit hashes or logs, no "today we…" or "we then…" narrative, and
-  no changelog or history sections (unless the entry type is changelog).
-- On merge, REPLACE any fact the contribution supersedes; never keep the old
-  and the new side by side. Keep what the contribution does not touch.
+- The body describes the CURRENT state of the subject, in present-tense prose.
+  No session narrative, no logs, no commit hashes, no "today we…" or "we
+  then…". Dates appear only in the History section (below), never in the body
+  (unless the entry type is changelog).
+- On merge, REPLACE any fact the contribution supersedes in the body; never
+  keep the old and the new side by side. Keep what the contribution does not
+  touch.
+- HISTORY: end the detail with a final "## History" section. For each fact you
+  replaced, add one line:
+  - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <reason, if known>.
+  Use the CONTRIBUTION DATE given in the prompt for <YYYY-MM-DD>; omit the
+  "because" clause when the reason is not known. Keep each line to at most two
+  sentences. Keep every existing History line exactly as written (never rewrite
+  them) and do not add a line for a change already recorded. When History would
+  pass about 15 lines, fold the oldest lines into a single summary line. Omit
+  the section when there is nothing to record. Do not put a History section
+  anywhere but last, and do not use the \`context\` field for it.
+- DECISION entries: when the EXISTING ENTRY has kind "decision", never change
+  its body. If the contribution contradicts or changes the decision, set
+  "supersedesDecision": true and write the NEW decision as a complete entry of
+  kind "decision" (the pipeline keeps the old one and links the new one to it).
+  Otherwise leave "supersedesDecision" false; your output is then discarded and
+  the decision stays as it is.
 - Stay on the entry's subject. If the contribution contains material about a
   different subject, leave it out.
-- Be concise: aim for at most ~6,000 characters in total. Cut redundancy and
-  detail that does not help someone using the subject.
+- Be concise: aim for at most ~6,000 characters in the body; the History
+  section does not count towards that. Cut redundancy and detail that does not
+  help someone using the subject.
 
 FRONTMATTER RULES (the entry is machine-read — be disciplined):
 - type MUST be exactly one of: ${[...ENTRY_KINDS, "other"].join(", ")}.

@@ -55,6 +55,16 @@ export interface ProduceEntryInput {
 export interface ProduceEntryResult {
   entry: Entry;
   action: "create" | "merge";
+  /** Decision entries are never rewritten: the contribution agreed with the
+   *  existing decision, so `entry` is a discarded draft and nothing is committed. */
+  unchanged?: boolean;
+  /** Id of the decision the new `entry` replaces (it also carries the relation). */
+  supersedes?: string;
+}
+
+/** True when the entry markdown declares `kind: decision`. */
+export function isDecisionMarkdown(markdown: string): boolean {
+  return parseFrontmatter(markdown).fields.kind === "decision";
 }
 
 /** Work item ids never reach the KB (the Factory is not linked from it). */
@@ -161,7 +171,8 @@ export async function produceEntry(
       existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${existingMarkdown}` : "",
       context ? `\n${context}` : "",
       graduation === "hub" && contribution.final ? "\nTHE INITIATIVE IS COMPLETE." : "",
-      `\nACTION: ${action}`,
+      `\nCONTRIBUTION DATE: ${contribution.sourceUpdated ?? now().slice(0, 10)}`,
+      `ACTION: ${action}`,
     ].join("\n");
 
     // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
@@ -180,13 +191,18 @@ export async function produceEntry(
   }
 
   // Build DerivedFacts deterministically
-  const id = EntryId.parse(entryId ?? newEntryId ?? mkEntryId(domain));
+  // A decision is never rewritten in place: a contradicting contribution
+  // becomes a NEW decision that supersedes it, an agreeing one changes nothing.
+  const decisionTarget = !!(entryId && !graduation && existingMarkdown && isDecisionMarkdown(existingMarkdown));
+  const supersedes = decisionTarget && opinion.supersedesDecision ? EntryId.parse(entryId) : undefined;
+  const mergeId = supersedes ? undefined : entryId;
+  const id = EntryId.parse(mergeId ?? newEntryId ?? mkEntryId(domain));
   const timestamp = IsoDate.parse(now().slice(0, 10));
   // On merge the entry keeps its original creation date.
   const kept = IsoDate.safeParse(
     existingCreated ?? (existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") : "")
   );
-  const created = entryId && kept.success ? kept.data : timestamp;
+  const created = mergeId && kept.success ? kept.data : timestamp;
   
   // Compute content hash from the opinion prose
   const contentText = [opinion.title, opinion.summary, opinion.detail].join("\n");
@@ -202,7 +218,10 @@ export async function produceEntry(
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
     // Structural links the sender named (a graduated feature → its hub). Code
     // writes them; the hub's id is fixed, so it may not exist yet.
-    relations: graduationRelations(contribution),
+    relations: [
+      ...graduationRelations(contribution),
+      ...(supersedes ? [{ kind: "supersedes" as const, target: supersedes, source: "code" as const, weight: 1 }] : []),
+    ],
     section,
     placement,
   };
@@ -210,5 +229,10 @@ export async function produceEntry(
   // Assemble the final entry (validates, resolves proposed relations, drops unresolved)
   const entry = assembleEntry({ opinion, facts, overrides, resolve });
 
+  if (decisionTarget) {
+    return supersedes
+      ? { entry: { ...entry, kind: { type: "decision" } }, action: "create", supersedes }
+      : { entry, action: "merge", unchanged: true };
+  }
   return { entry, action };
 }

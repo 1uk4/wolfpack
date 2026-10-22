@@ -36,6 +36,10 @@ export async function kbCmd(argv: string[]): Promise<void> {
   const rp = remotePaths();
   const libId = lib.id ?? "";
   const envSetup = [
+    // Start in the wolf's home: sudo keeps root's cwd (/root), which the wolf
+    // user can't enter, and the Agent SDK then fails to spawn Claude Code
+    // (reported as a misleading "binary failed to launch / libc" error).
+    `cd ${rp.home(libId)}`,
     `export KB_BASE=${rp.sharedKbBase}`,
     `export KB_OPS=${rp.sharedKbOps}`,
     `export WOLF_DEN=${rp.den(libId)}`,

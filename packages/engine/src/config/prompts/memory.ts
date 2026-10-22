@@ -72,6 +72,7 @@ Rules:
 - Keep prose tight and skimmable. Headings and short paragraphs are fine.
 - The summary field is load-bearing — it's the ONLY thing the wolf sees until it opens the file. Make it specific and current.
 - Strip session-specific context (timestamps, "today we", "just now"). This is permanent memory.
+- One subject per topic. When a topic passes about 8,000 characters, split it by subject (a new topic for the second subject) rather than appending to it.
 - Prefer MERGE into an existing topic over creating a near-duplicate. Only reference ids that appear in the input; NEVER invent ids.
 
 Respond with valid JSON matching the schema.`;

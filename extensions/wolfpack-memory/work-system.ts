@@ -60,6 +60,10 @@ import {
   type SelectorState,
   type SelectorKey,
   type SelectorEffect,
+  renderWorkingDocument,
+  extractRecord,
+  replaceRecordSection,
+  syncFeatureStage,
 } from "@wolfpack/memory";
 import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
 import * as fs from "node:fs";
@@ -148,6 +152,8 @@ interface ActiveTaskState {
   workId: string;
   domain: string;
   boundAt: string;
+  /** The task's parent feature at bind time. */
+  featureId?: string;
 }
 
 function activeTaskPath(wolfDen: string, sessionId: string): string {
@@ -299,7 +305,13 @@ export interface WorkSystemConfig {
   onReadyToGraduate?: (item: WorkItem) => Promise<void>;
 }
 
-export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): void {
+/** What the work system exposes to the rest of the memory extension. */
+export interface WorkSystemHandle {
+  /** The task this session is bound to right now (memory tags observations with it). */
+  getBoundWork(): { taskId: string; featureId?: string } | null;
+}
+
+export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): WorkSystemHandle | void {
   const wolfDen = process.env.WOLF_DEN;
   const wolfName = process.env.WOLF_NAME ?? "wolf";
   const kbBase = process.env.KB_BASE;
@@ -373,6 +385,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
     activeTask = readActiveTask(wolfDen, sessionId);
   }
+  function getBoundWork(): { taskId: string; featureId?: string } | null {
+    const t = sessionId ? readActiveTask(wolfDen!, sessionId) : activeTask;
+    return t ? { taskId: t.workId, ...(t.featureId ? { featureId: t.featureId } : {}) } : null;
+  }
+
   /** The feature this session works in. Kept when a task is unbound, so new
    *  tasks still land there; set by binding a task or opening a feature in /task. */
   let workspaceId: string | null = null;
@@ -456,6 +473,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       workId: item.id,
       domain: item.domain as string,
       boundAt: new Date().toISOString(),
+      ...(item.partOf ? { featureId: item.partOf as string } : {}),
     };
     writeActiveTask(wolfDen, sessionId, activeTask);
     if (item.partOf) workspaceId = item.partOf as string;
@@ -464,20 +482,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     startFileTracking(item.id);
     onWorkBound(item.id as any, wolfName as any, new Date().toISOString());
 
-    // Advance ancestors to in_build if they're in earlier stages
-    try {
-      let parentId = item.partOf;
-      while (parentId) {
-        let parent: WorkItem | undefined;
-        try { parent = await client.get(parentId as string); } catch { break; }
-        if (parent && ["idea", "plan", "feasibility", "approved"].includes(parent.stage)) {
-          await client.stage(parent.id, "in_build");
-        }
-        parentId = parent?.partOf ?? null;
-      }
-    } catch (e) {
-      // Ignore stage propagation errors - non-critical
-    }
+    // A feature follows its tasks into build (non-critical)
+    await syncFeatureStage(client, item).catch(() => {});
 
     await refreshActiveItem();
     updateWidget(ctx);
@@ -533,7 +539,8 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (signal.to === "shipped") {
               await shipWithRollup(activeTask.workId);
             } else {
-              await client.stage(activeTask.workId, signal.to);
+              const moved = await client.stage(activeTask.workId, signal.to);
+              if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             }
             await client.note(activeTask.workId, `Stage: ${signal.from} → ${signal.to}`);
             await refreshActiveItem();
@@ -565,8 +572,13 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
 
     // Read the working document body
-    const resolved = await client.get(activeTask.workId);
-    const docBody = "";
+    let docBody = "";
+    try {
+      const { body } = await client.getWithBody(activeTask.workId);
+      docBody = renderWorkingDocument(body ?? "");
+    } catch {
+      // No document this turn; the rest of the context still goes in.
+    }
 
     const parts: string[] = [];
     parts.push(`You are working on: "${activeItem.title}" (${activeItem.kind}, ${activeItem.stage})`);
@@ -583,8 +595,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     // The working document — the agent reads and writes this
     if (docBody) {
       parts.push("");
-      parts.push("## Working Document");
+      parts.push("## Working Document (plan + Record)");
       parts.push(docBody);
+      parts.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
     }
 
     if (activeItem.log.length > 0) {
@@ -1081,7 +1094,11 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
-          await client.updateBody(activeItem.id, params.body);
+          // The Record belongs to memory: whatever the agent writes, the item's
+          // current Record section stays as it is.
+          const { body: current } = await client.getWithBody(activeItem.id);
+          const record = extractRecord(current ?? "");
+          await client.updateBody(activeItem.id, record ? replaceRecordSection(params.body, record) : params.body);
           return { content: [{ type: "text" as const, text: `Updated working document for: ${activeItem.title}` }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
@@ -1102,6 +1119,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const item = await client.note(activeTask.workId, params.text);
           activeItem = item;
+          await syncFeatureStage(client, item).catch(() => {});
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `Logged: ${params.text} (${item.log.length} entries)` }] };
         } catch (e: any) {
@@ -1125,6 +1143,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             ? await shipWithRollup(activeTask.workId)
             : await client.stage(activeTask.workId, params.to);
           activeItem = item;
+          if (item.stage === "in_build") await syncFeatureStage(client, item).catch(() => {});
           updateWidget(ctx);
           return { content: [{ type: "text" as const, text: `${item.title} → ${item.stage}` }] };
         } catch (e: any) {
@@ -1417,4 +1436,6 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       },
     })
   );
+
+  return { getBoundWork };
 }

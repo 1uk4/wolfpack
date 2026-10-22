@@ -107,3 +107,6 @@ export {
   type SummarizeTaskResult,
   type WorkEventContext,
 } from "../work-memory.js";
+
+// A feature follows its tasks into build
+export { syncFeatureStage, BEFORE_BUILD, type StageSyncClient } from "./stage-sync.js";

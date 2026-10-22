@@ -27,6 +27,7 @@ import {
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
+import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
@@ -62,14 +63,26 @@ function formatMessage(message: AssistantMessage): string {
   return parts.join("\n");
 }
 
-async function writeToPool(wolfDen: string, observations: RawObservation[]): Promise<void> {
+/**
+ * Append observations to the pool. While a task is bound they are stamped
+ * `work: <task id>`: they feed that item's Record, not the den.
+ */
+async function writeToPool(
+  wolfDen: string,
+  observations: RawObservation[],
+  bound: { taskId: string; featureId?: string } | null = null,
+): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
   await mkdir(poolDir, { recursive: true });
   const poolFile = join(poolDir, "observations.jsonl");
   const timestamp = new Date().toISOString();
   const lines = observations.map(obs =>
-    JSON.stringify({ ...obs, recordedAt: timestamp }) + "\n"
+    JSON.stringify({
+      ...obs,
+      recordedAt: timestamp,
+      ...(bound ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
+    }) + "\n"
   );
   await appendFile(poolFile, lines.join(""));
 }
@@ -681,7 +694,7 @@ export default function createMemoryExtension(
             });
 
             if (result.observations.length > 0) {
-              await writeToPool(ctx.wolfDen, result.observations);
+              await writeToPool(ctx.wolfDen, result.observations, readBoundTask(ctx.wolfDen));
 
               // Auto-consolidation if threshold trigger
               if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") {

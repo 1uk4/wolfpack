@@ -24,6 +24,7 @@ import {
   readJourney,
   foldLedger,
   poolTokens,
+  HttpWorkRecordStore,
   type MemoryOrchestrator,
   type Observation,
   type AgentRuntime,
@@ -40,7 +41,7 @@ import {
 } from "@wolfpack/memory";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
-import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
+import { initWorkSystem, type WorkSystemConfig, type WorkSystemHandle } from "./work-system.js";
 import { WorkClient } from "./work-client.js";
 import {
   getStageContext,
@@ -1265,6 +1266,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
 
   let runtime: PiRuntime | null = null;
   let orchestrator: MemoryOrchestrator | null = null;
+  /** The work system's view of the bound task (set when it initialises, below). */
+  let workHandle: WorkSystemHandle | null = null;
+  const workRecordStore = new HttpWorkRecordStore();
   let engine: Engine | null = null;
   let enabled = false;
   let observerPending = false;
@@ -1336,6 +1340,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       defaultDomain: currentDomain,
       domains: wolfDomains,
       kbBasePath: kbRoots.kbBase || undefined,
+      // Observations made while a task is bound feed that item's Record, not the den.
+      getBoundWork: () => workHandle?.getBoundWork() ?? null,
+      workRecordStore: workRecordStore.configured ? workRecordStore : undefined,
     };
     orchestrator = createOrchestrator(engine, runtime, orchConfig);
   }
@@ -1656,11 +1663,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   } catch { /* best effort */ }
 
-  initWorkSystem(pi, {
+  workHandle = initWorkSystem(pi, {
     ...workConfig,
     domains: wolfDomains,
     getCurrentDomain: () => currentDomain,
-  });
+  }) ?? null;
 
   // ── Commands ────────────────────────────────────────────────────────────
 

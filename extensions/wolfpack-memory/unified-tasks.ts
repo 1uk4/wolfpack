@@ -5,7 +5,7 @@
  * Uses @wolfpack/kb/client for work operations.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import {
   defineExtension,
@@ -23,6 +23,13 @@ import {
   isComplete,
 } from "@wolfpack/kb/client";
 import { listSubscribedDomains, formatDomainChoices } from "@wolfpack/kb";
+import {
+  renderWorkingDocument,
+  extractRecord,
+  replaceRecordSection,
+  syncFeatureStage,
+  readyToGraduate,
+} from "@wolfpack/memory";
 import { WorkClient } from "./work-client.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
@@ -39,6 +46,8 @@ interface ActiveBinding {
   taskId: string;
   domain: string;
   boundAt: string;
+  /** The task's parent feature at bind time. */
+  featureId?: string;
 }
 
 // ─── Binding State ─────────────────────────────────────────────────────────
@@ -60,13 +69,27 @@ async function readBinding(wolfDen: string): Promise<ActiveBinding | null> {
   }
 }
 
-async function writeBinding(wolfDen: string, taskId: string, domain: string): Promise<void> {
+/**
+ * The task this wolf is bound to, read synchronously (memory tags observations
+ * with it). Null when nothing is bound.
+ */
+export function readBoundTask(wolfDen: string): { taskId: string; featureId?: string } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(bindingPath(wolfDen), "utf-8")) as ActiveBinding | null;
+    return parsed?.taskId ? { taskId: parsed.taskId, ...(parsed.featureId ? { featureId: parsed.featureId } : {}) } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBinding(wolfDen: string, taskId: string, domain: string, featureId?: string): Promise<void> {
   const path = bindingPath(wolfDen);
   await mkdir(dirname(path), { recursive: true });
   const binding: ActiveBinding = {
     taskId,
     domain,
     boundAt: new Date().toISOString(),
+    ...(featureId ? { featureId } : {}),
   };
   await writeFile(path, JSON.stringify(binding, null, 2));
 }
@@ -134,6 +157,9 @@ export default function createTasksExtension(
     task: WorkItem;
     parent?: WorkItem;
     siblings?: WorkItem[];
+    /** The working document (plan + Record), as of the last refresh. */
+    body?: string;
+    fetchedAt?: number;
   }
 
   function cachePath(): string {
@@ -153,13 +179,30 @@ export default function createTasksExtension(
     await mkdir(dir, { recursive: true });
     let parent: WorkItem | undefined;
     let siblings: WorkItem[] | undefined;
+    let body: string | undefined;
+    try {
+      body = (await client.getWithBody(task.id as string)).body ?? "";
+    } catch { /* best effort: the section just omits the document */ }
     if (task.partOf) {
       try {
         parent = await client.get(task.partOf as string);
         siblings = await client.query({ domain: task.domain as string, partOf: task.partOf as string });
       } catch { /* best effort */ }
     }
-    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings }));
+    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, fetchedAt: Date.now() } satisfies TaskCache));
+  }
+
+  /** Sections render synchronously from the cache. The Record changes behind
+   *  our back (memory rewrites it), so each render schedules a refresh: the
+   *  agent sees it one turn later at the latest. */
+  let refreshing = false;
+  function refreshCacheSoon(cached: TaskCache): void {
+    if (refreshing || Date.now() - (cached.fetchedAt ?? 0) < 10_000) return;
+    refreshing = true;
+    client.get(cached.task.id as string)
+      .then((task) => writeCache(task))
+      .catch(() => {})
+      .finally(() => { refreshing = false; });
   }
 
   function clearCache(): void {
@@ -241,6 +284,15 @@ Domains: ${domainList}`;
             lines.push(`**Success Criteria:** ${task.successCriteria}`);
           }
 
+          const doc = cached.body ? renderWorkingDocument(cached.body) : "";
+          if (doc) {
+            lines.push("");
+            lines.push("## Working Document (plan + Record)");
+            lines.push(doc);
+            lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
+          }
+          refreshCacheSoon(cached);
+
           return lines.join("\n");
         } catch (err) {
           return `## Active Task\n\nError: ${err instanceof Error ? err.message : err}`;
@@ -275,8 +327,10 @@ Domains: ${domainList}`;
             };
           }
 
-          await writeBinding(ctx.wolfDen, item.id, domain);
+          await writeBinding(ctx.wolfDen, item.id, domain, item.partOf as string | undefined);
           await writeCache(item);
+          // A feature follows its tasks into build
+          await syncFeatureStage(client, item).catch(() => {});
 
           return {
             content: [{
@@ -556,7 +610,8 @@ Domains: ${domainList}`;
           
           
           try {
-            await client.note(binding.taskId, args.text);
+            const noted = await client.note(binding.taskId, args.text);
+            await syncFeatureStage(client, noted).catch(() => {});
             return {
               content: [{ type: "text", text: `Note added to ${binding.taskId}.` }],
             };
@@ -596,7 +651,11 @@ Domains: ${domainList}`;
           
           
           try {
-            await client.updateBody(found.item.id, args.body);
+            // The Record belongs to memory: whatever the agent writes, the
+            // item's current Record section stays as it is.
+            const { body: current } = await client.getWithBody(found.item.id);
+            const record = extractRecord(current ?? "");
+            await client.updateBody(found.item.id, record ? replaceRecordSection(args.body, record) : args.body);
             await writeCache(found.item);
             return {
               content: [{ type: "text", text: `Updated working document for: ${found.item.title}` }],
@@ -629,7 +688,8 @@ Domains: ${domainList}`;
           
           
           try {
-            await client.stage(binding.taskId, args.to);
+            const moved = await client.stage(binding.taskId, args.to);
+            if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             return {
               content: [{ type: "text", text: `${binding.taskId} → ${args.to}` }],
             };
@@ -679,7 +739,7 @@ Domains: ${domainList}`;
             
             const found = await findItem(binding.taskId);
             const result: string[] = [`Shipped: ${binding.taskId}`];
-            
+
             // Find next sibling if requested
             const bindNext = args.bindNext ?? true;
             if (bindNext && found?.item.partOf) {
@@ -690,15 +750,33 @@ Domains: ${domainList}`;
               );
               
               if (next) {
-                await writeBinding(ctx.wolfDen, next.id, binding.domain);
+                await writeBinding(ctx.wolfDen, next.id, binding.domain, next.partOf as string | undefined);
+                await writeCache(next);
+                await syncFeatureStage(client, next).catch(() => {});
                 result.push(`Bound to next: [${next.id}] ${next.title}`);
               } else {
                 await clearBinding(ctx.wolfDen);
+                clearCache();
                 result.push("No more tasks in this feature. Unbound.");
               }
             } else {
               await clearBinding(ctx.wolfDen);
+              clearCache();
             }
+
+            // Last task done → ready to graduate. Never automatic: the user
+            // decides (graduating from durable is not wired yet; the ready
+            // state is what the user needs to hear).
+            try {
+              const shipped = await client.get(binding.taskId);
+              const all = await client.query({ domain: binding.domain });
+              const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
+              if (feature && readyToGraduate(feature, all)) {
+                result.push(`🎓 All tasks under "${feature.title}" are done: it is ready to graduate. Tell the user.`);
+              } else if (readyToGraduate(shipped, all)) {
+                result.push(`🎓 "${shipped.title}" is done and ready to graduate on its own. Tell the user.`);
+              }
+            } catch { /* readiness is advisory */ }
 
             return {
               content: [{ type: "text", text: result.join("\n") }],

@@ -11,6 +11,7 @@ import { loadConfig, getHost } from "../config.js";
 import { c } from "../render.js";
 import { spawn } from "node:child_process";
 import { remotePaths } from "../paths.js";
+import { sshKeyArgs } from "../ssh-helper.js";
 
 export async function kbCmd(argv: string[]): Promise<void> {
   const config = loadConfig();
@@ -78,7 +79,7 @@ export async function kbCmd(argv: string[]): Promise<void> {
   const sshKey = host.ssh?.key;
   const sshUser = host.ssh?.user ?? "root";
   const sshArgs = [
-    ...(sshKey ? ["-i", sshKey] : []),
+    ...(sshKey ? sshKeyArgs(sshKey) : []),
     `${sshUser}@${host.address}`,
     asWolf,
   ];

@@ -12,7 +12,7 @@ import esbuild from "esbuild";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import type { HostEntry } from "./config.js";
-import { execSsh, execSshStream, scpToHost } from "./ssh-helper.js";
+import { execSsh, execSshStream, scpToHost, sshKeyFlags } from "./ssh-helper.js";
 import { c } from "./render.js";
 import { remotePaths } from "./paths.js";
 
@@ -371,7 +371,7 @@ WantedBy=multi-user.target
     );
 
     // 5. Copy files
-    const rsyncCmd = `rsync -avz --delete -e "ssh -i ${host.ssh.key} -p ${host.ssh.port}" ${deployDir}/ ${host.ssh.user}@${host.address}:/opt/wolfpack-agent/`;
+    const rsyncCmd = `rsync -avz --delete -e 'ssh ${sshKeyFlags(host.ssh.key)} -p ${host.ssh.port}' ${deployDir}/ ${host.ssh.user}@${host.address}:/opt/wolfpack-agent/`;
     execSync(rsyncCmd, { stdio: "inherit" });
 
     // 6. Install systemd service

@@ -8,6 +8,21 @@ import path from "node:path";
 import os from "node:os";
 import type { HostEntry } from "./config.js";
 
+/**
+ * Key options for every ssh/scp/rsync call: use only the given key file and
+ * never the local ssh-agent. A desktop agent (e.g. macOS keychain, 1Password)
+ * can hold the same key yet refuse to sign non-interactively, which fails a
+ * BatchMode call before the key file is ever tried.
+ */
+export function sshKeyArgs(key: string): string[] {
+  return ["-i", key, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"];
+}
+
+/** sshKeyArgs as a shell fragment, for command strings. */
+export function sshKeyFlags(key: string): string {
+  return sshKeyArgs(key).map((a) => (a === key ? JSON.stringify(key) : a)).join(" ");
+}
+
 export interface SshConfig {
   user: string;
   key: string;
@@ -44,8 +59,7 @@ export async function testSshConnection(
 ): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
     const args = [
-      "-i",
-      config.key,
+      ...sshKeyArgs(config.key),
       "-p",
       config.port.toString(),
       "-o",
@@ -95,7 +109,7 @@ export function execSsh(
 ): { stdout: string; stderr: string; code: number } {
   try {
     const stdout = execSync(
-      `ssh -i ${host.ssh.key} -p ${host.ssh.port} ${host.ssh.user}@${host.address} "${command}"`,
+      `ssh ${sshKeyFlags(host.ssh.key)} -p ${host.ssh.port} ${host.ssh.user}@${host.address} "${command}"`,
       {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
@@ -123,8 +137,7 @@ export async function execSshStream(
     const proc = spawn(
       "ssh",
       [
-        "-i",
-        host.ssh.key,
+        ...sshKeyArgs(host.ssh.key),
         "-p",
         host.ssh.port.toString(),
         `${host.ssh.user}@${host.address}`,
@@ -161,7 +174,7 @@ export function scpToHost(
 ): { success: boolean; error?: string } {
   try {
     execSync(
-      `scp -i ${host.ssh.key} -P ${host.ssh.port} -r ${localPath} ${host.ssh.user}@${host.address}:${remotePath}`,
+      `scp ${sshKeyFlags(host.ssh.key)} -P ${host.ssh.port} -r ${localPath} ${host.ssh.user}@${host.address}:${remotePath}`,
       {
         stdio: "inherit",
       },
@@ -182,7 +195,7 @@ export function scpFromHost(
 ): { success: boolean; error?: string } {
   try {
     execSync(
-      `scp -i ${host.ssh.key} -P ${host.ssh.port} -r ${host.ssh.user}@${host.address}:${remotePath} ${localPath}`,
+      `scp ${sshKeyFlags(host.ssh.key)} -P ${host.ssh.port} -r ${host.ssh.user}@${host.address}:${remotePath} ${localPath}`,
       {
         stdio: "inherit",
       },

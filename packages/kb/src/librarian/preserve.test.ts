@@ -107,30 +107,17 @@ describe("produceEntry guards", () => {
     expect(r.entry.relations).toContainEqual({ kind: "see_also", target: "kb-wolfpack-ZZZZZZZ", source: "code" });
   });
 
-  it("a graduation regenerated from its dossier keeps the previous History", async () => {
-    const { engine, call } = engineReturning({ detail: "Built X." });
-    const r = await produceEntry(engine, {
-      ...input,
-      contribution: contribution({ graduation: "feature", entryId: "kb-wolfpack-abc1234" } as Partial<ParsedContribution>),
-      entryId: "kb-wolfpack-abc1234",
-      previousMarkdown: PREV,
-    });
-    expect(call.mock.calls[0][2].prompt).not.toContain("EXISTING ENTRY");
-    expect(r.entry.detail).toContain("## History");
-    expect(r.entry.detail).toContain(H1);
-    expect(r.entry.detail).toContain(H2);
-    expect(r.entry.created).toBe("2026-01-01");
-  });
+  it("a History line citing a work id passes the lint; the id in the body does not", async () => {
+    const cite = "- 2026-10-22: sweep takes one item per run (work-wolfpack-ggNO3Sv).";
+    const ok = engineReturning({ detail: `## Body\n\nNew.\n\n## History\n\n${cite}\n` });
+    const r = await produceEntry(ok.engine, { ...input, contribution: contribution() });
+    expect(r.lint?.before).toEqual([]);
+    expect(r.entry.detail).toContain(cite);
 
-  it("a verbatim graduation keeps the previous History too", async () => {
-    const { engine } = engineReturning({});
-    const r = await produceEntry(engine, {
-      ...input,
-      contribution: contribution({ graduation: "feature", preserveBody: true, body: "# Spec\n\nVerbatim body." } as Partial<ParsedContribution>),
-      entryId: "kb-wolfpack-abc1234",
-      previousMarkdown: PREV,
-    });
-    expect(r.entry.detail).toBe(`Verbatim body.\n\n## History\n\n${H1}\n${H2}\n`);
+    const bad = engineReturning({ detail: "## Body\n\nNew, from work-wolfpack-ggNO3Sv." });
+    const r2 = await produceEntry(bad.engine, { ...input, contribution: contribution() });
+    expect(r2.lint?.before.map((f) => f.code)).toContain("work-id");
+    expect(r2.lint?.retried).toBe(true);
   });
 
   it("a superseding decision does not inherit the old decision's History", async () => {

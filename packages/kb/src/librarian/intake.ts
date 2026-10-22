@@ -109,18 +109,7 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
     origin: fields.origin
       ? (String(fields.origin) as ParsedContribution["origin"])
       : undefined,
-    graduation:
-      fields.graduation === "feature" || fields.graduation === "hub"
-        ? fields.graduation
-        : undefined,
-    entryId: fields.entry_id ? String(fields.entry_id) : undefined,
-    final: fields.final === true || fields.final === "true" ? true : undefined,
-    partOf: fields.part_of ? String(fields.part_of) : undefined,
-    preserveBody:
-      fields.preserve_body === true || fields.preserve_body === "true"
-        ? true
-        : undefined,
-    // A sender may name the summary (verbatim graduations do); else the
+    // A sender may name the summary ; else the
     // first paragraph of the body.
     summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,

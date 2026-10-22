@@ -135,18 +135,16 @@ describe("sweep: subject-checked merges", () => {
     expect(r.paused).toBeTruthy();
   });
 
-  it("an alias to a graduated entry creates a new entry and does not fall back to similarity", async () => {
+  it("an entry an old graduation made is an ordinary entry: its alias merges into it", async () => {
     entry("kb-wp-GRADGRA", "properties:\n  graduation-commits: abc\n");
     appendLedger(roots, [
       ev.contribution({ from: "w1", denTopicId: "some-topic", hash: "old", prevHash: null, domainHint: "wp" }),
       ev.entryWritten("kb-wp-GRADGRA", "kb-wp-GRADGRA", "create"),
       ev.aliased("w1", "some-topic", "kb-wp-GRADGRA", "old"),
     ]);
-    // AAAAAAA would be a clear similarity merge (0.95); the alias must block it.
     const before = readdirSync(entries()).length;
-    expect(await run({ "kb-wp-GRADGRA": 0.95, "kb-wp-AAAAAAA": 0.95 })).toMatchObject({ created: 1, merged: 0 });
-    expect(subjectCalls()).toHaveLength(0);
-    expect(readdirSync(entries()).length).toBe(before + 1);
+    expect(await run({ "kb-wp-GRADGRA": 0.95, "kb-wp-AAAAAAA": 0.95 })).toMatchObject({ created: 0, merged: 1 });
+    expect(readdirSync(entries()).length).toBe(before);
   });
 
   it("keeps the original created date when merging", async () => {

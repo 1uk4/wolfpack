@@ -133,7 +133,6 @@ export {
   CRAWL_CONSOLIDATE_SYSTEM,
   CRAWL_JOURNEY_SYSTEM,
 } from "./config/prompts/memory.js";
-export { GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "./config/prompts/graduation.js";
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -313,8 +312,8 @@ CONVERT, DO NOT LOG:
 - When the topic records that a fact CHANGED (it says what was before and what is now, or when it was changed), write the new fact in the body and add one line to a final "## History" section:
   - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <why, if the topic says>.
   Use the date the topic gives for the change; if it gives none, use the TOPIC DATE. Each line at most two sentences, dated, with a reason only when known. A line keeps the dated substance (what the old fact was, when, why it changed), never a vague "updated". When History would pass about 15 lines, fold the oldest lines into one summary line saying the full earlier text is in versions/, for example "- Earlier history (before <YYYY-MM-DD>): <summary>; see versions/ for prior text." Omit the section when nothing changed.
-- LEAVE OUT, entirely: commit hashes, task ids, work ids, "N tests pass" lines, "deployed" / "verified" / "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
-- Never put a date in a heading or in the body outside History. Never put a hash or id in History.
+- LEAVE OUT, entirely: commit hashes, task ids, work ids (except the closing citation of a graduation History line, see GRADUATION INPUT), "N tests pass" lines, "deployed" / "verified" / "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
+- Never put a date in a heading or in the body outside History. Never put a hash or id in History (the graduation citation excepted).
 - Do not add facts the topic does not state.
 
 ONE SUBJECT EACH. If the topic covers clearly different subjects (for example a design AND a separate incident, or two unrelated systems), return one contribution per subject, at most 4, the main subject first. Otherwise return exactly one. Do not split a single subject into parts.
@@ -324,6 +323,23 @@ PREVIOUS CONTRIBUTIONS may be listed (slug: title) from earlier promotes of this
 If CHECK FAILURES are listed, your previous answer broke those rules: rewrite the contributions and fix every one.
 
 Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body"}]}.`;
+
+/**
+ * stage: distill (graduation) · appended to DISTILL_SYSTEM when the input is a finished work item
+ *
+ * Graduation is NOT a separate pipeline: the item's plan, Record, Outcomes and
+ * tasks are distilled like any topic, into subject contributions that flow
+ * through the inbox and the sweep's subject check. This only reframes the input.
+ */
+export const DISTILL_GRADUATION = `GRADUATION INPUT. When the input is headed "GRADUATION OF", it is not a private note but the record of a FINISHED work item: its plan, its Record (decisions, changes, findings, problems), its Outcomes, its tasks, and the initiative it belongs to. Convert it the same way, with these differences:
+- Write for the SUBJECTS the work affected (a system, a process, a rule), never for the work item itself. One contribution per affected subject, at most 4, main subject first, each describing how that subject works NOW as the Record and Outcomes establish it. The plan is intent written before the work and may be outdated: the Record and the Outcomes win. Do not write a past-tense "feature entry"; no task lists, no remaining work.
+- A decision in the Record with lasting weight (what was chosen, what was rejected, why) gets its OWN contribution when it stands apart from any one subject: title = the decision as a noun phrase, body = the decision, the reasons, the alternatives rejected. Otherwise fold it into the subject it shaped.
+- HISTORY: every contribution ends with a "## History" section holding at least one line for this work, ending with the WORK ID given in the input, in parentheses, exactly as written:
+  - <YYYY-MM-DD>: <what this work changed or decided about the subject, and why> (<work id>)
+  or, when a fact was replaced: "- Until <YYYY-MM-DD>: <old>. Now <new>, because <why> (<work id>)". The work id appears ONLY at the end of a History line: never in a title, summary or body section, and never any other work id.
+- TOTALS: when the input lists TOTALS, every value (digits and unit) must appear unchanged in the contribution that reports the outcomes, in its body or History.
+- INITIATIVE: when the input has an INITIATIVE section, add exactly one more contribution about the initiative, with "initiative": true and slug "initiative". Its body is present tense: the initiative's goal and scope, the decisions that span its features, and what this work delivered, as part of the current state. Link to subject entries with [[kb-...]] ONLY for ids listed under KNOWN ENTRIES; with none listed, describe the subjects in words. When the INITIATIVE section says THIS ITEM, the graduating item is the initiative itself: write ONLY the initiative contribution. If the INITIATIVE is marked COMPLETE, say in the body that it is complete and what it achieved overall. A standing initiative never completes: its entry is a live page of the area. Its History line says what this work added, with the same work id. Every other contribution omits "initiative".
+Respond with the same JSON, where a contribution may carry "initiative": true.`;
 
 /**
  * stage: workRecord · model: smart · in: a work item's current Record + its title/criteria/plan + new observations · out: the rewritten Record
@@ -374,7 +390,11 @@ WRITING RULES:
   "because" clause when the reason is not known. Keep each line to at most two
   sentences. Keep every existing History line exactly as written (never rewrite
   them) and do not add a line for a change already recorded. History lines
-  carry dates and reasons only: never a commit hash, task id or work id. A History line for a replaced fact keeps the
+  carry dates and reasons only: never a commit hash or task id. A work id
+  (work-<domain>-<id>) may appear in a History line ONLY as its closing
+  "(work-<domain>-<id>)" citation: when the CONTRIBUTION has History lines with
+  such a citation, add them to the entry's History exactly as written, citation
+  included. A History line for a replaced fact keeps the
   dated substance (what it was, when, why it changed), never a vague "updated".
   When History would pass about 15 lines, fold the oldest lines into one
   summary line that says the full earlier text is in versions/, for example
@@ -391,9 +411,10 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
-- Never write commit hashes, task or work ids, "N tests pass" lines, or
+- Never write commit hashes, task ids, "N tests pass" lines, or
   "deployed"/"verified" status lines anywhere in the entry, and never repeat
-  the summary in the detail. Leave out progress notes; keep only what is true
+  the summary in the detail. A work id appears only as a History line's closing
+  citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
 - Stay on the entry's subject. If the contribution contains material about a
   different subject, leave it out.

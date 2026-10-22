@@ -5,6 +5,17 @@
  */
 export { sweep, type SweepContext, type SweepResult } from "./sweep.js";
 export { runSweepTick, type SweepTickOptions, type SweepTickResult } from "./tick.js";
+export {
+  workIdOfTopic,
+  parseKbNotes,
+  linkNote,
+  queueWorkLink,
+  pendingWorkLinks,
+  flushWorkLinks,
+  httpNotePoster,
+  type WorkLink,
+  type NotePoster,
+} from "./work-links.js";
 export { createLibrarianEngine } from "./engine.js";
 export {
   readLedger,

@@ -38,6 +38,7 @@ import { readSections, writeSections } from "./sections.js";
 import { withBudget, BudgetExceeded, recordFailure, recordOverrun, clearAttempts, park } from "./park.js";
 import { classifyError, shouldParkNow, backoffRemainingMs, noteInfraFailure, noteSweepSuccess, type Alert } from "./backoff.js";
 import { writeCurrent, clearCurrent } from "./progress.js";
+import { queueWorkLink, workIdOfTopic } from "./work-links.js";
 import {
   DomainId,
   EntryId,
@@ -134,49 +135,12 @@ function mkSectionId(domain: string): SectionId {
 }
 
 /**
- * The entry a graduation contribution owns, as named by its sender
- * (`entry_id`). It must be a valid entry id in the contribution's domain.
+ * The entry an OLD graduation made for a work item: `kb-<domain>-<id>` for the
+ * den topic `work-<domain>-<id>` (no split suffix). Null for any other topic.
  */
-export function graduationEntryId(c: Pick<ParsedContribution, "graduation" | "entryId">, domain: string): string | null {
-  if (!c.graduation) return null;
-  const id = c.entryId ?? "";
-  if (!EntryId.safeParse(id).success || !id.startsWith(`kb-${domain}-`)) {
-    throw new Error(`graduation contribution needs entry_id kb-${domain}-<7id> (got "${id}")`);
-  }
-  return id;
-}
-
-/**
- * Entries owned by graduated work, read from the ledger: a graduation is
- * logged as a contribution from den topic `work-<domain>-<id>` and owns entry
- * `kb-<domain>-<id>`. These entries are records; nothing else may merge into
- * them (a merge has the LLM rewrite the whole entry).
- */
-export function graduationOwnedIds(log: Array<{ t: string; denTopicId?: string }>): Set<string> {
-  const owned = new Set<string>();
-  for (const e of log) {
-    if (e.t !== "contribution" || !e.denTopicId) continue;
-    const m = /^work-([a-z0-9]+)-([0-9A-Za-z]{7})$/.exec(e.denTopicId);
-    if (m) owned.add(`kb-${m[1]}-${m[2]}`);
-  }
-  return owned;
-}
-
-/**
- * Graduated entries that predate (or lack) a ledger contribution from a
- * `work-…` den topic still carry the `graduation-commits` property in their
- * frontmatter; that is the one marker found on real graduated entries.
- */
-export function hasGraduationMarker(markdown: string | null): boolean {
-  if (!markdown) return false;
-  const fm = /^---\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
-  return /^[ \t]+graduation-commits:/m.test(fm);
-}
-
-/** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
-export function listedEntryIds(body: string): string[] {
-  const ids = [...body.matchAll(/\[\[(kb-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\]\]/g)].map((m) => m[1]);
-  return [...new Set(ids)];
+export function oldHubId(denTopicId: string, domain: string): string | null {
+  const m = new RegExp(`^work-${domain}-([0-9A-Za-z]{7})$`).exec(denTopicId);
+  return m ? `kb-${domain}-${m[1]}` : null;
 }
 
 /** The contribution's title: the first H1 of the den topic, else its den topic id. */
@@ -361,28 +325,6 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // the nearest entries by title+summary similarity, with an LLM subject
       // check when the score is uncertain (seeds the alias on commit).
       let targetId: string | undefined;
-      // Graduated work owns exactly one entry, named in the contribution: update
-      // it if it exists, otherwise create it. Never similarity-merged, and no
-      // other contribution may merge into it (by alias or by similarity): an
-      // alias that points at a graduated entry is NOT merged and does not fall
-      // through to similarity either, so that den topic gets its own entry and
-      // the alias is re-pointed on commit.
-      let aliasBlocked = false;
-      const ownId = graduationEntryId(c, domain);
-      const ledgerOwned = graduationOwnedIds([...log, ...batch] as any);
-      // Owned by the ledger, or marked as graduated in its own frontmatter.
-      const markerCache = new Map<string, boolean>();
-      const protectedIds = {
-        has: (id: string): boolean => {
-          if (ledgerOwned.has(id)) return true;
-          let marked = markerCache.get(id);
-          if (marked === undefined) {
-            marked = hasGraduationMarker(readEntryMarkdown(roots, domain, id));
-            markerCache.set(id, marked);
-          }
-          return marked;
-        },
-      };
       // A decision another entry supersedes is history: contributions go to the
       // newest decision in the chain, never to the old one.
       const superseded = supersededIds(roots, domain);
@@ -390,32 +332,39 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         for (let i = 0; i < 10 && superseded.has(id); i++) id = superseded.get(id)!;
         return id;
       };
-      if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
-      for (const topic of ownId ? [] : reg.values()) {
+      let aliased: string | undefined;
+      for (const topic of reg.values()) {
         const alias = topic.aliases.find(
           (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
         );
         if (alias) {
-          const aliased = topic.entries[0];
-          if (!readEntryMarkdown(roots, domain, aliased)) {
-            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
-          } else if (!protectedIds.has(head(aliased))) {
+          aliased = topic.entries[0];
+          if (readEntryMarkdown(roots, domain, aliased)) {
             targetId = head(aliased);
           } else {
-            aliasBlocked = true;
-            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} is graduated)`);
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
           }
           break;
+        }
+      }
+      // One-time continuation of an old initiative hub: the first contribution of
+      // work-<domain>-<id> with no alias yet goes to the entry kb-<domain>-<id>
+      // that the old graduation made, so the hub is continued, not duplicated.
+      if (!targetId && !aliased) {
+        const old = oldHubId(c.denTopicId, domain);
+        if (old && readEntryMarkdown(roots, domain, old)) {
+          targetId = head(old);
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${targetId} (old hub of that work item, continued)`);
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
       // the merge rewrites the whole entry.
       const sizeLimit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
-      if (!targetId && !ownId && !aliasBlocked) {
+      if (!targetId) {
         const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
-          if (protectedIds.has(e.entryId) || superseded.has(e.entryId)) continue;
+          if (superseded.has(e.entryId)) continue;
           const md = readEntryMarkdown(roots, domain, e.entryId);
           if (!md || md.length > sizeLimit) continue;
           const f = parseFrontmatter(md).fields;
@@ -445,11 +394,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // Never merge into an oversized entry: the merge rewrites the whole
       // entry. Create a new one instead; its alias is re-pointed on commit.
       // (Similarity candidates were already filtered by size above; this
-      // catches an alias match.) A graduation's own entry (ownId) is exempt by
-      // construction: graduations are regenerated from their dossier and never
-      // fed the previous text, so the rewrite is bounded by the dossier, not by
-      // the old entry, and PRODUCE_SYSTEM asks for a concise entry.
-      if (targetId && targetId !== ownId) {
+      // catches an alias match.)
+      if (targetId) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         if (size > sizeLimit) {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
@@ -493,21 +439,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
-      // A new initiative hub goes where its first delivered feature landed.
-      const hubFeatures = c.graduation === "hub" ? listedEntryIds(c.body) : [];
-      if (!sectionId && hubFeatures.length) {
-        for (const fid of hubFeatures) {
-          const md = readEntryMarkdown(roots, domain, fid);
-          const sec = md ? String(parseFrontmatter(md).fields.section ?? "") : "";
-          if (SectionId.safeParse(sec).success) {
-            sectionId = SectionId.parse(sec);
-            placement = { basis: "routed", fit: 1 };
-            break;
-          }
-        }
-      }
-
-      // Otherwise place a NEW entry by deterministic tree descent.
+      // A new entry is placed by deterministic tree descent.
       if (!sectionId) {
         // Build section members map for placeEntry
         const sectionMembers = new Map<string, EWV[]>();
@@ -574,32 +506,15 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       if (!sectionId || !placement) throw new Error("unrouted contribution");
       if (targetId) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
-        setRoute(`${targetId === ownId ? "update own" : "merge into"} ${targetId} (${size} chars)`);
+        setRoute(`merge into ${targetId} (${size} chars)`);
       } else {
-        setRoute(`${ownId ? "create own" : "create"} ${ownId ?? "entry"} in ${sectionId}`);
+        setRoute(`create entry in ${sectionId}`);
       }
 
       // ── PRODUCE (LLM → opinion only; code assembles) ────────────────────
-      // A graduation is regenerated from its full dossier each time (a hub from
-      // the full list of delivered features), never from its previous text:
-      // the old entry would carry forward anything the dossier has corrected.
-      const existingMarkdown = targetId && !c.graduation
-        ? readEntryMarkdown(roots, domain, targetId) ?? undefined
-        : undefined;
-      // An update keeps the entry's original creation date, graduations included.
-      const targetMd = targetId ? readEntryMarkdown(roots, domain, targetId) : null;
-      const existingCreated = targetMd ? String(parseFrontmatter(targetMd).fields.created ?? "") || undefined : undefined;
-      // For a hub: what Dewey actually recorded for each delivered feature.
-      const recorded = hubFeatures
-        .map((fid) => {
-          const md = readEntryMarkdown(roots, domain, fid);
-          if (!md) return null;
-          const f = parseFrontmatter(md).fields;
-          const summary = md.split("\n---\n")[1]?.trim().split("\n\n")[1] ?? "";
-          return `- [[${fid}]] ${String(f.title ?? fid)}${summary ? ` — ${summary.slice(0, 300)}` : ""}`;
-        })
-        .filter(Boolean);
-      const context = recorded.length ? `RECORDED FEATURE ENTRIES (what the KB holds for each):\n${recorded.join("\n")}` : undefined;
+      const existingMarkdown = targetId ? readEntryMarkdown(roots, domain, targetId) ?? undefined : undefined;
+      // An update keeps the entry's original creation date.
+      const existingCreated = existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") || undefined : undefined;
 
       const { entry, action, unchanged, supersedes, historyRestored, lint } = await produceEntry(itemEngine, {
         contribution: c,
@@ -607,11 +522,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         section: sectionId,
         placement,
         entryId: targetId,
-        newEntryId: ownId ?? undefined,
         existingMarkdown,
-        previousMarkdown: targetMd ?? undefined,
         existingCreated,
-        context,
         resolve,
       });
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
@@ -642,12 +554,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
       // Registry: record (wolf, den topic) -> entry so later re-promotes resolve
       // by alias and update in place. Re-fold so later items in THIS batch see it.
-      // Graduations are found by entry_id instead, so the registry never
-      // records a work item id.
-      if (!c.graduation) {
-        batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
-        reg = foldRegistry([...log, ...batch]);
-      }
+      batch.push(ev.aliased(c.from, c.denTopicId, entry.id, c.contentHash));
+      reg = foldRegistry([...log, ...batch]);
 
       // The entry is live: record it in the ledger BEFORE anything else, so a
       // crash can't leave a live entry with no ledger record.
@@ -655,6 +563,16 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
+
+      // Graduated work: note the entry on the work item (queued; never blocks).
+      const workId = workIdOfTopic(c.denTopicId);
+      if (workId && !unchanged) {
+        try {
+          queueWorkLink(roots, { workId, entryId: entry.id, action: action === "create" ? "created" : "updated" });
+        } catch (err) {
+          ctx.notify?.(`sweep: could not queue the work link for ${workId}: ${cleanError(err)}`);
+        }
+      }
 
       writeReceipt(roots, c.from, c, action, entry.id);
       markProcessed(c);

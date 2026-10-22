@@ -56,30 +56,6 @@ export const ContributionSchema = z.object({
    * combined with `currency`, a crawl is historical reference, not lived truth.
    */
   origin: z.enum(["wolf", "crawl"]).optional(),
-
-  // ── Graduation (finished Factory work → past-tense knowledge) ───────────
-  /** Set when this contribution is graduated work: a feature, or an
-   *  initiative's hub. The sweep writes it with the graduation prompt. */
-  graduation: z.enum(["feature", "hub"]).optional(),
-  /** The entry this graduation owns (created first time, updated after).
-   *  Named by the sender, so the KB never interprets work ids. */
-  entryId: z.string().optional(),
-  /** Hub only: the initiative is complete (adds an outcome summary). */
-  final: z.boolean().optional(),
-  /** Feature only: the hub entry it belongs to (its initiative's), linked
-   *  part_of by code. Named by the sender, like entryId. */
-  partOf: z.string().optional(),
-  /** Deliberate account: the sender's body is the record and must land
-   *  verbatim. The sweep's `produce` stage bypasses the LLM entirely — title
-   *  derived from H1, summary from the first paragraph, detail = body as
-   *  written. Classification (section placement) and relation resolution
-   *  still run. Defaults to false (observational contributions go through
-   *  the normal LLM consolidation path).
-   *
-   *  Set by graduated work (features) so a deliberately-authored sprint record
-   *  isn't paraphrased away. Hubs ignore this — they're meant to be LLM-
-   *  produced short overviews. */
-  preserveBody: z.boolean().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

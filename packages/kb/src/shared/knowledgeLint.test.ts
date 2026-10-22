@@ -19,6 +19,18 @@ describe("lintKnowledge: positives (text from real den topics)", () => {
     expect(codes("Tracked in work-wolfpack-ggNO3Sv.")).toContain("work-id");
     expect(codes("Finished task AbC1234 yesterday.")).toContain("work-id");
   });
+  it("a work id is allowed in History lines only", () => {
+    const hist = "## Design\nOne item per run.\n\n## History\n\n- 2026-10-22: sweep takes one item per run (work-wolfpack-ggNO3Sv).";
+    expect(codes(hist)).not.toContain("work-id");
+    expect(codes(hist, { workIds: "none" })).toContain("work-id");
+    expect(codes("## Design\nOne item per run (work-wolfpack-ggNO3Sv).\n\n## History\n\n- x")).toContain("work-id");
+    expect(codes("x", { title: "Sweep work-wolfpack-ggNO3Sv" })).toContain("work-id");
+    expect(codes("x", { summary: "See work-wolfpack-ggNO3Sv." })).toContain("work-id");
+    expect(codes("x", { properties: { origin: "work-wolfpack-ggNO3Sv" } })).toContain("work-id");
+    // a task id, hash or test count in History is still noise
+    expect(codes("## History\n\n- 2026-10-22: done in commit ee17088 (work-wolfpack-ggNO3Sv).")).toContain("commit-hash");
+    expect(codes("## History\n\n- 2026-10-22: Finished task AbC1234.")).toContain("work-id");
+  });
   it("test counts and suite status", () => {
     expect(codes("Verified the helper connects. 682 tests passed at the time.")).toContain("test-count");
     expect(codes("Build passes; 2 new tests cover the default.")).not.toContain("test-count");

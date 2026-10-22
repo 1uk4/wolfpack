@@ -41,6 +41,12 @@ export interface LintInput {
   cap?: number;
   /** Chars outside `body` that count toward the cap (the rendered lede). */
   extraChars?: number;
+  /**
+   * Where a work id (work-<domain>-<id>) may appear. "history" (default): only
+   * in History lines, where graduated work cites itself. "none": nowhere (a den
+   * topic never carries one).
+   */
+  workIds?: "history" | "none";
 }
 
 const HASH_TOKEN = /(?<![\w./~-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])/g;
@@ -102,15 +108,23 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
     findings.push({ code, message, ...(sample ? { sample: clip(sample) } : {}) });
   const { main } = splitHistory(input.body);
 
-  // Commit hashes and work ids are noise anywhere, History included.
+  // Commit hashes and task ids are noise anywhere, History included. A work id
+  // is allowed in History lines only (graduated work cites itself there); in the
+  // body, title, summary and properties it is noise.
   const all = proseLines(input.body);
   const hashes = new Set<string>();
   let workId: string | undefined;
-  for (const l of all) {
+  const historyAt = input.workIds === "none" ? -1 : input.body.search(/^## History[ \t]*$/m);
+  const historyStart = historyAt < 0 ? Infinity : proseLines(input.body.slice(0, historyAt)).length;
+  all.forEach((l, i) => {
     const h = hashIn(l);
     if (h) hashes.add(h);
-    const w = WORK_ID.exec(l) ?? TASK_ID.exec(l);
+    const w = (i < historyStart ? WORK_ID.exec(l) : null) ?? TASK_ID.exec(l);
     if (w && !workId) workId = w[0];
+  });
+  if (!workId) {
+    const others = [input.title ?? "", input.summary ?? "", ...Object.entries(input.properties ?? {}).flatMap(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v ?? "")])];
+    workId = others.map((t) => WORK_ID.exec(t)?.[0]).find(Boolean);
   }
   if (hashes.size) add("commit-hash", `${hashes.size} commit-hash-like token(s): ${[...hashes].slice(0, 3).join(", ")}`, [...hashes][0]);
   if (workId) add("work-id", `task/work id in the text: ${workId}`, workId);

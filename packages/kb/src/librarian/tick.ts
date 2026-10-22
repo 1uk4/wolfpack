@@ -19,6 +19,8 @@ import { createEmbedder, buildEntryVectors, currentEntryHashes, type CachedEmbed
 import { backoffRemainingMs, classifyError, noteInfraFailure, type Alert } from "./backoff.js";
 import { withBudget } from "./park.js";
 import { noteDrainProgress, flushDrain } from "./drain.js";
+import { flushWorkLinks, hasPendingWorkLinks, httpNotePoster, type NotePoster } from "./work-links.js";
+import { withKbLock, KbLockBusy } from "./lock.js";
 
 export interface SweepTickOptions {
   roots: KbRoots;
@@ -30,6 +32,8 @@ export interface SweepTickOptions {
   alert?: Alert;
   /** Test seam: the run budget for the one item (default SWEEP.runBudgetMs). */
   budgetMs?: number;
+  /** Where link-back notes for graduated work go (default: the Work API from WORK_ENDPOINT / WORK_TOKEN; none → they stay queued). */
+  notePoster?: NotePoster | null;
 }
 
 export interface SweepTickResult {
@@ -47,6 +51,24 @@ export interface SweepTickResult {
  * back as outcome "backoff"; any other error is thrown for the caller to report.
  */
 export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickResult> {
+  const result = await runTick(opts);
+  await sendWorkLinks(opts);
+  return result;
+}
+
+/** Post the queued work-item notes (best effort: an unreachable Work API leaves them queued). */
+async function sendWorkLinks(opts: SweepTickOptions): Promise<void> {
+  try {
+    if (!hasPendingWorkLinks(opts.roots)) return;
+    const post = opts.notePoster === undefined ? httpNotePoster() : opts.notePoster;
+    if (!post) return;
+    await withKbLock(opts.roots, () => flushWorkLinks(opts.roots, post, opts.notify));
+  } catch (err) {
+    if (!(err instanceof KbLockBusy)) opts.notify?.(`work links: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots } = opts;
 
   const waitMs = backoffRemainingMs(roots);

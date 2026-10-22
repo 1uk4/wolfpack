@@ -127,3 +127,19 @@ export {
   type DenTopicState,
   type ReconcileResult,
 } from "./den-reconcile.js";
+
+// Distill — convert den topics into KB-grade contributions at promote
+export {
+  promoteTopics,
+  distillTopic,
+  readDistillRecord,
+  DistillOutputSchema,
+  type PromoteTopic,
+  type PromoteOptions,
+  type PromoteStats,
+  type DistillInput,
+  type DistillResult,
+  type DistillRecord,
+  type DistilledContribution,
+} from "./distill.js";
+export { TOPIC_SOFT_CAP } from "./consolidate.js";

@@ -33,8 +33,14 @@ function sessionTopic(id: string, title = id, summary = `${id} summary`, body = 
   );
 }
 
+/** Only the distill step runs at promote: it echoes the topic as one clean contribution. */
 const stubEngine: Engine = {
-  call: async () => { throw new Error("LLM should not be called"); },
+  call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { prompt: string }) => {
+    if (step !== "distill") throw new Error(`LLM should not be called: ${step}`);
+    const title = /^TOPIC TITLE: (.*)$/m.exec(opts.prompt)?.[1] ?? "Topic";
+    const body = opts.prompt.split("TOPIC BODY:\n")[1] ?? "";
+    return schema.parse({ contributions: [{ slug: "main", title, summary: `${title} summary`, body: `## Details\n${body}` }] });
+  },
 } as unknown as Engine;
 
 beforeEach(() => {
@@ -240,5 +246,13 @@ describe("consolidateSession durability gate", () => {
 
     sessionTopic("dashboard", "KB Dashboard", "served", "The dashboard is served at :4000.");
     expect((await run()).claimsSubmitted).toBe(1);
+  });
+
+  it("logs a topic over the soft cap but still writes it", async () => {
+    sessionTopic("huge", "Huge topic", "s", "word ".repeat(2000));
+    const progress: string[] = [];
+    await run(progress);
+    expect(progress.some((m) => m.includes("topic over 8000 chars") && m.includes("huge"))).toBe(true);
+    expect(readDenTopics(den).some((t) => t.id === "huge")).toBe(true);
   });
 });

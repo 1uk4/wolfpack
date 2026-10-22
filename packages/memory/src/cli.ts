@@ -17,7 +17,7 @@
  */
 import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { tryEmitDelta } from "@wolfpack/kb/client";
+import { promoteTopics } from "./distill.js";
 import { consolidateSession } from "./consolidate.js";
 import { listSessionIds } from "./session/memory.js";
 import { getConsolidatedSessions, readDenTopics } from "./den.js";
@@ -91,23 +91,21 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const topics = readDenTopics(resolvedDen);
-    let emitted = 0;
-    for (const t of topics) {
-      if (!t.promotable) continue; // held in the den as a session log
-      const d = tryEmitDelta({
+    const stats = await promoteTopics(
+      topics
+        .filter((t) => t.promotable) // the rest are held in the den as session logs
+        .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const })),
+      {
+        engine,
         roots: kbRoots,
         wolf: wolfName,
-        denTopicId: t.id,
-        change: "create",
-        domainHint: defaultDomain,
-        summary: t.summary,
-        body: t.body,
-      }, (why) => console.error(`  ${why}`));
-      if (d) {
-        emitted++;
-        console.log(`  emitted: ${t.id}`);
+        defaultDomain,
+        force: true,
+        onProgress: (m) => console.log(m),
       }
-    }
+    );
+    const emitted = stats.emitted;
+    console.log(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
     console.log(
       `emit-den: ${emitted}/${topics.length} deltas \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}`
     );

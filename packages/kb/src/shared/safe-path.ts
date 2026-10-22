@@ -6,7 +6,7 @@
 
 import { contentHash } from "./hash.js";
 
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+const SAFE_SEGMENT = /^[A-Za-z0-9._~-]+$/;
 
 export function isSafeSegment(value: unknown): value is string {
   return typeof value === "string" && value !== "." && value !== ".." && SAFE_SEGMENT.test(value);
@@ -15,7 +15,7 @@ export function isSafeSegment(value: unknown): value is string {
 /** Return `value` if it is a single safe path segment, else throw. */
 export function safeSegment(value: unknown, label = "path segment"): string {
   if (!isSafeSegment(value)) {
-    throw new Error(`unsafe ${label}: ${JSON.stringify(String(value).slice(0, 80))} (allowed: A-Z a-z 0-9 . _ -)`);
+    throw new Error(`unsafe ${label}: ${JSON.stringify(String(value).slice(0, 80))} (allowed: A-Z a-z 0-9 . _ ~ -)`);
   }
   return value;
 }

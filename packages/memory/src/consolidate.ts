@@ -18,7 +18,7 @@
  *   6. Mark session as consolidated
  */
 import type { Engine } from "@wolfpack/engine";
-import { isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
+import { promoteTopics } from "./distill.js";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +34,9 @@ import {
 } from "./den.js";
 import { renderDenIndex } from "./den-index.js";
 import { isAbsorbed, reconcileDen } from "./den-reconcile.js";
+
+/** Den topics are working memory: past this size the consolidator is asked to split, and we log (no rejection). */
+export const TOPIC_SOFT_CAP = 8000;
 
 export interface ConsolidateOptions {
   /** The engine instance (with provider + model config) */
@@ -187,6 +190,7 @@ export async function consolidateSession(
     const gate = gateDenTopic(t);
     writeDenTopic(den.denRoot, { ...topic, ...gate });
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${t.title}`);
+    if (t.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${t.body.length}): ${t.id} — should be split by subject`);
     if (!gate.promotable) {
       held++;
       onProgress?.(`  held back (not promotable): ${t.id} — ${gate.promotableReason}`);
@@ -199,38 +203,33 @@ export async function consolidateSession(
   }
   if (skipped > 0) onProgress?.(`  unchanged and already in the KB: ${skipped} skipped`);
 
-  // Step 5: Emit contribution deltas to the KB (deterministic, NO LLM).
-  // The wolf just reports what changed about each den topic; Dewey's sweep
-  // decides whether/where it lands. Hash-guarded, so unchanged re-promotes
-  // are no-ops.
+  // Step 5: Distill each changed topic into KB-grade contributions and emit
+  // them to the Librarian inbox. The den topic stays private working memory;
+  // what reaches the KB is converted knowledge (see distill.ts). Unchanged raw
+  // topics cost no LLM call; a failed distill leaves the topic pending.
   let claimsSubmitted = 0;
   let trivialSkipped = 0;
 
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
-    for (const topic of updatedTopics) {
-      if (isTrivialRepromote(kbRoots, topic.id, topic.body)) {
-        trivialSkipped++;
-        continue;
-      }
-      const hint = topic.domain || defaultDomain;
-      const emitted = tryEmitDelta({
-        roots: kbRoots,
-        wolf: den.wolfName,
-        denTopicId: topic.id,
-        change: topic.change,
-        domainHint: hint,
-        summary: topic.summary,
-        body: topic.body,
-        session: sessionId,
-      }, (why) => onProgress?.(`  ${why}`));
-      if (emitted) {
-        claimsSubmitted++;
-        onProgress?.(`  emitted: ${topic.title} → ${hint}`);
-      }
-    }
+    const stats = await promoteTopics(updatedTopics, {
+      engine,
+      roots: kbRoots,
+      wolf: den.wolfName,
+      defaultDomain,
+      session: sessionId,
+      onProgress,
+      onHold: (t, reason) => {
+        const full = updatedTopics.find((x) => x.id === t.id);
+        if (full) writeDenTopic(den.denRoot, { ...full, updated: now, promotable: false, promotableReason: reason });
+      },
+    });
+    claimsSubmitted = stats.emitted;
+    trivialSkipped = stats.trivialSkipped;
+    held += stats.held;
+    onProgress?.(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
   }
 
-  if (held > 0) onProgress?.(`  held back as session logs: ${held}`);
+  if (held > 0) onProgress?.(`  held back: ${held}`);
   if (trivialSkipped > 0) onProgress?.(`  trivial change since last emit: ${trivialSkipped} skipped`);
 
   // Step 6: Update journey

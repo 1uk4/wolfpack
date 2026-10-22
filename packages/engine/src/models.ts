@@ -36,6 +36,7 @@ export type Tier = (typeof TIERS)[number];
 export const ENGINE_STEPS = [
   "classify",
   "consolidate",
+  "distill",
   "produce",
   "contradict",
   "classifyToSection",
@@ -49,6 +50,7 @@ export type EngineStep = (typeof ENGINE_STEPS)[number];
 export const STEP_TIERS: Record<EngineStep, Tier> = {
   classify: "fast",
   consolidate: "smart",
+  distill: "smart",
   produce: "smart",
   contradict: "fast",
   classifyToSection: "fast",

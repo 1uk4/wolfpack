@@ -293,6 +293,39 @@ Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * stage: distill (promote) · model: smart · in: one den topic (+ previous slugs) · out: 1-4 KB contributions
+ *
+ * A den topic is private working memory: it may carry status, task ids, commit
+ * hashes, test counts and "deployed/verified" notes. Promote converts it into
+ * contributions that read as durable knowledge before anything reaches the KB.
+ */
+export const DISTILL_SYSTEM = `You convert ONE wolf's private working-memory topic into contribution(s) for a shared, curated knowledge base.
+
+The topic is a working note. It may mix durable knowledge with progress noise: status, task ids, commit hashes, test counts, "deployed" / "verified" lines, session narrative. The knowledge base keeps only what stays true and useful: what the subject is, how it works, what was decided and why. Convert, do not just delete.
+
+For each contribution write:
+- slug: short lower-kebab name of its subject.
+- title: the subject, as a noun phrase (no dates, no "deployed", no status).
+- summary: ONE paragraph that stands alone as the lede: what the subject is and its key facts. The body must not repeat it.
+- body: markdown starting at its first "## " section (no "# " title line, no lede). Describe the CURRENT state in present-tense prose, with the lasting detail: file paths, identifiers, names, error codes, numbers that are part of the design (limits, intervals, thresholds). Aim for at most about 4,000 characters, never more than 5,000, excluding History.
+
+CONVERT, DO NOT LOG:
+- When the topic records that a fact CHANGED (it says what was before and what is now, or when it was changed), write the new fact in the body and add one line to a final "## History" section:
+  - Until <YYYY-MM-DD>: <old fact>. Now <new fact>, because <why, if the topic says>.
+  Use the date the topic gives for the change; if it gives none, use the TOPIC DATE. Each line at most two sentences, dated, with a reason only when known. Omit the section when nothing changed.
+- LEAVE OUT, entirely: commit hashes, task ids, work ids, "N tests pass" lines, "deployed" / "verified" / "shipped" status, "unverified live" notes, who did what in which session, next-step lists, what is pending. These stay in the wolf's private notes.
+- Never put a date in a heading or in the body outside History. Never put a hash or id in History.
+- Do not add facts the topic does not state.
+
+ONE SUBJECT EACH. If the topic covers clearly different subjects (for example a design AND a separate incident, or two unrelated systems), return one contribution per subject, at most 4, the main subject first. Otherwise return exactly one. Do not split a single subject into parts.
+
+PREVIOUS CONTRIBUTIONS may be listed (slug: title) from earlier promotes of this topic. Reuse the slug of a subject that is already there so it keeps its identity; invent a new slug only for a new subject.
+
+If CHECK FAILURES are listed, your previous answer broke those rules: rewrite the contributions and fix every one.
+
+Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body"}]}.`;
+
+/**
  * stage: produce (KB sweep) · model: smart · in: contribution + existing (if merge) · out: entry
  *
  * Write a curated KB entry from a contribution, integrating with existing if merging.

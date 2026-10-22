@@ -29,8 +29,9 @@ import {
   gateDenTopic,
   buildDomainContext,
   reconcileDen,
+  promoteTopics,
+  TOPIC_SOFT_CAP,
 } from "@wolfpack/memory";
-import { isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 /** Observation stored in pool JSONL */
@@ -275,6 +276,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     });
 
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
+    if (action.result.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${action.result.body.length}): ${action.result.id} — should be split by subject`);
     if (isUpdate) merged++;
     else created++;
     if (!gate.promotable) {
@@ -293,32 +295,26 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     });
   }
 
-  // Emit contribution deltas to the KB (same as Pi-CLI promote)
-  // Deterministic, no LLM. Hash-guarded so unchanged topics are no-ops.
+  // Distill each changed topic into KB-grade contributions and emit them
+  // (same as Pi-CLI promote; see @wolfpack/memory distill). Unchanged raw
+  // topics cost no LLM call; a failed distill leaves the topic pending.
   let claimsSubmitted = 0;
 
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
-    onProgress?.("Emitting deltas to KB...");
-    for (const topic of updatedTopics) {
-      if (isTrivialRepromote(kbRoots, topic.id, topic.body)) {
-        trivialSkipped++;
-        continue;
-      }
-      const hint = topic.domain || defaultDomain;
-      const emitted = tryEmitDelta({
-        roots: kbRoots,
-        wolf: wolfName,
-        denTopicId: topic.id,
-        change: topic.change,
-        domainHint: hint,
-        summary: topic.summary,
-        body: topic.body,
-      }, (why) => onProgress?.(`  ${why}`));
-      if (emitted) {
-        claimsSubmitted++;
-        onProgress?.(`  emitted: ${topic.id} → ${hint}`);
-      }
-    }
+    onProgress?.("Distilling and emitting to KB...");
+    const stats = await promoteTopics(updatedTopics, {
+      engine,
+      roots: kbRoots,
+      wolf: wolfName,
+      defaultDomain,
+      onProgress,
+      onHold: (t, reason) =>
+        writeDenTopic(wolfDen, { ...t, updated: now, domain: t.domain, promotable: false, promotableReason: reason }),
+    });
+    claimsSubmitted = stats.emitted;
+    trivialSkipped += stats.trivialSkipped;
+    held += stats.held;
+    onProgress?.(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
   }
 
   // Regenerate den index
@@ -340,12 +336,12 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
 
 /** Consolidation engine from the table: the consolidate step on its tier (smart). */
 function createConsolidationEngine(table: ModelTable, apiKey: string | undefined): Engine {
-  const step = engineSteps(table).consolidate;
+  const steps = engineSteps(table);
   const tier = table.tiers[table.steps.consolidate.tier];
   return createEngine({
     provider: tier.provider,
     apiKey,
-    defaultModel: step.model,
-    steps: { consolidate: step },
+    defaultModel: steps.consolidate.model,
+    steps: { consolidate: steps.consolidate, distill: steps.distill },
   });
 }

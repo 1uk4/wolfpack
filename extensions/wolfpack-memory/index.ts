@@ -38,7 +38,6 @@ import {
   reconcileDen,
   denTopicStates,
 } from "@wolfpack/memory";
-import { emitDelta } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { readDeclaredDomains } from "@wolfpack/kb/librarian";
 import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
@@ -63,6 +62,7 @@ import {
   readPlan,
   writePlan,
   readDenTopics,
+  promoteTopics,
   discoverSources,
   gatePlan,
   DEFAULT_CRAWL_CONCURRENCY,
@@ -2957,24 +2957,26 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         }
       }
 
-      // Emit den topics.
+      // Emit den topics, distilled (stored outputs are reused when a topic is unchanged).
       let denEmitted = 0;
-      for (const t of denTopics) {
-        if (t.promotable === false) continue; // held in the den as a session log
-        try {
-          const d = emitDelta({
+      try {
+        if (!engine) throw new Error("model engine not ready");
+        const stats = await promoteTopics(
+          denTopics
+            .filter((t) => t.promotable !== false) // held in the den as a session log
+            .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const })),
+          {
+            engine,
             roots: kbRoots,
             wolf: wolfName,
-            denTopicId: t.id,
-            change: "create",
-            domainHint: currentDomain,
-            summary: t.summary,
-            body: t.body,
-          });
-          if (d) denEmitted++;
-        } catch (e) {
-          ctx.ui?.notify?.(`\ud83d\udc3a den topic ${t.id} failed: ${String(e)}`, "warning");
-        }
+            defaultDomain: currentDomain,
+            force: true,
+            onProgress: (m) => ctx.ui?.notify?.(`\ud83d\udc3a ${m.trim()}`, "info"),
+          }
+        );
+        denEmitted = stats.emitted;
+      } catch (e) {
+        ctx.ui?.notify?.(`\ud83d\udc3a den topics failed: ${String(e)}`, "warning");
       }
 
       // Emit crawl runs.

@@ -64,8 +64,10 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
   it("keeps only subscribed domains as the hint; invented tags fall back to the default", async () => {
     pool(6);
     const engine = {
-      call: async (_s: string, schema: { parse: (v: unknown) => unknown }) =>
-        schema.parse({ actions: [
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { prompt: string }) =>
+        step === "distill"
+          ? schema.parse({ contributions: [{ slug: "main", title: /^TOPIC TITLE: (.*)$/m.exec(opts.prompt)?.[1] ?? "Topic", summary: "s", body: "## Details\nbody" }] })
+          : schema.parse({ actions: [
           { sessionTopicId: "lift", action: "create", reasoning: "r", result: { id: "lift", title: "Lift", summary: "s", body: "b1", domain: "fitness" } },
           { sessionTopicId: "plan", action: "create", reasoning: "r", result: { id: "plan", title: "Plan", summary: "s", body: "b2", domain: "personal" } },
         ] }),

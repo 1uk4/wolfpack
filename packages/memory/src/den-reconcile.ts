@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
 import { contentHash, inboxDir, receiptsDir, type KbRoots } from "@wolfpack/kb/shared";
 import { readDenTopics, type DenTopic } from "./den.js";
+import { readDistillRecord } from "./distill.js";
 
 /** Receipt outcomes meaning the KB holds this content (or deliberately newer truth). */
 const ABSORBED = new Set(["create", "merge", "reject"]);
@@ -24,6 +25,7 @@ export type DenTopicStatus =
   | { kind: "absorbed"; entryId: string | null; absorbedAt: string }
   | { kind: "awaiting-domain"; domain: string }
   | { kind: "parked" }
+  | { kind: "held"; reason: string }
   | { kind: "awaiting-sweep" }
   | { kind: "pending-promote" };
 
@@ -73,20 +75,43 @@ export function denTopicStates(denRoot: string, roots: KbRoots | undefined, wolf
   const inbox = inboxDir(roots, wolf);
   const emitted = readEmittedMap(roots);
 
-  return topics.map((topic): DenTopicState => {
-    const stem = receiptStem(topic.id, topic.body);
+  return topics.map((topic): DenTopicState => ({ topic, status: statusOf(topic, roots, wolf, receipts, inbox, emitted) }));
+}
+
+/**
+ * What the sweep sees for a topic. A promoted topic is emitted DISTILLED, so
+ * its receipts are keyed by the distilled bodies recorded at promote; a topic
+ * without a (current) record was emitted raw. It is absorbed once every
+ * contribution it produced is.
+ */
+function statusOf(
+  topic: DenTopic,
+  roots: KbRoots,
+  wolf: string,
+  receipts: string,
+  inbox: string,
+  emitted: Record<string, string>
+): DenTopicStatus {
+  const rec = readDistillRecord(roots, topic.id);
+  const current = rec && contentHash(rec.rawBody.trim()) === contentHash(topic.body.trim()) ? rec : null;
+  if (current?.held) return { kind: "held", reason: `distill: ${current.held}` };
+  const parts = current ? current.outputs.map((o) => ({ id: o.id, body: o.body })) : [{ id: topic.id, body: topic.body }];
+
+  const states = parts.map((p): DenTopicStatus => {
+    const stem = receiptStem(p.id, p.body);
     const r = readReceipt(join(receipts, `${stem}.md`));
     const absorbed = r ? asAbsorbed(r) : null;
-    if (absorbed) return { topic, status: absorbed };
+    if (absorbed) return absorbed;
     if (r?.outcome === "unclassified") {
       const domain = /pending domain:\s*(\S+)/.exec(r.detail)?.[1] ?? "unknown";
-      return { topic, status: { kind: "awaiting-domain", domain } };
+      return { kind: "awaiting-domain", domain };
     }
-    if (r?.outcome === "parked") return { topic, status: { kind: "parked" } };
-    const wasEmitted =
-      emitted[topic.id] === contentHash(topic.body) || existsSync(join(inbox, `${stem}.md`));
-    return { topic, status: { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" } };
+    if (r?.outcome === "parked") return { kind: "parked" };
+    const wasEmitted = emitted[p.id] === contentHash(p.body) || existsSync(join(inbox, `${stem}.md`));
+    return { kind: wasEmitted ? "awaiting-sweep" : "pending-promote" };
   });
+  // The first part that is not absorbed decides; all absorbed → absorbed (first part's entry).
+  return states.find((s) => s.kind !== "absorbed") ?? states[0];
 }
 
 function asAbsorbed(r: { outcome: string; processed: string; detail: string }): Extract<DenTopicStatus, { kind: "absorbed" }> | null {
@@ -102,6 +127,13 @@ function asAbsorbed(r: { outcome: string; processed: string; detail: string }): 
  * session would otherwise resurrect every absorbed topic on each promote).
  */
 export function isAbsorbed(roots: KbRoots, wolf: string, id: string, body: string): boolean {
+  const rec = readDistillRecord(roots, id);
+  if (rec && !rec.held && contentHash(rec.rawBody.trim()) === contentHash(body.trim())) {
+    return rec.outputs.every((o) => {
+      const r = readReceipt(join(receiptsDir(roots, wolf), `${receiptStem(o.id, o.body)}.md`));
+      return !!(r && asAbsorbed(r));
+    });
+  }
   const r = readReceipt(join(receiptsDir(roots, wolf), `${receiptStem(id, body.trim())}.md`));
   return !!(r && asAbsorbed(r));
 }
@@ -142,6 +174,7 @@ export function describeStatus(status: Exclude<DenTopicStatus, { kind: "absorbed
   switch (status.kind) {
     case "awaiting-domain": return `awaiting domain: ${status.domain}`;
     case "parked": return "parked by sweep";
+    case "held": return `held back (${status.reason})`;
     case "awaiting-sweep": return "awaiting sweep";
     case "pending-promote": return "pending promote";
   }

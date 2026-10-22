@@ -25,7 +25,7 @@ import {
   lintKnowledge, hardFindings, describeFindings, stripProperties, stripLedeRepeat, stripDetailHeading,
   type LintFinding,
 } from "../shared/knowledgeLint.js";
-import { existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
+import { addCitedHistory, existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // assemble-based produce (LlmOpinion ⊕ DerivedFacts ⊕ Curator)
@@ -162,7 +162,11 @@ export async function produceEntry(
     historyRestored = kept.restored;
     if (kept.restored.length) opinion = LlmOpinion.parse({ ...opinion, detail: kept.detail });
   }
-  
+
+  // Graduated work's cited History lines always reach the entry.
+  const cited = addCitedHistory(opinion.detail, contribution.body);
+  if (cited.added.length && !(decisionTarget && !supersedes)) opinion = LlmOpinion.parse({ ...opinion, detail: cited.detail });
+
   // Compute content hash from the opinion prose
   const contentText = [opinion.title, opinion.summary, opinion.detail].join("\n");
   const contentHashValue = hashContent(contentText);

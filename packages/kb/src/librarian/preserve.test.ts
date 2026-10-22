@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { historyLines, preserveHistory, normalizeDetail, foldIntro, existingRelations, supersededIds } from "./preserve.js";
+import { addCitedHistory, historyLines, preserveHistory, normalizeDetail, foldIntro, existingRelations, supersededIds } from "./preserve.js";
 import { produceEntry } from "./produce.js";
 import { sweep } from "./sweep.js";
 import { type KbRoots, type ParsedContribution } from "../shared/index.js";
@@ -40,6 +40,29 @@ describe("preserveHistory", () => {
     expect(preserveHistory(PREV, `x\n\n## History\n\n${H1.replace(/ /g, "  ")}\n${H2}`).restored).toEqual([]);
     const many = Array.from({ length: 16 }, (_, i) => `- Until 2026-01-${String(i + 1).padStart(2, "0")}: a. Now b.`).join("\n");
     expect(preserveHistory(`---\n---\n# T\n\n## History\n\n${many}\n`, "folded").restored).toEqual([]);
+  });
+});
+
+describe("addCitedHistory", () => {
+  const W = "work-wolfpack-ggNO3Sv";
+  const LINE = `- 2026-10-22: sweep takes one item per run (${W})`;
+  const body = (h: string) => `Lede.\n\n# T\n\n## How\n\nx\n\n## History\n\n${h}\n`;
+
+  it("appends a cited History line the entry does not have, creating the section when needed", () => {
+    expect(addCitedHistory("## How\n\nnew.", body(LINE))).toEqual({ detail: `## How\n\nnew.\n\n## History\n\n${LINE}\n`, added: [LINE] });
+    const r = addCitedHistory(`## How\n\nnew.\n\n## History\n\n${H1}`, body(LINE));
+    expect(r.detail).toBe(`## How\n\nnew.\n\n## History\n\n${H1}\n${LINE}\n`);
+  });
+
+  it("leaves it alone when the entry already cites that work, however the model worded the line", () => {
+    const own = `- Until 2026-10-22: one per run was not enforced. Now it is (${W}).`;
+    const detail = `## How\n\nnew.\n\n## History\n\n${own}`;
+    expect(addCitedHistory(detail, body(LINE))).toEqual({ detail, added: [] });
+  });
+
+  it("ignores History lines without a work citation and bodies without History", () => {
+    expect(addCitedHistory("x", body("- 2026-10-22: no citation")).added).toEqual([]);
+    expect(addCitedHistory("x", "Lede.\n\n# T\n\n## How\n\nno history").added).toEqual([]);
   });
 });
 
@@ -118,6 +141,14 @@ describe("produceEntry guards", () => {
     const r2 = await produceEntry(bad.engine, { ...input, contribution: contribution() });
     expect(r2.lint?.before.map((f) => f.code)).toContain("work-id");
     expect(r2.lint?.retried).toBe(true);
+  });
+
+  it("a model that drops the contribution's cited History line does not lose it", async () => {
+    const W = "work-wolfpack-ggNO3Sv";
+    const LINE = `- 2026-10-22: sweep takes one item per run (${W})`;
+    const { engine } = engineReturning({ detail: "## How\n\nOne item per run." });
+    const r = await produceEntry(engine, { ...input, contribution: contribution({ body: `Lede.\n\n# T\n\n## How\n\nx\n\n## History\n\n${LINE}\n` }) });
+    expect(r.entry.detail).toBe(`## How\n\nOne item per run.\n\n## History\n\n${LINE}\n`);
   });
 
   it("a superseding decision does not inherit the old decision's History", async () => {

@@ -122,3 +122,24 @@ export function supersededIds(roots: KbRoots, domain: string): Map<string, strin
   }
   return out;
 }
+
+const WORK_CITATION = /\((work-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\)\s*$/;
+
+/**
+ * Graduated work cites itself in its History lines "(work-<domain>-<id>)". The
+ * model is asked to carry them into the entry but is not trusted to: any
+ * History line of `contributionBody` whose work id the entry's History does not
+ * cite yet is appended (a line the model already wrote for that work stands).
+ */
+export function addCitedHistory(detail: string, contributionBody: string): { detail: string; added: string[] } {
+  const cited = bodyHistory(contributionBody).filter((l) => WORK_CITATION.test(l));
+  if (cited.length === 0) return { detail, added: [] };
+  const have = new Set(bodyHistory(detail).flatMap((l) => [...l.matchAll(/\bwork-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7}\b/g)].map((m) => m[0])));
+  const added = cited.filter((l) => !have.has(WORK_CITATION.exec(l)![1]));
+  if (added.length === 0) return { detail, added };
+  const base = detail.trimEnd();
+  return {
+    detail: HISTORY_HEADING.test(base) ? `${base}\n${added.join("\n")}\n` : `${base}\n\n## History\n\n${added.join("\n")}\n`,
+    added,
+  };
+}

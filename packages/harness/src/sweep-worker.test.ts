@@ -62,11 +62,13 @@ describe("SweepManager alerts", () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  it("alerts when an item is parked, and sends no per-item or complete chatter", async () => {
+  it("alerts when an item is parked, then one drained message, and no per-item or complete chatter", async () => {
     failWith = new Error("model returned junk");
     for (let i = 0; i < 3; i++) await tick();
     expect(readdirSync(inbox()).filter((f) => f.endsWith(".md"))).toEqual([]);
-    expect(msgs).toEqual(["sweep: parked w1/bad — failed 3 times: model returned junk"]);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toBe("sweep: parked w1/bad — failed 3 times: model returned junk");
+    expect(msgs[1]).toMatch(/^sweep: inbox drained — 1 processed \(0 merged, 0 created, 1 parked, 2 failed\) since \d\d:\d\d$/);
   });
 
   it("an outage sends one down alert, skips ticks in backoff, and parks nothing", async () => {

@@ -46,6 +46,7 @@ export {
   type ErrorClass,
   type Alert,
 } from "./backoff.js";
+export { drainFile, readDrain, formatDrain, type DrainState } from "./drain.js";
 export { withBudget, BudgetExceeded, park, unpark, listParked, type ParkedItem } from "./park.js";
 export {
   readDeclaredDomains,

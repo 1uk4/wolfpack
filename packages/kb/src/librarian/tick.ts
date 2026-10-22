@@ -18,6 +18,7 @@ import { readLedger, foldRegistry } from "./ledger.js";
 import { createEmbedder, buildEntryVectors, currentEntryHashes, type CachedEmbedder } from "./embed.js";
 import { backoffRemainingMs, classifyError, noteInfraFailure, type Alert } from "./backoff.js";
 import { withBudget } from "./park.js";
+import { noteDrainProgress, flushDrain } from "./drain.js";
 
 export interface SweepTickOptions {
   roots: KbRoots;
@@ -25,7 +26,7 @@ export interface SweepTickOptions {
   createEngine: () => Engine;
   /** Progress chatter (log lines, a status line). */
   notify?: (msg: string) => void;
-  /** Messages for a human: sweep paused, recovered, an item parked. */
+  /** Messages for a human: sweep paused, recovered, an item parked, inbox drained. */
   alert?: Alert;
   /** Test seam: the run budget for the one item (default SWEEP.runBudgetMs). */
   budgetMs?: number;
@@ -52,10 +53,17 @@ export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickRes
   if (waitMs > 0) {
     return { outcome: "backoff", sweep: { ...emptyResult(), paused: `backing off, ${Math.ceil(waitMs / 1000)}s left` } };
   }
-  if (countPending(roots.opsRoot).total === 0) return { outcome: "idle", sweep: emptyResult() };
+  if (countPending(roots.opsRoot).total === 0) {
+    await flushDrain(roots, opts.alert);
+    return { outcome: "idle", sweep: emptyResult() };
+  }
 
   try {
-    return await tick(opts);
+    const result = await tick(opts);
+    // Tally this tick; once the inbox is really empty, send the one summary.
+    noteDrainProgress(roots, result.sweep);
+    if (!result.sweep.paused && countPending(roots.opsRoot).total === 0) await flushDrain(roots, opts.alert);
+    return result;
   } catch (err) {
     if (classifyError(err) !== "infra") throw err;
     const state = await noteInfraFailure(roots, err, opts.alert);

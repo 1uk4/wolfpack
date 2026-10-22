@@ -316,7 +316,8 @@ WRITING RULES:
   Use the CONTRIBUTION DATE given in the prompt for <YYYY-MM-DD>; omit the
   "because" clause when the reason is not known. Keep each line to at most two
   sentences. Keep every existing History line exactly as written (never rewrite
-  them) and do not add a line for a change already recorded. When History would
+  them) and do not add a line for a change already recorded. History lines
+  carry dates and reasons only: never a commit hash, task id or work id. When History would
   pass about 15 lines, fold the oldest lines into a single summary line. Omit
   the section when there is nothing to record. Do not put a History section
   anywhere but last, and do not use the \`context\` field for it.
@@ -330,6 +331,10 @@ WRITING RULES:
   then the detail. The summary is the whole lede (one paragraph, however many
   sentences it needs). Start the detail at its first "## " section: do NOT
   repeat the title as a "# " heading, do NOT repeat the summary at its top.
+- Never write commit hashes, task or work ids, "N tests pass" lines, or
+  "deployed"/"verified" status lines anywhere in the entry, and never repeat
+  the summary in the detail. Leave out progress notes; keep only what is true
+  of the subject.
 - Stay on the entry's subject. If the contribution contains material about a
   different subject, leave it out.
 - Be concise: aim for at most ~6,000 characters in the body; the History
@@ -356,9 +361,11 @@ FRONTMATTER RULES (the entry is machine-read — be disciplined):
   Omit any axis you are unsure about; leave facets empty ({}) when none apply.
 - properties: an OPTIONAL open map for concrete structured ATTRIBUTES the source
   carries that are NOT classification axes — e.g. {"host": "sfo01", "region":
-  "sfo1", "provider": "digitalocean", "test-count": "42"}. Use this (not facets)
+  "sfo1", "provider": "digitalocean", "retries": "3"}. Use this (not facets)
   for host/provider/region/version/counts/thresholds and similar specifics.
-  Keys: short, descriptive. Values: a single string (stringify numbers). Omit
+  Keys: short, descriptive. Values: a single string (stringify numbers).
+  Never use keys like commit, commits, test-count, tests, task, work-id or
+  scores: progress noise is not knowledge. Omit
   prose or anything already in the body; leave empty ({}) when nothing fits.
 - Do NOT set id, domain, subcategory, created, updated, authority — those are
   owned by the pipeline and will be overwritten.

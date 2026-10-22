@@ -609,7 +609,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         .filter(Boolean);
       const context = recorded.length ? `RECORDED FEATURE ENTRIES (what the KB holds for each):\n${recorded.join("\n")}` : undefined;
 
-      const { entry, action, unchanged, supersedes, historyRestored } = await produceEntry(itemEngine, {
+      const { entry, action, unchanged, supersedes, historyRestored, lint } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
         section: sectionId,
@@ -623,6 +623,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         context,
         resolve,
       });
+      if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
+      if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────

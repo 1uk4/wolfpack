@@ -351,3 +351,65 @@ describe("LlmOpinion schema enforcement (firewall test)", () => {
     expect(created.entry.created).not.toBe("2024-05-06");
   });
 });
+
+describe("produceEntry: knowledge lint", () => {
+  const input = (contribution = mockContribution()): ProduceEntryInput => ({
+    contribution,
+    domain: "wolfpack",
+    section: SectionId.parse("sec-wolfpack-abc123"),
+    placement: { basis: "routed", fit: 0.85 },
+    resolve: () => null,
+  });
+  const op = (o: Partial<LlmOpinion>): LlmOpinion => ({
+    title: "Sweep pipeline", kind: { type: "architecture" }, summary: "A lede that is long enough to be compared.",
+    detail: "## How\nclean", confidence: "high", facets: {}, properties: {}, proposedRelations: [], ...o,
+  });
+
+  it("retries once with the findings, then keeps the clean answer", async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce(op({ detail: "## How\nFixed in commit ee17088. 682 tests passed." }))
+      .mockResolvedValueOnce(op({ detail: "## How\nclean" }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][2].prompt).toContain("commit-hash");
+    expect(call.mock.calls[1][2].prompt).toContain("test-count");
+    expect(r.lint).toMatchObject({ retried: true, after: [] });
+    expect(r.entry.detail).not.toContain("ee17088");
+  });
+
+  it("does not retry a clean answer; strips forbidden properties, repeated lede and the Detail heading", async () => {
+    const lede = "A lede that is long enough to be compared.";
+    const call = vi.fn().mockResolvedValue(op({ summary: lede, detail: `## Detail\n\n${lede}\n\n## How\nclean`, properties: { commit: "abc", "test-count": "9", host: "sfo01" } }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(r.entry.properties).toEqual({ host: "sfo01" });
+    expect(r.entry.detail).not.toContain("## Detail");
+    expect(r.entry.detail.split(lede).length).toBe(1);
+  });
+
+  it("keeps an answer that still fails after the retry and reports it", async () => {
+    const call = vi.fn().mockResolvedValue(op({ detail: "## How\nTask AbC1234 done." }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(r.lint?.after.map((f) => f.code)).toEqual(["work-id"]);
+  });
+
+  it("ignores hashes in History lines the entry already carried", async () => {
+    const prev = "---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\n---\n\n# T\n\nlede\n\n## How\nclean\n\n## History\n\n- Until 2026-10-21: a. Now b (2a47c99).\n";
+    const call = vi.fn().mockResolvedValue(op({ detail: "## How\nclean\n\n## History\n\n- Until 2026-10-21: a. Now b (2a47c99)." }));
+    const r = await produceEntry({ call } as unknown as Engine, { ...input(), entryId: "kb-wolfpack-AbC1234", existingMarkdown: prev });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(r.lint?.after).toEqual([]);
+  });
+
+  it("oversize keeps the entry but reports it; history-style domains are exempt", async () => {
+    const big = "## How\n" + "word ".repeat(1500);
+    const call = vi.fn().mockResolvedValue(op({ detail: big }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(r.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
+    call.mockClear();
+    const h = await produceEntry({ call } as unknown as Engine, { ...input(), style: "history" });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(h.lint?.after).toEqual([]);
+  });
+});

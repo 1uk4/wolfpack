@@ -13,3 +13,4 @@ export * from "./paths.js";
 export * from "./safe-path.js";
 export * from "./domain-registry.js";
 export * from "./ev.js";
+export * from "./knowledgeLint.js";

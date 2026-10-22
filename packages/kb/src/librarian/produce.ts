@@ -22,6 +22,10 @@ import {
   IsoDate,
 } from "../schema/knowledge.js";
 import { contentHash as hashContent } from "../shared/hash.js";
+import {
+  lintKnowledge, hardFindings, describeFindings, stripProperties, stripLedeRepeat, stripDetailHeading,
+  type LintFinding,
+} from "../shared/knowledgeLint.js";
 import { existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,6 +72,18 @@ export interface ProduceEntryResult {
   supersedes?: string;
   /** History lines of the previous entry the model dropped and code restored. */
   historyRestored?: string[];
+  /** Knowledge-lint outcome on the model's output (absent for graduations). */
+  lint?: { retried: boolean; before: LintFinding[]; after: LintFinding[] };
+}
+
+/**
+ * Lint what the model wrote, ignoring lines the entry already carried (a merge
+ * keeps old History lines verbatim, so their content is not the model's fault).
+ */
+export function lintOpinion(o: LlmOpinion, previous: string | undefined, style: string | undefined): LintFinding[] {
+  const old = new Set((previous ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
+  const body = o.detail.split("\n").filter((l) => !old.has(l.trim())).join("\n");
+  return lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, style });
 }
 
 /** True when the entry markdown declares `kind: decision`. */
@@ -167,6 +183,7 @@ export async function produceEntry(
   // are LLM-produced short overviews. Classification + relations still run
   // through the normal post-LLM pipeline.
   let opinion: LlmOpinion;
+  let lint: ProduceEntryResult["lint"];
   if (contribution.preserveBody && graduation !== "hub") {
     opinion = buildVerbatimOpinion(contribution);
   } else {
@@ -192,16 +209,38 @@ export async function produceEntry(
       style === "history" ? PRODUCE_HISTORY_RULES : "",
       graduation ? (graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES) : "",
     ].filter(Boolean).join("\n\n");
-    opinion = LlmOpinion.parse(
-      await engine.call("produce", LlmOpinion, {
-        system,
-        prompt,
-      })
-    );
-    if (graduation) opinion = scrubGraduation(opinion, graduation);
-    // The entry renders as H1 + lede + detail: the detail must not repeat them.
-    const detail = normalizeDetail(opinion.detail, opinion.summary, previous);
-    opinion = LlmOpinion.parse({ ...opinion, ...foldIntro(opinion.summary, detail, previous) });
+    const shape = (raw: unknown): LlmOpinion => {
+      let o = LlmOpinion.parse(raw);
+      if (graduation) o = scrubGraduation(o, graduation);
+      // The entry renders as H1 + lede + detail: the detail must not repeat them.
+      const detail = normalizeDetail(o.detail, o.summary, previous);
+      return LlmOpinion.parse({ ...o, ...foldIntro(o.summary, detail, previous) });
+    };
+    opinion = shape(await engine.call("produce", LlmOpinion, { system, prompt }));
+
+    // Last line of defence against changelog content: lint, ONE retry with the
+    // findings, then strip what can be stripped safely. Graduations are
+    // deliberate records of work and are not linted.
+    if (!graduation) {
+      const before = lintOpinion(opinion, previous, style);
+      let retried = false;
+      if (hardFindings(before).length || before.some((f) => f.code === "oversize")) {
+        retried = true;
+        const again = shape(
+          await engine.call("produce", LlmOpinion, {
+            system,
+            prompt: `${prompt}\n\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS:\n${describeFindings(before)}\nWrite the entry again and fix every one. Commit hashes, task ids, test counts, deploy status and dated headings are never part of an entry; History lines carry dates and reasons only.`,
+          })
+        );
+        opinion = again;
+      }
+      opinion = LlmOpinion.parse({
+        ...opinion,
+        properties: stripProperties(opinion.properties),
+        detail: stripLedeRepeat(opinion.summary, stripDetailHeading(opinion.detail)),
+      });
+      lint = { retried, before, after: lintOpinion(opinion, previous, style) };
+    }
   }
 
   // Build DerivedFacts deterministically
@@ -259,5 +298,5 @@ export async function produceEntry(
       ? { entry: { ...entry, kind: { type: "decision" } }, action: "create", supersedes }
       : { entry, action: "merge", unchanged: true };
   }
-  return { entry, action, historyRestored };
+  return { entry, action, historyRestored, lint };
 }

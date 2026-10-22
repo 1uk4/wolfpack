@@ -118,6 +118,8 @@ export interface DistillInput {
   graduation?: {
     workId: string;
     initiativeTopicId?: string;
+    /** The initiative's title: a contribution with this title (or slug "initiative") is the initiative's even if the model forgot the flag. */
+    initiativeTitle?: string;
     totals?: Array<{ key: string; value: string }>;
     /** The graduating item IS the initiative: keep only its initiative contribution. */
     only?: "initiative";
@@ -138,11 +140,14 @@ export interface DistillResult {
   warnings: string[];
 }
 
-function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: string[] = []): string {
+function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: string[] = [], noInitiative = false): string {
   const failureLines = [
     failures?.length ? describeFindings(failures) : "",
     missing.length
       ? `- totals: these Totals values are missing or changed; each must appear unchanged (digits and unit) in the body or History: ${missing.join("; ")}`
+      : "",
+    noInitiative
+      ? '- initiative: the INITIATIVE contribution is missing; add exactly one more contribution with "initiative": true and slug "initiative"'
       : "",
   ].filter(Boolean);
   const prev = input.previous?.length
@@ -175,10 +180,10 @@ function cleanBody(summary: string, body: string): string {
 export async function distillTopic(engine: Engine, input: DistillInput): Promise<DistillResult> {
   const grad = input.graduation;
   const system = grad ? `${DISTILL_SYSTEM}\n\n${DISTILL_GRADUATION}` : DISTILL_SYSTEM;
-  const run = async (failures?: LintFinding[], missing: string[] = []) => {
+  const run = async (failures?: LintFinding[], missing: string[] = [], noInitiative = false) => {
     const raw = await engine.call("distill", DistillOutputSchema, {
       system,
-      prompt: buildPrompt(input, failures, missing),
+      prompt: buildPrompt(input, failures, missing, noInitiative),
     });
     const all = DistillOutputSchema.parse(raw).contributions;
     return grad ? all : all.slice(0, 4).map((c) => ({ ...c, initiative: undefined }));
@@ -187,14 +192,20 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
     lintKnowledge({ title: c.title, summary: c.summary, body: cleanBody(c.summary, c.body), workIds: grad ? "history" : "none" });
   const missingOf = (cs: Array<{ title: string; summary: string; body: string }>) =>
     grad?.totals?.length ? missingTotals(grad.totals, cs.map((c) => `${c.summary}\n${c.body}`).join("\n")) : [];
+  const normTitle = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  /** The initiative's contribution: flagged, or slugged "initiative", or titled like the initiative. */
+  const isInitiative = (c: { slug: string; title: string; initiative?: boolean }) =>
+    !!grad?.initiativeTopicId && (c.initiative === true || c.slug === "initiative" || (!!grad.initiativeTitle && normTitle(c.title) === normTitle(grad.initiativeTitle)));
+  const missingInitiative = (cs: Array<{ slug: string; title: string; initiative?: boolean }>) =>
+    !!grad?.initiativeTopicId && grad.only !== "initiative" && !cs.some(isInitiative);
 
   let contributions = await run();
   const before = contributions.flatMap(lint);
   let missing = missingOf(contributions);
   let retried = false;
-  if (hardFindings(before).length || before.some((f) => f.code === "oversize") || missing.length) {
+  if (hardFindings(before).length || before.some((f) => f.code === "oversize") || missing.length || missingInitiative(contributions)) {
     retried = true;
-    contributions = await run(before, missing);
+    contributions = await run(before, missing, missingInitiative(contributions));
     missing = missingOf(contributions);
   }
 
@@ -208,19 +219,19 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
       warnings.push(`dropped an extra contribution: "${c.title}"`);
       continue;
     }
-    const isInitiative = !!(grad?.initiativeTopicId && (c.initiative || grad.only === "initiative") && !outputs.some((o) => o.initiative));
+    const isInit = !!(grad?.initiativeTopicId && (isInitiative(c) || grad.only === "initiative") && !outputs.some((o) => o.initiative));
     let slug = c.slug;
     for (let n = 2; seen.has(slug); n++) slug = `${c.slug}-${n}`;
     seen.add(slug);
     let body = cleanBody(c.summary, c.body);
     if (grad) body = citeWork(body, grad.workId);
     outputs.push({
-      id: isInitiative ? grad!.initiativeTopicId! : plain++ === 0 ? input.id : `${input.id}~${slug}`,
+      id: isInit ? grad!.initiativeTopicId! : plain++ === 0 ? input.id : `${input.id}~${slug}`,
       slug,
       title: c.title,
       summary: c.summary,
       body: `# ${c.title}\n\n${body}\n`,
-      ...(isInitiative ? { initiative: true } : {}),
+      ...(isInit ? { initiative: true } : {}),
     });
   }
   if (grad) {

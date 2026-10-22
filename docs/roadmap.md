@@ -58,9 +58,9 @@ Spec (as built): `docs/factory-design.md`.
 - **`/task` dashboard + agent tools** (`task_create`, `task_stage`, `task_done`, …):
   bind a session to an item, render it into the system prompt, advance stages, log
   progress, link KB entries.
-- **Graduation**: shipped tasks summarize into their parent; shipped features (and,
-  once all features have, initiatives) graduate into Library entries via the ops
-  inbox → sweep path.
+- **Graduation** (manual `g` / `task_graduate`): a feature's plan, Record and Outcomes
+  are distilled, previewed and confirmed, then flow through the ordinary ops
+  inbox → sweep path (alias or subject check) as subject updates plus one initiative entry.
 
 Open gaps (area inheritance, area → `subsystem` facet, work files written into the
 receive-only mirror) are listed in `docs/factory-design.md`.

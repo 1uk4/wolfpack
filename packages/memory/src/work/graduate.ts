@@ -253,7 +253,7 @@ export async function previewGraduation(opts: {
     date: opts.today ?? new Date().toISOString().slice(0, 10),
     graduation: {
       workId: input.workId,
-      ...(input.initiative ? { initiativeTopicId: input.initiative.id as string } : {}),
+      ...(input.initiative ? { initiativeTopicId: input.initiative.id as string, initiativeTitle: input.initiative.title } : {}),
       totals: input.totals,
       ...(isInitiative ? { only: "initiative" as const } : {}),
     },

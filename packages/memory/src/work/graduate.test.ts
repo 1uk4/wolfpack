@@ -172,6 +172,29 @@ describe("graduation: preview then confirm", () => {
     expect(file).not.toMatch(/graduation:|entry_id:|preserve_body:|part_of:/);
   });
 
+  it("a forgotten initiative flag is recovered by slug or title; a missing initiative contribution is asked for once", async () => {
+    const { client } = fakeClient([init, f, t1, t2], { [f.id]: PLAN });
+    const noFlag = answer(f.id);
+    delete (noFlag.contributions[1] as any).initiative; // slug "initiative" stays
+    const p1 = await previewGraduation({ client, engine: engineOf(noFlag).engine, id: f.id as string, today: "2026-10-22" });
+    expect(p1.contributions.map((c) => [c.id, c.initiative])).toEqual([[f.id, false], [init.id, true]]);
+
+    const byTitle = answer(f.id);
+    Object.assign(byTitle.contributions[1], { slug: "overview", title: "Dockerize" });
+    delete (byTitle.contributions[1] as any).initiative;
+    const p2 = await previewGraduation({ client, engine: engineOf(byTitle).engine, id: f.id as string, today: "2026-10-22" });
+    expect(p2.contributions.map((c) => c.id)).toEqual([f.id, init.id]);
+
+    const none = { contributions: [answer(f.id).contributions[0]] };
+    const { engine, call } = engineOf(none, answer(f.id));
+    const p3 = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22" });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect((call.mock.calls[1] as any)[2].prompt).toContain("the INITIATIVE contribution is missing");
+    expect(p3.contributions.map((c) => c.id)).toEqual([f.id, init.id]);
+    const stillNone = await previewGraduation({ client, engine: engineOf(none).engine, id: f.id as string, today: "2026-10-22" });
+    expect(stillNone.warnings).toContain("no initiative entry was produced");
+  });
+
   it("an Inbox task graduates alone: no initiative contribution", async () => {
     const inboxItem = w("feature", "Inbox", null, { container: true });
     const stray = w("task", "Fix the typo", inboxItem.id, { successCriteria: "typo fixed" });

@@ -82,7 +82,7 @@ export const WorkItem = z.object({
   /** A holding container (the per-domain Inbox): never ships or graduates. */
   container: z.boolean().default(false),
   /** Initiative that never completes (e.g. Releases, which gains a new sprint
-   *  feature every sprint). Its features graduate into its hub as usual; the
+   *  feature every sprint). Its features graduate as usual, each updating its entry; the
    *  initiative itself is never offered for completion. */
   standing: z.boolean().default(false),
   /** When this task is scheduled to run. ISO-ish "YYYY-MM-DD HH:MM" in local

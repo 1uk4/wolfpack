@@ -149,18 +149,32 @@ work.bound · work.unbound · work.summarized
   notes; that is `task_done`'s job.
 
 ## Completion and graduation
-1. **Task ships** → the LLM summarizes it (`TASK_SUMMARY_SYSTEM`) from its working
-   document and the notes logged while it was bound; the summary is appended to the
-   parent's `## Implementation Log`.
-2. **Feature ready** → once every task under a feature is complete, `/task` marks it
-   🎓 *ready* (left pane, and a banner in its task pane), and `task_done` says so.
-   Nothing graduates automatically.
-3. **Graduate with `g`** → confirms first, explaining what happens; then ships the
-   feature, writes a contribution to the wolf's ops inbox (`opsRoot/inbox/<wolf>/`),
-   records the `graduated` date, and **archives** the feature and its tasks (they leave
-   `/task`; the ledger keeps their history). Nothing is archived if graduation fails. If it is the last feature of its **initiative** to
-   graduate, the confirmation says so and the initiative ships and graduates too.
-4. **Dewey's sweep** turns the contribution into a curated entry like any other.
+1. **Task ships** → it is folded into its feature's `## Outcomes` section (its
+   `## Rollup` section verbatim, else one line "<title>, shipped <date>"; Totals
+   are summed when the feature declares them). The rest of the document is untouched.
+   While the work is bound, what the sessions learn is kept in the feature's `## Record`.
+2. **Feature ready** → once every task under a feature is complete, `task_done`
+   leaves the session **bound to the feature** (`⛓ <feature> · ready to graduate`;
+   follow-up talk still goes to its Record) and `/task` marks it 🎓 *ready*.
+   A lone Inbox task stays bound to itself the same way. Nothing graduates automatically.
+3. **Graduate with `g`** (pi) or `task_graduate` (Hal, two steps) → the item's plan
+   (document minus Record/Outcomes), Record, Outcomes, tasks and its initiative's
+   title and goal are **distilled** (the same distill step as den topics, with a
+   graduation framing) into contributions: current-state updates for the subjects
+   the work affected, decision entries, and ONE initiative-level contribution under
+   the stable topic `work-<domain>-<initiativeId>`. A **preview** (titles,
+   summaries, History lines, Totals warnings) is shown first; nothing is sent until
+   the owner confirms. Then the contributions are written to the wolf's ops inbox
+   (`work-<domain>-<id>`, `…~<slug>` splits), the `graduated` date is recorded and
+   the item and its tasks are **archived** (history kept). Cancel = nothing changes.
+   A task/issue/spike in the Inbox graduates alone; an initiative graduates when all
+   its features have.
+4. **Dewey's sweep** routes each contribution like any other: by alias, else by the
+   subject check. There are no owned or special entries. History lines of graduated
+   work end with `(work-<domain>-<id>)`; that is the only place a work id may appear.
+5. **Link-back**: for each work contribution it commits, the sweep queues a note
+   `KB: created|updated <entry>` on the work item (posted to the Work API; retried
+   while it is unreachable), so the archived item records which entries it touched.
 
 ---
 

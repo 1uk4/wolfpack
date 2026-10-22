@@ -112,7 +112,7 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
 // ── standing ──────────────────────────────────────────────────────────────────────
 
 /** Mark or unmark an initiative as standing: it never completes, its
- *  features keep graduating into its hub. */
+ *  features keep updating its entry as they graduate. */
 export function setStanding(
   roots: KbRoots,
   id: string,

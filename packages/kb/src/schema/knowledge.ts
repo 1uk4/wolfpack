@@ -327,6 +327,8 @@ export const DerivedFacts = z.object({
   contentHash: z.string(),
   currency: Currency.default("live"),
   asOf: IsoDate.optional(),
+  /** Anchored subject key (frontmatter `anchor:`): routing by key, not similarity. */
+  anchor: z.string().optional(),
   /** Deterministic + resolved relations (embedding see_also ∪ resolved LLM edges). */
   relations: z.array(Relation).default([]),
   /** Section placement (required, single-parent tree). */
@@ -381,6 +383,7 @@ export const Entry = z.object({
   currency: Currency,
   verified: z.boolean(),
   asOf: IsoDate.optional(),
+  anchor: z.string().optional(),
   expires: IsoDate.optional(),
 });
 export type Entry = z.infer<typeof Entry>;
@@ -461,6 +464,7 @@ export function assembleEntry(input: {
     currency: facts.currency,
     verified: overrides.verified ?? false,
     asOf: facts.asOf,
+    anchor: facts.anchor,
     expires: overrides.expires,
   });
 }

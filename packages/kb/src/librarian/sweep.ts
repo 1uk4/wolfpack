@@ -18,6 +18,7 @@ import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js"
 import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
+import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
@@ -132,15 +133,6 @@ function mkSectionId(domain: string): SectionId {
   for (let i = 0; i < 6; i++) tail += chars[Math.floor(Math.random() * chars.length)];
   // Domain is sanitized to the brand's [a-z0-9-] alphabet by DomainId elsewhere.
   return SectionId.parse(`sec-${domain}-${tail}`);
-}
-
-/**
- * The entry an OLD graduation made for a work item: `kb-<domain>-<id>` for the
- * den topic `work-<domain>-<id>` (no split suffix). Null for any other topic.
- */
-export function oldHubId(denTopicId: string, domain: string): string | null {
-  const m = new RegExp(`^work-${domain}-([0-9A-Za-z]{7})$`).exec(denTopicId);
-  return m ? `kb-${domain}-${m[1]}` : null;
 }
 
 /** The contribution's title: the first H1 of the den topic, else its den topic id. */
@@ -321,7 +313,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
 
       // ── IDENTITY (deterministic registry) ───────────────────────────────
       // A re-promote of a known den topic UPDATES its entry (never duplicates).
-      // 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
+      // 0) an anchored contribution: by its key; 1) exact alias match (wolf, den topic) from the registry; 2) otherwise
       // the nearest entries by title+summary similarity, with an LLM subject
       // check when the score is uncertain (seeds the alias on commit).
       let targetId: string | undefined;
@@ -332,39 +324,54 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         for (let i = 0; i < 10 && superseded.has(id); i++) id = superseded.get(id)!;
         return id;
       };
-      let aliased: string | undefined;
-      for (const topic of reg.values()) {
-        const alias = topic.aliases.find(
-          (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
-        );
-        if (alias) {
-          aliased = topic.entries[0];
-          if (readEntryMarkdown(roots, domain, aliased)) {
-            targetId = head(aliased);
+      // Anchored entries are found by their key and kept out of every other
+      // contribution's candidates (they share vocabulary with their subjects by
+      // construction, so similarity cannot tell them apart).
+      const anchors = anchorIndex(roots, domain);
+      if (c.anchor) {
+        // ANCHORED: by key only, never by alias, similarity or the subject check.
+        const held = anchors.byKey.get(c.anchor);
+        if (held) {
+          targetId = held;
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${held} (anchor ${c.anchor})`);
+        } else {
+          // Old initiative hub: the entry kb-<domain>-<id> the old graduation made
+          // for work-<domain>-<id> is adopted, anchored and merged into.
+          const hub = oldHubFor(c.anchor, domain);
+          const md = hub ? readEntryMarkdown(roots, domain, hub) : null;
+          if (hub && md && !anchorOf(md)) {
+            targetId = hub;
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${hub} (old hub adopted, anchor ${c.anchor})`);
           } else {
-            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (anchor ${c.anchor})`);
           }
-          break;
         }
-      }
-      // One-time continuation of an old initiative hub: the first contribution of
-      // work-<domain>-<id> with no alias yet goes to the entry kb-<domain>-<id>
-      // that the old graduation made, so the hub is continued, not duplicated.
-      if (!targetId && !aliased) {
-        const old = oldHubId(c.denTopicId, domain);
-        if (old && readEntryMarkdown(roots, domain, old)) {
-          targetId = head(old);
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${targetId} (old hub of that work item, continued)`);
+      } else {
+        let aliased: string | undefined;
+        for (const topic of reg.values()) {
+          const alias = topic.aliases.find(
+            (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
+          );
+          if (alias) {
+            aliased = topic.entries[0];
+            if (readEntryMarkdown(roots, domain, aliased)) {
+              targetId = head(aliased);
+            } else {
+              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
+            }
+            break;
+          }
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
       // the merge rewrites the whole entry.
       const sizeLimit = Number(process.env.KB_MAX_MERGE_TARGET_CHARS) || maxMergeTargetChars;
-      if (!targetId) {
+      if (!targetId && !c.anchor) {
         const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
           if (superseded.has(e.entryId)) continue;
+          if (anchors.ids.has(e.entryId)) continue;
           const md = readEntryMarkdown(roots, domain, e.entryId);
           if (!md || md.length > sizeLimit) continue;
           const f = parseFrontmatter(md).fields;

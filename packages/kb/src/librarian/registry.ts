@@ -15,6 +15,8 @@ import {
   domainRegistryFile,
   now,
 } from "../shared/index.js";
+import { anchorOf } from "./anchors.js";
+import { readEntryMarkdown } from "./commit.js";
 
 /** The domain a topic belongs to. The `domain` field is only populated once a
  *  topic crystallizes, so fall back to the canonical id prefix (kb-<domain>-). */
@@ -24,12 +26,25 @@ function topicDomain(t: RegistryTopic): string {
   return m ? m[1] : "";
 }
 
-function renderTopic(t: RegistryTopic): string[] {
+/** `- anchor:` lines for the topic's anchored entries (the key lives in the entry's frontmatter). */
+function anchorLines(roots: KbRoots, t: RegistryTopic): string[] {
+  const domain = topicDomain(t);
+  const out: string[] = [];
+  for (const id of t.entries) {
+    const md = domain ? readEntryMarkdown(roots, domain, id) : null;
+    const key = md ? anchorOf(md) : undefined;
+    if (key) out.push(`- anchor: ${key}`);
+  }
+  return out;
+}
+
+function renderTopic(roots: KbRoots, t: RegistryTopic): string[] {
   const lines = [
     `## ${t.canonicalId}${t.crystallized ? "" : " _(forming)_"}`,
     "",
     `- domain: ${t.domain || "—"}${t.subcategory ? ` / ${t.subcategory}` : ""}`,
     `- entries: ${t.entries.join(", ") || "—"}`,
+    ...anchorLines(roots, t),
     `- subscribers: ${t.subscribers.join(", ") || "—"}`,
     `- aliases:`,
   ];
@@ -63,7 +78,7 @@ export function renderRegistry(roots: KbRoots, reg: Registry, alsoDomains: strin
       `_Updated: ${now()}_`,
       "",
     ];
-    for (const t of topics) lines.push(...renderTopic(t));
+    for (const t of topics) lines.push(...renderTopic(roots, t));
     const file = domainRegistryFile(roots, domain);
     mkdirSync(dirname(file), { recursive: true });
     atomicWrite(file, lines.join("\n") + "\n");

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
 import {
+  ANCHOR_RE,
   type Contribution,
   contentHash,
   inboxDir,
@@ -76,6 +77,8 @@ export interface EmitDeltaInput {
   currency?: Contribution["currency"];
   sourcePath?: string;
   origin?: Contribution["origin"];
+  /** Anchored subject key: routes the contribution by key only. */
+  anchor?: string;
 }
 
 /**
@@ -85,6 +88,7 @@ export interface EmitDeltaInput {
  */
 export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const { roots, wolf } = input;
+  if (input.anchor && !ANCHOR_RE.test(input.anchor)) throw new Error(`invalid anchor ${JSON.stringify(input.anchor)}`);
   const dir = inboxDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
 
@@ -112,6 +116,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     currency: input.currency,
     sourcePath: input.sourcePath,
     origin: input.origin,
+    anchor: input.anchor,
   };
 
   const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
@@ -165,6 +170,7 @@ function render(c: Contribution): string {
     c.currency ? `currency: ${c.currency}` : null,
     c.sourcePath ? `source_path: ${c.sourcePath}` : null,
     c.origin ? `origin: ${c.origin}` : null,
+    c.anchor ? `anchor: ${c.anchor}` : null,
     `submitted: ${c.submitted}`,
     "---",
   ]

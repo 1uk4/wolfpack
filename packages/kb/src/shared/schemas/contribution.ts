@@ -7,6 +7,9 @@
  */
 import { z } from "zod";
 
+/** What an anchor key may look like (it is written to frontmatter). */
+export const ANCHOR_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 export const ContributionSchema = z.object({
   /** Which wolf produced this (provenance). */
   from: z.string(),
@@ -56,6 +59,12 @@ export const ContributionSchema = z.object({
    * combined with `currency`, a crawl is historical reference, not lived truth.
    */
   origin: z.enum(["wolf", "crawl"]).optional(),
+  /**
+   * Anchored subject: a stable key for the entry this contribution belongs to
+   * (graduation's initiative contribution: `work-<domain>-<initiativeId>`).
+   * Routed by key alone, never by similarity or the subject check.
+   */
+  anchor: z.string().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

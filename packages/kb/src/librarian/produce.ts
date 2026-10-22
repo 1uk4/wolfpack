@@ -25,6 +25,7 @@ import {
   lintKnowledge, hardFindings, describeFindings, stripProperties, stripLedeRepeat, stripDetailHeading,
   type LintFinding,
 } from "../shared/knowledgeLint.js";
+import { anchorOf } from "./anchors.js";
 import { addCitedHistory, existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -179,6 +180,8 @@ export async function produceEntry(
     contentHash: contentHashValue,
     currency: contribution.currency === "archived" ? "archived" : "live",
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
+    // The anchor is the entry's identity: an anchored contribution sets it, a merge keeps it.
+    anchor: contribution.anchor ?? (mergeId && previous ? anchorOf(previous) : undefined),
     relations: [
       // An update keeps the entry's existing links (the model never sees them).
       ...(mergeId && previous ? existingRelations(previous) : []),

@@ -167,9 +167,10 @@ describe("graduation: preview then confirm", () => {
     expect(calls).toContain(`stage ${t1.id} archived`);
     expect(calls.some((c) => c.startsWith(`note ${f.id} Archived on graduation with 2 item(s)`))).toBe(true);
     expect(ship).toHaveBeenCalledWith(f.id); // the feature itself was still in_build: shipped on confirm
-    // the subjects are submitted before the initiative's entry (the sweep takes the oldest first)
-    const submitted = (topic: string) => /submitted: (.+)/.exec(readFileSync(join(inbox(), readdirSync(inbox()).find((x) => new RegExp(`^${topic}-[0-9a-f]+\\.md$`).test(x))!), "utf8"))![1];
-    expect(submitted(f.id as string) < submitted(init.id as string)).toBe(true);
+    // only the initiative's contribution is anchored, to its work id (the stable subject key)
+    const fileOf = (topic: string) => readFileSync(join(inbox(), readdirSync(inbox()).find((x) => new RegExp(`^${topic}-[0-9a-f]+\\.md$`).test(x))!), "utf8");
+    expect(fileOf(init.id as string)).toMatch(new RegExp(`^anchor: ${init.id}$`, "m"));
+    expect(fileOf(f.id as string)).not.toMatch(/^anchor:/m);
     // the files carry no frontmatter graduation markers: ordinary contributions
     const file = readdirSync(inbox()).map((x) => readFileSync(join(inbox(), x), "utf8")).join("\n");
     expect(file).not.toMatch(/graduation:|entry_id:|preserve_body:|part_of:/);

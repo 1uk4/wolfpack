@@ -357,9 +357,9 @@ export async function confirmGraduation(opts: {
     await client.note(item.id as string, "Shipped for graduation: all tasks complete.");
   }
 
-  // The subjects reach the sweep first, then the initiative's entry: it can then
-  // describe what they became, and it never lands before (and absorbs) them.
-  const minute = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString().replace("T", " ").slice(0, 16);
+  // The initiative's contribution is anchored to its work id (routed by that key
+  // alone), so it needs no ordering against the subjects: nothing it says can be
+  // merged into a subject, and no subject can merge into it.
   const sent: string[] = [];
   for (const c of preview.contributions) {
     let failure: string | undefined;
@@ -369,11 +369,11 @@ export async function confirmGraduation(opts: {
         wolf,
         denTopicId: c.id,
         change: c.initiative ? "merge" : "create",
+        ...(c.initiative ? { anchor: c.id } : {}),
         domainHint: preview.domain,
         summary: c.summary,
         body: c.body,
         session: opts.session,
-        submitted: minute(c.initiative ? 60_000 : 0),
       },
       (why) => { failure = why; },
     );

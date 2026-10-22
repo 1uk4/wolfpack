@@ -1,7 +1,7 @@
 /**
  * Graduated work goes through the same route as everything else: inbox →
  * sweep → alias, else subject check. No owned entries. Two additions only:
- * the first contribution of an old hub's work item continues that hub, and the
+ * an anchored contribution is routed by its key (an old hub is adopted), and the
  * sweep queues a note for the work item (the link-back).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
+import { writeEntrySection } from "./reorg.js";
 import { foldRegistry, readLedger } from "./ledger.js";
 import { flushWorkLinks, pendingWorkLinks, workIdOfTopic, parseKbNotes } from "./work-links.js";
 import type { KbRoots } from "../shared/index.js";
@@ -44,8 +45,8 @@ describe("sweep: graduated work", () => {
       `---\nid: ${id}\ntitle: Title ${id}\nsummary: Summary of ${id}\nsection: sec-wp-aaaaaa\ncreated: 2025-01-02\n${extra}---\n\nbody\n`
     );
   let n = 0;
-  const drop = (topic: string, title = "A title") =>
-    writeFileSync(join(inbox(), `${topic.replace(/~/g, "_")}.md`), `---\nfrom: w1\nden_topic_id: ${topic}\ncontent_hash: c0de${(++n).toString(16)}\nprev_hash: null\ndomain_hint: wp\n---\n\n# ${title}\n\nbody ${n}\n`);
+  const drop = (topic: string, title = "A title", anchor?: string) =>
+    writeFileSync(join(inbox(), `${topic.replace(/~/g, "_")}.md`), `---\nfrom: w1\nden_topic_id: ${topic}\ncontent_hash: c0de${(++n).toString(16)}\nprev_hash: null\ndomain_hint: wp\n${anchor ? `anchor: ${anchor}\n` : ""}---\n\n# ${title}\n\nbody ${n}\n`);
   const run = (scores: Record<string, number>) =>
     sweep({
       engine, roots, notify: (m) => notes.push(m),
@@ -89,34 +90,107 @@ describe("sweep: graduated work", () => {
     expect(aliasOf("work-wp-FEAT002")).toBe("kb-wp-GRAD001");
   });
 
-  it("the initiative contribution is routed by its alias and merged, not rebuilt", async () => {
-    drop("work-wp-INITI01", "Dockerize");
-    expect(await run({ "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 1, merged: 0 });
-    const hub = aliasOf("work-wp-INITI01")!;
-    expect(hub).toMatch(/^kb-wp-/);
-    // the next feature's initiative contribution: same topic id
-    drop("work-wp-INITI01", "Dockerize");
-    calls.length = 0;
-    expect(await run({ [hub]: 0.3, "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 0, merged: 1 });
-    expect(subjectCalls()).toHaveLength(0);
-    expect(produceCalls()[0].prompt).toContain(`EXISTING ENTRY (${hub})`);
-  });
+  describe("anchored subjects", () => {
+    const hubKey = "work-wp-INITI01";
+    const anchoredId = () => readdirSync(entries()).map((f) => f.slice(0, -3)).find((id) => /^anchor: /m.test(readFileSync(join(entries(), `${id}.md`), "utf8")))!;
 
-  it("old-hub compatibility: the first contribution of work-<d>-<id> continues the entry kb-<d>-<id>, once", async () => {
-    entry("kb-wp-OLDHUB1", "kind: overview\n");
-    drop("work-wp-OLDHUB1", "Old initiative");
-    expect(await run({ "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 0, merged: 1 });
-    expect(notes.some((m) => m.includes("old hub of that work item, continued"))).toBe(true);
-    expect(produceCalls()[0].prompt).toContain("EXISTING ENTRY (kb-wp-OLDHUB1)");
-    expect(aliasOf("work-wp-OLDHUB1")).toBe("kb-wp-OLDHUB1");
-    // later contributions follow the alias (no old-hub note again)
-    notes.length = 0;
-    drop("work-wp-OLDHUB1", "Old initiative");
-    expect(await run({ "kb-wp-OLDHUB1": 0.3 })).toMatchObject({ merged: 1 });
-    expect(notes.some((m) => m.includes("old hub"))).toBe(false);
-    // a split of that work item is NOT the old hub
-    drop("work-wp-OLDHUB1~extra", "Something else");
-    expect(await run({ "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 1 });
+    it("an anchored contribution with no entry creates one and records the anchor (no subject check, no similarity)", async () => {
+      drop(hubKey, "Dockerize", hubKey);
+      expect(await run({ "kb-wp-AAAAAAA": 0.9, "kb-wp-BBBBBBB": 0.85 })).toMatchObject({ created: 1, merged: 0 });
+      expect(subjectCalls()).toHaveLength(0);
+      const id = anchoredId();
+      expect(id).toMatch(/^kb-wp-/);
+      expect(readFileSync(join(entries(), `${id}.md`), "utf8")).toMatch(new RegExp(`^anchor: ${hubKey}$`, "m"));
+      // visible in the registry
+      expect(readFileSync(join(base, "base", "domains", "wp", "_registry.md"), "utf8")).toContain(`- anchor: ${hubKey}`);
+    });
+
+    it("the next anchored contribution merges by key, whatever the scores, with no subject check", async () => {
+      drop(hubKey, "Dockerize", hubKey);
+      await run({});
+      const id = anchoredId();
+      drop(hubKey, "Dockerize", hubKey);
+      calls.length = 0;
+      // the other entries are the best similarity matches; the key wins anyway
+      expect(await run({ [id]: 0.3, "kb-wp-AAAAAAA": 0.99 })).toMatchObject({ created: 0, merged: 1 });
+      expect(subjectCalls()).toHaveLength(0);
+      expect(produceCalls()[0].prompt).toContain(`EXISTING ENTRY (${id})`);
+      expect(anchoredId()).toBe(id);
+      expect(readFileSync(join(entries(), `${id}.md`), "utf8")).toMatch(new RegExp(`^anchor: ${hubKey}$`, "m"));
+      // the alias follows the entry
+      expect(aliasOf(hubKey)).toBe(id);
+    });
+
+    it("a non-anchored contribution very similar to an anchored entry never merges into it", async () => {
+      drop(hubKey, "Dockerize", hubKey);
+      await run({});
+      const id = anchoredId();
+      // clearly the same by similarity: would have merged by the band
+      drop("work-wp-FEAT001", "Dockerize sweep");
+      expect(await run({ [id]: 0.99, "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 1, merged: 0 });
+      expect(aliasOf("work-wp-FEAT001")).not.toBe(id);
+      // uncertain: the subject check is asked, and the anchored entry is not offered
+      drop("work-wp-FEAT002", "Dockerize more");
+      calls.length = 0;
+      subjectAnswer = () => ({ match: "new" });
+      await run({ [id]: 0.82, "kb-wp-AAAAAAA": 0.8, "kb-wp-BBBBBBB": 0.7 });
+      expect(subjectCalls()).toHaveLength(1);
+      expect(subjectCalls()[0].prompt).not.toContain(id);
+      expect(subjectCalls()[0].prompt).toContain("kb-wp-AAAAAAA");
+    });
+
+    it("old-hub adoption: no entry anchored to work-<d>-<id>, kb-<d>-<id> exists → anchored and merged into", async () => {
+      entry("kb-wp-INITI01", "kind: overview\n");
+      drop(hubKey, "Old initiative", hubKey);
+      expect(await run({ "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 0, merged: 1 });
+      expect(notes.some((m) => m.includes("old hub adopted"))).toBe(true);
+      expect(subjectCalls()).toHaveLength(0);
+      expect(produceCalls()[0].prompt).toContain("EXISTING ENTRY (kb-wp-INITI01)");
+      expect(readFileSync(join(entries(), "kb-wp-INITI01.md"), "utf8")).toMatch(new RegExp(`^anchor: ${hubKey}$`, "m"));
+      // from now on it is found by key, and kept out of similarity
+      notes.length = 0;
+      drop(hubKey, "Old initiative", hubKey);
+      expect(await run({ "kb-wp-INITI01": 0.3 })).toMatchObject({ merged: 1 });
+      expect(notes.some((m) => m.includes("old hub"))).toBe(false);
+      // a split of that work item is not the hub; the hub is not adopted for a non-anchored contribution
+      drop("work-wp-INITI01~extra", "Something else");
+      expect(await run({ "kb-wp-AAAAAAA": 0.3 })).toMatchObject({ created: 1 });
+    });
+
+    it("an old hub already anchored to another key is not adopted", async () => {
+      entry("kb-wp-INITI01", "anchor: something-else\n");
+      drop(hubKey, "Old initiative", hubKey);
+      expect(await run({})).toMatchObject({ created: 1, merged: 0 });
+    });
+
+    it("the anchor survives a reorg's section rewrite and a lost ledger", async () => {
+      drop(hubKey, "Dockerize", hubKey);
+      await run({});
+      const id = anchoredId();
+      writeEntrySection(entries(), id, "sec-wp-zzzzzz");
+      expect(readFileSync(join(entries(), `${id}.md`), "utf8")).toMatch(new RegExp(`^anchor: ${hubKey}$`, "m"));
+      // rebuild: the ledger (den-local) is gone; the key is read from the entry
+      rmSync(join(roots.opsRoot, "ledger"), { recursive: true, force: true });
+      drop(hubKey, "Dockerize", hubKey);
+      calls.length = 0;
+      expect(await run({ [id]: 0.3 })).toMatchObject({ created: 0, merged: 1 });
+      expect(produceCalls()[0].prompt).toContain(`EXISTING ENTRY (${id})`);
+    });
+
+    it("alias routing into an entry that later becomes anchored still works", async () => {
+      drop("work-wp-FEAT001", "Sweep pacing");
+      subjectAnswer = () => ({ match: "kb-wp-BBBBBBB" });
+      await run({ "kb-wp-AAAAAAA": 0.8, "kb-wp-BBBBBBB": 0.75 });
+      expect(aliasOf("work-wp-FEAT001")).toBe("kb-wp-BBBBBBB");
+      // the entry becomes anchored
+      const f = join(entries(), "kb-wp-BBBBBBB.md");
+      writeFileSync(f, readFileSync(f, "utf8").replace("id: kb-wp-BBBBBBB\n", "id: kb-wp-BBBBBBB\nanchor: some-key\n"));
+      drop("work-wp-FEAT001", "Sweep pacing");
+      calls.length = 0;
+      expect(await run({ "kb-wp-AAAAAAA": 0.99 })).toMatchObject({ created: 0, merged: 1 });
+      expect(subjectCalls()).toHaveLength(0);
+      expect(produceCalls()[0].prompt).toContain("EXISTING ENTRY (kb-wp-BBBBBBB)");
+    });
   });
 
   it("queues a note per committed work contribution, including splits; other topics queue none", async () => {

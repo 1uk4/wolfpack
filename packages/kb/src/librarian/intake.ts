@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
 import {
   type ParsedContribution,
+  ANCHOR_RE,
   contentHash,
   hashHex,
   safeSegment,
@@ -83,6 +84,9 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
     : contentHash(content);
   hashHex(hash); // reject a non-hex hash now, before it reaches a file name
 
+  const anchor = fields.anchor ? String(fields.anchor) : undefined;
+  if (anchor && !ANCHOR_RE.test(anchor)) throw new Error(`invalid anchor ${JSON.stringify(anchor)}`);
+
   return {
     from,
     host: fields.host ? String(fields.host) : undefined,
@@ -111,6 +115,7 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
       : undefined,
     // A sender may name the summary ; else the
     // first paragraph of the body.
+    anchor: anchor,
     summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",

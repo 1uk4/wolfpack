@@ -214,7 +214,7 @@ function rewriteShardFrontmatter(
 ): string {
   const lines = parentYaml.split("\n");
   const out: string[] = [];
-  const dropBlocks = new Set(["section", "placement", "properties", "relations", "related", "see_also"]);
+  const dropBlocks = new Set(["section", "placement", "anchor", "properties", "relations", "related", "see_also"]);
   let skipIndentBlock = false;
 
   for (const line of lines) {

@@ -162,7 +162,8 @@ work.bound · work.unbound · work.summarized
    title and goal are **distilled** (the same distill step as den topics, with a
    graduation framing) into contributions: current-state updates for the subjects
    the work affected, decision entries, and ONE initiative-level contribution under
-   the stable topic `work-<domain>-<initiativeId>`. A **preview** (titles,
+   the stable topic `work-<domain>-<initiativeId>`, sent with that id as its
+   **anchor** (see step 4). A **preview** (titles,
    summaries, History lines, Totals warnings) is shown first; nothing is sent until
    the owner confirms. Then the contributions are written to the wolf's ops inbox
    (`work-<domain>-<id>`, `…~<slug>` splits), the `graduated` date is recorded and
@@ -170,7 +171,17 @@ work.bound · work.unbound · work.summarized
    A task/issue/spike in the Inbox graduates alone; an initiative graduates when all
    its features have.
 4. **Dewey's sweep** routes each contribution like any other: by alias, else by the
-   subject check. There are no owned or special entries. History lines of graduated
+   subject check. There are no owned or special entries. The one exception is the
+   **anchored subject** (a general KB mechanism, not specific to work): a
+   contribution may carry `anchor: <key>` (here `work-<domain>-<initiativeId>`) and is
+   then routed by that key alone, never by alias, similarity or the subject check: it
+   merges into the entry anchored to the key, else creates one and records
+   `anchor: <key>` in its frontmatter (an old hub `kb-<domain>-<id>` with no anchor is
+   adopted once). Anchored entries are never similarity or subject-check candidates
+   for other contributions, so an initiative page and its subjects (which share
+   vocabulary) cannot absorb each other; otherwise they are ordinary entries (size
+   cap, History, lint). Because of this the initiative contribution needs no ordering
+   against the subjects. History lines of graduated
    work end with `(work-<domain>-<id>)`; that is the only place a work id may appear.
 5. **Link-back**: for each work contribution it commits, the sweep queues a note
    `KB: created|updated <entry>` on the work item (posted to the Work API; retried

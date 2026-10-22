@@ -153,6 +153,21 @@ export class SweepManager {
         return;
       }
       
+      // The timer fires every minute: an empty inbox is a silent no-op (no
+      // engine, no embedder, no ledger read, no log line).
+      {
+        const { drainInbox } = await import("@wolfpack/kb/librarian");
+        const idleRoots = {
+          kbBase: this.config.kbBase,
+          opsRoot: this.config.kbOps,
+          denLocal: this.config.denLocal,
+        };
+        if (drainInbox(idleRoots).length === 0) {
+          this.status = { state: "idle" };
+          return;
+        }
+      }
+
       this.updateProgress("Loading KB engine...");
 
       // Dynamic imports to keep startup fast
@@ -223,7 +238,7 @@ export class SweepManager {
       }
 
       // Post-sweep reorg: check if any touched sections need splitting
-      if (result.processed > 0) {
+      if (result.created + result.merged > 0) {
         try {
           this.updateProgress("Running post-sweep reorg check...");
           const { reorg } = await import("@wolfpack/kb/librarian");

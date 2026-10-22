@@ -18,7 +18,7 @@ import {
 import { kbBaseDir, librarianDir, type CliConfig } from "./config.js";
 import { c } from "./render.js";
 
-const SWEEP_INTERVAL_S = 900; // 15 min, matching the VPS timer
+const SWEEP_INTERVAL_S = 60; // 1 min; each run sweeps one contribution
 
 const kbCliPath = () => path.join(os.homedir(), ".wolfpack", "bin", "wolfpack-kb.cjs");
 const plistPath = (name: string) =>
@@ -117,7 +117,7 @@ export async function installLocalLibrarian(
     }
     try {
       execFileSync("launchctl", ["load", pp], { stdio: "ignore" });
-      notes.push(`Sweep timer loaded (every ${SWEEP_INTERVAL_S / 60} min). Log: ${sweepLog(wolf.name)}`);
+      notes.push(`Sweep timer loaded (every ${SWEEP_INTERVAL_S}s). Log: ${sweepLog(wolf.name)}`);
     } catch (err) {
       notes.push(`Could not load launchd timer: ${err instanceof Error ? err.message : err}`);
     }

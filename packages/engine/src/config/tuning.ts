@@ -24,14 +24,12 @@ export const EMBED = {
  * when novel clusters crystallize into new sections from _unplaced.
  */
 /**
- * Sweep batching. The sweep timer fires on a schedule (every 15 min on the VPS);
- * each run processes at most `batchSize` contributions (oldest first) so a large
- * multi-wolf inbox can never make a single run exhaust the server (LLM calls,
- * memory, runtime, rate limits). The remainder waits for the next tick and the
- * backlog drains steadily. Override per host with the KB_SWEEP_BATCH env var.
+ * Sweep pacing. The sweep timer fires every minute; each run processes exactly
+ * one contribution (oldest first), so the next one is picked up within a minute
+ * and one run can never exhaust the server (LLM calls, memory, runtime, rate
+ * limits). That contribution gets the whole run budget.
  */
 export const SWEEP = {
-  batchSize: 25,
   /** cosine \u2265 this to an existing entry \u2192 same topic: UPDATE it (and seed its
    *  registry alias) rather than create a duplicate. The ALIAS is the primary
    *  deterministic identity; this similarity seed only matters for entries that
@@ -42,31 +40,23 @@ export const SWEEP = {
   mergeSim: 0.72,
   /**
    * Estimated milliseconds per character of LLM output during merge operations.
-   * Used to compute the dynamic merge threshold from the item budget.
+   * Used to compute the merge threshold from the run budget.
    * Calibrate from observed sweep times (12KB entry merged in 145s = ~12ms/char).
    */
   msPerMergeChar: 15,
   
   /**
-   * Fraction of the per-item budget allocated to the merge LLM call.
+   * Fraction of the run budget allocated to the merge LLM call.
    * The rest covers embedding, routing, and overhead.
-   * maxMergeChars = (itemBudget * mergeBudgetFraction) / msPerMergeChar
+   * maxMergeChars = (runBudgetMs * mergeBudgetFraction) / msPerMergeChar
    */
   mergeBudgetFraction: 0.6,
   
-  /**
-   * Per-item time budget, computed dynamically at sweep start:
-   *   itemBudget = runBudgetMs / min(inboxSize, batchSize)
-   * This is the CEILING — items that finish early move on immediately.
-   * The budget determines what to ATTEMPT (merge vs create), not how long to wait.
-   * 
-   * Fallback when inbox size is unknown. Normally derived at runtime.
-   */
-  itemBudgetMs: 180_000,
   /** Failed attempts (across ticks) before a contribution is parked. */
   maxAttempts: 3,
-  /** Stop starting new contributions after this long, so a run always ends
-   *  (and writes its ledger) well inside systemd's 15-minute limit. */
+  /** Time budget for a run's one contribution: past it the item is parked, so a
+   *  run always ends (and writes its ledger) well inside systemd's 15-minute
+   *  limit. Merge threshold: 600s * 0.6 / 15ms = 24,000 chars. */
   runBudgetMs: 600_000,
 } as const;
 

@@ -175,7 +175,7 @@ describe("sweep: never merges into oversized entries", () => {
   it("creates a new entry when the best match is over the limit", async () => {
     writeFileSync(join(entries(), "kb-wp-TARGET1.md"), "---\nid: kb-wp-TARGET1\nsection: sec-wp-aaaaaa\n---\n" + "x".repeat(600));
     expect(await run()).toMatchObject({ created: 1, merged: 0 });
-    expect(notes.some((n) => n.includes("not merged into kb-wp-TARGET1"))).toBe(true);
+    expect(notes.some((n) => n.includes("→ new entry (target kb-wp-TARGET1 is"))).toBe(true);
   });
 
   it("still updates a graduation's own entry when it is over the limit", async () => {
@@ -183,7 +183,7 @@ describe("sweep: never merges into oversized entries", () => {
     writeFileSync(join(inbox(), "g.md"), "---\nfrom: w1\nden_topic_id: work-wp-OWNHUB1\ncontent_hash: hg\nprev_hash: null\ndomain_hint: wp\ngraduation: hub\nentry_id: kb-wp-OWNHUB1\n---\n\n# hub\n\nbody\n");
     rmSync(join(inbox(), "t.md"));
     expect(await run()).toMatchObject({ created: 0, merged: 1 });
-    expect(notes.some((n) => n.includes("not merged into"))).toBe(false);
+    expect(notes.some((n) => n.includes("→ new entry (target"))).toBe(false);
   });
 
   it("still merges into a match under the limit", async () => {

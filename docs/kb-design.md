@@ -23,7 +23,7 @@
 - **Authority:** Dewey, the librarian wolf, on **the VPS host** (wolf id `<wolf-id>`).
   KB at `/home/wolf-<wolf-id>/knowledge/base`; den-local state (ledger, sections,
   vectors) at `/var/lib/wolfpack-kb/<wolf-id>`. A systemd timer runs the sweep every
-  15 minutes; the CLI is bundled to `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
+  minute, one contribution per run; the CLI is bundled to `/opt/wolfpack-kb/cli.cjs` by `wolf sync`.
 - **Mirrors:** every other wolf gets each `domains/<domain>/` folder as a
   **receive-only** Syncthing share. Edits or deletions on a mirror never reach
   Dewey — change the KB on the VPS host (e.g. `kb retire`), never by editing the mirror.

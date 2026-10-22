@@ -269,7 +269,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
 
   // Set up sweep timer if librarian mode with interval
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
-  const sweepInterval = config.memory?.sweepInterval;
+  const sweepInterval = config.memory?.sweepInterval ?? (isLibrarian ? "1m" : undefined);
   
   if (sweepManager && sweepInterval) {
     const sweepMs = parseInterval(sweepInterval);
@@ -281,7 +281,6 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         return;
       }
       
-      console.log(`[librarian] Timer-triggered sweep`);
       const result = await sweepManager.start();
       if (!result.started) {
         console.log(`[librarian] Sweep not started: ${result.reason}`);

@@ -55,6 +55,9 @@ export interface SweepContext {
   /** Load current entry vectors (from cache). Injected for testability. */
   loadEntryVectors: () => Promise<EntryVector[]>;
   notify?: (msg: string) => void;
+  /** Time budget for the run's one contribution (default SWEEP.runBudgetMs).
+   *  A test seam: lets tests exercise parking without waiting minutes. */
+  budgetMs?: number;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -78,7 +81,7 @@ export interface SweepResult {
   failures: SweepFailure[];
   /** Contributions moved to parked/ this run (over budget or out of attempts). */
   parked: SweepFailure[];
-  /** Contributions left in the inbox after this batched run (await next tick). */
+  /** Contributions left in the inbox after this run (await next tick). */
   remaining: number;
 }
 
@@ -174,20 +177,30 @@ export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   } catch (err) {
     if (!(err instanceof KbLockBusy)) throw err;
     ctx.notify?.("sweep: skipped, the KB is busy (a reorg or rebuild is running)");
-    return {
-      processed: 0, created: 0, merged: 0, rejected: 0, crystallized: 0, errors: 0,
-      unclassified: 0, suggestedDomains: [], failures: [], parked: [], remaining: 0,
-    };
+    return emptyResult();
   }
+}
+
+function emptyResult(): SweepResult {
+  return {
+    processed: 0, created: 0, merged: 0, rejected: 0, crystallized: 0, errors: 0,
+    unclassified: 0, suggestedDomains: [], failures: [], parked: [], remaining: 0,
+  };
 }
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
-  const embedder = createEmbedder(roots);
-  const startedAt = Date.now();
-  const runBudgetMs = Number(process.env.KB_SWEEP_RUN_BUDGET_MS) || SWEEP.runBudgetMs;
-  // itemBudgetMs computed after inbox size is known (below)
+  const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
+  // One contribution per run, oldest first. The timer fires every minute, so the
+  // next one is picked up within a minute. An empty inbox returns here: no
+  // embedder, no ledger read, no LLM call, no writes, no log line.
+  const pending = drainInbox(roots).sort((a, b) =>
+    (a.submitted || "").localeCompare(b.submitted || "")
+  );
+  if (pending.length === 0) return emptyResult();
+
+  const embedder = createEmbedder(roots);
   const log = readLedger(roots);
   let reg = foldRegistry(log); // deterministic identity: (wolf, den topic) -> entry
   const seen = seenHashes(log);
@@ -196,19 +209,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   let sections: Section[] = readSections(roots);
 
   const batch: KbEvent[] = [];
-  const result: SweepResult = {
-    processed: 0,
-    created: 0,
-    merged: 0,
-    rejected: 0,
-    crystallized: 0,
-    errors: 0,
-    unclassified: 0,
-    suggestedDomains: [],
-    failures: [],
-    parked: [],
-    remaining: 0,
-  };
+  const result = emptyResult();
 
   const declared = readDeclaredDomains(roots);
   const touchedDomains = new Set<string>();
@@ -219,39 +220,21 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // follow-up; dropping is safe (never invents an id). See §Phase 3b.
   const resolve: RelationResolver = () => null;
 
-  // Batch: process at most `batchSize` contributions per run (oldest first), so
-  // a large multi-wolf inbox never makes one run exhaust the server. The rest
-  // wait for the next timer tick. Oldest-first keeps it fair by arrival time.
-  const batchSize = Number(process.env.KB_SWEEP_BATCH) || SWEEP.batchSize;
-  const pending = drainInbox(roots).sort((a, b) =>
-    (a.submitted || "").localeCompare(b.submitted || "")
-  );
-  const contributions = pending.slice(0, batchSize);
-  
-  // Dynamic per-item budget: divide run budget by batch size
-  // Generous for small inboxes, tight for large ones
-  const itemBudgetMs = Math.max(
-    20_000, // floor: 20s minimum per item
-    Math.floor(runBudgetMs / Math.max(contributions.length, 1))
-  );
-  
-  // Dynamic merge threshold: derived from item budget
+  // Already-seen duplicates are retired without work; the first unseen one is
+  // this run's contribution. The rest wait for the next tick.
+  for (const dup of pending.filter((c) => seen.has(c.contentHash))) markProcessed(dup);
+  const unseen = pending.filter((c) => !seen.has(c.contentHash));
+  const contributions = unseen.slice(0, 1);
+  result.remaining = unseen.length - contributions.length;
+
+  // The contribution gets the whole run budget. The merge threshold derives from
+  // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
+  const itemBudgetMs = budgetMs;
   const maxMergeTargetChars = Math.floor(
     (itemBudgetMs * SWEEP.mergeBudgetFraction) / SWEEP.msPerMergeChar
   );
-  result.remaining = Math.max(0, pending.length - contributions.length);
 
-  for (const [i, c] of contributions.entries()) {
-    if (seen.has(c.contentHash)) {
-      markProcessed(c);
-      continue;
-    }
-    if (Date.now() - startedAt > runBudgetMs) {
-      // Leave the rest for the next tick; this run still persists what it did.
-      result.remaining += contributions.length - i;
-      ctx.notify?.(`sweep: run budget reached, ${contributions.length - i} left for the next tick`);
-      break;
-    }
+  for (const c of contributions) {
     result.processed++;
 
     // One summary line per contribution: route, target size, LLM time, outcome.
@@ -558,7 +541,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
 
   // ── INDEX + DIGEST per touched domain ─────────────────────────────────────
-  if (sections.length > 0) writeSections(roots, sections);
+  if (touchedDomains.size > 0 && sections.length > 0) writeSections(roots, sections);
   for (const domain of touchedDomains) {
     renderDomainIndex(roots, domain);
     renderDomainDigest(roots, domain);
@@ -571,7 +554,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
   }
 
-  ctx.notify?.(
+  if (contributions.length > 0) ctx.notify?.(
     `sweep: ${result.processed} contributions → ${result.created}c ${result.merged}m` +
       (result.remaining > 0 ? ` · ${result.remaining} queued for next tick` : "")
   );

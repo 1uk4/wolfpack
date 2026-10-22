@@ -255,7 +255,7 @@ async function cmdSweep(opts: { drain: boolean } = { drain: false }): Promise<vo
     // Aggregate across passes. In drain mode we loop until the inbox is truly
     // empty OR a pass makes no net progress (persistent failures must not spin
     // forever). We count the real inbox each pass — `remaining` only reflects
-    // the per-tick batch cap, not items that failed and stayed behind.
+    // the one-per-run cap, not items that failed and stayed behind.
     const tot = {
       processed: 0, created: 0, merged: 0, rejected: 0,
       unclassified: 0, crystallized: 0, errors: 0,

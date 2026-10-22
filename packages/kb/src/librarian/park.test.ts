@@ -66,33 +66,60 @@ describe("sweep: one bad contribution never blocks the queue", () => {
     roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
     mkdirSync(inbox(), { recursive: true });
     mkdirSync(join(roots.kbBase, "domains", "wp", "entries"), { recursive: true });
-    vi.stubEnv("KB_SWEEP_ITEM_BUDGET_MS", "200");
     // Fake Ollama: every text embeds to the same unit vector.
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] }))));
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     rmSync(base, { recursive: true, force: true });
   });
 
-  const run = (engine: Engine) =>
-    sweep({ engine, roots, loadEntryVectors: async () => [], notify: () => {} });
+  const run = (engine: Engine, budgetMs = 200) =>
+    sweep({ engine, roots, loadEntryVectors: async () => [], notify: () => {}, budgetMs });
 
-  it("parks an item that runs over its budget and still processes the next one", async () => {
+  it("parks an item that runs over its budget; the next run processes the next one", async () => {
     drop("slow", "HANG on purpose", "2026-10-10T01:00:00Z");
     drop("fine", "the second one", "2026-10-10T02:00:00Z");
 
-    const r = await run(fakeEngine());
+    const first = await run(fakeEngine());
+    expect(first.parked).toEqual([{ from: "w1", denTopicId: "slow", reason: "over its 0s time budget" }]);
+    expect(first.created).toBe(0);
+    expect(first.remaining).toBe(1);
+    expect(readdirSync(inbox()).filter((f) => f.endsWith(".md"))).toEqual(["fine.md"]);
 
-    expect(r.parked).toEqual([{ from: "w1", denTopicId: "slow", reason: "over its 0s time budget" }]);
+    const r = await run(fakeEngine());
     expect(r.created).toBe(1);
     expect(readdirSync(inbox()).filter((f) => f.endsWith(".md"))).toEqual([]);
     expect(listParked(roots)).toEqual([{ wolf: "w1", file: "slow.md" }]);
     const receipt = readFileSync(join(roots.opsRoot, "receipts", "w1", readdirSync(join(roots.opsRoot, "receipts", "w1")).find((f) => f.startsWith("slow"))!), "utf8");
     expect(receipt).toContain("outcome: parked");
     expect(receipt).toContain("wolfpack-kb unpark w1/slow.md");
+  });
+
+  it("processes exactly one item per run and leaves the rest pending", async () => {
+    drop("a", "the first one", "2026-10-10T01:00:00Z");
+    drop("b", "the second one", "2026-10-10T02:00:00Z");
+    drop("c", "the second one too", "2026-10-10T03:00:00Z");
+
+    const r = await run(fakeEngine());
+
+    expect(r).toMatchObject({ processed: 1, created: 1, remaining: 2 });
+    expect(readdirSync(inbox()).filter((f) => f.endsWith(".md")).sort()).toEqual(["b.md", "c.md"]);
+  });
+
+  it("does no work on an empty inbox", async () => {
+    const engine = fakeEngine();
+    const notes: string[] = [];
+    const r = await sweep({ engine, roots, loadEntryVectors: async () => [], notify: (m) => notes.push(m) });
+
+    expect(r).toMatchObject({ processed: 0, created: 0, remaining: 0 });
+    expect(engine.call).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(notes).toEqual([]);
+    expect(readdirSync(roots.opsRoot)).toEqual(["inbox"]);
+    // Only the lock may be touched: no ledger, sections, registry or git commit.
+    expect(readdirSync(roots.denLocal).filter((f) => !f.includes("lock"))).toEqual([]);
   });
 
   it("retries a failing item on later ticks, then parks it after maxAttempts", async () => {

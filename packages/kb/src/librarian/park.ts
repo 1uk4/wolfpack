@@ -1,7 +1,7 @@
 /**
  * park — keep one bad contribution from blocking the sweep.
  *
- * Each contribution gets a time budget (SWEEP.itemBudgetMs). An item that runs
+ * Each contribution gets a time budget (SWEEP.runBudgetMs). An item that runs
  * over it is parked at once; an item that fails is retried on later ticks and
  * parked after SWEEP.maxAttempts. Parked items move from inbox/<wolf>/ to
  * parked/<wolf>/ (never synced back to wolves), get a receipt with the reason,

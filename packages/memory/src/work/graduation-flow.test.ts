@@ -140,7 +140,14 @@ describe("graduation flow through the real sweep", () => {
     for (const f of graduationFiles({ item, all, bodyOf: () => "", from: "owner", now: new Date() })) {
       writeFileSync(join(base, "ops", "inbox", "owner", f.name), f.content);
     }
-    return sweep({ engine, roots: roots(), loadEntryVectors: async () => [], notify: () => {} });
+    // One contribution per run: sweep until the inbox is drained, summing results.
+    const total = { created: 0, merged: 0 };
+    for (;;) {
+      const r = await sweep({ engine, roots: roots(), loadEntryVectors: async () => [], notify: () => {} });
+      total.created += r.created;
+      total.merged += r.merged;
+      if (r.processed === 0) return total;
+    }
   };
   const entry = (id: string) => join(base, "base", "domains", "wp", "entries", `kb-wp-${id.split("-").pop()}.md`);
   const sectionOf = (file: string) => readFileSync(file, "utf8").match(/^section: (.+)$/m)?.[1];

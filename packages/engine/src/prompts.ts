@@ -275,6 +275,19 @@ Output valid JSON matching the schema.`;
  */
 export const CONTRADICT_SYSTEM = `You compare a NEW knowledge contribution against an EXISTING KB entry. Decide only whether they factually conflict, and if so which should win. Base 'winner' on recency and specificity of evidence, using the supplied dates. IMPORTANT: if the NEW contribution is marked currency=archived and its date is older than the existing entry, prefer 'existing' and treat the new material as historical context, NOT a correction. Also: origin=crawl means the NEW material was bulk-ingested from old documents (a wolf acting as a scribe), not lived/curated knowledge — do not let it overwrite a current entry unless it is clearly more recent AND more specific. Output JSON only.`;
 
+/**
+ * stage: matchSubject (KB sweep) · model: fast · in: contribution title+summary + up to 3 candidate entries · out: entry id | "new"
+ *
+ * Subject check for an uncertain embedding match: is the contribution about the
+ * same subject as one of the nearest entries?
+ */
+export const MATCH_SUBJECT_SYSTEM = `You decide whether a new knowledge contribution is about the SAME SUBJECT as one of a few existing KB entries.
+
+Merge only if the contribution is an update, correction or extension of that entry's own subject (the same system, feature, decision or incident). Entries that are merely related, adjacent, or in the same area are NOT the same subject: a fix to the sweep is not part of an entry about the memory timer; a feature that uses a system is not part of that system's entry.
+
+Answer with the id of the one entry that is the same subject, or "new" if none is. When unsure, answer "new".
+Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>"}.`;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // KB SWEEP: PRODUCE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -288,6 +301,17 @@ export const CONTRADICT_SYSTEM = `You compare a NEW knowledge contribution again
 export const PRODUCE_SYSTEM = `You write a single curated knowledge-base entry from a wolf's contribution.
 Be precise and sourced. On merge, integrate the new information into the
 existing entry, changing only what the contribution affects.
+
+WRITING RULES:
+- Describe the CURRENT state of the subject, in present-tense prose. No session
+  dates, no commit hashes or logs, no "today we…" or "we then…" narrative, and
+  no changelog or history sections (unless the entry type is changelog).
+- On merge, REPLACE any fact the contribution supersedes; never keep the old
+  and the new side by side. Keep what the contribution does not touch.
+- Stay on the entry's subject. If the contribution contains material about a
+  different subject, leave it out.
+- Be concise: aim for at most ~6,000 characters in total. Cut redundancy and
+  detail that does not help someone using the subject.
 
 FRONTMATTER RULES (the entry is machine-read — be disciplined):
 - type MUST be exactly one of: ${[...ENTRY_KINDS, "other"].join(", ")}.

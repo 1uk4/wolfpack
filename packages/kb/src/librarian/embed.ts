@@ -71,28 +71,44 @@ function normalize(v: Vector): Vector {
   return n > 0 ? v.map((x) => x / n) : v;
 }
 
-/** Fixed, consistent text shape so entries + contributions are comparable. */
+/** Version of the embedded text scheme (see embedInput). Stored in the cache
+ *  meta: bump it whenever embedInput changes what gets embedded, so the next
+ *  tick throws the stale vectors away and re-embeds every entry. */
+export const EMBED_INPUT_VERSION = 2;
+
+/** nomic-embed-text is trained with task prefixes; other models get none. */
+export function isNomicModel(model: string): boolean {
+  return /nomic/i.test(model);
+}
+
+/**
+ * The text a vector is built from: title + summary ONLY (the detail dilutes
+ * the subject; the 58-decision eval lifted top-1 from 59% to 87% with this).
+ * Entries are "document"s and contributions "query"s; for a nomic model they
+ * get the matching `search_document: ` / `search_query: ` prefix (eval config
+ * C3), for any other model no prefix. `model` defaults to the configured one.
+ */
 export function embedInput(parts: {
   title?: string;
   summary?: string;
-  detail?: string;
+  role: "document" | "query";
+  model?: string;
 }): string {
-  // TODO(tuning): nomic-embed-text is trained with task prefixes
-  // ("search_document:" / "search_query:") and quality drops without them.
-  // Our comparison is document-vs-document (entry vs contribution), so prefix
-  // both with "search_document: " here to widen the related/unrelated cosine
-  // gap (measured 0.62 vs 0.38 unprefixed on the live box). Must re-embed the
-  // whole cache when changing this (it alters the vectors).
-  return [parts.title, parts.summary, parts.detail]
+  const model = parts.model ?? resolveEmbedConfig().model;
+  const prefix = isNomicModel(model) ? `search_${parts.role}: ` : "";
+  const text = [parts.title, parts.summary]
+    .map((p) => (p ?? "").trim())
     .filter(Boolean)
-    .join("\n")
-    .slice(0, EMBED.inputMaxChars);
+    .join("\n");
+  return (prefix + text).slice(0, EMBED.inputMaxChars);
 }
 
 // ── Ollama-backed, hash-cached embedder ──────────────────────────────────────
 
 interface CacheMeta {
   model: string;
+  /** EMBED_INPUT_VERSION the vectors were built with (absent on old caches). */
+  inputVersion?: number;
   dim: number;
   updated: string;
 }
@@ -141,13 +157,14 @@ export function createEmbedder(
   const cachePath = join(dir, "cache.jsonl");
   mkdirSync(dir, { recursive: true });
 
-  // Load cache — but only if it was built with the SAME model. Mixing vectors
-  // across models makes cosine meaningless, so a model change = full rebuild.
+  // Load cache — but only if it was built with the SAME model and embedded-text
+  // scheme. Mixing vectors across either makes cosine meaningless, so a change
+  // of model or EMBED_INPUT_VERSION = full rebuild.
   let meta: CacheMeta | null = existsSync(metaPath)
     ? (JSON.parse(readFileSync(metaPath, "utf-8")) as CacheMeta)
     : null;
 
-  if (meta && meta.model !== config.model) {
+  if (meta && (meta.model !== config.model || meta.inputVersion !== EMBED_INPUT_VERSION)) {
     if (existsSync(cachePath)) rmSync(cachePath);
     loadedCaches.delete(cachePath);
     meta = null;
@@ -218,7 +235,7 @@ export function createEmbedder(
       appendFileSync(cachePath, JSON.stringify({ hash, vec }) + "\n");
       state.lines++;
       refreshStamp();
-      meta = { model: config.model, dim: vec.length, updated: now() };
+      meta = { model: config.model, inputVersion: EMBED_INPUT_VERSION, dim: vec.length, updated: now() };
       atomicWrite(metaPath, JSON.stringify(meta, null, 2));
       return vec;
     },
@@ -258,7 +275,7 @@ interface ScannedEntry {
 }
 
 /** Every curated entry in kb-base with the text its vector is cached under. */
-function* scanEntries(roots: KbRoots): Generator<ScannedEntry> {
+function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
   const domainsRoot = join(roots.kbBase, "domains");
   if (!existsSync(domainsRoot)) return;
   for (const domain of readdirSync(domainsRoot)) {
@@ -276,8 +293,13 @@ function* scanEntries(roots: KbRoots): Generator<ScannedEntry> {
         if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
         throw err;
       }
-      const { fields, body } = parseFrontmatter(raw);
-      const text = embedInput({ title: String(fields.title ?? ""), detail: body });
+      const { fields } = parseFrontmatter(raw);
+      const text = embedInput({
+        title: String(fields.title ?? ""),
+        summary: String(fields.summary ?? ""),
+        role: "document",
+        model,
+      });
       yield {
         id: String(fields.id ?? file.replace(/\.md$/, "")),
         domain: String(fields.domain ?? domain),
@@ -289,8 +311,8 @@ function* scanEntries(roots: KbRoots): Generator<ScannedEntry> {
 }
 
 /** Cache keys of the entries on disk now (no embedding): what a compaction keeps. */
-export function currentEntryHashes(roots: KbRoots): Set<string> {
-  return new Set([...scanEntries(roots)].map((e) => e.hash));
+export function currentEntryHashes(roots: KbRoots, model: string = resolveEmbedConfig().model): Set<string> {
+  return new Set([...scanEntries(roots, model)].map((e) => e.hash));
 }
 
 /**
@@ -301,7 +323,8 @@ export function currentEntryHashes(roots: KbRoots): Set<string> {
 export async function buildEntryVectors(
   roots: KbRoots,
   reg: Registry,
-  embedder: Embedder
+  embedder: Embedder,
+  model: string = resolveEmbedConfig().model
 ): Promise<EntryVector[]> {
   // entryId → canonicalId lookup from the registry.
   const canonicalOf = new Map<string, string>();
@@ -310,7 +333,7 @@ export async function buildEntryVectors(
   }
 
   const out: EntryVector[] = [];
-  for (const e of scanEntries(roots)) {
+  for (const e of scanEntries(roots, model)) {
     out.push({
       entryId: e.id,
       canonicalId: canonicalOf.get(e.id) ?? "",

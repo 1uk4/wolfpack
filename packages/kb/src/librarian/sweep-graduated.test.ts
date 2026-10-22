@@ -204,8 +204,8 @@ describe("sweep: never merges into oversized entries", () => {
 
   it("creates a new entry when the best match is over the limit", async () => {
     writeFileSync(join(entries(), "kb-wp-TARGET1.md"), "---\nid: kb-wp-TARGET1\nsection: sec-wp-aaaaaa\n---\n" + "x".repeat(600));
+    // The oversized entry is not even a candidate.
     expect(await run()).toMatchObject({ created: 1, merged: 0 });
-    expect(notes.some((n) => n.includes("→ new entry (target kb-wp-TARGET1 is"))).toBe(true);
   });
 
   it("still updates a graduation's own entry when it is over the limit", async () => {

@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseFrontmatter } from "@wolfpack/engine";
-import { createEmbedder, currentEntryHashes, embedInput } from "./embed.js";
+import { createEmbedder, currentEntryHashes, embedInput, EMBED_INPUT_VERSION } from "./embed.js";
 import { contentHash, vectorsDir, type KbRoots } from "../shared/index.js";
 
 describe("vector cache", () => {
@@ -75,9 +74,48 @@ describe("vector cache", () => {
   it("currentEntryHashes hashes the text an entry's vector is cached under", () => {
     const dir = join(roots.kbBase, "domains", "wp", "entries");
     mkdirSync(dir, { recursive: true });
-    const raw = "---\nid: kb-wp-AAAAAAA\ntitle: T\ndomain: wp\n---\n\nbody text\n";
+    const raw = "---\nid: kb-wp-AAAAAAA\ntitle: T\nsummary: S line\ndomain: wp\n---\n\nbody text\n";
     writeFileSync(join(dir, "kb-wp-AAAAAAA.md"), raw);
-    const expected = contentHash(embedInput({ title: "T", detail: parseFrontmatter(raw).body }));
-    expect([...currentEntryHashes(roots)]).toEqual([expected]);
+    const model = "nomic-embed-text";
+    const expected = contentHash(embedInput({ title: "T", summary: "S line", role: "document", model }));
+    expect([...currentEntryHashes(roots, model)]).toEqual([expected]);
+  });
+
+  it("embeds title + summary only, with nomic task prefixes only for a nomic model", () => {
+    const parts = { title: "T", summary: "S", detail: "ignored body" } as { title: string; summary: string };
+    expect(embedInput({ ...parts, role: "document", model: "nomic-embed-text" })).toBe("search_document: T\nS");
+    expect(embedInput({ ...parts, role: "query", model: "nomic-embed-text:v1.5" })).toBe("search_query: T\nS");
+    expect(embedInput({ ...parts, role: "query", model: "mxbai-embed-large" })).toBe("T\nS");
+  });
+
+  it("a cache built with another input version (or none) is discarded", async () => {
+    const e1 = createEmbedder(roots);
+    await e1.embed("a", "a");
+    const metaPath = join(vectorsDir(roots), "meta.json");
+    expect(JSON.parse(readFileSync(metaPath, "utf-8")).inputVersion).toBe(EMBED_INPUT_VERSION);
+
+    // Same version: kept, no refetch.
+    fetchMock.mockClear();
+    await createEmbedder(roots).embed("a", "a");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // An older cache (no inputVersion in meta) is thrown away: re-embed.
+    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    delete meta.inputVersion;
+    writeFileSync(metaPath, JSON.stringify(meta));
+    await createEmbedder(roots).embed("a", "a");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A different version likewise.
+    writeFileSync(metaPath, JSON.stringify({ ...meta, inputVersion: EMBED_INPUT_VERSION - 1 }));
+    fetchMock.mockClear();
+    await createEmbedder(roots).embed("a", "a");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A different model likewise.
+    writeFileSync(metaPath, JSON.stringify({ ...meta, inputVersion: EMBED_INPUT_VERSION, model: "other" }));
+    fetchMock.mockClear();
+    await createEmbedder(roots).embed("a", "a");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -39,6 +39,7 @@ export const ENGINE_STEPS = [
   "produce",
   "contradict",
   "classifyToSection",
+  "matchSubject",
   "sectionSummary",
   "labelSection",
 ] as const;
@@ -51,6 +52,7 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   produce: "smart",
   contradict: "fast",
   classifyToSection: "fast",
+  matchSubject: "fast",
   sectionSummary: "fast",
   labelSection: "fast",
 };

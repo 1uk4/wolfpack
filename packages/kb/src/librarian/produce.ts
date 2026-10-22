@@ -4,7 +4,7 @@
  * call stays bounded and cheap (don't re-generate unchanged prose).
  */
 import type { Engine } from "@wolfpack/engine";
-import { PRODUCE_SYSTEM, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
+import { parseFrontmatter, PRODUCE_SYSTEM, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
@@ -43,6 +43,9 @@ export interface ProduceEntryInput {
   context?: string;
   /** Existing entry markdown for merge context */
   existingMarkdown?: string;
+  /** `created` date of the entry being updated, kept on merge (read from
+   *  existingMarkdown when not given). */
+  existingCreated?: string;
   /** Resolver for proposed relations (embedding NN + id lookup) */
   resolve: RelationResolver;
   /** Curator overrides (optional) */
@@ -135,7 +138,7 @@ export async function produceEntry(
   engine: Engine,
   input: ProduceEntryInput
 ): Promise<ProduceEntryResult> {
-  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, resolve, overrides, context } = input;
+  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, existingCreated, resolve, overrides, context } = input;
   const graduation = contribution.graduation;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
 
@@ -179,6 +182,11 @@ export async function produceEntry(
   // Build DerivedFacts deterministically
   const id = EntryId.parse(entryId ?? newEntryId ?? mkEntryId(domain));
   const timestamp = IsoDate.parse(now().slice(0, 10));
+  // On merge the entry keeps its original creation date.
+  const kept = IsoDate.safeParse(
+    existingCreated ?? (existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") : "")
+  );
+  const created = entryId && kept.success ? kept.data : timestamp;
   
   // Compute content hash from the opinion prose
   const contentText = [opinion.title, opinion.summary, opinion.detail].join("\n");
@@ -187,7 +195,7 @@ export async function produceEntry(
   const facts: DerivedFacts = {
     id,
     domain: DomainId.parse(domain),
-    created: timestamp, // TODO: preserve from existing on merge
+    created,
     updated: timestamp,
     contentHash: contentHashValue,
     currency: contribution.currency === "archived" ? "archived" : "live",

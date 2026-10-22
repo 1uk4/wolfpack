@@ -26,14 +26,25 @@ export const EMBED = {
  * limits). That contribution gets the whole tick budget.
  */
 export const SWEEP = {
-  /** cosine \u2265 this to an existing entry \u2192 same topic: UPDATE it (and seed its
-   *  registry alias) rather than create a duplicate. The ALIAS is the primary
-   *  deterministic identity; this similarity seed only matters for entries that
-   *  have no alias yet (e.g. migrated ones on first re-promote).
-   *  TODO(calibrate): nomic-embed has a COMPRESSED range \u2014 0.85 was too high (a
-   *  real re-promote scored below it and duplicated). Calibrate against real
-   *  re-promotes on Dewey; the old v1 estimate was ~0.75 for "same topic". */
-  mergeSim: 0.72,
+  /**
+   * Merge-or-create decision on title+summary embeddings (nomic with
+   * search_document/search_query prefixes). Calibrated on 58 labelled sweep
+   * decisions (/tmp/embed-eval, config C3: top-1 87%, mean cosine of the
+   * correct entry .829 vs .734 for the hardest wrong one):
+   *  - top-1 < mergeLow  → create (no labelled merge scored below .695);
+   *  - top-1 ≥ mergeHigh and (top-1 − top-2) ≥ mergeMargin → merge, no LLM
+   *    (the highest wrong top-1 was .892, so .90 leaves zero errors outside
+   *    the band on the eval set);
+   *  - otherwise a fast-tier LLM picks among the top-3 or says "new".
+   * On the eval set the band covers 43/58 (74%) of decisions; mergeHigh .85
+   * would cut that to 35/58 (60%) at the cost of one wrong auto-merge.
+   * The ALIAS (den topic → entry) is still the primary identity.
+   */
+  mergeLow: 0.69,
+  mergeHigh: 0.9,
+  mergeMargin: 0.03,
+  /** Candidates (best first) shown to the LLM subject check. */
+  mergeCandidates: 3,
   /**
    * Estimated milliseconds per character of LLM output during merge operations.
    * Used to compute the merge threshold from the run budget.

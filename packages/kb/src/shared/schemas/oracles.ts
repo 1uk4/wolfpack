@@ -36,3 +36,11 @@ export const LabelSectionSchema = z.object({
   title: z.string(),
 });
 export type LabelSection = z.infer<typeof LabelSectionSchema>;
+
+/** matchSubject — which candidate entry is the contribution's subject, or "new". */
+export const MatchSubjectSchema = z.object({
+  /** A candidate entry id, or the literal string "new". */
+  match: z.string(),
+  reason: z.string().optional(),
+});
+export type MatchSubject = z.infer<typeof MatchSubjectSchema>;

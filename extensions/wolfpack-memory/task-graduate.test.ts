@@ -122,6 +122,19 @@ describe("durable task_graduate: preview, then confirm", () => {
     expect(inboxFiles()).toEqual([]);
   });
 
+  it("a confirmed graduation unbinds the session that was bound to the finished feature", async () => {
+    const { f, t } = ready();
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(den, "tasks"), { recursive: true });
+    await writeFile(join(den, "tasks", "active.json"), JSON.stringify({ taskId: f.id, domain: "wolfpack", boundAt: "now", featureId: f.id }));
+    const token = /confirm "([a-f0-9]+)"/.exec((await run({ id: f.id })).content[0].text as string)![1];
+    // previewing alone leaves the binding
+    expect(JSON.parse(readFileSync(join(den, "tasks", "active.json"), "utf8")).taskId).toBe(f.id);
+    await run({ id: f.id, confirm: token });
+    expect(JSON.parse(readFileSync(join(den, "tasks", "active.json"), "utf8"))).toBeNull();
+    void t;
+  });
+
   it("an Inbox task graduates alone with the same two steps", async () => {
     const inbox = add({ kind: "feature", title: "Inbox", container: true });
     const s = add({ kind: "task", title: "Stray fix", stage: "shipped", partOf: inbox.id, body: "# Stray fix\n\nplan\n" });

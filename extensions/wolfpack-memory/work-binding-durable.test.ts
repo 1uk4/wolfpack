@@ -150,3 +150,40 @@ describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
     expect(readBoundTask(den)?.taskId).toBe(mine.id);
   });
 });
+
+describe("durable task tools: finishing the last task stays bound until graduated", () => {
+  const readyLine = "Bound to F — all tasks done, ready to graduate (press g / task_graduate). Follow-up discussion goes to its Record.";
+
+  it("the last task of a feature: bound to the FEATURE (work = feature = its id), ready label in the context, reply ends with it", async () => {
+    const f = add({ kind: "feature", title: "F", body: "# F\n\n## Plan\n\nx\n" });
+    const t1 = add({ kind: "task", title: "T1", partOf: f.id });
+    const t2 = add({ kind: "task", title: "T2", partOf: f.id });
+    await run("task_bind", { id: t1.id });
+    expect(await run("task_done", { confirm: false })).toContain(`Bound to next: [${t2.id}]`);
+    const last = await run("task_done", { confirm: false });
+    expect(last.split("\n").at(-1)).toBe("Bound to F (all tasks done — ready to graduate)");
+    expect(last).toContain("Tell the user");
+    expect(readBoundTask(den)).toEqual({ taskId: f.id, featureId: f.id });
+    expect(sectionText("active_task")).toContain(readyLine);
+    expect(sectionText("active_task")).toContain("**Feature:** [");
+    // task_done does not ship the feature
+    const again = await tool("task_done").execute({ confirm: false }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
+    expect(again.isError).toBe(true);
+    expect(items.get(f.id)!.stage).not.toBe("shipped");
+    // a task added later: the binding stays
+    add({ kind: "task", title: "Late", partOf: f.id });
+    expect(readBoundTask(den)?.taskId).toBe(f.id);
+  });
+
+  it("a lone Inbox task stays bound to itself, ready to graduate", async () => {
+    const inbox = add({ kind: "feature", title: "Inbox", container: true });
+    const s = add({ kind: "task", title: "Stray", partOf: inbox.id });
+    add({ kind: "task", title: "Another stray", partOf: inbox.id });
+    await run("task_bind", { id: s.id });
+    const r = await run("task_done", { confirm: false });
+    expect(r.split("\n").at(-1)).toBe("Bound to Stray (shipped — ready to graduate)");
+    expect(r).not.toContain("Bound to next");
+    expect(readBoundTask(den)).toEqual({ taskId: s.id });
+    expect(sectionText("active_task")).toContain("Bound to Stray — shipped, ready to graduate (press g / task_graduate)");
+  });
+});

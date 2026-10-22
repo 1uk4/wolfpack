@@ -126,6 +126,8 @@ export {
   shouldBindOnCreate,
   notBoundReason,
   bindingLabel,
+  readyBoundContext,
+  readyBoundReply,
   headsUp,
   withHeadsUp,
   recordFeatureId,

@@ -54,11 +54,29 @@ export function notBoundReason(i: AutoBindInput): string {
   return "not requested";
 }
 
-/** The status-bar label: `⛓ <short title>` or `⛓ unbound`. */
-export function bindingLabel(title: string | null | undefined, max = 28): string {
+/**
+ * The status-bar label: `⛓ <short title>` or `⛓ unbound`; `⛓ <title> · ready to
+ * graduate` when the bound item is a finished feature (or a finished loose task).
+ */
+export function bindingLabel(title: string | null | undefined, max = 28, ready = false): string {
   const t = title?.trim();
   if (!t) return "⛓ unbound";
-  return `⛓ ${t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t}`;
+  return `⛓ ${t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t}${ready ? " · ready to graduate" : ""}`;
+}
+
+/**
+ * What is said while the session stays bound to a FINISHED feature (its last
+ * task shipped) or a finished loose task: it is ready to graduate, and talk
+ * about it still goes to its Record. Shared by both runtimes' context.
+ */
+export function readyBoundContext(item: { title: string; kind: string }): string {
+  const done = item.kind === "feature" ? "all tasks done" : "shipped";
+  return `Bound to ${item.title} — ${done}, ready to graduate (press g / task_graduate). Follow-up discussion goes to its Record.`;
+}
+
+/** The line a task_done reply ends with when it leaves the session bound to the finished item. */
+export function readyBoundReply(item: { title: string; kind: string }): string {
+  return `Bound to ${item.title} (${item.kind === "feature" ? "all tasks done" : "shipped"} — ready to graduate)`;
 }
 
 interface Ref {

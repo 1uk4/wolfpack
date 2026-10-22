@@ -245,6 +245,17 @@ describe("Record per feature", () => {
     expect(prompts[0]).toContain("from task two");
   });
 
+  it("observations while bound to the FEATURE itself (work = feature = its id) go to the feature's Record", async () => {
+    const { store, writes } = fakeStore({ f1: { kind: "feature", title: "The feature" } });
+    const out = await consolidateWorkRecords({
+      engine: fakeEngine([rec({ decisions: [{ decision: "rename X", why: "clearer" }] })]),
+      store,
+      observations: withFeature("f1", "f1", "follow-up: decided to rename X"),
+    });
+    expect(out.map((o) => [o.work, o.status])).toEqual([["f1", "written"]]);
+    expect(writes.map((w) => w.id)).toEqual(["f1"]);
+  });
+
   it("an Inbox task (feature is a container) keeps its own Record", async () => {
     const { store, writes } = fakeStore({ inbox: { kind: "feature", container: true }, t3: {} });
     const out = await consolidateWorkRecords({ engine: fakeEngine([rec({ findings: ["x"] })]), store, observations: withFeature("inbox", "t3", "inbox work") });

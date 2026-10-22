@@ -31,6 +31,8 @@ import {
   replaceRecordSection,
   syncFeatureStage,
   readyToGraduate,
+  readyBoundContext,
+  readyBoundReply,
   previewGraduation,
   confirmGraduation,
   renderGraduationPreview,
@@ -196,6 +198,8 @@ export default function createTasksExtension(
     body?: string;
     /** The feature's Record (shared by its tasks), rendered for the context. */
     featureRecord?: string;
+    /** The bound item is done and waits for a manual graduation (a finished feature or loose task). */
+    ready?: boolean;
     fetchedAt?: number;
   }
 
@@ -231,7 +235,12 @@ export default function createTasksExtension(
         }
       } catch { /* best effort */ }
     }
-    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, featureRecord, fetchedAt: Date.now() } satisfies TaskCache));
+    let ready = false;
+    try {
+      const all = task.kind === "feature" ? [task, ...(await client.query({ domain: task.domain as string, partOf: task.id as string }))] : [task, ...(parent ? [parent] : [])];
+      ready = readyToGraduate(task, all);
+    } catch { /* advisory */ }
+    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, featureRecord, ready, fetchedAt: Date.now() } satisfies TaskCache));
   }
 
   /** Sections render synchronously from the cache. The Record changes behind
@@ -347,8 +356,12 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
 
           const { task, parent, siblings } = cached;
           const lines: string[] = ["## Active Task", ""];
+          if (cached.ready) lines.push(readyBoundContext(task), "");
 
-          if (parent && (parent.kind === "feature" || parent.kind === "initiative") && siblings) {
+          if (task.kind === "feature") {
+            lines.push(`**Feature:** [${task.id}] ${task.title}`);
+            lines.push(`  Stage: ${task.stage}`);
+          } else if (parent && (parent.kind === "feature" || parent.kind === "initiative") && siblings) {
             lines.push(formatHierarchy(parent, siblings, task.id));
           } else {
             lines.push(`**Task:** [${task.id}] ${task.title}`);
@@ -367,7 +380,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             lines.push(doc);
             lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
           }
-          if (cached.featureRecord) {
+          if (cached.featureRecord && task.kind !== "feature") {
             lines.push("");
             lines.push(cached.featureRecord);
           }
@@ -834,6 +847,14 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             };
           }
 
+          // Bound to a finished feature: nothing to ship, it waits for graduation.
+          if (binding.featureId === binding.taskId) {
+            return {
+              content: [{ type: "text", text: `Bound to the feature ${binding.taskId}, not to a task. It is ready to graduate when all its tasks are done: use task_graduate.` }],
+              isError: true,
+            };
+          }
+
           const shouldConfirm = args.confirm ?? !autoShip;
           
           // If confirmation needed, return message
@@ -855,43 +876,41 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             const found = await findItem(binding.taskId);
             const result: string[] = [`Shipped: ${binding.taskId}`];
 
-            // Find next sibling if requested
+            // Find next sibling if requested; with none left, stay on the finished
+            // feature (or on the finished loose task) until it is graduated.
             const bindNext = args.bindNext ?? true;
-            if (bindNext && found?.item.partOf) {
-              const siblings = await getChildren(binding.domain, found.item.partOf);
-              const next = siblings.find(s => 
-                s.id !== binding.taskId && 
-                !isComplete(s)
-              );
-              
+            const all = await client.query({ domain: binding.domain });
+            const parentItem = found?.item.partOf ? all.find((i) => i.id === found.item.partOf) : undefined;
+            const realFeature = parentItem && parentItem.kind === "feature" && !parentItem.container ? parentItem : undefined;
+            const shippedItem = await client.get(binding.taskId);
+            if (!realFeature) {
+              if (readyToGraduate(shippedItem, all)) {
+                await writeCache(shippedItem);
+                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
+                result.push(readyBoundReply(shippedItem));
+              } else {
+                await clearBinding(ctx.wolfDen);
+                clearCache();
+              }
+            } else {
+              const siblings = bindNext ? await getChildren(binding.domain, realFeature.id as string) : [];
+              const next = siblings.find(s => s.id !== binding.taskId && !isComplete(s));
               if (next) {
                 await writeBinding(ctx.wolfDen, next.id, binding.domain, await recordFeatureId(client, next));
                 await writeCache(next);
                 await syncFeatureStage(client, next).catch(() => {});
                 result.push(`Bound to next: [${next.id}] ${next.title}`);
+              } else if (readyToGraduate(realFeature, all)) {
+                await writeBinding(ctx.wolfDen, realFeature.id as string, binding.domain, realFeature.id as string);
+                await writeCache(realFeature);
+                result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                result.push(readyBoundReply(realFeature));
               } else {
                 await clearBinding(ctx.wolfDen);
                 clearCache();
                 result.push("No more tasks in this feature. Unbound.");
               }
-            } else {
-              await clearBinding(ctx.wolfDen);
-              clearCache();
             }
-
-            // Last task done → ready to graduate. Never automatic: the user
-            // decides (graduating from durable is not wired yet; the ready
-            // state is what the user needs to hear).
-            try {
-              const shipped = await client.get(binding.taskId);
-              const all = await client.query({ domain: binding.domain });
-              const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
-              if (feature && readyToGraduate(feature, all)) {
-                result.push(`🎓 All tasks under "${feature.title}" are done: it is ready to graduate (task_graduate previews it). Tell the user.`);
-              } else if (readyToGraduate(shipped, all)) {
-                result.push(`🎓 "${shipped.title}" is done and ready to graduate on its own (task_graduate previews it). Tell the user.`);
-              }
-            } catch { /* readiness is advisory */ }
 
             return {
               content: [{ type: "text", text: result.join("\n") }],

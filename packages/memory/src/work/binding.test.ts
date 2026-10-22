@@ -5,6 +5,8 @@ import {
   shouldBindOnCreate,
   notBoundReason,
   bindingLabel,
+  readyBoundContext,
+  readyBoundReply,
   headsUp,
   withHeadsUp,
   recordFeatureId,
@@ -64,6 +66,15 @@ describe("texts", () => {
     expect(bindingLabel("Short")).toBe("⛓ Short");
     expect(bindingLabel("x".repeat(60)).length).toBeLessThanOrEqual(30);
     expect(bindingLabel("x".repeat(60)).endsWith("…")).toBe(true);
+  });
+  it("a finished feature or loose task: the label says ready to graduate, the context and reply say where talk goes", () => {
+    expect(bindingLabel("Compose stack", 28, true)).toBe("⛓ Compose stack · ready to graduate");
+    expect(readyBoundContext({ title: "Compose stack", kind: "feature" })).toBe(
+      "Bound to Compose stack — all tasks done, ready to graduate (press g / task_graduate). Follow-up discussion goes to its Record.",
+    );
+    expect(readyBoundContext({ title: "Stray fix", kind: "task" })).toContain("Bound to Stray fix — shipped, ready to graduate");
+    expect(readyBoundReply({ title: "Compose stack", kind: "feature" })).toBe("Bound to Compose stack (all tasks done — ready to graduate)");
+    expect(readyBoundReply({ title: "Stray fix", kind: "task" })).toBe("Bound to Stray fix (shipped — ready to graduate)");
   });
 });
 

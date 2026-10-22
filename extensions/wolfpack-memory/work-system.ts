@@ -68,6 +68,8 @@ import {
   recordFeatureId,
   renderFeatureRecord,
   bindingLabel,
+  readyBoundContext,
+  readyBoundReply,
   withHeadsUp,
   shouldBindOnCreate,
   notBoundReason,
@@ -198,19 +200,20 @@ function writeActiveTask(wolfDen: string, sessionId: string, state: ActiveTaskSt
  *   ● <task title>  plan · <workspace> 3/8
  *     ✓ <done when>
  */
-function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: number; total: number }, autoShip = false): string[] {
+function renderTaskWidget(item: WorkItem, workspace?: { title: string; done: number; total: number }, autoShip = false, ready = false): string[] {
   const stageColor = STAGE_COLORS[item.stage] ?? "";
   const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
   const ws = workspace ? ` \x1b[2m· ${clip(workspace.title, 40)} ${workspace.done}/${workspace.total}\x1b[0m` : "";
   const auto = autoShip ? `  \x1b[33m⚡ auto-ship\x1b[0m` : "";
-  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stageColor}${stageLabel(item.stage)}\x1b[0m${ws}${auto}`];
+  const stage = ready ? "\x1b[32m🎓 ready to graduate\x1b[0m" : `${stageColor}${stageLabel(item.stage)}\x1b[0m`;
+  const lines = [`\x1b[36m●\x1b[0m \x1b[1m${item.title}\x1b[0m  ${stage}${ws}${auto}`];
   if (item.successCriteria) lines.push(`  \x1b[2m✓ ${clip(item.successCriteria, 100)}\x1b[0m`);
   return lines;
 }
 
 /** `⛓ <short title>` plus the stage, dimmed. */
-function renderStatusBarCompact(item: WorkItem): string {
-  return `${bindingLabel(item.title)} \x1b[2m${stageLabel(item.stage)}\x1b[0m`;
+function renderStatusBarCompact(item: WorkItem, ready = false): string {
+  return ready ? bindingLabel(item.title, 28, true) : `${bindingLabel(item.title)} \x1b[2m${stageLabel(item.stage)}\x1b[0m`;
 }
 
 function renderQueueList(items: WorkItem[]): string {
@@ -318,6 +321,10 @@ export interface WorkSystemConfig {
 export interface WorkSystemHandle {
   /** The task this session is bound to right now (memory tags observations with it). */
   getBoundWork(): { taskId: string; featureId?: string } | null;
+  /** `g`: preview, confirm, send, archive (also callable without the /task panel). */
+  graduate(ctx: any, itemId: string): Promise<void>;
+  /** Re-read the bound item and redraw the status bar and widget. */
+  refresh(ctx: any): Promise<void>;
 }
 
 export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}): WorkSystemHandle | void {
@@ -403,29 +410,41 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
   }
 
+  /** Bound to a FINISHED feature (its last task shipped): see bindToFeature. */
+  const isFeatureBinding = (item: WorkItem | null) =>
+    !!item && !!activeTask && item.kind === "feature" && !item.container && activeTask.featureId === item.id;
+  /** The bound item is done and waits for a manual graduation (a finished feature or loose task). */
+  let boundReady = false;
+
   async function refreshActiveItem(): Promise<WorkItem | null> {
-    if (!activeTask) { activeItem = null; return null; }
+    if (!activeTask) { activeItem = null; boundReady = false; return null; }
     try {
       activeItem = await client.get(activeTask.workId);
     } catch {
       activeItem = null;
     }
-    if (!activeItem || !isBindable(activeItem)) {
+    const featureBound = isFeatureBinding(activeItem);
+    // A feature binding ends when the feature is graduated or archived.
+    if (!activeItem || !(isBindable(activeItem) || featureBound) || (featureBound && (activeItem.graduated || activeItem.stage === "archived"))) {
       if (sessionId) {
         activeItem = null;
         activeTask = null;
         writeActiveTask(wolfDen, sessionId, null);
       }
     }
-    if (activeItem?.partOf && !workspaceId) workspaceId = activeItem.partOf as string;
+    if (activeItem?.partOf && !workspaceId && !featureBound) workspaceId = activeItem.partOf as string;
     // Update workspace cache for widget
     cachedWorkspace = undefined;
-    if (activeItem?.partOf) {
+    boundReady = false;
+    if (activeItem && (featureBound || activeItem.partOf)) {
       try {
         const all = await client.query({ domain: activeItem.domain as string });
-        const feature = all.find((i) => i.id === activeItem!.partOf);
+        boundReady = readyToGraduate(activeItem, all);
+        const feature = featureBound ? undefined : all.find((i) => i.id === activeItem!.partOf);
         if (feature) cachedWorkspace = { title: feature.title, ...progress(feature, all) };
       } catch { /* best effort */ }
+    } else if (activeItem) {
+      try { boundReady = readyToGraduate(activeItem, await client.query({ domain: activeItem.domain as string })); } catch { /* best effort */ }
     }
     return activeItem;
   }
@@ -439,10 +458,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         return;
       }
       const workspace = cachedWorkspace;
-      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace, shipPolicy() === "auto"), {
+      ctx.ui.setWidget("wolfpack-task", renderTaskWidget(activeItem, workspace, shipPolicy() === "auto", boundReady), {
         placement: "aboveEditor",
       });
-      ctx.ui.setStatus("wolfpack-task", renderStatusBarCompact(activeItem));
+      ctx.ui.setStatus("wolfpack-task", renderStatusBarCompact(activeItem, boundReady));
     } catch {
       // stale ctx
     }
@@ -484,6 +503,28 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     return true;
   }
 
+  /**
+   * Bind to a FINISHED feature (the last task of it shipped): the session stays
+   * on the feature until it is graduated or the user unbinds, and follow-up
+   * discussion goes to the feature's Record (work = feature = the feature id).
+   */
+  async function bindToFeature(feature: WorkItem, ctx: any): Promise<boolean> {
+    if (isSubagent()) return false;
+    ensureSessionLoaded(ctx);
+    if (!sessionId || feature.kind !== "feature" || feature.container) return false;
+    if (activeTask) stopFileTracking(activeTask.workId);
+    activeTask = {
+      workId: feature.id,
+      domain: feature.domain as string,
+      boundAt: new Date().toISOString(),
+      featureId: feature.id,
+    };
+    writeActiveTask(wolfDen!, sessionId, activeTask);
+    await refreshActiveItem();
+    updateWidget(ctx);
+    return true;
+  }
+
   /** Unbind from current task with tracking cleanup */
   function unbindTask(ctx: any): void {
     ensureSessionLoaded(ctx);
@@ -514,7 +555,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     updateWidget(ctx);
 
     // Check for stage transitions on active task
-    if (activeItem && activeTask && ctx.hasUI) {
+    if (activeItem && activeTask && ctx.hasUI && activeItem.kind !== "feature") {
       try {
         const resolved = await client.get(activeTask.workId);
         const body = "";
@@ -578,7 +619,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
 
     // The Record is kept on the feature: show it next to the task's own document.
     let featureRecord = "";
-    if (activeTask.featureId) {
+    if (activeTask.featureId && activeTask.featureId !== activeTask.workId) {
       try {
         const f = await client.getWithBody(activeTask.featureId);
         featureRecord = renderFeatureRecord(f.item.title, f.body ?? "");
@@ -586,6 +627,10 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     }
 
     const parts: string[] = [];
+    if (boundReady) {
+      parts.push(readyBoundContext(activeItem));
+      parts.push("");
+    }
     parts.push(`You are working on: "${activeItem.title}" (${activeItem.kind}, ${activeItem.stage})`);
     parts.push(`id: ${activeItem.id} | domain: ${activeItem.domain}${activeItem.area ? " | area: " + activeItem.area : ""} | assignee: ${activeItem.assignee}`);
     if (activeItem.successCriteria) {
@@ -641,6 +686,59 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     debugLog('injecting active_task section', { contentLen: content.length });
   });
 
+
+  /** `g`: preview the distilled contributions, send only after the owner confirms, then archive. */
+  async function graduateItem(ctx: any, itemId: string): Promise<void> {
+    // Graduate a ready feature/initiative: ship it, then send it to the KB.
+    const all = await client.query({}) ?? [];
+    const item = all.find((i) => i.id === itemId);
+    if (!readyToGraduate(item, all)) {
+      ctx.ui.notify("Not ready to graduate.", "warning");
+      return;
+    }
+    if (!config.graduation) {
+      ctx.ui.notify("Graduation not configured.", "warning");
+      return;
+    }
+    const initiative = item.kind === "feature" ? initiativeOf(item, all) : undefined;
+    let preview: GraduationPreview;
+    try {
+      ctx.ui.notify(`Distilling "${item.title}" for the knowledge base…`, "info");
+      preview = await config.graduation.preview(item.id as string);
+    } catch (e: any) {
+      ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
+      return;
+    }
+    const text = renderGraduationPreview(preview);
+    if (preview.blocked) {
+      ctx.ui.notify(text, "warning");
+      return;
+    }
+    const ok = await ctx.ui.confirm(
+      item.kind === "initiative" ? `🎓 Complete "${item.title}"?` : `🎓 Graduate "${item.title}" to the knowledge base?`,
+      text
+    );
+    if (!ok) {
+      ctx.ui.notify("Graduation cancelled: nothing was sent.", "info");
+      return;
+    }
+    try {
+      ctx.ui.notify(`Graduating ${item.title}…`, "info");
+      const done = await config.graduation.confirm(preview, shipWithRollup);
+      if (activeTask && done.archived.includes(activeTask.workId)) unbindTask(ctx);
+      await refreshActiveItem();
+      updateWidget(ctx);
+      ctx.ui.notify(`🎓 ${item.title} graduated and archived (${done.sent.length} contribution${done.sent.length === 1 ? "" : "s"} sent to Dewey).`, "info");
+      // Its last feature delivered → the initiative can be completed (never automatic).
+      const after = await client.query({}) ?? [];
+      const parent = initiative ? after.find((i) => i.id === initiative.id) : undefined;
+      if (readyToGraduate(parent, after)) {
+        ctx.ui.notify(`🎓 All features of "${parent.title}" have graduated: press g on it to complete it.`, "info");
+      }
+    } catch (e: any) {
+      ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
+    }
+  }
 
   // ── Command: /task ────────────────────────────────────────────────────────
 
@@ -840,7 +938,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const stage = item.container ? ""
                 : item.standing ? theme.fg("dim", " · standing")
                 : readyToGraduate(item, allItems) ? theme.fg("success", " \ud83c\udf93 ready") : ` ${STAGE_ICONS[item.stage] ?? ""}`;
-              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${extraMark(extra)}${relationMark(item.id as string)}`);
+              out.push(`${cursor ? theme.fg("accent", "\u203a") : " "}${"  ".repeat(depth)}${fold}${chainPrefix(chain)}${icon} ${title}${count}${stage}${item.id === activeTask?.workId ? theme.fg("success", " \u25c0 bound") : ""}${extraMark(extra)}${relationMark(item.id as string)}`);
             });
             return out;
           }
@@ -853,6 +951,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
             if (ws.successCriteria) out.push(theme.fg("dim", `done when: ${ws.successCriteria}`));
             if (readyToGraduate(ws, allItems)) {
               out.push(theme.fg("success", "\ud83c\udf93 All tasks done: press g to graduate"));
+              if (ws.id === activeTask?.workId) out.push(theme.fg("success", "\u26d3 Bound \u2014 ready to graduate. Follow-up discussion goes to its Record."));
             }
             out.push("");
             const tree = rightTree(items, sel.openId);
@@ -862,7 +961,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
               const bound = t.id === activeTask?.workId;
               const title = isComplete(t) ? theme.fg("dim", t.title) : cursor ? theme.fg("accent", t.title) : t.title;
               const kind = t.kind === "task" ? "" : theme.fg("dim", ` (${t.kind})`);
-              out.push(`${cursor ? theme.fg("accent", "\u25b6") : " "} ${chainPrefix(chain)}${statusIcon(t)} ${title}${kind}${extraMark(extra)}${relationMark(t.id as string)}${bound ? theme.fg("success", "  \u25c0 bound") : ""}`);
+              out.push(`${cursor ? theme.fg("accent", "\u25b6") : " "} ${chainPrefix(chain)}${statusIcon(t)} ${title}${kind}${extraMark(extra)}${relationMark(t.id as string)}${bound ? theme.fg("success", readyToGraduate(t, allItems) ? "  \u25c0 bound \u00b7 ready to graduate" : "  \u25c0 bound") : ""}`);
               if (cursor && t.successCriteria) out.push(theme.fg("dim", `     done when: ${t.successCriteria}`));
               if (cursor && isBlocked(t, items)) {
                 const waiting = (t.dependsOn ?? []).map((id) => items.find((i) => i.id === id))
@@ -1006,55 +1105,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           ctx.ui.notify(e.message, "error");
         }
       } else if (typeof action === "object" && action?.type === "graduate") {
-        // Graduate a ready feature/initiative: ship it, then send it to the KB.
-        const all = await client.query({}) ?? [];
-        const item = all.find((i) => i.id === action.id);
-        if (!readyToGraduate(item, all)) {
-          ctx.ui.notify("Not ready to graduate.", "warning");
-          return;
-        }
-        if (!config.graduation) {
-          ctx.ui.notify("Graduation not configured.", "warning");
-          return;
-        }
-        const initiative = item.kind === "feature" ? initiativeOf(item, all) : undefined;
-        let preview: GraduationPreview;
-        try {
-          ctx.ui.notify(`Distilling "${item.title}" for the knowledge base…`, "info");
-          preview = await config.graduation.preview(item.id as string);
-        } catch (e: any) {
-          ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
-          return;
-        }
-        const text = renderGraduationPreview(preview);
-        if (preview.blocked) {
-          ctx.ui.notify(text, "warning");
-          return;
-        }
-        const ok = await ctx.ui.confirm(
-          item.kind === "initiative" ? `🎓 Complete "${item.title}"?` : `🎓 Graduate "${item.title}" to the knowledge base?`,
-          text
-        );
-        if (!ok) {
-          ctx.ui.notify("Graduation cancelled: nothing was sent.", "info");
-          return;
-        }
-        try {
-          ctx.ui.notify(`Graduating ${item.title}…`, "info");
-          const done = await config.graduation.confirm(preview, shipWithRollup);
-          if (activeTask && done.archived.includes(activeTask.workId)) unbindTask(ctx);
-          await refreshActiveItem();
-          updateWidget(ctx);
-          ctx.ui.notify(`🎓 ${item.title} graduated and archived (${done.sent.length} contribution${done.sent.length === 1 ? "" : "s"} sent to Dewey).`, "info");
-          // Its last feature delivered → the initiative can be completed (never automatic).
-          const after = await client.query({}) ?? [];
-          const parent = initiative ? after.find((i) => i.id === initiative.id) : undefined;
-          if (readyToGraduate(parent, after)) {
-            ctx.ui.notify(`🎓 All features of "${parent.title}" have graduated: press g on it to complete it.`, "info");
-          }
-        } catch (e: any) {
-          ctx.ui.notify(`Graduation failed: ${e.message}`, "error");
-        }
+        await graduateItem(ctx, action.id);
       } else if (typeof action === "object" && action?.type === "standing") {
         try {
           const cur = (await client.query({}) ?? []).find((i) => i.id === action.id);
@@ -1479,6 +1530,9 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           }
         }
         if (!activeTask || !activeItem) return { content: [{ type: "text" as const, text: "No active task. Bind one with task_bind." }], isError: true };
+        if (activeItem.kind === "feature") {
+          return text(`Bound to the feature "${activeItem.title}", not to a task. ${boundReady ? "It is ready to graduate: the user presses g in /task." : "Bind one of its tasks to ship it."}`, true);
+        }
 
         // Human gate (default) vs. agent loops (auto / no UI attached).
         if (shouldConfirmShip(shipPolicy(), !!ctx?.hasUI)) {
@@ -1514,35 +1568,40 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           config.onTaskComplete(activeTask.workId, shipped).catch(() => {});
         }
 
-        // Find the next unfinished sibling
+        // Find the next unfinished sibling; with none left, stay on the finished
+        // feature (or on the finished loose task) until it is graduated.
         try {
-          let nextItem: WorkItem | null = null;
-          if (shipped.partOf) {
-            // Same pick as the selector: first open, unblocked task, in progress first.
-            const all = await client.query({}) ?? [];
-            nextItem = firstTask(rightRows(all, shipped.partOf as string), all) ?? null;
-          }
-
-          if (nextItem) {
-            await bindToTask(nextItem, ctx);
-            resultText += `\n→ Next: ${nextItem.title} [${nextItem.stage}]`;
+          const all = await client.query({}) ?? [];
+          const parent = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
+          const realFeature = parent && parent.kind === "feature" && !parent.container ? parent : undefined;
+          if (!realFeature) {
+            // A loose task (Inbox or no parent) graduates on its own: stay bound to it.
+            if (readyToGraduate(shipped, all)) {
+              await refreshActiveItem();
+              updateWidget(ctx);
+              resultText += `\n🎓 "${shipped.title}" is done and ready to graduate on its own: press g on it in /task.`;
+              resultText += `\n${readyBoundReply(shipped)}`;
+            } else {
+              unbindTask(ctx);
+            }
           } else {
-            unbindTask(ctx);
+            // Same pick as the selector: first open, unblocked task, in progress first.
+            const nextItem = firstTask(rightRows(all, realFeature.id as string), all) ?? null;
+            if (nextItem) {
+              await bindToTask(nextItem, ctx);
+              resultText += `\n→ Next: ${nextItem.title} [${nextItem.stage}]`;
+            } else if (readyToGraduate(realFeature, all)) {
+              // Last task done → the feature is ready to graduate. Never automatic:
+              // the user graduates it with `g` in /task.
+              await bindToFeature(realFeature, ctx);
+              resultText += `\n🎓 All tasks under "${realFeature.title}" are done. It is ready to graduate: press g on it in /task.`;
+              resultText += `\n${readyBoundReply(realFeature)}`;
+            } else {
+              unbindTask(ctx);
+            }
           }
         } catch {
           // Ignore sibling binding errors
-        }
-
-        // Last task done → the feature is ready to graduate. Never automatic:
-        // the user graduates it with `g` in /task.
-        try {
-          const all = await client.query({}) ?? [];
-          const feature = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
-          if (readyToGraduate(feature, all)) {
-            resultText += `\n🎓 All tasks under "${feature.title}" are done. It is ready to graduate: press g on it in /task.`;
-          }
-        } catch {
-          // Ignore readiness check errors
         }
 
         return { content: [{ type: "text" as const, text: resultText }] };
@@ -1550,5 +1609,5 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
     })
   );
 
-  return { getBoundWork };
+  return { getBoundWork, graduate: graduateItem, refresh: async (ctx: any) => { ensureSessionLoaded(ctx); await refreshActiveItem(); updateWidget(ctx); } };
 }

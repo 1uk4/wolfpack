@@ -16,7 +16,7 @@ vi.mock("@earendil-works/pi-tui", () => ({
   matchesKey: () => false,
 }));
 
-import { initWorkSystem } from "./work-system.js";
+import { initWorkSystem, type WorkSystemConfig } from "./work-system.js";
 
 // ── an in-memory Work API behind fetch ───────────────────────────────────────
 
@@ -297,5 +297,101 @@ describe("subagent sessions (PI_SUBAGENT_AGENT): no binding", () => {
     // the orchestrator's binding was never touched
     expect(readFileSync(file, "utf8")).toBe(before);
     expect(statuses).toEqual([]);
+  });
+});
+
+
+describe("finishing the last task: stay bound until graduated", () => {
+  const readyLine = "Bound to The feature — all tasks done, ready to graduate (press g / task_graduate). Follow-up discussion goes to its Record.";
+  const lastStatus = () => statuses.at(-1) ?? "";
+
+  /** A fresh work system with a graduation stub (the real one distills with a model). */
+  async function system(over: Partial<WorkSystemConfig> = {}) {
+    const hh = fakePi();
+    const confirm = vi.fn(async (_p: any, _ship: any) => ({ sent: ["x"], archived: [] as string[] }));
+    const handle: any = initWorkSystem(hh.pi, {
+      domains: ["wolfpack"],
+      graduation: { preview: async (id: string) => ({ itemId: id, kind: "feature", title: "T", domain: "wolfpack", contributions: [], warnings: [], archive: [], token: "t", createdAt: "" } as any), confirm },
+      ...over,
+    });
+    await hh.handlers["session_start"]({}, ctx);
+    return { hh, handle, confirm, call: (name: string, p: Record<string, unknown> = {}) => hh.tools[name].execute("call", p, undefined, undefined, ctx) };
+  }
+
+  it("the last task of a feature shipped: bound to the FEATURE with the ready label, reply, context and Record tags", async () => {
+    const f = feature();
+    const t1 = task({ partOf: f.id });
+    const t2 = task({ partOf: f.id, title: "Second" });
+    const { hh, handle, call } = await system();
+
+    await call("task_bind", { id: t1.id });
+    const first = text(await call("task_done"));
+    expect(first).toContain("→ Next: Second");
+    expect(handle.getBoundWork()).toMatchObject({ taskId: t2.id, featureId: f.id }); // a next task: normal rebind
+
+    const last = text(await call("task_done"));
+    expect(last.split("\n").at(-1)).toBe("Bound to The feature (all tasks done — ready to graduate)");
+    expect(last).toContain("ready to graduate: press g");
+    // observations now tag work = feature = the feature id → the feature's Record
+    expect(handle.getBoundWork()).toEqual({ taskId: f.id, featureId: f.id });
+    expect(lastStatus()).toContain("⛓ The feature · ready to graduate");
+    expect(text(await call("task_current"))).toContain(f.id);
+
+    const event: any = { systemPrompt: "BASE", systemPromptOptions: { sections: {} } };
+    await hh.handlers["before_agent_start"](event, ctx);
+    expect(event.systemPromptOptions.sections["active_task"]).toContain(readyLine);
+
+    // task_done does not ship the feature
+    const again = await call("task_done");
+    expect(again.isError).toBe(true);
+    expect(text(again)).toContain("not to a task");
+    expect(api.items.get(f.id)!.stage).not.toBe("shipped");
+
+    // a task added later: the binding stays, the ready label goes
+    task({ partOf: f.id, title: "Late" });
+    await handle.refresh(ctx);
+    expect(handle.getBoundWork()).toEqual({ taskId: f.id, featureId: f.id });
+    expect(lastStatus()).toContain("⛓ The feature");
+    expect(lastStatus()).not.toContain("ready to graduate");
+  });
+
+  it("a confirmed graduation unbinds; cancelling keeps the binding", async () => {
+    const f = feature();
+    const t = task({ partOf: f.id });
+    const { handle, call, confirm } = await system();
+    await call("task_bind", { id: t.id });
+    await call("task_done");
+    expect(handle.getBoundWork()?.taskId).toBe(f.id);
+
+    // owner says no: nothing is sent, still bound
+    const no: any = { ...ctx, ui: { ...ctx.ui, confirm: async () => false } };
+    await handle.graduate(no, f.id as string);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(handle.getBoundWork()?.taskId).toBe(f.id);
+
+    // owner says yes: sent, the feature is archived with its tasks → unbound
+    confirm.mockImplementation(async () => ({ sent: ["x"], archived: [f.id as string, t.id as string] }));
+    await handle.graduate(ctx, f.id as string);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(handle.getBoundWork()).toBeNull();
+    expect(lastStatus()).toContain("⛓ unbound");
+  });
+
+  it("a lone Inbox task stays bound to itself, ready to graduate, until graduated", async () => {
+    const inbox = api.add({ kind: "feature", title: "Inbox", container: true });
+    const t = task({ partOf: inbox.id, title: "Stray fix" });
+    const other = task({ partOf: inbox.id, title: "Another stray" });
+    const { handle, call, confirm } = await system();
+    await call("task_bind", { id: t.id });
+    const r = text(await call("task_done"));
+    expect(r.split("\n").at(-1)).toBe("Bound to Stray fix (shipped — ready to graduate)");
+    expect(r).not.toContain("→ Next"); // the Inbox's other tasks are not a sequence
+    expect(handle.getBoundWork()).toEqual({ taskId: t.id });
+    expect(lastStatus()).toContain("⛓ Stray fix · ready to graduate");
+
+    confirm.mockImplementation(async () => ({ sent: ["x"], archived: [t.id as string] }));
+    await handle.graduate(ctx, t.id as string);
+    expect(handle.getBoundWork()).toBeNull();
+    expect(other.stage).not.toBe("archived");
   });
 });

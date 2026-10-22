@@ -4,7 +4,9 @@ Pass this file's path in an investigator brief. Commands marked **[RO]** are rea
 
 ## Hosts and ssh
 - Registered hosts live in `~/.wolfpack/config.yaml` (`hosts:`; **read it only for names/addresses, it contains API keys**). Current host: `host-a` (address `100.64.0.1`, Tailscale; agent port 3141).
-- ssh: `ssh -i ~/.ssh/<key> -o BatchMode=yes -o ConnectTimeout=5 root@100.64.0.1 '<cmd>'` — user `root`, port 22. Keep remote commands bounded and non-interactive.
+- ssh (read-only investigation **[RO]**): `ssh -i ~/.ssh/<key-ro> -o BatchMode=yes -o ConnectTimeout=5 wolfpack-ro@100.64.0.1 '<cmd>'` — user `wolfpack-ro`, port 22, no write access. **Investigator, scout and other read-only roles use this one.**
+- ssh (admin, state changes): `ssh -i ~/.ssh/<key> -o BatchMode=yes -o ConnectTimeout=5 root@100.64.0.1 '<cmd>'` — user `root`. **Only the worker, or an investigator whose brief explicitly authorises root.**
+- Keep remote commands bounded and non-interactive; batch several reads into one ssh call. Read-only agents run through `guarded_bash`, which rejects writes/redirects/deletes inside the remote string too.
 
 ## Wolves (id ↔ name)
 | name | id | runtime | host |

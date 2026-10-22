@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast recon of code, KB entries or library typings; returns paths, line numbers and signatures, never raw output
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, guarded_bash
 model: fast
 pane: false
 auto-exit: true

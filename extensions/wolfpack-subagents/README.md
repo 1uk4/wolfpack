@@ -147,7 +147,7 @@ wolfpack-subagents/
 │   ├── background.ts   # no-pane backend: detached child + log file
 │   ├── tmux.ts         # tmux backend
 │   └── herdr.ts        # Herdr backend (herdr pane verbs)
-├── tools/safe-bash.ts  # bash with dangerous-command blocking (loaded on demand)
+├── tools/safe-bash.ts  # safe_bash + guarded_bash (read-only guard, tools/command-guard.ts)
 ├── agents/             # bundled agent definitions
 ├── prompts/            # workflow presets
 └── config.json.example # status widget config

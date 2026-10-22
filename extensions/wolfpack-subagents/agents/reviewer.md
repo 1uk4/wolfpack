@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Reviews a diff or commits for bugs, security and maintainability; returns blocking, should-fix and nits
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, guarded_bash
 model: smart
 pane: false
 auto-exit: true

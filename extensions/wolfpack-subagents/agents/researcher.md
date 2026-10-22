@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Reads external docs, READMEs and web pages and returns a sourced summary; no code changes
-tools: read, bash
+tools: read, guarded_bash
 model: smart
 pane: false
 auto-exit: true

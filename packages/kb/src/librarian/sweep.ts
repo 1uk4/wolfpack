@@ -35,7 +35,7 @@ import {
 import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, isDeclared } from "./domains.js";
 import { readSections, writeSections } from "./sections.js";
 import { withBudget, BudgetExceeded, recordFailure, recordOverrun, clearAttempts, park } from "./park.js";
-import { classifyError, backoffRemainingMs, noteInfraFailure, noteSweepSuccess, type Alert } from "./backoff.js";
+import { classifyError, shouldParkNow, backoffRemainingMs, noteInfraFailure, noteSweepSuccess, type Alert } from "./backoff.js";
 import { writeCurrent, clearCurrent } from "./progress.js";
 import {
   DomainId,
@@ -294,7 +294,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         },
       };
       const oracles = createOracles(itemEngine);
-      const domain = c.domainHint || "wolfpack";
+      // No domain: park as unclassified rather than guess one.
+      if (!c.domainHint) {
+        throw Object.assign(new Error("unclassified: contribution has no domain"), {
+          parkNow: true,
+          parkReason: "unclassified: no domain",
+        });
+      }
+      const domain = c.domainHint;
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
       if (!isDeclared(declared, domain)) {
@@ -568,12 +575,17 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
       // A budget overrun is retried SWEEP.budgetRetries times (no attempt
       // counted), then parked; other item errors count toward maxAttempts.
+      // Some item errors (truncated output, no domain) repeat on every retry:
+      // park those at once.
+      const parkNow = shouldParkNow(err);
       const overrun = err instanceof BudgetExceeded;
       const overruns = overrun ? recordOverrun(roots, c, reason) : 0;
       const attempts = overrun ? 0 : recordFailure(roots, c, reason);
-      if (overrun ? overruns > SWEEP.budgetRetries : attempts >= SWEEP.maxAttempts) {
-        // Over budget twice or out of attempts: park it.
-        const why = overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
+      if (parkNow || (overrun ? overruns > SWEEP.budgetRetries : attempts >= SWEEP.maxAttempts)) {
+        // Unretryable, over budget twice, or out of attempts: park it.
+        const why = parkNow
+          ? String((err as { parkReason?: unknown }).parkReason ?? reason)
+          : overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);

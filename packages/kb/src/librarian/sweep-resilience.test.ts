@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { SWEEP } from "@wolfpack/engine";
+import { SWEEP, OutputTruncatedError } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
 import { readLedger } from "./ledger.js";
 import { classifyError, InfraError, readBackoff, backoffDelayMs, backoffRemainingMs, noteInfraFailure } from "./backoff.js";
@@ -83,12 +83,13 @@ describe("sweep resilience", () => {
     );
   const queued = () => readdirSync(inbox()).filter((f) => f.endsWith(".md"));
 
-  let mode: "ok" | "down" | "junk" | "hang";
+  let mode: "ok" | "down" | "junk" | "hang" | "truncated";
   const engine = {
     call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { signal?: AbortSignal }) => {
       if (step === "classifyToSection") return schema.parse({ section: "NEW", confidence: "low" });
       if (mode === "down") throw Object.assign(new Error("Overloaded"), { status: 529 });
       if (mode === "junk") throw new Error("model returned junk");
+      if (mode === "truncated") throw new OutputTruncatedError("claude-sonnet-5-5", 16000, 64000);
       if (mode === "hang") {
         return new Promise((_, reject) => opts.signal?.addEventListener("abort", () => reject(opts.signal!.reason), { once: true }));
       }
@@ -177,6 +178,29 @@ describe("sweep resilience", () => {
       "sweep paused: Overloaded, retrying with backoff",
       "sweep recovered: resuming normal operation",
     ]);
+  });
+
+  it("parks truncated output on the first attempt as 'output too long'", async () => {
+    drop("huge", "body");
+    mode = "truncated";
+    const r = await run();
+    expect(r.parked).toEqual([{ from: "w1", denTopicId: "huge", reason: "output too long" }]);
+    expect(queued()).toEqual([]);
+    expect(readBackoff(roots)).toBeNull();
+    expect(alerts).toEqual(["sweep: parked w1/huge — output too long"]);
+  });
+
+  it("parks a contribution with no domain as unclassified, without calling the model", async () => {
+    writeFileSync(
+      join(inbox(), "nodomain.md"),
+      `---\nfrom: w1\nden_topic_id: nodomain\nchange: create\ncontent_hash: ${Buffer.from("nodomain").toString("hex")}\nprev_hash: null\nsubmitted: 2026-10-10T01:00:00Z\n---\n\n# nodomain\n\nbody\n`
+    );
+    const r = await run();
+    expect(r.parked).toEqual([{ from: "w1", denTopicId: "nodomain", reason: "unclassified: no domain" }]);
+    expect(r.created).toBe(0);
+    expect(queued()).toEqual([]);
+    expect(vi.mocked(engine.call)).not.toHaveBeenCalled();
+    expect(existsSync(join(roots.kbBase, "domains", "wolfpack"))).toBe(false);
   });
 
   it("an item error counts attempts and parks after maxAttempts, alerting once", async () => {

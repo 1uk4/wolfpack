@@ -46,6 +46,12 @@ export const SWEEP = {
   /** Candidates (best first) shown to the LLM subject check. */
   mergeCandidates: 3,
   /**
+   * Domains whose merges keep history (the `history` merge style) when
+   * `domains.yaml` gives no `style:` for them. Snapjack is an intentional
+   * development history: dated snapshots stay in the body.
+   */
+  historyDomains: ["snapjack"] as readonly string[],
+  /**
    * Estimated milliseconds per character of LLM output during merge operations.
    * Used to compute the merge threshold from the run budget.
    * Calibrate from observed sweep times (12KB entry merged in 145s = ~12ms/char).

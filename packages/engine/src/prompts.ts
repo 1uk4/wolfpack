@@ -326,6 +326,10 @@ WRITING RULES:
   kind "decision" (the pipeline keeps the old one and links the new one to it).
   Otherwise leave "supersedesDecision" false; your output is then discarded and
   the decision stays as it is.
+- LAYOUT: the entry is rendered as "# <title>", then the summary as the lede,
+  then the detail. The summary is the whole lede (one paragraph, however many
+  sentences it needs). Start the detail at its first "## " section: do NOT
+  repeat the title as a "# " heading, do NOT repeat the summary at its top.
 - Stay on the entry's subject. If the contribution contains material about a
   different subject, leave it out.
 - Be concise: aim for at most ~6,000 characters in the body; the History
@@ -362,6 +366,23 @@ FRONTMATTER RULES (the entry is machine-read — be disciplined):
   (e.g. \`#2E7D32\`) so Obsidian does not misread them as tags.
 
 Output JSON matching the entry schema.`;
+
+/**
+ * Appended to PRODUCE_SYSTEM for a domain with the `history` merge style
+ * (domains.yaml `style: history`, default: snapjack). Overrides the
+ * "current state only" rules above.
+ */
+export const PRODUCE_HISTORY_RULES = `DOMAIN STYLE: this domain is an intentional development history. These rules
+override the "current state" and "dates only in History" rules above:
+- On merge, do NOT replace dated content with current state. Keep the existing
+  dated snapshots ("As of <date>, …"), plans and change-log rows in the body.
+- Add what the contribution brings as dated content: "As of <CONTRIBUTION
+  DATE>, …", plus a change-log row when the entry has a change log.
+- Mark snapshot-like claims with their date; never rewrite history into
+  present tense.
+- Delete historical content only when it is clearly wrong; otherwise keep it.
+- Still add a "- Until <YYYY-MM-DD>: …" line to the final "## History" section
+  for each fact that stopped being true, and keep every existing History line.`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CRAWL: OBSERVER (document mode)

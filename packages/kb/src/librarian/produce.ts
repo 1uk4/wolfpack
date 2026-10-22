@@ -4,7 +4,7 @@
  * call stays bounded and cheap (don't re-generate unchanged prose).
  */
 import type { Engine } from "@wolfpack/engine";
-import { parseFrontmatter, PRODUCE_SYSTEM, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
+import { parseFrontmatter, PRODUCE_SYSTEM, PRODUCE_HISTORY_RULES, GRADUATE_FEATURE_RULES, GRADUATE_HUB_RULES } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
 import { entryId as mkEntryId, now } from "../shared/index.js";
 import {
@@ -22,6 +22,7 @@ import {
   IsoDate,
 } from "../schema/knowledge.js";
 import { contentHash as hashContent } from "../shared/hash.js";
+import { existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // assemble-based produce (LlmOpinion ⊕ DerivedFacts ⊕ Curator)
@@ -43,6 +44,11 @@ export interface ProduceEntryInput {
   context?: string;
   /** Existing entry markdown for merge context */
   existingMarkdown?: string;
+  /** The entry being replaced when it is not fed to the model (a graduation
+   *  regenerated from its dossier): its History lines and relations are kept. */
+  previousMarkdown?: string;
+  /** Merge style of the domain: `history` keeps dated snapshots (default `current`). */
+  style?: "history" | "current";
   /** `created` date of the entry being updated, kept on merge (read from
    *  existingMarkdown when not given). */
   existingCreated?: string;
@@ -60,6 +66,8 @@ export interface ProduceEntryResult {
   unchanged?: boolean;
   /** Id of the decision the new `entry` replaces (it also carries the relation). */
   supersedes?: string;
+  /** History lines of the previous entry the model dropped and code restored. */
+  historyRestored?: string[];
 }
 
 /** True when the entry markdown declares `kind: decision`. */
@@ -148,7 +156,8 @@ export async function produceEntry(
   engine: Engine,
   input: ProduceEntryInput
 ): Promise<ProduceEntryResult> {
-  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, existingCreated, resolve, overrides, context } = input;
+  const { contribution, domain, section, placement, entryId, newEntryId, existingMarkdown, previousMarkdown, style, existingCreated, resolve, overrides, context } = input;
+  const previous = existingMarkdown ?? previousMarkdown;
   const graduation = contribution.graduation;
   const action: ProduceEntryResult["action"] = entryId ? "merge" : "create";
 
@@ -178,9 +187,11 @@ export async function produceEntry(
     // LLM call — returns ONLY opinion (no ids, dates, section, resolved relations).
     // Re-parse through the schema to guarantee branded types AND re-validate the
     // model output (the confinement firewall — nothing invalid reaches assemble).
-    const system = graduation
-      ? `${PRODUCE_SYSTEM}\n\n${graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES}`
-      : PRODUCE_SYSTEM;
+    const system = [
+      PRODUCE_SYSTEM,
+      style === "history" ? PRODUCE_HISTORY_RULES : "",
+      graduation ? (graduation === "hub" ? GRADUATE_HUB_RULES : GRADUATE_FEATURE_RULES) : "",
+    ].filter(Boolean).join("\n\n");
     opinion = LlmOpinion.parse(
       await engine.call("produce", LlmOpinion, {
         system,
@@ -188,6 +199,9 @@ export async function produceEntry(
       })
     );
     if (graduation) opinion = scrubGraduation(opinion, graduation);
+    // The entry renders as H1 + lede + detail: the detail must not repeat them.
+    const detail = normalizeDetail(opinion.detail, opinion.summary, previous);
+    opinion = LlmOpinion.parse({ ...opinion, ...foldIntro(opinion.summary, detail, previous) });
   }
 
   // Build DerivedFacts deterministically
@@ -200,9 +214,18 @@ export async function produceEntry(
   const timestamp = IsoDate.parse(now().slice(0, 10));
   // On merge the entry keeps its original creation date.
   const kept = IsoDate.safeParse(
-    existingCreated ?? (existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") : "")
+    existingCreated ?? (previous ? String(parseFrontmatter(previous).fields.created ?? "") : "")
   );
   const created = mergeId && kept.success ? kept.data : timestamp;
+
+  // Code-side guard: History lines are never lost on an update (a merge, or a
+  // graduation regenerated from its dossier).
+  let historyRestored: string[] = [];
+  if (mergeId && previous && !(decisionTarget && !supersedes)) {
+    const kept = preserveHistory(previous, opinion.detail);
+    historyRestored = kept.restored;
+    if (kept.restored.length) opinion = LlmOpinion.parse({ ...opinion, detail: kept.detail });
+  }
   
   // Compute content hash from the opinion prose
   const contentText = [opinion.title, opinion.summary, opinion.detail].join("\n");
@@ -219,6 +242,8 @@ export async function produceEntry(
     // Structural links the sender named (a graduated feature → its hub). Code
     // writes them; the hub's id is fixed, so it may not exist yet.
     relations: [
+      // An update keeps the entry's existing links (the model never sees them).
+      ...(mergeId && previous ? existingRelations(previous) : []),
       ...graduationRelations(contribution),
       ...(supersedes ? [{ kind: "supersedes" as const, target: supersedes, source: "code" as const, weight: 1 }] : []),
     ],
@@ -234,5 +259,5 @@ export async function produceEntry(
       ? { entry: { ...entry, kind: { type: "decision" } }, action: "create", supersedes }
       : { entry, action: "merge", unchanged: true };
   }
-  return { entry, action };
+  return { entry, action, historyRestored };
 }

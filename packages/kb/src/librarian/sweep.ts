@@ -23,6 +23,8 @@ import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { produceEntry } from "./produce.js";
+import { supersededIds } from "./preserve.js";
+import { readDomainRegistry } from "../shared/index.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
 import {
   commitEntry,
@@ -170,6 +172,13 @@ export function hasGraduationMarker(markdown: string | null): boolean {
   if (!markdown) return false;
   const fm = /^---\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
   return /^[ \t]+graduation-commits:/m.test(fm);
+}
+
+/** The merge style of a domain: `style:` in domains.yaml, else the tuning default. */
+export function domainMergeStyle(roots: KbRoots, domain: string): "history" | "current" {
+  const declared = readDomainRegistry(roots.kbBase)[domain]?.style;
+  if (declared) return declared === "history" ? "history" : "current";
+  return SWEEP.historyDomains.includes(domain) ? "history" : "current";
 }
 
 /** Entry ids a hub lists as [[kb-…]] wikilinks, in order. */
@@ -382,6 +391,13 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           return marked;
         },
       };
+      // A decision another entry supersedes is history: contributions go to the
+      // newest decision in the chain, never to the old one.
+      const superseded = supersededIds(roots, domain);
+      const head = (id: string): string => {
+        for (let i = 0; i < 10 && superseded.has(id); i++) id = superseded.get(id)!;
+        return id;
+      };
       if (ownId && readEntryMarkdown(roots, domain, ownId)) targetId = ownId;
       for (const topic of ownId ? [] : reg.values()) {
         const alias = topic.aliases.find(
@@ -391,8 +407,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           const aliased = topic.entries[0];
           if (!readEntryMarkdown(roots, domain, aliased)) {
             ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
-          } else if (!protectedIds.has(aliased)) {
-            targetId = aliased;
+          } else if (!protectedIds.has(head(aliased))) {
+            targetId = head(aliased);
           } else {
             aliasBlocked = true;
             ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} is graduated)`);
@@ -407,7 +423,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const ranked: Array<{ id: string; score: number; title: string; summary: string }> = [];
         for (const e of entryVectors) {
           if (e.domain !== domain) continue;
-          if (protectedIds.has(e.entryId)) continue;
+          if (protectedIds.has(e.entryId) || superseded.has(e.entryId)) continue;
           const md = readEntryMarkdown(roots, domain, e.entryId);
           if (!md || md.length > sizeLimit) continue;
           const f = parseFrontmatter(md).fields;
@@ -593,7 +609,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         .filter(Boolean);
       const context = recorded.length ? `RECORDED FEATURE ENTRIES (what the KB holds for each):\n${recorded.join("\n")}` : undefined;
 
-      const { entry, action, unchanged, supersedes } = await produceEntry(itemEngine, {
+      const { entry, action, unchanged, supersedes, historyRestored } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
         section: sectionId,
@@ -601,10 +617,13 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         entryId: targetId,
         newEntryId: ownId ?? undefined,
         existingMarkdown,
+        previousMarkdown: targetMd ?? undefined,
+        style: domainMergeStyle(roots, domain),
         existingCreated,
         context,
         resolve,
       });
+      if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       // A decision the contribution agrees with is left exactly as it is.

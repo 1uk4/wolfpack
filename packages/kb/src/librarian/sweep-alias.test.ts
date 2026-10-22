@@ -241,4 +241,26 @@ describe("sweep: missing alias target creates fresh entry", () => {
     expect(receiptContent).toContain("outcome: merge");
     expect(receiptContent).toContain(existingEntryId);
   });
+  it("a den topic re-pointed from a graduated entry to a live one merges into the later one", async () => {
+    const grad = "kb-wp-GRAD001";
+    const live = "kb-wp-LIVE001";
+    writeFileSync(join(entries(), `${grad}.md`), `---\nid: ${grad}\nsection: sec-wp-bbbbbb\ntitle: Graduated\nproperties:\n  graduation-commits: "f32e6c0"\n---\n\nRecord.\n`);
+    writeFileSync(join(entries(), `${live}.md`), `---\nid: ${live}\nsection: sec-wp-bbbbbb\ntitle: Live\n---\n\nLive content.\n`);
+    appendLedger(roots, [
+      ev.entryWritten(grad, grad, "create"),
+      ev.aliased("w1", "t3", grad, "h1"),
+      ev.entryWritten(live, live, "create"),
+      ev.aliased("w1", "t3", live, "h2"),
+    ]);
+    // Fold: the alias lives only on the latest topic.
+    const reg = foldRegistry(readLedger(roots));
+    expect(reg.get(grad)!.aliases).toEqual([]);
+    expect(reg.get(live)!.aliases).toHaveLength(1);
+
+    drop("t3", "a1b2c5", "More about the live topic");
+    const result = await run([{ entryId: live, domain: "wp", vector: [0.5, 0.5, 0.0] }]);
+    expect(result).toMatchObject({ errors: 0, created: 0, merged: 1 });
+    expect(notes.some((n) => n.includes("is graduated"))).toBe(false);
+    expect(readFileSync(join(entries(), `${live}.md`), "utf-8")).toContain("Some detail about this topic");
+  });
 });

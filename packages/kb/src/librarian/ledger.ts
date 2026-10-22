@@ -99,6 +99,12 @@ export function foldRegistry(events: KbEvent[]): Registry {
         break;
       }
       case "aliased": {
+        // A den topic resolves to ONE topic: the one holding its latest aliased
+        // event. Re-pointing removes the alias from every older topic.
+        for (const other of reg.values()) {
+          if (other.canonicalId === e.canonicalId) continue;
+          other.aliases = other.aliases.filter((a) => !(a.wolf === e.wolf && a.denTopicId === e.denTopicId));
+        }
         const t = ensure(e.canonicalId);
         const existing = t.aliases.find(
           (a) => a.wolf === e.wolf && a.denTopicId === e.denTopicId

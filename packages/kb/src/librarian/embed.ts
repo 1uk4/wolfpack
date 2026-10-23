@@ -113,8 +113,14 @@ export function entrySummary(markdown: string): string {
   const { fields, body } = parseFrontmatter(markdown);
   const fm = String(fields.summary ?? "").trim();
   if (fm) return fm;
-  const m = /^\s*#\s+[^\n]*\n+([\s\S]*?)(?:\n\s*\n|$)/.exec(body);
-  return (m?.[1] ?? "").trim().slice(0, 600);
+  // The lede: the first paragraph after the H1 that isn't a blockquote banner
+  // (e.g. "> Dated snapshot…" notes sit above some ledes).
+  const afterH1 = /^\s*#\s+[^\n]*\n+([\s\S]*)$/.exec(body)?.[1] ?? "";
+  const lede = afterH1
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p && !p.startsWith(">") && !p.startsWith("#"));
+  return (lede ?? "").slice(0, 600);
 }
 
 // ── Ollama-backed, hash-cached embedder ──────────────────────────────────────

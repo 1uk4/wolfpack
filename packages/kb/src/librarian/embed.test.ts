@@ -121,6 +121,10 @@ describe("vector cache", () => {
 });
 
 describe("entrySummary", () => {
+  it("skips a blockquote banner above the lede", () => {
+    const md = "---\nid: x\ntitle: T\n---\n\n# Paywall\n\n> Dated snapshot; see the current entry.\n\nPremium gates league creation only.\n";
+    expect(entrySummary(md)).toBe("Premium gates league creation only.");
+  });
   it("prefers the frontmatter summary", () => {
     expect(entrySummary("---\nid: x\nsummary: \"From frontmatter\"\n---\n\n# T\n\nLede here.\n")).toBe("From frontmatter");
   });

@@ -21,18 +21,30 @@ export function buildStamp(dirs: string[]): number {
   return newest;
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
+// Where this module lives. In a bundle (the pi-durable harness.cjs) there is no
+// module URL and no source tree beside it: the check is then off, never a crash.
+function moduleDir(): string | undefined {
+  try {
+    const url = import.meta.url;
+    return url ? dirname(fileURLToPath(url)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const here = moduleDir();
 /** Where this code lives: …/memory/<src|dist>/work. The graduation also uses kb's shared helpers. */
 function codeDirs(root: string): string[] {
+  if (!here) return [];
   const memory = join(here, "..", "..");
   return [join(memory, root, "work"), join(memory, "..", "kb", root, "shared")];
 }
-const runningRoot = basename(dirname(here)); // "src" or "dist"
+const runningRoot = here ? basename(dirname(here)) : ""; // "src" or "dist"
 
 const LOADED = buildStamp(codeDirs(runningRoot));
 
 /** A warning when the code on disk is newer than the code this process loaded, or the dist build lags src. */
 export function staleBuildWarning(loaded = LOADED, dirs: { running?: string[]; src?: string[] } = {}): string | undefined {
+  if (!here && !dirs.running) return undefined;
   const current = buildStamp(dirs.running ?? codeDirs(runningRoot));
   if (loaded && current > loaded + 1000) {
     return "this pi session loaded older code than what is on disk (e.g. the Delivered list); restart pi before graduating";

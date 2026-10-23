@@ -23,6 +23,7 @@ import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
+import { resolveAliasedEntry } from "./alias.js";
 import { produceEntry } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -160,6 +161,21 @@ export function mergeBand(ranked: Array<{ id: string; score: number }>): MergeBa
   return { kind: "ask" };
 }
 
+/** How a contribution was routed; written to its receipt as `routing:` JSON. */
+export interface RoutingRecord {
+  route: "alias" | "anchor" | "similarity" | "new";
+  /** The entry written (set on commit). */
+  target?: string;
+  /** Top-3 similarity candidates (best first). */
+  candidates: Array<{ id: string; score: number }>;
+  band?: string;
+  subject?: { match: string; valid: boolean; reason?: string };
+  /** The entry distill named for this contribution. */
+  targetHint?: string;
+  domainMismatch?: { hint: string; entry: string };
+  warning?: string;
+}
+
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
  *  cosine FP overshoot (>1) or a reused _unplaced score (<0) hard-failing the
  *  whole contribution at schema-parse time. */
@@ -294,7 +310,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           parkReason: "unclassified: no domain",
         });
       }
-      const domain = c.domainHint;
+      // May change to the aliased entry's own domain (see below).
+      let domain = c.domainHint;
+      // How this contribution was routed; written to its receipt.
+      const routing: RoutingRecord = { route: "new", candidates: [] };
 
       // Declared-domain gate — never commit into an unmirrored, unreviewed domain.
       if (!isDeclared(declared, domain)) {
@@ -317,6 +336,30 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // the nearest entries by title+summary similarity, with an LLM subject
       // check when the score is uncertain (seeds the alias on commit).
       let targetId: string | undefined;
+      // An alias is an explicit routing decision: the entry is looked up in ITS
+      // OWN domain, even when the contribution's domain hint differs.
+      let aliasedFrom: string | undefined;
+      let aliasMissing: string | undefined;
+      if (!c.anchor) {
+        for (const topic of reg.values()) {
+          const alias = topic.aliases.find((a) => a.wolf === c.from && a.denTopicId === c.denTopicId);
+          if (!alias) continue;
+          aliasedFrom = topic.entries[0];
+          const hit = aliasedFrom ? resolveAliasedEntry(roots, log, aliasedFrom, topic.domain || domain) : null;
+          if (hit) {
+            if (hit.followedFrom) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.followedFrom} was retired, following it to ${hit.id}`);
+            if (hit.domain !== domain) {
+              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → alias ${hit.id} is in domain ${hit.domain}, contribution says ${domain}: merging into the alias`);
+              routing.domainMismatch = { hint: domain, entry: hit.domain };
+              domain = hit.domain;
+            }
+            aliasedFrom = hit.id;
+          } else {
+            aliasMissing = aliasedFrom;
+          }
+          break;
+        }
+      }
       // A decision another entry supersedes is history: contributions go to the
       // newest decision in the chain, never to the old one.
       const superseded = supersededIds(roots, domain);
@@ -331,6 +374,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       if (c.anchor) {
         // ANCHORED: by key only, never by alias, similarity or the subject check.
         const held = anchors.byKey.get(c.anchor);
+        routing.route = "anchor";
         if (held) {
           targetId = held;
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${held} (anchor ${c.anchor})`);
@@ -347,20 +391,12 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           }
         }
       } else {
-        let aliased: string | undefined;
-        for (const topic of reg.values()) {
-          const alias = topic.aliases.find(
-            (a) => a.wolf === c.from && a.denTopicId === c.denTopicId
-          );
-          if (alias) {
-            aliased = topic.entries[0];
-            if (readEntryMarkdown(roots, domain, aliased)) {
-              targetId = head(aliased);
-            } else {
-              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (aliased entry ${aliased} has no file)`);
-            }
-            break;
-          }
+        if (aliasedFrom && !aliasMissing) {
+          targetId = head(aliasedFrom);
+          routing.route = "alias";
+        } else if (aliasMissing) {
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry, WARNING: aliased entry ${aliasMissing} has no file and no survivor`);
+          routing.warning = `aliased entry ${aliasMissing} has no file and no survivor`;
         }
       }
       // The size limit also keeps an oversized entry out of the candidates:
@@ -383,17 +419,41 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           });
         }
         ranked.sort((x, y) => y.score - x.score);
-        const top = ranked.slice(0, SWEEP.mergeCandidates);
-        const band = mergeBand(top);
+        let top = ranked.slice(0, SWEEP.mergeCandidates);
+        routing.candidates = top.slice(0, 3).map((r) => ({ id: r.id, score: Number(r.score.toFixed(3)) }));
+        // Distill's target hint is a strong prior: it leads the candidate list.
+        // The subject check still decides (a hint is never a bypass).
+        let hinted = false;
+        if (c.target && !superseded.has(c.target) && !anchors.ids.has(c.target)) {
+          const tmd = readEntryMarkdown(roots, domain, c.target);
+          if (tmd) {
+            const f = parseFrontmatter(tmd).fields;
+            const tv = entryVectors.find((e) => e.domain === domain && e.entryId === c.target);
+            const lead = { id: c.target, score: tv ? cosine(vec, tv.vector) : 0, title: String(f.title ?? c.target), summary: entrySummary(tmd) };
+            top = [lead, ...top.filter((r) => r.id !== c.target)].slice(0, SWEEP.mergeCandidates);
+            routing.candidates = top.slice(0, 3).map((r) => ({ id: r.id, score: Number(r.score.toFixed(3)) }));
+            routing.targetHint = c.target;
+            hinted = true;
+          } else {
+            routing.targetHint = `${c.target} (not found)`;
+          }
+        }
+        const band = hinted ? ({ kind: "ask" } as const) : mergeBand(top);
+        routing.band = hinted ? "ask (target hint)" : band.kind;
         const scores = top.map((r) => r.score.toFixed(3)).join("/");
         if (band.kind === "merge") {
           targetId = band.id;
+          routing.route = "similarity";
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${band.id} by similarity (${scores})`);
         } else if (band.kind === "ask") {
           const pick = await oracles.matchSubject({ title, summary: c.summary }, top);
+          routing.subject = { match: pick.match, valid: pick.valid, reason: pick.reason };
           if (!pick.valid) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check unparseable, creating a new entry`);
-          if (pick.match !== "new") targetId = pick.match;
-          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check (${scores}) → ${pick.match}`);
+          if (pick.match !== "new") {
+            targetId = pick.match;
+            routing.route = "similarity";
+          }
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check (${scores}) → ${pick.match}${pick.reason ? ` (${pick.reason})` : ""}`);
         }
       }
 
@@ -406,6 +466,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         if (size > sizeLimit) {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
+          routing.warning = `target ${targetId} is ${size} chars, over the ${sizeLimit} merge limit`;
+          routing.route = "new";
           targetId = undefined;
         }
       }
@@ -581,7 +643,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
-      writeReceipt(roots, c.from, c, action, entry.id);
+      routing.target = entry.id;
+      writeReceipt(roots, c.from, c, action, entry.id, routing);
       markProcessed(c);
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;

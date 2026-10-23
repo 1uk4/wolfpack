@@ -34,7 +34,8 @@ export function writeReceipt(
   wolf: string,
   c: ParsedContribution,
   outcome: string,
-  detail: string
+  detail: string,
+  routing?: unknown
 ): void {
   const dir = receiptsDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
@@ -44,6 +45,8 @@ export function writeReceipt(
     `den_topic_id: ${c.denTopicId}`,
     `outcome: ${outcome}`,
     `processed: ${now()}`,
+    // One-line JSON: how the sweep routed this contribution (see RoutingRecord).
+    ...(routing ? [`routing: ${JSON.stringify(routing)}`] : []),
     "---",
     "",
     detail,

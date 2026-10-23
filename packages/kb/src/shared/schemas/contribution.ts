@@ -65,6 +65,11 @@ export const ContributionSchema = z.object({
    * Routed by key alone, never by similarity or the subject check.
    */
   anchor: z.string().optional(),
+  /**
+   * Hint from distill: the existing entry this contribution is about. A strong
+   * prior for the sweep's subject check, never a bypass of it.
+   */
+  target: z.string().optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

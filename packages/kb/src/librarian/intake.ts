@@ -116,6 +116,7 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
     // A sender may name the summary ; else the
     // first paragraph of the body.
     anchor: anchor,
+    target: fields.target && /^kb-[A-Za-z0-9-]+$/.test(String(fields.target)) ? String(fields.target) : undefined,
     summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",

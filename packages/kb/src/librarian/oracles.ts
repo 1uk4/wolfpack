@@ -86,7 +86,7 @@ export function createOracles(engine: Engine) {
     async matchSubject(
       contribution: { title: string; summary: string },
       candidates: Array<{ id: string; title: string; summary: string }>
-    ): Promise<{ match: string; valid: boolean }> {
+    ): Promise<{ match: string; valid: boolean; reason?: string }> {
       const list = candidates
         .map((c) => `- ${c.id}: ${c.title}\n  ${c.summary}`)
         .join("\n\n");
@@ -108,11 +108,12 @@ export function createOracles(engine: Engine) {
           !(err instanceof BudgetExceeded) &&
           (/^Failed to extract valid output/.test(msg) || (err as { name?: string })?.name === "ZodError");
         if (!unparseable) throw err;
-        return { match: "new", valid: false };
+        return { match: "new", valid: false, reason: "unparseable answer" };
       }
       const match = result.match.trim();
-      if (candidates.some((c) => c.id === match)) return { match, valid: true };
-      return { match: "new", valid: match.toLowerCase() === "new" };
+      const reason = result.reason?.trim() || undefined;
+      if (candidates.some((c) => c.id === match)) return { match, valid: true, reason };
+      return { match: "new", valid: match.toLowerCase() === "new", reason };
     },
   };
 }

@@ -23,6 +23,7 @@ import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpa
 import { deliveredBullets, mergeDelivered, parseKbNotes, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
 import { distillTopic, type DistilledContribution } from "../distill.js";
 import { extractRecord, withoutRecord } from "../work-record.js";
+import { staleBuildWarning } from "./build-stamp.js";
 import { outcomesText, totalsText, totalsValues, withoutRollup } from "./rollup.js";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -276,7 +277,9 @@ export async function previewGraduation(opts: {
     const body = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
     return { id: o.id, title: o.title, summary: o.summary, body, initiative: !!o.initiative, history: historyOf(body) };
   });
+  const stale = staleBuildWarning();
   const warnings = [
+    ...(stale ? [`Stale build: ${stale}`] : []),
     ...r.missingTotals.map((m) => `Totals: ${m} is not in the distilled text`),
     ...r.warnings,
     ...r.after.filter((f) => !["commit-hash", "work-id", "test-count", "deploy-status", "dated-heading"].includes(f.code)).map((f) => `lint: ${f.message}`),

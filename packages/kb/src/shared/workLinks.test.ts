@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deliveredBullets, mergeDelivered, renderDelivered } from "./workLinks.js";
+import { deliveredBullets, mergeDelivered, renderDelivered, stripProseDelivered } from "./workLinks.js";
 
 const A = "kb-wolfpack-AAAAAAA";
 const B = "kb-wolfpack-BBBBBBB";
@@ -25,5 +25,15 @@ describe("Delivered", () => {
     const out = mergeDelivered(body, [{ title: "base image", links: [A, B] }, { title: "Other", links: [A] }, { title: "New", links: [] }]);
     expect(out).toBe(`## Delivered\n\n- Base image: [[${A}]], [[${B}]]\n- Other: [[${A}]]\n- New\n\n## History\n\n- h`);
     expect(mergeDelivered(out, [{ title: "Base image", links: [A, B] }])).toBe(out);
+  });
+
+  it("replaces a prose 'Delivered by' heading or paragraph with the list", () => {
+    const heading = "## Scope\n\nx\n\n## Delivered by the sweep work\n\nSome prose about it.\n\n- loose bullet\n\n## History\n\n- h";
+    expect(mergeDelivered(heading, [{ title: "F", links: [A] }])).toBe(`## Scope\n\nx\n\n## Delivered\n\n- F: [[${A}]]\n\n## History\n\n- h`);
+    const para = "## Scope\n\nx\n\nDelivered by F and G over two weeks.\nStill that paragraph.\n\n## History\n\n- h";
+    const out = mergeDelivered(para, [{ title: "F", links: [A] }]);
+    expect(out).not.toContain("Delivered by");
+    expect(out.match(/## Delivered/g)).toHaveLength(1);
+    expect(stripProseDelivered("## Delivered\n\n- F")).toBe("## Delivered\n\n- F");
   });
 });

@@ -82,6 +82,32 @@ export function deliveredBullets(body: string): DeliveredBullet[] {
 }
 
 /**
+ * Drop model-written prose that stands in for the list: a heading such as
+ * `## Delivered by the sweep work` (with its section) or a paragraph that opens
+ * "Delivered by …". The exact `## Delivered` list is left alone.
+ */
+export function stripProseDelivered(body: string): string {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^(#{2,4}) Delivered\b(?!\s*$)/.exec(lines[i]);
+    if (h) {
+      // skip to the next heading of the same or a higher level
+      i++;
+      while (i < lines.length && !new RegExp(`^#{1,${h[1].length}} `).test(lines[i])) i++;
+      i--;
+      continue;
+    }
+    if (/^(?:\*\*|_)?Delivered by\b/i.test(lines[i])) {
+      while (i + 1 < lines.length && lines[i + 1].trim() !== "") i++;
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+/**
  * Merge `bullets` into the body's `## Delivered` section without duplicating it:
  * a bullet whose feature is listed already adds only the links it lacks; a new
  * feature is appended. A body without the section gets one before `## History`
@@ -90,6 +116,7 @@ export function deliveredBullets(body: string): DeliveredBullet[] {
 export function mergeDelivered(body: string, bullets: DeliveredBullet[]): string {
   const want = bullets.filter((b) => b.title.trim());
   if (want.length === 0) return body;
+  body = stripProseDelivered(body);
   const r = deliveredRange(body);
   const lines = r
     ? body.slice(r.start, r.end).trimEnd().split("\n")

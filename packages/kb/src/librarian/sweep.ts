@@ -596,6 +596,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         resolve,
       });
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
+      if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
+      if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
       if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 

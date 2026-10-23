@@ -331,6 +331,21 @@ describe("produceEntry: knowledge lint", () => {
     expect(r.lint?.after).toEqual([]);
   });
 
+  it("a size pass fixes an entry that is only oversize", async () => {
+    const big = "## How\n" + "word ".repeat(1500);
+    const call = vi.fn().mockResolvedValueOnce(op({ detail: big })).mockResolvedValueOnce(op({ detail: big })).mockResolvedValueOnce(op({ detail: "## How\nshort" }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call.mock.calls[2][2].prompt).toContain("Condense the body");
+    expect(r.lint).toMatchObject({ sizePass: true, after: [] });
+  });
+
+  it("no size pass when another finding remains", async () => {
+    const call = vi.fn().mockResolvedValue(op({ detail: "## How\nTask AbC1234 done." }));
+    const r = await produceEntry({ call } as unknown as Engine, input());
+    expect(r.lint?.sizePass).toBe(false);
+  });
+
   it("oversize keeps the entry but reports it, in every domain", async () => {
     const big = "## How\n" + "word ".repeat(1500);
     const call = vi.fn().mockResolvedValue(op({ detail: big }));
@@ -353,7 +368,8 @@ describe("produceEntry: size counts the whole entry on a merge", () => {
       contribution: mockContribution(), domain: "wolfpack", section: SectionId.parse("sec-wolfpack-abc123"),
       placement: { basis: "routed", fit: 0.85 }, resolve: () => null, entryId: "kb-wolfpack-AbC1234", existingMarkdown: prev,
     });
-    expect(call).toHaveBeenCalledTimes(2); // retried for oversize
+    expect(call).toHaveBeenCalledTimes(3); // retried for oversize, then one size pass
     expect(r.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
+    expect(r.lint?.oversizeChars).toBeGreaterThan(6000);
   });
 });

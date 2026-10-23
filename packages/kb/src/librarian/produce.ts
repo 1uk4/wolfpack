@@ -23,6 +23,7 @@ import {
 import { contentHash as hashContent } from "../shared/hash.js";
 import {
   lintKnowledge, hardFindings, describeFindings, stripProperties, stripLedeRepeat, stripDetailHeading,
+  DEFAULT_BODY_CAP,
   type LintFinding,
 } from "../shared/knowledgeLint.js";
 import { anchorOf } from "./anchors.js";
@@ -65,7 +66,7 @@ export interface ProduceEntryResult {
   /** History lines of the previous entry the model dropped and code restored. */
   historyRestored?: string[];
   /** Knowledge-lint outcome on the model's output. */
-  lint?: { retried: boolean; before: LintFinding[]; after: LintFinding[] };
+  lint?: { retried: boolean; sizePass?: boolean; before: LintFinding[]; after: LintFinding[]; oversizeChars?: number };
 }
 
 /**
@@ -141,7 +142,26 @@ export async function produceEntry(
     properties: stripProperties(opinion.properties),
     detail: stripLedeRepeat(opinion.summary, stripDetailHeading(opinion.detail)),
   });
-  const lint = { retried, before, after: lintOpinion(opinion, previous) };
+  let after = lintOpinion(opinion, previous);
+  // Only the size is left: one focused pass that condenses the body.
+  let sizePass = false;
+  if (after.length && after.every((f) => f.code === "oversize")) {
+    sizePass = true;
+    opinion = shape(
+      await engine.call("produce", LlmOpinion, {
+        system: PRODUCE_SYSTEM,
+        prompt: `${prompt}\n\nYOUR LAST ANSWER (the detail below is over the size cap):\n${opinion.detail}\n\n${describeFindings(after)}\nCondense the body to ≤ ${DEFAULT_BODY_CAP} chars (History excluded): cut redundancy and repetition. Keep History exactly as it is; move nothing else; add nothing.`,
+      })
+    );
+    opinion = LlmOpinion.parse({
+      ...opinion,
+      properties: stripProperties(opinion.properties),
+      detail: stripLedeRepeat(opinion.summary, stripDetailHeading(opinion.detail)),
+    });
+    after = lintOpinion(opinion, previous);
+  }
+  const oversize = after.find((f) => f.code === "oversize");
+  const lint = { retried, sizePass, before, after, oversizeChars: oversize ? Number(/(\d+) chars/.exec(oversize.message)?.[1]) || undefined : undefined };
 
   // Build DerivedFacts deterministically
   // A decision is never rewritten in place: a contradicting contribution

@@ -426,6 +426,16 @@ describe("produceEntry: prevent at source", () => {
       expect(r.overflow?.body).toContain("Syncthing runs");
     });
 
+    it("Delivered links to retired entries become their survivors; ones with none are dropped", async () => {
+      const body = "## Delivered\n\n- Feature A: [[kb-wolfpack-Old1111]], [[kb-wolfpack-Live111]]\n- Feature B: [[kb-wolfpack-Gone333]]";
+      const call = vi.fn().mockResolvedValue(op({ detail: "## How\nclean\n\n## Delivered\n\n- Feature A: [[kb-wolfpack-Old1111]]" }));
+      const map = (ls: string[]) => [...new Set(ls.flatMap((l) => (l === "kb-wolfpack-Old1111" ? ["kb-wolfpack-Surv222"] : l === "kb-wolfpack-Gone333" ? [] : [l])))];
+      const r = await produceEntry({ call } as unknown as Engine, { ...input(mockContribution({ body })), resolveLinks: map });
+      expect(r.entry.detail).toContain("- Feature A: [[kb-wolfpack-Surv222]], [[kb-wolfpack-Live111]]");
+      expect(r.entry.detail).toContain("- Feature B");
+      expect(r.entry.detail).not.toMatch(/Old1111|Gone333/);
+    });
+
     it("with overflow not allowed the size pass condenses and an overflow is ignored", async () => {
       const big = "## How\n" + "word ".repeat(1500);
       const call = vi.fn()

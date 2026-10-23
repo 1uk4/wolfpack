@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import type { Engine } from "@wolfpack/engine";
 import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpack/kb/client";
-import { deliveredBullets, mergeDelivered, parseKbNotes, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
+import { deliveredBullets, mergeDelivered, parseKbNotes, resolveRetiredIds, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
 import { distillTopic, existingFor, type DistilledContribution } from "../distill.js";
 import { extractRecord, withoutRecord } from "../work-record.js";
 import { staleBuildWarning } from "./build-stamp.js";
@@ -121,6 +121,8 @@ export function buildGraduationInput(opts: {
   all: WorkItem[];
   /** The item's working document. */
   body: string;
+  /** The KB mirror: link-back notes naming retired entries are followed to their survivors. */
+  roots?: KbRoots;
 }): GraduationInput {
   const { item, all } = opts;
   const body = opts.body ?? "";
@@ -136,7 +138,7 @@ export function buildGraduationInput(opts: {
 
   // Entries the initiative's earlier graduations already updated (from the link-back notes).
   const siblings = initiative ? all.filter((f) => f.partOf === initiative.id && f.kind === "feature" && f.graduated && f.id !== item.id) : [];
-  const known = [...new Set(siblings.flatMap((f) => parseKbNotes(f.log).all))];
+  const known = [...new Set(siblings.flatMap((f) => linksOf(f, opts.roots)))];
 
   const lines: string[] = [`GRADUATION OF ${item.kind}: ${item.title}`, `WORK ID: ${item.id}`];
   if (item.successCriteria) lines.push(`DONE WHEN: ${item.successCriteria}`);
@@ -151,7 +153,7 @@ export function buildGraduationInput(opts: {
   if (features.length) {
     lines.push("", "FEATURES DELIVERED:");
     for (const f of features) {
-      const kb = parseKbNotes(f.log).all;
+      const kb = linksOf(f, opts.roots);
       lines.push(`- ${f.title}${f.successCriteria ? ` — ${f.successCriteria}` : ""}${kb.length ? ` (entries: ${kb.map((k) => `[[${k}]]`).join(", ")})` : ""}`);
     }
   }
@@ -225,10 +227,21 @@ export interface GraduationPreview {
  * initiative (and the one graduating now) with the entries its link-back notes
  * name. A feature with no notes yet is listed without links.
  */
-export function deliveredFor(initiative: WorkItem, item: WorkItem, all: WorkItem[]): DeliveredBullet[] {
+export function deliveredFor(initiative: WorkItem, item: WorkItem, all: WorkItem[], roots?: KbRoots): DeliveredBullet[] {
   return all
     .filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id))
-    .map((f) => ({ title: f.title, links: parseKbNotes(f.log).all }));
+    .map((f) => ({ title: f.title, links: linksOf(f, roots) }));
+}
+
+/**
+ * The entries a work item's link-back notes name, each followed through the
+ * retire chain to the live entry that replaced it (retired ids with no
+ * survivor are dropped, duplicates collapsed). Without the KB mirror the notes
+ * are taken as they are. See resolveRetiredIds for what the wolf can know.
+ */
+export function linksOf(f: WorkItem, roots?: KbRoots): string[] {
+  const all = parseKbNotes(f.log).all;
+  return roots ? resolveRetiredIds(roots, all, { workId: f.id as string }) : all;
 }
 
 const historyOf = (body: string): string[] => {
@@ -257,7 +270,7 @@ export async function previewGraduation(opts: {
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
   const { body } = await client.getWithBody(id);
-  const input = buildGraduationInput({ item, all, body: body ?? "" });
+  const input = buildGraduationInput({ item, all, body: body ?? "", roots: opts.roots });
   const isInitiative = item.kind === "initiative";
   opts.onProgress?.(`distilling ${input.text.length} chars…`);
   const r = await distillTopic(engine, {
@@ -276,7 +289,7 @@ export async function previewGraduation(opts: {
     },
   });
 
-  const delivered = input.initiative ? deliveredFor(input.initiative, item, all) : [];
+  const delivered = input.initiative ? deliveredFor(input.initiative, item, all, opts.roots) : [];
   const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
     // The initiative's list of delivered features is built here, not by the model.
     const body = o.initiative ? mergeDelivered(o.body, delivered) : o.body;

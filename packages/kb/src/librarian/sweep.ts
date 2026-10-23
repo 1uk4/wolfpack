@@ -25,7 +25,7 @@ import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
-import { resolveAliasedEntry } from "./alias.js";
+import { resolveAliasedEntry, survivorOf } from "./alias.js";
 import { produceEntry } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
@@ -205,6 +205,16 @@ export function liveEntryIds(roots: KbRoots): Set<string> {
     for (const f of readdirSync(dir)) if (f.endsWith(".md")) ids.add(f.slice(0, -3));
   }
   return ids;
+}
+
+/** `id` if it is a live entry, else the live entry its retirement chain ends at, else null. */
+export function liveSurvivor(log: KbEvent[], live: ReadonlySet<string>, id: string): string | null {
+  let cur: string | null = id;
+  for (let hops = 0; cur && hops < 5; hops++) {
+    if (live.has(cur)) return cur;
+    cur = survivorOf(log, cur);
+  }
+  return null;
 }
 
 /** The contribution for a second subject split out of `c` (its own den topic id: the alias of `c` stays on the main entry). */
@@ -682,6 +692,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // An update keeps the entry's original creation date.
       const existingCreated = existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") || undefined : undefined;
 
+      const liveIds = liveEntryIds(roots);
       const { entry, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
@@ -691,7 +702,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         existingMarkdown,
         existingCreated,
         resolve,
-        liveIds: liveEntryIds(roots),
+        liveIds,
+        resolveLinks: (links) => links.map((id) => liveSurvivor(log, liveIds, id)).filter((id): id is string => !!id),
         allowOverflow: overflowOk,
       });
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);

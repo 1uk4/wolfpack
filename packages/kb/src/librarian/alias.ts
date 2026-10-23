@@ -14,7 +14,7 @@ export function entryDomain(id: string): string | null {
 }
 
 /** The survivor a retire reason names ("merged into <id>" / "moved to <id>"). */
-function survivorOf(log: KbEvent[], id: string): string | null {
+export function survivorOf(log: KbEvent[], id: string): string | null {
   for (let i = log.length - 1; i >= 0; i--) {
     const e = log[i];
     if (e.t !== "entry_retired" || e.entryId !== id) continue;

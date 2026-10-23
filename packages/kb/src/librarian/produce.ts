@@ -27,7 +27,7 @@ import {
   type LintFinding,
 } from "../shared/knowledgeLint.js";
 import { anchorOf } from "./anchors.js";
-import { deliveredBullets, mergeDelivered } from "../shared/index.js";
+import { deliveredBullets, mapDeliveredLinks, mergeDelivered } from "../shared/index.js";
 import { addCitedHistory, dedupeDetail, existingRelations, foldIntro, historyLines, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -58,6 +58,8 @@ export interface ProduceEntryInput {
   /** The model may return a second subject as `overflow` (default true; the
    *  overflow's own produce passes false, so a split never recurses). */
   allowOverflow?: boolean;
+  /** Maps `## Delivered` links to live entries: retired ids to their survivors, ids with none dropped. */
+  resolveLinks?: (links: string[]) => string[];
 }
 
 /** A second subject the model split out of the contribution, to be routed as its own contribution. */
@@ -239,9 +241,14 @@ export async function produceEntry(
 
   // An initiative's Delivered links (built in code from the features' link-back
   // notes) are never lost: the entry's own plus the contribution's are re-added.
-  const delivered = [...(previous && mergeId ? deliveredBullets(previous) : []), ...deliveredBullets(contribution.body)];
-  if (delivered.length && !(decisionTarget && !supersedes)) {
-    opinion = LlmOpinion.parse({ ...opinion, detail: mergeDelivered(opinion.detail, delivered) });
+  const resolveLinks = input.resolveLinks;
+  const delivered = [...(previous && mergeId ? deliveredBullets(previous) : []), ...deliveredBullets(contribution.body)]
+    .map((b) => (resolveLinks ? { ...b, links: resolveLinks(b.links) } : b));
+  if (!(decisionTarget && !supersedes)) {
+    let detail = delivered.length ? mergeDelivered(opinion.detail, delivered) : opinion.detail;
+    // Links the model copied from the old entry may name retired entries too.
+    if (resolveLinks) detail = mapDeliveredLinks(detail, resolveLinks);
+    if (detail !== opinion.detail) opinion = LlmOpinion.parse({ ...opinion, detail });
   }
 
   // Graduated work's cited History lines always reach the entry.

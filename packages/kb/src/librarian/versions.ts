@@ -10,7 +10,7 @@
  * and it rides the domain's Syncthing share with the rest of the folder.
  * Timestamps use `-` for `:` so the names are legal on every filesystem.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite } from "@wolfpack/engine";
 import { type KbRoots, entryVersionsDir } from "../shared/index.js";
@@ -88,12 +88,25 @@ export function snapshotIfChanged(
   return meaningfulContent(previous) === meaningfulContent(next) ? null : snapshotEntry(roots, domain, entryId, previous);
 }
 
-/** Retire: move the entry file into its versions folder. Nothing is destroyed. */
-export function archiveRetiredEntry(roots: KbRoots, domain: string, entryId: string, file: string): string {
+/**
+ * Retire: move the entry file into its versions folder. Nothing is destroyed.
+ * A reason that names a survivor ("merged into <id>" / "moved to <id>") is
+ * recorded in the copy's frontmatter (`retired`, `retiredInto`), so a wolf that
+ * has the KB mirror but not the ledger can still follow the entry to it.
+ */
+export function archiveRetiredEntry(roots: KbRoots, domain: string, entryId: string, file: string, reason?: string): string {
   const dir = entryVersionsDir(roots, domain, entryId);
   mkdirSync(dir, { recursive: true });
   const name = stamp(dir, "-retired");
-  renameSync(file, join(dir, `${name}.md`));
+  const into = reason ? /\b(?:merged into|moved to)\s+(kb-[A-Za-z0-9-]+)/i.exec(reason)?.[1] : undefined;
+  const raw = reason && into ? readFileSync(file, "utf-8") : null;
+  if (raw && reason && /^---\n/.test(raw)) {
+    const extra = `retired: ${JSON.stringify(reason)}\nretiredInto: ${into}`;
+    atomicWrite(join(dir, `${name}.md`), raw.replace(/^---\n/, `---\n${extra}\n`));
+    unlinkSync(file);
+  } else {
+    renameSync(file, join(dir, `${name}.md`));
+  }
   return name;
 }
 

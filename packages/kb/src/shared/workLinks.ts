@@ -140,3 +140,25 @@ export function mergeDelivered(body: string, bullets: DeliveredBullet[]): string
   if (h < 0) return `${body.trimEnd()}\n\n${section}\n`;
   return `${body.slice(0, h).trimEnd()}\n\n${section}\n\n${body.slice(h)}`;
 }
+
+/**
+ * Rewrite the entry links of every `## Delivered` bullet through `map` (a list
+ * in, a list out: retired ids to their survivors, unresolvable ones dropped,
+ * duplicates collapsed). Titles and all other lines are left as they are.
+ */
+export function mapDeliveredLinks(body: string, map: (links: string[]) => string[]): string {
+  const r = deliveredRange(body);
+  if (!r) return body;
+  const section = body
+    .slice(r.start, r.end)
+    .split("\n")
+    .map((l) => {
+      if (!l.trim().startsWith("- ")) return l;
+      const links = [...l.matchAll(ENTRY_LINK)].map((m) => m[1]);
+      if (!links.length) return l;
+      const next = [...new Set(map(links))];
+      return next.length === links.length && next.every((x, i) => x === links[i]) ? l : renderDelivered({ title: bulletTitle(l.trim()), links: next });
+    })
+    .join("\n");
+  return `${body.slice(0, r.start)}${section}${body.slice(r.end)}`;
+}

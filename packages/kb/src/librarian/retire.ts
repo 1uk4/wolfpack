@@ -60,7 +60,7 @@ export function retireEntries(
   // on disk and retires it again (the fold tolerates duplicate retirements).
   appendLedger(roots, result.retired.map((r) => ev.entryRetired(r.entryId, opts.reason)));
   for (const r of result.retired) {
-    if (r.hadFile) archiveRetiredEntry(roots, r.domain, r.entryId, join(entriesDir(roots, r.domain), `${r.entryId}.md`));
+    if (r.hadFile) archiveRetiredEntry(roots, r.domain, r.entryId, join(entriesDir(roots, r.domain), `${r.entryId}.md`), opts.reason);
   }
 
   renderRegistry(roots, foldRegistry(readLedger(roots)), result.domains);

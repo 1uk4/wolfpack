@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { retireEntries } from "./retire.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
-import { ev, type KbRoots } from "../shared/index.js";
+import { ev, resolveRetiredIds, type KbRoots } from "../shared/index.js";
 
 describe("retireEntries", () => {
   let testRoot: string;
@@ -93,5 +93,17 @@ describe("retireEntries", () => {
     seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"] });
     expect(() => retireEntries(roots, ["kb-fit-aaaaaaa", "../etc/passwd"])).toThrow(/not entry ids/);
     expect(existsSync(d("entries", "kb-fit-aaaaaaa.md"))).toBe(true);
+  });
+
+  it("records the survivor a reason names in the retired copy, so a wolf can follow it", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"] });
+    retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "merged into kb-fit-bbbbbbb" });
+    const dir = d("versions", "kb-fit-aaaaaaa");
+    const f = readdirSync(dir).find((n) => n.endsWith("-retired.md"))!;
+    const md = readFileSync(join(dir, f), "utf-8");
+    expect(md).toMatch(/^---\nretired: "merged into kb-fit-bbbbbbb"\nretiredInto: kb-fit-bbbbbbb\ntitle: kb-fit-aaaaaaa/);
+    expect(md).toContain("body");
+    expect(existsSync(d("entries", "kb-fit-aaaaaaa.md"))).toBe(false);
+    expect(resolveRetiredIds(roots, ["kb-fit-aaaaaaa"])).toEqual(["kb-fit-bbbbbbb"]);
   });
 });

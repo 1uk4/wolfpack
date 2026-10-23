@@ -15,3 +15,4 @@ export * from "./domain-registry.js";
 export * from "./ev.js";
 export * from "./knowledgeLint.js";
 export * from "./workLinks.js";
+export * from "./retired.js";

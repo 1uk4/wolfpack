@@ -3,7 +3,7 @@
  * fake Work API (in-memory) and temp dirs; nothing leaves the process.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -12,6 +12,8 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import {
   archiveSet,
   buildGraduationInput,
+  deliveredFor,
+  linksOf,
   confirmGraduation,
   previewGraduation,
   readyToGraduate,
@@ -326,5 +328,40 @@ describe("archiveSet", () => {
     const t2 = w("task", "T2", f.id, { stage: "archived" });
     expect(archiveSet(f, [init, f, t1, t2]).map((i) => i.id)).toEqual([f.id, t1.id]);
     expect(archiveSet(init, [init, f, t1, t2]).map((i) => i.id)).toEqual([init.id, f.id, t1.id]);
+  });
+});
+
+describe("Delivered follows retired entries (the Ss47OBh case)", () => {
+  let dir: string;
+  let roots: KbRoots;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "grad-retired-"));
+    roots = { kbBase: join(dir, "kb"), opsRoot: join(dir, "ops"), denLocal: join(dir, "den") };
+    const d = join(roots.kbBase, "domains", "wp");
+    mkdirSync(join(d, "entries"), { recursive: true });
+    for (const id of ["kb-wp-340zBGW", "kb-wp-bWGgKqJ"]) writeFileSync(join(d, "entries", `${id}.md`), `---\nid: ${id}\n---\nb`);
+    mkdirSync(join(d, "versions", "kb-wp-T4pp4qR"), { recursive: true });
+    writeFileSync(join(d, "versions", "kb-wp-T4pp4qR", "2026-10-23T17-39-14.001Z-retired.md"), "---\nid: kb-wp-T4pp4qR\n---\nold");
+    writeFileSync(join(d, "_registry.md"), "## kb-wp-340zBGW\n\n- entries: kb-wp-340zBGW\n- aliases:\n  - 1uk4:work-wp-Ss47OBh (2026-10-23 17:39)\n\n## kb-wp-bWGgKqJ\n\n- entries: kb-wp-bWGgKqJ\n- aliases:\n  - 1uk4:work-wp-Ss47OBh~local-first-pack-topology (2026-10-23 01:24)\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const init = w("initiative", "Open-source readiness", null);
+  const ss47 = { ...w("feature", "Local-first pack", init.id), id: "work-wp-Ss47OBh", graduated: "2026-10-23", log: [{ at: "x", text: "KB: created kb-wp-T4pp4qR" }, { at: "y", text: "KB: created kb-wp-bWGgKqJ" }] } as unknown as WorkItem;
+
+  it("without the mirror the notes are taken as they are (the retired id leaks in)", () => {
+    expect(deliveredFor(init, ss47, [init, ss47])[0].links).toEqual(["kb-wp-T4pp4qR", "kb-wp-bWGgKqJ"]);
+  });
+  it("with the mirror, the retired id is replaced by its survivor and nothing is duplicated", () => {
+    expect(deliveredFor(init, ss47, [init, ss47], roots)[0].links).toEqual(["kb-wp-340zBGW", "kb-wp-bWGgKqJ"]);
+    const withFix = { ...ss47, log: [...ss47.log, { at: "z", text: "KB: updated kb-wp-340zBGW" }] } as WorkItem;
+    expect(linksOf(withFix, roots)).toEqual(["kb-wp-bWGgKqJ", "kb-wp-340zBGW"]);
+  });
+  it("the graduation input offers distill the live entries only", () => {
+    const sib = { ...ss47, id: "work-wp-Sib0001" } as WorkItem;
+    const g = w("feature", "Next", init.id);
+    const r = buildGraduationInput({ item: g, all: [init, ss47, g, sib], body: "# N\n\nx", roots });
+    expect(r.text).toContain("[[kb-wp-340zBGW]]");
+    expect(r.text).not.toContain("T4pp4qR");
   });
 });

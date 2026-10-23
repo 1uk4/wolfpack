@@ -138,6 +138,7 @@ export {
   distillTopic,
   readDistillRecord,
   DistillOutputSchema,
+  existingFor,
   type PromoteTopic,
   type PromoteOptions,
   type PromoteStats,

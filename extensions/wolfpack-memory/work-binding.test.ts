@@ -395,3 +395,54 @@ describe("finishing the last task: stay bound until graduated", () => {
     expect(other.stage).not.toBe("archived");
   });
 });
+
+describe("binding defaults and a stale binding", () => {
+  const sessionFile = () => join(den, "factory", "sessions", "sess-1", "active-task.json");
+  const rebindOutOfBand = async (t: Item) => {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(sessionFile(), JSON.stringify({ workId: t.id, domain: "wolfpack", boundAt: new Date().toISOString() }));
+  };
+
+  it("binds only the first of several tasks created in a row", async () => {
+    const replies = [];
+    for (const title of ["One", "Two", "Three"]) {
+      replies.push(text(await run("task_create", { kind: "task", domain: "wolfpack", title })));
+    }
+    expect(replies.filter((r) => r.includes("Bound to it."))).toHaveLength(1);
+    expect(replies[0]).toContain("Bound to it.");
+    expect(text(await run("task_current"))).toContain("One");
+  });
+
+  it("binds only one of several tasks created at the same time", async () => {
+    const replies = (await Promise.all(
+      ["One", "Two", "Three"].map((title) => run("task_create", { kind: "task", domain: "wolfpack", title })),
+    )).map(text);
+    expect(replies.filter((r) => r.includes("Bound to it."))).toHaveLength(1);
+    expect(replies.filter((r) => r.includes("Not bound: another item is already bound"))).toHaveLength(2);
+  });
+
+  it("task_stage without an id acts on the item bound by the latest rebind", async () => {
+    const a = task({ title: "First", stage: "plan" });
+    const b = task({ title: "Second", stage: "plan" });
+    await run("task_bind", { id: a.id });
+    await run("task_bind", { id: b.id });
+    const r = text(await run("task_stage", { to: "approved" }));
+    expect(api.items.get(b.id)!.stage).toBe("approved");
+    expect(api.items.get(a.id)!.stage).toBe("plan");
+    expect(r).not.toContain("Heads-up");
+  });
+
+  it("a rebind made behind the tools' back is picked up, and the heads-up names both items correctly", async () => {
+    const a = task({ title: "First" });
+    const b = task({ title: "Second" });
+    await run("task_bind", { id: a.id });
+    await rebindOutOfBand(b);
+    const r = text(await run("task_stage", { to: "approved" }));
+    expect(api.items.get(b.id)!.stage).toBe("approved");
+    expect(api.items.get(a.id)!.stage).toBe("plan");
+    expect(r).not.toContain("Heads-up");
+    await rebindOutOfBand(a);
+    const note = text(await run("task_note", { id: b.id, text: "x" }));
+    expect(note).toContain(`you're working on "Second" (${b.id}) but the bound item is "First" (${a.id})`);
+  });
+});

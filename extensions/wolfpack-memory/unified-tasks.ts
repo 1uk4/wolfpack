@@ -42,6 +42,7 @@ import {
   recordFeatureId,
   renderFeatureRecord,
   shouldBindOnCreate,
+  createSerial,
   notBoundReason,
   withHeadsUp,
   UNBOUND_CONTEXT,
@@ -82,6 +83,7 @@ interface ActiveBinding {
  * auto-bind, no heads-up; task_bind / task_unbind refuse. Other tools keep working.
  */
 const isSubagent = () => !!process.env.PI_SUBAGENT_AGENT;
+const bindSerial = createSerial();
 const SUBAGENT_NO_BIND = "Subagents don't bind: the orchestrator owns the binding.";
 const heads = (reply: string, working: { id: string; title?: string }, bound: { id: string; title?: string } | null) =>
   isSubagent() ? reply : withHeadsUp(reply, working, bound);
@@ -676,17 +678,16 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             const result = await client.create(input);
 
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
-            const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx.wolfDen)), bind: args.bind };
-            if (isSubagent()) {
-              // a subagent never binds
-            } else if (shouldBindOnCreate(bindInput)) {
+            // One at a time, reading the binding file inside: parallel creates see each other's binding.
+            reply += await bindSerial(async () => {
+              const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx.wolfDen)), bind: args.bind };
+              if (isSubagent()) return ""; // a subagent never binds
+              if (!shouldBindOnCreate(bindInput)) return `\nNot bound: ${notBoundReason(bindInput)}.`;
               await writeBinding(ctx.wolfDen, result.item.id, args.domain, await recordFeatureId(client, result.item));
               await writeCache(result.item);
               await syncFeatureStage(client, result.item).catch(() => {});
-              reply += "\nBound to it.";
-            } else {
-              reply += `\nNot bound: ${notBoundReason(bindInput)}.`;
-            }
+              return "\nBound to it.";
+            });
             return { content: [{ type: "text", text: reply }] };
           } catch (err) {
             return {

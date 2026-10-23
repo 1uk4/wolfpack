@@ -187,3 +187,23 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(sectionText("active_task")).toContain("Bound to Stray — shipped, ready to graduate (press g / task_graduate)");
   });
 });
+
+describe("durable task tools: binding defaults and rebinds", () => {
+  it("binds only one of several tasks created at the same time", async () => {
+    const replies = await Promise.all(["A", "B", "C"].map((title) => run("task_create", { kind: "task", domain: "wolfpack", title })));
+    expect(replies.filter((r) => r.includes("Bound to it."))).toHaveLength(1);
+    expect(replies.filter((r) => r.includes("Not bound: another item is already bound"))).toHaveLength(2);
+  });
+
+  it("after a rebind, task_stage without an id acts on the new item and the heads-up names the right ones", async () => {
+    const a = add({ kind: "task", title: "First" });
+    const b = add({ kind: "task", title: "Second" });
+    await run("task_bind", { id: a.id });
+    await run("task_bind", { id: b.id });
+    const r = await run("task_stage", { to: "approved" });
+    expect(items.get(b.id)!.stage).toBe("approved");
+    expect(items.get(a.id)!.stage).toBe("plan");
+    expect(r).not.toContain("Heads-up");
+    expect(await run("task_note", { id: a.id, text: "x" })).toContain(`you're working on "First" (${a.id}) but the bound item is "Second" (${b.id})`);
+  });
+});

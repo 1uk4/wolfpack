@@ -45,6 +45,20 @@ export function shouldBindOnCreate(i: AutoBindInput): boolean {
   return !i.bound && i.assignee === i.wolf;
 }
 
+/**
+ * A queue that runs async jobs one at a time. The create-then-bind decision
+ * must not interleave: tool calls issued together would each see "nothing
+ * bound" and each bind.
+ */
+export function createSerial(): <T>(job: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return (job) => {
+    const run = tail.then(job, job);
+    tail = run.catch(() => {});
+    return run;
+  };
+}
+
 /** Why a created item was not bound, for the tool reply. */
 export function notBoundReason(i: AutoBindInput): string {
   if (!BINDABLE.includes(i.kind)) return `${i.kind}s are workspaces and cannot be bound`;

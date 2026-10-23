@@ -126,6 +126,7 @@ export {
   shouldBindOnCreate,
   notBoundReason,
   bindingLabel,
+  createSerial,
   readyBoundContext,
   readyBoundReply,
   headsUp,

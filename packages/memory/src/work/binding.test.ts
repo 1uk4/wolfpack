@@ -88,3 +88,21 @@ describe("recordFeatureId", () => {
     expect(await recordFeatureId(c as any, {})).toBeUndefined();
   });
 });
+
+describe("createSerial", () => {
+  it("runs jobs one at a time, in order, even when one fails", async () => {
+    const { createSerial } = await import("./binding.js");
+    const serial = createSerial();
+    const log: string[] = [];
+    const job = (name: string, ms: number, fail = false) => serial(async () => {
+      log.push(`start ${name}`);
+      await new Promise((r) => setTimeout(r, ms));
+      log.push(`end ${name}`);
+      if (fail) throw new Error(name);
+      return name;
+    });
+    const results = await Promise.allSettled([job("a", 20, true), job("b", 1), job("c", 1)]);
+    expect(log).toEqual(["start a", "end a", "start b", "end b", "start c", "end c"]);
+    expect(results.map((r) => r.status)).toEqual(["rejected", "fulfilled", "fulfilled"]);
+  });
+});

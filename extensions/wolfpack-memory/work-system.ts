@@ -72,6 +72,7 @@ import {
   readyBoundReply,
   withHeadsUp,
   shouldBindOnCreate,
+  createSerial,
   notBoundReason,
   UNBOUND_CONTEXT,
   BINDING_RULES,
@@ -381,8 +382,22 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       debugLog('ensureSessionLoaded: session change', { sid, prev: sessionId });
       sessionId = sid;
     }
+    // An unknown session has no file to re-read: memory is all there is.
+    if (sessionId === "unknown" && !isSubagent()) return;
     activeTask = isSubagent() ? null : readActiveTask(wolfDen, sessionId);
   }
+  /**
+   * Every tool starts from the binding as it is NOW: re-read from the file (a
+   * rebind may have been made elsewhere) and, when the cached item is not the
+   * bound one, re-fetch it so no tool names a stale item.
+   */
+  async function syncBinding(ctx: any): Promise<void> {
+    ensureSessionLoaded(ctx);
+    if (!activeTask) { activeItem = null; return; }
+    if (activeItem?.id !== activeTask.workId) await refreshActiveItem();
+  }
+  /** Runs the create-then-bind decisions one at a time: parallel task_create calls must see each other's binding. */
+  const bindSerial = createSerial();
   function getBoundWork(): { taskId: string; featureId?: string } | null {
     const t = sessionId ? readActiveTask(wolfDen!, sessionId) : activeTask;
     return t ? { taskId: t.workId, ...(t.featureId ? { featureId: t.featureId } : {}) } : null;
@@ -1152,7 +1167,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
   // ── Agent-callable tools ────────────────────────────────────────────────
 
   /** The bound item as the heads-up line names it. */
-  const boundRef = () => (activeTask ? { id: activeTask.workId, title: activeItem?.title } : null);
+  const boundRef = () => (activeTask ? { id: activeTask.workId, title: activeItem?.id === activeTask.workId ? activeItem.title : undefined } : null);
   const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], ...(isError ? { isError: true } : {}) });
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
 
@@ -1166,6 +1181,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.String({ description: "Work item ID to bind to" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
         let item: WorkItem;
         try { item = await client.get(params.id); } catch { return text(`Work item ${params.id} not found.`, true); }
@@ -1184,6 +1200,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       description: "Unbind from the current work item without shipping it. What you learn afterwards goes to den topics until you bind again.",
       parameters: Type.Object({}),
       async execute(_id, _params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
         ensureSessionLoaded(ctx);
         if (!activeTask) return text("No work item bound.");
@@ -1200,6 +1217,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       description: "Show the currently bound work item.",
       parameters: Type.Object({}),
       async execute(_id, _params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         ensureSessionLoaded(ctx);
         if (!activeTask) return text(UNBOUND_CONTEXT);
         await refreshActiveItem();
@@ -1219,6 +1237,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.Optional(Type.String({ description: "Work item to update (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         const target = params.id ?? activeTask?.workId;
         if (!target || (!params.id && !activeItem)) return text("No active task. Bind one with task_bind.", true);
         try {
@@ -1244,6 +1263,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.Optional(Type.String({ description: "Work item to note (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         const target = params.id ?? activeTask?.workId;
         if (!target) return text("No active task. Bind one with task_bind.", true);
         try {
@@ -1270,6 +1290,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         const target = params.id ?? activeTask?.workId;
         if (!target) return text("No active task. Bind one with task_bind.", true);
         try {
@@ -1309,6 +1330,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         ),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         const unscheduling = params.clear === true || params.scheduledFor === "";
         const sched: string | null = unscheduling ? null : (params.scheduledFor ?? null);
@@ -1342,6 +1364,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         target: Type.String({ description: "Target work item id (work-*)" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
           await client.link(activeTask.workId, params.rel, params.target);
@@ -1364,6 +1387,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         target: Type.String({ description: "Target id to unlink" }),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         if (!activeTask) return { content: [{ type: "text" as const, text: "No active task." }], isError: true };
         try {
           await client.unlink(activeTask.workId, params.rel, params.target);
@@ -1386,6 +1410,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.Optional(Type.String({ description: "Work item to move (default: the bound task)" })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         const id = params.id ?? activeTask?.workId;
         if (!id) return { content: [{ type: "text" as const, text: "No id given and no task bound." }], isError: true };
         try {
@@ -1430,6 +1455,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         bind: Type.Optional(Type.Boolean({ description: "Bind the new item (task/issue/spike) so what you learn goes to its Record. Default: true when nothing is bound and the item is assigned to you, else false." })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        await syncBinding(ctx);
         // Resolve partOf first so we can check its domain. Keep the current
         // workspace-defaulting behaviour (bound task's feature; last-worked
         // feature in session).
@@ -1470,14 +1496,14 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         try {
           const result = await client.create(input);
           let reply = `Created ${result.id}: ${result.item.title} [${result.item.stage}]`;
-          const bindInput = { kind: params.kind, assignee: input.assignee, wolf: wolfName, bound: !!activeTask, bind: params.bind };
-          if (isSubagent()) {
-            // a subagent never binds
-          } else if (shouldBindOnCreate(bindInput)) {
-            reply += (await bindToTask(result.item, ctx)) ? `\nBound to it.` : `\nNot bound: could not bind it.`;
-          } else {
-            reply += `\nNot bound: ${notBoundReason(bindInput)}.`;
-          }
+          // One at a time, from the binding as it is now: the first task created binds, the rest see it.
+          reply += await bindSerial(async () => {
+            await syncBinding(ctx);
+            const bindInput = { kind: params.kind, assignee: input.assignee, wolf: wolfName, bound: !!activeTask, bind: params.bind };
+            if (isSubagent()) return ""; // a subagent never binds
+            if (shouldBindOnCreate(bindInput)) return (await bindToTask(result.item, ctx)) ? `\nBound to it.` : `\nNot bound: could not bind it.`;
+            return `\nNot bound: ${notBoundReason(bindInput)}.`;
+          });
           return { content: [{ type: "text" as const, text: reply }] };
         } catch (e: any) {
           return { content: [{ type: "text" as const, text: e.message }], isError: true };
@@ -1515,6 +1541,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
         id: Type.Optional(Type.String({ description: "Work item to ship (default: the bound one)" })),
       }),
       async execute(_id, params, _signal, onUpdate, ctx) {
+        await syncBinding(ctx);
         if (params.id && params.id !== activeTask?.workId) {
           // Another item than the bound one: ship it, keep the binding.
           try {

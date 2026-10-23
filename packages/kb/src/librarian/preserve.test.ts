@@ -130,6 +130,18 @@ describe("produceEntry guards", () => {
     expect(r.entry.relations).toContainEqual({ kind: "see_also", target: "kb-wolfpack-ZZZZZZZ", source: "code" });
   });
 
+  it("a merge that drops a Delivered link gets it back, without duplicating the model's lines", async () => {
+    const prev = `---\nid: kb-wolfpack-abc1234\nkind: architecture\ncreated: 2026-01-01\nanchor: work-wolfpack-AAAAAAA\n---\n\n# T\n\nThe lede.\n\n## Scope\n\nOld.\n\n## Delivered\n\n- Base image: [[kb-wolfpack-CCCCCCC]], [[kb-wolfpack-DDDDDDD]]\n- Compose: [[kb-wolfpack-EEEEEEE]]\n\n## History\n\n${H1}\n`;
+    const { engine } = engineReturning({ detail: "## Scope\n\nNew.\n\n## Delivered\n\n- Base image: [[kb-wolfpack-CCCCCCC]]\n\n## History\n\n" + H1 });
+    const body = "## Delivered\n\n- Healthchecks: [[kb-wolfpack-FFFFFFF]]\n- Base image: [[kb-wolfpack-CCCCCCC]]\n";
+    const r = await produceEntry(engine, { ...input, contribution: contribution({ body }), entryId: "kb-wolfpack-abc1234", existingMarkdown: prev });
+    expect(r.entry.detail.match(/## Delivered/g)).toHaveLength(1);
+    expect(r.entry.detail).toContain("- Base image: [[kb-wolfpack-CCCCCCC]], [[kb-wolfpack-DDDDDDD]]");
+    expect(r.entry.detail).toContain("- Compose: [[kb-wolfpack-EEEEEEE]]");
+    expect(r.entry.detail).toContain("- Healthchecks: [[kb-wolfpack-FFFFFFF]]");
+    expect(r.entry.detail.indexOf("## Delivered")).toBeLessThan(r.entry.detail.indexOf("## History"));
+  });
+
   it("a History line citing a work id passes the lint; the id in the body does not", async () => {
     const cite = "- 2026-10-22: sweep takes one item per run (work-wolfpack-ggNO3Sv).";
     const ok = engineReturning({ detail: `## Body\n\nNew.\n\n## History\n\n${cite}\n` });

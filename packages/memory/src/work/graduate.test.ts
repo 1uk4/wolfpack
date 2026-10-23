@@ -225,6 +225,29 @@ describe("graduation: preview then confirm", () => {
     expect(p.warnings.some((x) => x.includes("dropped an extra contribution"))).toBe(true);
   });
 
+  it("the initiative's contribution gets a Delivered list built in code from the link-back notes", async () => {
+    const g = { ...f, id: "work-wp-GGGGGGG", title: "Base image", graduated: "2026-10-05", stage: "archived", log: [{ at: "x", text: "KB: created kb-wp-CCCCCCC" }, { at: "x", text: "KB: updated kb-wp-DDDDDDD" }] } as WorkItem;
+    const { client } = fakeClient([init, g, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const p = await previewGraduation({ client, engine: engineOf(answer(f.id)).engine, id: f.id as string, today: "2026-10-22" });
+    const ini = p.contributions.find((c) => c.initiative)!;
+    expect(ini.body).toContain("## Delivered");
+    expect(ini.body).toContain("- Base image: [[kb-wp-CCCCCCC]], [[kb-wp-DDDDDDD]]");
+    expect(ini.body).toContain("- Compose\n"); // the graduating feature has no notes yet: no links
+    expect(ini.body.indexOf("## Delivered")).toBeLessThan(ini.body.indexOf("## History"));
+    expect(p.contributions.find((c) => !c.initiative)!.body).not.toContain("## Delivered");
+  });
+
+  it("a model-written Delivered section is merged, not duplicated", async () => {
+    const g = { ...f, id: "work-wp-GGGGGGG", title: "Base image", graduated: "2026-10-05", stage: "archived", log: [{ at: "x", text: "KB: created kb-wp-CCCCCCC" }] } as WorkItem;
+    const own = { contributions: [{ slug: "initiative", initiative: true, title: "Dockerize", summary: "Containers.", body: "## Scope\n\nContainers.\n\n## Delivered\n\n- Base image: [[kb-wp-EEEEEEE]]\n\n## History\n\n- 2026-10-22: done" }] };
+    const { client } = fakeClient([init, g], { [init.id]: "# Dockerize\n\n## Plan\n\nContainerise.\n" });
+    const p = await previewGraduation({ client, engine: engineOf(own).engine, id: init.id as string, today: "2026-10-22" });
+    const body = p.contributions[0].body;
+    expect(body.match(/## Delivered/g)).toHaveLength(1);
+    expect(body.match(/- Base image/g)).toHaveLength(1);
+    expect(body).toContain("- Base image: [[kb-wp-EEEEEEE]], [[kb-wp-CCCCCCC]]");
+  });
+
   it("not-ready items are refused", async () => {
     const { client } = fakeClient([init, f, { ...t1, stage: "in_build" } as WorkItem], {});
     await expect(previewGraduation({ client, engine: engineOf(answer(f.id)).engine, id: f.id as string })).rejects.toThrow(/not ready/);

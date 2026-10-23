@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import type { Engine } from "@wolfpack/engine";
 import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpack/kb/client";
-import { parseKbNotes, type KbRoots } from "@wolfpack/kb/shared";
+import { deliveredBullets, mergeDelivered, parseKbNotes, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
 import { distillTopic, type DistilledContribution } from "../distill.js";
 import { extractRecord, withoutRecord } from "../work-record.js";
 import { outcomesText, totalsText, totalsValues, withoutRollup } from "./rollup.js";
@@ -217,6 +217,17 @@ export interface GraduationPreview {
   createdAt: string;
 }
 
+/**
+ * The initiative entry's `## Delivered` bullets: each graduated feature of the
+ * initiative (and the one graduating now) with the entries its link-back notes
+ * name. A feature with no notes yet is listed without links.
+ */
+export function deliveredFor(initiative: WorkItem, item: WorkItem, all: WorkItem[]): DeliveredBullet[] {
+  return all
+    .filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id))
+    .map((f) => ({ title: f.title, links: parseKbNotes(f.log).all }));
+}
+
 const historyOf = (body: string): string[] => {
   const at = body.search(/^## History[ \t]*$/m);
   if (at < 0) return [];
@@ -259,14 +270,12 @@ export async function previewGraduation(opts: {
     },
   });
 
-  const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => ({
-    id: o.id,
-    title: o.title,
-    summary: o.summary,
-    body: o.body,
-    initiative: !!o.initiative,
-    history: historyOf(o.body),
-  }));
+  const delivered = input.initiative ? deliveredFor(input.initiative, item, all) : [];
+  const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
+    // The initiative's list of delivered features is built here, not by the model.
+    const body = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
+    return { id: o.id, title: o.title, summary: o.summary, body, initiative: !!o.initiative, history: historyOf(body) };
+  });
   const warnings = [
     ...r.missingTotals.map((m) => `Totals: ${m} is not in the distilled text`),
     ...r.warnings,

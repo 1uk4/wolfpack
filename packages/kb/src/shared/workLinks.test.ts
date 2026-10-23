@@ -1,0 +1,29 @@
+import { describe, it, expect } from "vitest";
+import { deliveredBullets, mergeDelivered, renderDelivered } from "./workLinks.js";
+
+const A = "kb-wolfpack-AAAAAAA";
+const B = "kb-wolfpack-BBBBBBB";
+
+describe("Delivered", () => {
+  it("renders a bullet with or without links", () => {
+    expect(renderDelivered({ title: "Base image", links: [A, B, A] })).toBe(`- Base image: [[${A}]], [[${B}]]`);
+    expect(renderDelivered({ title: "Compose", links: [] })).toBe("- Compose");
+  });
+
+  it("reads the bullets of the section only", () => {
+    const body = `## Scope\n\n- not me: [[${B}]]\n\n## Delivered\n\n- Base image: [[${A}]]\n- Compose\n\n## History\n\n- x`;
+    expect(deliveredBullets(body)).toEqual([{ title: "Base image", links: [A] }, { title: "Compose", links: [] }]);
+  });
+
+  it("adds the section before History, or at the end", () => {
+    expect(mergeDelivered("## Scope\n\nx\n\n## History\n\n- h", [{ title: "F", links: [A] }])).toBe(`## Scope\n\nx\n\n## Delivered\n\n- F: [[${A}]]\n\n## History\n\n- h`);
+    expect(mergeDelivered("## Scope\n\nx", [{ title: "F", links: [] }])).toBe("## Scope\n\nx\n\n## Delivered\n\n- F\n");
+  });
+
+  it("merges into an existing bullet by title, adding only missing links", () => {
+    const body = `## Delivered\n\n- Base image: [[${A}]]\n- Other\n\n## History\n\n- h`;
+    const out = mergeDelivered(body, [{ title: "base image", links: [A, B] }, { title: "Other", links: [A] }, { title: "New", links: [] }]);
+    expect(out).toBe(`## Delivered\n\n- Base image: [[${A}]], [[${B}]]\n- Other: [[${A}]]\n- New\n\n## History\n\n- h`);
+    expect(mergeDelivered(out, [{ title: "Base image", links: [A, B] }])).toBe(out);
+  });
+});

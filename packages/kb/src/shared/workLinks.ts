@@ -35,3 +35,81 @@ export function parseKbNotes(log: Array<{ text: string }> | undefined): { create
   const all = [...new Set([...created, ...updated])];
   return { created, updated, all };
 }
+
+// ── Delivered: an initiative entry's list of its features and the entries they updated ──
+
+/** One `## Delivered` bullet: a feature title and the entries it created or updated. */
+export interface DeliveredBullet {
+  title: string;
+  links: string[];
+}
+
+const DELIVERED_HEADING = /^## Delivered[ \t]*$/m;
+const ENTRY_LINK = /\[\[(kb-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})(?:\|[^\]]*)?\]\]/g;
+const normTitle = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** `- <title>: [[kb-…]], [[kb-…]]` (just `- <title>` when it has no entries yet). */
+export function renderDelivered(b: DeliveredBullet): string {
+  const links = [...new Set(b.links)];
+  return `- ${b.title.replace(/\s+/g, " ").trim()}${links.length ? `: ${links.map((l) => `[[${l}]]`).join(", ")}` : ""}`;
+}
+
+/** The title of a `## Delivered` line: the text before its first link, minus the trailing colon. */
+function bulletTitle(line: string): string {
+  const text = line.replace(/^-\s+/, "");
+  const at = text.search(/\[\[/);
+  return (at < 0 ? text : text.slice(0, at)).replace(/[:\s—–-]+$/, "").trim();
+}
+
+function deliveredRange(body: string): { start: number; end: number } | null {
+  const m = DELIVERED_HEADING.exec(body);
+  if (!m) return null;
+  const after = m.index + m[0].length;
+  const next = body.slice(after).search(/^## /m);
+  return { start: m.index, end: next < 0 ? body.length : after + next };
+}
+
+/** The bullets of an entry body's `## Delivered` section. */
+export function deliveredBullets(body: string): DeliveredBullet[] {
+  const r = deliveredRange(body);
+  if (!r) return [];
+  return body
+    .slice(r.start, r.end)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("- "))
+    .map((l) => ({ title: bulletTitle(l), links: [...l.matchAll(ENTRY_LINK)].map((m) => m[1]) }));
+}
+
+/**
+ * Merge `bullets` into the body's `## Delivered` section without duplicating it:
+ * a bullet whose feature is listed already adds only the links it lacks; a new
+ * feature is appended. A body without the section gets one before `## History`
+ * (or at the end). The model's own lines and wording stand.
+ */
+export function mergeDelivered(body: string, bullets: DeliveredBullet[]): string {
+  const want = bullets.filter((b) => b.title.trim());
+  if (want.length === 0) return body;
+  const r = deliveredRange(body);
+  const lines = r
+    ? body.slice(r.start, r.end).trimEnd().split("\n")
+    : ["## Delivered", ""];
+  const idx = (t: string) => lines.findIndex((l) => l.trim().startsWith("- ") && normTitle(bulletTitle(l.trim())) === normTitle(t));
+  for (const b of want) {
+    const at = idx(b.title);
+    if (at < 0) {
+      lines.push(renderDelivered(b));
+      continue;
+    }
+    const have = new Set([...lines[at].matchAll(ENTRY_LINK)].map((m) => m[1]));
+    const missing = [...new Set(b.links)].filter((l) => !have.has(l));
+    if (missing.length) {
+      lines[at] = `${lines[at].trimEnd()}${have.size ? "," : ":"} ${missing.map((l) => `[[${l}]]`).join(", ")}`;
+    }
+  }
+  const section = lines.join("\n").trimEnd();
+  if (r) return `${body.slice(0, r.start)}${section}\n${body.slice(r.end) ? `\n${body.slice(r.end).replace(/^\n+/, "")}` : ""}`;
+  const h = body.search(/^## History[ \t]*$/m);
+  if (h < 0) return `${body.trimEnd()}\n\n${section}\n`;
+  return `${body.slice(0, h).trimEnd()}\n\n${section}\n\n${body.slice(h)}`;
+}

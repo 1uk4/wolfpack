@@ -26,6 +26,7 @@ import {
   type LintFinding,
 } from "../shared/knowledgeLint.js";
 import { anchorOf } from "./anchors.js";
+import { deliveredBullets, mergeDelivered } from "../shared/index.js";
 import { addCitedHistory, existingRelations, foldIntro, normalizeDetail, preserveHistory } from "./preserve.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -162,6 +163,13 @@ export async function produceEntry(
     const kept = preserveHistory(previous, opinion.detail);
     historyRestored = kept.restored;
     if (kept.restored.length) opinion = LlmOpinion.parse({ ...opinion, detail: kept.detail });
+  }
+
+  // An initiative's Delivered links (built in code from the features' link-back
+  // notes) are never lost: the entry's own plus the contribution's are re-added.
+  const delivered = [...(previous && mergeId ? deliveredBullets(previous) : []), ...deliveredBullets(contribution.body)];
+  if (delivered.length && !(decisionTarget && !supersedes)) {
+    opinion = LlmOpinion.parse({ ...opinion, detail: mergeDelivered(opinion.detail, delivered) });
   }
 
   // Graduated work's cited History lines always reach the entry.

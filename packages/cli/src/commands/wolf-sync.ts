@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
+import { smokeCheckBundle, watchAfterRestart } from "../sync-safety.js";
 import { buildRemoteBundle, buildHarnessBundle, stampExtension } from "../bundle.js";
 import {
   loadConfig,
@@ -227,6 +228,16 @@ async function syncPiDurable(
     console.log(c.yellow(`  ! Skipped extensions: ${built.missing.join(", ")}`));
   }
 
+  // Never upload a bundle that does not even load: run it locally in smoke mode.
+  const smoke = await smokeCheckBundle(built.harnessPath);
+  if (!smoke.ok) {
+    console.error(c.red(`✗ The harness bundle fails its load check; nothing was uploaded, ${cfg.name} is untouched.`));
+    for (const line of smoke.output.trim().split("\n").slice(-12)) console.error(c.dim(`    ${line}`));
+    fs.rmSync(built.tmpDir, { recursive: true, force: true });
+    process.exit(1);
+  }
+  console.log(c.dim("  Smoke:   bundle loads (ok)"));
+
   // Read and base64 encode the individual files
   const harnessB64 = fs.readFileSync(built.harnessPath).toString("base64");
   const wolfYamlB64 = fs.readFileSync(built.wolfYamlPath).toString("base64");
@@ -246,6 +257,8 @@ async function syncPiDurable(
   }
 
   const client = new AgentClient(host);
+  // Restart count before the update, to tell a crash loop from the one restart the update causes.
+  const baseline = await client.wolfStatus(wolf.id).then((s) => (s as { restarts?: number }).restarts, () => undefined);
   try {
     await client.updateWolfBundle(wolf.id, {
       runtime: "pi-durable",
@@ -267,6 +280,17 @@ async function syncPiDurable(
   } finally {
     fs.rmSync(built.tmpDir, { recursive: true, force: true });
   }
+
+  // Watch the wolf come back; a crash loop is rolled back to the previous bundle.
+  console.log(c.dim("  Watching the restart (up to 30s)..."));
+  const verdict = await watchAfterRestart(client, wolf.id, { baseline });
+  if (!verdict.ok) {
+    console.error(c.red(`✗ ${cfg.name} is unhealthy after the sync: ${verdict.reason}`));
+    if (verdict.rolledBack) console.error(c.yellow("  Restored the previous harness bundle and restarted. The sync did not take."));
+    else console.error(c.red(`  Could not roll back (${verdict.rollbackError}). Check the wolf: wolfpack logs ${cfg.name}`));
+    process.exit(1);
+  }
+  console.log(c.green(`✓ ${cfg.name} is healthy after the restart`));
 
   // Librarian pi-durable wolves also need the standalone KB CLI shipped to
   // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>` for admin ops like

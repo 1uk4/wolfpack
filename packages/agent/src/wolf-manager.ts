@@ -362,8 +362,10 @@ WantedBy=multi-user.target
     // Ensure agent dir exists
     await fs.mkdir(agentDir, { recursive: true });
 
-    // Write harness.cjs
+    // Write harness.cjs, keeping the one it replaces as harness.prev.cjs so a
+    // sync whose bundle crash-loops can be rolled back (rollbackHarness).
     const harnessPath = path.join(agentDir, "harness.cjs");
+    await fs.copyFile(harnessPath, path.join(agentDir, "harness.prev.cjs")).catch(() => {});
     await fs.writeFile(harnessPath, Buffer.from(harnessB64, "base64"));
 
     // Write shipped extensions to den/extensions/<name>/index.js. The den also
@@ -426,6 +428,25 @@ WantedBy=multi-user.target
     return merged;
   }
 
+  /**
+   * Put the previous harness bundle (harness.prev.cjs, kept by the last
+   * updatePiDurableBundle) back and restart the wolf. Throws when there is none.
+   */
+  async rollbackHarness(id: string): Promise<void> {
+    if (!this.wolvesIndex.has(id)) throw new Error(`Wolf not found: ${id}`);
+    const agentDir = path.join(wolfHome(id), "agent");
+    const prev = path.join(agentDir, "harness.prev.cjs");
+    try {
+      await fs.access(prev);
+    } catch {
+      throw new Error(`No previous harness bundle to roll back to for ${id}`);
+    }
+    await fs.copyFile(prev, path.join(agentDir, "harness.cjs"));
+    const user = wolfUser(id);
+    await exec("chown", [`${user}:${user}`, path.join(agentDir, "harness.cjs")]);
+    await this.restart(id);
+  }
+
   async status(id: string): Promise<WolfStatus> {
     const config = this.wolvesIndex.get(id);
     if (!config) throw new Error(`Wolf not found: ${id}`);
@@ -450,10 +471,21 @@ WantedBy=multi-user.target
         // ignore
       }
 
+      // Automatic restarts so far: a crash-looping wolf keeps counting up.
+      let restarts: number | undefined;
+      try {
+        const { stdout } = await exec("systemctl", ["show", wolfService(id), "--property=NRestarts", "--value"]);
+        const n = Number(stdout.trim());
+        restarts = Number.isFinite(n) && stdout.trim() !== "" ? n : undefined;
+      } catch {
+        // ignore
+      }
+
       return {
         id,
         name: config.name,
         active: serviceState === "active",
+        restarts,
         runtime: config.runtime ?? "pi",
         profile: config.profile,
         serviceState,

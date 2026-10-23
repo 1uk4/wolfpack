@@ -73,6 +73,11 @@ export class AgentClient {
     return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/restart`);
   }
 
+  /** Put the previous harness bundle back and restart (a sync that crash-loops). */
+  async rollbackWolf(nameOrId: string): Promise<unknown> {
+    return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/rollback`);
+  }
+
   /** Stop wolf */
   async stopWolf(nameOrId: string): Promise<unknown> {
     return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/stop`);

@@ -19,6 +19,14 @@ import { createWolfHarness } from "../index.js";
 
 console.log("[harness] Modules loaded");
 
+// Smoke mode: `wolfpack sync` runs the built bundle this way before uploading
+// it. Every module above has loaded (a crash at load already happened); nothing
+// is constructed, nothing connects.
+if (process.argv.includes("--smoke") || process.env.WOLF_HARNESS_SMOKE === "1") {
+  console.log("ok");
+  process.exit(0);
+}
+
 async function main() {
   console.log("[harness] Starting main...");
   const instance = await createWolfHarness();

@@ -69,6 +69,8 @@ export interface WolfStatus {
   serviceState: string;
   /** Uptime string from systemd */
   since?: string;
+  /** systemd NRestarts: automatic restarts so far (climbs while crash-looping). */
+  restarts?: number;
   /** Manifest of the installed identity bundle (versions + hashes). */
   bundle?: BundleManifest;
   /** KB domains this wolf subscribes to (from wolf.yaml). */

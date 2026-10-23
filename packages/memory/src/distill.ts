@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { atomicWrite, DISTILL_SYSTEM, DISTILL_GRADUATION, LlmInfraError, type Engine } from "@wolfpack/engine";
-import { isTrivialChange, isTrivialRepromote, tryEmitDelta } from "@wolfpack/kb/client";
+import { isTrivialChange, isTrivialRepromote, nearestEntries, tryEmitDelta } from "@wolfpack/kb/client";
 import {
   contentHash,
   describeFindings,
@@ -49,6 +49,8 @@ export const DistillOutputSchema = z.object({
         body: z.string().min(1),
         /** Graduation only: the one initiative-level contribution. */
         initiative: z.boolean().optional(),
+        /** An id from EXISTING ENTRIES: the entry this contribution is about. */
+        target: z.string().optional(),
       })
     )
     .min(1)
@@ -65,6 +67,8 @@ export interface DistilledContribution {
   body: string;
   /** Graduation: the initiative-level contribution (emitted under the initiative's topic id). */
   initiative?: boolean;
+  /** The existing entry this contribution is about (always one of the offered ones). */
+  target?: string;
 }
 
 export interface DistillRecord {
@@ -110,6 +114,8 @@ export interface DistillInput {
   previous?: Array<{ slug: string; title: string }>;
   /** YYYY-MM-DD used for History lines the topic does not date. */
   date: string;
+  /** The entries of the domain nearest to this input (see nearestEntries), shown to the model. */
+  existing?: Array<{ id: string; title: string; summary: string }>;
   /**
    * Set when the input is a finished work item (DISTILL_GRADUATION is added to
    * the prompt): its History lines cite `workId`, an initiative contribution is
@@ -159,6 +165,9 @@ function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: str
     `TOPIC TITLE: ${input.title}`,
     `TOPIC SUMMARY: ${input.summary}`,
     prev,
+    input.existing?.length
+      ? `EXISTING ENTRIES (id: title — summary):\n${input.existing.map((e) => `- ${e.id}: ${e.title} — ${e.summary.replace(/\s+/g, " ").slice(0, 240)}`).join("\n")}`
+      : "EXISTING ENTRIES: none",
     "",
     "TOPIC BODY:",
     input.body,
@@ -232,6 +241,8 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
       summary: c.summary,
       body: `# ${c.title}\n\n${body}\n`,
       ...(isInit ? { initiative: true } : {}),
+      // Confinement: only an offered entry can be a target; the initiative is anchored, never targeted.
+      ...(!isInit && c.target?.trim() && input.existing?.some((e) => e.id === c.target?.trim()) ? { target: c.target.trim() } : {}),
     });
   }
   if (grad) {
@@ -272,6 +283,18 @@ function citeWork(body: string, workId: string): string {
     return t.includes(workId) ? t : `${t} (${workId})`;
   });
   return head + lines.join("\n");
+}
+
+/**
+ * The domain's entries nearest to the input (lexical, over INDEX.md; no
+ * embedder needed on a wolf). Never throws: without a mirror there are none.
+ */
+export function existingFor(roots: KbRoots, domain: string, input: { title: string; summary: string }) {
+  try {
+    return nearestEntries(roots, domain, `${input.title}\n${input.summary}`, 6).map(({ id, title, summary }) => ({ id, title, summary }));
+  } catch {
+    return [];
+  }
 }
 
 // ── promote ──────────────────────────────────────────────────────────────────
@@ -354,6 +377,7 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
           domain,
           previous: rec?.slugs,
           date: today,
+          existing: existingFor(roots, domain, topic),
         });
         stats.distilled++;
         outputs = r.outputs;
@@ -397,6 +421,7 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
           summary: o.summary,
           body: o.body,
           session: opts.session,
+          ...(o.target ? { target: o.target } : {}),
         },
         (why) => {
           failed = true;

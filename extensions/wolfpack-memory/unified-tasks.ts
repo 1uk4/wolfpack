@@ -1148,7 +1148,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           if (!roots) return fail("The knowledge base is not configured for this wolf (KB_BASE / KB_OPS).");
           try {
             if (!args.confirm) {
-              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id });
+              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id, roots });
               await mkdir(previewDir(), { recursive: true });
               await writeFile(previewFile(preview.token), JSON.stringify(preview));
               const text = renderGraduationPreview(preview);

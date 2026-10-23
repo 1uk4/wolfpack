@@ -320,9 +320,11 @@ ONE SUBJECT EACH. If the topic covers clearly different subjects (for example a 
 
 PREVIOUS CONTRIBUTIONS may be listed (slug: title) from earlier promotes of this topic. Reuse the slug of a subject that is already there so it keeps its identity; invent a new slug only for a new subject.
 
+EXISTING ENTRIES may be listed (id: title — summary): the entries the knowledge base already holds that are nearest to this input. When a contribution is about the SAME SUBJECT as one of them (an update, correction or extension of that entry's own subject), use that entry's title EXACTLY as the contribution's title and add "target": "<that entry id>". Do not invent a new title for a subject that already has an entry. A contribution about a subject none of them covers gets its own title and no target. Never target an entry that is merely related or adjacent.
+
 If CHECK FAILURES are listed, your previous answer broke those rules: rewrite the contributions and fix every one.
 
-Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body"}]}.`;
+Respond with valid JSON: {"contributions": [{"slug", "title", "summary", "body", "target"?}]}.`;
 
 /**
  * stage: distill (graduation) · appended to DISTILL_SYSTEM when the input is a finished work item

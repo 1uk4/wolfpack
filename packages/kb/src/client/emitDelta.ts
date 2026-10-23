@@ -79,6 +79,8 @@ export interface EmitDeltaInput {
   origin?: Contribution["origin"];
   /** Anchored subject key: routes the contribution by key only. */
   anchor?: string;
+  /** Distill's hint: the existing entry this contribution is about. */
+  target?: string;
 }
 
 /**
@@ -117,6 +119,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     sourcePath: input.sourcePath,
     origin: input.origin,
     anchor: input.anchor,
+    target: input.target,
   };
 
   const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
@@ -171,6 +174,7 @@ function render(c: Contribution): string {
     c.sourcePath ? `source_path: ${c.sourcePath}` : null,
     c.origin ? `origin: ${c.origin}` : null,
     c.anchor ? `anchor: ${c.anchor}` : null,
+    c.target ? `target: ${c.target}` : null,
     `submitted: ${c.submitted}`,
     "---",
   ]

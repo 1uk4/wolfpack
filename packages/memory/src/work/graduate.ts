@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import type { Engine } from "@wolfpack/engine";
 import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpack/kb/client";
 import { deliveredBullets, mergeDelivered, parseKbNotes, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
-import { distillTopic, type DistilledContribution } from "../distill.js";
+import { distillTopic, existingFor, type DistilledContribution } from "../distill.js";
 import { extractRecord, withoutRecord } from "../work-record.js";
 import { staleBuildWarning } from "./build-stamp.js";
 import { outcomesText, totalsText, totalsValues, withoutRollup } from "./rollup.js";
@@ -199,6 +199,8 @@ export interface PreviewContribution {
   initiative: boolean;
   /** The `- ` lines of its History section (they carry the work id). */
   history: string[];
+  /** The existing entry distill says this is about (a hint for Dewey's subject check). */
+  target?: string;
 }
 
 export interface GraduationPreview {
@@ -245,6 +247,8 @@ export async function previewGraduation(opts: {
   id: string;
   /** Today (YYYY-MM-DD); tests pin it. */
   today?: string;
+  /** The KB mirror: when given, distill is shown the nearest existing entries. */
+  roots?: KbRoots;
   onProgress?: (msg: string) => void;
 }): Promise<GraduationPreview> {
   const { client, engine, id } = opts;
@@ -263,6 +267,7 @@ export async function previewGraduation(opts: {
     body: input.text,
     domain: item.domain as string,
     date: opts.today ?? new Date().toISOString().slice(0, 10),
+    ...(opts.roots ? { existing: existingFor(opts.roots, item.domain as string, { title: item.title, summary: `${item.successCriteria || ""}\n${input.text.slice(0, 1500)}` }) } : {}),
     graduation: {
       workId: input.workId,
       ...(input.initiative ? { initiativeTopicId: input.initiative.id as string, initiativeTitle: input.initiative.title } : {}),
@@ -275,7 +280,7 @@ export async function previewGraduation(opts: {
   const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
     // The initiative's list of delivered features is built here, not by the model.
     const body = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
-    return { id: o.id, title: o.title, summary: o.summary, body, initiative: !!o.initiative, history: historyOf(body) };
+    return { id: o.id, title: o.title, summary: o.summary, body, initiative: !!o.initiative, history: historyOf(body), ...(o.target ? { target: o.target } : {}) };
   });
   const stale = staleBuildWarning();
   const warnings = [
@@ -382,6 +387,7 @@ export async function confirmGraduation(opts: {
         denTopicId: c.id,
         change: c.initiative ? "merge" : "create",
         ...(c.initiative ? { anchor: c.id } : {}),
+        ...(c.target && !c.initiative ? { target: c.target } : {}),
         domainHint: preview.domain,
         summary: c.summary,
         body: c.body,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { promoteTopics, distillTopic, readDistillRecord, type PromoteTopic } from "./distill.js";
+import { promoteTopics, distillTopic, existingFor, readDistillRecord, type PromoteTopic } from "./distill.js";
 import { writeDenTopic, readDenTopics } from "./den.js";
 import { denTopicStates, isAbsorbed } from "./den-reconcile.js";
 
@@ -161,5 +161,47 @@ describe("reconcile with distilled contributions", () => {
     const bad = { contributions: [{ ...clean, body: "## Design\nTask AbC1234." }] };
     await promoteTopics([topic("t", "raw body")], opts(engineOf(bad, bad).engine));
     expect(denTopicStates(den, roots, WOLF)[0].status).toMatchObject({ kind: "held" });
+  });
+});
+
+describe("distill sees the nearest existing entries", () => {
+  const index = (rows: string[]) => {
+    mkdirSync(join(roots.kbBase, "domains", "wolfpack", "entries"), { recursive: true });
+    writeFileSync(join(roots.kbBase, "domains", "wolfpack", "INDEX.md"), `# wolfpack — knowledge index\n\n${rows.length} entries.\n\n${rows.join("\n")}\n`);
+  };
+  const SWEEP = "- [[kb-wolfpack-AbC1234|KB sweep system (shared tick, resilience, hardening)]] — How the KB sweep ticks, budgets each item and recovers from outages.";
+  const OTHER = "- [[kb-wolfpack-ZzZ9999|Dashboard Work View]] — The agent serves a dashboard of the work graph.";
+
+  it("lists them in the prompt and keeps only offered targets", async () => {
+    index([SWEEP, OTHER]);
+    const { call, engine } = engineOf({
+      contributions: [
+        { ...clean, title: "KB sweep system (shared tick, resilience, hardening)", target: "kb-wolfpack-AbC1234" },
+        { slug: "other", title: "Another subject", summary: "x.", body: "## Design\nY.", target: "kb-wolfpack-NotOffered" },
+      ],
+    });
+    const existing = existingFor(roots, "wolfpack", { title: "Sweep resilience", summary: "The KB sweep recovers from outages and budgets each item." });
+    expect(existing[0].id).toBe("kb-wolfpack-AbC1234");
+    const r = await distillTopic(engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22", existing });
+    const prompt = (call.mock.calls[0] as any)[2].prompt as string;
+    expect(prompt).toContain("EXISTING ENTRIES (id: title — summary):");
+    expect(prompt).toContain("- kb-wolfpack-AbC1234: KB sweep system (shared tick, resilience, hardening) — How the KB sweep ticks");
+    expect(r.outputs.map((o) => o.target)).toEqual(["kb-wolfpack-AbC1234", undefined]);
+  });
+
+  it("an anchored (initiative) entry is never offered", async () => {
+    index([SWEEP]);
+    writeFileSync(join(roots.kbBase, "domains", "wolfpack", "entries", "kb-wolfpack-AbC1234.md"), "---\nid: kb-wolfpack-AbC1234\nanchor: work-wolfpack-AbC1234\n---\n\nbody\n");
+    expect(existingFor(roots, "wolfpack", { title: "KB sweep", summary: "sweep" })).toEqual([]);
+  });
+
+  it("promote emits the target hint into the inbox contribution; no mirror means none offered", async () => {
+    index([SWEEP]);
+    const { engine } = engineOf({ contributions: [{ ...clean, target: "kb-wolfpack-AbC1234" }] });
+    await promoteTopics([topic("t", "The KB sweep ticks and budgets each item; resilience hardening.", { title: "KB sweep resilience", summary: "sweep tick" })], opts(engine));
+    const f = inbox()[0];
+    expect(readFileSync(join(roots.opsRoot, "inbox", WOLF, f), "utf-8")).toContain("target: kb-wolfpack-AbC1234");
+    rmSync(join(roots.kbBase), { recursive: true, force: true });
+    expect(existingFor(roots, "wolfpack", { title: "x", summary: "y" })).toEqual([]);
   });
 });

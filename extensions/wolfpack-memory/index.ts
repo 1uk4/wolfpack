@@ -1574,7 +1574,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id });
+        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id, roots: kbRoots });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");

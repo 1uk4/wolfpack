@@ -22,6 +22,7 @@ import {
   type ContextDigest,
   type DigestSection,
 } from "../shared/index.js";
+import { entrySummary } from "./embed.js";
 import { readSections, getRoots, buildParentIndex } from "./sections.js";
 import type { Section, SectionId, Currency } from "../schema/knowledge.js";
 
@@ -48,6 +49,15 @@ export function isDeclared(declared: Set<string> | null, domain: string): boolea
   return declared === null || declared.has(domain);
 }
 
+/** Max chars of an INDEX line's summary. */
+const INDEX_SUMMARY_MAX = 200;
+
+/** One line, capped: the INDEX shows a glance, not the whole lede. */
+function indexSummary(s: string): string {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > INDEX_SUMMARY_MAX ? one.slice(0, INDEX_SUMMARY_MAX - 1).trimEnd() + "…" : one;
+}
+
 /**
  * Regenerate `domains/<domain>/INDEX.md` from the entries on disk. Deterministic
  * (reads each entry's frontmatter). Call for each domain touched in a sweep.
@@ -58,11 +68,12 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
   if (existsSync(dir)) {
     for (const f of readdirSync(dir).filter((x) => x.endsWith(".md"))) {
       try {
-        const { fields } = parseFrontmatter(readFileSync(join(dir, f), "utf-8"));
+        const md = readFileSync(join(dir, f), "utf-8");
+        const { fields } = parseFrontmatter(md);
         rows.push({
           id: f.replace(/\.md$/, ""),
           title: String(fields.title ?? f.replace(/\.md$/, "")),
-          summary: String(fields.summary ?? ""),
+          summary: indexSummary(entrySummary(md)),
           sub: String(fields.subcategory ?? ""),
         });
       } catch {

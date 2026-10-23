@@ -56,6 +56,19 @@ describe("renderDomainIndex", () => {
     expect(idx).toContain("- [[kb-wolfpack-aaa|Alpha]] _(core)_ — first thing");
     expect(idx).toContain("- [[kb-wolfpack-bbb|Beta]] — second thing");
   });
+
+  it("falls back to the lede paragraph and caps the summary to one line", () => {
+    const dir = entriesDir(roots, "wolfpack");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "kb-wolfpack-ccc.md"), "---\ntitle: Gamma\n---\n\n# Gamma\n\nFirst lede line.\nSecond lede line.\n\nNext paragraph.\n");
+    writeFileSync(join(dir, "kb-wolfpack-ddd.md"), `---\ntitle: Delta\n---\n\n# Delta\n\n${"long ".repeat(100)}\n`);
+    renderDomainIndex(roots, "wolfpack");
+    const lines = readFileSync(domainIndex(roots, "wolfpack"), "utf-8").split("\n");
+    expect(lines).toContain("- [[kb-wolfpack-ccc|Gamma]] — First lede line. Second lede line.");
+    const delta = lines.find((l) => l.includes("kb-wolfpack-ddd"))!;
+    expect(delta.length).toBeLessThan(260);
+    expect(delta.endsWith("…")).toBe(true);
+  });
 });
 
 describe("unclassified quarantine path", () => {

@@ -16,6 +16,7 @@ import { wolfRestart } from "../commands/wolf-restart.js";
 import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
+import { workDoctor } from "../commands/work-doctor.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
@@ -42,6 +43,7 @@ ${c.bold("COMMANDS")}
   logs <wolf>                     View wolf logs
   models [wolf]                   Resolved model per use (tier, model, thinking, source)
   usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
+  work doctor                     Read-only work-item hygiene check (--domain d, --json)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
 ${c.bold("FLAGS")}
@@ -167,6 +169,8 @@ function parseArgs(argv: string[]) {
       flags.domains = argv[++i]!;
     } else if (arg === "--session" && argv[i + 1]) {
       flags.session = argv[++i]!;
+    } else if (arg === "--domain" && argv[i + 1]) {
+      flags.domain = argv[++i]!;
     } else if (arg === "--since" && argv[i + 1]) {
       flags.since = argv[++i]!;
     } else if (arg === "--by" && argv[i + 1]) {
@@ -342,6 +346,11 @@ async function main(): Promise<void> {
           json: flags.json as boolean | undefined,
           noIngest: flags.noIngest as boolean | undefined,
         });
+        break;
+
+      case "work":
+        if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json]");
+        await workDoctor({ domain: flags.domain as string | undefined, json: flags.json as boolean | undefined });
         break;
 
       case "config":

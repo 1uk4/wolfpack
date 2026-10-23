@@ -292,6 +292,11 @@ export const LlmOpinion = z.object({
    *  it: the sweep then keeps the old decision and writes this opinion as a
    *  NEW decision entry that `supersedes` it. */
   supersedesDecision: z.boolean().optional(),
+  /** Material about a SECOND subject, returned when the prompt allows it: the
+   *  sweep routes it like a new contribution instead of growing this entry. */
+  overflow: z
+    .object({ title: z.string().min(3).max(140), summary: z.string().min(1), detail: z.string().min(1) })
+    .optional(),
   confidence: Confidence,
   /** Controlled facet values the model is confident about. Unknown keys and
    *  non-slug values are stripped (coerceFacets) rather than failing the parse,

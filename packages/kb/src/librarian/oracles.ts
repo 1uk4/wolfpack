@@ -6,13 +6,14 @@
 import type { Engine } from "@wolfpack/engine";
 import { classifyError } from "./backoff.js";
 import { BudgetExceeded } from "./park.js";
-import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM, MATCH_SUBJECT_SYSTEM } from "@wolfpack/engine";
+import { CONTRADICT_SYSTEM, SECTION_PICK_SYSTEM, MATCH_SUBJECT_SYSTEM, CONFIRM_SUBJECT_SYSTEM } from "@wolfpack/engine";
 import {
   ContradictResultSchema,
   type ContradictResult,
   SectionPickSchema,
   type SectionPick,
   MatchSubjectSchema,
+  ConfirmSubjectSchema,
 } from "../shared/index.js";
 
 export function createOracles(engine: Engine) {
@@ -114,6 +115,37 @@ export function createOracles(engine: Engine) {
       const reason = result.reason?.trim() || undefined;
       if (candidates.some((c) => c.id === match)) return { match, valid: true, reason };
       return { match: "new", valid: match.toLowerCase() === "new", reason };
+    },
+
+    /**
+     * confirmSubject — the second look before a near-miss create: with the
+     * contribution's and the candidate's FULL texts, same subject?
+     *
+     * Only an explicit "merge" merges; an unparseable answer is "different"
+     * (a duplicate is safer than a wrong merge). Infra errors propagate.
+     */
+    async confirmSubject(
+      contribution: { title: string; summary: string; body: string },
+      candidate: { id: string; markdown: string }
+    ): Promise<{ merge: boolean; valid: boolean; reason?: string }> {
+      const prompt =
+        `CONTRIBUTION:\n${contribution.title}\n${contribution.summary}\n\n${contribution.body}\n\n` +
+        `EXISTING ENTRY (${candidate.id}):\n${candidate.markdown}`;
+      let result;
+      try {
+        result = await engine.call("confirmSubject", ConfirmSubjectSchema, { system: CONFIRM_SUBJECT_SYSTEM, prompt });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const unparseable =
+          classifyError(err) === "item" &&
+          !(err instanceof BudgetExceeded) &&
+          (/^Failed to extract valid output/.test(msg) || (err as { name?: string })?.name === "ZodError");
+        if (!unparseable) throw err;
+        return { merge: false, valid: false, reason: "unparseable answer" };
+      }
+      const verdict = result.verdict.trim().toLowerCase();
+      const reason = result.reason?.trim() || undefined;
+      return { merge: verdict === "merge", valid: verdict === "merge" || verdict === "different", reason };
     },
   };
 }

@@ -12,6 +12,8 @@
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
@@ -52,7 +54,7 @@ import {
   type RelationResolver,
 } from "../schema/knowledge.js";
 import type { Engine } from "@wolfpack/engine";
-import type { KbRoots } from "../shared/index.js";
+import { entriesDir, type KbRoots } from "../shared/index.js";
 
 export interface SweepContext {
   engine: Engine;
@@ -170,10 +172,84 @@ export interface RoutingRecord {
   candidates: Array<{ id: string; score: number }>;
   band?: string;
   subject?: { match: string; valid: boolean; reason?: string };
+  /** The near-miss second check (full bodies) that ran before a create. */
+  confirm?: { candidate: string; score: number; merge: boolean; valid: boolean; reason?: string };
   /** The entry distill named for this contribution. */
   targetHint?: string;
   domainMismatch?: { hint: string; entry: string };
   warning?: string;
+  /** The second subject produce split out, and how it was routed. */
+  overflow?: {
+    title: string;
+    denTopicId: string;
+    target?: string;
+    action?: string;
+    route: string;
+    candidates?: Array<{ id: string; score: number }>;
+    band?: string;
+    subject?: { match: string; valid: boolean; reason?: string };
+    confirm?: RoutingRecord["confirm"];
+    error?: string;
+  };
+}
+
+/** Ids of every live entry in every domain (a directory listing). */
+export function liveEntryIds(roots: KbRoots): Set<string> {
+  const ids = new Set<string>();
+  const domains = join(roots.kbBase, "domains");
+  if (!existsSync(domains)) return ids;
+  for (const d of readdirSync(domains, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const dir = entriesDir(roots, d.name);
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) if (f.endsWith(".md")) ids.add(f.slice(0, -3));
+  }
+  return ids;
+}
+
+/** The contribution for a second subject split out of `c` (its own den topic id: the alias of `c` stays on the main entry). */
+export function overflowContribution(
+  c: ParsedContribution,
+  o: { title: string; summary: string; body: string },
+  domain: string
+): ParsedContribution {
+  const slug = o.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "overflow";
+  const body = `# ${o.title}\n\n${o.summary}\n\n${o.body}`.trim();
+  return {
+    ...c,
+    denTopicId: `${c.denTopicId}~split-${slug}`,
+    change: "create",
+    contentHash: contentHash(body),
+    prevHash: null,
+    domainHint: domain,
+    summary: o.summary,
+    body,
+    anchor: undefined,
+    target: undefined,
+    filePath: join(dirname(c.filePath), `${c.denTopicId}~split-${slug}.md`),
+  };
+}
+
+/** Put the overflow contribution in the sender's inbox so the next tick routes it as its own item. */
+export function requeueOverflow(roots: KbRoots, o: ParsedContribution): void {
+  const dir = join(roots.opsRoot, "inbox", o.from);
+  mkdirSync(dir, { recursive: true });
+  const fm = [
+    "---",
+    `from: ${o.from}`,
+    `den_topic_id: ${o.denTopicId}`,
+    `content_hash: ${o.contentHash}`,
+    "prev_hash: null",
+    `domain_hint: ${o.domainHint}`,
+    ...(o.sourceUpdated ? [`source_updated: ${o.sourceUpdated}`] : []),
+    `summary: ${JSON.stringify(o.summary)}`,
+    `submitted: ${now()}`,
+    "---",
+    "",
+    o.body,
+    "",
+  ].join("\n");
+  writeFileSync(join(dir, basename(o.filePath)), fm);
 }
 
 /** Clamp a routing score into the Placement.fit [0,1] range. Guards against a
@@ -325,6 +401,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         return;
       }
 
+      // Route, produce and commit ONE contribution (the item itself, or the
+      // second subject split out of it). Null: rejected by archive-safety.
+      const place = async (c: ParsedContribution, domain0: string, routing: RoutingRecord, overflowOk: boolean, exclude?: string) => {
+      let domain = domain0;
       // ── EMBED ───────────────────────────────────────────────────────────
       const title = contributionTitle(c);
       const embedText = embedInput({ title, summary: c.summary, role: "query" });
@@ -408,6 +488,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           if (e.domain !== domain) continue;
           if (superseded.has(e.entryId)) continue;
           if (anchors.ids.has(e.entryId)) continue;
+          if (e.entryId === exclude) continue; // a split never routes back into the entry it came from
           const md = readEntryMarkdown(roots, domain, e.entryId);
           if (!md || md.length > sizeLimit) continue;
           const f = parseFrontmatter(md).fields;
@@ -454,6 +535,22 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             routing.route = "similarity";
           }
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} subject check (${scores}) → ${pick.match}${pick.reason ? ` (${pick.reason})` : ""}`);
+          // Near miss: the title+summary check said "new" but the nearest entry
+          // scored high (or distill named it). One more look with both FULL
+          // texts; only "different" creates.
+          const near = top[0];
+          if (!targetId && near && (hinted || near.score >= SWEEP.nearMissScore)) {
+            const nmd = readEntryMarkdown(roots, domain, near.id);
+            if (nmd) {
+              const second = await oracles.confirmSubject({ title, summary: c.summary, body: c.body }, { id: near.id, markdown: nmd });
+              routing.confirm = { candidate: near.id, score: Number(near.score.toFixed(3)), merge: second.merge, valid: second.valid, reason: second.reason };
+              if (second.merge) {
+                targetId = near.id;
+                routing.route = "similarity";
+              }
+              ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} near-miss check on ${near.id} (${near.score.toFixed(3)}) → ${second.merge ? "merge" : "different"}${second.reason ? ` (${second.reason})` : ""}`);
+            }
+          }
         }
       }
 
@@ -489,7 +586,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           markProcessed(c);
           result.rejected++;
           outcome = "rejected (archived, older than live entry)";
-          return;
+          return null;
         }
       }
 
@@ -585,7 +682,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // An update keeps the entry's original creation date.
       const existingCreated = existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") || undefined : undefined;
 
-      const { entry, action, unchanged, supersedes, historyRestored, lint } = await produceEntry(itemEngine, {
+      const { entry, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = await produceEntry(itemEngine, {
         contribution: c,
         domain,
         section: sectionId,
@@ -594,11 +691,16 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         existingMarkdown,
         existingCreated,
         resolve,
+        liveIds: liveEntryIds(roots),
+        allowOverflow: overflowOk,
       });
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
       if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);
       if (lint?.after.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} kept with lint findings: ${lint.after.map((f) => f.code).join(",")}`);
+      if (lint?.strippedLinks?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → stripped ${lint.strippedLinks.length} link(s) to no entry from ${entry.id}: ${lint.strippedLinks.join(", ")}`);
+      if (deduped?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → collapsed ${deduped.length} duplicate paragraph/line(s) in ${entry.id}`);
+      if (overflow) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → ${entry.id} covers two subjects: "${overflow.title}" is split out`);
       if (historyRestored?.length) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → restored ${historyRestored.length} History line(s) the model dropped from ${entry.id}`);
 
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
@@ -642,6 +744,35 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           queueWorkLink(roots, { workId, entryId: entry.id, action: action === "create" ? "created" : "updated" });
         } catch (err) {
           ctx.notify?.(`sweep: could not queue the work link for ${workId}: ${cleanError(err)}`);
+        }
+      }
+
+      return { entry, action, domain, overflow, route: routing.route };
+      };
+
+      const placed = await place(c, domain, routing, !c.denTopicId.includes("~split-"));
+      if (!placed) return;
+      const { entry, action } = placed;
+      // A second subject the produce step split out: committed after the main
+      // entry, then routed like a new contribution (one level, no recursion).
+      if (placed.overflow) {
+        const o = overflowContribution(c, placed.overflow, placed.domain);
+        const oRouting: RoutingRecord = { route: "new", candidates: [] };
+        try {
+          const op = await place(o, placed.domain, oRouting, false, placed.entry.id);
+          if (op) {
+            oRouting.target = op.entry.id;
+            routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, target: op.entry.id, action: op.action, route: oRouting.route, candidates: oRouting.candidates, band: oRouting.band, subject: oRouting.subject, confirm: oRouting.confirm };
+            ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split: "${placed.overflow.title}" ${op.action === "create" ? "created" : "merged into"} ${op.entry.id}`);
+            if (op.action === "create") result.created++;
+            else result.merged++;
+          }
+        } catch (err) {
+          // The main entry is live and the contribution counts as seen: the
+          // second subject must not be lost, so it is queued as its own item.
+          requeueOverflow(roots, o);
+          routing.overflow = { title: placed.overflow.title, denTopicId: o.denTopicId, route: "queued", error: cleanError(err) };
+          ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → split "${placed.overflow.title}" queued for the next tick: ${cleanError(err)}`);
         }
       }
 

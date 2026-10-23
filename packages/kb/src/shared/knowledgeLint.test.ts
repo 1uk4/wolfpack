@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { lintKnowledge, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings } from "./knowledgeLint.js";
+import { lintKnowledge, brokenLinks, stripBrokenLinks, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings } from "./knowledgeLint.js";
 
 const codes = (body: string, extra: Partial<Parameters<typeof lintKnowledge>[0]> = {}) =>
   lintKnowledge({ body, ...extra }).map((f) => f.code);
@@ -108,5 +108,26 @@ describe("strip helpers", () => {
     const f = lintKnowledge({ body: "Commit e23309c: x" });
     expect(hardFindings(f)).toHaveLength(1);
     expect(describeFindings(f)).toMatch(/^- commit-hash:/);
+  });
+});
+
+describe("broken wikilinks", () => {
+  const live = new Set(["kb-wolfpack-AbC1234"]);
+  it("flags a link to no existing entry (placeholders too) as a hard finding", () => {
+    const f = lintKnowledge({ body: "See [[kb-wolfpack-AbC1234]], [[kb-...]] and [[NEW-x|y]].", liveIds: live });
+    expect(f.map((x) => x.code)).toEqual(["broken-link"]);
+    expect(hardFindings(f)).toHaveLength(1);
+    expect(f[0].message).toContain("kb-..., NEW-x");
+  });
+  it("is off without live ids and ignores code fences", () => {
+    expect(lintKnowledge({ body: "[[nothing]]" })).toEqual([]);
+    expect(brokenLinks("```\n[[x]]\n```", live)).toEqual([]);
+  });
+  it("strips the brackets and keeps the text", () => {
+    expect(stripBrokenLinks("a [[kb-...]] b [[x|the x]] c [[kb-wolfpack-AbC1234#h|ok]]", live)).toEqual({
+      text: "a kb-... b the x c [[kb-wolfpack-AbC1234#h|ok]]",
+      stripped: ["kb-...", "x"],
+    });
+    expect(stripBrokenLinks("old [[x]]\nnew [[y]]", live, new Set(["old [[x]]"])).text).toBe("old [[x]]\nnew y");
   });
 });

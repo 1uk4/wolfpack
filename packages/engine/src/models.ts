@@ -42,6 +42,7 @@ export const ENGINE_STEPS = [
   "contradict",
   "classifyToSection",
   "matchSubject",
+  "confirmSubject",
   "sectionSummary",
   "labelSection",
 ] as const;
@@ -57,6 +58,7 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   contradict: "fast",
   classifyToSection: "fast",
   matchSubject: "fast",
+  confirmSubject: "fast",
   sectionSummary: "fast",
   labelSection: "fast",
 };

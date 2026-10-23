@@ -16,6 +16,7 @@ export type LintCode =
   | "dated-heading"
   | "oversize"
   | "lede-repeat"
+  | "broken-link"
   | "forbidden-property";
 
 export interface LintFinding {
@@ -47,6 +48,11 @@ export interface LintInput {
    * topic never carries one).
    */
   workIds?: "history" | "none";
+  /**
+   * Every live entry id (any domain). When given, a `[[target]]` whose target is
+   * not in the set is a "broken-link" finding (placeholders included).
+   */
+  liveIds?: ReadonlySet<string>;
 }
 
 const HASH_TOKEN = /(?<![\w./~-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])/g;
@@ -145,10 +151,51 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
 
   if (input.summary && ledeRepeated(input.summary, main)) add("lede-repeat", "the lede paragraph is repeated in the body", input.summary);
 
+  if (input.liveIds) {
+    const broken = brokenLinks([input.summary ?? "", input.body].join("\n"), input.liveIds);
+    if (broken.length) add("broken-link", `${broken.length} wikilink(s) to no existing entry: ${broken.slice(0, 3).join(", ")}`, broken[0]);
+  }
+
   for (const key of Object.keys(input.properties ?? {})) {
     if (FORBIDDEN_PROPERTY.test(key)) add("forbidden-property", `property "${key}" carries progress noise`, key);
   }
   return findings;
+}
+
+const WIKILINK = /\[\[([^\]\n]*)\]\]/g;
+const linkTarget = (inner: string) => inner.split("|")[0].split("#")[0].trim();
+
+/** Targets of the `[[…]]` links in `text` (outside code fences) that are not in `live`. */
+export function brokenLinks(text: string, live: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const l of proseLines(text)) {
+    for (const m of l.matchAll(WIKILINK)) {
+      const t = linkTarget(m[1]);
+      if (!live.has(t) && !out.includes(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * Replace each `[[target|text]]` whose target is not in `live` by its text
+ * (`[[target]]` → target), leaving the rest. Lines in `keep` (carried over from
+ * the previous entry) and code fences are left alone.
+ */
+export function stripBrokenLinks(text: string, live: ReadonlySet<string>, keep?: ReadonlySet<string>): { text: string; stripped: string[] } {
+  const stripped: string[] = [];
+  let fenced = false;
+  const out = text.split("\n").map((l) => {
+    if (/^\s*```/.test(l)) { fenced = !fenced; return l; }
+    if (fenced || keep?.has(l.trim())) return l;
+    return l.replace(WIKILINK, (all, inner: string) => {
+      if (live.has(linkTarget(inner))) return all;
+      stripped.push(linkTarget(inner));
+      const alias = inner.includes("|") ? inner.split("|").slice(1).join("|").trim() : "";
+      return alias || linkTarget(inner);
+    });
+  });
+  return { text: out.join("\n"), stripped };
 }
 
 /** True when a paragraph of `body` equals the lede (normalized). */
@@ -182,7 +229,7 @@ export function stripDetailHeading(body: string): string {
 }
 
 /** Codes that need a rewrite or a hold-back (not safely strippable). */
-export const HARD_CODES: ReadonlySet<LintCode> = new Set<LintCode>(["commit-hash", "work-id", "test-count", "deploy-status", "dated-heading"]);
+export const HARD_CODES: ReadonlySet<LintCode> = new Set<LintCode>(["commit-hash", "work-id", "test-count", "deploy-status", "dated-heading", "broken-link"]);
 
 export const hardFindings = (f: LintFinding[]): LintFinding[] => f.filter((x) => HARD_CODES.has(x.code));
 

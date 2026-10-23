@@ -143,3 +143,142 @@ export function addCitedHistory(detail: string, contributionBody: string): { det
     added,
   };
 }
+
+// ── No duplicate content on merge ───────────────────────────────────────────
+
+/** Near-duplicate threshold on normalized text (word-bigram Dice). */
+export const DUPLICATE_SIMILARITY = 0.9;
+
+const words = (s: string): string[] => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(" ").filter(Boolean);
+
+/** Word-bigram Dice similarity of two texts after normalization, 0..1. */
+export function textSimilarity(a: string, b: string): number {
+  const wa = words(a);
+  const wb = words(b);
+  if (wa.join(" ") === wb.join(" ")) return wa.length ? 1 : 0;
+  const grams = (w: string[]) => {
+    const m = new Map<string, number>();
+    for (let i = 0; i + 1 < w.length; i++) m.set(`${w[i]} ${w[i + 1]}`, (m.get(`${w[i]} ${w[i + 1]}`) ?? 0) + 1);
+    return m;
+  };
+  const ga = grams(wa);
+  const gb = grams(wb);
+  let total = 0;
+  let common = 0;
+  for (const n of ga.values()) total += n;
+  for (const n of gb.values()) total += n;
+  if (total === 0) return 0;
+  for (const [g, n] of ga) common += Math.min(n, gb.get(g) ?? 0);
+  return (2 * common) / total;
+}
+
+/** Shorter texts (bullets like "- none") are never collapsed. */
+const MIN_WORDS = 6;
+const isDup = (a: string, b: string) =>
+  words(a).length >= MIN_WORDS && words(b).length >= MIN_WORDS && textSimilarity(a, b) >= DUPLICATE_SIMILARITY;
+
+const CITATION = /\((work-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9A-Za-z]{7})\)\s*\.?\s*$/;
+
+type Unit = { text: string; lines: string[]; kind: "heading" | "code" | "bullet" | "para" | "blank"; dropped?: boolean };
+
+/** A body as units: headings, fenced blocks, bullets (with their indented continuation), paragraphs and blank lines. */
+function detailUnits(main: string): Unit[] {
+  const units: Unit[] = [];
+  const lines = main.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      const block = [l];
+      while (++i < lines.length) {
+        block.push(lines[i]);
+        if (/^\s*```/.test(lines[i])) break;
+      }
+      units.push({ text: "", lines: block, kind: "code" });
+    } else if (!l.trim()) units.push({ text: "", lines: [l], kind: "blank" });
+    else if (/^#{1,6} /.test(l)) units.push({ text: l, lines: [l], kind: "heading" });
+    else if (/^\s*(?:[-*]|\d+\.)\s/.test(l)) {
+      const block = [l];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1]) && !/^\s*(?:[-*]|\d+\.)\s/.test(lines[i + 1])) block.push(lines[++i]);
+      units.push({ text: block.join(" "), lines: block, kind: "bullet" });
+    } else {
+      const block = [l];
+      while (i + 1 < lines.length && lines[i + 1].trim() && !/^(?:#{1,6} |\s*(?:[-*]|\d+\.)\s|\s*```)/.test(lines[i + 1])) block.push(lines[++i]);
+      units.push({ text: block.join(" "), lines: block, kind: "para" });
+    }
+  }
+  return units;
+}
+
+/**
+ * Collapse near-duplicate paragraphs and bullets of a merged entry (first one
+ * wins; a heading left empty by it goes too) and History lines that restate
+ * the same change (same closing work id and the same fact, or near-identical
+ * text). `keep` lines (the previous entry's History) are never dropped.
+ * `against` seeds the comparison with text that lives elsewhere (a split-out
+ * subject), so a copy of it left in the entry is dropped too.
+ */
+export function dedupeDetail(detail: string, keep: ReadonlySet<string> = new Set(), against = ""): { detail: string; removed: string[] } {
+  const at = detail.search(HISTORY_HEADING);
+  const main = at < 0 ? detail : detail.slice(0, at);
+  const history = at < 0 ? "" : detail.slice(at);
+  const removed: string[] = [];
+
+  const units = detailUnits(main);
+  // `against`: text that lives elsewhere now (a split-out second subject); what repeats it is dropped here.
+  const seen: string[] = detailUnits(against).filter((u) => u.kind === "bullet" || u.kind === "para").map((u) => u.text);
+  let dirtyUnder = false;
+  const heads: Array<{ unit: Unit; level: number; dirty: boolean }> = [];
+  for (const u of units) {
+    if (u.kind === "heading") {
+      heads.push({ unit: u, level: /^#+/.exec(u.text)![0].length, dirty: false });
+      continue;
+    }
+    if (u.kind !== "bullet" && u.kind !== "para") continue;
+    if (seen.some((s) => isDup(s, u.text))) {
+      u.dropped = true;
+      removed.push(u.text.trim());
+      if (heads.length) heads[heads.length - 1].dirty = true;
+      dirtyUnder = true;
+    } else seen.push(u.text);
+  }
+  if (!removed.length) dirtyUnder = false;
+  if (dirtyUnder) {
+    // An emptied section goes too: a dirty heading with nothing kept before the next heading of its level or above.
+    for (let h = 0; h < heads.length; h++) {
+      if (!heads[h].dirty) continue;
+      const from = units.indexOf(heads[h].unit) + 1;
+      let empty = true;
+      for (let i = from; i < units.length; i++) {
+        const u = units[i];
+        if (u.kind === "heading" && /^#+/.exec(u.text)![0].length <= heads[h].level) break;
+        if (u.kind !== "blank" && !u.dropped) { empty = false; break; }
+      }
+      if (empty) heads[h].unit.dropped = true;
+    }
+  }
+  const keptMain = units.filter((u) => !u.dropped).flatMap((u) => u.lines).join("\n").replace(/\n{3,}/g, "\n\n");
+
+  // History: a line restating a change already recorded.
+  let keptHistory = history;
+  if (history) {
+    const kept: string[] = [];
+    const out = history.split("\n").filter((l) => {
+      if (!l.trim().startsWith("- ")) return true;
+      const cite = CITATION.exec(l.trim())?.[1];
+      const body = l.replace(CITATION, "");
+      const dup = kept.some((k) => {
+        const kc = CITATION.exec(k.trim())?.[1];
+        const kb = k.replace(CITATION, "");
+        return textSimilarity(kb, body) >= DUPLICATE_SIMILARITY || (!!cite && cite === kc && textSimilarity(kb, body) >= 0.7);
+      });
+      if (dup && !keep.has(norm(l))) {
+        removed.push(l.trim());
+        return false;
+      }
+      kept.push(l);
+      return true;
+    });
+    keptHistory = out.join("\n");
+  }
+  return { detail: `${keptMain}${keptHistory}`, removed };
+}

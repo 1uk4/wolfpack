@@ -336,7 +336,7 @@ describe("produceEntry: knowledge lint", () => {
     const call = vi.fn().mockResolvedValueOnce(op({ detail: big })).mockResolvedValueOnce(op({ detail: big })).mockResolvedValueOnce(op({ detail: "## How\nshort" }));
     const r = await produceEntry({ call } as unknown as Engine, input());
     expect(call).toHaveBeenCalledTimes(3);
-    expect(call.mock.calls[2][2].prompt).toContain("Condense the body");
+    expect(call.mock.calls[2][2].prompt).toContain("condense the body");
     expect(r.lint).toMatchObject({ sizePass: true, after: [] });
   });
 
@@ -372,4 +372,104 @@ describe("produceEntry: size counts the whole entry on a merge", () => {
     expect(r.lint?.after.map((f) => f.code)).toEqual(["oversize"]);
     expect(r.lint?.oversizeChars).toBeGreaterThan(6000);
   });
+});
+
+describe("produceEntry: prevent at source", () => {
+  const input = (contribution = mockContribution()): ProduceEntryInput => ({
+    contribution,
+    domain: "wolfpack",
+    section: SectionId.parse("sec-wolfpack-abc123"),
+    placement: { basis: "routed", fit: 0.85 },
+    resolve: () => null,
+  });
+  const op = (o: Partial<LlmOpinion>): LlmOpinion => ({
+    title: "Sweep pipeline", kind: { type: "architecture" }, summary: "A lede that is long enough to be compared.",
+    detail: "## How\nclean", confidence: "high", facets: {}, properties: {}, proposedRelations: [], ...o,
+  });
+    const live = new Set(["kb-wolfpack-AAAAAAA"]);
+
+    it("a size pass offers the split; an overflow comes back with the trimmed entry", async () => {
+      const big = "## How\n" + "word ".repeat(1500);
+      const call = vi.fn()
+        .mockResolvedValueOnce(op({ detail: big }))
+        .mockResolvedValueOnce(op({ detail: big }))
+        .mockResolvedValueOnce(op({ detail: "## How\nshort", overflow: { title: "Syncthing setup", summary: "How sync is wired.", detail: "## Wiring\nfolders" } }));
+      const r = await produceEntry({ call } as unknown as Engine, input());
+      expect(call.mock.calls[2][2].prompt).toContain("TWO subjects");
+      expect(r.overflow).toEqual({ title: "Syncthing setup", summary: "How sync is wired.", body: "## Wiring\nfolders" });
+      expect(r.lint?.after).toEqual([]);
+    });
+
+    it("an entry still over the cap after a split gets a condense pass that keeps the overflow", async () => {
+      const big = "## How\n" + "word ".repeat(1500);
+      const ov = { title: "Syncthing setup", summary: "How sync is wired.", detail: "## Wiring\nfolders" };
+      const call = vi.fn()
+        .mockResolvedValueOnce(op({ detail: big, overflow: ov }))
+        .mockResolvedValueOnce(op({ detail: big, overflow: ov }))
+        .mockResolvedValueOnce(op({ detail: "## How\nshort" }));
+      const r = await produceEntry({ call } as unknown as Engine, input());
+      expect(call).toHaveBeenCalledTimes(3);
+      expect(call.mock.calls[2][2].prompt).not.toContain("TWO subjects");
+      expect(r.overflow?.title).toBe("Syncthing setup");
+      expect(r.lint?.after).toEqual([]);
+    });
+
+    it("text of the split-out subject that the model also left in the entry is dropped from it", async () => {
+      const P = "Syncthing runs as a star around Dewey, with a Mac hub and four folder types per wolf, all receive-only.";
+      const call = vi.fn().mockResolvedValue(op({
+        detail: `## Layout\nThe ledger is one append-only file per den, read by every command.\n\n## Topology\n${P}`,
+        overflow: { title: "Syncthing topology", summary: "How sync is wired.", detail: `## Topology\n${P}` },
+      }));
+      const r = await produceEntry({ call } as unknown as Engine, input());
+      expect(r.entry.detail).toContain("## Layout");
+      expect(r.entry.detail).not.toContain("Syncthing");
+      expect(r.overflow?.body).toContain("Syncthing runs");
+    });
+
+    it("with overflow not allowed the size pass condenses and an overflow is ignored", async () => {
+      const big = "## How\n" + "word ".repeat(1500);
+      const call = vi.fn()
+        .mockResolvedValueOnce(op({ detail: big }))
+        .mockResolvedValueOnce(op({ detail: big }))
+        .mockResolvedValueOnce(op({ detail: "## How\nshort", overflow: { title: "Another thing", summary: "s", detail: "d" } }));
+      const r = await produceEntry({ call } as unknown as Engine, { ...input(), allowOverflow: false });
+      expect(call.mock.calls[0][2].prompt).toContain("OVERFLOW: not allowed");
+      expect(call.mock.calls[2][2].prompt).not.toContain("TWO subjects");
+      expect(r.overflow).toBeUndefined();
+    });
+
+    it("an overflow in the first answer, entry within the cap, needs no size pass", async () => {
+      const call = vi.fn().mockResolvedValue(op({ overflow: { title: "Second subject", summary: "s", detail: "d" } }));
+      const r = await produceEntry({ call } as unknown as Engine, input());
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(r.overflow?.title).toBe("Second subject");
+    });
+
+    it("a link to no entry makes produce retry; a surviving one is stripped, text kept", async () => {
+      const bad = op({ detail: "## How\nSee [[kb-...]] and [[NEW-thing|the thing]] and [[kb-wolfpack-AAAAAAA]]." });
+      const call = vi.fn().mockResolvedValue(bad);
+      const r = await produceEntry({ call } as unknown as Engine, { ...input(), liveIds: live });
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(call.mock.calls[1][2].prompt).toContain("broken-link");
+      expect(r.entry.detail).toContain("See kb-... and the thing and [[kb-wolfpack-AAAAAAA]].");
+      expect(r.lint?.strippedLinks).toEqual(["kb-...", "NEW-thing"]);
+      expect(r.lint?.after).toEqual([]);
+    });
+
+    it("without live ids links are not checked", async () => {
+      const call = vi.fn().mockResolvedValue(op({ detail: "## How\nSee [[kb-...]]." }));
+      await produceEntry({ call } as unknown as Engine, input());
+      expect(call).toHaveBeenCalledTimes(1);
+    });
+
+    it("collapses a restated section and a restated History line, keeping the previous History", async () => {
+      const prev = "---\nid: kb-wolfpack-AbC1234\ncreated: 2026-10-01\n---\n\n# T\n\nlede\n\n## Principle\nThe sweep merges a contribution into an entry only when the subject is the same.\n\n## History\n\n- Until 2026-10-20: the sweep routed every contribution by similarity alone. Now it routes by alias first (work-wolfpack-AbC1234).\n";
+      const detail = "## Principle\nThe sweep merges a contribution into an entry only when the subject is the same.\n\n## Rehearsal\nThe sweep merges a contribution into an entry only when the subject is the same.\n\n## History\n\n- Until 2026-10-20: the sweep routed every contribution by similarity alone. Now it routes by alias first (work-wolfpack-AbC1234).\n- Until 2026-10-23: the sweep routed each contribution by similarity alone. Now it routes by alias first (work-wolfpack-AbC1234).";
+      const call = vi.fn().mockResolvedValue(op({ detail }));
+      const r = await produceEntry({ call } as unknown as Engine, { ...input(), entryId: "kb-wolfpack-AbC1234", existingMarkdown: prev });
+      expect(r.entry.detail.match(/only when the subject is the same/g)).toHaveLength(1);
+      expect(r.entry.detail).not.toContain("## Rehearsal");
+      expect(r.entry.detail.match(/by similarity alone/g)).toHaveLength(1);
+      expect(r.deduped).toHaveLength(2);
+    });
 });

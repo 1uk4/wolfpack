@@ -43,6 +43,11 @@ export const SWEEP = {
   mergeLow: 0.69,
   mergeHigh: 0.9,
   mergeMargin: 0.03,
+  /**
+   * A create whose nearest entry scored at least this (or that distill hinted)
+   * gets one more look with both full bodies before it is allowed to create.
+   */
+  nearMissScore: 0.8,
   /** Candidates (best first) shown to the LLM subject check. */
   mergeCandidates: 3,
   /**

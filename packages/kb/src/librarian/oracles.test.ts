@@ -155,3 +155,23 @@ describe("oracles — classifyToSection", () => {
     }
   });
 });
+
+describe("oracles — confirmSubject", () => {
+  const c = { title: "T", summary: "S", body: "THE BODY" };
+  const cand = { id: "kb-wp-AAAAAAA", markdown: "THE ENTRY" };
+  it("merges only on an explicit merge, with both full texts in the prompt", async () => {
+    const call = vi.fn(async (_s: string, _sc: unknown, o: { prompt: string }) => ({ verdict: " Merge ", reason: "same" }));
+    const r = await createOracles(createMockEngine(call)).confirmSubject(c, cand);
+    expect(r).toEqual({ merge: true, valid: true, reason: "same" });
+    expect(call.mock.calls[0][0]).toBe("confirmSubject");
+    expect(call.mock.calls[0][2].prompt).toContain("THE BODY");
+    expect(call.mock.calls[0][2].prompt).toContain("THE ENTRY");
+  });
+  it("anything else is a different subject; an unparseable answer too; infra errors propagate", async () => {
+    const o = (f: any) => createOracles(createMockEngine(vi.fn(f)));
+    expect(await o(async () => ({ verdict: "different" })).confirmSubject(c, cand)).toMatchObject({ merge: false, valid: true });
+    expect(await o(async () => ({ verdict: "maybe" })).confirmSubject(c, cand)).toMatchObject({ merge: false, valid: false });
+    expect(await o(async () => { throw new Error("Failed to extract valid output from model"); }).confirmSubject(c, cand)).toMatchObject({ merge: false, valid: false });
+    await expect(o(async () => { throw Object.assign(new Error("rate limited"), { status: 429 }); }).confirmSubject(c, cand)).rejects.toThrow("rate limited");
+  });
+});

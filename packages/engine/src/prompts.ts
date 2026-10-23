@@ -287,6 +287,18 @@ Merge only if the contribution is an update, correction or extension of that ent
 Answer with the id of the one entry that is the same subject, or "new" if none is. When unsure, answer "new".
 Output JSON only: {"match": "<entry id or new>", "reason": "<one short sentence>"}.`;
 
+/**
+ * stage: confirmSubject (KB sweep) · model: fast · in: the contribution's full body + the near-miss candidate's full body · out: merge | different
+ *
+ * Second look before a near-miss CREATE: the title+summary check said "new" but
+ * the nearest entry scored high. With both full texts, is it the same subject?
+ */
+export const CONFIRM_SUBJECT_SYSTEM = `You are given a new knowledge contribution and ONE existing KB entry that scored as very similar. Decide from the full texts whether the contribution is about the SAME SUBJECT as the entry.
+
+Answer "merge" if the contribution is an update, correction, extension or a part of that entry's own subject (the same system, feature, decision, incident or initiative), so that a reader looking for this subject would expect to find it in that entry. Answer "different" if it is a separate subject that merely shares vocabulary, an adjacent feature, or a user of that system.
+
+Output JSON only: {"verdict": "merge" | "different", "reason": "<one short sentence>"}.`;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // KB SWEEP: PRODUCE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -418,8 +430,22 @@ WRITING RULES:
   the summary in the detail. A work id appears only as a History line's closing
   citation, never in the title, summary, body or properties. Leave out progress notes; keep only what is true
   of the subject.
-- Stay on the entry's subject. If the contribution contains material about a
-  different subject, leave it out.
+- Stay on the entry's subject: the one the CONTRIBUTION belongs to. If the
+  contribution contains material about a different subject, leave it out. When
+  the prompt says "OVERFLOW: allowed", put a second subject in \`overflow\` as
+  {"title", "summary", "detail"} instead: a different system, feature or
+  incident from the one the entry's title names, whether it came with the
+  contribution or is ALREADY in the existing entry. Write it as its own
+  complete entry under these same rules, and remove it from this entry: it must
+  not appear in this entry's title, summary or detail. Return no \`overflow\`
+  when everything is one subject.
+- No repetition on merge: add only what the EXISTING ENTRY does not already say,
+  in its body or its History. A fact already there stays as it is, in its place,
+  and is never restated in another sentence, bullet or section; never write the
+  same section twice.
+- Link only with [[<entry id>]] where the id is a real kb-<domain>-<id> id given
+  to you in the prompt or the existing entry. Never write a placeholder or an
+  invented id in [[ ]]: name the subject in plain words instead.
 - Be concise: aim for at most ~6,000 characters in the body; the History
   section does not count towards that. Cut redundancy and detail that does not
   help someone using the subject.

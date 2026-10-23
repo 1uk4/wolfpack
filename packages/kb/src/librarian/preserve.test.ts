@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
-import { addCitedHistory, historyLines, preserveHistory, normalizeDetail, foldIntro, existingRelations, supersededIds } from "./preserve.js";
+import { addCitedHistory, dedupeDetail, textSimilarity, historyLines, preserveHistory, normalizeDetail, foldIntro, existingRelations, supersededIds } from "./preserve.js";
 import { produceEntry } from "./produce.js";
 import { sweep } from "./sweep.js";
 import { type KbRoots, type ParsedContribution } from "../shared/index.js";
@@ -259,5 +259,40 @@ describe("superseded decisions and snapjack merges", () => {
     expect(body).toContain("at most 6 players");
     expect(body).not.toContain("at most 4 players");
     expect(history).toContain("Until 2026-10-22: a room held at most 4 players. Now it holds 6");
+  });
+});
+
+describe("dedupeDetail", () => {
+  const P = "The sweep routes a contribution to an entry by alias first, then by similarity band, then by a subject check.";
+  it("measures normalized similarity", () => {
+    expect(textSimilarity("A b c d e f g.", "a B c d e f g")).toBe(1);
+    expect(textSimilarity(P, "Totally different words about the memory timer and its interval.")).toBeLessThan(0.2);
+  });
+  it("drops a near-duplicate paragraph and bullet, and the section it empties", () => {
+    const d = `## One\n\n${P}\n\n- first bullet that says something quite specific here\n\n## Two\n\n${P}\n\n- first bullet that says something quite specific here.\n\n## Three\n\nkept text`;
+    const r = dedupeDetail(d);
+    expect(r.removed).toHaveLength(2);
+    expect(r.detail).toContain("## One");
+    expect(r.detail).not.toContain("## Two");
+    expect(r.detail).toContain("## Three");
+    expect(r.detail.match(/first bullet/g)).toHaveLength(1);
+  });
+  it("leaves short lines, code blocks and distinct text alone", () => {
+    const d = "## A\n\n- yes\n- yes\n\n```\nsame same same same same same same\nsame same same same same same same\n```\n\n## B\n\nA wholly different paragraph about something else entirely, with enough words.";
+    expect(dedupeDetail(d)).toEqual({ detail: d, removed: [] });
+  });
+  it("dedupes History lines with the same work id and fact, never a kept one", () => {
+    const a = "- Until 2026-10-20: the KB had two entries for one subject. Now one (work-wolfpack-AbC1234).";
+    const b = "- Until 2026-10-23: the KB had two entries for the one subject. Now one entry (work-wolfpack-AbC1234).";
+    const other = "- Until 2026-10-21: a is on. Now off (work-wolfpack-ZzZ9999).";
+    expect(dedupeDetail(`Body.\n\n## History\n\n${a}\n${b}\n${other}`).detail).toBe(`Body.\n\n## History\n\n${a}\n${other}`);
+    expect(dedupeDetail(`Body.\n\n## History\n\n${a}\n${b}`, new Set([b])).removed).toEqual([]);
+  });
+  it("drops what repeats text that lives elsewhere now", () => {
+    const moved = "## Topology\n\nThe pack syncs a star of Syncthing folders around Dewey plus a Mac hub, receive-only on wolves.";
+    const d = "## Layout\n\nOne ledger file per den, read by every command of the kb CLI.\n\n" + moved;
+    const r = dedupeDetail(d, new Set(), moved);
+    expect(r.detail.trim()).toBe("## Layout\n\nOne ledger file per den, read by every command of the kb CLI.");
+    expect(r.removed).toHaveLength(1);
   });
 });

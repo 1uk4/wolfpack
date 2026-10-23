@@ -44,3 +44,10 @@ export const MatchSubjectSchema = z.object({
   reason: z.string().optional(),
 });
 export type MatchSubject = z.infer<typeof MatchSubjectSchema>;
+
+/** confirmSubject — second look at a near-miss create: merge into the candidate, or a different subject. */
+export const ConfirmSubjectSchema = z.object({
+  verdict: z.string(),
+  reason: z.string().optional(),
+});
+export type ConfirmSubject = z.infer<typeof ConfirmSubjectSchema>;

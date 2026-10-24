@@ -10,7 +10,8 @@ import * as crypto from "node:crypto";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 
-const require = createRequire(import.meta.url);
+// electron-builder is a desktop devDependency; npm may hoist it to the root or keep it under apps/desktop.
+const require = createRequire(new URL("../../desktop/package.json", import.meta.url));
 const sourcePath = require.resolve("app-builder-lib/out/codeSign/macCodeSign.js");
 const source = fs.readFileSync(sourcePath, "utf8");
 const generatedPassword = Buffer.alloc(32, 42).toString("base64");

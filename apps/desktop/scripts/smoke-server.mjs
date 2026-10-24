@@ -25,7 +25,6 @@
  * way, same day).
  */
 import { spawn } from "node:child_process";
-import { probeEnv, verifyDemoRuntime } from "./smoke-demo-runtime.mjs";
 import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -61,6 +60,23 @@ function freePort() {
 	});
 }
 
+/** A hermetic child env: no credentials from the host, HOME and config dirs
+ *  pointed into the throwaway `home`. */
+function probeEnv(env, home) {
+	const clean = Object.fromEntries(Object.entries(env).filter(([key]) =>
+		!/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) &&
+		!/^(AWS_|GOOGLE_|GCLOUD_|CLOUDSDK_|AZURE_|ANTHROPIC_|OPENAI_|OPENROUTER_|GEMINI_)/.test(key) &&
+		!["NODE_OPTIONS", "NODE_PATH", "LH_DEV_URL", "ELECTRON_RUN_AS_NODE"].includes(key)));
+	return {
+		...clean,
+		HOME: home, USERPROFILE: home,
+		APPDATA: path.join(home, "config"), LOCALAPPDATA: path.join(home, "local"),
+		XDG_CONFIG_HOME: path.join(home, "config"), XDG_CACHE_HOME: path.join(home, "cache"),
+		LH_DATA_DIR: path.join(home, "data"), LH_AUTH_FILE: path.join(home, "auth.json"),
+		LH_IGNORE_ENV_KEYS: "1", NODE_ENV: "production",
+	};
+}
+
 /** One GET; resolves the status code (0 = connection refused/failed). */
 function get(url) {
 	return new Promise((resolve) => {
@@ -77,9 +93,6 @@ function get(url) {
 }
 
 async function main() {
-	// HTTP boot alone never imports the dynamically loaded demo engine.
-	// Fail before packaging if its standalone dependency graph is incomplete.
-	verifyDemoRuntime(STANDALONE, RUNTIME);
 	const port = await freePort();
 	const url = `http://127.0.0.1:${port}`;
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "lh-smoke-"));

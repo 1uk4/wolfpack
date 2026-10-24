@@ -57,74 +57,25 @@ function serverEntry() {
 }
 
 // ─── Single instance: two instances would fight over the data dir ─────────
-// ─── Browser-service helper (Wave E stage 3, owner 2026-10-10) ────────
-// The render engines for agent jobs: PDFs and SVGs rasterize natively
-// (pdfjs+Skia, resvg — no browser); DEMOS execute JS and need one. The
-// app's own Chromium serves that via this helper — the server spawns
-//   <this binary> --browser-service
-// and connects over CDP (system Chrome stays the fallback). Handshake:
-// the helper prints "BROWSER_SERVICE_CDP <port>" on stdout once the CDP
-// endpoint listens. Lifetime: parent IPC disconnect/death = quit.
-// MUST run before the single-instance lock — a helper is a second
-// instance of this very binary, and before the LH_DEV_URL redirect — the
-// helper owns no user data at all.
-if (process.argv.includes("--browser-service")) {
-	const { waitForBrowserService } = require("./browser-service-readiness.cjs");
-	// Own the helper's entire startup lifetime, including the readiness wait.
-	const lifetime = new AbortController();
-	const parentClosed = () => {
-		lifetime.abort(new Error("browser-service parent IPC disconnected"));
-		app.quit();
-	};
-	(async () => {
-		try {
-			// Full Windows Electron replaces stdin with synthetic EOF. Use the
-			// real Node IPC channel, and refuse to start an unowned helper.
-			if (!process.channel || !process.connected) throw new Error("browser-service requires connected parent IPC");
-			process.once("disconnect", parentClosed);
-			app.dock?.hide();
-			const port = await freePort();
-			// Must land before app-ready for Chromium to pick it up.
-			app.commandLine.appendSwitch("remote-debugging-port", String(port));
-			await app.whenReady();
-			// A hidden window keeps the app lifecycle ordinary on every
-			// platform (no window-all-closed handler is installed here).
-			const win = new BrowserWindow({ show: false });
-			await win.loadURL("about:blank");
-			// Window load is not a DevTools HTTP readiness barrier. Confirm the
-			// endpoint before both production and smoke clients see the handshake.
-			await waitForBrowserService(port, { signal: lifetime.signal });
-			if (!lifetime.signal.aborted) console.log(`BROWSER_SERVICE_CDP ${port}`);
-		} catch (err) {
-			if (lifetime.signal.aborted) return; // Parent disconnect is normal.
-			console.error("browser-service failed:", err);
-			app.exit(1);
-		}
-	})();
-} else {
-	// Dev shell (LH_DEV_URL) runs BESIDE the packaged app, not instead of it:
-	// its own userData so (a) the single-instance lock — checked below — doesn't
-	// silently kill it, and (b) it never reads/writes the real app's
-	// localStorage, auth.json, or logs. Must run before the lock check.
-	if (process.env.LH_DEV_URL) {
-		app.setPath("userData", `${app.getPath("userData")}-dev`);
-	}
+// Dev shell (LH_DEV_URL) runs BESIDE the packaged app, not instead of it:
+// its own userData so (a) the single-instance lock — checked below — doesn't
+// silently kill it, and (b) it never reads/writes the real app's
+// localStorage, auth.json, or logs. Must run before the lock check.
+if (process.env.LH_DEV_URL) {
+	app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
 
-	// The whole normal boot — lock included — lives in this else: a helper is
-	// a SECOND instance of this very binary on purpose (the running app owns
-	// the lock), so it must never reach this check.
-	if (!app.requestSingleInstanceLock()) {
-		app.quit();
-	} else {
-		app.on("second-instance", () => {
-			const win = BrowserWindow.getAllWindows()[0];
-			if (win) {
-				if (win.isMinimized()) win.restore();
-				win.focus();
-			}
-		});
-		main();
-	}
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+} else {
+	app.on("second-instance", () => {
+		const win = BrowserWindow.getAllWindows()[0];
+		if (win) {
+			if (win.isMinimized()) win.restore();
+			win.focus();
+		}
+	});
+	main();
 }
 
 let serverProcess = null;

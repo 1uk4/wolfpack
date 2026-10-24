@@ -87,7 +87,9 @@ describe("desktop packaging policy", () => {
 	const config = yaml.load(readFileSync(new URL("../../desktop/electron-builder.yml", import.meta.url), "utf8"));
 
 	it("configuration is accepted by the INSTALLED electron-builder schema", async () => {
-		const { validateConfiguration } = require("app-builder-lib/out/util/config/config.js");
+		// electron-builder lives in the desktop workspace's dependency tree.
+		const desktopRequire = createRequire(fileURLToPath(new URL("../../desktop/package.json", import.meta.url)));
+		const { validateConfiguration } = desktopRequire("app-builder-lib/out/util/config/config.js");
 		await validateConfiguration(config, { isEnabled: false });
 	});
 
@@ -106,11 +108,11 @@ describe("desktop packaging policy", () => {
 	});
 
 	it("deb has public maintainer metadata and a matching desktop identity", () => {
-		const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+		const pkg = JSON.parse(readFileSync(new URL("../../desktop/package.json", import.meta.url), "utf8"));
 		assert.equal(pkg.author.name, "Amos Blomqvist");
 		assert.equal(pkg.author.email, "255718537+amosblomqvist@users.noreply.github.com");
 		assert.equal(pkg.homepage, "https://github.com/amosblomqvist/learnharness");
-		assert.equal(pkg.desktopName, "learnharness.desktop");
+		assert.equal(pkg.desktopName, "wolfpack-console.desktop");
 	});
 });
 

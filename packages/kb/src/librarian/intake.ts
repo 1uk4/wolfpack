@@ -87,6 +87,12 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
   const anchor = fields.anchor ? String(fields.anchor) : undefined;
   if (anchor && !ANCHOR_RE.test(anchor)) throw new Error(`invalid anchor ${JSON.stringify(anchor)}`);
 
+  const group = fields.group ? String(fields.group) : undefined;
+  if (group && !ANCHOR_RE.test(group)) throw new Error(`invalid group ${JSON.stringify(group)}`);
+  const groupDate = fields.group_date ? String(fields.group_date) : undefined;
+  if (groupDate && !/^\d{4}-\d{2}-\d{2}$/.test(groupDate)) throw new Error(`invalid group_date ${JSON.stringify(groupDate)}`);
+  const verbatim = String(fields.verbatim) === "true" ? true : undefined;
+
   return {
     from,
     host: fields.host ? String(fields.host) : undefined,
@@ -116,6 +122,9 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
     // A sender may name the summary ; else the
     // first paragraph of the body.
     anchor: anchor,
+    verbatim,
+    group,
+    groupDate,
     target: fields.target && /^kb-[A-Za-z0-9-]+$/.test(String(fields.target)) ? String(fields.target) : undefined,
     summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,

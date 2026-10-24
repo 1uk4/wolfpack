@@ -66,6 +66,18 @@ export const ContributionSchema = z.object({
    */
   anchor: z.string().optional(),
   /**
+   * Verbatim: the body is the entry as authored. The librarian stores it
+   * as-is (no rewrite, no lint, no size pass). Only meaningful with `anchor`.
+   */
+  verbatim: z.boolean().optional(),
+  /**
+   * Group key (an anchor key): this entry belongs under the anchored entry
+   * holding that key, shown and sectioned with it, ordered by `groupDate`.
+   */
+  group: z.string().regex(ANCHOR_RE).optional(),
+  /** Ordering date within the group (YYYY-MM-DD). */
+  groupDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /**
    * Hint from distill: the existing entry this contribution is about. A strong
    * prior for the sweep's subject check, never a bypass of it.
    */

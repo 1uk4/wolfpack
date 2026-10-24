@@ -162,3 +162,18 @@ export function mapDeliveredLinks(body: string, map: (links: string[]) => string
     .join("\n");
   return `${body.slice(0, r.start)}${section}${body.slice(r.end)}`;
 }
+
+/**
+ * Replace the bullets of the body's `## Delivered` section with `bullets`, in
+ * that order, in place (a body without the section gets one, as mergeDelivered
+ * places it). Non-bullet lines of the section are dropped.
+ */
+export function setDelivered(body: string, bullets: DeliveredBullet[]): string {
+  const want = bullets.filter((b) => b.title.trim());
+  if (want.length === 0) return body;
+  const r = deliveredRange(body);
+  if (!r) return mergeDelivered(body, want);
+  const section = ["## Delivered", "", ...want.map(renderDelivered)].join("\n");
+  const rest = body.slice(r.end);
+  return `${body.slice(0, r.start)}${section}\n${rest ? `\n${rest.replace(/^\n+/, "")}` : ""}`;
+}

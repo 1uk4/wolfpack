@@ -13,6 +13,7 @@ import { readSections, writeSections, foldSections } from "./sections.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
 import { renderDomainDigest, renderDomainIndex } from "./domains.js";
 import { renderRegistry } from "./registry.js";
+import { anchorIndex, groupOf } from "./anchors.js";
 import {
   shouldMerge,
   type EntryWithVector,
@@ -142,14 +143,48 @@ function entriesPointingAt(eDir: string, sectionId: SectionId | string): string[
 }
 
 /**
+ * Put every grouped entry in its holder's section (the entry anchored by its
+ * `group:` key), so the group stays together whatever the tree did. Returns the
+ * ids repinned. No-op under `dryRun`.
+ */
+export function repinGroups(roots: KbRoots, domains: string[], dryRun?: boolean): string[] {
+  const moved: string[] = [];
+  if (dryRun) return moved;
+  for (const domain of domains) {
+    const eDir = join(roots.kbBase, "domains", domain, "entries");
+    const { byKey, grouped } = anchorIndex(roots, domain);
+    for (const id of grouped) {
+      const file = join(eDir, `${id}.md`);
+      if (!existsSync(file)) continue;
+      const key = groupOf(readFileSync(file, "utf-8"));
+      const holder = key ? byKey.get(key) : undefined;
+      if (!holder || holder === id) continue;
+      const holderFile = join(eDir, `${holder}.md`);
+      if (!existsSync(holderFile)) continue;
+      const section = String(parseFrontmatter(readFileSync(holderFile, "utf-8")).fields.section ?? "");
+      if (!section) continue;
+      const have = String(parseFrontmatter(readFileSync(file, "utf-8")).fields.section ?? "");
+      if (have === section) continue;
+      writeEntrySection(eDir, id, section);
+      moved.push(id);
+    }
+  }
+  return moved;
+}
+
+/**
  * Scan an entries/ directory and return a map of sectionId -> count of
  * entry files whose frontmatter points at that section.
  */
-function readSectionCounts(eDir: string): Map<string, number> {
+/** Exported for tests. */
+export function readSectionCounts(eDir: string): Map<string, number> {
   const counts = new Map<string, number>();
   if (!existsSync(eDir)) return counts;
   for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-    const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+    const raw = readFileSync(join(eDir, f), "utf-8");
+    // A grouped entry follows its holder; it is not a member of the section's tree.
+    if (groupOf(raw)) continue;
+    const { fields } = parseFrontmatter(raw);
     const sec = String(fields.section ?? "");
     if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
   }
@@ -520,6 +555,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
     await rebuildLabelAfter(sections, rctx);
 
     rerenderRegistry(roots, opts.dryRun);
+    repinGroups(roots, domains, opts.dryRun);
     persistDomains(roots, sections, result.domains, opts.dryRun);
 
     notify?.(opts.dryRun
@@ -547,6 +583,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
     sections = collapseSingleChildChains(sections, domain, eDir, notify, opts.dryRun);
   }
 
+  repinGroups(roots, domains, opts.dryRun);
   persistDomains(roots, sections, result.domains, opts.dryRun);
 
   notify?.(opts.dryRun

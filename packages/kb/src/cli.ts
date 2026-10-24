@@ -452,9 +452,10 @@ async function cmdRetire(): Promise<void> {
   const argv = process.argv.slice(3);
   const ids = argv.filter((a) => !a.startsWith("--"));
   const dryRun = argv.includes("--dry-run");
+  const force = argv.includes("--force");
   const reason = argv.find((a) => a.startsWith("--reason="))?.slice("--reason=".length) || undefined;
   if (ids.length === 0) {
-    console.error("usage: retire <entryId...> [--reason=<text>] [--dry-run]");
+    console.error("usage: retire <entryId...> [--reason=<text>] [--dry-run] [--force]");
     process.exit(1);
   }
   const release = dryRun ? () => {} : acquireKbLock(roots);
@@ -463,7 +464,7 @@ async function cmdRetire(): Promise<void> {
     process.exit(1);
   }
   try {
-    const r = retireEntries(roots, ids, { reason, dryRun });
+    const r = retireEntries(roots, ids, { reason, dryRun, force });
     for (const e of r.retired) {
       console.log(`${dryRun ? "would retire" : "retired"} ${e.entryId}${e.hadFile ? "" : " (file already gone; registry only)"}`);
     }
@@ -526,7 +527,7 @@ async function cmdHistory(): Promise<void> {
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
   "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]\n" +
-  "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run]\n" +
+  "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 
 async function main(): Promise<void> {

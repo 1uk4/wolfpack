@@ -56,6 +56,27 @@ describe("retireEntries", () => {
     expect(readFileSync(d("INDEX.md"), "utf-8")).toContain("0 entries");
   });
 
+  it("refuses an anchored entry unless forced, names the ids, and retires nothing", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"], "kb-fit-bbbbbbb": ["kb-fit-bbbbbbb"] });
+    writeFileSync(d("entries", "kb-fit-aaaaaaa.md"), `---\ntitle: a\nanchor: work-fit-FEAT001\nsummary: s\n---\nbody`);
+    expect(() => retireEntries(roots, ["kb-fit-bbbbbbb", "kb-fit-aaaaaaa"], { reason: "cleanup" })).toThrow(/kb-fit-aaaaaaa \(anchor work-fit-FEAT001\).*--force/);
+    // all or nothing: the unanchored one stayed too
+    expect(existsSync(d("entries", "kb-fit-bbbbbbb.md"))).toBe(true);
+    expect(existsSync(d("entries", "kb-fit-aaaaaaa.md"))).toBe(true);
+    expect(readLedger(roots).filter((e) => e.t === "entry_retired")).toHaveLength(0);
+    // a dry run refuses too
+    expect(() => retireEntries(roots, ["kb-fit-aaaaaaa"], { dryRun: true })).toThrow(/anchored/);
+
+    const r = retireEntries(roots, ["kb-fit-aaaaaaa"], { reason: "owner decision", force: true });
+    expect(r.retired).toEqual([{ entryId: "kb-fit-aaaaaaa", domain: "fit", hadFile: true }]);
+    expect(existsSync(d("entries", "kb-fit-aaaaaaa.md"))).toBe(false);
+  });
+
+  it("unanchored entries retire as before", () => {
+    seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa"] });
+    expect(retireEntries(roots, ["kb-fit-aaaaaaa"]).retired).toHaveLength(1);
+  });
+
   it("keeps a topic that still has other entries", () => {
     seed({ "kb-fit-aaaaaaa": ["kb-fit-aaaaaaa", "kb-fit-bbbbbbb"] });
 

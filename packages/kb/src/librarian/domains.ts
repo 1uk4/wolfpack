@@ -23,6 +23,7 @@ import {
   type DigestSection,
 } from "../shared/index.js";
 import { entrySummary } from "./embed.js";
+import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
 import { readSections, getRoots, buildParentIndex } from "./sections.js";
 import type { Section, SectionId, Currency } from "../schema/knowledge.js";
 
@@ -58,13 +59,47 @@ function indexSummary(s: string): string {
   return one.length > INDEX_SUMMARY_MAX ? one.slice(0, INDEX_SUMMARY_MAX - 1).trimEnd() + "…" : one;
 }
 
+interface GroupInfo {
+  id: string;
+  anchor?: string;
+  group?: string;
+  groupDate: string;
+}
+
+/**
+ * `items` (already in their display order) with each grouped entry moved to sit
+ * right after its holder (the entry anchored by its `group:` key), followers
+ * ordered by group date. A grouped entry whose holder is not in `items` keeps
+ * its own place. Returns the ordered items and the ids that are followers.
+ */
+export function orderGroups<T extends GroupInfo>(items: T[]): { ordered: T[]; followers: Set<string> } {
+  const holderOf = new Map<string, string>();
+  for (const i of items) if (i.anchor && !i.group) holderOf.set(i.anchor, i.id);
+  const under = new Map<string, T[]>();
+  const followers = new Set<string>();
+  for (const i of items) {
+    const h = i.group ? holderOf.get(i.group) : undefined;
+    if (!h || h === i.id) continue;
+    followers.add(i.id);
+    under.set(h, [...(under.get(h) ?? []), i]);
+  }
+  const ordered: T[] = [];
+  for (const i of items) {
+    if (followers.has(i.id)) continue;
+    ordered.push(i);
+    const f = under.get(i.id);
+    if (f) ordered.push(...[...f].sort((a, b) => a.groupDate.localeCompare(b.groupDate) || a.id.localeCompare(b.id)));
+  }
+  return { ordered, followers };
+}
+
 /**
  * Regenerate `domains/<domain>/INDEX.md` from the entries on disk. Deterministic
  * (reads each entry's frontmatter). Call for each domain touched in a sweep.
  */
 export function renderDomainIndex(roots: KbRoots, domain: string): void {
   const dir = entriesDir(roots, domain);
-  const rows: Array<{ id: string; title: string; summary: string; sub: string }> = [];
+  const rows: Array<GroupInfo & { title: string; summary: string; sub: string }> = [];
   if (existsSync(dir)) {
     for (const f of readdirSync(dir).filter((x) => x.endsWith(".md"))) {
       try {
@@ -75,6 +110,9 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
           title: String(fields.title ?? f.replace(/\.md$/, "")),
           summary: indexSummary(entrySummary(md)),
           sub: String(fields.subcategory ?? ""),
+          anchor: anchorOf(md),
+          group: groupOf(md),
+          groupDate: groupDateOf(md) ?? "",
         });
       } catch {
         /* skip unreadable entry */
@@ -82,6 +120,8 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
     }
   }
   rows.sort((a, b) => a.title.localeCompare(b.title));
+  // Grouped entries are listed under their holder, indented, by group date.
+  const { ordered, followers } = orderGroups(rows);
 
   const lines = [
     `# ${domain} — knowledge index`,
@@ -90,9 +130,9 @@ export function renderDomainIndex(roots: KbRoots, domain: string): void {
     "",
     // `[[id]]` wikilinks so the catalog is navigable in Obsidian. Filenames
     // equal ids, so each link resolves directly to the entry.
-    ...rows.map(
+    ...ordered.map(
       (r) =>
-        `- [[${r.id}|${r.title}]]${r.sub ? ` _(${r.sub})_` : ""}${
+        `${followers.has(r.id) ? "  " : ""}- [[${r.id}|${r.title}]]${r.sub ? ` _(${r.sub})_` : ""}${
           r.summary ? ` — ${r.summary}` : ""
         }`,
     ),
@@ -114,12 +154,15 @@ export function renderDomainDigest(roots: KbRoots, domain: string): void {
 
   // Read all entries for this domain to get their currency and section membership
   const entryMap = new Map<string, { currency: Currency; section: string }>();
+  const groupInfo: GroupInfo[] = [];
   const dir = entriesDir(roots, domain);
   if (existsSync(dir)) {
     for (const f of readdirSync(dir).filter((x) => x.endsWith(".md"))) {
       try {
-        const { fields } = parseFrontmatter(readFileSync(join(dir, f), "utf-8"));
+        const md = readFileSync(join(dir, f), "utf-8");
+        const { fields } = parseFrontmatter(md);
         const entryId = f.replace(/\.md$/, "");
+        groupInfo.push({ id: entryId, anchor: anchorOf(md), group: groupOf(md), groupDate: groupDateOf(md) ?? "" });
         const currency = (fields.currency as Currency) ?? "live";
         const section = String(fields.section ?? "");
         entryMap.set(entryId, { currency, section });
@@ -130,10 +173,14 @@ export function renderDomainDigest(roots: KbRoots, domain: string): void {
   }
 
   // Helper: get entry IDs for a section
+  // (the holder first, then the entries grouped under it by group date)
   const getEntryIds = (sectionId: string): string[] => {
-    return Array.from(entryMap.entries())
-      .filter(([_, data]) => data.section === sectionId)
-      .map(([id]) => id);
+    const here = new Set(
+      Array.from(entryMap.entries())
+        .filter(([_, data]) => data.section === sectionId)
+        .map(([id]) => id),
+    );
+    return orderGroups(groupInfo.filter((g) => here.has(g.id))).ordered.map((g) => g.id);
   };
 
   // Helper: roll up currency for a section (live > snapshot > archived)

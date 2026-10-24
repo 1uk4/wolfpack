@@ -306,6 +306,7 @@ export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResu
 
   const raw = readFileSync(file, "utf-8");
   const { yaml, body } = parseEntryFile(raw);
+  if (/^anchor:/m.test(yaml)) throw new Error(`${entryId} is anchored: an anchored entry is a pinned record and is not split`);
   if (raw.length < threshold) {
     return { entryId, parentSize: raw.length, shards: [], retired: false };
   }

@@ -125,6 +125,8 @@ function renderEntry(entry: Entry): string {
   lines.push(`title: ${yamlStr(entry.title)}`);
   lines.push(`domain: ${entry.domain}`);
   if (entry.anchor) lines.push(`anchor: ${entry.anchor}`);
+  if (entry.group) lines.push(`group: ${entry.group}`);
+  if (entry.groupDate) lines.push(`groupDate: ${entry.groupDate}`);
 
   // Section placement
   lines.push(`section: ${entry.section}`);

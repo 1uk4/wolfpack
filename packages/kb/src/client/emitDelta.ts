@@ -79,6 +79,12 @@ export interface EmitDeltaInput {
   origin?: Contribution["origin"];
   /** Anchored subject key: routes the contribution by key only. */
   anchor?: string;
+  /** Store the body as authored (anchored entries only). */
+  verbatim?: boolean;
+  /** Anchor key of the entry this one is grouped under. */
+  group?: string;
+  /** Ordering date within the group (YYYY-MM-DD). */
+  groupDate?: string;
   /** Distill's hint: the existing entry this contribution is about. */
   target?: string;
 }
@@ -91,6 +97,8 @@ export interface EmitDeltaInput {
 export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const { roots, wolf } = input;
   if (input.anchor && !ANCHOR_RE.test(input.anchor)) throw new Error(`invalid anchor ${JSON.stringify(input.anchor)}`);
+  if (input.group && !ANCHOR_RE.test(input.group)) throw new Error(`invalid group ${JSON.stringify(input.group)}`);
+  if (input.groupDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.groupDate)) throw new Error(`invalid groupDate ${JSON.stringify(input.groupDate)}`);
   const dir = inboxDir(roots, wolf);
   mkdirSync(dir, { recursive: true });
 
@@ -119,6 +127,9 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     sourcePath: input.sourcePath,
     origin: input.origin,
     anchor: input.anchor,
+    verbatim: input.verbatim,
+    group: input.group,
+    groupDate: input.groupDate,
     target: input.target,
   };
 
@@ -174,6 +185,9 @@ function render(c: Contribution): string {
     c.sourcePath ? `source_path: ${c.sourcePath}` : null,
     c.origin ? `origin: ${c.origin}` : null,
     c.anchor ? `anchor: ${c.anchor}` : null,
+    c.verbatim ? `verbatim: true` : null,
+    c.group ? `group: ${c.group}` : null,
+    c.groupDate ? `group_date: ${c.groupDate}` : null,
     c.target ? `target: ${c.target}` : null,
     `submitted: ${c.submitted}`,
     "---",

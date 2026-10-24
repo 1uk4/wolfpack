@@ -20,6 +20,7 @@ import {
 import { join } from "node:path";
 import { atomicWrite, parseFrontmatter, EMBED, SWEEP } from "@wolfpack/engine";
 import { InfraError } from "./backoff.js";
+import { groupOf } from "./anchors.js";
 import {
   type KbRoots,
   type Registry,
@@ -292,6 +293,8 @@ interface ScannedEntry {
   domain: string;
   text: string;
   hash: string;
+  /** Sits under another entry (frontmatter `group:`). */
+  grouped: boolean;
 }
 
 /** Every curated entry in kb-base with the text its vector is cached under. */
@@ -325,6 +328,7 @@ function* scanEntries(roots: KbRoots, model: string): Generator<ScannedEntry> {
         domain: String(fields.domain ?? domain),
         text,
         hash: contentHash(text),
+        grouped: !!groupOf(raw),
       };
     }
   }
@@ -354,6 +358,9 @@ export async function buildEntryVectors(
 
   const out: EntryVector[] = [];
   for (const e of scanEntries(roots, model)) {
+    // A grouped entry follows its holder's section: it takes no part in
+    // similarity placement, so it is neither embedded nor vectored.
+    if (e.grouped) continue;
     out.push({
       entryId: e.id,
       canonicalId: canonicalOf.get(e.id) ?? "",

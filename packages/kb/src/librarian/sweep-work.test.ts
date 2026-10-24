@@ -193,6 +193,110 @@ describe("sweep: graduated work", () => {
     });
   });
 
+  describe("standing features: verbatim, grouped entries", () => {
+    const holderKey = "work-wp-INITI01";
+    const dropV = (topic: string, title: string, bodyText: string, f: { anchor?: string; verbatim?: boolean; group?: string; groupDate?: string; summary?: string } = {}) =>
+      writeFileSync(
+        join(inbox(), `${topic.replace(/~/g, "_")}-${++n}.md`),
+        `---\nfrom: w1\nden_topic_id: ${topic}\ncontent_hash: c0de${n.toString(16)}\nprev_hash: null\ndomain_hint: wp\n` +
+          `${f.anchor ? `anchor: ${f.anchor}\n` : ""}${f.verbatim ? "verbatim: true\n" : ""}${f.group ? `group: ${f.group}\n` : ""}${f.groupDate ? `group_date: ${f.groupDate}\n` : ""}` +
+          `summary: ${JSON.stringify(f.summary ?? "One paragraph about the period.")}\n---\n\n# ${title}\n\n${bodyText}\n`
+      );
+    const file = (id: string) => readFileSync(join(entries(), `${id}.md`), "utf8");
+    const byAnchor = (key: string) => readdirSync(entries()).map((x) => x.slice(0, -3)).find((id) => new RegExp(`^anchor: ${key}$`, "m").test(file(id)))!;
+    const BODY_A = "## Plan\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n### 2026-10-14 first day\n\nDone (work-wp-TASK001, commit abc1234).\n\n## Record\n\n- kept as written";
+
+    it("a verbatim anchored contribution is stored exactly as authored, with no model call", async () => {
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true });
+      expect(await run({})).toMatchObject({ created: 1, merged: 0 });
+      expect(produceCalls()).toHaveLength(0);
+      expect(subjectCalls()).toHaveLength(0);
+      const md = file(byAnchor("work-wp-FEATA01"));
+      expect(md).toContain("title: \"Period A\"");
+      expect(md).toMatch(/^kind: fact$/m);
+      expect(md).toContain("One paragraph about the period.");
+      expect(md).toContain(BODY_A); // tables, dated headings, ids, hashes: untouched
+      expect(md).not.toContain("## Detail");
+    });
+
+    it("a later verbatim contribution to the same anchor replaces the whole text and keeps id, creation date and group", async () => {
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({});
+      const id = byAnchor("work-wp-FEATA01");
+      writeFileSync(join(entries(), `${id}.md`), file(id).replace(/^created: .*$/m, "created: 2026-01-01"));
+      dropV("work-wp-FEATA01", "Period A", "## Plan\n\nrewritten entirely", { anchor: "work-wp-FEATA01", verbatim: true });
+      expect(await run({ [id]: 0.3 })).toMatchObject({ created: 0, merged: 1 });
+      expect(produceCalls()).toHaveLength(0);
+      expect(byAnchor("work-wp-FEATA01")).toBe(id);
+      const md = file(id);
+      expect(md).toContain("rewritten entirely");
+      expect(md).not.toContain("kept as written");
+      expect(md).toMatch(/^created: 2026-01-01$/m);
+      expect(md).toMatch(new RegExp(`^group: ${holderKey}$`, "m"));
+      expect(md).toMatch(/^groupDate: 2026-10-14$/m);
+    });
+
+    it("a verbatim entry is skipped by the size guard and left out of every other contribution's candidates", async () => {
+      process.env.KB_MAX_MERGE_TARGET_CHARS = "100";
+      try {
+        dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true });
+        await run({});
+        const id = byAnchor("work-wp-FEATA01");
+        dropV("work-wp-FEATA01", "Period A", `${BODY_A}\n\nmore`, { anchor: "work-wp-FEATA01", verbatim: true });
+        expect(await run({ [id]: 0.3 })).toMatchObject({ created: 0, merged: 1 }); // replaced in place despite its size
+        dropV("work-wp-OTHER01", "Period A again", "text");
+        expect(await run({ [id]: 0.99 })).toMatchObject({ created: 1, merged: 0 });
+        expect(aliasOf("work-wp-OTHER01")).not.toBe(id);
+      } finally {
+        delete process.env.KB_MAX_MERGE_TARGET_CHARS;
+      }
+    });
+
+    it("a grouped entry takes its holder's section", async () => {
+      dropV(holderKey, "The initiative", "body", { anchor: holderKey });
+      await run({});
+      const holder = byAnchor(holderKey);
+      writeEntrySection(entries(), holder, "sec-wp-hhhhhh");
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({ [holder]: 0.3 });
+      const md = file(byAnchor("work-wp-FEATA01"));
+      expect(md).toMatch(/^section: sec-wp-hhhhhh$/m);
+      expect(md).toMatch(/^placement:\n  basis: routed\n  fit: 1.000$/m);
+    });
+
+    const deliveredLines = (id: string) => file(id).split("\n").filter((l) => l.startsWith("- Period"));
+
+    it("the holder's Delivered list follows its group in date order: members swept after the holder", async () => {
+      dropV(holderKey, "The initiative", "body", { anchor: holderKey });
+      await run({});
+      dropV("work-wp-FEATB01", "Period B", "b", { anchor: "work-wp-FEATB01", verbatim: true, group: holderKey, groupDate: "2026-10-20" });
+      await run({});
+      dropV("work-wp-FEATA01", "Period A", "a", { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({});
+      const idA = byAnchor("work-wp-FEATA01");
+      const idB = byAnchor("work-wp-FEATB01");
+      expect(deliveredLines(byAnchor(holderKey))).toEqual([`- Period A: [[${idA}]]`, `- Period B: [[${idB}]]`]);
+      // content hash tracks the new text
+      expect(file(byAnchor(holderKey))).toMatch(/^contentHash: sha256:[0-9a-f]{64}$/m);
+    });
+
+    it("the holder's Delivered list follows its group in date order: members swept before the holder", async () => {
+      dropV("work-wp-FEATB01", "Period B", "b", { anchor: "work-wp-FEATB01", verbatim: true, group: holderKey, groupDate: "2026-10-20" });
+      await run({});
+      dropV("work-wp-FEATA01", "Period A", "a", { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({});
+      dropV(holderKey, "The initiative", "body", { anchor: holderKey });
+      await run({});
+      const idA = byAnchor("work-wp-FEATA01");
+      const idB = byAnchor("work-wp-FEATB01");
+      expect(deliveredLines(byAnchor(holderKey))).toEqual([`- Period A: [[${idA}]]`, `- Period B: [[${idB}]]`]);
+      // a re-sweep of the holder changes nothing further
+      dropV(holderKey, "The initiative", "body changed", { anchor: holderKey });
+      await run({});
+      expect(deliveredLines(byAnchor(holderKey))).toEqual([`- Period A: [[${idA}]]`, `- Period B: [[${idB}]]`]);
+    });
+  });
+
   it("queues a note per committed work contribution, including splits; other topics queue none", async () => {
     drop("work-wp-FEAT003", "One");
     await run({});

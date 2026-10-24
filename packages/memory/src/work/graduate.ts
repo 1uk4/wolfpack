@@ -338,7 +338,11 @@ export async function previewGraduation(opts: {
     // Credentials never reach the shared KB: redacted here, so what is previewed is what is sent.
     const scan = scanSecrets(rendered.text);
     for (const f of scan.findings) featureWarnings.push(`redacted ${f.count} ${f.kind}${f.count === 1 ? "" : "s"} from the feature entry; check the document`);
-    return { id: item.id as string, title: item.title, summary, body: `# ${item.title}\n\n${scan.text}\n`, initiative: false, history: [], feature: true };
+    // The title and summary are stored too (the summary may be model-written).
+    const sum = scanSecrets(summary);
+    const ttl = scanSecrets(item.title);
+    for (const f of [...sum.findings, ...ttl.findings]) featureWarnings.push(`redacted ${f.count} ${f.kind}${f.count === 1 ? "" : "s"} from the feature entry's title or summary; check the document`);
+    return { id: item.id as string, title: ttl.text, summary: sum.text, body: `# ${ttl.text}\n\n${scan.text}\n`, initiative: false, history: [], feature: true };
   };
   let contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
     if (o.feature) return featureContribution(o.summary);

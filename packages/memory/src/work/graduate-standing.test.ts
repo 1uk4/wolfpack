@@ -143,6 +143,17 @@ describe("graduating a feature of a standing initiative", () => {
     expect(p.warnings.some((x) => /redacted .* from the feature entry/.test(x))).toBe(true);
   });
 
+  it("redacts a credential the model put in the feature's summary", async () => {
+    const { client } = fakeClient([init, f, t1], { [f.id]: DOC });
+    const leaky = { ...featureOut, summary: "Used key sk-abcdefghijklmnopqrstuvwx1234 this period." };
+    const { engine } = engineOf({ contributions: [leaky, initOut] });
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22" });
+    const feat = p.contributions.find((c) => c.feature)!;
+    expect(feat.summary).not.toContain("sk-abcdefghijklmnopqrstuvwx1234");
+    expect(feat.summary).toContain("[REDACTED:");
+    expect(p.warnings.some((x) => /title or summary/.test(x))).toBe(true);
+  });
+
   it("deliveredFor lists a standing initiative's features by creation date", () => {
     const late = w("feature", "Late", init.id, { created: "2026-10-21", graduated: "2026-10-22" });
     const early = w("feature", "Early", init.id, { created: "2026-10-07", graduated: "2026-10-08" });
@@ -243,5 +254,12 @@ describe("scanSecrets", () => {
     const r = scanSecrets(input);
     expect(r.findings).toEqual([]);
     expect(r.text).toBe(input);
+  });
+});
+
+describe("scanSecrets trade-off", () => {
+  it("an all-letter passphrase after a credential name is NOT redacted (words are indistinguishable from prose)", () => {
+    const r = scanSecrets("password = correcthorsebatterystaple");
+    expect(r.findings).toEqual([]);
   });
 });

@@ -47,3 +47,4 @@ Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from
 - [docs/decisions/](docs/decisions/): architecture decision records.
 - [docs/development.md](docs/development.md): contributor guide and docs rules.
 - Console-specific, inherited from learnharness: [keyboard shortcuts](apps/console/docs/keyboard.md), [desktop release](apps/console/docs/desktop-release.md).
+- Legacy operations (CLI reference, `wolf.yaml`, install, Tailscale/Syncthing health): see the [README on `main`](https://github.com/1uk4/wolfpack/blob/main/README.md) — those systems run production until cutover.

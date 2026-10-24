@@ -2,13 +2,11 @@
 
 The developer README (split out of the storefront README, 2026-10-10). Everything below is for people working ON LearnHarness, not using it.
 
-A standalone learning app (web + Electron desktop): a **teacher agent** (Next.js; the Vercel AI SDK's `UIMessage` protocol end-to-end, LLM engine [pi-ai](docs/pi-engine-swap.md) via OpenRouter), probe→teach lessons with graded quiz/ask interactions, a formal **session plan tree** the teacher authors once (`plan_init`) and whose progress is derived from tagged quiz calls, and a persistent cross-session **knowledge graph** of what the learner knows — the graph is the app's home page.
+**Wolfpack Console** — a Next.js app (web + Electron desktop) on the generic harness shell: a chat view over the pi agent loop (LLM engine [pi-ai](pi-engine-swap.md), BYOK), a server event bus/SSE, a jobs registry, settings, and an inert dagre/canvas graph renderer kept for the wolfpack knowledge graph.
 
-Not a chat app with a graph bolted on: sessions are probe→teach lessons, the plan tree is a structured, schema-validated object, sessions accumulate into the graph through the extraction pipeline (propositions + reasoning chains — the stored truth; the canvas renders a derived image), and the teacher reaches back into the graph through read-only prober tools on its own judgment so probing compounds across sessions.
+> **Status note (teaching-domain strip).** The learnharness teaching domain — teacher/prober/practice agents, the plan tree and phases, the extraction pipeline, the demo/visual/pdf/research sub-agents, practice sessions — was removed. The chat runs a single plain assistant agent with no tools. The question family (`quiz` / `explain` / `ask_user_question`: question-core, the dock, answered cards, the dismiss route) and the fs-reader tool files (`read`/`ls`/`find`/`grep`) remain as inert shell machinery. Sections of [`architecture.md`](architecture.md) and below that describe the removed systems are **historical** until the docs are rewritten for wolfpack.
 
-- [`docs/architecture.md`](docs/architecture.md) is the **canonical architecture spec** — layers, the import law, the five systems, the invariants, the seam directory. (The pre-audit spec is archived under `docs/archive/` — history only.)
-- Living design doc (all decisions): [`docs/vision.md`](docs/vision.md)
-- Build plan + wave/gate results: [`docs/plan.md`](docs/plan.md)
+- [`architecture.md`](architecture.md) — layers, the import law, the invariants, the seam directory.
 
 ## Commands
 
@@ -26,11 +24,7 @@ npm run typecheck    # tsc --noEmit
 npm run desktop:dev    # next dev + Electron shell pointed at it
 npm run desktop:dist   # local signed/notarized macOS arm64 build (LH_NOTARY keychain)
 
-# one-shot data scripts (run from the master tree only — data never crosses trees)
-npx tsx --env-file=.env.local scripts/import-notes.ts <dir>   # bulk-import notes → graph
-npx tsx --env-file=.env.local scripts/backfill-graph.ts       # wipe + re-extract every chat
-npx tsx --env-file=.env.local scripts/replay-layout.ts        # re-derive layout from the ledgers
-npx tsx scripts/sync-pricing.ts                               # regenerate core/prices.ts tables
+npx tsx scripts/sync-pricing.ts   # regenerate core/prices.ts tables
 ```
 
 For Windows/Linux packages and the three-OS CI/release flow, see [`desktop-release.md`](desktop-release.md). Native renderer binaries are traced per platform, so release builds run on the target OS, not as cross-builds from macOS.
@@ -143,8 +137,7 @@ src/
                                 ledgers · jobs (+ render-settings, default-settings)
 electron/                       desktop launcher + security guard (spawns the standalone
                                 server; 1 IPC channel; LH_DATA_DIR + BYOK env)
-scripts/                        build-server.mjs (packaging guards), import-notes,
-                                backfill-graph, replay-layout, sync-pricing
+scripts/                        build-server.mjs (packaging guards), sync-pricing, dev-fresh.sh, test.sh
 data/                           chats/ · graph/ (nodes/chains/sessions/coverage
                                 ledgers + positions/sources/render-settings maps) ·
                                 jobs/ · settings.json — runtime state, git-ignored

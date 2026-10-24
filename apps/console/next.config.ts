@@ -32,8 +32,7 @@ const nextConfig: NextConfig = {
 	// the previous build inside the next) is instead prevented by the
 	// desktop:dist clean step AND targeted post-trace curation in
 	// scripts/build-server.mjs (2026-10-11): remove standalone-root dist/
-	// and node_modules/electron/ (the demo helper's DEV runtime; packaged
-	// helpers use the app's own binary). Runtime dependencies' dist/ dirs
+	// and node_modules/electron/. Runtime dependencies' dist/ dirs
 	// stay intact, and the script guards against leaked data/keys.
 	outputFileTracingExcludes: {
 		"*": [
@@ -47,28 +46,8 @@ const nextConfig: NextConfig = {
 	// pi-ai's provider catalog (39 JSON files) vanished from the trace and
 	// the server 500s on module load. Include the whole data dirs of the
 	// runtime-loaded engine packages.
-	// pdfjs-dist (sources v0 live smoke, 2026-09-19): its legacy build loads
-	// the node fake worker (pdf.worker.mjs) and our standard_fonts dir via
-	// runtime-resolved paths — invisible to the tracer. Bundling (without
-	// serverExternalPackages below) additionally breaks the worker's
-	// import.meta.url resolution inside .next/dev chunks — the live smoke
-	// caught it; unit tests run unbundled and never see it.
 	outputFileTracingIncludes: {
 		"*": [
-			// The standalone trace omitted this entire runtime-imported directory
-			// in 0.3.0, so importing puppeteer-core failed before browser startup.
-			"node_modules/@puppeteer/browsers/lib/browser-data/**/*.js",
-			"node_modules/pdfjs-dist/legacy/**/*",
-			"node_modules/pdfjs-dist/standard_fonts/**/*",
-			// Wave E (2026-10-10): pdf_render paints via @napi-rs/canvas — its
-			// platform binary (@napi-rs/canvas-<platform>-<arch>) is a dynamic
-			// optional-dep require the tracer cannot see. Builds run per-OS and
-			// npm installs only the current platform's binary, so this glob
-			// resolves to exactly one Skia binary per build.
-			"node_modules/@napi-rs/canvas-*/**/*",
-			// Wave E stage 2: resvg rasterizes visual-maker SVGs natively; same
-			// per-platform-binary story as the canvas above (one per build).
-			"node_modules/@resvg/resvg-js-*/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 		],
@@ -79,9 +58,6 @@ const nextConfig: NextConfig = {
 	serverExternalPackages: [
 		"@earendil-works/pi-ai",
 		"@earendil-works/pi-agent-core",
-		"pdfjs-dist", // sources v0: bundling breaks its node fake-worker path
-		"@napi-rs/canvas", // native binding — bundling breaks the .node require
-		"@resvg/resvg-js", // native binding — same
 	],
 };
 

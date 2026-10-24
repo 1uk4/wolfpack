@@ -14,6 +14,11 @@
  *   preview       distill locally; contributions, History lines, warnings
  *   confirm       ship if needed → emit contributions → mark graduated → archive
  *
+ * A feature of a STANDING initiative is the exception: it keeps its own entry,
+ * a fixed record of its period written verbatim from the item's own document
+ * (see renderFeatureEntry), grouped under the initiative's entry. The model
+ * contributes the entry's summary and any lasting decisions/findings only.
+ *
  * Den topic ids: `work-<domain>-<id>` (the item), `…~<slug>` (splits) and the
  * initiative's own `work-<domain>-<initiativeId>` (a stable alias key).
  */
@@ -24,7 +29,8 @@ import { deliveredBullets, mergeDelivered, parseKbNotes, resolveRetiredIds, type
 import { distillTopic, existingFor, type DistilledContribution } from "../distill.js";
 import { extractRecord, withoutRecord } from "../work-record.js";
 import { staleBuildWarning } from "./build-stamp.js";
-import { outcomesText, totalsText, totalsValues, withoutRollup } from "./rollup.js";
+import { hasRollupZone, outcomesText, stripRollupMarkers, totalsText, totalsValues, withoutRollup } from "./rollup.js";
+import { scanSecrets } from "./secrets.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 · ELIGIBILITY
@@ -90,6 +96,11 @@ export function initiativeOf(feature: WorkItem, all: WorkItem[]): WorkItem | und
   return parent?.kind === "initiative" ? parent : undefined;
 }
 
+/** A feature whose initiative is standing: it graduates into its own pinned entry. */
+export function isStanding(item: WorkItem, all: WorkItem[]): boolean {
+  return item.kind === "feature" && !!initiativeOf(item, all)?.standing;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 2 · THE GRADUATION INPUT
 // ════════════════════════════════════════════════════════════════════════════
@@ -142,6 +153,7 @@ export function buildGraduationInput(opts: {
 
   const lines: string[] = [`GRADUATION OF ${item.kind}: ${item.title}`, `WORK ID: ${item.id}`];
   if (item.successCriteria) lines.push(`DONE WHEN: ${item.successCriteria}`);
+  if (initiative && isStanding(item, all)) lines.push("", "STANDING FEATURE: this feature is kept as its own entry (written from the document, not by you); give it a summary.");
   if (initiative) {
     lines.push(
       "",
@@ -179,6 +191,28 @@ export function buildGraduationInput(opts: {
   };
 }
 
+/** The most a standing feature's entry body holds. */
+export const FEATURE_ENTRY_CAP = 60_000;
+
+/**
+ * The body of a standing feature's own entry: the item's document as authored
+ * (Plan, Outcomes, Totals and Record included) without the rollup marker
+ * comments and the leading title line, plus a `## Tasks` list (title, stage)
+ * when the document has no rollup zone to carry them. Work ids, commit hashes
+ * and deploy status are kept: the entry is a fixed record of its period.
+ * Longer than FEATURE_ENTRY_CAP: cut there and `truncated` is set.
+ */
+export function renderFeatureEntry(item: WorkItem, tasks: WorkItem[], body: string): { text: string; truncated: boolean } {
+  const doc = stripRollupMarkers(body ?? "").replace(/^\s*#\s+[^\n]*\n+/, "").trim();
+  const parts = [doc];
+  if (!hasRollupZone(body ?? "") && tasks.length) {
+    parts.push(["## Tasks", "", ...tasks.map((t) => `- ${t.title} (${t.stage})`)].join("\n"));
+  }
+  const text = parts.filter(Boolean).join("\n\n").trim() || item.title;
+  if (text.length <= FEATURE_ENTRY_CAP) return { text, truncated: false };
+  return { text: `${text.slice(0, FEATURE_ENTRY_CAP).trimEnd()}\n\n…(truncated)`, truncated: true };
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 3 · PREVIEW
 // ════════════════════════════════════════════════════════════════════════════
@@ -203,6 +237,8 @@ export interface PreviewContribution {
   history: string[];
   /** The existing entry distill says this is about (a hint for Dewey's subject check). */
   target?: string;
+  /** A standing feature's own entry: stored verbatim, pinned to the item, grouped under the initiative. */
+  feature?: boolean;
 }
 
 export interface GraduationPreview {
@@ -228,9 +264,10 @@ export interface GraduationPreview {
  * name. A feature with no notes yet is listed without links.
  */
 export function deliveredFor(initiative: WorkItem, item: WorkItem, all: WorkItem[], roots?: KbRoots): DeliveredBullet[] {
-  return all
-    .filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id))
-    .map((f) => ({ title: f.title, links: linksOf(f, roots) }));
+  const features = all.filter((f) => f.partOf === initiative.id && f.kind === "feature" && (f.graduated || f.id === item.id));
+  // A standing initiative lists its features in the order they happened.
+  if (initiative.standing) features.sort((a, b) => String(a.created).localeCompare(String(b.created)));
+  return features.map((f) => ({ title: f.title, links: linksOf(f, roots) }));
 }
 
 /**
@@ -272,6 +309,7 @@ export async function previewGraduation(opts: {
   const { body } = await client.getWithBody(id);
   const input = buildGraduationInput({ item, all, body: body ?? "", roots: opts.roots });
   const isInitiative = item.kind === "initiative";
+  const standing = isStanding(item, all);
   opts.onProgress?.(`distilling ${input.text.length} chars…`);
   const r = await distillTopic(engine, {
     id: item.id as string,
@@ -286,17 +324,37 @@ export async function previewGraduation(opts: {
       ...(input.initiative ? { initiativeTopicId: input.initiative.id as string, initiativeTitle: input.initiative.title } : {}),
       totals: input.totals,
       ...(isInitiative ? { only: "initiative" as const } : {}),
+      ...(standing ? { standingFeature: { title: item.title } } : {}),
     },
   });
 
   const delivered = input.initiative ? deliveredFor(input.initiative, item, all, opts.roots) : [];
-  const contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
+  const featureWarnings: string[] = [];
+  // The standing feature's entry: the item's own document, not the model's text.
+  const featureContribution = (summary: string): PreviewContribution => {
+    const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature");
+    const rendered = renderFeatureEntry(item, tasks, body ?? "");
+    if (rendered.truncated) featureWarnings.push(`the feature entry was cut at ${FEATURE_ENTRY_CAP} characters`);
+    // Credentials never reach the shared KB: redacted here, so what is previewed is what is sent.
+    const scan = scanSecrets(rendered.text);
+    for (const f of scan.findings) featureWarnings.push(`redacted ${f.count} ${f.kind}${f.count === 1 ? "" : "s"} from the feature entry; check the document`);
+    return { id: item.id as string, title: item.title, summary, body: `# ${item.title}\n\n${scan.text}\n`, initiative: false, history: [], feature: true };
+  };
+  let contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
+    if (o.feature) return featureContribution(o.summary);
     // The initiative's list of delivered features is built here, not by the model.
-    const body = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
-    return { id: o.id, title: o.title, summary: o.summary, body, initiative: !!o.initiative, history: historyOf(body), ...(o.target ? { target: o.target } : {}) };
+    const text = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
+    return { id: o.id, title: o.title, summary: o.summary, body: text, initiative: !!o.initiative, history: historyOf(text), ...(o.target ? { target: o.target } : {}) };
   });
+  if (standing && !contributions.some((c) => c.feature)) contributions.push(featureContribution(item.successCriteria || item.title));
+  if (standing) {
+    // Emit order: the initiative, the feature, then the subjects.
+    const rank = (c: PreviewContribution) => (c.initiative ? 0 : c.feature ? 1 : 2);
+    contributions = [...contributions].sort((a, b) => rank(a) - rank(b));
+  }
   const stale = staleBuildWarning();
   const warnings = [
+    ...featureWarnings,
     ...(stale ? [`Stale build: ${stale}`] : []),
     ...r.missingTotals.map((m) => `Totals: ${m} is not in the distilled text`),
     ...r.warnings,
@@ -335,7 +393,7 @@ export function renderGraduationPreview(p: GraduationPreview): string {
     "",
   ];
   p.contributions.forEach((c, i) => {
-    out.push(`${i + 1}. ${c.initiative ? "[initiative] " : ""}${c.title}`);
+    out.push(`${i + 1}. ${c.initiative ? "[initiative] " : c.feature ? "[feature entry] " : ""}${c.title}`);
     out.push(`   ${oneLine(c.summary, 280)}`);
     for (const h of c.history) out.push(`   ${oneLine(h, 240)}`);
   });
@@ -390,6 +448,9 @@ export async function confirmGraduation(opts: {
   // The initiative's contribution is anchored to its work id (routed by that key
   // alone), so it needs no ordering against the subjects: nothing it says can be
   // merged into a subject, and no subject can merge into it.
+  // A standing feature's entry is anchored to its item, stored as written and
+  // grouped under the initiative's entry, ordered by the item's creation date.
+  const initiative = initiativeOf(item, all);
   const sent: string[] = [];
   for (const c of preview.contributions) {
     let failure: string | undefined;
@@ -398,9 +459,10 @@ export async function confirmGraduation(opts: {
         roots,
         wolf,
         denTopicId: c.id,
-        change: c.initiative ? "merge" : "create",
-        ...(c.initiative ? { anchor: c.id } : {}),
-        ...(c.target && !c.initiative ? { target: c.target } : {}),
+        change: c.initiative || c.feature ? "merge" : "create",
+        ...(c.initiative || c.feature ? { anchor: c.id } : {}),
+        ...(c.feature && initiative ? { verbatim: true, group: initiative.id as string, groupDate: String(item.created).slice(0, 10) } : {}),
+        ...(c.target && !c.initiative && !c.feature ? { target: c.target } : {}),
         domainHint: preview.domain,
         summary: c.summary,
         body: c.body,

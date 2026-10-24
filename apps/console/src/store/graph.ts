@@ -11,18 +11,12 @@
  *                                      session asserting the same
  *                                      (premises, conclusion) appends
  *                                      another line; readers merge)
- *   sessions.jsonl  SessionCheckpoint— emission checkpoints (foldedAt)
- *   coverage.jsonl  CoverageEntry    — per-message extraction coverage
  *
  * CHAINS-PRIMARY (owner, 2026-09-30): there is NO edges ledger — the edge
  * view (implication nodes + untyped arrows) is derived in core/graph.ts on
  * every read and never persisted. A stale edges.jsonl left by a pre-chains
  * build is deleted once, here, at adapter load (same doctrine as the
  * events-ledger purge below).
- *
- * Plus config.SOURCES_FILE (sources.json): the imported-notes bookkeeping
- * (NOT a ledger) — one JSON map, src-id → NotesSource, read-modify-write
- * like a chat file. The format-agnostic front door (2026-09-13).
  *
  * Implements core/ports.ts GraphStore. data/graph/* is exclusively this
  * adapter's. Reads are strict against the contracts.ts shapes (the 2026-09-02
@@ -34,18 +28,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { LEDGER_FILES, POSITIONS_FILE, SOURCES_FILE } from "../../config.ts";
+import { LEDGER_FILES, POSITIONS_FILE } from "../../config.ts";
 import { assertGraphFormat, ensureGraphFormat } from "./graph-format.ts";
-import type {
-	GraphChain,
-	GraphNode,
-	ExtractionRunUsage,
-	NotesSource,
-	Position,
-	ProvenancePoint,
-	CoverageEntry,
-	SessionCheckpoint,
-} from "../core/contracts.ts";
+import type { GraphChain, GraphNode, Position, ProvenancePoint } from "../core/contracts.ts";
 import type { GraphStore } from "../core/ports.ts";
 
 // ─── JSONL primitives ────────────────────────────────────────────────────────
@@ -120,12 +105,6 @@ const isGraphChain = (v: unknown): v is GraphChain =>
 	v.provenance.every(isProvenancePoint) &&
 	isString(v.createdAt);
 
-const isCheckpoint = (v: unknown): v is SessionCheckpoint =>
-	isRecord(v) && isString(v.chatId) && isString(v.foldedAt);
-
-const isCoverageEntry = (v: unknown): v is CoverageEntry =>
-	isRecord(v) && isString(v.chatId) && isString(v.fp) && typeof v.tokens === "number" && isString(v.foldedAt);
-
 // ─── the port implementation ────────────────────────────────────────────────
 
 export const graphStore: GraphStore = {
@@ -148,43 +127,6 @@ export const graphStore: GraphStore = {
 		return readValid(LEDGER_FILES.chains, isGraphChain);
 	},
 
-	appendCheckpoint(checkpoint: SessionCheckpoint): void {
-		appendLine(LEDGER_FILES.sessions, checkpoint);
-	},
-	readCheckpoints(): SessionCheckpoint[] {
-		return readValid(LEDGER_FILES.sessions, isCheckpoint);
-	},
-
-	appendCoverage(entry: CoverageEntry): void {
-		appendLine(LEDGER_FILES.coverage, entry);
-	},
-	readCoverage(): CoverageEntry[] {
-		return readValid(LEDGER_FILES.coverage, isCoverageEntry);
-	},
-
-	// ── imported-notes bookkeeping (config.SOURCES_FILE — a JSON map) ──
-
-	/** Upsert: keeps the existing record's usage log when re-importing. */
-	upsertSource(source: NotesSource): void {
-		const all = readSourceMap();
-		const prev = all[source.id];
-		all[source.id] = prev ? { ...source, extractions: prev.extractions } : source;
-		writeSourceMap(all);
-	},
-	readSources(): NotesSource[] {
-		return Object.values(readSourceMap());
-	},
-	/** Idempotent per startedAt — same discipline as chats.appendExtractionUsage. */
-	appendSourceUsage(id: string, entry: ExtractionRunUsage): void {
-		const all = readSourceMap();
-		const source = all[id];
-		if (!source) return; // no such source — nothing to bill against
-		source.extractions = source.extractions?.some((r) => r.startedAt === entry.startedAt)
-			? source.extractions
-			: [...(source.extractions ?? []), entry];
-		writeSourceMap(all);
-	},
-
 	// ── the layout ledger (config.POSITIONS_FILE — a JSON map) ──
 	readPositions(): Record<string, Position> {
 		return readPositionMap();
@@ -193,7 +135,7 @@ export const graphStore: GraphStore = {
 		writePositionMap(positions);
 	},
 
-	/** THE DESTRUCTIVE SEAM (wave 6 session deletion): atomic full-content
+	/** THE DESTRUCTIVE SEAM (node deletion): atomic full-content
 	 *  replacement per provided ledger — write a uniquely-named temp file
 	 *  beside the ledger, then rename over it (POSIX-atomic: a crash mid-
 	 *  write leaves the original ledger and an orphan .tmp-*, never a torn
@@ -202,14 +144,10 @@ export const graphStore: GraphStore = {
 	rewriteLedgers(next: {
 		nodes?: GraphNode[];
 		chains?: GraphChain[];
-		coverage?: CoverageEntry[];
-		checkpoints?: SessionCheckpoint[];
 	}): void {
 		const files = {
 			nodes: LEDGER_FILES.nodes,
 			chains: LEDGER_FILES.chains,
-			coverage: LEDGER_FILES.coverage,
-			checkpoints: LEDGER_FILES.sessions,
 		} as const;
 		for (const [key, records] of Object.entries(next) as [keyof typeof files, unknown[]][]) {
 			const file = files[key];
@@ -280,35 +218,6 @@ function writePositionMap(positions: Record<string, Position>): void {
 const isPosition = (v: unknown): v is Position =>
 	isRecord(v) && typeof v.x === "number" && Number.isFinite(v.x) && typeof v.y === "number" && Number.isFinite(v.y);
 
-/** sources.json — { id: NotesSource }. Read-modify-write, NOT append-only:
- *  the usage log lives inside the record (like a chat's JSON file). */
-function readSourceMap(): Record<string, NotesSource> {
-	assertGraphFormat(); // honest refusal on a newer-stamped data dir
-	let raw: string;
-	try {
-		raw = fs.readFileSync(SOURCES_FILE, "utf-8");
-	} catch {
-		return {};
-	}
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (!isRecord(parsed)) return {};
-		const out: Record<string, NotesSource> = {};
-		for (const [id, value] of Object.entries(parsed)) {
-			if (isNotesSource(value)) out[id] = value;
-		}
-		return out;
-	} catch {
-		return {};
-	}
-}
-
-function writeSourceMap(map: Record<string, NotesSource>): void {
-	fs.mkdirSync(path.dirname(SOURCES_FILE), { recursive: true });
-	ensureGraphFormat(); // the lazy format stamp (graph-format.ts)
-	fs.writeFileSync(SOURCES_FILE, JSON.stringify(map, null, "\t"), "utf-8");
-}
-
 // ─── one-way purges at adapter load: dead ledgers are exactly the confusion
 // the cleanup removes (owner doctrine — nothing reads them, nothing writes
 // them, a stale file lying around is a lie). ────────────────────────────────
@@ -326,6 +235,3 @@ function writeSourceMap(map: Record<string, NotesSource>): void {
 		}
 	}
 }
-
-const isNotesSource = (v: unknown): v is NotesSource =>
-	isRecord(v) && isString(v.id) && isString(v.filePath) && isString(v.importedAt);

@@ -19,7 +19,7 @@ import { createElement } from "react";
  * word for graph objects (standardized everywhere, same ruling).
  */
 
-import { DeleteNodeBody, DeleteNodeDialog, EXTRACTION_RETRY_LINE } from "../components/delete-node-dialog.tsx";
+import { DeleteNodeBody, DeleteNodeDialog } from "../components/delete-node-dialog.tsx";
 
 /** The body — pure, so SSR pins everything the live dialog shows. */
 function bodyAt(nodes: { id: string; name: string }[], extra?: { failure?: { code: string; error: string } | null; busy?: boolean }) {
@@ -33,12 +33,6 @@ function bodyAt(nodes: { id: string; name: string }[], extra?: { failure?: { cod
 		}),
 	);
 }
-
-describe("EXTRACTION_RETRY_LINE (the 409 phrasing, owner-locked)", () => {
-	it("names the activity dock — the surface the user watches drain", () => {
-		assert.equal(EXTRACTION_RETRY_LINE, "An extraction is running — try again when the activity dock drains.");
-	});
-});
 
 describe("DeleteNodeDialog (thin SSR)", () => {
 	it("null and empty nodes both render nothing — closed either way", () => {
@@ -105,13 +99,12 @@ describe("DeleteNodeBody — the minimal screen (owner, 2026-09-30)", () => {
 		assert.match(ten, /, and 2 more/);
 	});
 
-	it("failure: the 409 renders the activity-dock line with a Try-again; other codes state themselves", () => {
+	it("failure: the server's line renders with a Try-again", () => {
 		const conflict = bodyAt([{ id: "kepler", name: "Kepler's three laws" }], {
-			failure: { code: "extraction_running", error: "server line" },
+			failure: { code: "busy", error: "server line" },
 		});
 		assert.match(conflict, /data-testid="node-delete-failure"/);
-		assert.match(conflict, new RegExp(EXTRACTION_RETRY_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-		assert.doesNotMatch(conflict, /server line/); // the dock phrasing REPLACES the raw line for the known code
+		assert.match(conflict, /server line/);
 		assert.match(conflict, /data-testid="node-delete-retry"/);
 
 		const plain = bodyAt([{ id: "kepler", name: "Kepler's three laws" }], {

@@ -47,9 +47,6 @@ test("activityFeed: running jobs across ALL chats, running-only, title-joined, o
 		// oldest-first on updatedAt: jobA/jobB created before jobB2's bump
 		const order = feedJobs.map((j) => j.id);
 		assert.equal(order.indexOf(jobB2.id), order.length - 1);
-
-		// extraction runs are absent when the pipeline is idle (registry empty)
-		assert.deepEqual(feed.extractions, []);
 	} finally {
 		fs.unlinkSync(`${PATHS.chats}/${chatA.id}.json`);
 		fs.unlinkSync(`${PATHS.chats}/${chatB.id}.json`);

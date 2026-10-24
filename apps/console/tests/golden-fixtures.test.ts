@@ -6,14 +6,11 @@
  * import — every app-module import is dynamic), and asserts:
  *
  *   1. every record parses and passes the contract folds the app itself
- *      runs (phases, pending questions/problems, plan tree, summaries);
+ *      runs (pending questions, summaries);
  *   2. the LLM wire flattening (toLlmMessages) turns each full record into
  *      a legal provider message list — the strongest property a record has;
  *   3. the graph derivation builds from the real ledgers end-to-end;
- *   4. marker COVERAGE: every custom-marker kind of the current contract
- *      appears in real data here (a new marker without a fixture update
- *      fails this suite);
- *   5. reads are READ-ONLY: after everything above, the copy is
+ *   4. reads are READ-ONLY: after everything above, the copy is
  *      byte-identical to the fixture source.
  *
  * THE FIXTURE LAW: an intentional format change updates the fixtures in the
@@ -43,8 +40,7 @@ const { readRenderSettings } = await import("../src/store/render-settings.ts");
 const { getGraph, deriveView } = await import("../src/core/graph.ts");
 const { sanitizeRenderSettings } = await import("../src/core/render-settings.ts");
 const { toLlmMessages } = await import("../src/core/native-messages.ts");
-const { phaseAt3Lh } = await import("../src/core/phases.ts");
-const { danglingQuestionOf, activeProblemOf } = await import("../src/core/native-messages.ts");
+const { danglingQuestionOf } = await import("../src/core/native-messages.ts");
 
 const TEACH = "chat_mv27rrra_feff23b6";
 const PRACTICE = "chat_mv293wv5_10656952";
@@ -78,9 +74,7 @@ test("chats: both fixture records parse through the production read path", () =>
 		assert.ok(r, `${id} reads`);
 		assert.ok(Array.isArray(r!.messages) && r!.messages.length > 0);
 		// the folds the app itself runs per render/turn:
-		assert.equal(typeof phaseAt3Lh(r!.messages), "string", "the phase fold runs clean");
 		assert.equal(danglingQuestionOf(r!.messages), null, "no dangling question tool call");
-		activeProblemOf(r!.messages); // must not throw
 	}
 });
 
@@ -111,62 +105,11 @@ test("chats: the LLM wire flattening turns each full record into a legal provide
 	}
 });
 
-test("markers: the fixture pair covers EVERY custom-marker kind of the current contract", () => {
-	// The coverage law: a new customType added to the contract without real
-	// fixture data fails here — extend the fixtures in the same commit.
-	const EXPECTED = [
-		"graph-context",
-		"probe-handoff",
-		"subagent-steer",
-		"subagent-abort",
-		"plan-block",
-		"practice-thinking",
-		"practice-next",
-		"problem-dismissed",
-		"compaction",
-	] as const;
-	const seen = new Set<string>();
-	for (const id of [TEACH, PRACTICE]) {
-		for (const m of chatStore.getChat(id)!.messages) {
-			if ((m as { role?: string }).role === "custom") seen.add((m as { customType: string }).customType);
-		}
-	}
-	for (const kind of EXPECTED) assert.ok(seen.has(kind), `marker ${kind} appears in real fixture data`);
-});
-
-test("tools: the core tool surface appears in real fixture data", () => {
-	// A living inventory, not an exhaustive pin: teach tools in the teach
-	// record, practice tools in the practice record. New TOOLS don't fail
-	// this (they fail their own suites) — the pinned CORE set must simply
-	// stay representable in real records.
-	const teachTools = new Set<string>();
-	const practiceTools = new Set<string>();
-	for (const m of chatStore.getChat(TEACH)!.messages) {
-		for (const b of (m as { content?: Array<{ type?: string; name?: string }> }).content ?? []) {
-			if (b.type === "toolCall" && b.name) teachTools.add(b.name);
-		}
-	}
-	for (const m of chatStore.getChat(PRACTICE)!.messages) {
-		for (const b of (m as { content?: Array<{ type?: string; name?: string }> }).content ?? []) {
-			if (b.type === "toolCall" && b.name) practiceTools.add(b.name);
-		}
-	}
-	for (const t of ["quiz", "ask_user_question", "plan_init", "probe_done", "recall", "explain", "research", "demo", "visual", "pdf"]) {
-		assert.ok(teachTools.has(t), `teach tool ${t} exercised in the fixture record`);
-	}
-	for (const t of ["problem", "conclude"]) {
-		assert.ok(practiceTools.has(t), `practice tool ${t} exercised in the fixture record`);
-	}
-});
-
 // ── the graph: ledgers through the full derivation ──────────────────────────
 
 test("graph: the real ledgers parse through their shape guards", () => {
 	assert.ok(graphStore.readNodes().length >= 250, "nodes parse");
 	assert.ok(graphStore.readChains().length >= 150, "chains parse");
-	assert.ok(graphStore.readCheckpoints().length >= 5, "session checkpoints parse");
-	assert.ok(graphStore.readCoverage().length >= 90, "coverage entries parse");
-	assert.ok(graphStore.readSources().length >= 1, "imported-notes sources parse");
 });
 
 test("graph: getGraph + deriveView build the snapshot end-to-end", () => {

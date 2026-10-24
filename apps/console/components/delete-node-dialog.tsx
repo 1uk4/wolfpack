@@ -4,11 +4,6 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 
-/** The 409 extraction_running line (owner phrasing, node interlude):
- *  the server's error names the extraction; the ACTIVITY DOCK is the
- *  surface the user actually watches drain. Exported pure for pins. */
-export const EXTRACTION_RETRY_LINE = "An extraction is running — try again when the activity dock drains.";
-
 /**
  * Node deletion (node interlude, Platform's 50bfcba engine) — the
  * confirm surface, portaled z-50 like the session-delete dialog whose
@@ -20,9 +15,7 @@ export const EXTRACTION_RETRY_LINE = "An extraction is running — try again whe
  * fetch flickered the dialog open-closed, and richer facts would only
  * grow more confusing as deletion semantics evolve (rewiring talk is
  * on the table). The screen is: title, names, one permanence line,
- * Cancel / Delete. The 409 extraction_running still gets the dock
- * phrasing with a Try-again — the run is never aborted server-side,
- * it clears on its own; other failures state themselves plainly.
+ * Cancel / Delete. A failure states itself plainly, with a Try-again.
  *
  * WORDING: "node"/"nodes" — THE UI word for graph objects (owner
  * ruling, same day, standardized everywhere in the UI).
@@ -89,9 +82,7 @@ export function DeleteNodeBody({
 					data-testid="node-delete-failure"
 					className="mt-3 rounded-sm border border-border/60 px-3 py-2 text-xs"
 				>
-					<span className="text-foreground">
-						{failure.code === "extraction_running" ? EXTRACTION_RETRY_LINE : failure.error}
-					</span>
+					<span className="text-foreground">{failure.error}</span>
 					<button
 						type="button"
 						data-testid="node-delete-retry"
@@ -180,8 +171,7 @@ export function DeleteNodeDialog({
 	// Sequential full deaths — never parallel (the store's revision
 	// counter and the sweep must observe them in order). A failure STOPS
 	// the run: what died, died; the failure line names why the rest
-	// still stands (extraction_running especially must not be plowed
-	// through). onDeleted fires with everything that actually died.
+	// still stands. onDeleted fires with everything that actually died.
 	const run = async () => {
 		if (!nodes || nodes.length === 0 || busy) return;
 		setBusy(true);

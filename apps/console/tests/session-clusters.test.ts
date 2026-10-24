@@ -1,21 +1,16 @@
 /**
- * BIRTH-SESSION CLUSTERING + THE PROBER GRAPH-TOOLS DATA SEAM (wave 7,
- * owner-locked 2026-09-23): embeddings are dead — a proposition's cluster
- * is the session that created it, derived on read from provenance
- * (session-clusters.ts); labels are session names; the prober tools read a
- * session list + per-session propositions with the extractor's latest
- * understanding level and its own timestamp. All in-memory fakes — the
- * fs-backed snapshot join (with the real store adapters) lives in
- * graph.test.ts.
+ * BIRTH-SESSION CLUSTERING (wave 7, owner-locked 2026-09-23): embeddings
+ * are dead — a proposition's cluster is the session that created it,
+ * derived on read from provenance (session-clusters.ts); labels are
+ * session names. All in-memory fakes — the fs-backed snapshot join (with
+ * the real store adapters) lives in graph.test.ts.
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { GraphChain, GraphNode, NotesSource, ChatSummary } from "../src/core/contracts.ts";
+import type { GraphChain, GraphNode, ChatSummary } from "../src/core/contracts.ts";
 import type { ChatStore, GraphStore } from "../src/core/ports.ts";
 import {
-	graphSessionIndex,
-	graphSessionPropositions,
 	graphSnapshot,
 	type GraphDeps,
 } from "../src/core/graph.ts";
@@ -45,7 +40,6 @@ function fakeStores(
 	nodes: GraphNode[],
 	over: {
 		chats?: Array<Pick<ChatSummary, "id" | "title" | "createdAt" | "updatedAt">>;
-		sources?: Array<Pick<NotesSource, "id" | "filePath" | "importedAt">>;
 		chains?: GraphChain[];
 	} = {},
 ): GraphDeps {
@@ -53,10 +47,6 @@ function fakeStores(
 	const graphStore: GraphStore = {
 		readNodes: () => nodes,
 		readChains: () => chains,
-		readCheckpoints: () => [],
-		readCoverage: () => [],
-		readSources: () =>
-			(over.sources ?? []).map((s) => ({ ...s, extractions: [] }) as unknown as NotesSource),
 		readPositions: () => ({}),
 		writePositions: () => {},
 	} as unknown as GraphStore;
@@ -112,68 +102,26 @@ describe("birthSessionPartition", () => {
 
 // ─── notes files as birth sessions (production shape) ────────────────────────
 
-describe("notes files as birth sessions", () => {
-	// The mapping-line fallback is GONE (owner, 2026-09-29): the mappings
-	// ledger itself died with per-job in-memory resolution, and every merge
-	// writes provenance points — the src id IS the birth session.
-	it("graphSessionIndex lists imported files as kind:file with birth counts (production shape)", () => {
-		const nodes = [node("a", "Alpha", [pt("src_abc")]), node("b", "Beta", [pt("src_abc")]), node("c", "Gamma", [pt("src_abc")])];
-		const deps = fakeStores(nodes, {
-			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
-		});
-		const index = graphSessionIndex(deps);
-		assert.deepEqual(index, [
-			{
-				id: "src_abc",
-				name: "/vault/learn vim.md",
-				kind: "file",
-				createdAt: "2026-09-22T00:00:00.000Z",
-				updatedAt: "2026-09-22T00:00:00.000Z",
-				propositions: 3,
-			},
-		], "the file births under its src id; the childless chat has no entry (birth sessions only)");
-	});
-
-	it("graphSessionPropositions lists the file's births under the src id (a pure birth list, 2026-09-27)", () => {
-		const deps = fakeStores([node("a", "Alpha", [pt("src_abc")]), node("b", "Beta", [pt("src_abc")])], {
-			sources: [{ id: "src_abc", filePath: "/vault/learn vim.md", importedAt: "2026-09-22T00:00:00.000Z" }],
-		});
-		assert.deepEqual(graphSessionPropositions(deps, "src_abc"), [
-			{ nodeId: "a", name: "Alpha" },
-			{ nodeId: "b", name: "Beta" },
-		]);
-	});
-});
-
 // ─── the snapshot join ──────────────────────────────────────────────────────
 
 describe("graphSnapshot birth-session clusters", () => {
-	it("labels clusters with session names (chat title / file path), keeps the ≥3 hull rule", () => {
+	it("labels clusters with the session name (chat title), keeps the ≥3 hull rule", () => {
 		const nodes = [
 			node("a", "A", [pt("chat1")]),
 			node("b", "B", [pt("chat1")]),
 			node("c", "C", [pt("chat1")]),
-			node("d", "D", [pt("src_notes")]),
-			node("e", "E", [pt("src_notes")]),
-			node("f", "F", [pt("src_notes")]),
 		];
 		const deps = fakeStores(nodes, {
 			chats: [{ id: "chat1", title: "Learning session", createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-21T00:00:00.000Z" }],
-			sources: [{ id: "src_notes", filePath: "/vault/notes.md", importedAt: "2026-09-22T00:00:00.000Z" }],
 		});
 		const snap = graphSnapshot(deps);
-		assert.equal(snap.clusters.length, 2);
+		assert.equal(snap.clusters.length, 1);
 		const byLabel = new Map(snap.clusters.map((c) => [c.label, c]));
 		assert.deepEqual(byLabel.get("Learning session"), {
 			id: "chat1",
 			label: "Learning session",
 			members: ["a", "b", "c"],
 		});
-		assert.deepEqual(byLabel.get("/vault/notes.md"), {
-			id: "src_notes",
-			label: "/vault/notes.md",
-			members: ["d", "e", "f"],
-		}, "a notes file is a birth-session too (owner ruling)");
 		// A 2-proposition session renders no hull (the presentation rule).
 		const two = fakeStores([node("x", "X", [pt("chat1")]), node("y", "Y", [pt("chat1")])], {
 			chats: [{ id: "chat1", title: "tiny", createdAt: "", updatedAt: "" }],
@@ -189,70 +137,6 @@ describe("graphSnapshot birth-session clusters", () => {
 		assert.equal(snap.clusters[0]!.id, "gone");
 	});
 });
-
-// ─── the prober data seam ───────────────────────────────────────────────────
-
-describe("graphSessionIndex (the prober's session list)", () => {
-	it("birth counts, chat/file kinds, recency order, deleted records fall back honestly", () => {
-		const nodes = [
-			node("a", "A", [pt("chat1")]),
-			node("b", "B", [pt("chat1")]),
-			node("c", "C", [pt("chat1")]),
-			node("d", "D", [pt("src_notes")]),
-			node("e", "E", [pt("gone")]), // its chat record no longer exists
-		];
-		const deps = fakeStores(nodes, {
-			chats: [
-				{ id: "chat1", title: "Older session", createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-21T00:00:00.000Z" },
-			],
-			sources: [{ id: "src_notes", filePath: "/vault/notes.md", importedAt: "2026-09-22T00:00:00.000Z" }],
-		});
-		const index = graphSessionIndex(deps);
-		assert.deepEqual(index, [
-			{
-				id: "src_notes",
-				name: "/vault/notes.md",
-				kind: "file",
-				createdAt: "2026-09-22T00:00:00.000Z",
-				updatedAt: "2026-09-22T00:00:00.000Z",
-				propositions: 1,
-			},
-			{
-				id: "chat1",
-				name: "Older session",
-				kind: "chat",
-				createdAt: "2026-09-20T00:00:00.000Z",
-				updatedAt: "2026-09-21T00:00:00.000Z",
-				propositions: 3,
-			},
-			{
-				id: "gone",
-				name: "gone",
-				kind: "file",
-				createdAt: null,
-				updatedAt: null,
-				propositions: 1,
-			},
-		], "most recent first; the undatable record sinks and names itself by id");
-	});
-});
-
-describe("graphSessionPropositions (the per-session view)", () => {
-	it("birth propositions — a pure list, no evaluations (2026-09-27 cleanup)", () => {
-		const nodes = [
-			node("a", "Alpha", [pt("chat1")]),
-			node("b", "Beta", [pt("chat1")]),
-			node("c", "Gamma", [pt("chat2")]), // born elsewhere — never listed under chat1
-		];
-		const deps = fakeStores(nodes);
-		assert.deepEqual(graphSessionPropositions(deps, "chat1"), [
-			{ nodeId: "a", name: "Alpha" },
-			{ nodeId: "b", name: "Beta" },
-		]);
-	});
-});
-
-// ─── imp-node cluster assignment (physics arc, owner 2026-09-30) ─────────────
 
 describe("impClusterKey (majority among PREMISES' births)", () => {
 	const chainOf = (premises: string[], provenance: Array<{ chatId: string; messageId: string }> = []) =>

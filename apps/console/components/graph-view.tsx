@@ -63,18 +63,14 @@
  * camera never moves.
  */
 
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { NotesImportErrors, useNotesImport } from "@/components/notes-import.tsx";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { SearchIcon, SettingsIcon, WaypointsIcon } from "lucide-react";
+import { incrementalLayout, propositionSessionHref, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
-import { useActivity } from "@/components/activity-dock";
-import { useServerEvent, useServerResync } from "@/components/server-events";
 import { MenuShell } from "@/components/menu-shell.tsx";
 import { DeleteNodeDialog } from "@/components/delete-node-dialog.tsx";
-import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { Hint } from "@/components/ui/hint";
 import {
 	ARROW_LENGTH_LADDER,
@@ -271,162 +267,6 @@ function SettingSlider({
 				className="h-1.5 w-full accent-primary"
 			/>
 		</label>
-	);
-}
-
-/** Compact token display: 45231 → "45.2k"; absent → "—". */
-function fmtTokens(n: number | undefined): string {
-	if (n === undefined) return "—";
-	if (n < 1000) return String(Math.round(n));
-	if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-	return `${(n / 1_000_000).toFixed(2)}M`;
-}
-
-/** Relative time for run rows: "now", "12m", "3h", "2d". */
-function timeAgo(startedAt: number): string {
-	const mins = Math.round((Date.now() - startedAt) / 60_000);
-	if (mins < 1) return "now";
-	if (mins < 60) return `${mins}m`;
-	const hours = Math.round(mins / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.round(hours / 24)}d`;
-}
-
-/** Run/stage cost at 3 decimals (pipeline pennies are real money at this
- *  scale); headline totals use 2. Null (unpriced model) renders "—". */
-function fmtRunCost(dollars: number | null): string {
-	return dollars === null ? "—" : `$${dollars.toFixed(3)}`;
-}
-
-/**
- * The cost figures the UI DISPLAYS (owner refinement round, 2026-09-24):
- * extraction + audit only. Cluster naming is dead — labels are session
- * titles / file names — so the core's naming fold (and its historical
- * spend) is deliberately not shown anywhere: the pill and the panel must
- * agree, and both read THIS, never GraphCostSummary.totalDollars.
- * (The core fold's naming stage was then culled outright — 2026-09-24 —
- * so the recent-runs list carries extraction runs only.)
- */
-export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
-	totalDollars: number;
-	unpricedRuns: number;
-} {
-	// The two live stages (the spine came and went on one day,
-	// 2026-09-30 — digest-aware extraction replaced it).
-	return {
-		totalDollars: costs.stages.extraction.dollars + costs.stages.audit.dollars,
-		unpricedRuns: costs.stages.extraction.unpricedRuns + costs.stages.audit.unpricedRuns,
-	};
-}
-
-/**
- * The graph-pipeline cost control (2026-09-20 placement wave): a bare
- * cumulative-dollars number — no pill chrome (owner: "just a number"),
- * hover-highlighted, click toggles the breakdown panel. Same dismiss
- * pattern as the settings gear: outside click or Escape closes. The
- * panel is viewport-capped + scrollable like the coverage dropdown.
- */
-/** Exported for the chains home (graph rendering off, owner
- * 2026-10-06): the same bare cumulative-dollars pill + panel. */
-export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
-	const [open, setOpen] = useState(false);
-	// Click anywhere outside (or Escape) closes the panel — the root
-	// wraps button + panel, so the toggle itself keeps working.
-	const rootRef = useRef<HTMLDivElement>(null);
-	usePopoverDismiss(rootRef, open, () => setOpen(false));
-	return (
-		<div ref={rootRef} className="relative">
-			<Hint
-				// Trimmed (owner, subtlety round 2026-09-25).
-				label="Graph costs — click for details"
-				side="bottom"
-			>
-				<button
-				type="button"
-				aria-expanded={open}
-				onClick={() => setOpen((o) => !o)}
-				className={`rounded-lg px-2 py-1 text-xs tabular-nums transition-colors hover:bg-accent ${
-					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-				}`}
-			>
-				${displayCostTotals(costs).totalDollars.toFixed(2)}
-			</button>
-			</Hint>
-			{open && (
-				<div className="absolute right-0 top-full mt-2 max-h-[60vh] overflow-y-auto">
-					<GraphCostPanel costs={costs} />
-				</div>
-			)}
-		</div>
-	);
-}
-
-/**
- * The cost control's expanded panel: stage totals (extraction / audit —
- * dollars headline, tokens secondary) + the recent-runs list.
- * Presentational: the fold happens server-side (core/cost-summary.ts);
- * dollars are inferred read-time, never stored. Cluster naming is GONE
- * from the panel (owner refinement round, 2026-09-24): labels are session
- * titles / file names now, the namer is dead, and its historical spend is
- * not tracked anymore — the headline sums the displayed stages only and
- * naming-kind runs never reach the list.
- */
-function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
-	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
-		["Extraction", costs.stages.extraction],
-		["Audit", costs.stages.audit],
-	];
-	// The displayed figures come from displayCostTotals (naming excluded —
-	// the pill and this panel must agree).
-	const { totalDollars, unpricedRuns } = displayCostTotals(costs);
-	return (
-		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
-			<div className="mb-2 flex items-baseline justify-between">
-				<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-					Graph pipeline costs
-				</span>
-				<span className="text-foreground tabular-nums">
-					${totalDollars.toFixed(2)}
-					{unpricedRuns > 0 && (
-						<span className="text-muted-foreground"> · {unpricedRuns} unpriced</span>
-					)}
-				</span>
-			</div>
-			<div className="flex flex-col gap-1">
-				{stageRows.map(([label, stage]) => (
-					<div key={label} className="flex items-baseline justify-between gap-2 text-[11px]">
-						<span className="shrink-0 text-muted-foreground">{label}</span>
-						<span className="min-w-0 text-right tabular-nums">
-							{fmtRunCost(stage.runs === 0 || (stage.unpricedRuns > 0 && stage.dollars === 0) ? null : stage.dollars)}
-							{stage.unpricedRuns > 0 && stage.dollars > 0 && (
-								<span className="text-muted-foreground"> +{stage.unpricedRuns} unpriced</span>
-							)}
-							<span className="text-muted-foreground">
-								{" "}
-								· {fmtTokens(stage.tokens.inputTokens)} in / {fmtTokens(stage.tokens.outputTokens)} out
-							</span>
-						</span>
-					</div>
-				))}
-			</div>
-			<div className="mt-2 flex flex-col gap-0.5 border-t pt-2">
-				{costs.runs.map((run) => (
-						<div key={run.startedAt} className="flex items-baseline justify-between gap-2 text-[11px]">
-							<span className="min-w-0 flex-1 truncate text-muted-foreground">
-								<span className="text-foreground/70">{timeAgo(run.startedAt)}</span>{" "}
-								{run.title}
-								{run.merged && (
-									<span className="text-muted-foreground">
-										{" "}
-										+{run.merged.nodes}n
-									</span>
-								)}
-							</span>
-							<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
-						</div>
-					))}
-			</div>
-		</div>
 	);
 }
 
@@ -818,26 +658,20 @@ function GraphSettingsControl({
 	);
 }
 
-/** The top-chrome actions row's body (empty-graph chrome wave, owner
- *  2026-09-25): Import Notes renders ALWAYS (graph enabled) — it's the
- *  one action that works on an empty graph, the entry point itself;
- *  search + settings render only when the snapshot has nodes (dead
- *  controls are lies — the honesty principle). The two gated controls
- *  fade in on their mount (graph-chrome-fade-in, globals.css — the
- *  appear-once transition as the first nodes land). Exported pure for
- *  the empty/populated SSR pins (the DeleteNodeBody pattern). */
+/** The top-chrome actions row's body: search + settings render only when
+ *  the snapshot has nodes (dead controls are lies — the honesty
+ *  principle). The gated controls fade in on their mount
+ *  (graph-chrome-fade-in, globals.css — the appear-once transition as the
+ *  first nodes land). Exported pure for the empty/populated SSR pins (the
+ *  DeleteNodeBody pattern). */
 export function GraphChromeRow({
 	isEmpty,
 	query,
 	onQuery,
 	noMatch,
-	importing,
 	searchInputRef,
-	fileInputRef,
-	onImportFiles,
 	settings,
 	changeSettings,
-	onOpenChains,
 }: {
 	isEmpty: boolean;
 	query: string;
@@ -845,15 +679,9 @@ export function GraphChromeRow({
 	/** The search panel's "No matching nodes." note (computed by the
 	 *  wrapper — it owns visibleIds + the snapshot). */
 	noMatch: boolean;
-	importing: boolean;
 	searchInputRef: React.RefObject<HTMLInputElement | null>;
-	fileInputRef: React.RefObject<HTMLInputElement | null>;
-	onImportFiles: (files: FileList | null) => void;
 	settings: GraphRenderSettings;
 	changeSettings: (update: (cur: RenderSettings) => RenderSettings) => void;
-	/** Opens the chain table overlay (the chains-overlay plan,
-	 *  2026-09-29). */
-	onOpenChains: () => void;
 }) {
 	return (
 		<>
@@ -883,56 +711,6 @@ export function GraphChromeRow({
 					)}
 				</div>
 			)}
-			{/* The chain table (chains overlay, owner plan 2026-09-29). Own
-			    container (36px band), between the search and Import. */}
-			{!isEmpty && (
-				<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-					<Hint label="Every reasoning chain" side="bottom">
-						<button
-							type="button"
-							onClick={onOpenChains}
-							data-testid="open-chain-table"
-							className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent"
-						>
-							<ListTreeIcon className="size-3" />
-							Chains
-						</button>
-					</Hint>
-				</div>
-			)}
-			{/* Import notes — its own container (36px, header band); ALWAYS
-			    rendered (the empty-graph ruling above — the entry point). */}
-			<div className="shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
-				<input
-					ref={fileInputRef}
-					type="file"
-					multiple
-					accept=".md,.markdown,.txt"
-					className="hidden"
-					onChange={(e) => {
-						onImportFiles(e.target.files);
-						e.target.value = ""; // allow re-picking the same file
-					}}
-				/>
-				<Hint
-					// The one button whose action isn't obvious from its label:
-					// the missing fact is where imports go (owner, subtlety
-					// round 2026-09-25).
-					label="Import notes into the graph"
-					side="bottom"
-				>
-					<button
-						type="button"
-						disabled={importing}
-						onClick={() => fileInputRef.current?.click()}
-						data-testid="import-notes"
-					className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
-				>
-						<UploadIcon className="size-3" />
-						{importing ? "Importing…" : "Import notes…"}
-					</button>
-				</Hint>
-			</div>
 			{!isEmpty && (
 				// Rendering settings — own component; the gear toggles it. The
 				// gear sits at the far right (owner, round 3) so its panel drops
@@ -947,22 +725,7 @@ export function GraphChromeRow({
 	);
 }
 
-export function GraphView({
-	chainSelectOpen = false,
-	practiceSelection,
-	onPracticeSelectionChange,
-	onChainSelectClose,
-}: {
-	/** PRACTICE SELECT (owner vision, 2026-10-04): the LIFTED, persistent
-	 *  pick set — every check/clear in the chain table (however opened)
-	 *  reports the full node list up immediately; the composer-side chip
-	 *  reflects it live. chainSelectOpen still drives the picker mode
-	 *  (Done instead of Delete). */
-	chainSelectOpen?: boolean;
-	practiceSelection?: ReadonlySet<string>;
-	onPracticeSelectionChange?: (nodes: { id: string; name: string; statement: string }[]) => void;
-	onChainSelectClose?: () => void;
-}) {
+export function GraphView() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const cardRef = useRef<HTMLDivElement | null>(null);
@@ -1060,18 +823,9 @@ export function GraphView({
 		return set;
 	}, [snapshot, query]);
 
-	// Fetch the derived graph. Re-runs when a background pipeline run
-	// finishes (refreshTick) — its merges just landed in the ledger.
+	// Fetch the derived graph. Re-runs on a graph revision announcement
+	// (refreshTick) — a node deletion just rewrote the ledger.
 	const [refreshTick, setRefreshTick] = useState(0);
-	// The chain table overlay (chains-overlay plan, 2026-09-29) —
-	// component-local: a browsing surface, not graph state.
-	const [chainsOpen, setChainsOpen] = useState(false);
-	// PRACTICE SELECT (2026-10-04): the parent's chip drives the select
-	// mode; closing (either the picker's confirm or its X) reports back so
-	// the chip's open state and the table's never disagree.
-	useEffect(() => {
-		if (chainSelectOpen) setChainsOpen(true);
-	}, [chainSelectOpen]);
 	useEffect(() => {
 		let cancelled = false;
 		fetch("/api/graph")
@@ -1085,115 +839,14 @@ export function GraphView({
 		};
 	}, [refreshTick]);
 
-	// Notes import (the format-agnostic front door): file picker → POST
-	// /api/graph/import; the runs surface in the status chips below, and the
-	// graph refetches when they finish (the runs-empty transition).
-	const fileInputRef = useRef<HTMLInputElement>(null);
-	// The dock's start-site nudge (accuracy wave, 2026-09-19): the import
-	// POST awaits the WHOLE pipeline server-side, so the run registers long
-	// before the response — nudge at click and again at +600ms to catch the
-	// start; from its first setPhase the run announces itself on the events
-	// channel (S5), and the dock rides those announcements thereafter.
-	const refreshActivity = useActivity().refresh;
-	const notesImport = useNotesImport({
-		onStart: () => {
-			refreshActivity();
-			setTimeout(() => refreshActivity(), 600);
-		},
-	});
-	const { importing, onImportFiles } = notesImport;
-
-	// Background pipeline status: read /api/graph/status; whenever a run
-	// LEAVES the feed (finished / aborted / failed), refetch the graph.
-	// A run only leaves the registry after its merge + settle + usage
-	// persist complete, so disappearance ⇒ the graph change is already on
-	// disk. The old some→none transition batched PARALLEL runs into one
-	// reveal (owner 2026-09-28): with serialized audits, the first run's
-	// merge is its own graph change and must surface immediately, not wait
-	// for the whole feed to drain. A redundant fetch on aborted runs is
-	// free — the same doctrine as the deletion-refresh path below.
-	// Tracked by ROW id (the registry JOB key — source id, or "src#i" for
-	// chunk jobs), NOT chatId: chatId-scoping re-batched per-chunk jobs
-	// into one end-of-import reveal (the exact bug this rule exists to
-	// prevent — a chunk's row leaving IS its merge landing).
-	const [pipelineRuns, setPipelineRuns] = useState<{ id: string; chatId: string; title: string; phase: string; startedAt: number }[]>([]);
-	const rowIdsRef = useRef<Set<string>>(new Set());
-	const readPipelineStatus = useCallback(() => {
-		fetch("/api/graph/status")
-			.then((res) => res.json() as Promise<{ runs: typeof pipelineRuns }>)
-			.then(({ runs }) => {
-				setPipelineRuns(runs);
-				const ids = new Set(runs.map((r) => r.id));
-				if ([...rowIdsRef.current].some((id) => !ids.has(id))) setRefreshTick((t) => t + 1);
-				rowIdsRef.current = ids;
-			})
-			.catch(() => {}); // status is cosmetic — never surface read errors
-	}, []);
-	// PUSH (S7, 2026-10-02): the standing 2s poll is RETIRED — the
-	// extraction registry announces every phase transition and every
-	// finish (activity-changed), so each read lands exactly when truth
-	// moved. The per-chunk reveal semantics are PRESERVED event-for-event:
-	// setPhase + finishExtraction fire per part, so a chunk's row leaving
-	// is still its own, immediately-visible merge landing. Debounced (the
-	// S4 law); resync heals a reconnect that ate events.
-	const statusDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	useServerEvent("activity-changed", () => {
-		if (statusDebounceRef.current) clearTimeout(statusDebounceRef.current);
-		statusDebounceRef.current = setTimeout(() => {
-			statusDebounceRef.current = undefined;
-			readPipelineStatus();
-		}, 250);
-	});
-	useServerResync(() => readPipelineStatus());
+	/* Revision refresh: a graph write announces itself as lh:graph-revision
+	   (the node-delete flow dispatches it). Refetch the snapshot on every
+	   announcement: writes are rare, a redundant fetch is free. */
 	useEffect(() => {
-		readPipelineStatus();
-		return () => {
-			if (statusDebounceRef.current) clearTimeout(statusDebounceRef.current);
-		};
-	}, [readPipelineStatus]);
-
-	// Graph pipeline costs (2026-09 cost metrics wave): the cumulative fold
-	// of the usage channels (chat + notes extraction runs; the dead namer's
-	// channel is not displayed anymore, owner 2026-09-24)
-	// behind the bottom-left cost pill. Fetched once on mount and refetched
-	// when a pipeline run finishes (running -> none) so fresh spend lands
-	// without a manual reload. Best-effort: a fetch failure never blocks
-	// the view — the pill just stays on its last numbers.
-	const [costs, setCosts] = useState<GraphCostSummary | null>(null);
-	const refreshCosts = useCallback(() => {
-		fetch("/api/graph/costs")
-			.then((res) => res.json() as Promise<GraphCostSummary>)
-			.then(setCosts)
-			.catch(() => {});
-	}, []);
-	useEffect(() => {
-		refreshCosts();
-	}, [refreshCosts]);
-	// The same disappearance rule as the snapshot refresh (owner
-	// 2026-09-28): usage persists per JOB (per-chunk jobs), so costs refresh
-	// per job row — not only when the whole feed drains.
-	const prevRunIds = useRef(new Set<string>());
-	useEffect(() => {
-		const gone = [...prevRunIds.current].some((id) => !pipelineRuns.some((r) => r.id === id));
-		if (gone && prevRunIds.current.size > 0) refreshCosts();
-		prevRunIds.current = new Set(pipelineRuns.map((r) => r.id));
-	}, [pipelineRuns, refreshCosts]);
-
-	/* Deletion refresh (wave 6 chunk A): the DELETE /api/chats/:id response
-	   carries the new graphRevision, and the sidebar (which owns the delete
-	   flow) announces it as lh:graph-revision. The status poll above can't
-	   see a deletion — no pipeline run ever disappears from the feed for
-	   it — so this event is the one seam. Refetch the snapshot and the
-	   costs on every announcement: deletions are rare, a redundant fetch
-	   is free. */
-	useEffect(() => {
-		const onRevision = () => {
-			setRefreshTick((t) => t + 1);
-			refreshCosts();
-		};
+		const onRevision = () => setRefreshTick((t) => t + 1);
 		window.addEventListener("lh:graph-revision", onRevision);
 		return () => window.removeEventListener("lh:graph-revision", onRevision);
-	}, [refreshCosts]);
+	}, []);
 
 	/* Live rename labels (rename-shuffle fix, 2026-09-23): a session
 	   rename anywhere (sidebar inline row, chat header) announces itself
@@ -1595,35 +1248,12 @@ export function GraphView({
 					query={query}
 					onQuery={setQuery}
 					noMatch={snapshot !== null && visibleIds.size === 0 && query.trim() !== ""}
-					importing={importing}
 					searchInputRef={searchInputRef}
-					fileInputRef={fileInputRef}
-					onImportFiles={onImportFiles}
 					settings={settings}
 					changeSettings={changeSettings}
-					onOpenChains={() => setChainsOpen(true)}
 				/>
 			</div>
 
-			<NotesImportErrors errors={notesImport.errors} />
-			{/* Top-right tail (owner, 2026-09-20): the pipeline cost number —
-			    just a number, hover-highlighted, dropdown breakdown — then
-			    the running-pipeline pills under it. Lives BELOW the actions
-			    row so narrow windows can never push it over the composer
-			    the way the old bottom-left stack did; the whole top-right
-			    cluster is one column, right-aligned. */}
-			{costs && costs.runs.length > 0 && <GraphCostControl costs={costs} />}
-			{pipelineRuns.map((run) => (
-				<div
-					key={run.id}
-					className="flex items-center gap-2 rounded-full border bg-card/85 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur"
-				>
-					<Loader2Icon className="size-3.5 shrink-0 animate-spin" />
-					<span className="capitalize">{run.phase}</span>
-					<span className="max-w-48 truncate text-foreground">{run.title}</span>
-					<span className="tabular-nums">{Math.max(0, Math.round((Date.now() - run.startedAt) / 1000))}s</span>
-				</div>
-			))}
 			</div>
 
 			{selected && !isEmpty && (
@@ -1643,18 +1273,6 @@ export function GraphView({
 						<div className="mt-3 flex flex-col gap-1">
 							<div className="text-xs text-muted-foreground">Sessions</div>
 							{selected.sourceIds.map((sourceId) => {
-								// An imported-notes file: a STATIC entry — the path,
-								// plain text, never a link (no session to open).
-								if (snapshot?.fileSources?.[sourceId] !== undefined) {
-									return (
-										<div key={sourceId} className="flex items-center gap-1.5">
-											<FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-											<span className="min-w-0 flex-1 truncate px-2 py-1.5 text-sm text-muted-foreground">
-												{snapshot.fileSources[sourceId]}
-											</span>
-										</div>
-									);
-								}
 								// A real session: deep-linkable provenance.
 								return (
 									<div key={sourceId} className="flex items-center gap-1.5">
@@ -1674,42 +1292,6 @@ export function GraphView({
 					)}
 				</div>
 			)}
-			{/* The chain table overlay (chains-overlay plan, 2026-09-29):
-			    ABSOLUTE INSIDE the graph area (the session-overlay idiom —
-			    never a body portal) so the app chrome stays sharp and
-			    reachable; the overlay itself is read-only toward the graph
-			    and owns its selection.
-			    LAST CHILD OF THE ROOT, DELIBERATELY (owner, 2026-09-29
-			    night): app-region subtraction resolves by DOM order, not
-			    z-index — mounted earlier, the chrome's lh-no-drag column
-			    punched dead zones through the overlay's TopBar drag band
-			    (over the counts, around the search field). A full-bleed
-			    surface covering a drag band must paint AFTER everything it
-			    covers. (DeleteNodeDialog is body-portaled — DOM-irrelevant
-			    here.) */}
-			<ChainTableOverlay
-				open={chainsOpen && !isEmpty}
-				nodes={snapshot?.propositions ?? []}
-				chains={snapshot?.chains ?? []}
-				sessions={snapshot?.sessions ?? {}}
-				fileSources={snapshot?.fileSources ?? {}}
-				onClose={() => {
-					setChainsOpen(false);
-					onChainSelectClose?.();
-				}}
-				selectMode={chainSelectOpen}
-				controlledSelection={practiceSelection}
-				onSelectionChange={(ids) => {
-					// Resolve ids → nodes against the live snapshot; the
-					// caller holds the pick set (count + seed).
-					const props = snapshot?.propositions ?? [];
-					const picked: { id: string; name: string; statement: string }[] = [];
-					for (const id of ids) {
-						const n = props.find((node) => node.id === id);
-						if (n) picked.push({ id: n.id, name: n.name, statement: n.statement });
-					}
-					onPracticeSelectionChange?.(picked);
-				}}
-			/>		</div>
+		</div>
 	);
 }

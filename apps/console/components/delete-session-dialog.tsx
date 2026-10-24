@@ -3,41 +3,19 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
-import type { ChatDeleteMode, ChatListItem } from "@/src/core";
-
-/** The graph-traces checkbox copy (owner, 2026-09-24 flow rework — was
- *  the delete-nodes option's body in the two-button design): the
- *  graph-touching consequence says so, shared-topic survival included.
- *  Exported pure for render pins: the copy is design, not implementation. */
-export const TRACES_COPY = {
-	testid: "delete-traces",
-	checkbox: "delete-traces-checkbox",
-	title: "Also remove its graph traces",
-	body: "This session’s topics, links, and events leave the graph too. Topics other sessions or imported notes also cover survive; topics only this session created are removed entirely.",
-};
+import type { ChatListItem } from "@/src/core";
 
 /**
- * Session deletion (wave 6 chunk A; owner flow rework 2026-09-24) — THE
- * destructive-confirmation surface, portaled z-50 like the setup dialog,
- * now in the node dialog's shape (the two must read as one design):
+ * Session deletion — THE destructive-confirmation surface, portaled z-50
+ * like the setup dialog:
  *
- *   - red title "Delete session?" in the abort-turn look (owner, 2026-10-13
- *     polish: text-sm font-semibold JetBrains Mono via the UI default —
- *     the serif display title is gone), the session name below it in
- *     JetBrains Mono at normal text-sm size (was sized-up text-lg), no
- *     code-block chrome;
- *   - ONE unchecked-by-default checkbox "Also remove its graph traces"
- *     (unchecked = preserve-graph: the session record, its jobs, and its
- *     extraction bookkeeping die; the graph keeps every contribution.
- *     checked = delete-nodes: the session's ledger traces go too);
- *   - a bottom row Cancel + destructive-red Delete, exactly the node
- *     dialog's pair.
+ *   - red title "Delete session?", the session name below it in JetBrains
+ *     Mono, no code-block chrome;
+ *   - a bottom row Cancel + destructive-red Delete.
  *
- * Retryable failures render honestly with a Try-again: 409 turn_in_flight /
- * jobs_running ("wait for running work") and 503 extraction_winding_down
- * ("in a moment") both clear on their own — the server's error line is
- * already written for the user; we show it verbatim. Try-again is just
- * Delete pressed again — the mode re-derives from the checkbox.
+ * Retryable failures (409 turn_in_flight / jobs_running) render honestly
+ * with a Try-again: the server's error line is already written for the
+ * user; we show it verbatim. Try-again is just Delete pressed again.
  */
 export function DeleteSessionDialog({
 	chat,
@@ -48,23 +26,17 @@ export function DeleteSessionDialog({
 	chat: Pick<ChatListItem, "id" | "title"> | null;
 	onClose: () => void;
 	/** Success path — the sidebar owns navigation + list patching. */
-	onDeleted: (id: string, mode: ChatDeleteMode, graphRevision: number) => void;
+	onDeleted: (id: string) => void;
 }) {
-	const [traces, setTraces] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const backdropDismiss = useBackdropDismiss(() => {
 		if (!busy) onClose();
 	});
-	// Retry IS pressing Delete again: the mode always derives from the
-	// checkbox's current state (a toggle between failure and retry is a
-	// change of intent, honored as such — the checkbox is disabled while
-	// busy, so no mid-flight switches).
 	const [failure, setFailure] = useState<{ code: string; error: string } | null>(null);
 
 	// Fresh state per session: closing resets, opening a new chat starts clean.
 	useEffect(() => {
 		if (!chat) {
-			setTraces(false);
 			setBusy(false);
 			setFailure(null);
 		}
@@ -89,25 +61,22 @@ export function DeleteSessionDialog({
 
 	const run = async () => {
 		if (!chat || busy) return;
-		const mode: ChatDeleteMode = traces ? "delete-nodes" : "preserve-graph";
 		setBusy(true);
 		setFailure(null);
 		try {
-			const res = await fetch(`/api/chats/${chat.id}?mode=${mode}`, { method: "DELETE" });
+			const res = await fetch(`/api/chats/${chat.id}`, { method: "DELETE" });
 			const body = (await res.json()) as {
 				ok?: boolean;
 				error?: string;
 				code?: string;
-				graphRevision?: number;
 			};
 			if (!res.ok) {
-				// 409 (turn/jobs running) and 503 (extraction winding down) are
-				// both retryable — keep the dialog open, show the server's line.
+				// 409 (turn/jobs running) is retryable — keep the dialog open, show the server's line.
 				setFailure({ code: body.code ?? "error", error: body.error ?? `Delete failed (${res.status})` });
 				setBusy(false);
 				return;
 			}
-			onDeleted(chat.id, mode, body.graphRevision ?? 0);
+			onDeleted(chat.id);
 		} catch {
 			setFailure({ code: "network", error: "Delete failed — network error. Try again." });
 			setBusy(false);
@@ -123,10 +92,8 @@ export function DeleteSessionDialog({
 		>
 			<DeleteSessionBody
 				chat={chat}
-				traces={traces}
 				busy={busy}
 				failure={failure}
-				onTraces={(next) => setTraces(next)}
 				onClose={onClose}
 				onRun={() => void run()}
 			/>
@@ -139,19 +106,14 @@ export function DeleteSessionDialog({
  *  node-dialog body pattern). The wrapper owns state + effects + portal. */
 export function DeleteSessionBody({
 	chat,
-	traces,
 	busy,
 	failure,
-	onTraces,
 	onClose,
 	onRun,
 }: {
 	chat: Pick<ChatListItem, "id" | "title">;
-	/** The graph-traces checkbox — unchecked by default (preserve-graph). */
-	traces: boolean;
 	busy: boolean;
 	failure: { code: string; error: string } | null;
-	onTraces: (next: boolean) => void;
 	onClose: () => void;
 	onRun: () => void;
 }) {
@@ -176,26 +138,8 @@ export function DeleteSessionBody({
 				</code>
 			</div>
 			<p className="mt-2 text-sm text-muted-foreground">
-				This permanently removes the session — its messages, background jobs, and extraction records. Everything
-				it added to the graph stays unless you check below. This cannot be undone.
+				This permanently removes the session — its messages and background jobs. This cannot be undone.
 			</p>
-			<label
-				data-testid={TRACES_COPY.testid}
-				className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-border/60 px-4 py-3"
-			>
-				<input
-					type="checkbox"
-					data-testid={TRACES_COPY.checkbox}
-					checked={traces}
-					onChange={(e) => onTraces(e.target.checked)}
-					disabled={busy}
-					className="mt-0.5 size-4 shrink-0 accent-primary"
-				/>
-				<span className="min-w-0">
-					<span className="block text-sm text-foreground">{TRACES_COPY.title}</span>
-					<span className="mt-1 block text-xs text-muted-foreground">{TRACES_COPY.body}</span>
-				</span>
-			</label>
 			{failure && (
 				<div
 					role="alert"

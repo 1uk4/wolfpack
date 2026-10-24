@@ -5,15 +5,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { RenameRow, SessionRow } from "../components/sidebar.tsx";
-import { DeleteSessionBody, DeleteSessionDialog, TRACES_COPY } from "../components/delete-session-dialog.tsx";
+import { DeleteSessionBody, DeleteSessionDialog } from "../components/delete-session-dialog.tsx";
 import type { ChatListItem } from "../src/core/index.ts";
 
 /**
  * Wave 6 chunk A — the deletion + context-menu seams on the sidebar:
  * SessionRow's right-click seam (always carries the row testid now), the
- * inline RenameRow (same geometry, select-all entry), and the two-option
- * delete dialog's plain-language copy (the locked design: both options
- * name their reach, the graph-touching one says so).
+ * inline RenameRow (same geometry, select-all entry), and the delete
+ * dialog's shape.
  */
 
 const chat: ChatListItem = {
@@ -51,7 +50,7 @@ describe("RenameRow — the inline rename surface", () => {
 	});
 });
 
-describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-09-24; portals no-op in SSR; pin the pure body)", () => {
+describe("DeleteSessionDialog — the node-dialog shape (portals no-op in SSR; pin the pure body)", () => {
 	it("closed (chat=null) renders nothing", () => {
 		const html = renderToStaticMarkup(
 			<DeleteSessionDialog chat={null} onClose={() => {}} onDeleted={() => {}} />,
@@ -63,10 +62,8 @@ describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-
 		const html = renderToStaticMarkup(
 			<DeleteSessionBody
 				chat={{ id: "c1", title: "Orbital mechanics" }}
-				traces={false}
 				busy={false}
 				failure={null}
-				onTraces={() => {}}
 				onClose={() => {}}
 				onRun={() => {}}
 			/>,
@@ -82,38 +79,12 @@ describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-
 		assert.match(html, /data-testid="session-name-code"[^>]*>Orbital mechanics</);
 	});
 
-	it("one unchecked-by-default checkbox for the graph traces — the graph-touching consequence says so", () => {
-		const html = renderToStaticMarkup(
-			<DeleteSessionBody
-				chat={{ id: "c1", title: "Orbital mechanics" }}
-				traces={false}
-				busy={false}
-				failure={null}
-				onTraces={() => {}}
-				onClose={() => {}}
-				onRun={() => {}}
-			/>,
-		);
-		// unchecked by default (preserve-graph) — React SSR omits the
-		// attribute when false, so pin its ABSENCE on the rendered input
-		assert.ok(!/"checked"/.test(html), "unchecked by default");
-		// plain-language consequences on the checkbox body
-		assert.ok(html.includes(TRACES_COPY.title));
-		assert.ok(html.includes("leave the graph too"));
-		assert.ok(html.includes("survive"));
-		// the old two-button design is gone
-		assert.ok(!html.includes("delete-option-preserve"));
-		assert.ok(!html.includes("delete-option-nodes"));
-	});
-
 	it("bottom row matches the node dialog: quiet Cancel + destructive-red Delete", () => {
 		const html = renderToStaticMarkup(
 			<DeleteSessionBody
 				chat={{ id: "c1", title: "Orbital mechanics" }}
-				traces={true}
 				busy={true}
 				failure={null}
-				onTraces={() => {}}
 				onClose={() => {}}
 				onRun={() => {}}
 			/>,
@@ -122,7 +93,6 @@ describe("DeleteSessionDialog — the node-dialog shape (owner flow rework 2026-
 		const del = html.match(/data-testid="delete-confirm"[^>]*>/)?.[0] ?? "";
 		assert.match(del, /border-destructive\/50/);
 		assert.match(html, /data-testid="delete-confirm"[^>]*>Deleting…</); // busy label on Delete
-		// the checkbox survives a busy render (disabled, not unmounted)
-		assert.match(html, /data-testid="delete-traces-checkbox"[^>]*disabled=""/);
+		assert.ok(!html.includes("delete-traces"), "no graph-traces option");
 	});
 });

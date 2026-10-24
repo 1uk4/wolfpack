@@ -1,8 +1,7 @@
 /**
  * Empty-graph chrome pins (empty-graph chrome wave, owner 2026-09-25):
- * Import Notes renders ALWAYS — the one action that works on an empty
- * graph, the entry point itself; search + settings render only when the
- * snapshot has nodes (dead controls are lies — the honesty principle).
+ * search + settings render only when the snapshot has nodes (dead controls
+ * are lies — the honesty principle); an empty graph renders no chrome.
  * GraphChromeRow is the pure seam (the DeleteNodeBody pattern): SSR of
  * both states pins the ruling. Fetches don't run under renderToStaticMarkup
  * (effects never fire), so these pins exercise the component directly.
@@ -25,36 +24,28 @@ const PROPS = {
 	query: "",
 	onQuery: () => {},
 	noMatch: false,
-	importing: false,
 	searchInputRef: ref,
-	fileInputRef: ref,
-	onImportFiles: () => {},
 	settings: {} as GraphRenderSettings,
 	changeSettings: () => {},
-	onOpenChains: () => {},
 };
 
 describe("GraphChromeRow — the empty-graph ruling (owner, 2026-09-25)", () => {
-	it("EMPTY graph: Import Notes renders (the entry point), search + settings absent", () => {
+	it("EMPTY graph: nothing renders — search + settings absent", () => {
 		const html = renderToStaticMarkup(createElement(GraphChromeRow, { ...PROPS, isEmpty: true }));
-		assert.ok(html.includes('data-testid="import-notes"'));
-		assert.ok(html.includes("Import notes…"));
+		assert.ok(!html.includes("import-notes"), "the import entry point retired with the extraction pipeline");
 		assert.ok(!html.includes("Search nodes…"), "search is a lie on an empty graph");
 		// the settings gear is the lucide-settings svg (tooltip wave: its old
 		// native title is gone — the styled tooltip carries the label now)
 		assert.ok(!html.includes("lucide-settings"), "settings is a lie on an empty graph");
-		assert.ok(!html.includes('data-testid="open-chain-table"'), "chains is a lie on an empty graph");
 		assert.ok(!html.includes("graph-chrome-fade-in"), "nothing gated = nothing fading in");
 	});
 
-	it("POPULATED graph: all four render, the gated trio carries the fade", () => {
+	it("POPULATED graph: search + settings render, both carrying the fade", () => {
 		const html = renderToStaticMarkup(createElement(GraphChromeRow, { ...PROPS, isEmpty: false }));
-		assert.ok(html.includes('data-testid="import-notes"'));
 		assert.ok(html.includes("Search nodes…"));
 		assert.ok(html.includes("lucide-settings"), "the settings gear renders");
-		assert.ok(html.includes('data-testid="open-chain-table"'), "the chains entry renders");
-		// the appear-once fade rides exactly the three gated controls, never Import Notes
-		assert.equal(html.split("graph-chrome-fade-in").length - 1, 3, "three fade carriers: search + chains + settings");
+		// the appear-once fade rides exactly the two gated controls
+		assert.equal(html.split("graph-chrome-fade-in").length - 1, 2, "two fade carriers: search + settings");
 	});
 
 	it("the no-match note renders only when the wrapper says so (its truth stays upstream)", () => {

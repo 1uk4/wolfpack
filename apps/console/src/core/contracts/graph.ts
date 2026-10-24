@@ -1,24 +1,15 @@
 /**
- * Knowledge-graph contracts — nodes, ledgers, extraction findings
+ * Knowledge-graph contracts — nodes, chains, the rendered snapshot
  *
- * The minimal implementation of the graph vision (docs/vision.md §1, the
- * 2026-09-02 redesign): every node is a TRUE proposition; edges are follows
- * (derivable) and supports (grounds without entailing); provenance is
- * message-granular; extraction is free-form and post-hoc, fully decoupled
- * from the session's plan tree. The graph is an extraction of the reasoning
- * chains from all teaching sessions (and imported notes) — NOTHING else:
- * no quiz outcomes, no understanding assessments (2026-09-27 cleanup).
- * Anything not
- * yet decided (the state model, strength derivation, selection strategies) is deliberately NOT here — transitional
- * stubs carry the renderer until those land.
+ * Every node is a proposition; chains (arguments) are the stored truth and
+ * edges are a derived view; provenance is message-granular. The graph is
+ * INERT in the console today (rendering only — nothing writes the ledgers);
+ * the contracts stay for the graph view's later reuse.
  *
- * Part of the domain-split contracts (src/core/contracts/): each domain file
- * is owned outright by its stream — cross-domain schema changes go through
- * master. Pure types + protocol docs + tiny pure helpers. See docs/vision.md.
+ * Part of the domain-split contracts (src/core/contracts/): pure types +
+ * tiny pure helpers.
  */
 // ─── Knowledge graph (vision §1 — global, cross-session) ────────────────────
-
-import type { CallUsage, ExtractionRunUsage } from "./chat.ts";
 
 /** One relation of the DERIVED view — chains are the stored truth (owner,
  *  2026-09-30: "the graph is a lossy image of what is truly stored"), and
@@ -53,24 +44,6 @@ export interface GraphChain {
 	createdAt: string;
 }
 
-/** What one extraction run merged into the graph ledgers — the merger's
- *  output, also persisted in extraction-run usage records (contracts/chat).
- *  `chains` is OPTIONAL IN OLD RECORDS ONLY: usage history from the
- *  pre-chains era carries `edges` instead — tolerated at read, never
- *  written again (no-backward-compat regime, owner 2026-09-30). */
-export interface EmissionStats {
-	/** New graph nodes appended. */
-	nodes: number;
-	/** New reasoning chains appended. */
-	chains?: number;
-	/** Chains the simplification pass removed in this merge (owner,
-	 *  2026-09-30 evening — ancestry-cover / prefer-fewest-premises).
-	 *  Maintenance, not extraction: appends are counted in `chains`
-	 *  regardless. Undefined when nothing dropped (pre-simplification
-	 *  records read as zero). */
-	droppedChains?: number;
-}
-
 /** One provenance point — message-granular (DECIDED 2026-09-02): nodes and
  *  edges record every (chat, message) where they came up, deep-linkable to
  *  the exact transcript point. */
@@ -80,42 +53,6 @@ export interface ProvenancePoint {
 	 *  recorded through the mapping line + the source record). */
 	chatId: string;
 	messageId: string;
-}
-
-/** One imported notes file — the format-agnostic front door's bookkeeping
- *  (DECIDED 2026-09-13): personal notes in ARBITRARY formats run through the
- *  same extractor → auditor → merger pipeline, with the file itself as the
- *  provenance anchor. There is no chat: the detail card shows the file path
- *  as a STATIC entry (not a link). The run's usage log lives here,
- *  mirroring ChatRecord.extractions. Ids are "src_" + hash of the file
- *  path — deterministic, so re-importing the same file re-runs extraction
- *  against the same source id (mappings dedupe by it). */
-export interface NotesSource {
-	id: string;
-	filePath: string;
-	/** ISO — when this file was imported (the checkpoint's foldedAt). */
-	importedAt: string;
-	/** Legacy content fingerprint. Accepted when reading old records, but
-	 * ignored: every explicit notes import processes the whole file. New
-	 * imports do not compute or write this field. No migration is needed. */
-	contentFp?: string;
-	/** The run's usage log — same append-only discipline as
-	 *  ChatRecord.extractions, idempotent per startedAt. */
-	extractions?: ExtractionRunUsage[];
-}
-
-/** What one cluster-naming refresh did — the namer's ClusterRefreshStats,
- *  contract-shaped so the agent layer needs no contracts import.
- *  Structural twins stay interchangeable. */
-export interface NamingRunStats {
-	/** Communities the current graph divides into (all sizes). */
-	detected: number;
-	/** Communities that kept a label via core-survival. */
-	claimed: number;
-	/** Communities sent to the namer (unnamed, size >= MIN_CLUSTER_SIZE). */
-	named: number;
-	/** Labeling records actually appended (idempotent dedupe may shrink). */
-	appended: number;
 }
 
 /** The graph-family format version this build writes and understands
@@ -146,144 +83,19 @@ export interface GraphNode {
 	provenance: ProvenancePoint[];
 }
 
-/** sessions.jsonl line — the emission checkpoint for one chat (which chats
- *  have been folded, and through which updatedAt — never fold twice). */
-export interface SessionCheckpoint {
-	chatId: string;
-	/** The chat record's `updatedAt` at the time of the fold. */
-	foldedAt: string;
-}
-
-/** coverage.jsonl line (vision-extraction-coverage.md, settled 2026-09-15):
- *  ONE MESSAGE of one chat has been extracted — by content fingerprint over
- *  exactly what the extraction view sees. The MESSAGE is the unit of
- *  coverage; "uncovered" is derived (fingerprint the current transcript,
- *  diff) — never dual-tracked. A quiz answer merging into the asking
- *  message changes its fingerprint: the message re-opens itself, only
- *  itself. Chat extractions write these instead of whole-chat checkpoints;
- *  notes imports keep the checkpoint (a file is one shot). */
-export interface CoverageEntry {
-	chatId: string;
-	/** sha256 of the message's view lines — "covered" means exactly this. */
-	fp: string;
-	/** chars/4 estimate of the message's view — display + budgeting. */
-	tokens: number;
-	/** ISO — when this message's last extraction run merged. */
-	foldedAt: string;
-}
-
 /**
  * Store format (src/store/graph.ts): JSONL ledgers at config.LEDGER_FILES
- * (nodes/chains/sessions), all append-only. Edges are NEVER stored — the
- * derived view (implication nodes + untyped arrows) is rebuilt from chains
- * on every read (chains-primary, owner 2026-09-30).
+ * (nodes/chains), append-only. Edges are NEVER stored — the derived view
+ * (implication nodes + untyped arrows) is rebuilt from chains on every read.
  *
  *   nodes.jsonl    one line per node — the FIRST line for an id defines
- *                  name/statement/createdAt; later lines for the
- *                  same id are link-appends (a session's re-encounter):
- *                  their statements/aliases join `aliases`, their
- *                  provenance unions; the name stays the first line's.
- *                  getGraph merges by id.
+ *                  name/statement/createdAt; later lines for the same id
+ *                  are link-appends: their statements/aliases join
+ *                  `aliases`, their provenance unions; getGraph merges by id.
  *   chains.jsonl   one line per chain ASSERTION; readers merge by
  *                  (premises, conclusion), unioning provenance — the
  *                  first line's arg_ id is the chain's identity.
- *
- * The derived graph is rebuilt by reading the ledgers — store events,
- * derive state. sessions.jsonl is the extraction checkpoint: which chats
- * the extraction pipeline has processed, and through which updatedAt
- * (never extract the same turns twice).
- *
- * The EXTRACTION PIPELINE is the sole graph writer (extractor → auditor →
- * merger), tree-blind and post-hoc (2026-09-27 cleanup — clear separation
- * of work): the extractor is the ONLY stage that sees the raw source
- * (whole session as readable markdown, or raw notes) and extracts the
- * reasoning chains — propositions (lonely relevant ones included) plus
- * follows/supports edges; the auditor NEVER sees
- * the source — its job is preparing the merge: identity verdicts
- * (link-or-create, merging equivalent forms of the same proposition) via
- * graph-exploration tools (find / list_sessions / list_propositions), and
- * it may draw BRIDGING edges from existing graph nodes to the new
- * propositions; the merger (core/graph.ts, deterministic) applies the
- * verdicts and appends. Quiz events and understanding observations are
- * GONE — the pipeline is the only session→graph bridge, and it carries
- * propositions + edges, nothing else.
  */
-
-// ─── Extraction findings (extractor output → audit → merger input) ───────────
-
-/** One proposed proposition — a node candidate (or a re-encounter of one). */
-export interface ExtractedProposition {
-	/** Extractor-local id ("p1", …) referenced by edges. */
-	id: string;
-	/** A very short label — a few words, a compact handle like a glossary
-	 *  headword. Not a sentence, needn't be unique or self-contained: the
-	 *  statement carries the precision. Becomes the node's name on create;
-	 *  on link, the existing node keeps its name. */
-	name: string;
-	/** The minimal proposition — a true, self-contained, world-facing
-	 *  statement, at full precision. No learner / teacher / session
-	 *  references: misconceptions are stated as the true correction, and
-	 *  wrongness is never recorded in the graph (2026-09-27: the event
-	 *  ledger is gone). */
-	statement: string;
-	/** Verbatim phrasings the session used. */
-	aliases: string[];
-	/* Submit-schema slim (owner, 2026-09-28): `messages` and `evidence`
-	 * are GONE. The verbatim-quote fields were never persisted and weak
-	 * models burned their retries on them ("propositions.0: must be
-	 * object" — the stringified-payload collapse). The extractor reports
-	 * propositions + structure, nothing else. */
-	/** OPTIONAL, SESSION PATH ONLY (owner, 2026-10-13): the message id of
-	 *  the ONE teacher passage this proposition came from — the extractor
-	 *  copies it from the view's "TEACHER [id]" label (core/coverage.ts
-	 *  messageViewLines) and the submit seam validates it against the
-	 *  CURRENT batch. The merger stamps it into the node's provenance
-	 *  point {chatId, messageId} (new nodes AND link-appends); chains
-	 *  stay chat-level. Notes imports and legacy/core callers have none:
-	 *  undefined → messageId "" (chat-level), so NO persisted shape or
-	 *  format version changes (GraphNode / ProvenancePoint untouched). */
-	messageId?: string;
-}
-
-/** One proposed argument (extractor redesign, 2026-09-30). Endpoints are
- *  extractor-local proposition ids ("p1", …) — the extractor is the ONLY
- *  stage that ever proposes chains; the merger resolves them to node ids. */
-export interface ExtractedChain {
-	/** Proposition ids that JOINTLY entail the conclusion. */
-	premises: string[];
-	/** The proposition id the premises jointly imply. */
-	conclusion: string;
-}
-
-/** The extractor's output shape: the raw reasoning chains. */
-export interface SessionFindings {
-	propositions: ExtractedProposition[];
-	chains: ExtractedChain[];
-}
-
-/** One identity verdict: the extractor's local proposition id → the
- *  EXISTING graph node that proposition IS. On link, the session's
- *  phrasings (statement, aliases) join the node's aliases and the
- *  provenance unions. EQUIVALENCE BIAS (2026-09-27): paraphrases,
- *  rewordings, and compressions of the same claim MERGE — do not create
- *  a duplicate because the wording differs. Only genuinely distinct
- *  propositions stay apart. */
-export interface IdentityLink {
-	id: string;
-	linkTo: string;
-}
-
-/** The auditor's output — VERDICTS ONLY (owner, 2026-09-28): the auditor
- *  never alters the extractor's findings, so it does not restate them;
- *  the deterministic merger joins findings + verdicts. `links` = the
- *  identity verdicts (local id ⇄ existing node) — the auditor's ENTIRE
- *  deliverable (owner, 2026-09-28 evening: the edges argument is GONE —
- *  the auditor never mints edges; the graph connects across sources
- *  solely through identified equivalences). No drop channel — the
- *  auditor never rejects; the extractor is fully trusted (2026-09-27). */
-export interface AuditVerdicts {
-	links: IdentityLink[];
-}
 
 /** The GET /api/graph payload — everything the home view's PURE renderer needs. */
 
@@ -327,10 +139,6 @@ export interface GraphSnapshot {
 	chains: GraphChain[];
 	/** chatId → title, for every chat that touched the graph. */
 	sessions: Record<string, string>;
-	/** srcId → file path, for every IMPORTED NOTES file that touched the
-	 *  graph (the format-agnostic front door): a static provenance entry —
-	 *  the detail card shows the path as plain text, not a link. */
-	fileSources: Record<string, string>;
 	/** nodeId → chatIds that touched the node (click-through provenance). */
 	nodeSessions: Record<string, string[]>;
 	/** Birth-session communities (core/session-clusters.ts: each

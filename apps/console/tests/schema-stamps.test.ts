@@ -95,7 +95,6 @@ test("graph: a NEWER-stamped sidecar is refused honestly", () => {
 	fs.mkdirSync(path.dirname(GRAPH_FORMAT_FILE), { recursive: true });
 	fs.writeFileSync(GRAPH_FORMAT_FILE, JSON.stringify({ version: 99 }), "utf-8");
 	assert.throws(() => graphStore.readNodes(), /older than its data|format version 99/);
-	assert.throws(() => graphStore.readSources(), /older than its data|format version 99/);
 	assert.throws(() => readRenderSettings(), /older than its data|format version 99/);
 });
 

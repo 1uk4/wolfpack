@@ -29,12 +29,11 @@ import type {
 	CatalogProvider,
 	ModelCatalogEntry,
 	ModelCatalogResponse,
-	RolePins,
 	SlotPins,
 } from "../core/contracts/models.ts";
-import type { EffectiveModelSpec, EffectiveSlot } from "../core/settings-resolution.ts";
+import type { EffectiveSlot } from "../core/settings-resolution.ts";
 import { AUTH_PROVIDER_KEYS } from "../core/auth-keys.ts";
-import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS, type BackgroundModelRole, type ModelSlotName, type ModelsSettings } from "../core/settings.ts";
+import { MODEL_SLOTS, type ModelSlotName, type ModelsSettings } from "../core/settings.ts";
 
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
@@ -67,34 +66,6 @@ export function catalogDefaultsFor(
  *  runs: the strong slot, i.e. the birth-default for new sessions. */
 export function catalogDefaults(): CatalogDefaults | null {
 	return catalogDefaultsFor(effectiveSettings().models.strong);
-}
-
-/** Project the resolved per-role specs to the client DTO (pure — the
- *  settings UI's "Default: <actual pinned model>" caption reads this).
- *  BYOK (owner, 2026-09-22): an empty chain projects to NULL — the caption
- *  honestly shows "not configured", never a phantom default. */
-export function rolePinsFor(
-	models: Record<BackgroundModelRole, EffectiveModelSpec | undefined>,
-): RolePins {
-	const pins = {} as RolePins;
-	for (const role of BACKGROUND_MODEL_ROLES) {
-		const spec = models[role];
-		pins[role] = spec
-			? {
-					model: { provider: spec.provider, id: spec.id },
-					...(spec.thinkingLevel !== undefined ? { thinkingLevel: spec.thinkingLevel } : {}),
-				}
-			: null;
-	}
-	return pins;
-}
-
-/** The background roles' RESOLVED pins: the user's agent-models
- *  override → tier slot → nothing — the same resolution the agent wiring
- *  uses (src/server/stores.ts effectiveSettings), so the caption can
- *  never drift from what actually runs. */
-export function catalogRolePins(): RolePins {
-	return rolePinsFor(effectiveSettings().agent.models);
 }
 
 /** The three slot tiers' RESOLVED pins — effectiveSettings().models
@@ -189,7 +160,6 @@ export function modelCatalog(): ModelCatalogResponse {
 	return {
 		models,
 		defaults: catalogDefaults(),
-		rolePins: catalogRolePins(),
 		slots: catalogSlots(),
 		providers: catalogProviders(),
 	};

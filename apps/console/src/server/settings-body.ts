@@ -16,15 +16,12 @@ import { isHexColor, type ChatSettings } from "../core";
 import type {
 	AgentSettings,
 	AppearanceSettings,
-	BackgroundModelRole,
 	CompactionSettings,
 	GeneralSettings,
-	GraphSettings,
 	ModelsSettings,
 	RoleModelOverride,
 } from "../core/settings.ts";
-import { BACKGROUND_MODEL_ROLES, COMPACTION_THRESHOLD_FLOOR, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
-import { WRITABLE_TOOL_KEYS } from "../core/pending.ts";
+import { COMPACTION_THRESHOLD_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
 export type SettingsBodyResult<T> =
@@ -57,10 +54,6 @@ export function parseSettingsBody(body: unknown): SettingsBodyResult<ChatSetting
 		}
 		settings.thinkingLevel = raw.thinkingLevel as ThinkingLevel;
 	}
-	// Wave 7 killed the graph-context injection (owner: zero configuration
-	// beyond chat models — the prober reads its map through tools now); its
-	// budget dial is gone with it. A stale client sending the old key has
-	// it silently dropped here (forward-compatible, like any unknown key).
 	return { ok: true, settings };
 }
 
@@ -89,8 +82,8 @@ export function parseGeneralSettingsBody(body: unknown): SettingsBodyResult<Gene
 	return { ok: true, settings };
 }
 
-/** agent.models: only the six known background roles; each override's
- *  fields mirror ChatSettings (model pair + independent thinkingLevel). */
+/** A slot override: fields mirror ChatSettings (model pair + independent
+ *  thinkingLevel). */
 function parseRoleOverride(value: unknown, role: string): { ok: true; override: RoleModelOverride } | { ok: false; error: string } {
 	const raw = asRecord(value);
 	if (!raw) return { ok: false, error: `${role} must be an object` };
@@ -118,7 +111,7 @@ function parseRoleOverride(value: unknown, role: string): { ok: true; override: 
 	return { ok: true, override };
 }
 
-/** A boolean map (tools / prompts switches): every value must be boolean. */
+/** A boolean map (the prompts switches): every value must be boolean. */
 function parseBooleanMap(value: unknown, field: string): { map?: Record<string, boolean>; error?: string } {
 	if (value === undefined) return {};
 	const raw = asRecord(value);
@@ -131,70 +124,15 @@ function parseBooleanMap(value: unknown, field: string): { map?: Record<string, 
 	return { map: out };
 }
 
-/** agent: { models?, tools?, prompts? } — model/thinking validity against
- *  the catalog is checked by the route (validateChatSettings discipline);
- *  prompt switch-on membership is checked by the route (needs the store). */
+/** agent: { prompts? } — prompt switch-on membership is checked by the
+ *  route (needs the store). */
 export function parseAgentSettingsBody(body: unknown): SettingsBodyResult<AgentSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
 	const settings: AgentSettings = {};
-	if (raw.models !== undefined) {
-		const models = asRecord(raw.models);
-		if (!models) return { ok: false, error: "models must be an object" };
-		const known = BACKGROUND_MODEL_ROLES as readonly string[];
-		const parsed: NonNullable<AgentSettings["models"]> = {};
-		for (const [role, value] of Object.entries(models)) {
-			if (!known.includes(role)) {
-				return { ok: false, error: `unknown role "${role}" (supported: ${known.join(", ")})` };
-			}
-			const override = parseRoleOverride(value, role);
-			if (!override.ok) return { ok: false, error: override.error };
-			if (Object.keys(override.override).length) parsed[role as BackgroundModelRole] = override.override;
-		}
-		if (Object.keys(parsed).length) settings.models = parsed;
-	}
-	const tools = parseBooleanMap(raw.tools, "tools");
-	if (tools.error) return { ok: false, error: tools.error };
-	if (tools.map) {
-		// Unknown tool keys are rejected at WRITE time (user decision
-		// 2026-09-19): the delta is inert while unread, but once the bridge
-		// honors it a persisted bogus key would drift. The writable set is
-		// the job tools + the quizzing-mechanics switch (explain, owner
-		// 2026-09-27). The read-side sanitizer stays lenient for
-		// forward-compat.
-		const supported = WRITABLE_TOOL_KEYS as readonly string[];
-		for (const key of Object.keys(tools.map)) {
-			if (!supported.includes(key)) {
-				return { ok: false, error: `unknown tool "${key}" (supported: ${supported.join(", ")})` };
-			}
-		}
-		settings.tools = tools.map;
-	}
 	const prompts = parseBooleanMap(raw.prompts, "prompts");
 	if (prompts.error) return { ok: false, error: prompts.error };
 	if (prompts.map) settings.prompts = prompts.map;
-	if (raw.search !== undefined) {
-		const search = asRecord(raw.search);
-		if (!search) return { ok: false, error: "search must be an object" };
-		if (search.engine !== undefined) {
-			if (search.engine !== "tavily" && search.engine !== "brave") {
-				return { ok: false, error: 'search.engine must be "tavily" or "brave"' };
-			}
-			settings.search = { engine: search.engine };
-		}
-	}
-	// Prober graph tools (wave 7, owner ruling 2026-09-23): an agent-section
-	// subsection, not a tool-toggles key — the mechanism is agent capability
-	// (tool registration), the subject is the graph. Strict write side:
-	// object shape only; `enabled` boolean when present. Absent = ON.
-	if (raw.graphTools !== undefined) {
-		const graphTools = asRecord(raw.graphTools);
-		if (!graphTools) return { ok: false, error: "graphTools must be an object" };
-		if (graphTools.enabled !== undefined && typeof graphTools.enabled !== "boolean") {
-			return { ok: false, error: "graphTools.enabled must be a boolean" };
-		}
-		settings.graphTools = graphTools.enabled === undefined ? {} : { enabled: graphTools.enabled };
-	}
 	return { ok: true, settings };
 }
 
@@ -277,48 +215,6 @@ export function parseAppearanceSettingsBody(body: unknown): SettingsBodyResult<A
 	return { ok: true, settings };
 }
 
-/** graph: the collapsed section { enabled? } (wave 7, owner ruling
- *  2026-09-23): the master switch ONLY — the embedding/clustering/labeling
- *  rungs and the BYOK embeddingModel died with the provider embedder
- *  (clustering is the free birth-session partition, labels are session
- *  names). Old-shape keys in a body are ignored, not rejected. */
-export function parseGraphSettingsBody(body: unknown): SettingsBodyResult<GraphSettings> {
-	const raw = asRecord(body);
-	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	// Wave 7 collapse (owner ruling 2026-09-23) + the extraction-UX
-	// redesign (2026-09-24): the section is the master switch and the
-	// chunk budget. PUT is replace-whole — a body like {enabled: true} IS
-	// the whole section (extractionChunkTokens absent = factory default at
-	// resolution); the dead rungs' keys in old records are unread (the
-	// sanitizer drops them; see sanitizeGraph).
-	const settings: GraphSettings = {};
-	if (raw.enabled !== undefined) {
-		if (typeof raw.enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };
-		settings.enabled = raw.enabled;
-	}
-	if (raw.rendering !== undefined) {
-		if (typeof raw.rendering !== "boolean") return { ok: false, error: "rendering must be a boolean" };
-		settings.rendering = raw.rendering;
-	}
-	if (raw.extractionChunkTokens !== undefined) {
-		if (typeof raw.extractionChunkTokens !== "number" || !Number.isFinite(raw.extractionChunkTokens)) {
-			return { ok: false, error: "extractionChunkTokens must be a number" };
-		}
-		const floored = Math.floor(raw.extractionChunkTokens);
-		if (floored < EXTRACTION_CHUNK_TOKENS_FLOOR) {
-			// the floor's rationale lives on GraphSettings.extractionChunkTokens:
-			// every run pays the graph-carrying prompt overhead — penny-batches
-			// cost more per extracted token than the content is worth.
-			return {
-				ok: false,
-				error: `extractionChunkTokens must be at least ${EXTRACTION_CHUNK_TOKENS_FLOOR} (smaller batches waste the per-run graph overhead)`,
-			};
-		}
-		settings.extractionChunkTokens = floored;
-	}
-	return { ok: true, settings };
-}
-
 /** models: { strong?, cheap?, vision? } — the slot tiers (model slots
  *  wave, 2026-09-20). Each slot is the same shape as a role override; a
  *  present-but-empty slot object is rejected (absent slot = unset; say
@@ -382,7 +278,6 @@ export const SETTINGS_SECTIONS = {
 	chat: parseSettingsBody,
 	agent: parseAgentSettingsBody,
 	appearance: parseAppearanceSettingsBody,
-	graph: parseGraphSettingsBody,
 	compaction: parseCompactionSettingsBody,
 	models: parseModelsSettingsBody,
 } as const;

@@ -29,29 +29,12 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { AUTH_PROVIDER_KEYS } from "./auth-keys.ts";
-import type { ModelRole } from "../../config.ts";
-import type { ChatSettings } from "./contracts/chat.ts";
-import type { SearchEngineId } from "./search.ts";
 
 /** The schema version this code understands. Bump ONLY for breaking shape
  *  changes (a field renamed/meaning changed); pure additions never bump. */
 export const CURRENT_SETTINGS_VERSION = 1;
 
-/** The background-agent roles whose models the Agent settings expose.
- *  The conversation pair (prober/teacher) stays out — chat-controlled via
- *  the strong slot (one controller, the model picker). Tests pin the set. */
-export const BACKGROUND_MODEL_ROLES = [
-	"researcher",
-	"demoBuilder",
-	"visualMaker",
-	"extractor",
-	"auditor",
-] as const;
-
-export type BackgroundModelRole = (typeof BACKGROUND_MODEL_ROLES)[number];
-
-/** A per-role model/thinking override — every field independent (absent
- *  field = that aspect falls back to config.ts's pin for the role). */
+/** A model/thinking choice — every field independent. */
 export interface RoleModelOverride {
 	/** The model swap: both coordinates or neither (mirrors ChatSettings.model). */
 	model?: { provider: string; id: string };
@@ -62,10 +45,9 @@ export interface RoleModelOverride {
 // ─── Model slots (model slots wave, 2026-09-20) ──────────────────────────────
 
 /** The capability tiers a user can pin models into (owner-settled mapping):
- *  strong = prober + teacher (also the per-session default-teacher
- *  starting point); cheap = researcher, demo-builder, extractor, auditor,
-; vision = visual-maker + pdf-reader. Resolution per role:
- *  ROLE OVERRIDE → slot → factory pin. */
+ *  strong = the conversation agent (also the per-session default starting
+ *  point); cheap and vision are reserved tiers for work that has no
+ *  consumer in the console yet. */
 export const MODEL_SLOTS = ["strong", "cheap", "vision"] as const;
 export type ModelSlotName = (typeof MODEL_SLOTS)[number];
 
@@ -214,20 +196,6 @@ export function slotsConfigured(models: ModelsSettings | undefined): boolean {
 	return Boolean(models?.strong?.model && models?.cheap?.model && models?.vision?.model);
 }
 
-/** Which slot a role draws from (model slots wave, 2026-09-20). Includes the
- *  conversation pair and pdfReader (not BackgroundModelRoles — the slot
- *  tier spans every role; only background roles surface per-role overrides). */
-export const ROLE_SLOT: Readonly<Record<ModelRole, ModelSlotName>> = {
-	prober: "strong",
-	teacher: "strong",
-	researcher: "cheap",
-	demoBuilder: "cheap",
-	extractor: "cheap",
-	auditor: "cheap",
-	visualMaker: "vision",
-	pdfReader: "vision",
-};
-
 /** General settings — app-level behavior. Version DISPLAY and plans login
  *  live outside the record (package.json / auth.json) by owner decision. */
 export interface GeneralSettings {
@@ -235,28 +203,8 @@ export interface GeneralSettings {
 	autoUpdate?: boolean;
 }
 
-/** Agent settings — everything about the non-conversation machinery. */
+/** Agent settings — everything about the agent machinery. */
 export interface AgentSettings {
-	/** Background-role model/thinking overrides (absent role = config pin). */
-	models?: Partial<Record<BackgroundModelRole, RoleModelOverride>>;
-	/** Tool toggles keyed by tool id (absent key = enabled). User-level
-	 *  only — no per-chat override (owner decision 2026-09-19). */
-	tools?: Record<string, boolean>;
-	/** Search-engine preference (search wave, 2026-09-20). OPTIONAL by
-	 *  owner decision: setting a key auto-activates its engine — the user
-	 *  never chooses an engine to make search work. An explicit choice only
-	 *  pins the preference (e.g. when BOTH keys are present); the chosen
-	 *  engine must still have its key, else search is honestly unavailable.
-	 *  Absent + no key = unavailable (no silent fallback, no default). */
-	search?: { engine?: SearchEngineId };
-	/** Prober graph tools (wave 7, owner ruling 2026-09-23): read-only
-	 *  knowledge-graph views for the prober agent — a session list +
-	 *  per-session propositions with understanding levels. Its SUBJECT
-	 *  is the graph but its MECHANISM is agent capability (tool
-	 *  registration), so it lives here in its OWN subsection, not in the
-	 *  tool-toggles map. Absent = enabled (the toggle discipline); the
-	 *  effective gate composes graph.enabled AND this switch. */
-	graphTools?: { enabled?: boolean };
 	/** System-prompt override SWITCHES keyed by segment path (absent key =
 	 *  off). Switch-on requires the override file to exist (enforced by the
 	 *  route); the switch is explicit so users keep a file on disk but run
@@ -293,51 +241,6 @@ export interface AppearanceSettings {
 	mdRendering?: MdRenderingSettings;
 }
 
-/** Knowledge-graph settings — a strict dependency ladder (owner decision
- *  2026-09-19): graph → embedding → clustering → labeling, each rung only
- *  meaningful when its parent is on (the UI grays dependents out; stored
- *  values persist but resolve inert). All default true. */
-export interface GraphSettings {
-	/** MASTER (and, since wave 7, ONLY): off = no extraction, no auditor.
-	 *  The wave-7 collapse (owner ruling 2026-09-23) deleted the three
-	 *  subordinate rungs — embedding/clustering/labeling — and the BYOK
-	 *  embeddingModel: clustering is the free birth-session partition
-	 *  derived on read (core/session-clusters.ts), labels ARE session
-	 *  names, and the prober graph tools read the ledgers directly — there
-	 *  is nothing left to configure. Data stays stored either way. */
-	enabled?: boolean;
-	/** GRAPH RENDERING (owner, 2026-10-06 — the release graph-controls
-	 *  round): gates ONLY the home's main view. Off = the home shows the
-	 *  chains view instead of the canvas; the ledgers, the extraction
-	 *  pipeline, and every write path are untouched — this is a display
-	 *  switch, not a data switch (the extraction master above is the
-	 *  data switch). Default on. */
-	rendering?: boolean;
-	/** The chunk budget (extraction-UX redesign, owner 2026-09-24): the
-	 *  transcript-token share of the extractor's context — a run fires
-	 *  when a chat's UNCOVERED tokens reach it, and the run batches the
-	 *  oldest uncovered messages into runs of ≤ this many tokens. It
-	 *  bounds both cost and chunk size (the extractor prompt also
-	 *  carries the whole graph + instructions, so a smaller budget means
-	 *  more, smaller runs — each paying that fixed overhead).
-	 *
-	 *  FACTORY DEFAULT 4096 (owner, 2026-10-13: halved back from the
-	 *  digest-era 8192 — the labeled passages + message anchors made
-	 *  smaller batches worth their overhead again; the pre-setting
-	 *  constant was 4096, vision-extraction-coverage.md, 2026-09-15).
-	 *  Only the FACTORY moves: an explicit user value always wins.
-	 *
-	 *  FLOOR 500 (EXTRACTION_CHUNK_TOKENS_FLOOR, the implementer's call
-	 *  per the owner's dispatch): every run pays the graph-carrying
-	 *  prompt overhead out of the write channel's money — a budget below
-	 *  ~500 tokens would fire penny-batches that cost more per extracted
-	 *  token than the content is worth, so the sanitizer clamps and the
-	 *  PUT rejects below it. NO CEILING on purpose: a large budget just
-	 *  delays extraction — the user's stated cost/thoroughness tradeoff,
-	 *  not a misconfiguration to police. */
-	extractionChunkTokens?: number;
-}
-
 /**
  * COMPACTION (owner round 14, 2026-10-05): the context-fitting mechanic's
  * user-facing knob. One number — the trigger threshold in context tokens.
@@ -365,7 +268,6 @@ export interface UserSettings {
 	/** The strong/cheap/vision model slots (model slots wave, 2026-09-20). */
 	models?: ModelsSettings;
 	appearance?: AppearanceSettings;
-	graph?: GraphSettings;
 	compaction?: CompactionSettings;
 	[key: string]: unknown;
 }
@@ -373,8 +275,8 @@ export interface UserSettings {
 /** Factory defaults for everything core can pin (owner decisions
  *  2026-09-19). NO factory models exist anywhere (owner, 2026-09-22 — BYOK
  *  all the way down): the chat section and every slot stay empty until the
- *  user picks, and the per-need gates refuse honestly; tools default on;
- *  prompts default off — hence their absence here. */
+ *  user picks, and the per-need gates refuse honestly; prompts default off
+ *  — hence their absence here. */
 export interface FactorySettings {
 	version: number;
 	general: Required<GeneralSettings>;
@@ -390,7 +292,6 @@ export interface FactorySettings {
 			italicColor: string | null;
 		};
 	};
-	graph: Required<GraphSettings>;
 	compaction: Required<CompactionSettings>;
 }
 
@@ -405,14 +306,8 @@ export const FACTORY_SETTINGS: FactorySettings = {
 		sessionNameSerif: true,
 		mdRendering: { headingWeight: 900, boldColor: null, italicColor: null },
 	},
-	graph: { enabled: true, rendering: true, extractionChunkTokens: 4096 },
 	compaction: { thresholdTokens: 150_000 },
 };
-
-/** The chunk budget's validated floor (GraphSettings.extractionChunkTokens
- *  — see its doc for the penny-batch rationale; the settings PUT names this
- *  in its rejection, the sanitizer clamps to it). */
-export const EXTRACTION_CHUNK_TOKENS_FLOOR = 500;
 
 // ─── Sanitizer ─────────────────────────────────────────────────────────────
 
@@ -499,35 +394,8 @@ function sanitizeBooleanMap(raw: unknown): Record<string, boolean> | undefined {
 
 function sanitizeAgent(raw: Record<string, unknown>): AgentSettings {
 	const out: AgentSettings = {};
-	if (raw.models !== null && typeof raw.models === "object" && !Array.isArray(raw.models)) {
-		const models: Partial<Record<BackgroundModelRole, RoleModelOverride>> = {};
-		for (const [role, override] of Object.entries(raw.models as Record<string, unknown>)) {
-			if ((BACKGROUND_MODEL_ROLES as readonly string[]).includes(role)) {
-				const cleaned = sanitizeRoleOverride(override);
-				if (cleaned) models[role as BackgroundModelRole] = cleaned;
-			}
-		}
-		if (Object.keys(models).length) out.models = models;
-	}
-	const tools = sanitizeBooleanMap(raw.tools);
-	if (tools) out.tools = tools;
 	const prompts = sanitizeBooleanMap(raw.prompts);
 	if (prompts) out.prompts = prompts;
-	// Search preference: lenient read side (an unknown engine id drops;
-	// the write side's parser is strict — a stale client can't brick the
-	// record, it just loses the pin and auto-detection resumes).
-	if (raw.search !== null && typeof raw.search === "object" && !Array.isArray(raw.search)) {
-		const engine = (raw.search as Record<string, unknown>).engine;
-		if (engine === "tavily" || engine === "brave") out.search = { engine };
-	}
-	// Prober graph tools (wave 7): its own agent-section subsection —
-	// lenient read side (a bad shape drops the key and the default ON
-	// resumes; the write side's parser is strict).
-	if (raw.graphTools !== null && typeof raw.graphTools === "object" && !Array.isArray(raw.graphTools)) {
-		const enabled = (raw.graphTools as Record<string, unknown>).enabled;
-		if (enabled === undefined) out.graphTools = {};
-		else if (typeof enabled === "boolean") out.graphTools = { enabled };
-	}
 	return out;
 }
 
@@ -559,36 +427,10 @@ function sanitizeAppearance(raw: Record<string, unknown>): AppearanceSettings {
 	return out;
 }
 
-function sanitizeGraph(raw: Record<string, unknown>): GraphSettings {
-	// Wave 7 collapse (owner ruling 2026-09-23): the section is the master
-	// switch ONLY. The dead rungs' keys (embedding/clustering/labeling/
-	// embeddingModel) in existing records are simply UNREAD and DROPPED by
-	// this reconstruction — the migration story: the next graph-section
-	// write (PUT is replace-whole) persists the collapsed shape, and no
-	// active code ever looks at the stale fields.
-	//
-	// extractionChunkTokens (extraction-UX redesign, 2026-09-24): the chunk
-	// budget — clamp-never-reject (the bd68486 discipline): a finite
-	// positive number floors to EXTRACTION_CHUNK_TOKENS_FLOOR (fractions
-	// floor to integers), anything else drops to the factory default at
-	// resolution. A disk record below the floor (older app, hand edit)
-	// clamps UP — the floor is a cost protection, not data to honor.
-	const out: GraphSettings = {};
-	const enabled = boolOrDrop(raw.enabled);
-	if (enabled !== undefined) out.enabled = enabled;
-	const rendering = boolOrDrop(raw.rendering);
-	if (rendering !== undefined) out.rendering = rendering;
-	const rawTokens = raw.extractionChunkTokens;
-	if (typeof rawTokens === "number" && Number.isFinite(rawTokens) && rawTokens > 0) {
-		out.extractionChunkTokens = Math.max(EXTRACTION_CHUNK_TOKENS_FLOOR, Math.floor(rawTokens));
-	}
-	return out;
-}
-
 /** clamp-never-reject (the sanitizer's discipline): a finite positive
  *  number floors to COMPACTION_THRESHOLD_FLOOR, anything else drops (the
  *  factory default resolves at read time). Exported for the PUT parser's
- *  reject-with-rationale (the graph chunk-budget precedent). */
+ *  reject-with-rationale. */
 export const COMPACTION_THRESHOLD_FLOOR = 32_000;
 
 function sanitizeCompaction(raw: Record<string, unknown>): CompactionSettings {
@@ -625,19 +467,17 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 		const models = sanitizeModels(r.models as Record<string, unknown>);
 		if (Object.keys(models).length) out.models = models;
 	}
-	if (r.graph !== null && typeof r.graph === "object" && !Array.isArray(r.graph)) {
-		out.graph = sanitizeGraph(r.graph as Record<string, unknown>);
-		if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") {
-			out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
-		}
+	if (r.compaction !== undefined && r.compaction !== null && typeof r.compaction === "object") {
+		out.compaction = sanitizeCompaction(r.compaction as Record<string, unknown>);
 	}
 	// Unknown top-level keys ride along untouched (forward-compat). One
-	// known-DEAD key is stripped instead of riding: `chat` (the old
-	// default-settings section) died with per-session models (owner,
-	// 2026-09-28) — a fossil copy on disk must never resurrect through
-	// reads (and any later write flushes it from the file for good).
+	// known-DEAD keys are stripped instead of riding: `chat` (the old
+	// default-settings section, died with per-session models, owner
+	// 2026-09-28) and `graph` (the extraction switches, died with the
+	// extraction pipeline) — a fossil copy on disk must never resurrect
+	// through reads (and any later write flushes it from the file for good).
 	for (const [key, value] of Object.entries(r)) {
-		if (key === "chat") continue;
+		if (key === "chat" || key === "graph") continue;
 		if (!(key in out)) out[key] = value;
 	}
 	return out;

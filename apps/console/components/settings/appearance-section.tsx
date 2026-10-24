@@ -1,6 +1,6 @@
 "use client";
 /**
- * The Appearance + Graph sections (thin settings wave).
+ * The Appearance section (thin settings wave).
  *
  * Appearance controls resolve against the factory in the provider; writes
  * PUT the whole appearance section and hand the delta back so the CSS
@@ -10,10 +10,6 @@
  * Mode is dark-only this wave: control rendered DISABLED with a note — the
  * light palette is the design wave's work, and a lying control is worse
  * than an honest disabled one.
- *
- * Graph graying (owner, 2026-09-20) follows the graph viewer's render-panel
- * convention: the whole row dims when a parent is off (stored values
- * persist but resolve inert — the switch shows stored, the dim effective).
  *
  * Reading font (appearance wave, 2026-09-26, owner ruling): a searchable
  * dropdown of the user's INSTALLED fonts (FontMenuList over model-menu's
@@ -31,12 +27,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import {
-	EXTRACTION_CHUNK_TOKENS_FLOOR,
-	resolveSettings,
-	type AppearanceSettings,
-	type GraphSettings,
-} from "@/src/core";
+import type { AppearanceSettings } from "@/src/core";
 import { MenuShell } from "@/components/menu-shell";
 import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "./appearance.tsx";
@@ -337,90 +328,6 @@ export function AppearanceSection({
 					ariaLabel="italic color"
 					testid="input-italic-color"
 					onCommit={(v) => onSectionChange({ ...appearance, mdRendering: { ...md, italicColor: v === "" ? null : v } })}
-				/>
-			</SettingsRow>
-		</>
-	);
-}
-
-export function GraphSection({
-	graph,
-	onSectionChange,
-}: {
-	graph: GraphSettings | undefined;
-	onSectionChange: (next: GraphSettings) => void;
-}) {
-	// Wave 7 collapse (owner ruling 2026-09-23): the section is the MASTER
-	// SWITCH — the embedding/clustering/labeling rungs are gone; clustering
-	// is the free birth-session partition derived on read, labels ARE session
-	// names. The chunk budget (2026-10-02) joined it as the section's second
-	// and only other control: it denominates the coverage ring AND gates the
-	// auto-extraction trigger (turn settle ≥ budget fires the run).
-	//
-	// Resolved through the SAME core resolver the server's effective
-	// settings use (one source of truth, the 4096-fallback fix 2026-10-02):
-	// the hint and placeholder report exactly the number the trigger waits
-	// for — never a second hand-rolled default.
-	const resolved = resolveSettings(graph === undefined ? null : { version: 1, graph }).graph;
-	return (
-		<>
-			{/* EXTRACTION (renamed, owner 2026-10-06): this switch is the DATA
-			    channel — the pipeline, the auditor, the prober's graph tools. It
-			    was born labeled "Graph" and that label lied once the rendering
-			    switch below arrived: off ≠ no graph, off = the graph stops
-			    growing. The testid keeps the old name's shape (row-enabled) so
-			    this stays one rename, not a test re-pin. */}
-			<SettingsRow label="Extraction" hint="Off = the graph stops growing" testid="graph-row-enabled">
-				<Toggle
-					checked={graph?.enabled ?? true}
-					label="extraction enabled"
-					onChange={(on) =>
-						// Compose, never replace-whole (the section PUT is, but the
-					// row must not drop its sibling field — fixed with the budget
-					// row's arrival: the old { enabled: on } wiped a stored budget).
-						onSectionChange({ ...graph, enabled: on })
-					}
-				/>
-			</SettingsRow>
-			{/* GRAPH RENDERING (owner, 2026-10-06 — the release graph-controls
-			    round): display-only. Off = the home shows the chains view
-			    instead of the canvas. The ledgers, the pipeline, everything
-			    data keeps working — that is the extraction switch above. */}
-			<SettingsRow label="Graph rendering" hint="Off = home shows the chains view" testid="graph-row-rendering">
-				<Toggle
-					checked={graph?.rendering ?? true}
-					label="graph rendering enabled"
-					onChange={(on) => onSectionChange({ ...graph, rendering: on })}
-				/>
-			</SettingsRow>
-			<SettingsRow
-				label="Extraction chunk budget"
-				hint={`${resolved.extractionChunkTokens} tok`}
-				testid="graph-row-chunk-tokens"
-			>
-				<CommitInput
-					type="number"
-					value={String(graph?.extractionChunkTokens ?? "")}
-					placeholder={String(resolved.extractionChunkTokens)}
-					ariaLabel="extraction chunk budget"
-					testid="input-chunk-tokens"
-					onCommit={(v) => {
-						// Empty = factory default (the fix-wave discipline): absence is
-						// the unset for numbers — Number("") is 0, so clamping would
-						// write the floor instead of unsetting.
-						if (v === "") {
-							onSectionChange({ ...graph, extractionChunkTokens: undefined });
-							return;
-						}
-						const n = Number(v);
-						if (!Number.isFinite(n) || n <= 0) return; // bad input: no write
-						// Mirror the server sanitize exactly: floor only (cost
-						// protection), no ceiling — a big budget is the user's call.
-						onSectionChange({
-							...graph,
-							extractionChunkTokens: Math.max(EXTRACTION_CHUNK_TOKENS_FLOOR, Math.round(n)),
-						});
-					}}
 				/>
 			</SettingsRow>
 		</>

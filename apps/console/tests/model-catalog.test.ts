@@ -3,12 +3,10 @@ import assert from "node:assert/strict";
 import {
 	catalogDefaultsFor,
 	catalogProviders,
-	catalogRolePins,
 	catalogSlots,
 	clampChatLevel,
 	clampModelsLevels,
 	modelCatalog,
-	rolePinsFor,
 	toModelDto,
 	validateChatSettings,
 	validateModelsSettings,
@@ -18,8 +16,6 @@ import type { SettingsValidation } from "../src/server/model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { DEFAULT_THINKING_ORDER } from "../src/core/settings.ts";
 import { piEngineForSpec, piModels } from "../src/agent/models.ts";
-import { BACKGROUND_MODEL_ROLES } from "../src/core/settings.ts";
-import { resolveSettings } from "../src/core/settings-resolution.ts";
 import { readSettings } from "../src/store/settings.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 
@@ -123,35 +119,6 @@ describe("the model catalog projection", () => {
 		assert.deepEqual(dto.supportedLevels, getSupportedThinkingLevels(raw));
 		assert.equal(dto.cost.input, raw.cost.input);
 		assert.equal(dto.contextWindow, raw.contextWindow);
-	});
-});
-
-describe("the background roles' resolved pins (rolePins)", () => {
-	it("no record → every role is NULL (BYOK: no phantom defaults)", () => {
-		const pins = rolePinsFor(resolveSettings(null).agent.models);
-		assert.deepEqual(Object.keys(pins), [...BACKGROUND_MODEL_ROLES]);
-		for (const role of BACKGROUND_MODEL_ROLES) {
-			assert.equal(pins[role], null, role);
-		}
-	});
-
-	it("a slot re-tiers its roles; overrides win for that role only", () => {
-		const record = {
-			version: 1,
-			models: { cheap: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } } },
-			agent: { models: { researcher: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" as const } } },
-		};
-		const pins = rolePinsFor(resolveSettings(record).agent.models);
-		assert.deepEqual(pins.researcher, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "high" });
-		assert.deepEqual(pins.auditor, { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" } }); // level unset
-		assert.equal(pins.visualMaker, null, "vision tier untouched");
-	});
-
-	it("catalogRolePins matches the same resolution the engine wiring uses", () => {
-		const pins = catalogRolePins();
-		for (const role of BACKGROUND_MODEL_ROLES) {
-			assert.ok(pins[role] === null || typeof pins[role]!.model.id === "string");
-		}
 	});
 });
 
@@ -320,10 +287,5 @@ describe("pi thinking truth (pinned against pi-ai upgrades)", () => {
 			assert.deepEqual(getSupportedThinkingLevels(flat), ["off"]);
 			assert.equal(engine.level, "off");
 		}
-	});
-
-	it("the legacy piEngineFor role entry point throws honestly (BYOK: no pins)", async () => {
-		const { piEngineFor } = await import("../src/agent/models.ts");
-		assert.throws(() => piEngineFor("prober"), /no configured model for role "prober"/);
 	});
 });

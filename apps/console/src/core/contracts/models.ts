@@ -6,7 +6,7 @@
  * components never import from the server band).
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { BackgroundModelRole, ModelSlotName } from "../settings.ts";
+import type { ModelSlotName } from "../settings.ts";
 
 /** One picker row: everything the UI shows about a model, projected from
  *  pi-ai's catalog. Costs are USD per 1M tokens (the same catalog, the same
@@ -35,15 +35,6 @@ export interface CatalogDefaults {
 	thinkingLevel?: ThinkingLevel;
 }
 
-/** One background role's RESOLVED pin (BYOK, owner 2026-09-22): what that
- *  role actually runs today — role override → tier slot → NOTHING. NULL
- *  = the role's chain is empty (the per-need gates refuse its work); the
- *  settings UI shows "not configured" from it. */
-export type RolePins = Record<
-	BackgroundModelRole,
-	{ model: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null
->;
-
 /** One slot tier's RESOLVED pin (BYOK, owner 2026-09-22): NULL = the tier
  *  holds no model. The settings UI captions each slot row with it and the
  *  picker pre-fills from it. */
@@ -59,11 +50,7 @@ export interface ModelCatalogResponse {
 	 *  conversation chain is empty (no factory floor; the turn gate
 	 *  refuses with 503 models_not_configured). */
 	defaults: CatalogDefaults | null;
-	/** The six background roles' resolved pins (same resolution the agent
-	 *  factories use — src/server/stores.ts effectiveSettings); NULL per
-	 *  role = chain empty. */
-	rolePins: RolePins;
-	/** The three slot tiers' resolved pins: role override → slot at tier
+	/** The three slot tiers' resolved pins: slot at tier
 	 *  granularity; effectiveSettings().models verbatim, NULL per unset
 	 *  tier. */
 	slots: SlotPins;

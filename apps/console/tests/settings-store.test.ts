@@ -43,10 +43,10 @@ describe("the settings store", () => {
 	});
 
 	it("write→read round-trips through the sanitizer", () => {
-		writeSettings({ version: 1, graph: { enabled: false } });
+		writeSettings({ version: 1, compaction: { thresholdTokens: 64_000 } });
 		const out = readSettings();
 		assert.ok(out);
-		assert.deepEqual(out.graph, { enabled: false });
+		assert.deepEqual(out.compaction, { thresholdTokens: 64_000 });
 	});
 
 	it("a chat section on disk is IGNORED — the field died with per-session models (owner, 2026-09-28)", () => {
@@ -58,14 +58,14 @@ describe("the settings store", () => {
 			JSON.stringify({
 				version: 1,
 				chat: { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" }, thinkingLevel: "low" },
-				graph: { enabled: true },
+				compaction: { thresholdTokens: 64_000 },
 			}),
 			"utf-8",
 		);
 		const out = readSettings();
 		assert.ok(out);
 		assert.equal("chat" in out, false, "the chat section never surfaces");
-		assert.deepEqual(out.graph, { enabled: true }); // siblings survive
+		assert.deepEqual(out.compaction, { thresholdTokens: 64_000 }); // siblings survive
 	});
 
 	it("corrupt settings.json → null (first-boot semantics), never throws", () => {

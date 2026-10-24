@@ -36,7 +36,6 @@ import {
 	type AgentSettings,
 	type AppearanceSettings,
 	type CompactionSettings,
-	type GraphSettings,
 	type UserSettings,
 } from "@/src/core";
 import { useAppearance } from "./appearance.tsx";
@@ -47,7 +46,7 @@ import { MENU_CLOSE_EVENT, MENU_OPEN_EVENT } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { KeysSection } from "./keys-section.tsx";
 import { Hint } from "@/components/ui/hint";
-import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
+import { AppearanceSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 
 /** Owner (2026-09-20): hints earn their place — mechanics-explaining
@@ -58,7 +57,6 @@ const SECTIONS = [
 	{ id: "keys", label: "Keys" },
 	{ id: "agent", label: "Agent" },
 	{ id: "appearance", label: "Appearance" },
-	{ id: "graph", label: "Graph" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -226,7 +224,7 @@ export function SettingsDialogBody({
 	 *  schema mistake caught by the validation surface). */
 	const write = useCallback(
 		async (
-			section: "general" | "agent" | "models" | "appearance" | "graph" | "compaction",
+			section: "general" | "agent" | "models" | "appearance" | "compaction",
 			body: object,
 		) => {
 			setError(null);
@@ -388,7 +386,6 @@ export function SettingsDialogBody({
 									<AgentSection
 										agent={record.agent}
 										models={record.models}
-										graph={record.graph}
 										compaction={record.compaction}
 										onModelsChange={(next: ModelsSettings) =>
 											void write("models", next)
@@ -411,19 +408,6 @@ export function SettingsDialogBody({
 										appearance={record.appearance}
 										onSectionChange={(next: AppearanceSettings) =>
 											void write("appearance", next)
-										}
-									/>
-								</SettingsSection>
-							)}
-							{active === "graph" && (
-								<SettingsSection
-									title="Graph"
-									testid="section-graph"
-								>
-									<GraphSection
-										graph={record.graph}
-										onSectionChange={(next: GraphSettings) =>
-											void write("graph", next)
 										}
 									/>
 								</SettingsSection>

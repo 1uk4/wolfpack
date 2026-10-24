@@ -41,3 +41,8 @@ export * from "./compaction.ts";
 export { runPiTurn, piTurnResponse, type PiTurnHandle, type PiTurnSpec } from "./pi/ui-stream.ts";
 export * from "./observability.ts";
 export * from "./model-catalog.ts";
+
+// The ConsoleClient seam (client-rewire wave): the factory + the thin
+// Response handlers the /api/wolves routes and the wolf pages share.
+export * from "./console-client.ts";
+export * from "./thread-api.ts";

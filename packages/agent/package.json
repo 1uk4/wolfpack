@@ -8,9 +8,11 @@
     "wolfpack-agent": "dist/bin/wolfpack-agent.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/bin/wolfpack-agent.js"
+    "start": "node dist/bin/wolfpack-agent.js",
+    "lint": "echo \"no lint configured for @wolfpack/agent\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/agent/src"
   },
   "dependencies": {
     "@wolfpack/kb": "*",

@@ -22,9 +22,11 @@
     "wolfpack-harness": "dist/bin/harness.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/bin/harness.js"
+    "start": "node dist/bin/harness.js",
+    "lint": "echo \"no lint configured for @wolfpack/harness\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/harness/src"
   },
   "dependencies": {
     "@earendil-works/chord": "^1.1.0",

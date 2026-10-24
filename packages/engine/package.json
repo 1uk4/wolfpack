@@ -5,9 +5,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/engine/src",
+    "lint": "echo \"no lint configured for @wolfpack/engine\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

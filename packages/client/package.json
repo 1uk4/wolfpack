@@ -9,8 +9,10 @@
     "./mock": "./dist/mock.js"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/client\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/client/src"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

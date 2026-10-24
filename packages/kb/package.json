@@ -14,8 +14,10 @@
     "./librarian": "./dist/librarian/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/kb\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/kb/src"
   },
   "dependencies": {
     "@wolfpack/engine": "*",

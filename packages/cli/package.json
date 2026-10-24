@@ -8,8 +8,10 @@
     "wolfpack": "dist/bin/wolfpack.js"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/cli\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/cli/src"
   },
   "dependencies": {
     "yaml": "^2.6.0",

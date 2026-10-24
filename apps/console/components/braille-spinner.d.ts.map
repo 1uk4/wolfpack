@@ -1,0 +1,1 @@
+{"version":3,"file":"braille-spinner.d.ts","sourceRoot":"","sources":["braille-spinner.tsx"],"names":[],"mappings":"AAgCA,oEAAoE;AACpE,eAAO,MAAM,gBAAgB,KAAK,CAAC;AACnC,eAAO,MAAM,cAAc,QAAgB,CAAC;AAE5C,wBAAgB,cAAc,CAAC,EAC9B,SAAS,EACT,KAAiB,GACjB,EAAE;IACF,yFAAyF;IACzF,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,+DAA+D;IAC/D,KAAK,CAAC,EAAE,MAAM,CAAC;CACf,OAuBA"}

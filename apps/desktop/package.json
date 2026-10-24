@@ -1,0 +1,28 @@
+{
+	"name": "@wolfpack/desktop",
+	"version": "0.3.4",
+	"private": true,
+	"type": "commonjs",
+	"description": "Wolfpack Console desktop shell (Electron)",
+	"main": "electron/main.cjs",
+	"desktopName": "wolfpack-console.desktop",
+	"author": {
+		"name": "Amos Blomqvist",
+		"email": "255718537+amosblomqvist@users.noreply.github.com"
+	},
+	"homepage": "https://github.com/amosblomqvist/learnharness",
+	"scripts": {
+		"dev": "concurrently -k -n console,electron \"npm run dev -w @wolfpack/console -- -p 3210\" \"until curl -sf -o /dev/null http://localhost:3210; do sleep 1; done; LH_DEV_URL=http://localhost:3210 electron .\"",
+		"electron:dev": "LH_DEV_URL=${LH_DEV_URL:-http://localhost:3000} electron .",
+		"build:server": "npm run build -w @wolfpack/console && node scripts/build-server.mjs && node scripts/smoke-server.mjs",
+		"dist": "npm run build:server && electron-builder --mac --arm64 --publish never -c.mac.identity=null"
+	},
+	"dependencies": {
+		"electron-updater": "^6.8.9"
+	},
+	"devDependencies": {
+		"electron": "^44.4.1",
+		"electron-builder": "26.16.1",
+		"concurrently": "^10.0.5"
+	}
+}

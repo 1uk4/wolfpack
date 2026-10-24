@@ -8,11 +8,12 @@
  * ledger (so the registry stops listing it), and re-render the domain's
  * registry, INDEX, and digest. Section member counts are left for `reorg`.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type KbRoots, entriesDir, ev } from "../shared/index.js";
 import { EntryId } from "../schema/knowledge.js";
 import { readLedger, appendLedger, foldRegistry } from "./ledger.js";
+import { anchorOf } from "./anchors.js";
 import { renderRegistry } from "./registry.js";
 import { archiveRetiredEntry } from "./versions.js";
 import { renderDomainIndex, renderDomainDigest } from "./domains.js";
@@ -34,13 +35,28 @@ function domainOf(entryId: string): string {
 export function retireEntries(
   roots: KbRoots,
   entryIds: string[],
-  opts: { reason?: string; dryRun?: boolean } = {}
+  opts: { reason?: string; dryRun?: boolean; force?: boolean } = {}
 ): RetireResult {
   const bad = entryIds.filter((id) => !EntryId.safeParse(id).success);
   if (bad.length) throw new Error(`not entry ids (want kb-<domain>-<7id>): ${bad.join(", ")}`);
 
   const reg = foldRegistry(readLedger(roots));
   const inRegistry = new Set([...reg.values()].flatMap((t) => t.entries));
+
+  // An anchored entry (an initiative's, a standing feature's) is a subject's identity,
+  // not a candidate for cleanup: retiring it needs an explicit force.
+  if (!opts.force) {
+    const anchored: string[] = [];
+    for (const entryId of new Set(entryIds)) {
+      const file = join(entriesDir(roots, domainOf(entryId)), `${entryId}.md`);
+      if (!existsSync(file)) continue;
+      const key = anchorOf(readFileSync(file, "utf-8"));
+      if (key) anchored.push(`${entryId} (anchor ${key})`);
+    }
+    if (anchored.length) {
+      throw new Error(`refusing to retire anchored entr${anchored.length === 1 ? "y" : "ies"}: ${anchored.join(", ")}. Anchored entries are pinned records; pass --force to retire them anyway.`);
+    }
+  }
 
   const result: RetireResult = { retired: [], notFound: [], domains: [] };
   for (const entryId of new Set(entryIds)) {

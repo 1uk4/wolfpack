@@ -56,6 +56,66 @@ describe("distillTopic", () => {
   });
 });
 
+describe("distillTopic: standing feature graduation", () => {
+  const grad = { workId: "work-wp-FEAT001", initiativeTopicId: "work-wp-INITI01", initiativeTitle: "Area", standingFeature: { title: "Period one" } };
+  const base = { id: "work-wp-FEAT001", title: "Period one", summary: "s", body: "GRADUATION OF feature: Period one", domain: "wolfpack", date: "2026-10-22" };
+  const feature = { slug: "feature", feature: true, title: "Model's own title", summary: "This period did things.", body: "short" };
+  const initiative = { slug: "initiative", initiative: true, title: "Area", summary: "Live.", body: "## Scope\n\nx\n\n## History\n\n- 2026-10-22: added (work-wp-FEAT001)" };
+  const subject = { slug: "rule", title: "A lasting rule", summary: "How X works.", body: "## Rule\n\nAlways.\n\n## History\n\n- 2026-10-22: chose X (work-wp-FEAT001)" };
+
+  it("the feature output takes the item's id and the forced title; only the initiative and subjects get other ids", async () => {
+    const { call, engine } = engineOf({ contributions: [subject, feature, initiative] });
+    const r = await distillTopic(engine, { ...base, graduation: grad });
+    expect((call.mock.calls[0] as any)[2].system).toContain("STANDING FEATURE");
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(r.outputs.map((o) => [o.id, o.title, !!o.feature, !!o.initiative])).toEqual([
+      ["work-wp-FEAT001~rule", "A lasting rule", false, false],
+      ["work-wp-FEAT001", "Period one", true, false],
+      ["work-wp-INITI01", "Area", false, true],
+    ]);
+    expect(r.outputs[1].summary).toBe("This period did things.");
+  });
+
+  it("the feature needs no History line (no warning); a subject without one still warns", async () => {
+    const noHistory = { ...subject, body: "## Rule\n\nAlways." };
+    const r = await distillTopic(engineOf({ contributions: [feature, initiative, noHistory] }).engine, { ...base, graduation: grad });
+    expect(r.warnings).toEqual([`"A lasting rule" has no History line citing the work`]);
+  });
+
+  it("a missing feature contribution is asked for once (retry), by slug or flag", async () => {
+    const { call, engine } = engineOf({ contributions: [initiative] }, { contributions: [initiative, feature] });
+    const r = await distillTopic(engine, { ...base, graduation: grad });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect((call.mock.calls[1] as any)[2].prompt).toContain("the FEATURE contribution is missing");
+    expect(r.retried).toBe(true);
+    expect(r.outputs.some((o) => o.feature)).toBe(true);
+    // recognised by slug alone
+    const bySlug = await distillTopic(engineOf({ contributions: [{ ...feature, feature: undefined }, initiative] }).engine, { ...base, graduation: grad });
+    expect(bySlug.outputs.find((o) => o.id === "work-wp-FEAT001")?.feature).toBe(true);
+  });
+
+  it("still missing after the retry: a warning, no further call", async () => {
+    const { call, engine } = engineOf({ contributions: [initiative] });
+    const r = await distillTopic(engine, { ...base, graduation: grad });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(r.warnings).toContain("no summary of the feature was produced");
+  });
+
+  it("zero subject contributions is fine; Totals are not demanded of the model's text", async () => {
+    const r = await distillTopic(engineOf({ contributions: [feature, initiative] }).engine, { ...base, graduation: { ...grad, totals: [{ key: "N", value: "3" }] } });
+    expect(r.missingTotals).toEqual([]);
+    expect(r.warnings).toEqual([]);
+    expect(r.retried).toBe(false);
+  });
+
+  it("an ordinary graduation or plain topic never sees a feature flag", async () => {
+    const plain = await distillTopic(engineOf({ contributions: [{ ...clean, feature: true }] }).engine, { id: "t", title: "T", summary: "s", body: "raw", domain: "wolfpack", date: "2026-10-22" });
+    expect(plain.outputs[0].feature).toBeUndefined();
+    const ordinary = await distillTopic(engineOf({ contributions: [subject, initiative] }).engine, { ...base, graduation: { ...grad, standingFeature: undefined } });
+    expect(ordinary.outputs.map((o) => o.id)).toEqual(["work-wp-FEAT001", "work-wp-INITI01"]);
+  });
+});
+
 describe("promoteTopics", () => {
   it("emits the distilled body (not the raw one) and records the raw body", async () => {
     const raw = "# Raw\n\nCommit dd44478 fixed it. 682 tests pass.";

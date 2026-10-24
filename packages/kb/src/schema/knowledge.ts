@@ -334,6 +334,10 @@ export const DerivedFacts = z.object({
   asOf: IsoDate.optional(),
   /** Anchored subject key (frontmatter `anchor:`): routing by key, not similarity. */
   anchor: z.string().optional(),
+  /** Group key (frontmatter `group:`): shown/sectioned under the anchored entry holding it. */
+  group: z.string().optional(),
+  /** Ordering date within the group (frontmatter `groupDate:`). */
+  groupDate: z.string().optional(),
   /** Deterministic + resolved relations (embedding see_also ∪ resolved LLM edges). */
   relations: z.array(Relation).default([]),
   /** Section placement (required, single-parent tree). */
@@ -389,6 +393,8 @@ export const Entry = z.object({
   verified: z.boolean(),
   asOf: IsoDate.optional(),
   anchor: z.string().optional(),
+  group: z.string().optional(),
+  groupDate: z.string().optional(),
   expires: IsoDate.optional(),
 });
 export type Entry = z.infer<typeof Entry>;
@@ -470,6 +476,8 @@ export function assembleEntry(input: {
     verified: overrides.verified ?? false,
     asOf: facts.asOf,
     anchor: facts.anchor,
+    group: facts.group,
+    groupDate: facts.groupDate,
     expires: overrides.expires,
   });
 }

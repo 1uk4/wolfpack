@@ -33,6 +33,17 @@ describe("drainInbox", () => {
     expect(existsSync(bad())).toBe(false);
   });
 
+  it("ignores group/group_date unless the contribution is anchored and verbatim", () => {
+    writeFileSync(join(inbox(), "a.md"), fm({ ...valid, group: "some-key", group_date: "2026-10-14" }));
+    writeFileSync(join(inbox(), "b.md"), fm({ ...valid, den_topic_id: "topic-b", content_hash: "abcdef0123456780", anchor: "k", verbatim: "true", group: "some-key", group_date: "2026-10-14" }));
+    writeFileSync(join(inbox(), "c.md"), fm({ ...valid, den_topic_id: "topic-c", content_hash: "abcdef0123456781", anchor: "k2", group: "some-key", group_date: "2026-10-14" }));
+    const by = Object.fromEntries(drainInbox(roots).map((c) => [c.denTopicId, c]));
+    expect(by["topic-a"].group).toBeUndefined();
+    expect(by["topic-a"].groupDate).toBeUndefined();
+    expect(by["topic-b"]).toMatchObject({ group: "some-key", groupDate: "2026-10-14", verbatim: true });
+    expect(by["topic-c"].group).toBeUndefined();
+  });
+
   it("moves a file missing den_topic_id to _bad/ with a reason, and still returns the next valid one", () => {
     writeFileSync(join(inbox(), "a-broken.md"), fm({ from: "w1", change: "create" }));
     writeFileSync(join(inbox(), "b-good.md"), fm(valid));

@@ -21,12 +21,13 @@ import { drainInbox } from "./intake.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
+import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { resolveAliasedEntry, survivorOf } from "./alias.js";
-import { produceEntry } from "./produce.js";
+import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
 import {
@@ -569,7 +570,8 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // entry. Create a new one instead; its alias is re-pointed on commit.
       // (Similarity candidates were already filtered by size above; this
       // catches an alias match.)
-      if (targetId) {
+      // (A verbatim anchored entry is replaced whole, not merged: no guard.)
+      if (targetId && !(c.anchor && c.verbatim)) {
         const size = readEntryMarkdown(roots, domain, targetId)?.length ?? 0;
         if (size > sizeLimit) {
           ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → new entry (target ${targetId} is ${size} chars, budget allows ${sizeLimit})`);
@@ -615,12 +617,28 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         }
       }
 
+      // A grouped entry (a standing feature's) sits in its holder's section.
+      if (!sectionId && c.group) {
+        const holder = anchors.byKey.get(c.group);
+        const hmd = holder ? readEntryMarkdown(roots, domain, holder) : null;
+        try {
+          if (hmd) {
+            sectionId = SectionId.parse(String(parseFrontmatter(hmd).fields.section ?? ""));
+            placement = { basis: "routed", fit: 1 };
+          }
+        } catch {
+          sectionId = undefined; // the holder has no usable section: normal descent
+        }
+      }
+
       // A new entry is placed by deterministic tree descent.
       if (!sectionId) {
-        // Build section members map for placeEntry
+        // Build section members map for placeEntry (grouped entries follow their
+        // holder and take no part in similarity placement)
         const sectionMembers = new Map<string, EWV[]>();
         for (const ev of entryVectors) {
           if (ev.domain !== domain) continue;
+          if (anchors.grouped.has(ev.entryId)) continue;
           // Find which section this entry is in by checking frontmatter
           const entryMd = readEntryMarkdown(roots, domain, ev.entryId);
           const entrySec = entryMd ? String(parseFrontmatter(entryMd).fields.section ?? "") : "";
@@ -629,7 +647,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             sectionMembers.get(entrySec)!.push({ entryId: ev.entryId, sectionId: entrySec as SectionId, vector: ev.vector });
           }
         }
-        const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain).map((e) => e.vector));
+        const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain && !anchors.grouped.has(e.entryId)).map((e) => e.vector));
         // placeEntry descends from the roots of its first section's domain, so it
         // must only see this domain's tree (it once routed entries from one domain into
         // another domain's sections).
@@ -693,7 +711,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       const existingCreated = existingMarkdown ? String(parseFrontmatter(existingMarkdown).fields.created ?? "") || undefined : undefined;
 
       const liveIds = liveEntryIds(roots);
-      const { entry, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = await produceEntry(itemEngine, {
+      const produceInput: ProduceEntryInput = {
         contribution: c,
         domain,
         section: sectionId,
@@ -705,7 +723,11 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         liveIds,
         resolveLinks: (links) => links.map((id) => liveSurvivor(log, liveIds, id)).filter((id): id is string => !!id),
         allowOverflow: overflowOk,
-      });
+      };
+      // Verbatim: the anchored entry is the contribution as authored, no model call.
+      const { entry, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = c.anchor && c.verbatim
+        ? produceVerbatim(produceInput)
+        : await produceEntry(itemEngine, produceInput);
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
       if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);
@@ -748,6 +770,20 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       log.push(...batch);
       batch.length = 0;
       touchedDomains.add(domain);
+
+      // The holder's Delivered list follows its group, whichever side was written last.
+      if (!unchanged && (c.anchor || c.group)) {
+        const holderKeys = new Set<string>();
+        if (c.group) holderKeys.add(c.group);
+        if (c.anchor) holderKeys.add(c.anchor);
+        for (const key of holderKeys) {
+          try {
+            if (syncDelivered(roots, domain, key)) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → Delivered list of ${key} updated`);
+          } catch (err) {
+            ctx.notify?.(`sweep: could not sync the Delivered list of ${key}: ${cleanError(err)}`);
+          }
+        }
+      }
 
       // Graduated work: note the entry on the work item (queued; never blocks).
       const workId = workIdOfTopic(c.denTopicId);

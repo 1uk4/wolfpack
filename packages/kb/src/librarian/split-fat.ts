@@ -21,6 +21,7 @@ import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
 import { entriesDir, ev, type KbRoots } from "../shared/index.js";
 import { SectionId } from "../schema/knowledge.js";
 import { retireEntries } from "./retire.js";
+import { anchorOf } from "./anchors.js";
 import { appendLedger } from "./ledger.js";
 import { withKbLock } from "./lock.js";
 
@@ -84,6 +85,7 @@ export function scanFat(
       }
       if (size < threshold) continue;
       const raw = readFileSync(path, "utf-8");
+      if (anchorOf(raw)) continue; // anchored entries are pinned records, never split
       const title = extractTitle(raw) ?? f.replace(/\.md$/, "");
       const nH2 = (raw.match(/^## /gm) ?? []).length;
       out.push({
@@ -306,6 +308,7 @@ export async function splitFatEntry(opts: SplitFatOptions): Promise<SplitFatResu
 
   const raw = readFileSync(file, "utf-8");
   const { yaml, body } = parseEntryFile(raw);
+  if (/^anchor:/m.test(yaml)) throw new Error(`${entryId} is anchored: an anchored entry is a pinned record and is not split`);
   if (raw.length < threshold) {
     return { entryId, parentSize: raw.length, shards: [], retired: false };
   }

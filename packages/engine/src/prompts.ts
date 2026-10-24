@@ -356,6 +356,20 @@ export const DISTILL_GRADUATION = `GRADUATION INPUT. When the input is headed "G
 Respond with the same JSON, where a contribution may carry "initiative": true.`;
 
 /**
+ * stage: distill (graduation of a feature of a STANDING initiative) · appended after DISTILL_GRADUATION
+ *
+ * A feature of a standing initiative is one instance of a recurring or
+ * open-ended area (one period, one round). It keeps its own entry, which code
+ * writes from the feature's own content; the model contributes only a summary
+ * of it plus whatever lasting knowledge the work established.
+ */
+export const DISTILL_GRADUATION_STANDING = `STANDING FEATURE. When the input says its feature belongs to a STANDING initiative, the feature itself is kept as its own entry, written by code from the work item's own content. So, in addition to the rules above:
+- Add exactly one contribution with "feature": true and slug "feature". Only its summary is used: ONE paragraph in plain words on what this period or instance of the work was and its outcomes (what was done, what resulted). Keep figures from the input as they are written. Give it a short body (a sentence is enough); it is not stored. Do not put a History section, ids or hashes in it.
+- Also write the INITIATIVE contribution as above: the standing initiative's current state, which this work may have changed.
+- Write subject contributions ONLY for lasting decisions and findings that the RECORD establishes and that outlive this instance (how something works now, what was decided and why). Do not describe the instance itself in them. Writing none is correct when the Record holds nothing of that kind.
+- Every other contribution omits "feature".`;
+
+/**
  * stage: workRecord · model: smart · in: a work item's current Record + its title/criteria/plan + new observations · out: the rewritten Record
  *
  * The Record is the curated knowledge of ONE work item, kept inside the item

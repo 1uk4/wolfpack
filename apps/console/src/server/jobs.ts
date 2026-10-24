@@ -61,6 +61,7 @@ import {
 	isSubagentFailure,
 	steerDelivered,
 	type JobRecord,
+	type JobResult,
 	type SteerMessage,
 } from "../core/contracts.ts";
 import type { TurnInput } from "../core/input-events.ts";
@@ -214,7 +215,7 @@ function handOffEligible(chatId: string, agent: Agent): void {
 	const queue = state().queues.get(chatId);
 	if (queue && queue.length > 0) {
 		for (const entry of queue) {
-			if (entry.handedTo !== agent && entry.steer.customType !== "probe-handoff") {
+			if (entry.handedTo !== agent) {
 				agent.steer(entry.steer);
 				entry.handedTo = agent;
 			}
@@ -222,8 +223,7 @@ function handOffEligible(chatId: string, agent: Agent): void {
 	}
 	// User steers (2026-10-03): same hand-off, any live run — a steer
 	// stranded behind a question or abort rides the chat's next run's
-	// first boundary. No probe-handoff exclusion: these are learner
-	// words, owed to whatever run is live.
+	// first boundary: these are user words, owed to whatever run is live.
 	const userQueue = state().userSteers.get(chatId);
 	if (userQueue && userQueue.length > 0) {
 		for (const entry of userQueue) {
@@ -392,11 +392,6 @@ export function abortJob(jobId: string): AbortOutcome {
 }
 
 function chatIdOf(steer: SteerMessage): string {
-	// The probe handoff carries its chat directly in the marker details (the
-	// job record would say it too, but the details are the cheap path).
-	if (steer.customType === "probe-handoff") {
-		return (steer.details as { chatId: string }).chatId;
-	}
 	// The chat is resolvable from the job record; the steer's details
 	// carry jobId, which indexes the store.
 	const jobId = jobIdOf(steer);
@@ -463,19 +458,8 @@ async function pump(chatId: string): Promise<void> {
 			if (live && isTurnRunning(chatId)) {
 				handOffEligible(chatId, live);
 				const handable = stillPending.filter((e) => e.handedTo === live);
-				// probe-handoffs never ride a live run (owner ruling: the
-				// handoff must START the teacher's run) — if any remain
-				// pending, wait the run out and loop to the wake below.
-				const handoffWaits = stillPending.some(
-					(e) => e.steer.customType === "probe-handoff",
-				);
-				if (handable.length > 0 && !handoffWaits) {
-					return; // the run delivers; settleSteers re-pumps the rest
-				}
 				if (handable.length > 0) {
-					await delay(POLL_MS);
-					await waitForIdle(chatId);
-					continue;
+					return; // the run delivers; settleSteers re-pumps the rest
 				}
 			}
 
@@ -491,13 +475,21 @@ async function pump(chatId: string): Promise<void> {
 			if (!fresh) {
 				continue; // the gone-chat branch rejects next iteration
 			}
+			// The registry is the truth after the wait too: an abort may have
+			// dropped entries (and queued its own note) while the gates were
+			// closed — fire what is queued NOW, never the pre-wait snapshot.
+			const queued = s.queues.get(chatId) ?? [];
+			if (queued.length === 0) {
+				s.queues.delete(chatId);
+				return;
+			}
 
 			// The runner is required — chat-handler sets it at init. If some
 			// module instance missed the wiring, fail loudly rather than hang.
 			if (!s.turnRunner) {
 				s.queues.delete(chatId);
 				const err = new Error("wake pipeline: no turn runner wired (setTurnRunner)");
-				for (const entry of stillPending) {
+				for (const entry of queued) {
 					failSteer(entry.steer, err);
 					entry.reject(err);
 				}
@@ -506,8 +498,8 @@ async function pump(chatId: string): Promise<void> {
 
 			// A live run may have delivered some markers while the gates were
 			// closed — re-check: only still-missing markers ride the wake.
-			const fire = stillPending.filter((e) => !steerDelivered(fresh.messages, e.steer.id));
-			for (const entry of stillPending) {
+			const fire = queued.filter((e) => !steerDelivered(fresh.messages, e.steer.id));
+			for (const entry of queued) {
 				if (!fire.includes(entry)) {
 					finalizeSteer(entry.steer);
 					entry.resolve();
@@ -658,7 +650,7 @@ export function recoverStaleJobs(): void {
 				if (isTurnRunning(job.chatId)) continue; // a wake turn may be delivering it right now
 				if (job.result) {
 					// The wake never fired (or crashed mid-flight): re-deliver.
-					const steer = buildSubagentSteer(job, job.result as never);
+					const steer = buildSubagentSteer(job, job.result as JobResult);
 					stores.jobStore.updateJob(job.id, { activity: "recovering: re-delivering" });
 					void deliverJobResult(steer).catch(() => {
 						/* deliverJobResult marks the job error on failure */

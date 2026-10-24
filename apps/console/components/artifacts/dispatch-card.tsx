@@ -15,21 +15,19 @@ import { BrailleSpinner } from "@/components/braille-spinner";
  *
  *   job unknown → "dispatched" pulse (the jobs feed hasn't seen it yet)
  *   running     → live activity card (activity line + elapsed)
- *   done/error  → quiet one-liner ("delivered" / "failed") — the artifact
+ *   done/error  → quiet one-liner ("delivered" / "failed") — the result
  *                 itself arrives in the steer message right below, so the
  *                 box must not duplicate it.
  */
-const KIND_LABEL: Record<JobKind, string> = {
-	research: "Research agent",
-	demo: "Demo agent",
-	visual: "Figure agent",
-	pdf: "PDF reader",
-};
+/** A job kind's display label — the kind itself, capitalized ("research" → "Research"). */
+function kindLabel(kind: JobKind): string {
+	return kind.length > 0 ? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}` : "Job";
+}
 
 export function DispatchCard({ toolCallId, kind }: { toolCallId: string; kind: JobKind }) {
 	const jobs = useContext(JobsContext);
 	const job = jobs.find((j) => j.toolCallId === toolCallId) ?? null;
-	const label = KIND_LABEL[kind];
+	const label = kindLabel(kind);
 
 	if (!job || job.status === "running") {
 		return <DispatchActivityCard job={job} label={label} />;

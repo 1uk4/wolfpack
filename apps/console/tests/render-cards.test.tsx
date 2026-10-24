@@ -17,7 +17,6 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { QuestionDock } from "../components/question-dock.tsx";
-import { ProbeDoneCard } from "../components/artifacts/probe-done-card.tsx";
 import { DispatchCard } from "../components/artifacts/dispatch-card.tsx";
 import { JobsContext } from "../components/jobs-context.ts";
 import { ChatActionsContext } from "../components/chat.tsx";
@@ -27,7 +26,6 @@ import {
 	buildAnswer,
 	normalizeOptions,
 	resolveCorrect,
-	questionNeedsReveal,
 	type QuestionData,
 } from "../src/core/question-core.ts";
 
@@ -65,7 +63,7 @@ function askQD(): QuestionData {
 }
 
 function renderDock(props: {
-	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall";
+	toolName: "quiz" | "ask_user_question" | "explain";
 	toolCallId: string;
 	input: never;
 	onSubmit?: () => void;
@@ -209,24 +207,6 @@ describe("render smoke tests", () => {
 		});
 		assert.ok(html.includes('data-testid="malformed-question"'));
 		assert.match(html, /malformed/);
-	});
-
-	it("phase scales the thinking field: teaching invites depth, probing stays quick", () => {
-		const teach = renderToStaticMarkup(
-			<QuestionDock
-				toolName="quiz"
-				toolCallId="t1"
-				input={quizInput as never}
-				expanded={true}
-				phase="teach"
-				onExpand={() => {}}
-				onSubmit={() => {}}
-			/>,
-		);
-		assert.ok(teach.includes("min-h-[4.5rem]"), "teach: a generous dump area");
-		const probe = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
-		assert.ok(!probe.includes("min-h-[4.5rem]"), "probe (default): stays compact");
-		assert.ok(probe.includes("min-h-10"), "probe: one quiet row");
 	});
 
 	it("text-mode asks keep Enter-to-submit and the answer label", () => {
@@ -399,114 +379,26 @@ describe("math rendering (streamdown + KaTeX)", () => {
 	});
 });
 
-describe("teach-check reveal (W5 phase separation)", () => {
-	// The collapsed dock renders the bar AND the hidden form (it stays mounted
-	// so a half-made selection survives) — assertions target the bar species.
-	it("teach-phase check collapses into the invitation bar, not the scroll bar", () => {
+describe("the collapsed question bar", () => {
+	it("a collapsed question renders the scroll bar with an Answer affordance", () => {
 		const html = renderToStaticMarkup(
-				<QuestionDock
-					toolName="quiz"
-					toolCallId="t1"
-					input={quizInput as never}
-					expanded={false}
-					reveal
-					onExpand={() => {}}
-					onSubmit={() => {}}
-				/>,
-		);
-		assert.ok(html.includes('data-testid="teach-check-reveal"'), "invitation affordance present");
-		assert.match(html, /Check your understanding/);
-		assert.match(html, /Which planet is closest/, "question teaser invites, not minimizes");
-		assert.match(html, /Open/, "a clear reveal action");
-	});
-
-	it("probe questions keep the plain collapsed bar (no invitation copy)", () => {
-		const html = renderToStaticMarkup(
-				<QuestionDock
-					toolName="quiz"
-					toolCallId="q1"
-					input={quizInput as never}
-					expanded={false}
-					onExpand={() => {}}
-					onSubmit={() => {}}
-				/>,
+			<QuestionDock
+				toolName="quiz"
+				toolCallId="q1"
+				input={quizInput as never}
+				expanded={false}
+				onExpand={() => {}}
+				onSubmit={() => {}}
+			/>,
 		);
 		assert.ok(html.includes('data-testid="question-dock-bar"'), "the scroll-collapse strip");
-		assert.ok(!html.includes("Check your understanding"), "no invitation copy outside teach phase");
 		assert.match(html, /Answer/, "the strip keeps its Answer affordance");
 	});
 
-	it("after the reveal, the teach check renders the full form (probe default, unchanged)", () => {
-		// Post-click: expanded=true — exactly today's dock. The probe auto-open
-		// path renders the identical form; this is also the regression pin for it.
+	it("an expanded question renders the full form", () => {
 		const html = renderDock({ toolName: "quiz", toolCallId: "t1", input: quizInput as never });
 		assert.ok(html.includes('data-testid="question-dock"'), "the form is the dock's content once expanded");
 		assert.match(html, /Submit answer/);
-	});
-});
-
-// ─── probe-done card (the malformed-assessment crash) ─────────────────────
-// The live bug: the model stringified `assessment` (a rejected input), and
-// the card's input-preview fallback trusted the shape — strands died. The
-// preview now reads only pending inputs; an errored part renders the quiet
-// retry note.
-describe("probe-done card", () => {
-	const validAssessment = {
-		strands: [
-			{ strand: "modal logic basics", assessment: "Floor: solid intuition; ceiling: notation." },
-			{ strand: "indexical 'actual'", assessment: "Genuine floor — prior exposure likely." },
-		],
-		summary: "Bracketed: teach the symbols on the intuition he has.",
-	};
-
-	it("renders the strand-by-strand assessment — the CALL is its home (context diet 2026-10-09)", () => {
-		const html = renderToStaticMarkup(
-			<ProbeDoneCard
-				part={{ state: "output-available", input: { assessment: validAssessment }, output: { ok: true } } as never}
-			/>,
-		);
-		assert.ok(html.includes('data-testid="probe-done-card"'));
-		assert.match(html, /modal logic basics/);
-		assert.match(html, /indexical &#x27;actual&#x27;|indexical 'actual'/);
-		assert.match(html, /Bracketed/);
-		// An ok output alone (the pre-diet echo shape) renders the quiet
-		// fallback, never strands: the assessment no longer rides the result.
-		const echoless = renderToStaticMarkup(
-			<ProbeDoneCard part={{ state: "output-available", output: { ok: true } } as never} />,
-		);
-		assert.match(echoless, /Writing the assessment…/);
-		assert.ok(!echoless.includes("modal logic basics"), "no assessment echo in the result");
-	});
-
-	it("previews the assessment from a PENDING (validated) input", () => {
-		const html = renderToStaticMarkup(
-			<ProbeDoneCard part={{ state: "input-available", input: { assessment: validAssessment } } as never} />,
-		);
-		assert.match(html, /modal logic basics/);
-	});
-
-	it("a REJECTED assessment (the stringified live shape) renders the retry note, never the garbage", () => {
-		// The exact live crash: assessment arrived as a string, zod rejected
-		// the call, the model retried — this dead part must not explode.
-		const html = renderToStaticMarkup(
-			<ProbeDoneCard
-				part={{
-					state: "output-error",
-					errorText: "Validation failed",
-					input: { assessment: "strands: [{\"strand\": ...stringified garbage" },
-				} as never}
-			/>,
-		);
-		assert.match(html, /malformed/);
-		assert.match(html, /retried/);
-		assert.ok(!html.includes("strands:"), "the rejected input never renders");
-	});
-
-	it("a mid-stream partial without strands renders the writing note, not a crash", () => {
-		const html = renderToStaticMarkup(
-			<ProbeDoneCard part={{ state: "input-streaming", input: { assessment: { summary: "…" } } } as never} />,
-		);
-		assert.match(html, /Writing the assessment/);
 	});
 });
 
@@ -541,55 +433,7 @@ describe("AnsweredCard: the explain variant", () => {
 
 });
 
-// ─── probe-phase naming (owner, 2026-10-09): the probe/recall rename —
-//     both surfaces carry the tool's OWN name ────────────────────────────
-
-describe("probe-phase naming: Probe/Recall labels", () => {
-	it("the dock labels a probe quiz as Probe (composer surface)", () => {
-		const html = renderDock({ toolName: "probe", toolCallId: "p1", input: quizInput as never });
-		assert.match(html, /Probe/, "the chip carries the tool's own name");
-		assert.ok(!html.includes(">Quiz<"), "not the teach label");
-		assert.match(html, /Which planet is closest to the sun\?/, "still a quiz-shaped card");
-	});
-
-	it("the dock labels a recall question as Recall", () => {
-		const html = renderDock({ toolName: "recall", toolCallId: "r1", input: { question: "Explain the chain rule.", correctAnswer: "Outer function times the derivative of the inner." } as never });
-		assert.match(html, /Recall/);
-		assert.ok(!html.includes(">Explain<"), "not the teach label");
-	});
-
-	it("an answered probe labels Probe — the phase boundary visible in the transcript", () => {
-		const qd: QuestionData = {
-			id: "p2",
-			kind: "quiz",
-			question: "Which planet is closest to the sun?",
-			mode: "single-select",
-			options: [{ label: "Mercury", value: "mercury" }, { label: "Venus", value: "venus" }],
-			correctIndices: [1],
-			committedAnswer: "Mercury — closest orbit.",
-			explanation: "Mercury, always Mercury.",
-			createdAt: new Date().toISOString(),
-		};
-		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(qd, { values: ["mercury"] }, "probe")} />);
-		assert.match(html, /Probe/);
-		assert.ok(!html.includes(">Quiz<"), "not the teach label");
-	});
-
-	it("an answered recall labels Recall", () => {
-		const recallQD: QuestionData = {
-			id: "r2",
-			kind: "explain",
-			question: "Explain why the null result matters.",
-			mode: "text",
-			options: [],
-			committedAnswer: "It ruled out the luminiferous aether.",
-			createdAt: new Date().toISOString(),
-		};
-		const html = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(recallQD, { text: "A hand-wave." }, "recall")} />);
-		assert.match(html, /Recall/);
-		assert.ok(!html.includes(">Explain<"), "not the teach label");
-	});
-
+describe("answered-card kind labels", () => {
 	it("old records (no tool) keep the kind labels", () => {
 		const oldQD: QuestionData = {
 			id: "o2",
@@ -661,28 +505,7 @@ describe("predict vs check rendering", () => {
 		assert.ok(!html.includes("Why:"), "no inline explanation — behind the toggle");
 	});
 
-	it("the reading-thinking channel is LIFTED above the card as its own user-side block", () => {
-		const withReading = buildAnswer(quizQD(), {
-			values: ["Mercury"],
-			thinking: "answering thought",
-			readingThinking: "was unsure mid-paragraph",
-		});
-		const html = renderToStaticMarkup(<AnsweredCard answer={withReading} />);
-		// The unified ThinkingBlock (owner round, 2026-10-05; round two
-		// 2026-10-07): the reading thoughts render BEFORE the card as the
-		// banded user-thinking row, arriving EXPANDED (clearly sent).
-		const blockAt = html.indexOf("reading-thinking-block");
-		const cardAt = html.indexOf("answered-card");
-		assert.ok(blockAt !== -1, "the lifted block renders");
-		assert.ok(blockAt < cardAt, "it sits ABOVE the answered card");
-		assert.ok(html.includes("YOUR THINKING"), "the plain label");
-		assert.ok(!html.includes("Your thinking while reading"), "the old verbose label is gone");
-		assert.ok(!html.includes("your-reading-thinking"), "the in-card inset is gone");
-		// EXPANDED ARRIVAL (owner round two, 2026-10-07): transcript rows
-		// render their text; the in-card answer thinking stays collapsed.
-		assert.ok(html.includes('data-testid="your-thinking-trigger"'), "the answer thinking stays inside the card");
-		assert.ok(html.includes("was unsure mid-paragraph"), "the lifted row arrives expanded");
-		assert.ok(!html.includes("answering thought"), "the in-card row stays collapsed");
+	it("legacy `note` records still render their thinking", () => {
 		const legacy = { ...buildAnswer(quizQD(), { values: ["Mercury"] }), note: "a 2026-09 answer" };
 		const legacyHtml = renderToStaticMarkup(<AnsweredCard answer={legacy} />);
 		assert.ok(legacyHtml.includes("a 2026-09 answer") || legacyHtml.includes('data-testid="your-thinking-trigger"'), "records from before the rename still render");

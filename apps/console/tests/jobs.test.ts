@@ -2,22 +2,12 @@
  * Job infrastructure tests — deterministic, zero network:
  *
  *   1. job store CRUD (create → get → update → list → dedup by toolCallId)
- *   2. steer helpers (pure, contracts.ts): buildSubagentSteer shape per kind,
+ *   2. steer helpers (pure, contracts.ts): buildSubagentSteer shape,
  *      isSubagentFailure, steerDelivered
- *   3. dispatch (async protocol §2): drive handleChatRequest with a scripted
- *      mock teacher that emits a research tool call → the tool part resolves
- *      IMMEDIATELY with the fire-and-forget ack (the teacher's turn
- *      CONTINUES — no turn break at the call), a job record exists, and the
- *      test runner (fake deliver) produces the steer
- *   4. runner completion: a fake researcher model (web_search call → final
- *      text brief, globalThis.fetch stubbed) → the job stores the result,
- *      the steer carries the brief + sources, the fake deliver flips the
- *      job done
- *   5. runner failure: a model that throws → the failure steer still fires
- *      (the teacher learns the outcome) and the job lands error
- *   6. the wake pipeline (src/server/jobs.ts): server-side steer delivery —
+ *   3. the wake pipeline (src/server/jobs.ts): server-side steer delivery —
  *      happy path (fires the injected turn runner, flips the job), pending-
  *      quiz deferral, 409 retry, idempotent redelivery
+ *   4. abort, crash recovery, composer steering
  *
  * Cleanup follows tests/chat-flow.test.ts: created chat/job files removed in
  * finally blocks / the after() hook.
@@ -34,18 +24,10 @@ import {
 	buildSubagentSteer,
 	isSubagentFailure,
 	steerDelivered,
-	type DemoResult,
+	type JobResult,
 	type JobUsage,
-	type PdfResult,
-	type ResearchResult,
-	type SubagentArtifactData,
 	type SteerMessage,
-	type VisualResult,
-	buildProbeHandoffSteer,
 } from "../src/core/contracts.ts";
-import { composeInstructions, createTeacherAgent } from "../src/agent/teacher-agent.ts";
-import { createTeacherTools } from "../src/agent/tools.ts";
-import { webTools } from "../src/agent/tools/web.ts";
 import { handleChatRequest } from "../src/server/chat-handler.ts";
 import { runningTurn } from "../src/server/turn-runs.ts";
 import {
@@ -66,10 +48,7 @@ import { beginTurn, endTurn } from "../src/server/turn-liveness.ts";
 import { persistTurn } from "../src/server/turn-service.ts";
 import { chatStore } from "../src/store/chats.ts";
 import { jobStore } from "../src/store/jobs.ts";
-import { createJobRunner, pdfModelOverride, researchModelOverride } from "../src/agent/subagents/runner.ts";
-import { providerKeyMissing, type ModelSlotName } from "../src/core/settings.ts";
 import type { PiEngine } from "../src/agent/models.ts";
-import type { SearchProvider } from "../src/core/search.ts";
 import { PATHS } from "../config.ts";
 import { projectView as projectNative } from "../src/core/view.ts";
 import { subscribe } from "../src/core/events.ts";
@@ -166,7 +145,6 @@ after(() => {
 			/* already gone */
 		}
 	}
-	researchModelOverride.current = undefined;
 });
 
 /** A scripted pi engine (faux provider): the response queue replaces the
@@ -311,25 +289,23 @@ describe("job store", () => {
 // ─── 2. steer helpers (pure) ─────────────────────────────────────────────────
 
 describe("steer helpers (contracts.ts)", () => {
-	const research: ResearchResult = { brief: "BRIEF", sources: [{ title: "s", url: "https://x.test" }] };
-	const demo: DemoResult = { title: "T", html: "<html></html>", tested: true, notes: "ok" };
-	const visual: VisualResult = { svg: "<svg/>", notes: "ok" };
+	const ok: JobResult = { brief: "BRIEF" };
 
-	it("buildSubagentSteer: a native marker — brief on the model-facing content, artifact payload in details", () => {
-		const job = { id: "job_x", kind: "research" as const, toolCallId: "call-x" };
-		const steer = buildSubagentSteer(job, research);
+	it("buildSubagentSteer: a native marker — brief on the model-facing content, result payload in details", () => {
+		const job = { id: "job_x", kind: "build", toolCallId: "call-x" };
+		const steer = buildSubagentSteer(job, ok);
 		assert.equal(steer.id, "steer_job_x", "deterministic id per job — idempotent delivery");
-		// Wave B: steers are LhMarkerMessage customs — role "custom", the
-		// model reads `content`, the UI reads `details` (never model-visible).
+		// Steers are LhMarkerMessage customs — role "custom", the model
+		// reads `content`, the UI reads `details` (never model-visible).
 		assert.equal(steer.role, "custom");
 		assert.equal(steer.customType, "subagent-steer");
 		assert.equal(steer.display, true);
 		assert.ok(steer.content.includes("BRIEF"), "the model-facing text carries the brief");
-		const data = steer.details as { jobId: string; kind: string; toolCallId: string; result: ResearchResult };
+		const data = steer.details as { jobId: string; kind: string; toolCallId: string; result: JobResult };
 		assert.equal(data.jobId, "job_x");
-		assert.equal(data.kind, "research");
+		assert.equal(data.kind, "build");
 		assert.equal(data.toolCallId, "call-x");
-		assert.deepEqual(data.result, research);
+		assert.deepEqual(data.result, ok);
 	});
 
 	it("accumulateJobUsage: sums per model call; fields NO call reported stay undefined (absent is not zero)", () => {
@@ -373,66 +349,34 @@ describe("steer helpers (contracts.ts)", () => {
 		}, "lastStep always mirrors the LATEST call, never the sums");
 	});
 
-	it("buildAbortSteer: a subagent-abort marker — teacher-facing text on content, the abort payload in details", () => {
-		const steer = buildAbortSteer({ id: "job_c", kind: "demo", toolCallId: "call-c" });
+	it("buildAbortSteer: a subagent-abort marker — agent-facing text on content, the abort payload in details", () => {
+		const steer = buildAbortSteer({ id: "job_c", kind: "build", toolCallId: "call-c" });
 		assert.equal(steer.id, "steer_job_c", "same id space — steerDelivered treats either as delivered");
 		assert.equal(steer.role, "custom");
 		assert.equal(steer.customType, "subagent-abort");
-		assert.ok(/aborted/.test(steer.content), "the teacher-facing text names the abort");
-		// The marker's customType is the message type: the UI renders the
-		// abort badge off the projection (demos.test.tsx pins the card).
-		assert.deepEqual(steer.details, { jobId: "job_c", kind: "demo", toolCallId: "call-c", aborted: true });
+		assert.ok(/aborted/.test(steer.content), "the agent-facing text names the abort");
+		assert.ok(steer.content.includes("build"), "…and the job kind");
+		assert.deepEqual(steer.details, { jobId: "job_c", kind: "build", toolCallId: "call-c", aborted: true });
 	});
 
-	it("isSubagentFailure: failure shapes only (empty html/svg, failure brief)", () => {
-		assert.equal(isSubagentFailure("research", research), false);
-		assert.equal(isSubagentFailure("research", { brief: "Research failed: x", sources: [] }), true);
-		// a brief with sources is a success even if the text mentions failure
-		assert.equal(isSubagentFailure("research", { brief: "Research failed: x", sources: [{ title: "s", url: "https://x" }] }), false);
-		assert.equal(isSubagentFailure("demo", demo), false);
-		assert.equal(isSubagentFailure("demo", { ...demo, html: "" }), true);
-		assert.equal(isSubagentFailure("visual", visual), false);
-		assert.equal(isSubagentFailure("visual", { ...visual, svg: "" }), true);
+	it("isSubagentFailure: the failure shape only", () => {
+		assert.equal(isSubagentFailure("build", ok), false);
+		assert.equal(isSubagentFailure("build", { brief: "boom", failed: true }), true);
 	});
 
 	it("steerDelivered: matches on the deterministic steer id (any steer kind)", () => {
-		const steer = buildSubagentSteer({ id: "job_y", kind: "demo", toolCallId: "c" }, demo);
+		const steer = buildSubagentSteer({ id: "job_y", kind: "build", toolCallId: "c" }, ok);
 		assert.equal(steer.id, "steer_job_y");
 		assert.equal(steerDelivered([], steer.id), false);
 		assert.equal(steerDelivered([steer], steer.id), true);
 		assert.equal(steerDelivered([steer], "steer_job_z"), false);
-		// the probe handoff shares the id-space contract
-		const handoff = buildProbeHandoffSteer("chat_q");
-		assert.equal(handoff.id, "steer_probe_chat_q");
-		assert.equal(steerDelivered([handoff], handoff.id), true);
-		assert.equal(steerDelivered([steer], handoff.id), false);
 	});
 
-	it("failure steers tell the teacher how to recover (research/demo/visual wording)", () => {
-		const failResearch = buildSubagentSteer({ id: "j1", kind: "research", toolCallId: "c" }, { brief: "Research failed: API down", sources: [] });
-		const failDemo = buildSubagentSteer({ id: "j2", kind: "demo", toolCallId: "c" }, { title: "T", html: "", tested: true, notes: "FAILED: boom" });
-		const failVisual = buildSubagentSteer({ id: "j3", kind: "visual", toolCallId: "c" }, { svg: "", notes: "FAILED: boom" });
-		for (const steer of [failResearch, failDemo, failVisual]) {
-			assert.ok(!steer.content.includes("rendered in the lesson"), "failure text never claims the artifact landed");
-		}
-		assert.ok(failResearch.content.includes("flag the uncertainty"));
-	});
-
-	it("pdf steers (sources v0): brief + page citations on success, PDF failed: shape on failure, abort wording per kind", () => {
-		const pdf: PdfResult = { path: "/tmp/doc.pdf", question: "q?", brief: "The formula is on p. 2.", pagesRead: [2], pagesConsulted: [1, 2] };
-		const ok = buildSubagentSteer({ id: "jp", kind: "pdf", toolCallId: "cp" }, pdf);
-		assert.ok(ok.content.includes("page citations"), "the teacher is told to cite pages");
-		assert.ok(ok.content.includes("The formula is on p. 2."));
-		assert.equal((ok.details as { kind: string }).kind, "pdf");
-		assert.deepEqual((ok.details as { result: unknown }).result, pdf);
-		// failure shape mirrors research
-		assert.equal(isSubagentFailure("pdf", pdf), false);
-		assert.equal(isSubagentFailure("pdf", { ...pdf, brief: "PDF failed: unreadable" }), true);
-		const fail = buildSubagentSteer({ id: "jf", kind: "pdf", toolCallId: "cf" }, { ...pdf, brief: "PDF failed: unreadable" });
+	it("failure steers tell the agent how to recover", () => {
+		const fail = buildSubagentSteer({ id: "j1", kind: "build", toolCallId: "c" }, { brief: "API down", failed: true });
+		assert.ok(fail.content.includes("failed"));
 		assert.ok(fail.content.includes("flag the gap"));
-		// abort wording names the PDF job
-		const aborted = buildAbortSteer({ id: "ja", kind: "pdf", toolCallId: "ca" });
-		assert.ok(aborted.content.includes("PDF reading job"));
+		assert.ok(!ok.brief.includes("failed"));
 	});
 });
 
@@ -459,312 +403,6 @@ function fakeDeliver() {
 	};
 }
 
-// ─── 3. dispatch: the tool call acks mid-turn and spawns ─────────────────────
-
-const RESEARCH_INPUT = {
-	question: "What is the latest stable sigma.js version?",
-	context: "Choosing a graph rendering library for the lesson.",
-};
-
-/** A teacher that calls research (text → call), then plain text thereafter. */
-function researchCallingTeacher(): PiEngine {
-	return fauxEngine([
-		fauxAssistantMessage(
-			[fauxText("Let me check the current state of the library."), fauxToolCall("research", RESEARCH_INPUT, { id: "call-r1" })],
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage([fauxText("Back with the brief.")]),
-	]);
-}
-
-describe("dispatch (async protocol §2)", () => {
-	it("the research call resolves immediately with an ack; the turn continues and the runner steers", async () => {
-		const chat = chatStore.createChat("Test: research dispatch");
-		trackChat(chat.id);
-		// BYOK turn gate (owner, 2026-09-22): the scripted chat needs a
-		// conversation model — the per-chat pin, exactly like the setup flow.
-		chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
-
-		const delivery = fakeDeliver();
-		const search = stubSearch();
-		const testRunner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => search });
-		const engine = researchCallingTeacher();
-		const tools = createTeacherTools({
-			chatId: chat.id,
-			chatStore,
-			jobStore,
-			spawn: (job, input) => void testRunner.runJob(job.id, input),
-		});
-		// The handler hands the factory the native build options — the
-		// record IS the agent state (Wave B: no adapter conversion).
-		const agent: Parameters<typeof handleChatRequest>[1] = (opts) =>
-			createTeacherAgent(undefined, { engine, tools, messages: opts.messages });
-
-		researchModelOverride.current = researcherModel();
-		const body = await drainTurn(post(chat.id, { type: "text", text: "teach me graph rendering" }), agent);
-
-		// The teacher's SAME turn carried on past the tool call.
-		assert.ok(body.includes("Back with the brief."), "the turn continued after the dispatch");
-
-		const saved = projectNative(chatStore.getChat(chat.id)!.messages);
-		const part = saved[1]!.parts.find((p) => p.type === "tool-research");
-		assert.ok(part && part.type === "tool-research", "research tool part persisted");
-		assert.equal(part.state, "output-available", "the part resolved at dispatch time (not held pending)");
-		assert.equal(typeof (part as { output?: unknown }).output, "string", "the output is the ack, not the result");
-		assert.match(String((part as { output?: unknown }).output), /fire-and-forget/);
-
-		// The job record exists and the background runner completed it.
-		const job = jobStore.findJobByToolCallId(chat.id, "call-r1");
-		assert.ok(job, "dispatch created a job record");
-		trackJob(job!.id);
-		await waitFor(() => jobStore.getJob(job!.id)!.status !== "running", 8000, "research job completion");
-
-		const done = jobStore.getJob(job!.id)!;
-		assert.equal(done.status, "done");
-		assert.equal(done.activity, "delivered");
-
-		// The steer carries the brief on its model-facing content; the
-		// artifact payload rides details for the (UI) renderer.
-		assert.equal(delivery.steers.length, 1, "exactly one steer — one job, one result");
-		const steer = delivery.steers[0]!;
-		assert.equal((steer.details as { jobId: string }).jobId, job!.id);
-		assert.ok(steer.content.includes("sigma.js v3 is current"), "steer text carries the brief");
-
-		// Search threading (2026-09-20): the researcher's web_search ran on
-		// the INJECTED port — the stub saw the scripted query, no network.
-		assert.deepEqual(search.queries, ["sigma.js latest version (5)"]);
-		researchModelOverride.current = undefined;
-	});
-});
-
-// ─── the researcher loop with a fake model + stubbed fetch ──────────────────
-
-const BRIEF = `## Summary
-sigma.js v3 is current.
-
-## Findings
-1. **v3 is the latest major.** [sigma.js docs](https://www.sigmajs.org/docs)
-
-## Sources
-- sigma.js docs (https://www.sigmajs.org/docs)`;
-
-/** The researcher loop's scripted engine. Turn 1: a web_search tool call;
- *  turn 2: the final text brief. */
-function researcherModel(): PiEngine {
-	return fauxEngine([
-		fauxAssistantMessage([fauxToolCall("web_search", { query: "sigma.js latest version" }, { id: "ws1" })], {
-			stopReason: "toolUse",
-		}),
-		fauxAssistantMessage([fauxText(BRIEF)]),
-	]);
-}
-
-/** A recording stub provider (search port wave, 2026-09-20): the runner's
- *  injected search seam — no network, queries captured for assertions. */
-function stubSearch(): SearchProvider & { queries: string[] } {
-	const queries: string[] = [];
-	return {
-		id: "tavily",
-		async search(query: string, count: number) {
-			queries.push(`${query} (${count})`);
-			return [{ title: "sigma.js", url: "https://www.sigmajs.org/", snippet: "v3 released" }];
-		},
-		queries,
-	};
-}
-
-describe("research runner (async protocol §3)", () => {
-	it("runJob completes the job: result + sources on the job, brief on the steer, activity recorded", async () => {
-		const chat = chatStore.createChat("Test: runner completion");
-		trackChat(chat.id);
-
-		// A dispatched research part in the stored chat (the input is also
-		// what the runner falls back to on a crash-recovery re-spawn).
-		chatStore.saveMessages(chat.id, nativeToolMessages("which sigma version?", "research", "call-run1", RESEARCH_INPUT));
-
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-run1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		const search = stubSearch();
-		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver, searchProvider: () => search });
-		researchModelOverride.current = researcherModel();
-		try {
-			await runner.runJob(job.id);
-		} finally {
-			researchModelOverride.current = undefined;
-		}
-
-		// The job is done, with the activity line from the tool call.
-		const done = jobStore.getJob(job.id)!;
-		assert.equal(done.status, "done");
-		assert.equal(done.activity, "delivered", "the fake deliver flips the status like the pipeline");
-		const result = done.result as ResearchResult;
-		assert.equal(result.brief, BRIEF);
-		assert.ok(result.sources.length > 0, "sources parsed from the brief");
-		assert.equal(result.sources[0]!.url, "https://www.sigmajs.org/docs");
-
-				// The activity trail: the last recorded activity is the deliver
-		// flip; the search line fired before it. The search itself ran on
-		// the INJECTED port — the stub saw the query (no network):
-		assert.deepEqual(search.queries, ["sigma.js latest version (5)"]);
-	});
-
-	it("a failing runner still steers (the teacher learns the outcome) and the job lands error", async () => {
-		const chat = chatStore.createChat("Test: runner failure");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-err1", RESEARCH_INPUT));
-
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-err1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		researchModelOverride.current = fauxEngine([
-			() => {
-				throw new Error("model exploded");
-			},
-		]);
-		try {
-			await runner.runJob(job.id);
-		} finally {
-			researchModelOverride.current = undefined;
-		}
-
-		const errored = jobStore.getJob(job.id)!;
-		assert.equal(errored.status, "error");
-		assert.match(errored.error ?? "", /model exploded/);
-
-		const steer = delivery.steers[0]!;
-		assert.ok(steer, "failure still delivers a steer");
-		assert.ok(steer.content.includes("Research failed: model exploded"), "failure brief on the steer text");
-		assert.deepEqual(((steer.details as { result: ResearchResult }).result).sources, []);
-	});
-
-	it("runJob resolves the input from the transcript when dispatch-time input is absent (crash recovery)", async () => {
-		const chat = chatStore.createChat("Test: transcript input fallback");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("go", "research", "call-fb1", RESEARCH_INPUT));
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-fb1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		const runner = createJobRunner({
-			chatStore,
-			jobStore,
-			deliver: delivery.deliver,
-			searchProvider: () => stubSearch(),
-		});
-		researchModelOverride.current = researcherModel();
-		try {
-			// no input passed — as a recovery re-spawn would call it
-			await runner.runJob(job.id);
-		} finally {
-			researchModelOverride.current = undefined;
-		}
-
-		const done = jobStore.getJob(job.id)!;
-		assert.equal(done.status, "done", "the researcher ran from the transcript-resolved input");
-		assert.equal((done.result as ResearchResult).brief, BRIEF);
-	});
-});
-
-// ─── the researcher agent construction (model resolution seam) ──────────────
-
-
-describe("pdf runner (sources v0)", () => {
-	const PDF_FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
-	const PDF_INPUT = { path: PDF_FIXTURE, question: "What is the integral of x dx?" };
-
-	/** A pdf-reader that triages, extracts pages 1-2, then briefs. */
-	function pdfReaderModel(): PiEngine {
-		return fauxEngine([
-			fauxAssistantMessage([fauxToolCall("pdf_info", {}, { id: "i1" })], { stopReason: "toolUse" }),
-			fauxAssistantMessage([fauxToolCall("pdf_extract", { pages: "1-2" }, { id: "e1" })], { stopReason: "toolUse" }),
-			fauxAssistantMessage([fauxText("The integral rule appears on page 1 (p. 1): x dx integrates to x^2/2.")]),
-		]);
-	}
-
-	it("runJob completes a pdf job: brief + pagesConsulted land on the record, citation steer delivered", async () => {
-		const chat = chatStore.createChat("Test: pdf runner");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("read this pdf", "pdf", "call-pdf1", PDF_INPUT));
-
-		const job = jobStore.createJob({ kind: "pdf", chatId: chat.id, toolCallId: "call-pdf1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		pdfModelOverride.current = pdfReaderModel();
-		try {
-			await runner.runJob(job.id);
-		} finally {
-			pdfModelOverride.current = undefined;
-		}
-
-		const done = jobStore.getJob(job.id)!;
-		assert.equal(done.status, "done");
-		assert.equal(done.activity, "delivered");
-		const result = done.result as PdfResult;
-		assert.equal(result.path, PDF_FIXTURE);
-		assert.match(result.brief, /integral rule/);
-		assert.deepEqual(result.pagesRead, [1, 2], "extracted pages are READ pages");
-		assert.deepEqual(result.pagesConsulted, [1, 2]);
-
-		assert.equal(delivery.steers.length, 1, "one job, one steer");
-		const steer = delivery.steers[0]!;
-		assert.equal((steer.details as { kind: string }).kind, "pdf");
-		assert.ok(steer.content.includes("integral rule"), "steer text carries the brief");
-	});
-
-	it("an unreadable source: the job lands error with the PDF failed: brief and the steer flags the gap", async () => {
-		const chat = chatStore.createChat("Test: pdf runner failure");
-		trackChat(chat.id);
-		const badPath = path.join(import.meta.dirname, "fixtures", "not-a-pdf.txt");
-		const job = jobStore.createJob({ kind: "pdf", chatId: chat.id, toolCallId: "call-pdf2" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		pdfModelOverride.current = pdfReaderModel();
-		try {
-			await runner.runJob(job.id, { path: badPath, question: "anything" });
-		} finally {
-			pdfModelOverride.current = undefined;
-		}
-
-		const done = jobStore.getJob(job.id)!;
-		assert.equal(done.status, "error", "the failure brief is a subagent failure");
-		const result = done.result as PdfResult;
-		assert.match(result.brief, /^PDF failed:/);
-		assert.deepEqual(result.pagesRead, []);
-		assert.deepEqual(result.pagesConsulted, []);
-
-		const steer = delivery.steers[0]!;
-		assert.ok(steer.content.includes("flag the gap"), "the teacher learns to flag the gap");
-	});
-});
-
-describe("researcher agent", () => {
-	it("runs with the web tool set (no network touched)", () => {
-		// The researcher is a runSubagent call over the webTools registry —
-		// the tool set is what the loop sees.
-		assert.ok(webTools.web_search, "web_search available");
-		assert.ok(webTools.web_fetch, "web_fetch available");
-		assert.equal(Object.keys(webTools).length, 2, "ONLY the web tools — no question/plan tools");
-		// reset any accidental global override
-		researchModelOverride.current = undefined;
-	});
-
-	it("the pdf-reader declares exactly the four skill tools (sources v0)", async () => {
-		const { createPdfTools } = await import("../src/agent/subagents/pdf-reader.ts");
-		const tools = createPdfTools(path.join(import.meta.dirname, "fixtures", "sample-3page.pdf"));
-		assert.deepEqual(Object.keys(tools).sort(), ["pdf_extract", "pdf_info", "pdf_render", "pdf_search"]);
-		// reset any accidental global override
-		pdfModelOverride.current = undefined;
-	});
-});
-
 // ─── 6. the wake pipeline (server-side steer delivery) ────────────────────────
 
 /**
@@ -777,56 +415,18 @@ describe("researcher agent", () => {
  */
 describe("wake pipeline (src/server/jobs.ts)", () => {
 	/** A chat with a finished job ready for delivery. */
-	function setup(kind: "research" | "demo" = "research"): { chatId: string; jobId: string; steer: SteerMessage } {
+	function setup(kind = "build"): { chatId: string; jobId: string; steer: SteerMessage } {
 		const chat = chatStore.createChat("Test: wake pipeline");
 		trackChat(chat.id);
 		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
 
 		const job = jobStore.createJob({ kind, chatId: chat.id, toolCallId: `call-${jobStore.listJobs(chat.id).length}` });
 		trackJob(job.id);
-		const result: ResearchResult = { brief: "Done: it works.", sources: [{ title: "s", url: "https://x.test" }] };
+		const result: JobResult = { brief: "Done: it works." };
 		jobStore.updateJob(job.id, { result, activity: "delivering result" });
 		const steer = buildSubagentSteer(job, result);
 		return { chatId: chat.id, jobId: job.id, steer };
 	}
-
-	it("delivers a PROBE HANDOFF steer the same way — the teacher's wake turn", async () => {
-		const chat = chatStore.createChat("Test: probe handoff wake");
-		trackChat(chat.id);
-		// The concluded probe: a persisted probe_done call + result (the
-		// native seam the chat-handler's construction branch keys on) and no
-		// open question.
-		chatStore.saveMessages(chat.id, nativeToolMessages("teach me calc", "probe_done", "call-pd", { ok: true }));
-		const handoff = buildProbeHandoffSteer(chat.id);
-		let seen: { chatId: string; steers: SteerMessage[] } | undefined;
-		setTurnRunner(async (cid, input) => {
-			seen = { chatId: cid, steers: (input as SteerInput).steers as SteerMessage[] };
-			return 200;
-		});
-
-		await deliverJobResult(handoff);
-		await waitFor(() => seen !== undefined, 8000, "handoff wake fired");
-		const firedHandoff = seen!;
-		assert.equal(firedHandoff.chatId, chat.id);
-		assert.equal(firedHandoff.steers.length, 1);
-		assert.equal(firedHandoff.steers[0]!.id, `steer_probe_${chat.id}`, "the handoff IS the wake turn's input");
-	});
-
-	it("a redelivered handoff dedupes via the transcript (idempotent by steer id)", async () => {
-		const chat = chatStore.createChat("Test: handoff idempotent");
-		trackChat(chat.id);
-		const handoff = buildProbeHandoffSteer(chat.id);
-		// The transcript already carries the steer (a previous wake completed).
-		chatStore.saveMessages(chat.id, [handoff as never]);
-		let fired = 0;
-		setTurnRunner(async () => {
-			fired++;
-			return 200;
-		});
-
-		await deliverJobResult(handoff);
-		assert.equal(fired, 0, "already delivered — the pump resolves without firing a wake");
-	});
 
 	it("delivers: fires the turn runner with the record + steer, then flips the job done", async () => {
 		const { chatId, jobId, steer } = setup();
@@ -1051,35 +651,6 @@ describe("Wave C: live steering handoff + settlement reconciliation", () => {
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
 	});
 
-	it("a probe-handoff NEVER rides a live run — it waits the turn out and wakes", async () => {
-		const chat = chatStore.createChat("Test: handoff never live");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("teach me calc", "probe_done", "call-pd", { ok: true }));
-		const handoff = buildProbeHandoffSteer(chat.id);
-		const { handed, agent } = fakeAgent();
-		const fired: SteerMessage[][] = [];
-		setTurnRunner(async (_cid, input) => {
-			fired.push((input as SteerInput).steers as SteerMessage[]);
-			return 200;
-		});
-
-		assert.ok(beginTurn(chat.id));
-		registerLiveAgent(chat.id, agent as never);
-
-		const delivery = deliverJobResult(handoff);
-		await delay(1200);
-		assert.equal(handed.length, 0, "the handoff was NOT handed to the live agent");
-		assert.equal(fired.length, 0, "no wake while the prober's turn streams");
-
-		// The prober's turn settles — now the handoff wakes the TEACHER.
-		unregisterLiveAgent(chat.id);
-		settleSteers(chat.id, []);
-		endTurn(chat.id);
-		await delivery;
-		assert.equal(fired.length, 1);
-		assert.equal(fired[0]![0]!.id, handoff.id, "the handoff rode the wake");
-	});
-
 	it("registerLiveAgent immediately steers pending markers into the NEW run (the parked-behind-quiz path)", async () => {
 		const { chatId, jobId, steer } = setup();
 		const { handed, agent } = fakeAgent();
@@ -1138,16 +709,15 @@ describe("Wave C: live steering handoff + settlement reconciliation", () => {
 		assert.equal(jobStore.getJob(jobId)!.status, "done", "flipped at the seam, no turn settled");
 		noteSteerVisible(steer); // the settle-path flip re-runs — no-op
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
-		// A probe-handoff (no jobId) is a harmless no-op.
-		const handoff = buildProbeHandoffSteer(chatId);
-		noteSteerVisible(handoff);
+		// A marker with no jobId is a harmless no-op.
+		noteSteerVisible({ id: "steer_probe_none", role: "custom", customType: "compaction", content: "", display: true, details: { chatId }, timestamp: 1 } as never);
 	});
 
 	it("the idle wake carries EVERY pending marker in ONE turn", async () => {
 		const { chatId, steer } = setup();
 		const job2 = jobStore.createJob({ kind: "research", chatId, toolCallId: "call-2" });
 		trackJob(job2.id);
-		const result: ResearchResult = { brief: "Second result.", sources: [] };
+		const result: JobResult = { brief: "Second result." };
 		jobStore.updateJob(job2.id, { result });
 		const steer2 = buildSubagentSteer(job2, result);
 
@@ -1287,192 +857,37 @@ describe("persistTurn (native history, Wave B)", () => {
 	});
 });
 
-// ─── prompt composition hygiene (the README leak) ─────────────────────────────
-
-describe("prompt composition", () => {
-	it("loads ONLY numeric-prefix fragments — README.md never enters the system prompt", () => {
-		const instructions = composeInstructions("teacher");
-		assert.ok(!instructions.includes("Prompt fragments"), "README content must not leak");
-		assert.ok(!instructions.includes("Rules for adding a fragment"), "README content must not leak (rules)");
-		// every numeric fragment DOES compose, verbatim, after the base prompt
-		const base = fs.readFileSync("src/agent/system-prompt.md", "utf-8").trim();
-		assert.ok(instructions.startsWith(base), "base prompt first");
-		for (const f of fs.readdirSync("src/agent/prompts").filter((f) => /^\d+-[\w.-]+\.md$/.test(f)).sort()) {
-			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
-			assert.ok(instructions.includes(body), `fragment ${f} must compose verbatim`);
-		}
-	});
-
-	it("the question principles compose into the teacher prompt; the probe's quick-measurement revision landed", () => {
-		const teacher = composeInstructions("teacher");
-		// the T2a doctrine fragment (user-locked wording 2026-09-15): verbatim presence
-		for (const pin of [
-			"Answerable by reasoning from the session",
-			"Never just reciting your words back",
-			"Prefer problems that apply the knowledge",
-			"Catch confusion early, and make it nameable",
-		]) {
-			assert.ok(teacher.includes(pin), `teacher prompt lost the principle: ${pin}`);
-		}
-		// it loads in sorted fragment order: right after 20-teaching, before 30-jobs
-		assert.ok(
-			teacher.indexOf("Question principles") > teacher.indexOf("# Teach — one step at a time"),
-			"principles sit after the teaching loop",
-		);
-		// the prober's doctrine: the "no rush" framing is gone, quick measurement in
-		const prober = composeInstructions("prober");
-		assert.ok(!prober.includes("There is no rush"), "the old no-rush framing is retired");
-		assert.ok(
-			prober.includes("every wasted question is resolution the final map doesn't get"),
-			"the efficiency-is-resolution directive is in",
-		);
-		assert.ok(!prober.includes("Question principles"), "the teach-phase fragment never composes into the prober");
-	});
-
-	it("the predict-check cycle composes into the teacher; the craft chunk reaches BOTH agents (owner 2026-10-03)", () => {
-		const teacher = composeInstructions("teacher");
-		// the cycle doctrine (28-predictions.md) — teacher-only
-		assert.ok(teacher.includes("predict → teach → check"), "the cycle line is in");
-		assert.ok(teacher.includes('The prediction (`type: "predict"`)'), "the prediction role section is in");
-		assert.ok(teacher.includes("Skip the prediction"), "the skip rule is in");
-		assert.ok(teacher.includes('The check (`type: "check"`)'), "the check role section is in");
-		// the craft + thinking channels (shared/20-question-tools.md) — BOTH agents
-		const prober = composeInstructions("prober");
-		for (const [name, prompt] of [
-			["teacher", teacher],
-			["prober", prober],
-		] as const) {
-			assert.ok(prompt.includes("asymmetry"), `${name} carries the option craft (moved out of tool descriptions)`);
-			assert.ok(prompt.includes("TRANSCRIBED SPEECH"), `${name} reads dictated thinking leniently`);
-			assert.ok(prompt.includes("thinkingWhileReading"), `${name} knows the reading channel`);
-		}
-		// the cycle is teach-phase doctrine — it never composes into the prober
-		assert.ok(!prober.includes("predict → teach → check"), "the teaching cycle stays out of the prober");
-	});
-
-	it("the sources-v0 prompt lines compose: read/pdf doctrine in the teacher, the read line in the prober", () => {
-		const teacher = composeInstructions("teacher");
-		assert.ok(teacher.includes("Learner source files"), "the teacher carries the source-files section");
-		assert.ok(teacher.includes("brief with page citations"), "the pdf brief's citation duty is stated");
-		const prober = composeInstructions("prober");
-		assert.ok(prober.includes("the `read` tool can inspect it directly"), "the prober knows it can read learner files");
-	});
-
-	it("the sources-v1 shared fragment composes into BOTH agents (find/ls/grep doctrine)", () => {
-		for (const kind of ["teacher", "prober"] as const) {
-			const instructions = composeInstructions(kind);
-			assert.ok(instructions.includes("## Learner files"), `${kind} carries the shared learner-files fragment`);
-			assert.ok(instructions.includes("find it yourself with `find`"), `${kind} knows to locate files itself`);
-			assert.ok(instructions.includes("home directory"), `${kind} knows the home-anchored path rule`);
-		}
-		// the agent's OWN fragments compose before the shared appendix
-		// (the reorder's order rule, 2026-09-27: job and method lead)
-		const teacher = composeInstructions("teacher");
-		assert.ok(
-			teacher.indexOf("## Learner source files") < teacher.indexOf("## Learner files"),
-			"the teacher's own 40-jobs section precedes the shared learner-files fragment",
-		);
-	});
-
-	it("guards prompt size — no fragment can silently balloon (the README-leak class)", () => {
-		// The wave-1 leak: README.md (815 bytes / ~200 tokens) rode into every
-		// teacher turn until the numeric-prefix filter stopped it. This guard
-		// catches the sibling failure mode — an accidental dump pasted into a
-		// fragment. Thresholds: largest real fragment is 40-demos.md at ~3.2k
-		// chars; 8k is generous headroom. Composed total ≤ 60k chars.
-		for (const f of fs.readdirSync("src/agent/prompts").filter((f) => /^\d+-[\w.-]+\.md$/.test(f))) {
-			const body = fs.readFileSync(`src/agent/prompts/${f}`, "utf-8").trim();
-			assert.ok(body.length <= 8_000, `fragment ${f} is ${body.length} chars — over the 8k guard`);
-		}
-		assert.ok(composeInstructions("teacher").length <= 60_000, "composed system prompt over the 60k guard");
-	});
-});
-
 // ─── abort (2026-09 semantics: real kill, cancelled status, teacher told) ───
 
 describe("abort (src/server/jobs.ts abortJob)", () => {
-	/** A hanging model whose call never resolves until its abort signal
-	 *  fires — the real-kill path: the in-flight call itself is killed. */
-	function hangingModel(): PiEngine {
-		return fauxEngine([abortableFactory()]);
-	}
-
-	/** One step (billed) then a hang — proves usage-so-far survives the kill. */
-	function oneStepThenHangModel(): PiEngine {
-		return fauxEngine([
-			fauxAssistantMessage([fauxToolCall("web_search", { query: "anything" }, { id: "ws1" })], {
-				stopReason: "toolUse",
-			}),
-			abortableFactory(),
-		]);
-	}
-
-	function newChatWithResearchJob(label: string, toolCallId: string): { chatId: string; jobId: string } {
+	function newChatWithJob(label: string, toolCallId: string): { chatId: string; jobId: string } {
 		const chat = chatStore.createChat(`Test: ${label}`);
 		trackChat(chat.id);
-		// Native fixture — the record is agent history (Wave B).
-		chatStore.saveMessages(chat.id, [
-			{ id: "u1", role: "user", content: "hi", timestamp: 1 } as never,
-			{
-				id: "a1",
-				role: "assistant",
-				content: [
-					{ type: "text", text: "Checking." },
-					{ type: "toolCall", id: toolCallId, name: "research", arguments: RESEARCH_INPUT as never },
-				],
-				api: "openai-completions",
-				provider: "openrouter",
-				model: "test",
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				stopReason: "toolUse",
-				timestamp: 1,
-			} as never,
-			{
-				id: "r1",
-				role: "toolResult",
-				toolCallId,
-				toolName: "research",
-				content: [{ type: "text", text: "Dispatched." }],
-				details: "Dispatched.",
-				isError: false,
-				timestamp: 1,
-			} as never,
-		]);
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId });
+		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "build", toolCallId, { what: "x" }));
+		const job = jobStore.createJob({ kind: "build", chatId: chat.id, toolCallId });
 		trackJob(job.id);
 		return { chatId: chat.id, jobId: job.id };
 	}
 
-	it("kills the running loop: error \"Aborted by learner\" immediately, loop unwinds silently, teacher gets the abort steer", async () => {
-		const { jobId } = newChatWithResearchJob("abort running job", "call-abort1");
+	it("kills the running loop: error \"Aborted by learner\" immediately, the loop's signal fires, the agent gets the abort steer", async () => {
+		const { jobId } = newChatWithJob("abort running job", "call-abort1");
 		const fired: SteerMessage[] = [];
 		setTurnRunner(async (_cid, input) => {
 			fired.push(...((input as SteerInput).steers as SteerMessage[]));
 			return 200;
 		});
-		researchModelOverride.current = hangingModel();
-		const runner = createJobRunner({
-			chatStore,
-			jobStore,
-			deliver: async () => {
-				throw new Error("a cancelled job must never deliver a result steer");
-			},
-		});
+		// A live loop registers its AbortController (what a job runner does).
+		const controller = new AbortController();
+		registerJobAbort(jobId, controller);
 		try {
-			const settled = runner.runJob(jobId, RESEARCH_INPUT);
-			await waitFor(() => jobStore.getJob(jobId)!.activity === "researching", 8000, "loop started");
-
 			const outcome = abortJob(jobId);
 			assert.ok(outcome.ok);
+			assert.equal(controller.signal.aborted, true, "the real kill: the loop's signal fired");
 			const killed = jobStore.getJob(jobId)!;
 			assert.equal(killed.status, "error", "flipped synchronously — the poll sees it at once");
 			assert.equal(killed.error, "Aborted by learner", "abort reads as an error with a reason, not a failure");
 			assert.equal(killed.activity, "aborted");
-
-			await settled; // unwinds — no hang
-			assert.equal(jobStore.getJob(jobId)!.status, "error", "the runner never overwrites the flip");
-			assert.equal(jobStore.getJob(jobId)!.error, "Aborted by learner");
-			assert.equal(jobStore.getJob(jobId)!.result, undefined, "no result on an aborted job");
+			assert.equal(killed.result, undefined, "no result on an aborted job");
 
 			await waitFor(() => fired.length > 0, 8000, "abort wake fired");
 			const last = fired[0]!;
@@ -1482,33 +897,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 			// aborted is terminal: the wake completing must not flip it
 			assert.equal(jobStore.getJob(jobId)!.status, "error", "terminal after the wake");
 		} finally {
-			researchModelOverride.current = undefined;
-		}
-	});
-
-	it("the usage folded so far survives the kill (money channel outlives the abort)", async () => {
-		const { jobId } = newChatWithResearchJob("abort keeps usage", "call-abort2");
-		setTurnRunner(async () => 200);
-		researchModelOverride.current = oneStepThenHangModel();
-		const runner = createJobRunner({ chatStore, jobStore, deliver: async () => {}, searchProvider: () => stubSearch() });
-		try {
-			const settled = runner.runJob(jobId, RESEARCH_INPUT);
-			await waitFor(() => (jobStore.getJob(jobId)!.usage?.steps ?? 0) === 1, 8000, "first step folded");
-			abortJob(jobId);
-			await settled;
-			const job = jobStore.getJob(jobId)!;
-			assert.equal(job.status, "error");
-		assert.equal(job.error, "Aborted by learner");
-			assert.equal(job.usage!.steps, 1, "usage-so-far persisted by the runner's finally");
-			// model slots wave: the stamp is the ENGINE's actual model,
-			// provider-qualified — the scripted faux engine here.
-			assert.equal(job.usage!.model, "faux:faux-1");
-			// faux estimates tokens from the prompt/response text — the
-			// pinned fact is that the ONE completed step's spend survived.
-			assert.ok(job.usage!.inputTokens! > 0, "input tokens billed");
-			assert.ok(job.usage!.outputTokens! > 0, "output tokens billed");
-		} finally {
-			researchModelOverride.current = undefined;
+			unregisterJobAbort(jobId);
 		}
 	});
 
@@ -1518,7 +907,7 @@ describe("abort (src/server/jobs.ts abortJob)", () => {
 		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
 		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-abort3" });
 		trackJob(job.id);
-		const result: ResearchResult = { brief: "Done: it works.", sources: [{ title: "s", url: "https://x.test" }] };
+		const result: JobResult = { brief: "Done: it works." };
 		jobStore.updateJob(job.id, { result, activity: "delivering result" });
 
 		// Block the pump's idle gates so the result steer sits QUEUED, not in flight.
@@ -1574,7 +963,7 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 
 	/** A FRESH "running" record (no loop registration): the orphan shape.
 	 *  Freshness is the point — the old code needed 15 minutes of age. */
-	function orphanJob(withResult?: ResearchResult): { chatId: string; jobId: string } {
+	function orphanJob(withResult?: JobResult): { chatId: string; jobId: string } {
 		const chat = chatStore.createChat("Test: stale sweep");
 		trackChat(chat.id);
 		chatStore.saveMessages(chat.id, [{ id: "u1", role: "user", content: "hello", timestamp: 1 } as never]);
@@ -1638,87 +1027,6 @@ describe("stale-job recovery sweep (liveness-gated)", () => {
 		await waitFor(() => fired > 0, 8000, "recovery wake fired");
 		await waitFor(() => jobStore.getJob(jobId)!.status !== "running", 8000, "orphan settled after re-delivery");
 		assert.equal(jobStore.getJob(jobId)!.status, "done");
-	});
-});
-
-// ─── BYOK: the unresolvable-engine refusal (owner, 2026-09-22) ──────────────
-
-describe("BYOK job refusal (no factory floor)", () => {
-	it("runJob with NO resolvable engine lands the job as error — the envelope wording, no phantom run", async () => {
-		const chat = chatStore.createChat("Test: unconfigured spawn");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-nc1", RESEARCH_INPUT));
-
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-nc1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		// NO test override, NO engineFor: the chain (override → slot → floor)
-		// comes up empty — the runner must refuse honestly, not fall back.
-		const runner = createJobRunner({ chatStore, jobStore, deliver: delivery.deliver });
-		await runner.runJob(job.id);
-
-		const done = jobStore.getJob(job.id)!;
-		// The refusal lands through the SAME convention as every other
-		// failed job (BYOK review fix, Teacher stream 2026-09-22): the kind's
-		// failure result steers the teacher — a dispatched job is never
-		// stranded waiting for a result that will never come — and
-		// finalizeJob flips the record to error after the delivery.
-		assert.equal(done.status, "error", "the job lands error, never a phantom run");
-		assert.match(done.error ?? "", /No model configured/);
-		assert.match(done.error ?? "", /missing: cheap/);
-		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
-		assert.ok(
-			delivery.steers[0]!.content.includes("Research failed: No model configured"),
-			"the steer carries the kind's failure shape",
-		);
-		const result = done.result as ResearchResult;
-		assert.equal(result.sources.length, 0, "the failure result matches the research convention");
-	});
-});
-
-// ─── provider-key: the key-presence job refusal (owner, 2026-09-25) ─────────
-
-describe("provider-key job refusal (key-presence interlude)", () => {
-	it("an engine whose provider key is gone refuses the spawn — envelope wording, no phantom run", async () => {
-		const chat = chatStore.createChat("Test: keyless spawn");
-		trackChat(chat.id);
-		chatStore.saveMessages(chat.id, nativeToolMessages("hi", "research", "call-km1", RESEARCH_INPUT));
-
-		const job = jobStore.createJob({ kind: "research", chatId: chat.id, toolCallId: "call-km1" });
-		trackJob(job.id);
-
-		const delivery = fakeDeliver();
-		// The chain RESOLVES (an engine exists) — the KEY is what's missing.
-		// The injected check is the server seam's stand-in: it sees the
-		// engine's provider + the kind's slot tier, exactly as wired.
-		const engine = fauxEngine([]);
-		const seen: Array<[string, ModelSlotName]> = [];
-		const runner = createJobRunner({
-			chatStore,
-			jobStore,
-			deliver: delivery.deliver,
-			engineFor: () => engine,
-			providerKeyMissing: (provider, tier) => {
-				seen.push([provider, tier]);
-				return providerKeyMissing(provider, [tier]);
-			},
-		});
-		await runner.runJob(job.id);
-
-		// The refusal lands through the SAME convention as every failed job:
-		// honest record, kind failure shape steered, terminal flip after.
-		const done = jobStore.getJob(job.id)!;
-		assert.equal(done.status, "error", "the job lands error, never a phantom run");
-		assert.equal(done.error, providerKeyMissing(engine.model.provider, ["cheap"]).error, "the envelope's error line verbatim");
-		assert.deepEqual(seen, [[engine.model.provider, "cheap"]], "the check saw the engine's provider + the researcher's tier");
-		assert.equal(delivery.steers.length, 1, "the refusal STEERED — the teacher is not stranded");
-		assert.ok(
-			delivery.steers[0]!.content.includes(`Research failed: No ${engine.model.provider} key is set`),
-			"the steer carries the kind's failure shape",
-		);
-		const result = done.result as ResearchResult;
-		assert.equal(result.sources.length, 0, "the failure result matches the research convention");
 	});
 });
 

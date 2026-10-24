@@ -294,3 +294,10 @@ npm run install:cli   # Rebuild + relink CLI
 - `@wolfpack/librarian` — claim processing pipeline
 - Agent→wolf RPC bridge (Option 3: inject prompts over the launcher FIFO)
 - KB → wolf context injection (reading shared knowledge)
+
+## Workspace tasks (turbo)
+
+- `npm run dev` — turbo dev for `@wolfpack/console` (browser, http://localhost:3000). Does not start Electron.
+- `npm run dev -w @wolfpack/desktop` — desktop path: starts console on :3210, then opens Electron. Run it in your own terminal.
+- `npm run verify` — `turbo run build typecheck lint test` across every workspace, cached. Packages have no linter yet (`lint` is a no-op echo). Console's test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO there.
+- `npm run build` / `npx vitest run` still work at the root as before.

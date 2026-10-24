@@ -11,13 +11,17 @@
     "test": "vitest",
     "cli": "node packages/cli/dist/bin/wolfpack.js",
     "install:cli": "npm run build && cd packages/cli && npm link",
-    "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/harness/dist/bin/harness.js"
+    "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/harness/dist/bin/harness.js",
+    "dev": "turbo run dev --filter=@wolfpack/console",
+    "verify": "turbo run build typecheck lint test"
   },
   "devDependencies": {
+    "turbo": "^2.11.10",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "overrides": {
     "katex": "0.18.2"
-  }
+  },
+  "packageManager": "npm@10.9.9"
 }

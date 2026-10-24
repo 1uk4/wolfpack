@@ -45,3 +45,5 @@ coverage/
 
 # visual-tools renders fall back to <cwd>/viz when WOLF_DEN is unset (never commit)
 viz/
+.turbo/
+.next/

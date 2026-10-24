@@ -1,15 +1,14 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
-import { APP_IDENTITY, piEngineFor, type PiEngine } from "../models.ts";
+import { APP_IDENTITY, type PiEngine } from "../models.ts";
 import { providerEventObserver } from "../provider-events.ts";
-import type { ModelRole } from "../../../config.ts";
 
 /**
  * The shared sub-agent runner (docs/pi-engine-swap.md §6): one helper every
- * background agent (researcher, demo-builder, visual-maker, extractor,
- * auditor) runs on — a stateless pi Agent built per call, driven to
- * completion, with the seams the job runner and the money channel need.
+ * background run (the compaction summarizer today) goes through — a
+ * stateless pi Agent built per call, driven to completion, with the seams
+ * the job runner and the money channel need.
  *
  * Error semantics mirror the old ToolLoopAgent.generate: provider/loop
  * failures THROW (pi encodes them in the stream; this helper surfaces
@@ -18,10 +17,11 @@ import type { ModelRole } from "../../../config.ts";
  */
 
 export interface SubagentRunOptions {
-	/** The role whose engine (model + thinking level) this run uses. */
-	role: ModelRole;
-	/** Test seam: a scripted engine replaces the role's production one. */
-	engine?: PiEngine;
+	/** A label for debug recordings ("job:<role>"). */
+	role: string;
+	/** The engine (model + thinking level) this run uses — the caller
+	 *  resolves it from the model slots (BYOK: no factory pins exist). */
+	engine: PiEngine;
 	systemPrompt: string;
 	/** Initial transcript (continuation semantics: ends user / toolResult). */
 	messages?: AgentMessage[];
@@ -52,15 +52,8 @@ export interface SubagentRunResult {
 	text: string;
 }
 
-export function subagentEngine(role: ModelRole, override?: PiEngine): PiEngine {
-	// BYOK (owner, 2026-09-22): no factory pins — the override is the only
-	// real path (the runner injects settings-resolved engines); a missed
-	// injection hits the honest thrower in models.ts instead of a guess.
-	return override ?? piEngineFor(role);
-}
-
 export async function runSubagent(tools: AgentTool<any, any>[], opts: SubagentRunOptions): Promise<SubagentRunResult> {
-	const engine = subagentEngine(opts.role, opts.engine);
+	const engine = opts.engine;
 	let turns = 0;
 	// Debug recorder (owner, 2026-10-04): raw provider events per job run.
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, `job:${opts.role}`) : undefined;

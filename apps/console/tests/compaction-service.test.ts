@@ -58,7 +58,6 @@ const depsOf = (chatId: string, thresholdTokens: number): CompactionDeps => ({
 	// identity rides the marker's provenance) — a minimal stand-in.
 	engine: { model: { provider: "faux", id: "test", contextWindow: 1_000_000 } } as never,
 	modelId: "faux:test",
-	kind: "teach",
 	thresholdTokens,
 	systemPromptTokens: 100,
 	summarize: async (prompt) => {

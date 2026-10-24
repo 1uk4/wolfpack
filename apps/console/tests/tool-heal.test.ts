@@ -9,11 +9,10 @@
  *
  * The fixes these pins hold:
  *  1. THE STANDARD HEAL EVERYWHERE — healToolRecord wraps every registry
- *     (bareQuestionTools carried NO prepareArguments at all), and the
+ *     (the bare registry carried NO prepareArguments at all), and the
  *     quote-encoded literal heals before TypeBox validation.
  *  2. THE DEBRIS STRIP AT MEMBERSHIP SEAMS — stripModelValueDebris in
- *     coerceCorrectAnswer (boundary check + grading), normalizeQuizType,
- *     and resolveTargetId.
+ *     coerceCorrectAnswer (boundary check + grading) and normalizeQuizType.
  *  3. THE DISPLAY MIRROR — the record keeps RAW arguments, so
  *     parseQuizInput heals the same wobble on read (the tool-parts law:
  *     a healed-at-boundary quiz whose display parse rejects is an
@@ -32,9 +31,7 @@ import {
 	quizInputProblems,
 } from "../src/core/question-core.ts";
 import { parseQuizInput } from "../src/core/tool-parts.ts";
-import { resolveTargetId } from "../src/core/chains.ts";
-import { bareQuestionTools } from "../src/agent/teacher-agent.ts";
-import { probeQuizTool } from "../src/agent/tools.ts";
+import { questionTools, quizTool } from "./helpers/question-tools.ts";
 
 /** The incident's exact encoding: the value wrapped in literal quotes. */
 function QUOTED(value: string): string {
@@ -89,8 +86,8 @@ describe("the death-loop shape — quiz type with quotes baked in", () => {
 		assert.equal((validated as { type: unknown }).type, "predict");
 	});
 
-	it("WIRING: bareQuestionTools (the registry with NO prepareArguments) now heals", () => {
-		const tools = bareQuestionTools();
+	it("WIRING: questionTools (the registry with NO prepareArguments) now heals", () => {
+		const tools = questionTools();
 		const quiz = tools.quiz;
 		assert.ok(quiz, "the bare quiz must exist");
 		assert.ok(quiz.prepareArguments, "the bare quiz must carry the standard heal");
@@ -104,7 +101,7 @@ describe("the death-loop shape — quiz type with quotes baked in", () => {
 		// The universal heal covers the ORIGINAL incident's shape as well:
 		// options serialized as a JSON string (then healed only on the
 		// plan-tree quiz path; the bare registries had nothing).
-		const quiz = bareQuestionTools().quiz;
+		const quiz = questionTools().quiz;
 		assert.ok(quiz?.prepareArguments, "the bare quiz must carry the standard heal");
 		const input = whiteheadQuiz("predict", ["parmenides"]);
 		const stringified = { ...input, options: JSON.stringify(input.options) };
@@ -145,31 +142,26 @@ describe("the colon shape — correctAnswer with copy-syntax debris", () => {
 		assert.equal(normalizeQuizType(undefined), undefined);
 		assert.equal(normalizeQuizType("bogus"), undefined);
 	});
-
-	it("resolveTargetId heals copy-syntax on targets", () => {
-		const nodes = [{ id: "experience-first", name: "Experience first" }];
-		assert.equal(resolveTargetId(":experience-first", nodes), "experience-first");
-		assert.equal(resolveTargetId('"Experience first"', nodes), "experience-first");
-		assert.equal(resolveTargetId("nope", nodes), null);
-	});
 });
 
 describe("the calculus retry loop — an exact answer was incorrectly stripped", () => {
-	it("the real probe tool accepts a label with its sentence-final period", async () => {
+	it("the real quiz tool accepts a label with its sentence-final period", async () => {
 		const input = {
 			question: "Which claim?",
 			options: [{ label: "The claim holds." }, { label: "The claim need not hold." }],
 			explanation: "The premise does not imply the claim.",
 			correctAnswer: "The claim need not hold.",
+			type: "check",
+			nodeId: "premise-claim",
 		};
-		const validated = validateToolArguments(probeQuizTool, {
+		const validated = validateToolArguments(quizTool, {
 			type: "toolCall",
 			id: "calculus-period",
-			name: "probe",
-			arguments: probeQuizTool.prepareArguments!(input),
+			name: "quiz",
+			arguments: quizTool.prepareArguments!(input),
 		});
 		assert.equal(validated.correctAnswer, input.correctAnswer);
-		const result = await probeQuizTool.execute("calculus-period", validated);
+		const result = await quizTool.execute("calculus-period", validated);
 		assert.notEqual(result.isError, true, "an already-exact answer must not trigger a retry");
 		assert.equal(result.terminate, true, "the valid question is posed normally");
 	});

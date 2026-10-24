@@ -15,12 +15,10 @@ import { Value } from "typebox/value";
 import { restoreMathEscapes } from "../src/core/math-delims.ts";
 import {
 	parseAskInput,
-	parseProbeDoneInput,
 	parseQuizInput,
 	parseExplainInput,
 } from "../src/core/tool-parts.ts";
 import { quizInputSchema, probeQuizInputSchema } from "../src/core/question-core.ts";
-import { probeDoneInputSchema } from "../src/core/contracts/probe.ts";
 
 const TEACHER_QUIZ = {
 	question: "What does Tarski's convention-T define?",
@@ -39,16 +37,6 @@ const PROBER_QUIZ = {
 	options: [{ label: "Venus" }, { label: "Mercury" }],
 	correctAnswer: "Mercury",
 	explanation: "Mercury is the innermost planet.",
-};
-
-const VALID_ASSESSMENT = {
-	assessment: {
-		strands: [
-			{ strand: "modal logic basics", assessment: "Floor: solid intuition; ceiling: notation." },
-			{ strand: "indexical 'actual'", assessment: "Genuine floor — prior exposure likely." },
-		],
-		summary: "Bracketed: teach the symbols on the intuition he has.",
-	},
 };
 
 describe("parseQuizInput", () => {
@@ -140,32 +128,6 @@ describe("parseAskInput", () => {
 	});
 });
 
-describe("parseProbeDoneInput", () => {
-	it("parses the valid assessment", () => {
-		const parsed = parseProbeDoneInput(VALID_ASSESSMENT);
-		assert.ok(parsed);
-		assert.equal(parsed.assessment.strands.length, 2);
-		assert.equal(parsed.assessment.summary, "Bracketed: teach the symbols on the intuition he has.");
-	});
-
-	it("boundary parity: anything the tool schema accepts, the display parse accepts", () => {
-		assert.ok(Value.Check(probeDoneInputSchema, VALID_ASSESSMENT));
-		assert.ok(parseProbeDoneInput(VALID_ASSESSMENT));
-	});
-
-	it("the live crash shape — assessment STRINGIFIED — does not parse", () => {
-		// The exact double-encoding from the modal-realism run: strands died
-		// on `.map` because the card cast the shape. The parse kills the class.
-		const stringified = { assessment: JSON.stringify(VALID_ASSESSMENT.assessment) };
-		assert.equal(parseProbeDoneInput(stringified), undefined);
-		const garbage = JSON.stringify(VALID_ASSESSMENT.assessment).slice(0, 30);
-		assert.equal(parseProbeDoneInput(garbage), undefined);
-	});
-
-	it("a mid-stream partial (no strands yet) does not parse", () => {
-		assert.equal(parseProbeDoneInput({ assessment: { summary: "…" } }), undefined);
-	});
-});
 describe("LaTeX-escape restoration (the JSON-debris fix, owner ruling 2026-09-26)", () => {
 	// The exact live shapes from the modal-logic session: single-backslash
 	// LaTeX inside JSON args — JSON escape resolution ate the command's

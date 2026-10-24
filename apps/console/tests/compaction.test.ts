@@ -11,7 +11,6 @@ import {
 	keptIndexFor,
 	newCompactionMarker,
 	newUserMessage,
-	planTreeToText,
 	serializeForSummary,
 	toLlmMessages,
 	COMPACTED_HISTORY_HEADER,
@@ -286,46 +285,27 @@ describe("toLlmMessages honors the cut", () => {
 // ─── the summarizer input ────────────────────────────────────────────────────
 
 describe("serializeForSummary + buildCompactionPrompt", () => {
-	it("labels roles; truncates long tool results; skips plan blocks", () => {
+	it("labels roles; truncates long tool results", () => {
 		const long = "y".repeat(5_000);
 		const messages: LhMessage[] = [
 			newUserMessage("hello"),
 			assistantText("a1", "lecture"),
 			resultFor("c1", long),
-			{ id: "pb", role: "custom", customType: "plan-block", content: "", display: true, details: {}, timestamp: 1 } as never,
 		];
 		const text = serializeForSummary(messages);
-		assert.ok(text.includes("[LEARNER] hello"));
-		assert.ok(text.includes("[TUTOR] lecture"));
+		assert.ok(text.includes("[USER] hello"));
+		assert.ok(text.includes("[ASSISTANT] lecture"));
 		assert.ok(text.includes("[RESULT for quiz]"));
 		assert.ok(text.includes("…[truncated]"));
 		assert.ok(!text.includes("yyyyy".repeat(1000)), "truncation bounded the result");
-		assert.ok(!text.toLowerCase().includes("plan-block"), "UI-only markers never serialize");
 	});
 
-	it("the prompt demands the four sections in order and carries the plan tree verbatim", () => {
-		const prompt = buildCompactionPrompt({ spanText: "TRANSCRIPT", planTreeText: "- [done] A (a1)\n- A → B", kind: "teach" });
-		const order = ["The learner's understanding", "The teaching arc", "The plan dependency tree", "The current moment"].map(
-			(s) => prompt.indexOf(s),
-		);
+	it("the prompt demands the three sections in order", () => {
+		const prompt = buildCompactionPrompt({ spanText: "TRANSCRIPT" });
+		const order = ["What was established", "Open threads", "The current moment"].map((s) => prompt.indexOf(s));
 		assert.deepEqual(order, [...order].sort((a, b) => a - b), "sections appear in the ruled order");
+		assert.ok(order.every((i) => i >= 0));
 		assert.ok(prompt.includes("TRANSCRIPT"));
-		assert.ok(prompt.includes("- [done] A (a1)"));
-	});
-
-	it("planTreeToText: statuses derive from the transcript; edges render; empty tree → null", () => {
-		assert.equal(planTreeToText(undefined, []), null);
-		const tree = {
-			nodes: [
-				{ id: "a", title: "Alpha", summary: "first" },
-				{ id: "b", title: "Beta" },
-			],
-			edges: [{ from: "a", to: "b" }],
-			version: 1,
-		};
-		const text = planTreeToText(tree as never, [])!;
-		assert.ok(text.includes("Alpha (a) — first"));
-		assert.ok(text.includes("Alpha → Beta"));
 	});
 });
 

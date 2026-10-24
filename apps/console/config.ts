@@ -20,8 +20,8 @@ const DATA_ROOT = process.env.LH_DATA_DIR
 
 export const PATHS = {
 	root: ROOT,
-	/** Teacher system prompt — the agent's instructions (src/agent/). */
-	teacherPrompt: path.join(ROOT, "src", "agent", "system-prompt.md"),
+	/** The assistant's system prompt (src/agent/). */
+	systemPrompt: path.join(ROOT, "src", "agent", "system-prompt.md"),
 	data: DATA_ROOT,
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(DATA_ROOT, "chats"),
@@ -41,40 +41,16 @@ export const PATHS = {
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Every agent role in the app. The conversation pair (prober/teacher)
- *  resolves chat.model → strong slot; background roles resolve their own
- *  override → tier slot (core/settings-resolution.ts ROLE_SLOT). */
-export type ModelRole =
-	| "prober"
-	| "teacher"
-	| "researcher"
-	| "demoBuilder"
-	| "visualMaker"
-	| "pdfReader"
-	| "extractor"
-	| "auditor";
-
 /**
- * The LIVE graph store (src/store/graph.ts) — owned by the app's extraction
+ * The LIVE graph store (src/store/graph.ts) — currently inert
  * pipeline. Line shapes: src/core/contracts.ts. CHAINS ARE THE STORED
  * TRUTH (owner, 2026-09-30): edges are a derived view, never stored.
  */
 export const LEDGER_FILES = {
 	nodes: path.join(PATHS.graph, "nodes.jsonl"),
 	chains: path.join(PATHS.graph, "chains.jsonl"),
-	sessions: path.join(PATHS.graph, "sessions.jsonl"),
-	/** Per-message extraction coverage (contracts/graph.ts CoverageEntry;
-	 *  the checkpoint's replacement for chat extractions — notes keep
-	 *  sessions.jsonl, whole-file as they are). */
-	coverage: path.join(PATHS.graph, "coverage.jsonl"),
 } as const;
 
-/**
- * Notes-import bookkeeping (NOT a ledger): one JSON map, src-id → NotesSource
- * record (contracts/graph.ts) — the file path + import time + the run's usage
- * log. Read-modify-write like a chat file, not append-only like the ledgers.
- */
-export const SOURCES_FILE = path.join(PATHS.graph, "sources.json");
 /** The layout ledger (read-modify-write like sources.json): nodeId →
  *  {x,y} resting positions from the incremental settle (core/layout.ts).
  *  Carries an updatedAt stamp for future live-physics conflict handling. */

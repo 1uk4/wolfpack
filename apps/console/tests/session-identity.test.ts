@@ -4,16 +4,12 @@ import { Type } from "typebox";
 import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall, normalizeContext, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { streamSimple as streamCodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { APP_IDENTITY, piEngineForSpec, type PiEngine } from "../src/agent/models.ts";
-import { createProberAgent, createTeacherAgent, createPracticeAgent, type AgentBuildOptions } from "../src/agent/teacher-agent.ts";
+import { createAssistantAgent, type AgentBuildOptions } from "../src/agent/assistant-agent.ts";
 import { runSubagent } from "../src/agent/subagents/pi-run.ts";
 import { healToolRecord } from "../src/agent/tools/heal.ts";
 import metadata from "../package.json" with { type: "json" };
 
-const factories = [
-	(opts: AgentBuildOptions) => createProberAgent({ chatId: opts.chatId, searchAvailable: () => false } as never, opts),
-	(opts: AgentBuildOptions) => createTeacherAgent(undefined, opts),
-	(opts: AgentBuildOptions) => createPracticeAgent({} as never, opts),
-];
+const factories = [(opts: AgentBuildOptions) => createAssistantAgent(opts)];
 
 function recordingEngine() {
 	const faux = createFauxCore({});
@@ -44,7 +40,7 @@ describe("native app and conversation identity", { concurrency: false }, () => {
 		assert.ok(!Object.hasOwn(APP_IDENTITY, "sessionId"));
 	});
 
-	it("reconstructed prober/teacher/practice Agents reuse the exact chat id across tool rounds", async () => {
+	it("reconstructed assistant Agents reuse the exact chat id across tool rounds", async () => {
 		for (const chatId of ["chat_exact_native_123", "chat_independent_456"]) {
 			for (const factory of factories) {
 				const { engine, requests } = recordingEngine();
@@ -95,7 +91,7 @@ describe("native app and conversation identity", { concurrency: false }, () => {
 			const requests: Request[] = [];
 			globalThis.fetch = async (input, init) => { const request = new Request(input, init); requests.push(request); await request.text(); return new Response('{"error":{"message":"closed fixture"}}', { status: 400, headers: { "content-type": "application/json" } }); };
 			for (const factory of factories) await factory({ engine, chatId: "chat_wire_exact", tools: {} }).prompt("offline");
-			assert.equal(requests.length, 3);
+			assert.equal(requests.length, factories.length);
 			for (const request of requests) {
 				assert.equal(new URL(request.url).pathname, endpoint);
 				assert.equal(request.headers.get("user-agent"), `learnharness/${metadata.version}`);
@@ -120,7 +116,7 @@ describe("native app and conversation identity", { concurrency: false }, () => {
 		let body: Record<string, unknown> = {};
 		let headers = new Headers();
 		globalThis.fetch = async (input, init) => { const request = new Request(input, init); headers = request.headers; body = JSON.parse(await request.text()); return new Response("{}", { status: 400, headers: { "content-type": "application/json" } }); };
-		await createTeacherAgent(undefined, { engine, chatId: sessionId, tools: {} }).prompt("offline");
+		await createAssistantAgent({ engine, chatId: sessionId, tools: {} }).prompt("offline");
 		assert.equal(body.prompt_cache_key, Array.from(sessionId).slice(0, 64).join(""));
 		assert.equal(headers.get("session_id"), sessionId);
 	}));

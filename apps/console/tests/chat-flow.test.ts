@@ -1,5 +1,5 @@
 /**
- * Scripted integration test — the full teacher loop with zero tokens:
+ * Scripted integration test — the full assistant loop with zero tokens:
  *
  *   learner opens chat → faux model calls `quiz` → server streams + persists
  *   → client grades and sends the ANSWER EVENT back
@@ -25,8 +25,8 @@ import {
 	fauxToolCall,
 	type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
-import { createTeacherTools } from "../src/agent/tools.ts";
+import { createAssistantAgent } from "../src/agent/assistant-agent.ts";
+import { freeRecallTools, questionTools } from "./helpers/question-tools.ts";
 import { handleChatInput, handleChatRequest } from "../src/server/chat-handler.ts";
 import { effectiveSettings } from "../src/server/stores.ts";
 import { isTurnRunning } from "../src/server/turn-liveness.ts";
@@ -101,7 +101,7 @@ function defaultLesson(calls: string[][]): FauxResponseStep[] {
  *  handler hands the factory the NATIVE build options (the record IS the
  *  agent state — no adapter conversion). */
 function agentFactory(engine: PiEngine): Parameters<typeof handleChatRequest>[1] {
-	return (opts) => createTeacherAgent(undefined, { engine, messages: opts.messages });
+	return (opts) => createAssistantAgent({ engine, messages: opts.messages, tools: questionTools() });
 }
 
 /** The graded answer a client sends for a quiz (the shared grading seam). */
@@ -245,18 +245,6 @@ function dismissPost(chatId: string, toolCallId: string, kind: "quiz" | "ask" | 
 function createConfiguredChat(title: string) {
 	const chat = chatStore.createChat(title);
 	chatStore.saveSettings(chat.id, { model: { provider: "openrouter", id: "z-ai/glm-5.3-flash" } });
-	// nodeId is required on teach quizzes (owner ruling 2026-09-26) — the
-	// scripted lessons quiz against this seeded tree.
-	chatStore.saveTree(chat.id, {
-		nodes: [
-			{ id: "planet-order", title: "Planet order" },
-			{ id: "genealogy", title: "Genealogy of religion" },
-			{ id: "indexicals", title: "Indexical 'actual'" },
-			{ id: "modal-realism", title: "Modal realism" },
-		],
-		edges: [],
-		version: 1,
-	});
 	return chat;
 }
 
@@ -1220,14 +1208,11 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	createdChats.push(chat.id);
 
 	// Free-recall armed: the mechanic swap is the ONLY change to the registry.
-	const tools = createTeacherTools(
-		{ chatId: chat.id, chatStore, jobStore, spawn: () => {} },
-		{ explain: true },
-	);
+	const tools = freeRecallTools();
 	assert.ok(tools.explain && !tools.quiz, "explain armed, quiz dropped — one quizzing tool");
 
 	const factory: Parameters<typeof handleChatRequest>[1] = (opts) =>
-		createTeacherAgent(undefined, { engine, messages: opts.messages, tools });
+		createAssistantAgent({ engine, messages: opts.messages, tools });
 	await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), factory);
 
 	const saved1 = chatStore.getChat(chat.id)!;
@@ -1269,7 +1254,7 @@ it("explain tool call persists as a pending part; the free-text answer reveals t
 	// the call's tool result) — his text AND the commitment snapshot ride it.
 	const seen = calls[1]!.join("\n");
 	assert.match(seen, /It stays near the Sun\./);
-	assert.match(seen, /committed/);
+	assert.match(seen, /correctAnswer/); // the commitment rides the call's own arguments
 	assert.match(seen, /small angular separation/);
 	assert.ok(!/"explanation"/.test(seen), "the answer record carries no explanation field");
 	assert.equal(danglingQuestionOf(saved2.messages), null, "no pending question remains");

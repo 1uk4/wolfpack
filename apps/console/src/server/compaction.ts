@@ -37,12 +37,10 @@ import {
 	estimateContextTokens,
 	estimateTokens,
 	newCompactionMarker,
-	planTreeToText,
 	serializeForSummary,
 	toLlmMessages,
 	type CompactionDetails,
 	type LhMessage,
-	type LhMarkerMessage,
 } from "../core/index.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
@@ -70,11 +68,9 @@ async function subagentSummarizer(prompt: string, engine: PiEngine): Promise<{ s
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	const { text } = await runSubagent([], {
-		// The engine override is always present (the chat's own conversation
-		// engine — owner ruling), so the role label never resolves an
-		// engine; "researcher" is the least-wrong existing ModelRole label
-		// for a one-shot text job (the cast documents the dead path).
-		role: "researcher" as never,
+		// The engine is the chat's own conversation engine (owner ruling);
+		// the role is only a debug-recording label.
+		role: "summarizer",
 		prompt,
 		engine,
 		systemPrompt: SUMMARIZER_SYSTEM_PROMPT,
@@ -94,8 +90,6 @@ export interface CompactionDeps {
 	engine: PiEngine;
 	/** provider:id of the engine (usage + marker provenance). */
 	modelId: string;
-	/** The session kind (summarizer wording: tutor vs practice). */
-	kind: "teach" | "practice" | "probe";
 	/** The effective trigger threshold, RESOLVED by the caller:
 	 *  min(settings threshold, contextWindow − reserve) — the owner's
 	 *  effective-trigger ruling. The catalog window lookup is the
@@ -204,8 +198,6 @@ async function compact(deps: CompactionDeps, chatId: string): Promise<void> {
 
 	const prompt = buildCompactionPrompt({
 		spanText: fullSpan,
-		planTreeText: planTreeToText(record.tree, messages),
-		kind: deps.kind,
 	});
 
 	emit("compaction-changed", { chatId, running: true });

@@ -1,34 +1,29 @@
 /**
- * Raw-stream credential regression: the Sept 26 Agent getApiKey-hook tests
- * do not exercise these two hand-rolled loops. All credentials here are
- * synthetic; fetch is CLOSED (never delegates), including Google's global
- * fetch-only adapter. The transport cases test SDK serialization, not accounts.
+ * Raw-stream credential regression: the assistant agent's stream requests
+ * carry NO credential override — pi-ai resolves keys natively, per provider
+ * and per request. All credentials here are synthetic; fetch is CLOSED
+ * (never delegates), including Google's global fetch-only adapter. The
+ * transport cases test SDK serialization, not accounts.
  */
 import assert from "node:assert/strict";
-import path from "node:path";
+import * as path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import {
-	createFauxCore, createModels, fauxAssistantMessage, fauxText, fauxToolCall,
-	type JsonObject, type TranscriptContext, type Usage,
+	createFauxCore, createModels, fauxAssistantMessage, fauxText,
+	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { createAssistantAgent } from "../src/agent/assistant-agent.ts";
 import { APP_IDENTITY, piEngineForSpec, type PiEngine } from "../src/agent/models.ts";
-import { runVisualMaker } from "../src/agent/subagents/visual-maker.ts";
-import { runPdfReaderAgent } from "../src/agent/subagents/pdf-reader.ts";
-import type { HeadlessApi } from "../src/agent/subagents/headless.ts";
 import { AUTH_PROVIDER_KEYS } from "../src/core/auth-keys.ts";
 import { providerEventsDir } from "../src/agent/provider-events.ts";
 
 const OR_KEY = "dummy-openrouter-MUST-NOT-REACH-other-endpoints";
-const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><rect width="20" height="20" fill="white"/></svg>';
-const FIXTURE = path.join(import.meta.dirname, "fixtures", "sample-3page.pdf");
-const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==", "base64");
-const FINAL = "Verified offline output (p. 1). Pages consulted: 1";
-const LOOPS = ["visual", "pdf"] as const;
-type Loop = typeof LOOPS[number];
-type Call = { name: string; args: JsonObject };
+const FINAL = "Verified offline output.";
+const PROMPT = "Say hello offline";
+type Call = { name: string; args: Record<string, unknown> };
 
 interface Transport {
 	provider: string; id: string; envVar: string; api: string;
@@ -66,175 +61,81 @@ async function isolated<T>(env: Record<string, string>, run: () => Promise<T>): 
 	}
 }
 
-function callsFor(loop: Loop, round: number): Call[] {
-	if (round === 2) return [];
-	if (loop === "visual") return round === 0
-		? [{ name: "write_svg", args: { svg: SVG } }]
-		: [{ name: "render_svg", args: {} }];
-	return round === 0
-		? [{ name: "pdf_info", args: {} }]
-		: [{ name: "pdf_extract", args: { pages: "1" } }, { name: "pdf_render", args: { pages: "1", dpi: 100 } }];
-}
 
-function fakeHeadless(renders: string[]): HeadlessApi {
-	return {
-		available: () => true,
-		unavailableReason: () => null,
-		runDemo: async () => { throw new Error("unexpected demo"); },
-		renderSvg: async (svg) => {
-			assert.equal(svg, SVG);
-			renders.push("svg");
-			return PNG;
-		},
-		renderPdfPages: async (file, pages, opts) => {
-			assert.equal(file, FIXTURE);
-			assert.deepEqual(pages, [1]);
-			assert.equal(opts?.dpi, 100);
-			renders.push("pdf:1");
-			return [{ page: 1, png: PNG }];
-		},
-	};
-}
-
-async function runLoop(loop: Loop, engine: PiEngine, signal = new AbortController().signal) {
-	const renders: string[] = [];
-	const activities: string[] = [];
-	const usages: Usage[] = [];
-	const opts = {
-		engine, headless: fakeHeadless(renders), abortSignal: signal,
-		onActivity: (line: string) => activities.push(line),
-		onUsage: (usage: Usage) => usages.push(usage),
-		// Direct recording cases enable the observer into an isolated temp dir.
-		chatId: "provider-neutral-offline",
-	};
-	const result = loop === "visual"
-		? await runVisualMaker({ brief: "A white square, no external resources" }, opts)
-		: await runPdfReaderAgent({ path: FIXTURE, question: "Read page 1" }, opts);
-	return { result, renders, activities, usages };
-}
-
-function assertSuccess(loop: Loop, run: Awaited<ReturnType<typeof runLoop>>) {
-	if ("svg" in run.result) {
-		assert.equal(run.result.svg, SVG, JSON.stringify(run.result));
-		assert.equal(run.result.notes, FINAL);
-	} else {
-		assert.equal(run.result.brief, FINAL);
-		assert.equal(run.result.path, FIXTURE);
-		assert.deepEqual(run.result.pagesRead, [1]);
-		assert.deepEqual(run.result.pagesConsulted, [1]);
-	}
-	assert.deepEqual(run.renders, [loop === "visual" ? "svg" : "pdf:1"]);
-	assert.equal(run.usages.length, 3, "one usage callback per successful stream round");
-	assert.ok(run.activities.some((line) => line.startsWith(loop === "visual" ? "write_svg:" : "pdf_info:")));
-	assert.ok(run.activities.some((line) => line.startsWith(loop === "visual" ? "render_svg:" : "pdf_render:")));
+/** Run one assistant prompt to completion on the given engine. */
+async function runAssistant(engine: PiEngine, chatId = "provider-neutral-offline") {
+	const usages: unknown[] = [];
+	const agent = createAssistantAgent({ engine, chatId, onUsage: (usage) => usages.push(usage) });
+	await agent.prompt(PROMPT);
+	return { agent, usages };
 }
 
 // All global/env cases in this file are deliberately serial.
-describe("provider-neutral raw agent loops", { concurrency: false }, () => {
-	for (const loop of LOOPS) {
-		it(`${loop}: every actual stream request has NO credential override (recording faux engine)`, async () => {
-			await isolated({ OPENROUTER_API_KEY: OR_KEY, LH_PROVIDER_EVENTS: "1" }, async () => {
-				const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
-				faux.setResponses([0, 1, 2, 0, 1, 2].map((round) => {
-					const calls = callsFor(loop, round);
-					return fauxAssistantMessage(calls.length
-						? calls.map((c, i) => fauxToolCall(c.name, c.args, { id: `call_${round}_${i}` }))
-						: [fauxText(FINAL)], { stopReason: calls.length ? "toolUse" : "stop" });
-				}));
-				const requests: { context: TranscriptContext; options: Record<string, unknown> }[] = [];
-				const signal = new AbortController().signal;
-				const engine: PiEngine = {
-					model: faux.getModel(), level: "medium",
-					streamFn: (model, context, options) => {
-						requests.push({ context, options: { ...options } });
-						return faux.streamSimple(model, context, options);
-					},
-				};
-				const run = await runLoop(loop, engine, signal);
-				assertSuccess(loop, run);
-				assert.equal(requests.length, 3);
-				const sessionId = requests[0]!.options.sessionId;
-				assert.match(String(sessionId), /^[0-9a-f-]{36}$/);
-				assert.notEqual(sessionId, "provider-neutral-offline");
-				for (const { options } of requests) {
-					assert.equal(options.sessionId, sessionId);
-					for (const key of ["apiKey", "getApiKey", "auth", "headers"]) {
-						assert.ok(!Object.hasOwn(options, key), `${loop} stream must not supply ${key}`);
-					}
-					assert.equal(options.reasoning, "medium");
-					assert.equal(options.signal, signal);
-					assert.equal(typeof options.onProviderStreamEvent, "function");
-				}
-				assert.match(JSON.stringify(requests[2]!.context), /image\/png/);
-				assert.match(JSON.stringify(requests[2]!.context), /toolResult/);
-				const second = await runLoop(loop, engine, signal);
-				assertSuccess(loop, second);
-				assert.equal(requests.length, 6);
-				const secondId = requests[3]!.options.sessionId;
-				assert.notEqual(secondId, sessionId, "a separate unsaved operation must not reuse a conversation");
-				for (const request of requests.slice(3)) assert.equal(request.options.sessionId, secondId);
-			});
+describe("provider-neutral raw agent loop", { concurrency: false }, () => {
+	it("every actual stream request has NO credential override (recording faux engine)", async () => {
+		await isolated({ OPENROUTER_API_KEY: OR_KEY, LH_PROVIDER_EVENTS: "1" }, async () => {
+			const faux = createFauxCore({ tokenSize: { min: 64, max: 64 } });
+			faux.setResponses([fauxAssistantMessage([fauxText(FINAL)]), fauxAssistantMessage([fauxText(FINAL)])]);
+			const requests: { context: TranscriptContext; options: Record<string, unknown> }[] = [];
+			const engine: PiEngine = {
+				model: faux.getModel(), level: "medium",
+				streamFn: (model, context, options) => {
+					requests.push({ context, options: { ...options } });
+					return faux.streamSimple(model, context, options);
+				},
+			};
+			const run = await runAssistant(engine);
+			assert.equal(run.usages.length, 1, "one usage callback per successful stream round");
+			assert.equal(requests.length, 1);
+			const { options } = requests[0]!;
+			assert.equal(options.sessionId, "provider-neutral-offline");
+			for (const key of ["apiKey", "getApiKey", "auth", "headers"]) {
+				assert.equal(options[key], undefined, `stream must not supply ${key}`);
+			}
+			assert.equal(options.reasoning, "medium");
+			assert.equal(typeof options.onProviderStreamEvent, "function");
 		});
-
-		it(`${loop}: abort still reaches the stream and retains the loop's failure semantics`, async () => {
-			await isolated({ OPENROUTER_API_KEY: OR_KEY }, async () => {
-				const faux = createFauxCore({});
-				faux.setResponses([fauxAssistantMessage([fauxText("must not be delivered")])]);
-				const controller = new AbortController();
-				controller.abort();
-				const run = await runLoop(loop, { model: faux.getModel(), streamFn: faux.streamSimple }, controller.signal);
-				const failure = "svg" in run.result ? run.result.notes : run.result.brief;
-				assert.match(failure ?? "", /crashed — aborted/);
-				assert.deepEqual(run.renders, []);
-				assert.equal(run.usages.length, 0);
-			});
-		});
-	}
+	});
 
 	for (const transport of TRANSPORTS) {
-		for (const loop of LOOPS) {
-			it(`${loop}: native ${transport.provider}/${transport.api} endpoint, payload and live per-request auth`, async () => {
-				await isolated({ OPENROUTER_API_KEY: OR_KEY, ...(transport.provider === "openrouter" ? {} : { [transport.envVar]: "dummy-selected-key-first" }) }, async () => {
+		it(`native ${transport.provider}/${transport.api} endpoint, payload and live per-request auth`, async () => {
+			await isolated({ OPENROUTER_API_KEY: OR_KEY, ...(transport.provider === "openrouter" ? {} : { [transport.envVar]: "dummy-selected-key-first" }) }, async () => {
+				const engine = piEngineForSpec({ provider: transport.provider, id: transport.id, thinkingLevel: "off" });
+				assert.equal(engine.model.api, transport.api);
+				const requests: RecordedRequest[] = [];
+				globalThis.fetch = closedFetch(transport, requests);
+				const run = await runAssistant(engine);
+				assert.equal(run.usages.length, 1);
+				assert.equal(requests.length, 1);
+				const request = requests[0]!;
+				assert.equal(request.headers.get("user-agent"), APP_IDENTITY.userAgent.custom);
+				if (transport.provider === "opencode-go") {
+					assert.match(request.headers.get("x-opencode-session") ?? "", /^[0-9a-zA-Z_-]+$/);
+					assert.equal(request.headers.get("x-opencode-client"), "@wolfpack/console");
+				}
+				const url = new URL(request.url);
+				assert.equal(url.origin, transport.origin);
+				assert.equal(url.pathname, transport.path);
+				assert.equal(request.method, "POST");
+				const expected = transport.provider === "openrouter" ? OR_KEY : "dummy-selected-key-first";
+				assert.equal(request.headers.get(transport.authHeader), transport.authHeader === "authorization" ? `Bearer ${expected}` : expected);
+				if (transport.provider !== "openrouter") assert.ok(!JSON.stringify({ ...request, headers: Object.fromEntries(request.headers) }).includes(OR_KEY));
+				assertPayload(transport, request.body);
+			});
+		});
+		if (transport.provider !== "openrouter") {
+			it(`${transport.provider} missing selected key does not fall back to configured OpenRouter`, async () => {
+				await isolated({ OPENROUTER_API_KEY: OR_KEY }, async () => {
+					let fetches = 0;
+					globalThis.fetch = async () => { fetches++; throw new Error("CLOSED: no fetch allowed"); };
 					const engine = piEngineForSpec({ provider: transport.provider, id: transport.id, thinkingLevel: "off" });
-					assert.equal(engine.model.api, transport.api);
-					const requests: RecordedRequest[] = [];
-					globalThis.fetch = closedFetch(transport, loop, requests);
-					const run = await runLoop(loop, engine);
-					assertSuccess(loop, run);
-					assert.equal(requests.length, 3);
-					for (const [round, request] of requests.entries()) {
-						assert.equal(request.headers.get("user-agent"), APP_IDENTITY.userAgent.custom);
-						if (transport.provider === "opencode-go") {
-							assert.match(request.headers.get("x-opencode-session") ?? "", /^[0-9a-f-]{36}$/);
-							assert.equal(request.headers.get("x-opencode-session"), requests[0]!.headers.get("x-opencode-session"));
-							assert.equal(request.headers.get("x-opencode-client"), "@wolfpack/console");
-						}
-						const url = new URL(request.url);
-						assert.equal(url.origin, transport.origin);
-						assert.equal(url.pathname, transport.path);
-						assert.equal(request.method, "POST");
-						const expected = transport.provider === "openrouter" ? OR_KEY : round === 0 ? "dummy-selected-key-first" : "dummy-selected-key-rotated";
-						assert.equal(request.headers.get(transport.authHeader), transport.authHeader === "authorization" ? `Bearer ${expected}` : expected);
-						if (transport.provider !== "openrouter") assert.ok(!JSON.stringify({ ...request, headers: Object.fromEntries(request.headers) }).includes(OR_KEY));
-						assertPayload(transport, loop, round, request.body);
-					}
+					const run = await runAssistant(engine);
+					const last = run.agent.state.messages.at(-1) as { stopReason?: string; errorMessage?: string } | undefined;
+					assert.equal(last?.stopReason, "error");
+					assert.match(last?.errorMessage ?? "", new RegExp(`Provider is not configured: ${transport.provider}`));
+					assert.equal(fetches, 0, "SDK Models guard rejects missing selected-provider auth before transport");
 				});
 			});
-			if (transport.provider !== "openrouter") {
-				it(`${loop}: ${transport.provider} missing selected key does not fall back to configured OpenRouter`, async () => {
-					await isolated({ OPENROUTER_API_KEY: OR_KEY }, async () => {
-						let fetches = 0;
-						globalThis.fetch = async () => { fetches++; throw new Error("CLOSED: no fetch allowed"); };
-						const engine = piEngineForSpec({ provider: transport.provider, id: transport.id, thinkingLevel: "off" });
-						const run = await runLoop(loop, engine);
-						const failure = "svg" in run.result ? run.result.notes : run.result.brief;
-						assert.match(failure ?? "", new RegExp(`Provider is not configured: ${transport.provider}`));
-						assert.equal(fetches, 0, "SDK Models guard rejects missing selected-provider auth before transport");
-						assert.equal(run.usages.length, 0);
-						assert.deepEqual(run.renders, []);
-					});
-				});
-			}
 		}
 	}
 
@@ -269,37 +170,23 @@ interface RecordedRequest {
 	url: string; method: string; headers: Headers; body: Record<string, unknown>;
 }
 
-function closedFetch(transport: Transport, loop: Loop, requests: RecordedRequest[]): typeof fetch {
+function closedFetch(transport: Transport, requests: RecordedRequest[]): typeof fetch {
 	return async (input, init) => {
 		const request = new Request(input, init);
-		const round = requests.length;
 		// Unexpected destinations/rounds fail closed; never call original fetch.
 		assert.equal(new URL(request.url).origin, transport.origin);
-		assert.ok(round < 3, "unexpected extra provider request");
+		assert.ok(requests.length < 1, "unexpected extra provider request");
 		requests.push({ url: request.url, method: request.method, headers: request.headers, body: JSON.parse(await request.text()) });
-		if (transport.provider !== "openrouter") process.env[transport.envVar] = "dummy-selected-key-rotated";
-		return sseResponse(transport, callsFor(loop, round), round);
+		return sseResponse(transport, [], 0);
 	};
 }
 
-function assertPayload(transport: Transport, loop: Loop, round: number, body: Record<string, unknown>) {
+function assertPayload(transport: Transport, body: Record<string, unknown>) {
 	if (transport.api !== "google-generative-ai") assert.equal(body.model, transport.id);
-	// Native Responses models may declare tools in additional_tools input
-	// items rather than top-level tools; assert the SDK's complete payload.
-	const tools = JSON.stringify(body);
-	assert.match(tools, new RegExp(loop === "visual" ? "write_svg" : "pdf_extract"));
-	assert.match(tools, new RegExp(loop === "visual" ? "render_svg" : "pdf_render"));
 	if (transport.api === "google-generative-ai") assert.ok(Array.isArray(body.contents));
 	else if (transport.api === "openai-responses") assert.ok(Array.isArray(body.input));
 	else assert.ok(Array.isArray(body.messages));
-	const json = JSON.stringify(body);
-	assert.match(json, new RegExp(loop === "visual" ? "white square" : "Read page 1"));
-	if (round === 2) {
-		const supportsImages = piEngineForSpec({ provider: transport.provider, id: transport.id }).model.input.includes("image");
-		assert.equal(json.includes(PNG.toString("base64")), supportsImages, "native modality filtering: only vision models receive rendered images");
-		assert.match(json, new RegExp(transport.api === "google-generative-ai" ? "functionResponse" : transport.api === "openai-responses" ? "function_call_output" : transport.api === "anthropic-messages" ? "tool_result" : '"role":"tool"'));
-		assert.match(json, new RegExp(loop === "visual" ? "Rendered" : "Page 1"));
-	}
+	assert.match(JSON.stringify(body), new RegExp(PROMPT));
 }
 
 function sseResponse(transport: Transport, calls: Call[], round: number): Response {

@@ -1,45 +1,27 @@
 import type { Usage } from "@earendil-works/pi-ai";
+import { createAssistantAgent, type AgentBuildOptions, type AssistantAgent } from "../agent/assistant-agent.ts";
+import { piEngineForSpec } from "../agent/models.ts";
 import {
-	createPracticeAgent,
-	createProberAgent,
-	createTeacherAgent,
-	type AgentBuildOptions,
-	type TeachingAgent,
-} from "../agent/teacher-agent.ts";
-import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
-import { createJobRunner } from "../agent/subagents/runner.ts";
-import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
-import type { ModelRole } from "../../config.ts";
-import {
-	deliverJobResult,
 	noteSteerVisible,
 	reconcileUserSteers,
 	registerLiveAgent,
-	setJobRespawn,
 	setTurnRunner,
 	settleSteers,
-	steerLiveChat,
 	unregisterLiveAgent,
 } from "./jobs.ts";
 import { runPiTurn } from "./pi/ui-stream.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
-import { searchAvailable, searchProvider } from "./search.ts";
 import { providerKeyPresent } from "./keys.ts";
-import {
-	extractionEnabled,
-	graphToolsEnabled,
-	resolveConversationSpec,
-	resolveRoleSpec,
-} from "../core/settings-resolution.ts";
-import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
+import { resolveConversationSpec } from "../core/settings-resolution.ts";
+import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope } from "../core/settings.ts";
 import { beginTurn, endTurn } from "./turn-liveness.ts";
 import { applyParkedDismissal } from "./dismissal-park.ts";
 import { registerTurn, unregisterTurn } from "./turn-runs.ts";
-import { persistTurn, triggerExtraction } from "./turn-service.ts";
-import { hasProbeDone, danglingQuestionOf } from "../core/native-messages.ts";
-import { composeInstructions } from "../agent/teacher-agent.ts";
+import { persistTurn } from "./turn-service.ts";
+import { danglingQuestionOf } from "../core/native-messages.ts";
+import { composeInstructions } from "../agent/assistant-agent.ts";
 import { ensureCompacted, kickCompaction, effectiveThresholdTokens } from "./compaction.ts";
 import { catalogContextLimits } from "./model-catalog.ts";
 import { emit } from "../core/events.ts";
@@ -73,73 +55,20 @@ import type {CallUsage, SteerMessage} from "../core/contracts.ts";
  * for write-ahead persistence, turn liveness, and the turn services.
  */
 
-const jobRunner = createJobRunner({
-	chatStore: stores.chatStore,
-	jobStore: stores.jobStore,
-	deliver: deliverJobResult,
-	// BYOK (owner, 2026-09-22): job engines resolve the chain — role
-	// override → slot → NOTHING — read FRESH per job (a settings PUT
-	// between dispatch and spawn lands); an empty chain flows through as
-	// undefined and the runner refuses the spawn honestly.
-	engineFor: (role) =>
-		resolveEngine(role),
-	// Key-presence gate (provider-key interlude, 2026-09-25): the runner
-	// reads the resolved engine's provider and asks THIS check (the agent
-	// layer may not read the key store); a missing key refuses the spawn
-	// with the 503-envelope family instead of dying mid-run.
-	providerKeyMissing: (provider, tier) =>
-		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
-	// Search port wave (2026-09-20): the researcher's web_search runs on the
-	// injected port — resolved FRESH per job (key rotations land immediately).
-	// null = honestly unavailable; the dispatch-level drop (below) uses the
-	// same signal so keyless servers never see the research tool at all.
-	searchProvider,
-});
-/** The app's ONE extraction pipeline instance — both front doors share it:
- *  quiz-triggered session runs (turn-service) and notes imports
- *  (/api/graph/import) hit the same single-flight registry. */
-export const extraction = createExtractionPipeline({
-	...stores,
-	// BYOK (owner, 2026-09-22): the extraction stages resolve the chain —
-	// role override → slot → NOTHING — read FRESH per stage call; an empty
-	// chain flows through as undefined and the pipeline refuses the run
-	// with the typed ModelsNotConfiguredError. Direct test values still win.
-	engineFor: (role) =>
-		resolveEngine(role),
-	// Key-presence gate (provider-key interlude, 2026-09-25): same check
-	// the job runner gets — a stage engine whose provider key is gone
-	// refuses BEFORE any batch runs (the typed throw), never mid-run.
-	providerKeyMissing: (provider, tier) =>
-		providerKeyPresent(provider) ? null : providerKeyMissingEnvelope(provider, [tier]),
-});
-
-
 // Wake-pipeline wiring (contracts.ts "THE ASYNC PROTOCOL" §4): the pipeline
 // delivers its steers through THIS composition root (one event: the steer
-// marker, appended natively under the turn claim), and crash recovery
-// re-spawns orphaned sub-agent loops through THIS runner.
+// marker, appended natively under the turn claim).
 setTurnRunner(async (chatId, input) => {
 	const res = await handleChatInput(chatId, input);
 	// Drive the stream to completion server-side — nobody else will read it,
-	// and onFinish (persist, extraction, endTurn) only runs when it drains.
+	// and onFinish (persist, endTurn) only runs when it drains.
 	await res.arrayBuffer().catch(() => undefined);
 	return res.status;
 });
-/** The settings-resolved engine for one role — BYOK (owner, 2026-09-22):
- *  the chain (role override → slot → NOTHING) may end empty, and undefined
- *  flows through to the per-need refusal gates (runner/extraction), read
- *  FRESH so a settings PUT between dispatch and spawn lands. */
-function resolveEngine(role: ModelRole): PiEngine | undefined {
-	const spec = resolveRoleSpec(role, stores.settingsStore.readSettings());
-	return spec ? piEngineForSpec(spec) : undefined;
-}
-
-setJobRespawn((jobId) => void jobRunner.runJob(jobId));
-
 /** The route-facing entry: parse {chatId, input} and run one turn. */
 export async function handleChatRequest(
 	req: Request,
-	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
+	buildAgent?: (opts: AgentBuildOptions) => AssistantAgent,
 ): Promise<Response> {
 	let body: { chatId?: unknown; input?: unknown };
 	try {
@@ -169,7 +98,7 @@ export async function handleChatRequest(
 export async function handleChatInput(
 	chatId: string,
 	input: TurnInput,
-	buildAgent?: (opts: AgentBuildOptions & { teaching: boolean }) => TeachingAgent,
+	buildAgent?: (opts: AgentBuildOptions) => AssistantAgent,
 ): Promise<Response> {
 	let record = stores.chatStore.getChat(chatId);
 	if (!record) {
@@ -182,8 +111,7 @@ export async function handleChatInput(
 	// refuses honestly with the machine-readable 503 envelope (new sessions
 	// and continuing ones alike — wake-pipeline turns ride this same path).
 	// Placement is deliberate: BEFORE beginTurn (no liveness effects), the
-	// write-ahead persist (nothing durable changes), and every downstream
-	// resolution (jobs/extraction gate per-need on their own tiers).
+	// write-ahead persist (nothing durable changes).
 	const effective = effectiveSettings();
 	const conversation = resolveConversationSpec(record.settings, effective.models.strong);
 	if (!conversation) {
@@ -212,7 +140,7 @@ export async function handleChatInput(
 	// running compaction): await any in-flight compaction (the settle
 	// kick usually finished inside the learner's answer pause), and if
 	// the record is STILL over threshold, compact synchronously — this
-	// request waits. Skipped under tests (the extraction precedent);
+	// request waits. Skipped under tests (scripted chats are fixtures);
 	// placement mirrors the BYOK/key gates — BEFORE appends and
 	// beginTurn, no liveness effects — and the record re-reads after
 	// because compaction appends the marker.
@@ -223,12 +151,11 @@ export async function handleChatInput(
 			chatStore: stores.chatStore,
 			engine: conversationEngine,
 			modelId: modelIdForCompaction,
-			kind: record.kind === "practice" ? "practice" : hasProbeDone(record.messages) ? "teach" : "probe",
 			thresholdTokens: effectiveThresholdTokens(
 				effective.compaction?.thresholdTokens,
 				catalogContextLimits().get(modelIdForCompaction),
 			),
-			systemPromptTokens: Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : "teacher").length / 4),
+			systemPromptTokens: Math.ceil(composeInstructions("assistant").length / 4),
 		},
 		chatId,
 	);
@@ -315,13 +242,6 @@ export async function handleChatInput(
 		});
 	};
 
-	// AGENT CONSTRUCTION BRANCH (docs/probe-teach-split.md §2): the transcript
-	// is the seam — a probe_done call in the record means the probe is
-	// concluded: build the TEACHER (planning + the full toolset). Otherwise
-	// the session is still probing: build the PROBER (quiz/ask + probe_done).
-	// Both share this whole composition (write-ahead persist, liveness,
-	// steers, usage, extraction) — only the agent differs.
-	const teaching = hasProbeDone(merged);
 	// BYOK (owner, 2026-09-22): the conversation chain was resolved by the
 	// turn gate above (chat.model override → strong slot → refused) — the
 	// engine build is pure from here; thinking levels clamp natively.
@@ -334,17 +254,11 @@ export async function handleChatInput(
 	// request builds a fresh one off the record — the factory mirrors that
 	// seam exactly. Wave B: the record IS the agent state (native messages;
 	// the record's id field strips at the wire in toLlmMessages).
-	// CROSS-STREAM SEAM (P2 reconciliation, 2026-09-19): `toolToggles`
-	// rides the build opts as the user-level DELTA map (absent key =
-	// enabled). The definitive toggleable set is TOGGLEABLE_TOOLS — the
-	// sub-agent JOB tools (research/demo/visual/pdf; adjudicated with the
-	// user: quiz/ask/fs/plan/probe_done are always-on).
 	const agentOpts: AgentBuildOptions = {
 		engine,
 		messages: asAgentMessages(merged),
 		onUsage: collectUsage,
-		toolToggles: effective.agent.tools,
-		// Debug (owner, 2026-10-04): teacher/prober raw provider events under
+		// Debug (owner, 2026-10-04): raw provider events under
 		// LH_PROVIDER_EVENTS=1 (provider-events.ts); no-op otherwise.
 		chatId,
 		// The prompt-override switches (P2, 2026-09-19): same resolution
@@ -352,68 +266,7 @@ export async function handleChatInput(
 		// prompt fresh per turn, swapping in any enabled override segments.
 		promptSwitches: effective.agent.prompts,
 	};
-	// PRACTICE BRANCH (owner design, 2026-10-04): a kind:"practice"
-	// session builds the practitioner from turn 1 — no prober→teacher
-	// split, no plan/question/job tools; the whole registry is
-	// problem + conclude. buildAgent stays honored (the test seam is
-	// uniform across kinds).
-	const constructed: TeachingAgent = buildAgent
-		? buildAgent({ ...agentOpts, teaching })
-		: record.kind === "practice"
-			? createPracticeAgent(
-					{
-						chatId,
-						chatStore: stores.chatStore,
-						// TARGET VALIDATION (owner round 9): the practice tools read the
-						// WHOLE graph fresh per pose — targets validate against every
-						// proposition, not just the session's picks (pickless sessions
-						// and future graph-tools poses stay valid).
-						graphNodes: () => stores.graphStore.readNodes(),
-						// THE RARELY-NEEDED SET (owner round 10): research + pdf jobs
-						// (same runner/gating as the teacher's — research honestly
-						// absent when no engine is live) and the map readers behind
-						// the SAME settings gate as the prober's.
-						jobs: {
-							chatId,
-							jobStore: stores.jobStore,
-							spawn: (job, input) => void jobRunner.runJob(job.id, input),
-							searchAvailable,
-						},
-						...(graphToolsEnabled(effective) ? { graph: { chatStore: stores.chatStore, graphStore: stores.graphStore } } : {}),
-					},
-					agentOpts,
-				)
-			: teaching
-			? createTeacherAgent(
-					{
-						chatId,
-						chatStore: stores.chatStore,
-						jobStore: stores.jobStore,
-						spawn: (job, input) => void jobRunner.runJob(job.id, input),
-						// The registry drop's signal (2026-09-20): no live engine
-						// = no research tool in the teacher's registry.
-						searchAvailable,
-					},
-					agentOpts,
-				)
-			: createProberAgent(
-					{
-						chatId,
-						chatStore: stores.chatStore,
-						deliver: (steer) => void deliverJobResult(steer),
-						// Fix wave (2026-09-20): the prober carries research + pdf
-						// dispatch (owner ruling — phase-omnipresent), so its ctx
-						// needs the same job wiring as the teacher's.
-						jobStore: stores.jobStore,
-						spawn: (job, input) => void jobRunner.runJob(job.id, input),
-						searchAvailable,
-						// The map reader (wave 7): the prober reads the learner's
-						// knowledge graph through tools when the gate opens —
-						// graph master switch AND the agent.graphTools toggle.
-						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
-					},
-					agentOpts,
-				);
+	const constructed: AssistantAgent = (buildAgent ?? createAssistantAgent)(agentOpts);
 
 	// A test-injected agent gets no usage collector (tests assert the
 	// transcript, not the money channel); when it's ours, usage flows through
@@ -474,17 +327,6 @@ export async function handleChatInput(
 						steps,
 					});
 				}
-				// GRAPH GATE (settings-storage wave, 2026-09-19): the write channel —
-				// extraction, its auditor — dies with the master switch.
-				// PRACTICE (owner, 2026-10-04): practice sessions write nothing —
-				// no extraction, no graph, no coverage (v1: the session itself
-				// is the deliverable).
-				if (record.kind !== "practice" && extractionEnabled(effective.graph)) {
-					// Fresh per-turn read of the graph section's chunk budget
-					// (extraction-UX redesign, 2026-09-24): the trigger compares
-					// against it and the pipeline's batches share it.
-					triggerExtraction(stores, extraction, chatId, effective.graph.extractionChunkTokens);
-				}
 				// PARKED DISMISSAL (owner, 2026-10-04): a dismissal that arrived
 				// mid-turn was parked by the dismiss route (202); now that
 				// persistTurn has landed the turn's messages, apply it against
@@ -518,7 +360,7 @@ export async function handleChatInput(
 				// between-runs window). The next turn's ensureCompacted gate
 				// awaits whatever this leaves running; a lost engine or a
 				// beneath-threshold record is a silent no-op. Skipped under
-				// tests (the extraction precedent — scripted chats are
+				// tests (scripted chats are
 				// fixtures; the service itself is pinned directly).
 				if (process.env.NODE_ENV !== "test")
 					kickCompaction(() => {
@@ -533,12 +375,11 @@ export async function handleChatInput(
 							chatStore: stores.chatStore,
 							engine: kickEngine,
 							modelId: kickModelId,
-							kind: freshRecord.kind === "practice" ? "practice" : hasProbeDone(freshRecord.messages) ? "teach" : "probe",
 							thresholdTokens: effectiveThresholdTokens(
 								fresh.compaction?.thresholdTokens,
 								catalogContextLimits().get(kickModelId),
 							),
-							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : "teacher").length / 4),
+							systemPromptTokens: Math.ceil(composeInstructions("assistant").length / 4),
 						};
 					}, chatId);
 			},

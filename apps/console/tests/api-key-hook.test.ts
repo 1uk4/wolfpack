@@ -1,6 +1,6 @@
 /**
  * The getApiKey-hook fix (owner, 2026-09-26): both Agent constructions
- * (baseAgentOptions in teacher-agent.ts, runSubagent's loop in
+ * (createAssistantAgent in assistant-agent.ts, runSubagent's loop in
  * subagents/pi-run.ts) used to pass `getApiKey: () => openRouterApiKey()` —
  * and pi-agent-core resolves
  * `(config.getApiKey ? await config.getApiKey(provider) : undefined) || config.apiKey`
@@ -22,10 +22,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createProberAgent, createTeacherAgent, type TeachingAgent } from "../src/agent/teacher-agent.ts";
-import type { ProberToolContext } from "../src/agent/tools.ts";
-import { jobStore } from "../src/store/jobs.ts";
-import { chatStore } from "../src/store/chats.ts";
+import { createAssistantAgent } from "../src/agent/assistant-agent.ts";
 import { createFauxCore } from "@earendil-works/pi-ai";
 import type { PiEngine } from "../src/agent/models.ts";
 
@@ -37,13 +34,8 @@ function fauxEngine(): PiEngine {
 }
 
 describe("the getApiKey-hook fix (native per-provider key resolution)", () => {
-	it("teacher and prober builds expose NO getApiKey hook — pi-ai resolves keys natively", () => {
-		const chatId = chatStore.createChat("getApiKey pin").id;
-		const ctx: ProberToolContext = { chatId, chatStore, deliver: () => {}, jobStore, spawn: () => {} };
-		const builds: TeachingAgent[] = [
-			createTeacherAgent(undefined, { engine: fauxEngine() }),
-			createProberAgent(ctx, { engine: fauxEngine() }),
-		];
+	it("the assistant build exposes NO getApiKey hook — pi-ai resolves keys natively", () => {
+		const builds = [createAssistantAgent({ engine: fauxEngine() })];
 		for (const agent of builds) {
 			assert.equal(
 				(agent as unknown as { getApiKey?: unknown }).getApiKey,

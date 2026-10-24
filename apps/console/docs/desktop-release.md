@@ -1,3 +1,5 @@
+> Inherited from learnharness; applies to `apps/console` and `apps/desktop`.
+
 # Desktop builds and releases
 
 ## Platforms

@@ -1,3 +1,5 @@
+> Inherited from learnharness; applies to `apps/console` and `apps/desktop`.
+
 # Keyboard shortcuts
 
 Decided 2026-09-17 (owner key-map review after the first draft; the whole

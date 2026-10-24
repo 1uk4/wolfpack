@@ -16,7 +16,7 @@ The learnharness teaching domain (teacher/prober/practice agents, plan tree, pha
 
 ## Develop
 
-See [`docs/development.md`](docs/development.md) (commands, layout) and [`docs/architecture.md`](docs/architecture.md) (layers, the import law). Keyboard shortcuts: [`docs/keyboard.md`](docs/keyboard.md). Engine notes: [`docs/pi-engine-swap.md`](docs/pi-engine-swap.md). Desktop builds: [`docs/desktop-release.md`](docs/desktop-release.md).
+See the repo-root [`docs/`](../../docs) (architecture, development guide, decisions). Keyboard shortcuts: [`docs/keyboard.md`](docs/keyboard.md). Desktop builds: [`docs/desktop-release.md`](docs/desktop-release.md).
 
 ```bash
 npm run dev      # http://localhost:3000

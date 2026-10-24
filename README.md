@@ -1,303 +1,49 @@
 # Wolfpack
 
-A framework for running personalized AI agents with persistent, shared knowledge.
+Wolfpack is a multi-agent system: a pack of long-lived AI agents ("wolves") with persistent memory and a shared knowledge base, working on a shared work ledger. Today's pack is **hal** (personal agent, 24/7 on a VPS), **dewey** (knowledge-base librarian, 24/7 on a VPS) and **1uk4** (personal working agent, on the Mac).
 
-> _Setup & architecture docs are being rewritten._
+> **Status: active rewrite on branch `console`.** `main` runs the production pack (pi TUI, Telegram bridge, dashboard, Syncthing). This branch replaces that front end with **Wolfpack Console**, a Next.js + Electron app over pi-durable wolves. The console currently runs against a mock client only; no daemon exists yet. See [docs/vision.md](docs/vision.md) and [docs/architecture.md](docs/architecture.md).
 
-## Architecture
+## Monorepo map
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your Mac (host)                                            │
-│                                                             │
-│  wolfpack CLI ──────────────────────────────┐               │
-│    • wolfpack add wolf <name>               │               │
-│    • wolfpack list / status / logs          │               │
-│    • wolfpack host add <vps> --ip <ip>      │               │
-│                                             │  HTTP :3141   │
-│  ~/wolves/  (host-first)                    │  (Tailscale)  │
-│    local/owner/     (local wolf, authoritative) │            │
-│    host-a/aide/   (VPS wolf, backup mirror)│               │
-│    shared/         (KB + librarian, later)  │               │
-│                                             ▼               │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  VPS (host-a)                                       │   │
-│  │                                                      │   │
-│  │  wolfpack-agent  ←── manages all wolves on this host │   │
-│  │    │                                                 │   │
-│  │    ├── /home/wolf-k7x2m/  (librarian)               │   │
-│  │    ├── /home/wolf-m3p9q/  (hal)                      │   │
-│  │    └── /home/wolf-r2d4w/  (forge)                    │   │
-│  │                                                      │   │
-│  │  Each wolf: own unix user, systemd service, Pi       │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
+npm workspaces (`packages/*`, `apps/*`), orchestrated by turbo.
 
-## Memory System
-
-Three-tier memory with escalating curation:
-
-```
-Conversation → Observer → Observations → Consolidator → Session Topics
-                                                          ↓ /wolf:promote
-                                                    Den Topics (persistent)
-                                                          ↓ auto-claim
-                                                    Librarian Inbox
-                                                          ↓ (not built yet)
-                                                    Knowledge Base
-```
-
-- **Session** — observations extracted per-turn, consolidated into `.memory/<session>/` topic files
-- **Wolf (Den)** — persistent across sessions at `$WOLF_DEN/memory/topics/` (`<wolf>/den/memory/topics/`), injected into system prompt
-- **Pack (KB)** — shared knowledge at `~/wolves/shared/knowledge/base/`, curated by Librarian (not built yet)
-
-## Project Layout
-
-```
-packages/
-  engine/          # Zod schemas, LLM adapter (Anthropic), pipeline utilities
-  memory/          # Observer, ledger, session memory, den, consolidation (agent-agnostic)
-  agent/           # VPS management HTTP API (port 3141, systemd, per-wolf unix users)
-  cli/             # Global CLI: host setup, wolf provisioning, management
-                   #   src/backend/ = WolfBackend (Local | Remote) behind resolveBackend()
-
-extensions/
-  wolfpack-memory/    # Pi extension: observer trigger, TUI status, den injection, commands
-  wolfpack-subagents/ # Pi extension: interactive sub agents (delegate to isolated agents)
-  wolfpack-telegram/  # Pi extension: Telegram bot channel (vendor your own here)
-
-infra/             # Ansible roles, playbooks, inventory (legacy)
-```
-
-## Packages
-
-| Package | Description | Status |
+| Path | Package | What it is |
 |---|---|---|
-| `@wolfpack/engine` | Knowledge schemas, LLM pipeline, adapters | ✅ Built |
-| `@wolfpack/memory` | Session memory, observer, den management | ✅ Built & tested |
-| `@wolfpack/agent` | VPS management agent (HTTP API) | ✅ Built, untested |
-| `@wolfpack/cli` | Pack management CLI | ✅ Built, untested |
+| `apps/console` | `@wolfpack/console` | Next.js app (browser + served web): chat shell, sidebar, settings, keyboard system. Lifted from learnharness, see [ATTRIBUTION.md](ATTRIBUTION.md). |
+| `apps/desktop` | `@wolfpack/desktop` | Thin Electron shell that spawns the console server on 127.0.0.1. |
+| `packages/client` | `@wolfpack/client` | `ConsoleClient` interface, event/thread types, `MockConsoleClient` + fixture. |
+| `packages/harness` | `@wolfpack/harness` | Wolf runtime: extensions, lifecycle, sweep worker, adapters. |
+| `packages/memory` | `@wolfpack/memory` | Session memory, observer, den, consolidation. |
+| `packages/kb` | `@wolfpack/kb` | Knowledge-base tooling. |
+| `packages/engine` | `@wolfpack/engine` | Zod schemas, LLM adapter, pipeline utilities. |
+| `packages/agent` | `@wolfpack/agent` | Legacy VPS management HTTP API (to be retired at cutover). |
+| `packages/cli` | `@wolfpack/cli` | `wolfpack` CLI: hosts, wolf provisioning, management. |
+| `extensions/` | | Legacy pi extensions (memory, subagents, telegram). |
+| `infra/` | | Legacy Ansible roles and inventory. |
 
-## Extensions
-
-| Extension | Description | Status |
-|---|---|---|
-| `wolfpack-memory` | Pi memory system (observer, consolidator, den, TUI) | ✅ Working |
-| `wolfpack-subagents` | Interactive sub agents (delegate tasks to isolated agents) | ✅ Working |
-| `wolfpack-telegram` | Reach the wolf via a Telegram bot (headless auto-connect, owner-gated) | ✅ Working (based on badlogic/pi-telegram, MIT) |
-
-Extensions live in `extensions/` and are declared in a wolf's **`agent/settings.json`**
-(`packages[]`), generated by the CLI. Two delivery paths:
-
-- **Local wolves** point `packages[]` at the repo's `extensions/` directly (always current).
-- **Remote wolves** get a portable **bundle**: the CLI esbuild-bundles each selected
-  extension into a self-contained artifact (Path Z), tars it, and ships it to the host
-  agent — so the VPS never needs the monorepo. `wolfpack sync` rebuilds + pushes updates;
-  `wolfpack status` tracks per-extension version + content-hash drift.
-
-Keys with no package under `extensions/` are recorded in `wolf.yaml` but skipped
-(the CLI warns).
-
-### Profiles
-
-New wolves pick a **profile** that bundles sensible extension defaults:
-
-| Profile | Default extensions | For |
-|---|---|---|
-| `worker` | memory, subagents | Local, keyboard-driven working agent (e.g. `owner`) |
-| `assistant` | memory, subagents, **telegram** | 24/7 VPS assistant reached via Telegram |
-
-Local wolves default to `worker`; remote (`--host`) wolves default to `assistant`.
-When the Telegram extension is attached, the CLI collects the bot token (stored in
-the wolf's `.env`) and owner id (stored in `wolf.yaml`).
-
-## Wolf Identity
-
-Each wolf has a **6-char nanoid** as its stable identifier and a cosmetic name.
-
-```yaml
-# wolf.yaml
-id: k7x2m
-name: librarian
-runtime: pi
-profile: assistant
-model: claude-sonnet-4-6
-role: knowledge-curator
-domains: [snapjack, wolfpack]
-extensions: [memory, subagents, telegram]
-telegram: { tokenEnv: TELEGRAM_BOT_TOKEN, ownerId: 123456 }
-```
-
-## Filesystem Layout (host-first)
-
-`~/wolves/` is namespaced by **host**, then wolf:
-
-```
-~/wolves/
-  local/                 # wolves running on this machine (authoritative)
-    owner/
-      wolf.yaml          # identity + config
-      .env               # secrets (WOLF_ID, TELEGRAM_BOT_TOKEN, ...)
-      agent/settings.json # PI_CODING_AGENT_DIR: packages[] -> extensions PI loads
-      den/memory/        # persistent memory (topics, items, JOURNEY)
-      logs/
-  host-a/               # a VPS host
-    aide/                # read-only backup mirror (VPS den is authoritative)
-  shared/                # cross-wolf shared memory (librarian), added later
-```
-
-- **Local wolves** (`local/<wolf>`) are authoritative on this machine.
-- **Remote wolves** run on the VPS (authoritative there); `~/wolves/<host>/<wolf>`
-  is a **backup mirror** of their den (one-way, read-only on the Mac).
-- **`shared/`** is reserved for the librarian's cross-wolf memory (not built yet).
-
-VPS layout: `/home/wolf-<id>/` — own unix user, own systemd service (the
-authoritative den lives here and mirrors up to `~/wolves/<host>/<wolf>/`).
-
-## Networking & Health (Tailscale + Syncthing)
-
-All inter-host traffic rides a **Tailscale** tailnet: the CLI-to-agent HTTP API
-(`:3141`) and Syncthing (backup mirror + shared memory) are tailnet-only. A
-host's `address` in config is its Tailscale IP.
-
-The agent's `/health` endpoint reports **Tailscale** and **Syncthing** health,
-surfaced by `wolfpack host status`:
-
-```
-  Services:
-    [ok] Tailscale  Running  100.x.y.z | 2/3 peers online
-    [ok] Syncthing  synced   2/2 peers | 3 folders | 100% synced
-```
-
-Syncthing's deeper check is enabled by setting these in the agent's environment:
-
-| Env | Default | Purpose |
-|---|---|---|
-| `SYNCTHING_UNIT` | `syncthing` | systemd unit to probe |
-| `SYNCTHING_URL` | `http://127.0.0.1:8384` | REST base |
-| `SYNCTHING_API_KEY` | (unset) | enables folder-completion check |
-
-> **Provisioning:** `wolfpack host add` is a guided wizard that pre-flight-checks
-> the box, then installs **Node 22 → pi → Tailscale → Syncthing → the agent**.
-> You join the tailnet yourself (`tailscale up`) before registering, or set
-> `TAILSCALE_AUTHKEY` to let the deploy run it. The agent runs as **root** and
-> manages per-wolf unix users + systemd units running `pi --mode rpc`.
-
-## CLI Commands
-
-```bash
-# Host management
-wolfpack host add host-a --ip <tailscale-ip>
-wolfpack host list
-wolfpack host status host-a   # CPU/mem/disk + Tailscale & Syncthing health + wolves
-
-# Wolf management (PI runtime only)
-wolfpack add wolf owner                          # local worker: memory,subagents
-wolfpack add wolf aide --host host-a          # remote assistant: +telegram (prompts for token)
-wolfpack add wolf aide --host host-a \
-  --profile assistant --telegram-token <t> --telegram-owner <id> --yes
-wolfpack add wolf test-wolf --ext memory       # specific extension set (skip picker)
-wolfpack launch owner                            # launch a local wolf's PI (env auto-loaded)
-wolfpack list [--json]                          # every backend: local + each host
-wolfpack status <wolf> [--host <h>]            # local or remote (shows memory snapshot)
-wolfpack logs <wolf> [-f] [--host <h>]         # local tails files; remote via agent
-wolfpack restart <wolf> --host <h>             # remote only (local wolves run in your terminal)
-
-# Change/update configuration
-wolfpack config <wolf>                         # interactive editor (runtime + extensions)
-wolfpack config <wolf> --set model=claude-sonnet-4-6
-wolfpack config <wolf> --set extensions=memory,subagents
-
-# Propagate extension/identity updates to provisioned wolves
-wolfpack sync <wolf> [--host <h>]              # rebuild bundle + restart (den preserved)
-wolfpack sync --all                            # every wolf on every host
-```
-
-### Add-wolf flags
-
-Wolfpack only uses the **PI** runtime right now.
-
-| Flag | Description |
-|---|---|
-| `--profile <p>` | `worker` (local) \| `assistant` (24/7 VPS, +telegram) |
-| `--ext a,b` | Attach these extension keys (skip the picker) |
-| `--telegram-token <t>` | Telegram bot token (assistant profile) |
-| `--telegram-owner <id>` | Telegram owner user id |
-| `-y`, `--yes` | Non-interactive; accept the profile's defaults |
-| `--model <m>` | Model id |
-
-## Pi Extension Commands
-
-When running as a wolf in Pi:
-
-| Command | Description |
-|---|---|
-| `/wolf:memory on/off` | Toggle observation |
-| `/wolf:status` | Pool size, cost, den path |
-| `/wolf:consolidate` | Force observations → session topics |
-| `/wolf:promote` | Consolidate → den → auto-claims |
-| `/end` | Promote → compact → exit |
-
-## Environment Variables
-
-`wolfpack launch <wolf>` loads these automatically. Precedence:
-shell env < `~/.wolfpack/.env` (shared secrets) < the wolf's own `.env`.
-
-```bash
-# Per-wolf (~/wolves/local/<wolf>/.env, written at creation)
-WOLF_ID=FHfgZV                              # stable id
-WOLF_NAME=owner                              # wolf identity
-WOLF_DEN=~/wolves/local/owner/den            # den path (memory extension)
-WOLFPACK_LIBRARIAN=~/wolves/shared/librarian/inbox
-
-# Shared (~/.wolfpack/.env — set once for all wolves)
-ANTHROPIC_API_KEY=sk-ant-...                # for memory LLM calls
-```
-
-## Installation
-
-```bash
-git clone https://github.com/<your-org>/wolfpack.git
-cd wolfpack
-./install.sh
-```
-
-This verifies Node 22+, installs dependencies, builds all packages, links the
-`wolfpack` CLI globally, installs the `pi` runtime, and scaffolds `~/.wolfpack/`.
-
-## Development
+## Quickstart
 
 ```bash
 npm install
-npm run build         # Build all packages
-npm run build         # Type check + compile
-npm run install:cli   # Rebuild + relink CLI
+npm run dev        # console at http://localhost:3000, backed by MockConsoleClient
+npm run verify     # turbo: build, typecheck, lint, test across all workspaces
 ```
 
-## Current Status
+Desktop (run in your own terminal; starts the console on :3210, then opens Electron):
 
-**Working end-to-end:**
-- Observer → observations → session topics → den topics → system prompt injection
-- TUI status bar with pool gauge, observation count, cost
-- Compaction renders memory (journey + topic map + observations + den context)
+```bash
+npm run dev -w @wolfpack/desktop
+```
 
-- PI-only, headless VPS wolves: per-user systemd running `pi --mode rpc`
-- Portable identity bundles (esbuild) + `sync` propagation + version/drift tracking
-- `wolfpack-telegram` headless auto-connect bridge
+`npm run dev` does not start Electron. Packages have no linter yet (`lint` is a no-op there). The console test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO in it.
 
-**Built, pending live VPS validation:**
-- CLI host wizard + agent provisioning end-to-end on a real box
-- memory/subagents re-validation against pi 1.0.x
+Legacy CLI commands (`wolfpack add wolf`, `launch`, `sync`, ...) still work from `main`'s tooling: `npm run build && npm run install:cli`.
 
-**Not yet built:**
-- `@wolfpack/librarian` — claim processing pipeline
-- Agent→wolf RPC bridge (Option 3: inject prompts over the launcher FIFO)
-- KB → wolf context injection (reading shared knowledge)
+## Docs
 
-## Workspace tasks (turbo)
-
-- `npm run dev` — turbo dev for `@wolfpack/console` (browser, http://localhost:3000). Does not start Electron.
-- `npm run dev -w @wolfpack/desktop` — desktop path: starts console on :3210, then opens Electron. Run it in your own terminal.
-- `npm run verify` — `turbo run build typecheck lint test` across every workspace, cached. Packages have no linter yet (`lint` is a no-op echo). Console's test script (`apps/console/scripts/test.sh`) excludes known-failing files; see the TODO there.
-- `npm run build` / `npx vitest run` still work at the root as before.
+- [docs/vision.md](docs/vision.md): goal, core model, milestone 1, branch policy.
+- [docs/architecture.md](docs/architecture.md): what is built vs planned.
+- [docs/decisions/](docs/decisions/): architecture decision records.
+- [docs/development.md](docs/development.md): contributor guide and docs rules.
+- Console-specific, inherited from learnharness: [keyboard shortcuts](apps/console/docs/keyboard.md), [desktop release](apps/console/docs/desktop-release.md).

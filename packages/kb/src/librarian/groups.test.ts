@@ -17,6 +17,8 @@ import { writeSections } from "./sections.js";
 import { drainInbox } from "./intake.js";
 import { emitDelta } from "../client/emitDelta.js";
 import { assembleEntry, type Section } from "../schema/knowledge.js";
+import { commitEntry } from "./commit.js";
+import { entryHashOf } from "./entry-hash.js";
 import type { KbRoots } from "../shared/index.js";
 
 describe("entry groups", () => {
@@ -97,6 +99,62 @@ describe("entry groups", () => {
       return import("../shared/hash.js").then(({ contentHash }) => {
         expect(read(HOLDER)).toContain(`contentHash: ${contentHash(["Holder title", "Summary of kb-wp-HOLDER1.", detail].join("\n"))}`);
       });
+    });
+  });
+
+  describe("syncDelivered: robustness", () => {
+    it("a holder body with $$ and $& survives the rewrite untouched", () => {
+      write(HOLDER, { anchor: KEY, body: "## How\n\ncosts $$5 and $& more, $` and $'.\n\n## History\n\n- 2026-10-01: made." });
+      write("kb-wp-AAAAAAA", { title: "Period A", anchor: "fa", group: KEY, groupDate: "2026-10-14" });
+      expect(syncDelivered(roots, "wp", KEY)).toBe(true);
+      expect(read(HOLDER)).toContain("costs $$5 and $& more, $` and $'.");
+    });
+
+    it("a follower written before its holder joins the holder's section when the holder arrives", () => {
+      write("kb-wp-AAAAAAA", { anchor: "fa", group: KEY, groupDate: "2026-10-14", section: "sec-wp-aaaaaa" });
+      expect(syncDelivered(roots, "wp", KEY)).toBe(false); // no holder yet
+      write(HOLDER, { anchor: KEY, section: "sec-wp-hhhhhh" });
+      syncDelivered(roots, "wp", KEY);
+      expect(read("kb-wp-AAAAAAA")).toMatch(/^section: sec-wp-hhhhhh$/m);
+    });
+  });
+
+  describe("entryHashOf equals the hash produce computes", () => {
+    const hashFor = (o: { summary: string; detail: string; context?: string }) => {
+      const entry = assembleEntry({
+        opinion: { title: "Holder title", kind: { type: "fact" }, confidence: "high", facets: {}, properties: {}, proposedRelations: [], ...o } as any,
+        facts: { id: "kb-wp-HASHEDD", domain: "wp", created: "2026-10-01", updated: "2026-10-01", contentHash: "x", currency: "live", relations: [], section: "sec-wp-aaaaaa", placement: { basis: "routed", fit: 1 } } as any,
+        resolve: () => null,
+      });
+      return import("../shared/hash.js").then(({ contentHash }) => {
+        const real = contentHash(["Holder title", o.summary, o.detail].join("\n"));
+        commitEntry(roots, { ...entry, contentHash: real });
+        return { real, fromFile: entryHashOf(read("kb-wp-HASHEDD")) };
+      });
+    };
+    it("detail with a Detail wrapper", async () => {
+      const r = await hashFor({ summary: "A summary.", detail: "plain text, no heading" });
+      expect(r.fromFile).toBe(r.real);
+    });
+    it("detail that starts with a heading (no wrapper)", async () => {
+      const r = await hashFor({ summary: "A summary.", detail: "## How\n\nstuff\n\n## History\n\n- 2026-10-01: x" });
+      expect(r.fromFile).toBe(r.real);
+    });
+    it("a Context section is not hashed", async () => {
+      const r = await hashFor({ summary: "A summary.", detail: "## How\n\nstuff", context: "Some context." });
+      expect(r.fromFile).toBe(r.real);
+    });
+    it("a multi-paragraph summary is hashed in full", async () => {
+      const r = await hashFor({ summary: "First paragraph.\n\nSecond paragraph.", detail: "## How\n\nstuff" });
+      expect(r.fromFile).toBe(r.real);
+    });
+    it("the synced holder hash matches for a holder with context", async () => {
+      write(HOLDER, { anchor: KEY });
+      write("kb-wp-AAAAAAA", { title: "Period A", anchor: "fa", group: KEY, groupDate: "2026-10-14" });
+      writeFileSync(join(dir(), `${HOLDER}.md`), read(HOLDER) + "\n## Context\n\nWhy it exists.\n");
+      syncDelivered(roots, "wp", KEY);
+      expect(read(HOLDER)).toContain(`contentHash: ${entryHashOf(read(HOLDER))}`);
+      expect(entryHashOf(read(HOLDER))).not.toContain("Why it exists");
     });
   });
 

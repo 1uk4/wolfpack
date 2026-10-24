@@ -61,6 +61,13 @@ function writeEntry(domain: string, id: string, size: number): string {
 }
 
 describe("scanFat", () => {
+  it("skips anchored entries", () => {
+    const p = writeEntry("testdom", "kb-testdom-anchor1", 30000);
+    writeFileSync(p, readFileSync(p, "utf-8").replace("id: kb-testdom-anchor1\n", "id: kb-testdom-anchor1\nanchor: work-testdom-FEAT001\n"));
+    writeEntry("testdom", "kb-testdom-plain01", 30000);
+    expect(scanFat(roots, { domain: "testdom" }).map((c) => c.entryId)).toEqual(["kb-testdom-plain01"]);
+  });
+
   it("returns oversized entries sorted largest-first", () => {
     writeEntry("testdom", "kb-testdom-small01", 500);
     writeEntry("testdom", "kb-testdom-medium1", 15000);

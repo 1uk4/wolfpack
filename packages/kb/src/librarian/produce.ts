@@ -27,6 +27,7 @@ import {
   type LintFinding,
 } from "../shared/knowledgeLint.js";
 import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
+import { entryHashText } from "./entry-hash.js";
 import { deliveredBullets, mapDeliveredLinks, mergeDelivered } from "../shared/index.js";
 import { addCitedHistory, dedupeDetail, existingRelations, foldIntro, historyLines, normalizeDetail, preserveHistory } from "./preserve.js";
 
@@ -267,7 +268,7 @@ export async function produceEntry(
   }
 
   // Compute content hash from the opinion prose
-  const contentText = [opinion.title, opinion.summary, opinion.detail].join("\n");
+  const contentText = entryHashText(opinion.title, opinion.summary, opinion.detail);
   const contentHashValue = hashContent(contentText);
 
   const facts: DerivedFacts = {
@@ -347,7 +348,7 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult {
     domain: DomainId.parse(domain),
     created,
     updated: timestamp,
-    contentHash: hashContent([opinion.title, opinion.summary, opinion.detail].join("\n")),
+    contentHash: hashContent(entryHashText(opinion.title, opinion.summary, opinion.detail)),
     currency: contribution.currency === "archived" ? "archived" : "live",
     asOf: contribution.sourceUpdated ? IsoDate.parse(contribution.sourceUpdated) : undefined,
     anchor: contribution.anchor ?? (prev ? anchorOf(prev) : undefined),
@@ -357,5 +358,13 @@ export function produceVerbatim(input: ProduceEntryInput): ProduceEntryResult {
     section,
     placement,
   };
-  return { entry: assembleEntry({ opinion, facts, overrides: input.overrides, resolve }), action };
+  const entry = assembleEntry({ opinion, facts, overrides: input.overrides, resolve });
+  // Same text and same identity as the entry on disk: nothing to write.
+  if (prev) {
+    const f = parseFrontmatter(prev).fields;
+    if (String(f.contentHash ?? "") === entry.contentHash && facts.anchor === anchorOf(prev) && facts.group === groupOf(prev) && facts.groupDate === groupDateOf(prev)) {
+      return { entry, action, unchanged: true };
+    }
+  }
+  return { entry, action };
 }

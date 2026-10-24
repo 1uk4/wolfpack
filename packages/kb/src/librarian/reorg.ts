@@ -367,6 +367,7 @@ function readDirectMembersFromDisk(
   if (!existsSync(eDir)) return members;
   for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
     const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
+    if (fields.group) continue; // grouped entries do not describe their section
     if (String(fields.section ?? "") === String(sectionId)) {
       members.push({
         title: String(fields.title ?? f.replace(/\.md$/, "")),
@@ -768,7 +769,7 @@ async function rebuildLabelAfter(
             for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
               if (result.length >= max) break;
               const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-              if (String(fields.section ?? "") === String(sectionId)) {
+              if (!fields.group && String(fields.section ?? "") === String(sectionId)) {
                 result.push({
                   title: String(fields.title ?? f.replace(/\.md$/, "")),
                   summary: fields.summary ? String(fields.summary) : undefined,

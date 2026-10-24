@@ -236,6 +236,27 @@ describe("sweep: graduated work", () => {
       expect(md).toMatch(/^groupDate: 2026-10-14$/m);
     });
 
+    it("an identical verbatim re-send changes nothing: no rewrite, no new version", async () => {
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({});
+      const id = byAnchor("work-wp-FEATA01");
+      const before = file(id);
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({ [id]: 0.3 });
+      expect(file(id)).toBe(before);
+      expect(existsSync(join(base, "base", "domains", "wp", "versions", id))).toBe(false);
+    });
+
+    it("a feature swept before its holder ends up in the holder's section", async () => {
+      dropV("work-wp-FEATA01", "Period A", BODY_A, { anchor: "work-wp-FEATA01", verbatim: true, group: holderKey, groupDate: "2026-10-14" });
+      await run({});
+      dropV(holderKey, "The initiative", "body", { anchor: holderKey });
+      await run({});
+      const holder = byAnchor(holderKey);
+      const hs = file(holder).match(/^section: (\S+)$/m)![1];
+      expect(file(byAnchor("work-wp-FEATA01"))).toMatch(new RegExp(`^section: ${hs}$`, "m"));
+    });
+
     it("a verbatim entry is skipped by the size guard and left out of every other contribution's candidates", async () => {
       process.env.KB_MAX_MERGE_TARGET_CHARS = "100";
       try {

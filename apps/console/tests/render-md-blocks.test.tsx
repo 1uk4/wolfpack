@@ -16,7 +16,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MessageResponse } from "../components/ai-elements/message.tsx";
 import { ThinkingBlock, setAllUserThinkingOpen } from "@/components/thinking-block";
 import { MermaidOverlay, SessionMermaidContext, chartSize } from "../components/session-overlay.tsx";
-import { PlanPopup } from "../components/plan-block.tsx";
 import { MarkdownCode, codeSource } from "../components/md-blocks.tsx";
 
 function render(md: string): string {
@@ -121,25 +120,10 @@ describe("session-scoped overlays (chrome-melt wave, 2026-09-19)", () => {
 		assert.match(html, /role="dialog"/, "dialog semantics for Esc/aria");
 	});
 
-	it("the plan popup is session-scoped the same way, and its chart is hidden until the first fit (no top-left flash)", () => {
-		const html = renderToStaticMarkup(<PlanPopup messages={[]} onClose={() => {}} />);
-		assert.match(html, /data-testid="plan-popup"/);
-		assert.match(html, /class="absolute inset-0[^"]*z-40/, "absolute inset-0 z-40 — scoped, not fullscreen");
-		assert.ok(html.includes("bg-background/80"), "80% background");
-		assert.ok(html.includes("backdrop-blur"), "blur surface");
-		assert.ok(!html.includes("fixed inset-0"), "never fixed — the drag bar stays uncovered");
-	});
-
 	it("the diagram wrapper is hidden until the first fit applies (no top-left flash — owner report, 2026-09-19)", () => {
-		// Covered in render-plan-block.test.tsx, which has a real tree
-		// fixture (an empty-messages popup renders no diagram to gate) — and
-		// the same gate is asserted on the mermaid overlay's wrapper here:
+		// The chart itself hasn't rendered at static render (async effect):
 		// settled=false at static render → opacity 0.
 		const html = renderToStaticMarkup(<MermaidOverlay chart="graph TD\nA --> B" onClose={() => {}} />);
-		// The chart itself hasn't rendered at static render (async effect) —
-		// the opacity gate is pinned on the plan popup's diagram wrapper in
-		// render-plan-block.test.tsx, which has a real tree fixture (the two
-		// overlays share the settled-gating pattern).
 		assert.ok(html.includes('data-testid="mermaid-overlay-close"'), "overlay shell renders");
 	});
 
@@ -164,7 +148,6 @@ describe("mermaid expand — the context seam", () => {
 			<SessionMermaidContext.Provider
 				value={{
 					openMermaid: (chart) => void opened.push(chart),
-					openFigure: () => {},
 				}}
 			>
 				<div />

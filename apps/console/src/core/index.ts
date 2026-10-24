@@ -17,7 +17,6 @@
 
 export * from "./contracts.ts";
 export * from "./ports.ts";
-export * from "./chains.ts";
 export * from "./render-settings.ts";
 
 export * from "./question-core.ts";
@@ -31,8 +30,6 @@ export * from "./events.ts";
 // client bundle (verified 2026-09-13: chunks contained it while this
 // line existed). Same logic as layout-settle.ts below.
 export * from "./layout.ts";
-export * from "./plan-tree.ts";
-export * from "./phases.ts";
 export * from "./pending.ts";
 export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";
@@ -48,20 +45,12 @@ export * from "./input-events.ts";
 export * from "./view.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
-export * from "./cost-summary.ts";
 export * from "./fuzzy.ts";
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.
 export * from "./settings.ts";
-// graph-deletion.ts (wave 6): the whole module is PURE but storage-port
-// driven — the deletion RUNS server-side only. The shell needs exactly one
-// two type-only things from it: the ChatDeleteMode union (the delete
-// dialog's two-option design + the DELETE query param) and the stats
-// shape its success line describes, hence this type-only re-export.
-export type { ChatDeleteMode, ChatDeletionStats } from "./graph-deletion.ts";
 export * from "./settings-resolution.ts";
-export * from "./search.ts"; // search port (search wave, 2026-09-20)
 export * from "./session-find.ts";
 export * from "./session-navigation.ts";
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +
@@ -70,8 +59,6 @@ export * from "./session-navigation.ts";
 export * from "./auth-keys.ts";
 // keyboard.ts: the shortcut registry + binding normalization (pure, browser-safe).
 export * from "./keyboard.ts";
-export * from "./coverage.ts";
-// session-markdown.ts (2026-09-27 engine; first consumer 2026-10-06): the
-// ONE session→markdown formatter — the extractor's view and the user-facing
-// export share it. Pure, browser-safe.
+// session-markdown.ts: the ONE session→markdown formatter (the export).
+// Pure, browser-safe.
 export * from "./session-markdown.ts";

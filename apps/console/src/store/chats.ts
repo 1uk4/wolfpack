@@ -12,11 +12,10 @@ import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { emit } from "../core/events.ts";
 import type { ChatStore } from "../core/ports.ts";
-import type { ChatRecord, ChatSettings, ChatSummary, ExtractionRunUsage, PlanTree, TurnUsage } from "../core/contracts.ts";
+import type { ChatRecord, ChatSettings, ChatSummary, TurnUsage } from "../core/contracts.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
-import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
-import { phaseAt3Lh } from "../core/phases.ts";
+import { danglingQuestionOf } from "../core/native-messages.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -26,13 +25,13 @@ function chatFile(id: string): string {
 /** THE SILENCE LAW (push S6, 2026-10-02): chats-changed announces ONLY
  *  list-SHAPE mutations — createChat, renameChat, deleteChat (below,
  *  each emits post-write). The content writers (saveMessages,
- *  appendTurnUsage, appendExtractionUsage, saveSettings, saveTree) are
+ *  appendTurnUsage, saveSettings) are
  *  DELIBERATELY SILENT: saveMessages fires per turn-persist and would
  *  spam the bus, and every list-visible change it causes (title, order,
- *  phase, busy, pendingQuestion) is already announced by turn-started /
+ *  busy, pendingQuestion) is already announced by turn-started /
  *  turn-settled, which the sidebar refetches on. Silence here is law,
  *  not oversight. */
-function createChat(title: string, kind?: "practice"): ChatRecord {
+function createChat(title: string): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
 		id: `chat_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
@@ -40,9 +39,6 @@ function createChat(title: string, kind?: "practice"): ChatRecord {
 		createdAt: now,
 		updatedAt: now,
 		messages: [],
-		// Practice sessions carry the marker; teach stays ABSENT (absence
-		// reads as teach — pre-practice records never migrate).
-		...(kind === "practice" ? { kind: "practice" as const } : {}),
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });
 	writeChat(record);
@@ -84,28 +80,27 @@ function listChats(): ChatSummary[] {
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => getChat(f.slice(0, -5)))
 			.filter((r): r is ChatRecord => r !== null)
-			.map(({ messages, tree, turns, extractions, ...summary }) => {
-				// Per-record isolation (Wave B): a record whose messages fail the
-				// projection (e.g. pre-Wave-B UIMessage-format scratch — the
-				// zero-back-compat wipe makes these "corrupt") must not blank the
-				// whole sidebar — same isolation getChat's per-file catch gives.
+			.map(({ messages, turns: _turns, ...summary }) => {
+				// Per-record isolation: a record whose messages fail the fold
+				// must not blank the whole sidebar — same isolation getChat's
+				// per-file catch gives.
 				try {
+					// Legacy fields from the learnharness era may still ride old
+					// records; they never reach the list payload.
+					const { tree: _tree, extractions: _extractions, kind: _kind, ...clean } = summary as typeof summary & {
+						tree?: unknown;
+						extractions?: unknown;
+						kind?: unknown;
+					};
 					return {
-						// turns and extractions stay out of the list payload (list =
-						// summaries; usage aggregates ride the full record, the picker
-						// never needs them).
-						...summary,
-						// Normalized kind: absent record field reads as teach.
-						kind: summary.kind ?? "teach",
+						// turns stay out of the list payload (list = summaries; usage
+						// aggregates ride the full record).
+						...clean,
 						messageCount: messages.length,
-						// Record-derived status for the session picker: phase from the
-						// transcript's explicit events (probe_done concluded / verdict
-						// accepted — docs/probe-teach-split.md §4), pending question
-						// from the native dangling-call scan. Wave D: both folds read
-						// the NATIVE record (core/phases.ts phaseAt3Lh +
-						// native-messages.ts danglingQuestionOf). Liveness (busy) is
-						// NOT record-derived — the API route merges it (ChatListItem).
-						phase: phaseAt3Lh(messages),
+						// Record-derived status for the session picker: the pending
+						// question from the native dangling-call scan. Liveness
+						// (busy) is NOT record-derived — the API route merges it
+						// (ChatListItem).
 						pendingQuestion: danglingQuestionOf(messages) !== null,
 					};
 				} catch (err) {
@@ -144,24 +139,12 @@ function appendTurnUsage(id: string, entry: TurnUsage): void {
 	writeChat(record);
 }
 
-/** Append one extraction-run usage entry to the record's extractions
- * log — idempotent per startedAt: a retry that reaches the append twice
- * (abort replays) does not double-count spend. */
-function appendExtractionUsage(id: string, entry: ExtractionRunUsage): void {
-	const record = getChat(id);
-	if (!record) throw new Error(`Chat not found: ${id}`);
-	record.extractions = record.extractions?.some((r) => r.startedAt === entry.startedAt)
-		? record.extractions
-		: [...(record.extractions ?? []), entry];
-	writeChat(record);
-}
-
 /** Persist the per-chat model/thinking settings — replace-whole (the
  * picker sends the complete object; absent = config defaults). */
 function saveSettings(id: string, settings: ChatSettings): void {
 	const record = getChat(id);
 	if (!record) throw new Error(`Chat not found: ${id}`);
-	// Like saveTree: a settings tweak is not conversation activity, so it
+	// A settings tweak is not conversation activity, so it
 	// deliberately does NOT bump updatedAt (sidebar order must not churn).
 	record.settings = settings;
 	writeChat(record);
@@ -183,8 +166,8 @@ function renameChat(id: string, title: string): ChatRecord {
 
 /** Delete the session record file entirely (session-deletion wave 6,
  *  owner 2026-09-22). False when the id is unknown — the route turns that
- *  into a 404. The record's graph traces and jobs are the route's
- *  choreography (core/graph-deletion.ts), not the store's. */
+ *  into a 404. The record's jobs are the route's choreography, not the
+ *  store's. */
 function deleteChat(id: string): boolean {
 	try {
 		fs.unlinkSync(chatFile(id));
@@ -195,25 +178,13 @@ function deleteChat(id: string): boolean {
 	}
 }
 
-/** Persist the session plan tree (plan tools call this in execute). */
-function saveTree(id: string, tree: PlanTree): void {
-	const record = getChat(id);
-	if (!record) throw new Error(`Chat not found: ${id}`);
-	record.tree = tree;
-	// Deliberately does NOT bump updatedAt: tree mutations piggyback on the
-	// turn's saveMessages, and sidebar ordering shouldn't churn on tree edits.
-	writeChat(record);
-}
-
 export const chatStore: ChatStore = {
 	createChat,
 	getChat,
 	listChats,
 	saveMessages,
-	saveTree,
 	saveSettings,
 	renameChat,
 	deleteChat,
 	appendTurnUsage,
-	appendExtractionUsage,
 };

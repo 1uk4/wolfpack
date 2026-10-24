@@ -19,10 +19,6 @@
  * result lands on the part that asked it, even turns later); a group's id is
  * its FIRST assistant message's id.
  *
- * Plan blocks: a plan-block marker has no message of its own — its data part
- * splices into the preceding assistant group, IN FLOW right after the last
- * successful plan_init call (the presentation moment).
- *
  * Question tools on the wire (owner fork 2): the agent's closing
  * tool_execution_end carries the in-memory "Question posed" placeholder —
  * projectView IGNORES clean question executions (the part stays
@@ -34,11 +30,9 @@
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
-import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
-import type { PlanBlockData } from "./contracts/chat.ts";
 
 /** A view part — the loose part vocabulary the renderers consume (the same
  *  shape names the pre-Wave-D UIMessage dialect used, so the renderer
@@ -107,17 +101,6 @@ function applyResult(part: LhViewPart, result: ToolResultMessage): void {
 		part.state = "output-available";
 		part.output = result.details;
 	}
-}
-
-/** Does this assistant group carry a successful plan_init (the splice target)? */
-function lastSuccessfulPlanInit(parts: LhViewPart[]): number {
-	let idx = -1;
-	parts.forEach((p, i) => {
-		if (p.type !== "tool-plan_init") return;
-		const ok = (p.output as { ok?: unknown } | undefined)?.ok;
-		if (ok === true) idx = i;
-	});
-	return idx;
 }
 
 /** Project the native record (+ live turn working list) into the client's
@@ -218,13 +201,6 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
 					const part = toolPartOf(block, live, streamingMessage);
-					// The conclusion's reveal join (owner round, 2026-10-05): the
-					// hero of a conclude card is the modelSolution committed at POSE
-					// time — a record fold, enriched here so the card renders pure.
-					if (block.name === PRACTICE_CONCLUDE_TOOL) {
-						part.reveal = modelSolutionForConclude(messages, block.id);
-						part.problemInput = problemInputForConclude(messages, block.id);
-					}
 					rest.push(part);
 				}
 			}
@@ -259,15 +235,10 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 }
 
 /** The dock-owned tools: question tools (client-owned results — the dock
- *  mounts on the dangling call) and the practice pose (its ack is FINAL —
- *  details: null, never replaced — and the card + dock read the call's
- *  input; the placeholder must never flip the part to output-available).
- *  PRACTICE (2026-10-04): problem joins the placeholder fork; conclude is
- *  a NORMAL tool part (its result acks with no payload, details null —
- *  but the ConcludeCard reads the call's input, and output-available with
- *  output undefined renders fine). */
+ *  mounts on the dangling call; the placeholder must never flip the part to
+ *  output-available). */
 function isPlaceholderResultTool(name: string): boolean {
-	return (QUESTION_TOOLS as readonly string[]).includes(name) || name === "problem";
+	return (QUESTION_TOOLS as readonly string[]).includes(name);
 }
 
 /** A tool call block → its view part, with the live execution layer.
@@ -326,12 +297,9 @@ function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage):
 		const isQuestion = isPlaceholderResultTool(tool);
 		if (isQuestion && !result.isError && result.details == null) {
 			// The placeholder fork (fork 2) stands: the clean pose/ask ack carries
-			// no card data — NEVER output-available. But the call IS settled
-			// (the practice bug, 2026-10-05: this early-return left the part on
-			// whatever toolPartOf guessed, which mid-turn resurrected a settled
-			// problem as a live spinner). input-available is the settled truth:
-			// the ProblemCard reads the call's input, the dock keys on the
-			// native fold — neither wants the ack's (null) payload.
+			// no card data — NEVER output-available. But the call IS settled:
+			// input-available is the settled truth (the dock keys on the
+			// native fold, not the ack's null payload).
 			part.state = "input-available";
 			return;
 		}
@@ -341,35 +309,12 @@ function applyResultTo(part: LhViewPart | undefined, result: ToolResultMessage):
 	// rendered nothing) is dropped from the view — the record keeps it.
 }
 
-/** A marker's projected message (handoff/steers) or splice (plan block). */
+/** A marker's projected message (steers, the compaction divider). */
 function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 	switch (marker.customType) {
-		case "graph-context": {
-			// The session's map context (owner, 2026-10-04): user-side —
-			// a minimal collapsible card ABOVE the first user message;
-			// never a text bubble (scaffolding, like the thinking card).
-			out.push({
-				id: marker.id,
-				role: "user",
-				parts: [{ type: "data-graph-context", id: `gc_${marker.id}`, data: marker.details }],
-			});
-			return;
-		}
-		case "probe-handoff": {
-			out.push({
-				id: marker.id,
-				role: "user",
-				parts: [{ type: "data-probe-handoff", id: `ph_${marker.id}`, data: marker.details }],
-			});
-			return;
-		}
 		case "subagent-steer": {
 			const meta = marker.details as SubagentResultMeta;
-			const artifact = marker.details as {
-				kind: SubagentArtifactData["kind"];
-				result: SubagentArtifactData["result"];
-				ui?: SubagentArtifactData["ui"];
-			};
+			const artifact = marker.details as SubagentArtifactData;
 			out.push({
 				id: marker.id,
 				role: "user",
@@ -379,7 +324,7 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 					{
 						type: "data-subagent-artifact",
 						id: `sa_${marker.id}`,
-						data: { kind: artifact.kind, result: artifact.result, ui: artifact.ui },
+						data: { kind: artifact.kind, result: artifact.result },
 					},
 				],
 			});
@@ -395,34 +340,6 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
-		case "practice-thinking": {
-			// The learner's working trace / committed answer (practice
-			// sessions): a user-side card keyed on the structured details
-			// (problemCallId, commit, text) — the register lives in the card,
-			// not re-parsed from content.
-			out.push({
-				id: marker.id,
-				role: "user",
-				parts: [{ type: "data-practice-thinking", id: `pt_${marker.id}`, data: marker.details }],
-			});
-			return;
-		}
-		case "practice-next": {
-			// The learner's explicit move-on signal (owner round 16): a compact
-			// centered system line — the mono-caps chrome register, not prose.
-			// The model reads the marker's content; the transcript never shows
-			// it (the label is chrome, single-sourced in the renderer).
-			out.push({
-				id: marker.id,
-				role: "user",
-				parts: [{ type: "data-practice-next", id: `pn_${marker.id}`, data: null }],
-			});
-			return;
-		}
-		case "problem-dismissed":
-			// UI-only (the ask-style dismissal): the synthesized conclude
-			// pair — which rides the NEXT input — carries the record's face.
-			return;
 		case "compaction": {
 			// THE MOMENT DIVIDER (owner round 14): minimal centered small
 			// text at the compaction moment — where the user currently is
@@ -440,17 +357,6 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 				},
 				],
 			});
-			return;
-		}
-		case "plan-block": {
-			// No message of its own: splice into the preceding assistant
-			// group, IN FLOW after the last successful plan_init call.
-			const group = out[out.length - 1];
-			if (!group || group.role !== "assistant") return;
-			const idx = lastSuccessfulPlanInit(group.parts);
-			if (idx === -1) return;
-			const { block } = marker.details as { planCallId: string; block: PlanBlockData };
-			group.parts.splice(idx + 1, 0, { type: "data-plan-block", id: marker.id, data: block });
 			return;
 		}
 	}

@@ -10,13 +10,7 @@ import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
-import { ChainTableOverlay } from "@/components/chain-table.tsx";
-import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
-import type { ChatSettings, GraphSnapshot } from "@/src/core";
-
-/** The draft's pick set (owner round 10): the SAME shape the home pick
- *  bar lifts — resolved nodes as the learner SAW them at pick time. */
-export type DraftPick = { id: string; name: string; statement: string };
+import { ComposerActions } from "@/components/composer-actions";
 
 /**
  * The sessionless draft view at /chat/new (owner, 2026-09-13): "+ New
@@ -40,26 +34,13 @@ const DOCK = "mx-auto w-full max-w-[46rem] px-4";
  * Returns null on empty text; rethrows on transport failure (the caller's
  * busy flag resets).
  */
-export async function startDraftSession(
-	text: string,
-	fetchLike: typeof fetch,
-	mode?: "practice",
-	picks?: readonly DraftPick[],
-): Promise<string | null> {
+export async function startDraftSession(text: string, fetchLike: typeof fetch): Promise<string | null> {
 	const t = text.trim();
 	if (!t) return null;
-	// THE PICKS RIDE THE CREATE (owner round 10): a practice draft seeded
-	// from the pick bar creates its session WITH the graph context — the
-	// same contract as the home screen's practice send (the marker with
-	// [id] name: statement lines, target validation's truth set).
 	const res = await fetchLike("/api/chats", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(
-			mode === "practice"
-				? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
-				: { title: t },
-		),
+		body: JSON.stringify({ title: t }),
 	});
 	const { id } = (await res.json()) as { id: string };
 	// No settings PUT on create (per-session models, owner 2026-09-28):
@@ -78,37 +59,15 @@ export function DraftShell({
 	onChange,
 	onSend,
 	setupCta,
-	mode = "teach",
-	picks = [],
-	onOpenPicker,
-	onClearPicks,
-	overlay,
 }: {
 	busy: boolean;
 	text: string;
 	onChange: (v: string) => void;
 	onSend: () => void;
-	/** The practice draft (owner, 2026-10-04): ?mode=practice — the
-	 *  created session carries kind:"practice" and the copy changes
-	 *  (the practice agent opens; no probing). */
-	mode?: "teach" | "practice";
 	/** The first-run CTA (fix wave chunk B): the same "Set up your models"
 	 *  affordance home carries, rendered above the draft shell — passed by
 	 *  NewSession, which owns the configured state and the SetupDialog. */
 	setupCta?: ReactNode;
-	/** THE PICK BAR (owner round 10): the SAME pill the home screen
-	 *  carries above its composer — dashed "Pick nodes" when empty,
-	 *  count + Clear when picked. The draft screen has
-	 *  no graph behind it, so the picker opens the standalone chain-table
-	 *  overlay over fetched snapshot data (owned by NewSession). */
-	picks?: DraftPick[];
-	onOpenPicker?: () => void;
-	onClearPicks?: () => void;
-	/** THE PICKER SLOT (owner round 10b): the chain-table overlay hosts
-	 *  INSIDE the content column's relative container — the same law as
-	 *  the graph view (the overlay fills its column, never the sidebar).
-	 *  Passed as a node so the pick state stays in NewSession. */
-	overlay?: ReactNode;
 }) {
 	// Voice dictation (STT wave, 2026-09-17): finals append at the end of the
 	// draft text (via the parent's onChange — the truth lives there); the
@@ -172,24 +131,15 @@ export function DraftShell({
 						<Conversation className="h-full min-w-0 flex-1" initial="instant">
 							<ConversationContent className="min-h-full gap-0 p-0">
 								<ConversationEmptyState
-									title={mode === "practice" ? "New practice session" : "New session"}
-									description={
-										mode === "practice"
-											? "Pick nodes from your knowledge graph, describe what you want to practice, or bring your own problem."
-											: "The teacher will open by probing what you already know."
-									}
+									title="New session"
+									description="Ask anything to get started."
 								/>
 							</ConversationContent>
 						</Conversation>
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
 						<div className="bg-background pb-4">
 							<div className={DOCK}>
-								<ComposerActions
-									picker={(picks.length > 0 || mode === "practice") && (
-										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
-									)}
-									setup={setupCta}
-								/>
+								<ComposerActions setup={setupCta} />
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 									<Composer
 										busy={busy}
@@ -201,11 +151,9 @@ export function DraftShell({
 										inputRef={composerInputRef}
 										autoFocus
 										onEscape={dictation.active ? dictation.cancel : undefined}
-										// The opening question, same as the graph view's new-session
-										// input (owner refinement round, 2026-09-24) — no lesson has
-										// started yet, so the composer must not read like one is in
-										// flight.
-										placeholder={mode === "practice" ? "What do you want to practice?" : "What do you want to learn?"}
+										// The opening prompt — no conversation has started yet, so
+										// the composer must not read like one is in flight.
+										placeholder="What's on your mind?"
 									/>
 								</div>
 								<StatsBar
@@ -215,7 +163,6 @@ export function DraftShell({
 							</div>
 						</div>
 					</div>
-					{overlay}
 				</div>
 			</div>
 			{/* The floating reopen toggle — pointer-events-none except the
@@ -230,7 +177,7 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({ initialConfigured, mode = "teach" }: { initialConfigured: boolean; mode?: "teach" | "practice" }) {
+export function NewSession({ initialConfigured }: { initialConfigured: boolean }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
 	/* The draft MIRROR ("nothing gets lost" round, 2026-10-01): the shell's
@@ -243,33 +190,6 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		setText(v);
 	};
 	const [busy, setBusy] = useState(false);
-	// THE PICK BAR (owner round 10): the draft's lifted pick set + the
-	// snapshot the standalone chain-table picker reads. Lazy — the graph
-	// is fetched on FIRST open only, then reused.
-	const [picks, setPicks] = useState<DraftPick[]>([]);
-	const picksRef = useRef<DraftPick[]>([]);
-	const applyPicks = (next: DraftPick[]) => {
-		picksRef.current = next;
-		setPicks(next);
-	};
-	const [pickerOpen, setPickerOpen] = useState(false);
-	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
-	const openPicker = () => {
-		if (snapshot) {
-			setPickerOpen(true);
-			return;
-		}
-		void fetch("/api/graph")
-			.then((r) => r.json() as Promise<GraphSnapshot>)
-			.then((snap) => {
-				setSnapshot(snap);
-				setPickerOpen(true);
-			})
-			.catch(() => {
-				/* an unreachable graph leaves the draft usable — pickless */
-			});
-	};
-
 	// First-run gate (model-slots wave, owner 2026-09-20): the send
 	// INTERCEPTS into the setup flow while unconfigured — no defaults for
 	// 33 providers, chats cannot start. The draft stays in the textarea;
@@ -302,7 +222,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(draft, fetch, mode === "practice" ? "practice" : undefined, mode === "practice" ? picksRef.current : undefined)
+		void startDraftSession(draft, fetch)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
@@ -317,35 +237,6 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				text={text}
 				onChange={applyText}
 				onSend={send}
-				mode={mode}
-				picks={picks}
-				onOpenPicker={openPicker}
-				onClearPicks={() => applyPicks([])}
-				overlay={
-					// THE PICKER (owner round 10b): hosted INSIDE the content
-					// column — absolute inset-0 resolves to the column's relative
-					// container, the same confinement the graph view gives it;
-					// never over the sidebar or the traffic lights.
-					<ChainTableOverlay
-						open={pickerOpen}
-						nodes={snapshot?.propositions ?? []}
-						chains={snapshot?.chains ?? []}
-						sessions={snapshot?.sessions ?? {}}
-						fileSources={snapshot?.fileSources ?? {}}
-						onClose={() => setPickerOpen(false)}
-						selectMode
-						controlledSelection={new Set(picks.map((p) => p.id))}
-						onSelectionChange={(ids) => {
-							const byId = new Map((snapshot?.propositions ?? []).map((n) => [n.id, n]));
-							const next: DraftPick[] = [];
-							for (const id of ids) {
-								const n = byId.get(id);
-								if (n) next.push({ id: n.id, name: n.name, statement: n.statement });
-							}
-							applyPicks(next);
-						}}
-					/>
-				}
 				setupCta={
 					zeroKeys ? (
 						<ZeroKeysPill inline onOpen={() => setSetupOpen(true)} />

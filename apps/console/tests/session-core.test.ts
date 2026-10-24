@@ -24,7 +24,7 @@ import { afterEach, describe, it } from "node:test";
 import { absorbed, pendingCallTool, SessionModel } from "../components/session-core.ts";
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
-import { newUserMessage, newAnswerResult, newThinkingMessage, needsContinuation, endsInDismissal } from "../src/core/native-messages.ts";
+import { newUserMessage, newAnswerResult, needsContinuation, endsInDismissal } from "../src/core/native-messages.ts";
 import { projectView } from "../src/core/index.ts";
 import { dismissedAnswer } from "../src/core/question-core.ts";
 import { buildAnswer, type QuestionData } from "../src/core/question-core.ts";
@@ -593,7 +593,7 @@ describe("resumeStream (the reattach path)", () => {
 		assert.equal(m.getState().status, "ready");
 	});
 
-	it("SESSION START SURVIVES A STOP() RACING THE SUBMIT (owner, 2026-10-10 — the dead-practice-start postmortem)", async () => {
+	it("SESSION START SURVIVES A STOP() RACING THE SUBMIT (owner, 2026-10-10 — the dead-session-start postmortem)", async () => {
 		// React StrictMode's simulated remount fires the unmount cleanup
 		// (~8ms in) while the ?prompt first send's POST is in flight — the
 		// exact live repro: pre-fix, the POST rode consumeAbort and died
@@ -1011,59 +1011,59 @@ describe("newAnswerResult two audiences", () => {
 	});
 });
 
-// ─── the practice live-view law (owner, 2026-10-05) ─────────────────────────
+// ─── the live-view law (owner, 2026-10-05) ──────────────────────────────────
 //
-// The two-spinners + doubled-card incident: submitting thinking flipped the
-// POSE turn's problem call back to a live spinner mid-transcript (session
-// busyness leaked into per-call state), and the optimistic thinking marker
-// was never absorbed (role "custom" was missing from absorbed()), so the
-// adoption window rendered the submission twice for the whole turn.
+// The two-spinners + doubled-card incident: a later turn's busyness flipped
+// a SETTLED call back to a live spinner mid-transcript (session busyness
+// leaked into per-call state), and an optimistic marker was never absorbed
+// (role "custom" was missing from absorbed()), so the adoption window
+// rendered it twice for the whole turn.
 
-/** The post-settle pose-turn record of a practice session. */
-function poseRecord(): LhMessage[] {
+/** A settled record: a question call with its placeholder ack. */
+function askRecord(): LhMessage[] {
 	return [
-		{ id: "m1", role: "user", content: "db practice" },
+		{ id: "m1", role: "user", content: "ask me" },
 		{
 			id: "m3",
 			role: "assistant",
-			content: [{ type: "toolCall", id: "call-p1", name: "problem", arguments: { statement: "Q?" } }],
+			content: [{ type: "toolCall", id: "call-p1", name: "ask_user_question", arguments: { question: "Q?" } }],
 		} as unknown as LhMessage,
 		{
 			id: "m4",
 			role: "toolResult",
 			toolCallId: "call-p1",
-			toolName: "problem",
-			content: [{ type: "text", text: "Problem posed — the turn ends here." }],
+			toolName: "ask_user_question",
+			content: [{ type: "text", text: "Question posed — the turn ends here." }],
 			details: null,
 		} as unknown as LhMessage,
 	] as LhMessage[];
 }
 
 describe("the live-view law — live is positive evidence, not session busyness", () => {
-	it("a settled problem call NEVER renders live during another turn (the two-spinner bug)", () => {
-		// The thinking turn's live state: inFlight, but NOTHING streams that
-		// touches the pose call, and the executions map (per-turn) is empty.
+	it("a settled call NEVER renders live during another turn (the two-spinner bug)", () => {
+		// The next turn's live state: inFlight, but NOTHING streams that
+		// touches the settled call, and the executions map (per-turn) is empty.
 		const live = { executions: new Map(), inFlight: true, streamingIds: new Set<string>() };
-		const view = projectView(poseRecord(), live);
-		const problem = view.flatMap((m) => m.parts).find((p) => p.type === "tool-problem");
-		assert.ok(problem, "the problem part projects");
-		assert.equal(problem!.state, "input-available", "settled = the ProblemCard, never a shimmer");
+		const view = projectView(askRecord(), live);
+		const ask = view.flatMap((m) => m.parts).find((p) => p.type === "tool-ask_user_question");
+		assert.ok(ask, "the question part projects");
+		assert.equal(ask!.state, "input-available", "settled = the dock's pending, never a shimmer");
 	});
 
 	it("a call in THIS turn's streaming message stays input-streaming (the shimmer's true home)", () => {
 		const live = { executions: new Map(), inFlight: true, streamingIds: new Set(["c_as1"]) };
 		const messages = [
-			...poseRecord(),
+			...askRecord(),
 			{
 				id: "c_as1",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "call-c1", name: "conclude", arguments: { outcome: "solved" } }],
+				content: [{ type: "toolCall", id: "call-c1", name: "read", arguments: { path: "notes.md" } }],
 			} as unknown as LhMessage,
 		];
 		const view = projectView(messages, live);
-		const conclude = view.flatMap((m) => m.parts).find((p) => p.type === "tool-conclude");
-		assert.ok(conclude, "the conclude part projects");
-		assert.equal(conclude!.state, "input-streaming", "the live card renders at the bottom, by construction");
+		const read = view.flatMap((m) => m.parts).find((p) => p.type === "tool-read");
+		assert.ok(read, "the tool part projects");
+		assert.equal(read!.state, "input-streaming", "the live card renders at the bottom, by construction");
 	});
 
 	it("a DANGLING call in a settled message is the dock's pending — not a mid-turn shimmer", () => {
@@ -1073,41 +1073,40 @@ describe("the live-view law — live is positive evidence, not session busyness"
 			{
 				id: "m2",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "call-p9", name: "problem", arguments: { statement: "Q?" } }],
+				content: [{ type: "toolCall", id: "call-p9", name: "ask_user_question", arguments: { question: "Q?" } }],
 			} as unknown as LhMessage,
 		] as LhMessage[];
 		const view = projectView(messages, live);
-		const part = view.flatMap((m) => m.parts).find((p) => p.type === "tool-problem");
+		const part = view.flatMap((m) => m.parts).find((p) => p.type === "tool-ask_user_question");
 		assert.equal(part!.state, "input-available", "no evidence, no shimmer — even mid-turn");
 	});
 });
 
-describe("absorbed — the custom role (the doubled thinking card)", () => {
-	it("absorbs the optimistic thinking marker by customType + details", () => {
-		const optimistic = { ...newThinkingMessage("call-p1", "my trace"), id: "c_opt1" } as LhMessage;
-		const serverCopy = { ...newThinkingMessage("call-p1", "my trace"), id: "srv_1" } as LhMessage;
-		assert.ok(absorbed(optimistic, [...poseRecord(), serverCopy]), "same submission → the local copy drops");
-		// A DIFFERENT submission (different text) is its own marker.
-		const other = { ...newThinkingMessage("call-p1", "a later, different trace"), id: "srv_2" } as LhMessage;
-		assert.ok(!absorbed(optimistic, [...poseRecord(), other]), "different details → not the same submission");
+describe("absorbed — the custom role (the doubled marker card)", () => {
+	const marker = (id: string, jobId: string) =>
+		({ id, role: "custom", customType: "subagent-steer", content: "done", display: true, details: { jobId }, timestamp: 1 }) as unknown as LhMessage;
+
+	it("absorbs an optimistic marker by customType + details", () => {
+		const optimistic = marker("c_opt1", "j1");
+		const serverCopy = marker("srv_1", "j1");
+		assert.ok(absorbed(optimistic, [...askRecord(), serverCopy]), "same marker → the local copy drops");
+		// A DIFFERENT payload is its own marker.
+		assert.ok(!absorbed(optimistic, [...askRecord(), marker("srv_2", "j2")]), "different details → not the same marker");
 		// The c_ gate: server stamps are never absorbed, whatever the role.
 		assert.ok(!absorbed(serverCopy, [optimistic]), "server ids never drop");
 	});
 
 	it("the adoption window cannot double the card (model-level end-to-end)", () => {
-		// The exact client sequence of the incident: the optimistic marker in
-		// the tail (client id), then the +400ms adoption fetch swaps in the
-		// write-ahead record (server id). ONE card must remain.
-		const m = model({ chatId: "chat_x", initialMessages: poseRecord() });
-		const optimistic = { ...newThinkingMessage("call-p1", "my trace"), id: "c_opt1" } as LhMessage;
-		m.applyWireEvent({ type: "message_start", message: optimistic });
+		// The optimistic marker in the tail (client id), then the adoption
+		// fetch swaps in the write-ahead record (server id). ONE card must remain.
+		const m = model({ chatId: "chat_x", initialMessages: askRecord() });
+		m.applyWireEvent({ type: "message_start", message: marker("c_opt1", "j1") });
 		assert.equal(
 			m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "custom").length,
 			1,
 			"the optimistic marker is in the tail",
 		);
-		const serverCopy = { ...newThinkingMessage("call-p1", "my trace"), id: "srv_1" } as LhMessage;
-		m.adoptRecord([...poseRecord(), serverCopy]);
+		m.adoptRecord([...askRecord(), marker("srv_1", "j1")]);
 		const customs = m.getState().nativeMessages.filter((x) => (x as { role?: string }).role === "custom");
 		assert.equal(customs.length, 1, "the server copy replaced the optimistic one — no doubling");
 		assert.equal((customs[0] as { id?: string }).id, "srv_1");

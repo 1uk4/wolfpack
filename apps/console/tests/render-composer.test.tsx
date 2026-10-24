@@ -14,7 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Composer, enterAction } from "../components/composer.tsx";
 
 function render(
-	opts: { busy?: boolean; canSend?: boolean; placeholder?: string; nextProblem?: boolean } = {},
+	opts: { busy?: boolean; canSend?: boolean; placeholder?: string } = {},
 ) {
 	return renderToStaticMarkup(
 		<Composer
@@ -25,7 +25,6 @@ function render(
 			onStop={() => {}}
 			canSend={opts.canSend ?? true}
 			{...(opts.placeholder ? { placeholder: opts.placeholder } : {})}
-			{...(opts.nextProblem ? { nextProblem: true, onNext: () => {} } : {})}
 		/>,
 	);
 }
@@ -33,7 +32,7 @@ function render(
 describe("Composer", () => {
 	it("chat placeholder + send button", () => {
 		const html = render();
-		assert.match(html, /Ask, answer, or steer the lesson/, "the default — active sessions");
+		assert.match(html, /Ask, answer, or steer…/, "the default — active sessions");
 		assert.ok(html.includes('aria-label="Send"'), "send button present");
 	});
 
@@ -61,26 +60,6 @@ describe("Composer", () => {
 		const html = render({ canSend: false });
 		assert.ok(/aria-label="Send"[^>]*disabled|disabled[^>]*aria-label="Send"/.test(html), "send disabled");
 	});
-
-	it("THE NEXT MORPH (owner round 16 refinement): empty composer in the pause → wide green Next problem", () => {
-		const html = render({ canSend: false, nextProblem: true });
-		assert.ok(html.includes('data-testid="next-problem-button"'), "the morphed button");
-		assert.match(html, /Next problem/, "the label");
-		assert.ok(html.includes("bg-green-600"), "green — the correct-answer register");
-		assert.ok(!html.includes('aria-label="Send"'), "the square send is gone in the pause");
-	});
-
-	it("typing anything returns the regular send button (canSend outranks the morph)", () => {
-		const html = render({ canSend: true, nextProblem: true });
-		assert.ok(html.includes('aria-label="Send"'), "regular send while there is text");
-		assert.ok(!html.includes('data-testid="next-problem-button"'), "no next morph with text typed");
-	});
-
-	it("busy outranks the morph — stop stays reachable", () => {
-		const html = render({ busy: true, canSend: false, nextProblem: true });
-		assert.ok(html.includes('aria-label="Stop"'), "stop wins the empty lane mid-turn");
-		assert.ok(!html.includes('data-testid="next-problem-button"'), "no next morph mid-turn");
-	});
 });
 
 // The Enter decision (composer steering, 2026-10-03): while a turn runs,
@@ -101,18 +80,5 @@ describe("enterAction", () => {
 	it("idle: send when there is the text, nothing when there is not", () => {
 		assert.equal(enterAction({ busy: false, canSend: true }), "send");
 		assert.equal(enterAction({ busy: false, canSend: false }), "none");
-	});
-
-	it("the practice pause (owner round 16): Enter on an EMPTY composer fires the move-on signal", () => {
-		assert.equal(enterAction({ busy: false, canSend: false, nextProblem: true }), "next");
-	});
-
-	it("typing anything outranks the pause — text makes Enter a send again", () => {
-		assert.equal(enterAction({ busy: false, canSend: true, nextProblem: true }), "send");
-	});
-
-	it("busy outranks the pause — steering and Stop keep their lanes", () => {
-		assert.equal(enterAction({ busy: true, canSend: false, nextProblem: true }), "stop");
-		assert.equal(enterAction({ busy: true, canSend: true, nextProblem: true }), "send");
 	});
 });

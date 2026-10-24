@@ -29,7 +29,6 @@ const { applyParkedDismissal, parkDismissal, takeParkedDismissal } = await impor
 const { beginTurn, endTurn, isTurnRunning } = await import("../src/server/turn-liveness.ts");
 const { subscribe } = await import("../src/core/events.ts");
 const {
-	activeProblemOf,
 	answeredCallIds,
 	danglingQuestionOf,
 	dismissedAnswer,
@@ -60,30 +59,11 @@ function chatWithDanglingQuiz(id: string): string {
 	return chat.id;
 }
 
-/** A record with an ACTIVE problem — the settled practice state a
- *  dismiss-problem park applies against. */
-function chatWithActiveProblem(): string {
-	const chat = chatStore.createChat("park: active problem");
-	const assistant = {
-		id: newMessageId(),
-		role: "assistant",
-		content: [
-			{
-				type: "toolCall",
-				id: "call-prob-1",
-				name: "problem",
-				arguments: { statement: "Prove |G|=p ⇒ cyclic", mode: "recall" },
-			},
-		],
-	} as never;
-	chatStore.saveMessages(chat.id, [assistant]);
-	return chat.id;
-}
-
 describe("the park registry", () => {
 	it("parks and takes (take drains — the second read is null)", () => {
-		parkDismissal("chat_x", { type: "dismiss-problem", problemCallId: "p" });
-		assert.deepEqual(takeParkedDismissal("chat_x"), { type: "dismiss-problem", problemCallId: "p" });
+		const input = { type: "dismiss", toolCallId: "p", answer: dismissedAnswer("quiz", "Q?") };
+		parkDismissal("chat_x", input);
+		assert.deepEqual(takeParkedDismissal("chat_x"), input);
 		assert.equal(takeParkedDismissal("chat_x"), null);
 	});
 
@@ -124,18 +104,10 @@ describe("applyParkedDismissal — against real records", () => {
 		assert.equal(takeParkedDismissal(chat), null);
 	});
 
-	it("applies a parked problem dismissal to the active problem", () => {
-		const chat = chatWithActiveProblem();
-		parkDismissal(chat, { type: "dismiss-problem", problemCallId: "call-prob-1" });
-		applyParkedDismissal(chatStore, chat);
-		// The marker freed the slot — no active problem remains.
-		assert.equal(activeProblemOf(chatStore.getChat(chat)!.messages), null);
-	});
-
 	it("drops a park that targets nothing (never materialized — silence)", () => {
 		const chat = chatWithDanglingQuiz("drop");
 		const before = chatStore.getChat(chat)!.messages.length;
-		parkDismissal(chat, { type: "dismiss-problem", problemCallId: "call-ghost" });
+		parkDismissal(chat, { type: "dismiss", toolCallId: "call-ghost", answer: dismissedAnswer("quiz", "Q?") });
 		let emitted = 0;
 		const off = subscribe((e) => {
 			if (e.type === "record-changed" && e.chatId === chat) emitted++;

@@ -18,9 +18,6 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import {
 	needsContinuation,
 	newAnswerResult,
-	newNextMessage,
-	newProblemDismissedMarker,
-	newThinkingMessage,
 	newUserMessage,
 	projectView,
 	type ChatInput,
@@ -137,12 +134,9 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 		);
 	}
 	if (role === "custom") {
-		// Markers (the thinking submission, 2026-10-05 — the doubled-card
-		// bug: the optimistic practice-thinking card was never absorbed, so
-		// the adoption window rendered it beside the write-ahead's server
-		// copy for the whole turn). TOTAL over roles by identity key — a
-		// marker is itself when its customType AND structured details match;
-		// types that never appear optimistically simply never reach here.
+		// Markers: TOTAL over roles by identity key — a marker is itself
+		// when its customType AND structured details match; types that never
+		// appear optimistically simply never reach here.
 		const marker = m as LhMarkerMessage;
 		return record.some(
 			(r) =>
@@ -544,16 +538,7 @@ export class SessionModel {
 		// adoption can tell them from the record's absorbed copies.
 		const optimistic: LhMessage[] = [];
 		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
-		else if (input.type === "thinking") {
-			// The practice submissions (2026-10-04): the marker lands
-			// optimistically — the card renders from its details the
-			// moment the button fires.
-			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.text), id: localId() });
-		} else if (input.type === "next") {
-			// The move-on signal (owner round 16): the NEXT PROBLEM line
-			// renders the instant the chip/Enter fires.
-			optimistic.push({ ...newNextMessage(), id: localId() });
-		} else if (input.type === "answer") {
+		else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
 		}
@@ -671,27 +656,6 @@ export class SessionModel {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ input: { type: "dismiss", toolCallId, answer } }),
-			});
-			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
-		} catch (err) {
-			this.setError((err as Error).message);
-		}
-	}
-
-	/** The problem discard (practice sessions, owner 2026-10-04): the
-	 *  ask-style dismissal — the UI-only marker lands optimistically, then
-	 *  the SILENT route persists it (no turn, no wake). The composer
-	 *  returns; the conclude synthesis rides the user's next input. */
-	async dismissProblem(problemCallId: string): Promise<void> {
-		if (!this.readyRef) return;
-		this.mutate(() => {
-			this.tail = [...this.tail, { ...newProblemDismissedMarker(problemCallId), id: localId() }];
-		});
-		try {
-			const res = await this.fetch(`/api/chats/${this.chatId}/dismiss`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ input: { type: "dismiss-problem", problemCallId } }),
 			});
 			if (!res.ok) throw new Error(`The dismissal failed (${res.status}).`);
 		} catch (err) {

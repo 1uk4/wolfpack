@@ -27,13 +27,11 @@ import { Hint } from "@/components/ui/hint";
  */
 
 /** The expand seam: md-blocks' mermaid hover button calls openMermaid with
- *  the chart source; the figure card's fullscreen button calls openFigure
- *  with the raw svg (+ its invert state). The chat page (which provides
- *  this context) opens the overlay. Null when no chat page is mounted
+ *  the chart source. The chat page (which provides this context) opens
+ *  the overlay. Null when no chat page is mounted
  *  (sidebar previews etc.) — the buttons simply don't render there. */
 export const SessionMermaidContext = createContext<{
 	openMermaid: (chart: string) => void;
-	openFigure: (svg: string, inverted: boolean) => void;
 } | null>(null);
 
 export function useSessionMermaid() {
@@ -42,7 +40,7 @@ export function useSessionMermaid() {
 
 /** A chart svg's natural size — mermaid always emits a viewBox; this is the
  *  extent at zoom 1 (1 svg unit = 1 px), like the plan diagram's natural
- *  size. Figure svgs (2026-10-07) may declare width/height instead — that
+ *  size. An svg may declare width/height instead — that
  *  pair is the fallback. The final fallback covers a degenerate svg with
  *  neither. Pure. */
 export function chartSize(svg: string): { w: number; h: number } {
@@ -67,33 +65,13 @@ export function chartSize(svg: string): { w: number; h: number } {
 /** The diagram focus: the chart at natural size inside a pan/zoom viewport
  *  (the plan popup's fit-floor semantics — fitGraphView/zoomedGraphView in
  *  pan-zoom.ts), Esc/X close. Renders its own copy of the chart (mermaid
- *  ids are per-render), not the injected inline svg. FIGURE MODE
- *  (2026-10-07): pass a raw `svg` instead of a mermaid `chart` — the same
- *  shell then focuses a figure card's svg on a white stage, with the
- *  caller's invert state carried over (the filter rides the white stage,
- *  exactly like the in-card holder). */
-export function MermaidOverlay({
-	chart,
-	svg: rawSvg,
-	inverted = false,
-	onClose,
-}: {
-	chart?: string;
-	svg?: string;
-	inverted?: boolean;
-	onClose: () => void;
-}) {
-	// ── chart render (own instance, own ids); figure mode uses the raw svg ──
-	const [svg, setSvg] = useState<string | null>(rawSvg ?? null);
+ *  ids are per-render), not the injected inline svg. */
+export function MermaidOverlay({ chart, onClose }: { chart: string; onClose: () => void }) {
+	// ── chart render (own instance, own ids) ──
+	const [svg, setSvg] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
-		if (rawSvg !== undefined) {
-			setSvg(rawSvg);
-			setError(null);
-			return;
-		}
-		if (chart === undefined) return;
 		let cancelled = false;
 		setSvg(null);
 		setError(null);
@@ -107,7 +85,7 @@ export function MermaidOverlay({
 		return () => {
 			cancelled = true;
 		};
-	}, [rawSvg, chart, attempt]);
+	}, [chart, attempt]);
 
 	// Esc closes — claimed at the document level (THE ONE-ESC LAW, owner
 	// keyboard round 2026-10-06): one Esc, one action; the window chain
@@ -222,7 +200,7 @@ export function MermaidOverlay({
 		>
 			<div className="mb-2 flex items-center gap-2">
 				<span className="text-sm font-medium">Diagram</span>
-				<span className="text-xs text-muted-foreground">from this lesson</span>
+				<span className="text-xs text-muted-foreground">from this session</span>
 				<Hint label="Close" binding="escape" side="left">
 <button
 					type="button"
@@ -248,7 +226,7 @@ export function MermaidOverlay({
 			>
 				{error ? (
 					<div className="flex h-full items-center justify-center p-4">
-						<MermaidError chart={chart ?? ""} error={error} retry={() => setAttempt((a) => a + 1)} />
+						<MermaidError chart={chart} error={error} retry={() => setAttempt((a) => a + 1)} />
 					</div>
 				) : svg ? (
 					<>
@@ -272,17 +250,10 @@ export function MermaidOverlay({
 							{/* data-lh-overlay-chart: globals.css pins the svg to the
 							    wrapper's width (kills mermaid's inline max-width cap)
 							    so the wrapper IS the natural-size box the fit math
-							    centers. FIGURE MODE: a white stage (the figure's
-							    backing law — models draw for a white page) with the
-							    caller's invert filter riding it, exactly like the
-							    in-card holder. */}
+							    centers. */}
 							<div
 								data-lh-overlay-chart
-								className={cn(
-									"[&_svg]:h-auto [&_svg]:w-full",
-									rawSvg !== undefined && "bg-white",
-								)}
-								style={rawSvg !== undefined && inverted ? { filter: "invert(1) hue-rotate(180deg)" } : undefined}
+								className="[&_svg]:h-auto [&_svg]:w-full"
 								dangerouslySetInnerHTML={{ __html: svg }}
 							/>
 						</div>

@@ -54,8 +54,8 @@ describe("GET /api/chats/:id/markdown", () => {
 		assert.ok(disposition.includes('filename="relational-databases-joins-normal-forms.md"'), "slugified title names the file");
 		const body = await res.text();
 		assert.ok(body.startsWith("# Relational Databases"), "the title mints the document header");
-		assert.ok(body.includes("### Learner"), "learner blocks render");
-		assert.ok(body.includes("### Teacher"), "teacher blocks render");
+		assert.ok(body.includes("### User"), "user blocks render");
+		assert.ok(body.includes("### Assistant"), "assistant blocks render");
 		assert.ok(!body.includes("m1"), "anchorless — no message-id provenance in the user-facing export");
 	});
 

@@ -32,7 +32,6 @@ import type { TSchema } from "typebox";
 import { quizDisplayInputSchema, askInputSchema, askOptionProblems, quizInputProblems, explainInputProblems, explainDisplayInputSchema, type AskToolInput, type QuizToolInput, type ExplainToolInput } from "./question-core.ts";
 import { repairMathForDisplay } from "./math-delims.ts";
 import { healEncodedArguments } from "./argument-heal.ts";
-import { probeDoneInputSchema, type ProbeDoneInput } from "./contracts/probe.ts";
 
 /** The pi-boundary parse step, mirrored here (live-smoke fix, 2026-09-26):
  *  pi-ai's validateToolArguments runs TypeBox's Value.Convert on the model's
@@ -131,9 +130,4 @@ export function parseExplainInput(input: unknown): ExplainToolInput | undefined 
 	if (!cleaned) return undefined;
 	if (explainInputProblems(cleaned).length > 0) return undefined;
 	return cleaned;
-}
-
-/** probe_done parse — the core-owned schema the tool itself declares. */
-export function parseProbeDoneInput(input: unknown): ProbeDoneInput | undefined {
-	return boundaryParse<ProbeDoneInput>(probeDoneInputSchema, input);
 }

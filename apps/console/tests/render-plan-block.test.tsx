@@ -2,8 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-	PlanBlock,
-	PlanPopup,
+	PlanDiagram,
 	blockLayout,
 	topoFor,
 	edgePathD,
@@ -13,15 +12,12 @@ import {
 	NODE_W_MIN,
 	nodeWidth,
 	estimateLineWidth,
-	type PopupMessage,
 } from "../components/plan-block.tsx";
-import type { PlanBlockData, PlanTree } from "../src/core/contracts.ts";
 
-// Plan blocks: the pure layered layout, the frozen-snapshot rendering
-// (full = borderless + column-filling
-// with the glowing current), and the popup's LIVE derivation.
+// The DAG diagram (inert in the console today): the pure layered layout and
+// the static render of the diagram itself.
 
-const CHAIN: PlanTree = {
+const CHAIN = {
 	nodes: [
 		{ id: "a", title: "Alpha node" },
 		{ id: "b", title: "Beta node" },
@@ -31,7 +27,6 @@ const CHAIN: PlanTree = {
 		{ from: "a", to: "b" },
 		{ from: "b", to: "c" },
 	],
-	version: 1,
 };
 
 describe("plan block layout (pure)", () => {
@@ -138,149 +133,12 @@ describe("plan block layout (pure)", () => {
 	});
 });
 
-describe("plan block render", () => {
-	it("full block: borderless, column-filling, statuses AS CARRIED (never re-derived)", () => {
-		const data: PlanBlockData = {
-			kind: "full",
-			at: "2026-09-09T12:00:00Z",
-			current: null,
-			nodes: [
-				{ id: "a", title: "Alpha node", status: "visited" },
-				{ id: "b", title: "Beta node", status: "upcoming" },
-			],
-			edges: [{ from: "a", to: "b" }],
-		};
-		const html = renderToStaticMarkup(<PlanBlock data={data} onOpen={() => {}} />);
-		assert.match(html, /data-testid="plan-block-full"/);
-		// Borderless: the wrapper carries no border/rounded chrome.
-		assert.ok(!/data-testid="plan-block-full"[^>]*border/.test(html), "no wrapping chrome");
-		// Fills the column UP TO the chat-font cap: the svg is w-full +
-		// mx-auto with maxWidth = extent × TEXT_CAP_SCALE, so node text never
-		// renders past the 16px prose size (owner, plan-graph round 1; the
-		// snap 16.5→16 landed in typography round 4).
-		assert.match(html, /<svg[^>]*class="block h-auto w-full mx-auto"/);
-		// The reading font, not the mono UI font (owner, 2026-09-26) — via the
-		// runtime var (the font-prose utility would bake the @theme literal
-		// and ignore the Appearance reading-font override).
-		assert.match(html, /<svg[^>]*font-family:var\(--font-prose\)/);
-		// Lines + outlines at the app's standard 1px border weight (owner,
-		// 2026-09-26; was 1.5).
-		assert.match(html, /<rect[^>]*stroke-width="1"/);
-		assert.match(html, /max-width:143\.36px/); // (96+16) × 1.28 — boxes hug now
-		// Centered text (owner, plan-hug round 2026-10-07): every title line
-		// anchors to its box's midline — the old x=12 left inset is gone.
-		assert.match(html, /<text[^>]*x="48"[^>]*text-anchor="middle"/); // 96/2
-		assert.ok(!/x="12"/.test(html), "no left-inset text");
-		// The in-chat block speaks the dock language (owner, 2026-10-07):
-		// lighter-background boxes like the composer shells — with WHITE
-		// outlines (owner follow-up: gray fill good, box edges stay white).
-		assert.match(html, /<rect[^>]*class="fill-card stroke-white"/);
-		// Two stacked nodes: 2*NODE_H + GAP_Y = 136 extent + GRAPH_PAD on
-		// every side (strokes/glow never clip at the edges). The width
-		// rides the hug now: 96-min boxes, not the old 160 slabs.
-		assert.match(html, /viewBox="-8 -8 112 152"/);
-		// Snapshot statuses render as carried.
-		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
-		assert.match(html, /data-testid="plan-node-b" data-status="upcoming"/);
-		assert.ok(html.includes('aria-label="Open the full plan"'), "the trigger names itself (tooltip copy)");
-	});
-
-});
-
-describe("plan popup (live derivation)", () => {
-	function messages(): PopupMessage[] {
-		return [
-			{
-				parts: [
-					{
-						type: "tool-plan_init",
-						state: "output-available",
-						output: { ok: true, tree: CHAIN },
-					},
-				],
-			},
-			{
-				parts: [
-					{
-						type: "tool-quiz",
-						state: "output-available",
-						input: { nodeId: "a" },
-						output: { correct: true },
-					},
-				],
-			},
-			{
-				parts: [
-					{
-						type: "tool-quiz",
-						state: "input-available",
-						input: { nodeId: "b" },
-					},
-				],
-			},
-		];
-	}
-
-	it("derives statuses at click time: latest tagged call → current, earlier → visited (glowing)", () => {
-		const html = renderToStaticMarkup(<PlanPopup messages={messages()} onClose={() => {}} />);
-		assert.match(html, /data-testid="plan-popup"/);
-		assert.match(html, /data-testid="plan-node-a" data-status="visited"/);
-		assert.match(html, /data-testid="plan-node-b" data-status="current"/);
-		assert.match(html, /data-testid="plan-node-c" data-status="upcoming"/);
-		// The current node is the glow target: a faint yellow fill, blurred
-		// so it bleeds over the edges — static, no pulse (owner, round 6).
-		assert.match(html, /fill-yellow-400\/25/);
-		assert.match(html, /feGaussianBlur/);
-		assert.doesNotMatch(html, /animate-pulse/);
-		// Arrows into not-yet-visited nodes are grayed out (owner, round 6).
-		assert.match(html, /marker-end="url\(#.*-dim\)"/);
-		assert.match(html, /live — statuses derive from your check outcomes/);
-		// No top-left flash: at static render settled=false, so the diagram
-		// wrapper paints at opacity 0 — the fit runs in an effect AFTER the
-		// first paint and the chart would otherwise flash at the initial
-		// top-left zoom:1 state for a frame (owner report, 2026-09-19;
-		// transition-gating alone didn't hide it).
-		assert.match(html, /opacity: ?0[;,}]/, "diagram hidden until the first fit applies");
-	});
-
-	it("dims an arrow when EITHER end is gray — white needs both ends white (owner, 2026-09-26)", () => {
-		// x upcoming → y visited: the OLD rule (target-only) painted this
-		// white; the new rule keeps it gray — a gray box's outgoing arrows
-		// stay gray even into covered territory. y → z (visited → current)
-		// stays white: BOTH ends white.
-		const tree: PlanTree = {
-			nodes: [
-				{ id: "x", title: "Gray origin" },
-				{ id: "y", title: "Covered middle" },
-				{ id: "z", title: "Covered latest" },
-			],
-			edges: [
-				{ from: "x", to: "y" },
-				{ from: "y", to: "z" },
-			],
-			version: 1,
-		};
-		const msgs: PopupMessage[] = [
-			{ parts: [{ type: "tool-plan_init", state: "output-available", output: { ok: true, tree } }] },
-			{ parts: [{ type: "tool-quiz", state: "output-available", input: { nodeId: "y" }, output: { correct: true } }] },
-			{ parts: [{ type: "tool-quiz", state: "output-available", input: { nodeId: "z" }, output: { correct: true } }] },
-		];
-		const html = renderToStaticMarkup(<PlanPopup messages={msgs} onClose={() => {}} />);
-		assert.match(html, /data-testid="plan-node-x" data-status="upcoming"/);
-		assert.match(html, /data-testid="plan-node-y" data-status="visited"/);
-		assert.match(html, /data-testid="plan-node-z" data-status="current"/);
-		// Exactly one gray edge (x→y, gray origin) and one white edge (y→z,
-		// both ends white): count the head markers, one per edge.
-		const dimHeads = (html.match(/marker-end="url\(#.*-dim\)"/g) ?? []).length;
-		const whiteHeads = (html.match(/marker-end="url\(#(?:R\d+|[a-z0-9-]+)\)"/g) ?? []).length;
-		assert.equal(dimHeads, 1, "the gray-origin edge dims");
-		assert.equal(whiteHeads, 1, "the both-white edge stays white");
-		assert.match(html, /<path[^>]*class="fill-none stroke-border"/);
-		assert.match(html, /<path[^>]*class="fill-none stroke-white"/);
-	});
-
-	it("renders the empty state when the session has no plan", () => {
-		const html = renderToStaticMarkup(<PlanPopup messages={[{ parts: [] }]} onClose={() => {}} />);
-		assert.match(html, /No plan in this session yet\./);
+describe("dag diagram render", () => {
+	it("renders every node title and one arrow path per edge", () => {
+		const html = renderToStaticMarkup(
+			<PlanDiagram nodes={CHAIN.nodes} edges={CHAIN.edges} statusOf={() => "upcoming"} markerId="m1" pad={8} monochrome />,
+		);
+		for (const title of ["Alpha node", "Beta node", "Gamma node"]) assert.ok(html.includes(title), title);
+		assert.equal((html.match(/<path /g) ?? []).length >= 2, true, "an arrow path per edge");
 	});
 });

@@ -26,7 +26,6 @@ import {
 	probeQuizInputSchema,
 	quizDisplayInputSchema,
 	normalizeQuizType,
-	questionNeedsReveal,
 	resolveCorrect,
 	toggleOption,
 	toggleOther,
@@ -759,25 +758,6 @@ describe("the quiz role field (predict | check)", () => {
 		assert.equal(normalizeQuizType(42), undefined);
 	});
 
-	it("questionNeedsReveal: checks collapse, predictions never do — both teach tools", () => {
-		assert.equal(questionNeedsReveal("quiz", { type: "check" }, "teach"), true);
-		assert.equal(questionNeedsReveal("quiz", { type: "predict" }, "teach"), false, "predictions arrive OPEN");
-		assert.equal(
-			questionNeedsReveal("quiz", undefined, "teach"),
-			true,
-			"old records (no type) render check-style",
-		);
-		assert.equal(questionNeedsReveal("quiz", { type: "predict" }, "probe"), false);
-		assert.equal(questionNeedsReveal("quiz", { type: "check" }, "probe"), false);
-		assert.equal(questionNeedsReveal("ask_user_question", {}, "teach"), false);
-		// Explain joined the law 2026-10-09: teach checks collapse, predictions
-		// don't, old no-type records render check-style — mirroring quiz exactly.
-		assert.equal(questionNeedsReveal("explain", { type: "check" }, "teach"), true);
-		assert.equal(questionNeedsReveal("explain", { type: "predict" }, "teach"), false);
-		assert.equal(questionNeedsReveal("explain", undefined, "teach"), true, "pre-type explain records render check-style");
-		assert.equal(questionNeedsReveal("explain", { type: "check" }, "probe"), false);
-	});
-
 	function quizQd(): QuestionData {
 		const options = normalizeOptions(valid.options);
 		return {
@@ -792,23 +772,20 @@ describe("the quiz role field (predict | check)", () => {
 		};
 	}
 
-	it("buildAnswer snapshots the question's role and carries both thinking channels", () => {
+	it("buildAnswer snapshots the question's role and carries the thinking channel", () => {
 		const predictQd: QuestionData = { ...quizQd(), questionType: "predict" };
-		const a = buildAnswer(predictQd, { values: ["Mercury"], thinking: "  guessed  ", readingThinking: "  reading note  " });
+		const a = buildAnswer(predictQd, { values: ["Mercury"], thinking: "  guessed  " });
 		assert.equal(a.questionType, "predict");
 		assert.equal(a.thinking, "guessed", "thinking is trimmed");
-		assert.equal(a.readingThinking, "reading note");
 		const b = buildAnswer(quizQd(), { values: ["Mercury"] });
 		assert.equal(b.thinking, undefined, "empty channels stay absent, never empty strings");
-		assert.equal(b.readingThinking, undefined);
 		assert.equal(b.questionType, undefined, "a role-less QuestionData (probe / old record) answers role-less");
 	});
 
-	it("compactAnswerForModel: distinct keys for the two channels; legacy `note` folds into thinking", () => {
-		const a = buildAnswer(quizQd(), { values: ["Mercury"], thinking: "h", readingThinking: "r" });
+	it("compactAnswerForModel: legacy `note` folds into thinking", () => {
+		const a = buildAnswer(quizQd(), { values: ["Mercury"], thinking: "h" });
 		const compact = compactAnswerForModel(a) as Record<string, unknown>;
 		assert.equal(compact.thinking, "h");
-		assert.equal(compact.thinkingWhileReading, "r");
 		const legacy = compactAnswerForModel({ ...a, thinking: undefined, note: "old note" }) as Record<string, unknown>;
 		assert.equal(legacy.thinking, "old note", "records written before the rename still reach the model");
 		assert.equal("note" in legacy, false, "the legacy key never re-crosses the wire");
@@ -816,6 +793,6 @@ describe("the quiz role field (predict | check)", () => {
 
 	it("the display parse KEEPS the role: quizDisplayInputSchema retains type where the base strips it", () => {
 		const cleaned = Value.Clean(quizDisplayInputSchema, { ...valid }) as Record<string, unknown>;
-		assert.equal(cleaned.type, "check", "role survives the display parse (the dock gates collapse + labels on it)");
+		assert.equal(cleaned.type, "check", "role survives the display parse (the dock labels on it)");
 	});
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
+import { ArrowDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
@@ -32,7 +32,6 @@ import {
 	type QuestionMode,
 	type QuizToolInput,
 	type SelectMode,
-	type Phase3,
 } from "@/src/core";
 import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-rail";
 
@@ -46,7 +45,7 @@ import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-
  * The thinking field is the transfer channel of the whole product (wave-2):
  * never called "optional", Enter makes a NEWLINE (it is for dumping — soon
  * dictated, not typed), submission is the button only, and its size scales
- * with the phase (probing stays quick; teaching invites depth). The
+ * with the field's content. The
  * "Other…" option is an editable option ROW — circle + inline input,
  * styled like its siblings — so picking Other never displaces thinking.
  *
@@ -57,18 +56,11 @@ import { CONFIDENCE_COLORS, confidenceRailStyle } from "@/components/confidence-
  */
 
 export interface QuestionDockProps {
-	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall";
+	toolName: "quiz" | "ask_user_question" | "explain";
 	toolCallId: string;
 	input: QuizToolInput | AskToolInput | ExplainToolInput;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
-	/**
-	 * Teach-phase check awaiting its reveal (vision §2, W5): while collapsed,
-	 * the bar is the "Check your understanding" invitation instead of the
-	 * scroll-collapse strip. Owned by the DockOverlay; false once the learner
-	 * has revealed (afterwards the normal collapse machine rules apply).
-	 */
-	reveal?: boolean;
 	onExpand: () => void;
 	onSubmit: (output: QuestionAnswerData) => void;
 	/** Escape in a question field stops dictation (STT wave) — threaded
@@ -77,13 +69,8 @@ export interface QuestionDockProps {
 	/** The keyboard machine (wave B) is armed only while the dock is
 	 *  expanded — the collapsed bar keeps its native Enter-to-expand. */
 	active?: boolean;
-	/** Session phase at the question — scales the thinking field: probing
-	 *  stays quick (one row), teaching invites dumping (three rows). */
-	phase?: Phase3;
-	/** Dictation claim (owner 2026-10-03): false while a teach-phase check
-	 *  sits UNREVEALED — the reading-thinking field owns dictated speech
-	 *  during the reading; the dock reclaims on reveal. Default true (probe
-	 *  questions, predictions, old callers). */
+	/** Dictation claim: false hands dictated speech to another field.
+	 *  Default true. */
 	dictationClaim?: boolean;
 	/** Compaction is running for this chat (owner round 14): the answer
 	 *  POST would block on the server's compaction gate — disable submit
@@ -97,24 +84,13 @@ export function QuestionDock({
 	toolCallId,
 	input,
 	expanded,
-	reveal = false,
 	onExpand,
 	onSubmit,
 	onEscape,
-	phase = "probe",
 	dictationClaim = true,
 	compactionRunning = false,
 }: QuestionDockProps) {
-	// The probe-phase names (owner, 2026-10-09) canonicalize onto their
-	// teach twins for every dock concern — parse dispatch, labels, kinds:
-	// the probe quiz ("probe") is quiz-shaped, the probe free-recall
-	// ("recall") is explain-shaped. Old records keep the teach names.
-	const canonical =
-		toolName === "probe" ? "quiz" : toolName === "recall" ? "explain" : toolName;
-	// The chip's display name carries the tool's OWN name (owner
-	// 2026-10-09): probe-phase questions label Probe/Recall in the
-	// composer; teach tools keep the standing labels.
-	const toolLabel = toolName === "probe" ? "Probe" : toolName === "recall" ? "Recall" : undefined;
+	const canonical = toolName;
 	// Parse, don't cast (src/core/tool-parts.ts): the model authored this
 	// input, and only the schema the tool declared vouches for its shape.
 	// The dock mounts on input-available parts (already validated at the
@@ -137,9 +113,7 @@ export function QuestionDock({
 					toolName={canonical}
 					question={parsed.question}
 					onExpand={onExpand}
-					variant={reveal ? "reveal" : "collapsed"}
-					toolLabel={toolLabel}
-					label={
+										label={
 						(canonical === "quiz" || canonical === "explain") &&
 						normalizeQuizType((parsed as { type?: unknown }).type) === "predict"
 							? "Prediction"
@@ -152,7 +126,6 @@ export function QuestionDock({
 					toolName={toolName}
 					toolCallId={toolCallId}
 					input={parsed}
-					phase={phase}
 					active={expanded}
 					onSubmit={onSubmit}
 					onEscape={onEscape}
@@ -177,51 +150,21 @@ function teaserText(q: string): string {
 		.trim();
 }
 
-/** The collapsed strip. Two species (W5): "collapsed" is the scroll minimization
- *  (kind chip + one-liner + Answer ↓); "reveal" is the teach-check invitation —
- *  a distinct, more inviting affordance, because it asks the learner to start
- *  something, not to resume something. */
+/** The collapsed strip: the scroll minimization (kind chip + one-liner +
+ *  Answer ↓). */
 export function QuestionDockBar({
 	toolName,
 	question,
 	onExpand,
-	variant = "collapsed",
 	label,
-	toolLabel,
 }: {
 	toolName: "quiz" | "ask_user_question" | "explain";
 	question: string;
 	onExpand: () => void;
-	variant?: "collapsed" | "reveal";
 	/** The kind chip's text (owner 2026-10-03): "Prediction" when a
-	 *  predict-type quiz minimizes by scroll — predictions never use the
-	 *  reveal variant, but the scroll-collapse strip can still hide them. */
+	 *  predict-type quiz minimizes by scroll. */
 	label?: string;
-	/** The chip's TOOL display name (owner 2026-10-09): probe-phase calls
-	 *  label Probe/Recall — the phase boundary visible in the composer. */
-	toolLabel?: string;
 }) {
-	if (variant === "reveal") {
-		return (
-			<button
-				type="button"
-				data-testid="teach-check-reveal"
-				onClick={onExpand}
-				className="dock-variant flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
-			>
-				<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-					<PlayIcon className="size-3.5" />
-				</span>
-				<span className="min-w-0 flex-1">
-					<span className="block text-sm font-medium">Check your understanding</span>
-					<span className="block truncate text-xs text-muted-foreground">{teaserText(question)}</span>
-				</span>
-				<span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary">
-					Open <ChevronRightIcon className="size-3.5" />
-				</span>
-			</button>
-		);
-	}
 	return (
 		<button
 			type="button"
@@ -230,9 +173,7 @@ export function QuestionDockBar({
 			className="dock-variant flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/40"
 		>
 			<span className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-				{label ??
-							toolLabel ??
-							(toolName === "quiz" ? "Check" : toolName === "explain" ? "Explain" : "Question")}
+				{label ?? (toolName === "quiz" ? "Check" : toolName === "explain" ? "Explain" : "Question")}
 			</span>
 			<span className="min-w-0 flex-1 truncate text-muted-foreground">{teaserText(question)}</span>
 			<span className="flex shrink-0 items-center gap-1 text-xs font-medium">
@@ -247,13 +188,12 @@ function QuestionDockForm({
 	toolName,
 	toolCallId,
 	input,
-	phase = "probe",
 	active,
 	onSubmit,
 	onEscape,
 	dictationClaim = true,
 	compactionRunning = false,
-}: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
+}: Omit<QuestionDockProps, "expanded" | "onExpand">) {
 	const kind = toolQuestionKind(toolName);
 
 	// Canonical QuestionData, built once per question. Quiz options are
@@ -352,8 +292,6 @@ function QuestionDockForm({
 			},
 			[qd.mode],
 		),
-		// Released while a teach check sits unrevealed (owner 2026-10-03):
-		// the reading-thinking field owns dictated speech during the reading.
 		dictationClaim,
 	);
 
@@ -546,17 +484,13 @@ function QuestionDockForm({
 			    long questions short — owner round, 2026-10-05). */}
 			<div data-session-find-root="" className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-					{toolName === "probe"
-						? "Probe"
-						: toolName === "recall"
-							? "Recall"
-							: kind === "quiz"
-								? qd.questionType === "predict"
-									? "Prediction"
-									: "Check"
-									: kind === "explain"
-										? "Explain"
-											: "Question"}
+					{kind === "quiz"
+						? qd.questionType === "predict"
+							? "Prediction"
+							: "Check"
+						: kind === "explain"
+							? "Explain"
+							: "Question"}
 					{qd.mode === "multi-select" && " · select all that apply"}
 				</div>
 				<div className="mb-3 font-medium">
@@ -888,9 +822,7 @@ function QuestionDockForm({
 							rows={1}
 							className={cn(
 								"field-sizing-content lh-input max-h-48 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground/70",
-								// Phase-scaled prominence: teaching invites depth,
-								// probing stays quick.
-								phase === "teach" ? "min-h-[4.5rem]" : "min-h-10",
+								"min-h-10",
 							)}
 						/>
 					)}

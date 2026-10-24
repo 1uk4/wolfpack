@@ -12,7 +12,7 @@ import { escAbortTarget } from "../components/chat.tsx";
  * pure) is the defense. Priority = stacking order.
  */
 describe("escAbortTarget (the layered-Esc ruling)", () => {
-	const none = { abortAsk: false, mermaidFocus: false, planOpen: false, setupOpen: false, pending: false, problem: false, busy: false };
+	const none = { abortAsk: false, mermaidFocus: false, setupOpen: false, pending: false, busy: false };
 
 	it("no overlays: the 2026-10-02 chain stands (question before turn)", () => {
 		assert.equal(escAbortTarget({ ...none, pending: true }), "question");
@@ -21,20 +21,13 @@ describe("escAbortTarget (the layered-Esc ruling)", () => {
 		assert.equal(escAbortTarget({ ...none, pending: true, busy: true }), "question", "a pending question outranks the turn");
 	});
 
-	it("an active practice problem sits between question and turn (2026-10-04)", () => {
-		assert.equal(escAbortTarget({ ...none, problem: true }), "problem");
-		assert.equal(escAbortTarget({ ...none, problem: true, busy: true }), "problem", "the problem card outranks the turn abort");
-		assert.equal(escAbortTarget({ ...none, planOpen: true, problem: true }), "plan", "an open popup still outranks the problem");
-	});
-
 	it("an open overlay claims Esc over a pending question — the owner's report", () => {
-		for (const overlay of ["mermaidFocus", "planOpen", "setupOpen"] as const) {
+		for (const overlay of ["mermaidFocus", "setupOpen"] as const) {
 			const target = escAbortTarget({ ...none, [overlay]: true, pending: true });
 			assert.notEqual(target, "question", `${overlay} open must not dismiss the question`);
 			assert.notEqual(target, "turn", `${overlay} open must not abort the turn`);
 		}
 		assert.equal(escAbortTarget({ ...none, mermaidFocus: true, pending: true }), "mermaid");
-		assert.equal(escAbortTarget({ ...none, planOpen: true, pending: true }), "plan");
 		assert.equal(escAbortTarget({ ...none, setupOpen: true, pending: true }), "setup");
 	});
 
@@ -44,9 +37,5 @@ describe("escAbortTarget (the layered-Esc ruling)", () => {
 			null,
 			"never chain: the dialog owns that Esc",
 		);
-	});
-
-	it("stacking order among overlays: mermaid paints above plan (later in DOM)", () => {
-		assert.equal(escAbortTarget({ ...none, mermaidFocus: true, planOpen: true, pending: true }), "mermaid");
 	});
 });

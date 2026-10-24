@@ -220,20 +220,6 @@ export function normalizeQuizType(raw: unknown): QuizQuestionType | undefined {
 	return v === "predict" ? "predict" : v === "check" ? "check" : undefined;
 }
 
-/** The reveal law as a pure predicate (owner 2026-10-03; explain joined
- *  2026-10-09): a teach-phase CHECK collapses behind the "Check your
- *  understanding" reveal — a prediction NEVER does (it precedes the
- *  teaching and gates it; collapsing it would invert the cycle), and
- *  neither do probe/plan questions or ask. Both teach quizzing tools
- *  (quiz and explain) obey the same law. chat.tsx calls this for its
- *  pending question; the reading-thinking field mounts on the same
- *  truth. Records that predate the `type` field carry none — they render
- *  as checks, the standing default. */
-export function questionNeedsReveal(tool: string, rawInput: unknown, phase: string): boolean {
-	if ((tool !== "quiz" && tool !== "explain") || phase !== "teach") return false;
-	return normalizeQuizType((rawInput as { type?: unknown } | null)?.type) !== "predict";
-}
-
 /** The teaching-cycle role field, shared VERBATIM by both teach quizzing
  *  tools (owner, 2026-10-09: explain gains the cycle's types — a
  *  free-recall check collapses behind the reveal exactly like a quiz
@@ -458,10 +444,6 @@ export interface QuestionAnswerData {
 	 *  replay through the same types, so it stays declared. Read via
 	 *  `thinking ?? note`. */
 	note?: string;
-	/** The learner's thinking WHILE READING the teaching prose (owner
-	 *  2026-10-03) — a separate channel from `thinking`, captured by the
-	 *  reading field and riding the check answer. Absent when empty. */
-	readingThinking?: string;
 	confidence?: number; // quiz only: the learner's stated probability (0-100, raw) that his selected answer is correct — never sent on "I don't know" (owner, 2026-10-01)
 	correct?: boolean; // quiz only
 	correctIndices?: number[]; // quiz only (rendering)
@@ -488,7 +470,6 @@ export interface AnswerRequest {
 	other?: string; // ask "Other"
 	text?: string; // ask text-mode
 	thinking?: string; // the reasoning-on-the-question channel (was `note`)
-	readingThinking?: string; // the thinking-while-reading channel (check answers)
 	confidence?: number; // quiz only: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
 }
 
@@ -700,7 +681,6 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string)
 		dontKnow: req.dontKnow === true,
 		answers: [],
 		thinking: req.thinking?.trim() || undefined,
-		readingThinking: req.readingThinking?.trim() || undefined,
 		answeredAt: new Date().toISOString(),
 	};
 	// resolve selected option values → OptionAnswer (in display order)
@@ -776,12 +756,9 @@ export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, un
 	// incorrect and carries no confidence: both stay implicit.)
 	if (ad.correct !== undefined && !ad.dontKnow) out.correct = ad.correct;
 	if (ad.confidence !== undefined) out.confidence = ad.confidence;
-	// Two DISTINCT thinking channels, clearly keyed so the model never
-	// conflates them (owner 2026-10-03): reasoning on the question vs
-	// thinking while reading the teaching. `note` is the pre-rename key —
-	// old records replay through here too, so both feed `thinking`.
+	// `note` is the pre-rename key — old records replay through here too,
+	// so both feed `thinking`.
 	const thinking = ad.thinking ?? ad.note;
 	if (thinking) out.thinking = thinking;
-	if (ad.readingThinking) out.thinkingWhileReading = ad.readingThinking;
 	return out;
 }

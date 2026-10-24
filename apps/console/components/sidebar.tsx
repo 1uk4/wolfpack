@@ -17,7 +17,13 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import type { ChatListItem } from "@/src/core";
+import { threadListItem, type ChatListItem } from "@/src/core";
+
+/** A sidebar row: a chat-shaped item that may carry the route it opens and
+ *  its own meta line (thread rows — the ConsoleClient list). */
+type SessionItem = ChatListItem & { href?: string; meta?: string };
+
+const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
 
 /**
@@ -244,7 +250,8 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  typography round 5): it informed no decision — clutter. messageCount
  *  still rides the API payload, so this is a one-line flip back if it's
  *  ever wanted. */
-function sessionMeta(chat: ChatListItem): string {
+function sessionMeta(chat: SessionItem): string {
+	if (chat.meta !== undefined && !chat.busy) return chat.meta;
 	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
 	if (chat.pendingQuestion) return `Waiting for input · ${timeAgo(chat.updatedAt)}`;
 	if (chat.busy) return "Working…";
@@ -263,7 +270,7 @@ export function SessionRow({
 	kbdSelected = false,
 	onContextMenu,
 }: {
-	chat: ChatListItem;
+	chat: SessionItem;
 	active: boolean;
 	onOpen: () => void;
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
@@ -350,7 +357,7 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
-	const [chats, setChats] = useState<ChatListItem[] | null>(null);
+	const [chats, setChats] = useState<SessionItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
@@ -361,7 +368,7 @@ function SessionsSidebar() {
 	   message is sent (and that message becomes its title). Search: a
 	   client-side filter over the poll snapshot — no server round trip. */
 	const newSession = useCallback(() => {
-		router.push("/chat/new");
+		router.push("/chat/new"); // redirects to a thread (see app/chat/new)
 	}, [router]);
 
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
@@ -387,9 +394,18 @@ function SessionsSidebar() {
 		if (refreshInFlightRef.current) return;
 		refreshInFlightRef.current = true;
 		try {
-			const res = await fetch("/api/chats", { cache: "no-store" });
-			const d = (await res.json()) as { chats: ChatListItem[] };
-			setChats(d.chats);
+			// The list is the ConsoleClient's: every wolf's threads.
+			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
+				wolves: { name: string }[];
+			};
+			const lists = await Promise.all(
+				wolves.wolves.map(async (w) => {
+					const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
+					const d = (await res.json()) as { threads: { id: string; title: string }[] };
+					return d.threads.map((t) => threadListItem(w.name, t));
+				}),
+			);
+			setChats(lists.flat());
 		} catch {
 			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
@@ -695,7 +711,7 @@ function SessionsSidebar() {
 									const target = shown![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
 									if (!target) return;
 									e.preventDefault();
-									router.push(`/chat/${target.id}`);
+									router.push(itemHref(target));
 									setKbdIndex(null);
 									e.currentTarget.blur();
 								}
@@ -729,13 +745,15 @@ function SessionsSidebar() {
 								<SessionRow
 									key={c.id}
 									chat={c}
-									active={pathname === `/chat/${c.id}`}
+									active={pathname === itemHref(c)}
 									kbdSelected={i === kbdIndex}
 									onOpen={() => {
 										setKbdIndex(null);
-										router.push(`/chat/${c.id}`);
+										router.push(itemHref(c));
 									}}
-									onContextMenu={(e) => openContext(e, c)}
+									// Thread rows have no management menu (rename/delete/export are
+									// legacy chat-record actions; the client has no such calls yet).
+									onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
 								/>
 							),
 						)

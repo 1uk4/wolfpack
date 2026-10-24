@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { ChatInput, LhMessage, QuestionAnswerData } from "@/src/core";
-import { SessionModel, type SessionState } from "@/components/session-core";
+import { SessionModel, type SessionState, type SessionTransport } from "@/components/session-core";
 
 export interface UseChatSessionOptions {
 	chatId: string;
@@ -24,14 +24,16 @@ export interface UseChatSessionOptions {
 	initialMessages: LhMessage[];
 	/** Reattach on mount: a turn is running server-side with no live view. */
 	initiallyInFlight?: boolean;
+	/** Turn traffic routes (default: the legacy pi routes). */
+	transport?: SessionTransport;
 }
 
-export function useChatSession({ chatId, initialMessages, initiallyInFlight }: UseChatSessionOptions) {
+export function useChatSession({ chatId, initialMessages, initiallyInFlight, transport }: UseChatSessionOptions) {
 	// The model is per-mount (chatId-keyed component); onChange forces the
 	// re-render. The ref pattern keeps it stable across renders.
 	const modelRef = useRef<SessionModel | null>(null);
 	if (modelRef.current === null) {
-		modelRef.current = new SessionModel({ chatId, initialMessages });
+		modelRef.current = new SessionModel({ chatId, initialMessages, transport });
 	}
 	const model = modelRef.current;
 	// The render VERSION — bumped by every model change, so the state memo

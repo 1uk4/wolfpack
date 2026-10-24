@@ -35,11 +35,50 @@ export const TURN_POLL_MS = 500;
 /** Give up waiting (a wake turn can run long) and surface the 409. */
 export const TURN_WAIT_MAX_MS = 30_000;
 
+/**
+ * THE WIRE SEAM: where a session's turn traffic goes and how its events are
+ * read. The default (LEGACY_TRANSPORT) is the pi-agent-core route family —
+ * POST /api/chat + /api/chats/[id] + the verbatim AgentEvent SSE. A thread
+ * session (ConsoleClient-backed) supplies its own routes and a `createWire`
+ * that maps each raw SSE payload to AgentEvent-shaped events (fresh per
+ * consume: the adapter is stateful).
+ */
+export interface SessionTransport {
+	submitUrl: string;
+	submitBody(input: ChatInput): string;
+	recordUrl: string;
+	/** Raw record JSON → native messages (null: shape not recognized). */
+	parseRecord(json: unknown): LhMessage[] | null;
+	streamUrl: string;
+	/** Abort route (POST); absent: the legacy global abort is the caller's. */
+	abortUrl?: string;
+	/** Poll out a racing turn on 409 (legacy wake race) vs. surface it. */
+	retryOnBusy: boolean;
+	createWire(): (raw: Record<string, unknown>) => Record<string, unknown>[];
+}
+
+export function legacyTransport(chatId: string): SessionTransport {
+	return {
+		submitUrl: "/api/chat",
+		submitBody: (input) => JSON.stringify({ chatId, input }),
+		recordUrl: `/api/chats/${encodeURIComponent(chatId)}`,
+		parseRecord: (json) => {
+			const messages = (json as { messages?: LhMessage[] }).messages;
+			return Array.isArray(messages) ? messages : null;
+		},
+		streamUrl: `/api/chats/${encodeURIComponent(chatId)}/stream`,
+		retryOnBusy: true,
+		createWire: () => (raw) => [raw],
+	};
+}
+
 export interface SessionModelDeps {
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch?: typeof globalThis.fetch;
 	/** Injectable retry timing (tests). */
 	pollMs?: number;
+	/** Where the turn traffic goes (default: the legacy pi routes). */
+	transport?: SessionTransport;
 	waitMaxMs?: number;
 }
 
@@ -196,6 +235,7 @@ export interface SessionModelOptions extends SessionModelDeps {
 
 export class SessionModel {
 	readonly chatId: string;
+	readonly transport: SessionTransport;
 	/** Injectable fetch (tests); defaults to the global. */
 	fetch: typeof globalThis.fetch;
 	/** Steers sent but not yet drained (the queued indicator's truth). */
@@ -226,6 +266,7 @@ export class SessionModel {
 
 	constructor(opts: SessionModelOptions) {
 		this.chatId = opts.chatId;
+		this.transport = opts.transport ?? legacyTransport(opts.chatId);
 		this.base = opts.initialMessages;
 		// BOUND: the browser's native fetch is a Window method — storing it
 		// unbound makes every call throw "Illegal invocation" in the browser
@@ -282,23 +323,23 @@ export class SessionModel {
 	 *  never persisted (write-ahead happens only on acceptance), so the
 	 *  retry waits out the running turn and re-POSTs the SAME body. */
 	async postInputEvent(input: ChatInput, signal?: AbortSignal): Promise<Response> {
-		const body = JSON.stringify({ chatId: this.chatId, input });
+		const body = this.transport.submitBody(input);
 		const init: RequestInit = {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body,
 			signal,
 		};
-		let response = await this.fetch("/api/chat", init);
+		let response = await this.fetch(this.transport.submitUrl, init);
 		let waited = 0;
-		while (response.status === 409) {
+		while (this.transport.retryOnBusy && response.status === 409) {
 			await response.body?.cancel().catch(() => {});
 			if (signal?.aborted || waited >= this.waitMaxMs) return response;
 			await delay(this.pollMs, signal);
 			waited += this.pollMs;
 			if (signal?.aborted) return response;
 			if ((await turnInFlight(this)) !== false) continue;
-			response = await this.fetch("/api/chat", init); // may 409 again → loop
+			response = await this.fetch(this.transport.submitUrl, init); // may 409 again → loop
 		}
 		return response;
 	}
@@ -424,19 +465,22 @@ export class SessionModel {
 		if (!res.body) throw new Error("The turn stream body is empty.");
 		const reader = res.body.getReader();
 		let sawEvent = false;
+		const wire = this.transport.createWire();
 		try {
-			for await (const event of sseEvents(reader)) {
-				if (event.type === "turn-settled") {
+			for await (const raw of sseEvents(reader)) {
+				if (raw.type === "turn-settled") {
 					// The raced-settle terminal: no turn to attach to — the
 					// record is current; the settle hook refetches.
 					await reader.cancel().catch(() => {});
 					this.onReattachSettled?.();
 					return;
 				}
-				const acted = this.applyWireEvent(event);
-				if (!sawEvent && acted) {
-					sawEvent = true;
-					if (this.statusValue !== "error") this.setStatus("streaming");
+				for (const event of wire(raw)) {
+					const acted = this.applyWireEvent(event);
+					if (!sawEvent && acted) {
+						sawEvent = true;
+						if (this.statusValue !== "error") this.setStatus("streaming");
+					}
 				}
 			}
 		} finally {
@@ -488,14 +532,14 @@ export class SessionModel {
 		this.setStatus("submitted");
 		try {
 			if (refetchRecordFirst) {
-				const recordRes = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}`, {
+				const recordRes = await this.fetch(this.transport.recordUrl, {
 					signal: controller.signal,
 				});
 				if (recordRes.ok) {
-					const record = (await recordRes.json()) as { messages?: LhMessage[] };
-					if (Array.isArray(record.messages)) {
+					const record = this.transport.parseRecord(await recordRes.json());
+					if (record) {
 						this.mutate(() => {
-							this.base = record.messages!;
+							this.base = record;
 							this.tail = [];
 						});
 					}
@@ -508,7 +552,7 @@ export class SessionModel {
 					});
 				}
 			}
-			const res = await this.fetch(`/api/chats/${encodeURIComponent(this.chatId)}/stream`, {
+			const res = await this.fetch(this.transport.streamUrl, {
 				signal: controller.signal,
 			});
 			if (!res.ok) throw new Error((await res.text()) || "Failed to attach to the running turn.");

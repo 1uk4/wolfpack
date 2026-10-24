@@ -18,6 +18,7 @@
     { "path": "packages/engine" },
     { "path": "packages/memory" },
     { "path": "packages/kb" },
+    { "path": "packages/client" },
     { "path": "packages/harness" },
     { "path": "packages/agent" },
     { "path": "packages/cli" }

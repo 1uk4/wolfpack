@@ -68,7 +68,7 @@ export const KEYBOARD_ACTIONS: readonly KeyActionDef[] = [
 	{ id: "jump-graph", label: "Graph view", scope: "global", binding: "mod+g" },
 	{ id: "new-session", label: "New session", scope: "global", binding: "mod+n" },
 	{ id: "rename-session", label: "Rename session", scope: "chat", binding: "f2" },
-	{ id: "toggle-user-thinking", label: "Toggle all your thinking", scope: "chat", binding: "mod+t" },
+	{ id: "toggle-user-thinking", label: "Toggle all thinking", scope: "chat", binding: "mod+t" },
 	// Mod+F is surface-scoped: graph node search and session text Find share
 	// one action/binding. Only the currently mounted surface listens.
 	{ id: "find", label: "Find", scope: "global", binding: "mod+f" },

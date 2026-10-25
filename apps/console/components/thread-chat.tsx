@@ -11,6 +11,7 @@ import { artifactRenderers } from "@/components/artifacts";
 import { Separator } from "@/components/ui/separator";
 import { Composer } from "@/components/composer";
 import { useChatSession } from "@/components/session";
+import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, LhMessage } from "@/src/core";
@@ -51,6 +52,7 @@ export function ThreadChat({
 		initiallyInFlight,
 		transport,
 	});
+	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
@@ -114,7 +116,8 @@ export function ThreadChat({
 															case "reasoning":
 																return (
 																	<Reasoning
-																		key={pi}
+																		key={`${pi}:${thinkingEpoch}`}
+																		defaultOpen={allThinkingOpen ?? undefined}
 																		isStreaming={status === "streaming" && isLastPart}
 																		className="mb-2"
 																	>

@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
+import type { Actor, ErrorCode, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -26,6 +26,8 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
       ? Omit<E, "actor"> & { actor?: Actor }
       : never
   : never;
+/** A snapshot baseline frame (see {@link WatchOptions.onSnapshot}). */
+export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
 export type WolfStatus = WolfSummary["status"];
@@ -39,6 +41,16 @@ export interface SubmitOptions {
 export interface WatchOptions {
   /** Replay events with id > from, then continue live. Omit to replay the current/last turn from its start. */
   from?: number;
+  /**
+   * Snapshot fold. When the server cannot replay from `from` (stale cursor) it
+   * sends a `snapshot` baseline instead. `watch()` never yields snapshots:
+   * it hands the baseline to this callback (state as of `upToId`, plus any
+   * partial in-flight turn) and treats `upToId` as the new cursor, so the
+   * events that follow continue gap-free. Consumers should replace their local
+   * thread state with `snapshot.thread` / `snapshot.inFlight`. HTTP client only;
+   * the in-process mock never sends baselines.
+   */
+  onSnapshot?: (snapshot: SnapshotEvent) => void;
 }
 
 export interface ConsoleClient {
@@ -64,5 +76,17 @@ export class NotFoundError extends Error {
   constructor(what: string) {
     super(`not found: ${what}`);
     this.name = "NotFoundError";
+  }
+}
+
+/** Any protocol error envelope that has no dedicated class (match by `code`, not HTTP status). */
+export class ProtocolError extends Error {
+  constructor(
+    public readonly code: ErrorCode,
+    message: string,
+    public readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "ProtocolError";
   }
 }

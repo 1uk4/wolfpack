@@ -1,0 +1,28 @@
+{
+  "name": "@wolfpack/workerd",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "workerd": "dist/bin/workerd.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/workerd\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/workerd/src"
+  },
+  "dependencies": {
+    "@wolfpack/engine": "*",
+    "@wolfpack/protocol": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@wolfpack/client": "*",
+    "typescript": "^5.7.0"
+  }
+}

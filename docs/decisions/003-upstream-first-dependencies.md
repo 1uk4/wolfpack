@@ -16,6 +16,16 @@ Use public packages as published. When wolfpack needs custom tooling or a missin
 
 Combined with the latest-stable policy: wolfpack tracks current releases of its ecosystem, breaking changes included, and adapts promptly.
 
+## Scope — dependencies are chosen selectively
+
+Upstream-first applies where a public package already owns the problem. It is not a mandate to depend on things. Three buckets:
+
+1. **Core domain — always in-house.** What makes wolfpack wolfpack is built and managed here: the memory system (observation → consolidation → den → KB), work/factory semantics, the protocol, the daemons, the console. These are never outsourced to a dependency.
+2. **Ecosystem infrastructure — upstream-first.** Engines, frameworks and bridges where a maintained public package owns the problem (pi-durable, pi-claude-bridge, Next.js, turbo): consume as published; fork + PR for gaps.
+3. **Small utilities — just write them.** Quick, easy tooling is not worth a dependency; own code wins.
+
+The test for adding a dependency: does a maintained package own this problem better than we would, and is the problem outside our core domain? Both yes → depend. Otherwise → build.
+
 ## Consequences
 
 - Wolfpack's own packages contain only what is genuinely wolfpack-specific (daemons, protocol, memory/work semantics, console).

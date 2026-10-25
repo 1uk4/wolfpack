@@ -16,6 +16,10 @@
     "./memory": {
       "types": "./dist/memory/index.d.ts",
       "default": "./dist/memory/index.js"
+    },
+    "./engine": {
+      "types": "./dist/engine/index.d.ts",
+      "default": "./dist/engine/index.js"
     }
   },
   "bin": {
@@ -29,11 +33,12 @@
     "test": "vitest run --root ../.. --config vitest.config.ts packages/harness/src"
   },
   "dependencies": {
-    "@earendil-works/chord": "^1.1.0",
-    "@earendil-works/pi-ai": "^1.1.0",
-    "@earendil-works/pi-durable": "^1.1.0",
+    "@earendil-works/chord": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-durable": "^1.4.0",
     "grammy": "^1.21.0",
-    "yaml": "^2.6.0"
+    "yaml": "^2.6.0",
+    "@wolfpack/protocol": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -4,6 +4,7 @@
     "rootDir": "src",
     "outDir": "dist"
   },
+  "references": [{ "path": "../protocol" }],
   "include": ["src"],
   "exclude": ["**/*.test.ts"]
 }

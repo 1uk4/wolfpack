@@ -1,81 +1,45 @@
 /**
- * Provisional console client types. A later protocol package will finalize the
- * wire format; these stay self-contained on purpose.
+ * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
+ * consumers keep a single import site. SDK-level types stay local.
  */
+import type { Actor, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
 
-export type WolfStatus = "online" | "offline" | "busy";
+export type {
+  Actor,
+  SubmitAck,
+  ThreadDetail,
+  ThreadMessage,
+  ThreadSummary,
+  WhenBusy,
+  WolfSummary,
+} from "@wolfpack/protocol";
 
-export interface WolfSummary {
-  id: string;
-  name: string;
-  host: string;
-  status: WolfStatus;
-}
+/**
+ * The event union as the SDK surfaces it: protocol events minus `snapshot`
+ * (the in-process client never resends baselines) and with `actor` optional,
+ * so consumers that build or ignore actor keep compiling. The mock always sets it.
+ */
+export type ThreadEvent = ProtocolThreadEvent extends infer E
+  ? E extends { type: "snapshot" }
+    ? never
+    : E extends unknown
+      ? Omit<E, "actor"> & { actor?: Actor }
+      : never
+  : never;
+export type ThreadEventType = ThreadEvent["type"];
 
-export type ThreadKind = "home" | "feature" | "subagent" | "process";
-
-export interface ThreadSummary {
-  id: string;
-  wolf: string;
-  kind: ThreadKind;
-  title: string;
-  boundWorkItem?: string;
-}
-
-export interface ThreadMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  /** ISO timestamp. */
-  at: string;
-}
-
-export interface ThreadDetail extends ThreadSummary {
-  messages: ThreadMessage[];
-  /** True while a turn is streaming. */
-  busy: boolean;
-  /** Id of the latest event emitted on this thread (0 if none). */
-  lastEventId: number;
-}
-
-export type WhenBusy = "steer" | "followUp" | "reject";
+export type WolfStatus = WolfSummary["status"];
+export type ThreadKind = ThreadSummary["kind"];
 
 export interface SubmitOptions {
   /** What to do if a turn is already running. Default: "reject". */
   whenBusy?: WhenBusy;
 }
 
-export interface SubmitAck {
-  /** Id of the user message created by this submit. */
-  messageId: string;
-  /** How the input was handled. */
-  disposition: "started" | "steered" | "queued";
-}
-
 export interface WatchOptions {
   /** Replay events with id > from, then continue live. Omit to replay the current/last turn from its start. */
   from?: number;
 }
-
-interface EventBase {
-  /** Monotonically increasing per thread; usable as SSE Last-Event-ID. */
-  id: number;
-  threadId: string;
-  /** ISO timestamp. */
-  at: string;
-}
-
-export type ThreadEvent =
-  | (EventBase & { type: "turn-start"; turnId: string })
-  | (EventBase & { type: "text-delta"; turnId: string; text: string })
-  | (EventBase & { type: "thinking-delta"; turnId: string; text: string })
-  | (EventBase & { type: "tool-start"; turnId: string; callId: string; name: string; args: unknown })
-  | (EventBase & { type: "tool-update"; turnId: string; callId: string; output: string })
-  | (EventBase & { type: "tool-end"; turnId: string; callId: string; result: string; isError: boolean })
-  | (EventBase & { type: "turn-end"; turnId: string; reason: "complete" | "aborted" | "error" })
-  | (EventBase & { type: "error"; turnId?: string; message: string });
-
-export type ThreadEventType = ThreadEvent["type"];
 
 export interface ConsoleClient {
   listWolves(): Promise<WolfSummary[]>;

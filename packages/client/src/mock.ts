@@ -19,7 +19,7 @@ export interface MockOptions {
   script?: ScriptStep[];
 }
 
-type Distribute<T> = T extends unknown ? Omit<T, "id" | "threadId" | "at"> : never;
+type Distribute<T> = T extends unknown ? Omit<T, "id" | "threadId" | "at" | "actor"> : never;
 type EventInput = Distribute<ThreadEvent>;
 
 interface ThreadState {
@@ -142,7 +142,13 @@ export class MockConsoleClient implements ConsoleClient {
   }
 
   private emit(t: ThreadState, ev: EventInput): void {
-    const full = { ...ev, id: ++t.seq, threadId: t.summary.id, at: new Date().toISOString() } as ThreadEvent;
+    const full = {
+      ...ev,
+      id: ++t.seq,
+      threadId: t.summary.id,
+      at: new Date().toISOString(),
+      actor: { id: t.summary.wolf, kind: "wolf" },
+    } as ThreadEvent;
     t.events.push(full);
     for (const w of [...t.waiters]) w();
   }

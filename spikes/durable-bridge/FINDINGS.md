@@ -200,3 +200,62 @@ Query options: `tools: []`, `maxTurns: 1`, `persistSession: false`, `settingSour
 6. **Subscription limits**: rate-limit/usage-limit errors arrive as `result` text or assistant `error` (`rate_limit`, `authentication_failed`; see `isSdkInfraFailure` in `packages/engine/src/adapters/claude-agent-sdk.ts`); map to retryable pi-ai errors so durable's retry/backoff handles them.
 7. **Concurrency**: one CLI process per active turn; check whether parallel conversations on one Max login hit throttling.
 8. **Thinking/effort and images**: not mapped here; `thinkingLevel` -> SDK `thinking`/effort options and image blocks need the structured-input path from (2).
+
+## Tool-streaming gate
+
+Ticket `work-wolfpack-BHgQm25`. Gate for feature `work-wolfpack-RhY15Hp`. **VERDICT: PASS** — pi-durable's engine executes the tool mid-turn while the model runs on the Max subscription through the Agent SDK. Code: `src/sdk-provider-tools.ts` (provider), `gate` subcommand in `src/cli.ts`. Run: `env -u ANTHROPIC_API_KEY GATE_MODE=park|replay GATE_VARIANT=add|steer node src/cli.ts gate`. Evidence: `evidence/gate-{park,replay}-{add,steer}.json` (all four PASS).
+
+### Plumbing: where tools reach a provider (pi-ai 1.4)
+- Providers get a `TranscriptContext` (`messages` only). `Context.tools`/`systemPrompt` are folded by `normalizeContext()` into a leading `role:"system"` message (`toolsAdded`/`toolsRemoved` deltas, further system messages mid-transcript can change tools).
+- The stock provider (`dist/api/anthropic-messages.js:379`) does `getCurrentTools(messages)` from `@earendil-works/pi-ai/utils/transcript` (also `getCurrentSystemMessage`, `resolveTranscriptTools`). **The sdk-provider does the same** — no other channel exists. (The earlier spike's "no tools field" was exactly this.)
+- Tool calls out: stock emits `toolcall_start` (block `{type:"toolCall",id,name,arguments,partialJson}`) → `toolcall_delta(partial_json)` → `toolcall_end{toolCall}` (partialJson stripped, args parsed), `message_delta.stop_reason: tool_use` → `done{reason:"toolUse"}`. Results in: next call's transcript ends `[assistant(toolCall blocks), toolResult{toolCallId,toolName,content,isError}…]`. The SDK stream maps 1:1 (`content_block_start tool_use` / `input_json_delta` / `content_block_stop`).
+
+### Strategy used: A (MCP passthrough), two variants — both PASS
+Tools are exposed as an in-process MCP server (raw `McpServer` + `ListTools`/`CallTool` handlers, TypeBox schema served verbatim as in the old bridge; SDK `tools: []` so no CC built-ins; `allowedTools: mcp__durable__<name>` so nothing prompts). **The handler never executes anything**: it reads the `tool_use` id from `_meta["claudecode/toolUseId"]` and parks a promise. SDK `mcp__durable__add` is stripped to `add` on the way out. The provider ends the pi stream at `message_stop` with `stop_reason:tool_use` → `done{toolUse}`; durable runs the tool (`tool_execution_start/end` visible to the watcher); the next `streamSimple` call carries the result.
+- **park** (the old bridge's mechanism, default): ONE `query()` lives across rounds. Round 2's `streamSimple` detects trailing `toolResult`s whose ids ∈ the live query's `expecting` set, swaps in its new stream, and resolves the parked handlers; the SDK's own next turn streams into the new pi stream. Streaming-input prompt (`AsyncIterable<SDKUserMessage>`) is required so a **steer** can be written to CLI stdin *before* the tool result is released (`priority:"next"`); the input is closed after the final `end_turn` so the CLI exits. `maxTurns` 12.
+- **replay**: at `tool_use` the provider `close()`s the query (kills the child). Next call is a **fresh query** whose prompt is the transcript flattened to text, tool pairs rendered as `[called tool add id=… args=…]` / `[result of tool call …]`, `maxTurns:1`. Works (model answers correctly, doesn't re-call the tool) but is lossy (no real tool_use/tool_result blocks). A faithful version needs session-JSONL resume (the old bridge's `session-verify`/sync machinery) — not needed for the gate. This path is also exactly the **crash-recovery path** (see below), so it was exercised.
+
+### Results (haiku-5-5, `ANTHROPIC_API_KEY` stripped, prompt "use the add tool to compute 17+25, then say the sum in words")
+Event sequence seen by the durable watcher (park/add): `message_start(user) > message_end(pi.user) > submission(placed) > run_start > turn_start > message_start(system) > message_end(pi.system) > message_start(assistant) > message_end(pi.assistant[toolCall add{a:17,b:25}]) > usage_changed > tool_execution_start(add toolu_…) > tool_execution_end > message_start(toolResult) > message_end(pi.tool-result) > turn_end > turn_start > message_start(assistant) > message_end(pi.assistant "42 — forty-two") > turn_end > run_end > submission(done)`. Tool ran in the engine (`toolLog`: `add {"a":17,"b":25}` once). Final answers: "Forty-two." / "42 — forty-two" — correct.
+
+| | park/add | replay/add | park/steer | replay/steer |
+|---|---|---|---|---|
+| SDK `query()` / `claude` child processes | **1** / 1 | **2** / 2 | 1 / 1 | 2 / 2 |
+| round 1 (spawn → `done toolUse`) | 1.5–2.3 s | 1.7 s | 1.3–1.5 s | 1.7 s |
+| round 2 (call → `done stop`) | **~1.1 s** | ~2.3 s | 0.8–1.0 s | 2.0 s |
+| round 1 tokens (in/out/cacheRead/cacheWrite) | 2/73/1068/0* | 2/73/1068/0* | 2/55/0–1076/1076 | 2/55/1076/0* |
+| round 2 tokens | 2/9/1171/0 | 2/8/**0/1203** | 2/64/1076/198 | 2/10/**0/1241** |
+| total turn | ~3.0–3.8 s | 4.2 s | 5.7 s (3 s tool) | 7.3 s |
+\*Round-1 cache is warm after the first run in the same minute; a cold start writes ~1070 tokens (CC's fixed preamble + tool schema). Park round 2 reuses the cache (`cacheRead` ≈ 1100, tiny write); **replay re-writes ~1200 tokens of cache on every round** (new process, cold prefix) and costs one extra CLI spawn (~1 s). Subscription so $0, but quota-wise replay ≈ +1.2k cache-write tokens per tool round.
+- **Steer after the tool round: PASS** in both (final reply `PINEAPPLE`, timeline `tool_execution_end > pi.tool-result > pi.user(steer) > turn_end > turn_start > assistant`). In park mode it only works because the steer is pushed to stdin before the result; without that (first attempt) the model answered "finished" and ignored the steer.
+- No stray processes left by the spike (`pgrep -P` empty after `harness.close`; `shutdown()` kills a parked query). The 3 `claude` processes in `ps` before/after belong to other sessions.
+
+### Gotchas found
+1. **durable aborts each call's `AbortSignal` when the call is over** (after `done`). A provider that maps `signal abort → close query` must only act if that call's round is still streaming (`live.cur === round`); otherwise it kills the parked query one tick after the `toolUse` round ends and park silently degrades to rebuild. (First run did exactly that — still produced a correct answer through the rebuild path.)
+2. `getCurrentTools()` is the only source of tool defs; tool set can change mid-conversation, but the MCP server is fixed per query → in park mode a tool-set change should force a fresh query (not implemented).
+3. Parallel tool calls: one `tool_use` per block, one parked handler each, matched by id; durable returns all results in one transcript tail → `trailing.every(expecting.has)`. Not exercised (single call tests only).
+4. `thinking_*`, images, `thinkingLevel`, and cost still unmapped (open questions 8 unchanged).
+
+### Rate-limit / error mapping
+durable retries per `ConversationRetryPolicy` using pi-ai `isRetryableAssistantError(message)` — a **regex over `errorMessage`** (`utils/retry.js`): retryable = `overloaded`, `rate.?limit`, `429/500/502/503/504`, `server.?error`, `timeout`, `connection lost`…; **non-retryable** = `billing`, `quota exceeded`, `Monthly usage limit reached`… So the provider must shape the *text*. Implemented `mapSdkError`: SDK `assistant.error` `rate_limit` → `"rate limit (429): …"`, `overloaded` → `"overloaded: …"`, `server_error` → `"server error (500): …"` (all retried with backoff), `billing_error`/`account_on_hold` → `"billing: …"` and Max-plan usage-limit result text (`/usage limit|5-hour|weekly limit/`) → `"quota exceeded: …"` (NOT retried: resets in hours), `authentication_failed` etc. pass through un-retried. A dead CLI → `"claude process ended unexpectedly (connection lost)"` (retryable). The SDK also streams `rate_limit_event` (`rate_limit_info`) — captured to `stats.lastRateLimit` for the console to surface. **Not provoked live** (would burn quota); mapping is from SDK types + retry.js, unverified end-to-end.
+
+### Crash / replay implications (reasoned from the mechanism)
+Window = between `done{toolUse}` and the next `streamSimple`.
+- **park mode state is process-memory only**: the live `query()` (child process), the parked handler promises, `expecting`. If wolfd dies there, the `claude` child is orphaned (parent gone; with a streaming-input pipe it should see stdin EOF and exit — verify; also add a process-group kill/`pkill` of orphans on startup) and *nothing durable references it*.
+- On restart durable's run resumes: the assistant entry (with the toolCall) is persisted; the tool is re-run or not per its `replay` flag (§5: `safe` re-executes, `unsafe` parks); once a `pi.tool-result` exists, durable calls `streamSimple` with transcript `[… assistant(toolCall), toolResult]`. `live` is `undefined` in the new process ⇒ `continuing` is false ⇒ **fresh-rebuild path** (identical to replay mode, which was tested and passed). So crash recovery degrades park → replay: one extra spawn + cache rewrite, lossy history rendering, and **the model is re-billed for the round** — but never wedges, because the provider never assumes the parked query exists (it verifies `expecting ⊇ trailing ids`, else rebuilds).
+- If the crash is *before* the tool-call entry is committed, durable just re-issues the model call from the prior transcript — a fresh query; the earlier partial SDK turn is wasted quota, nothing double-executes (the SDK executed nothing; only durable's `replay` classification matters for tools).
+- Because the SDK never executes tools, a replayed model call cannot cause side effects — all tool idempotency is durable's existing `replay: safe|unsafe` contract. This is the key property that makes strategy A fit the fork.
+- Residual risks: orphan CLI processes after SIGKILL (needs startup sweep); a parked process that outlives a long tool (the CLI's MCP tool-call timeout — not measured; `slow` 3 s was fine, a minutes-long tool may hit it → falls back to a protocol error; rebuild path covers it only if the handler returns/ the call errors cleanly); a lingering parked query per conversation if a run is abandoned (needs idle TTL → `shutdown()`).
+
+### Answers to the 8 open questions (from "Subscription provider spike")
+1. Tools execute in durable; SDK handler parks (park) or process is killed (replay). Re-attach after crash = not possible, rebuild instead (§crash).
+2. Both end-at-tool_use+rebuild and park work. Rebuild prompt used text flattening; faithful tool_use/tool_result replay needs session-JSONL resume (not built).
+3. `mcp__durable__<name>` ↔ `<name>` mapping done; `tools: []` + `strictMcpConfig` blocked all CC built-ins in every run (no built-in tool use observed).
+4. `input_json_delta` → `toolcall_delta` and `toolcall_end.toolCall.arguments` parse: PASS (args `{a:17,b:25}` executed by the engine). Streaming deltas are not visible as separate durable events at this scale (throttled partial commits).
+5. See crash analysis; process-group kill/orphan sweep still TODO.
+6. Mapped (above), not provoked.
+7. Concurrency: not tested (one conversation). Park mode holds one child per active turn; ~1 s spawn + ~1 k-token cache write each.
+8. Still open (thinking/images).
+
+### VERDICT: PASS
+The provider-core mechanism (tool defs from `getCurrentTools` → MCP passthrough → `toolcall_*` events + `done{toolUse}` → engine executes → result via next transcript → SDK continues) is viable. Recommended for the fork: **park as the fast path with replay as the mandatory fallback** (same code, chosen per call by `expecting ⊇ trailing toolResult ids`), plus orphan sweep, idle TTL, session-JSONL-faithful rebuild, and a live rate-limit probe.

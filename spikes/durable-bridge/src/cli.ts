@@ -333,9 +333,90 @@ async function sub() {
   await rec.stop(); await harness.close(ctx);
 }
 
+
+// ---------------------------------------------------------------- gate (tool streaming through the SDK)
+async function gate() {
+  const mode = process.env.GATE_MODE ?? "park";
+  const variant = process.env.GATE_VARIANT ?? "add"; // add | steer
+  log(`== GATE (${mode}/${variant}): durable executes tool mid-turn, model on subscription ==`);
+  if (process.env.ANTHROPIC_API_KEY) { verdicts["GATE"] = "FAIL (key present)"; return; }
+  const { execSync } = await import("node:child_process");
+  const { NodeExecutionEnv } = await import("@earendil-works/pi-durable/env/node");
+  const { openNodeSqliteStorage } = await import("@earendil-works/pi-durable/storage/sqlite/node");
+  const { createModels } = await import("@earendil-works/pi-ai/models");
+  const { createRegistry, Harness } = await import("@earendil-works/pi-durable");
+  const { claudeBridgeToolsProvider, stats, shutdown } = await import("./sdk-provider-tools.ts");
+  const { makeTools, SCRATCH } = await import("./lib.ts");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(SCRATCH, { recursive: true });
+  const models = createModels();
+  models.setProvider(claudeBridgeToolsProvider());
+  const registry = createRegistry();
+  registry.install(makeTools());
+  const harness = await Harness.open(
+    await openNodeSqliteStorage(freshStore(`gate-${mode}-${variant}`)),
+    { models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? SCRATCH }), onReport: (e) => console.error("[onReport]", e instanceof Error ? e.message : e) },
+    ctx,
+  );
+  harness.resume();
+  const conv = await harness.root(ctx, { agent: { model: { provider: "claude-bridge", modelId: "claude-haiku-5-5" }, thinkingLevel: null, instructions: "Be extremely terse. Use tools when told." } });
+  const all = (await conv.agent(ctx)).tools;
+  await conv.configure({ modelTools: all.filter((t) => t.name === (variant === "steer" ? "slow" : "add")) }, ctx);
+  log("tools offered to model:", (await conv.agent(ctx)).tools.map((t) => t.name).join(","));
+  const rig = { harness } as any;
+  const rec = await record(rig, conv, "gate");
+  // sample child processes of this node process
+  const pids = new Map<number, string>();
+  const sampler = setInterval(() => {
+    try { for (const l of execSync(`pgrep -P ${process.pid} -l`, { encoding: "utf8" }).split("\n").filter(Boolean)) { const [pid, ...n] = l.split(" "); pids.set(Number(pid), n.join(" ")); } } catch {}
+  }, 100);
+  const t0 = Date.now();
+  const prompt = variant === "steer"
+    ? "Call the slow tool with seconds=3, then reply with the single word 'finished'."
+    : "Use the add tool to compute 17+25, then say the sum in words.";
+  const s = await conv.submit({ type: "input", content: prompt }, ctx);
+  let steerSub;
+  if (variant === "steer") {
+    await rec.waitFor((e) => e.type === "tool_execution_start");
+    await sleep(500);
+    steerSub = await conv.submit({ type: "input", content: "STEERING: change of plan - your final reply must be exactly the word PINEAPPLE instead.", whenBusy: "steer" }, ctx);
+  }
+  const settled = await s.wait(ctx);
+  if (steerSub) await steerSub.wait(ctx);
+  await conv.waitForIdle(ctx);
+  await sleep(300);
+  const totalMs = Date.now() - t0;
+  clearInterval(sampler);
+  const tl = timeline(rec);
+  const view = await conv.context(ctx);
+  const texts = assistantTextsOf(view.messages);
+  const final = texts.at(-1) ?? "";
+  log("settled:", settled.status, "total ms", totalMs);
+  log("timeline:", tl.join(" > "));
+  log("tool calls executed BY ENGINE:", toolLog.map((t) => `${t.name}(${JSON.stringify(t.args)})`).join(" "));
+  log("assistant texts:", JSON.stringify(texts));
+  log("transcript:", view.entries.map((e) => `${e.id}:${e.kind}`).join(" "));
+  log("sdk queries spawned:", stats.queriesSpawned, "| distinct child pids seen:", [...pids.entries()].map(([p, n]) => `${p}`).join(","));
+  log("rounds:", JSON.stringify(stats.rounds.map((r: any) => ({ path: r.path, ms: r.ms, stop: r.stop, usage: r.usage && { in: r.usage.input, out: r.usage.output, cr: r.usage.cacheRead, cw: r.usage.cacheWrite } }))));
+  const starts = flat(rec).filter((e) => e.type === "tool_execution_start").length;
+  const ends = flat(rec).filter((e) => e.type === "tool_execution_end").length;
+  const executed = toolLog.some((t) => t.name === (variant === "steer" ? "slow" : "add"));
+  const answerOk = variant === "steer" ? /PINEAPPLE/i.test(final) : /forty[- ]?two|42/i.test(final);
+  const order = tl.findIndex((x) => x.startsWith("tool_execution_start")) < tl.findIndex((x) => x.startsWith("tool_execution_end"));
+  const ok = settled.status === "done" && executed && starts >= 1 && ends >= 1 && order && answerOk;
+  verdicts[`GATE ${mode}/${variant}`] = ok ? "PASS" : "FAIL";
+  saveEvidence(`gate-${mode}-${variant}.json`, {
+    mode, variant, prompt, settled, totalMs, finalText: final, assistantTexts: texts, timeline: tl, toolLog,
+    sdk: { queriesSpawned: stats.queriesSpawned, childPidsSeen: pids.size, rounds: stats.rounds, lastRateLimit: (stats as any).lastRateLimit },
+    transcript: view.entries.map((e) => ({ id: e.id, kind: e.kind, model: e.model })), rec: recToJson(rec),
+  });
+  await rec.stop(); shutdown(); await harness.close(ctx);
+  try { log("leftover children:", execSync(`pgrep -P ${process.pid} -l || true`, { encoding: "utf8" }).trim() || "none"); } catch {}
+}
+
 // ---------------------------------------------------------------- main
 const cmds: Record<string, () => Promise<void>> = { submit, attach, steer, abort, reconnect, tools, ask };
-const extra: Record<string, () => Promise<void>> = { sub };
+const extra: Record<string, () => Promise<void>> = { sub, gate };
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "__child-turn") {
   await childTurn(rest[0]!, rest[1] as "safe" | "unsafe");

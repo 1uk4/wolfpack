@@ -1,0 +1,345 @@
+import { describe, expect, it } from "vitest";
+import {
+  ERROR_HTTP_STATUS,
+  ErrorEnvelopeSchema,
+  PROTOCOL_VERSION,
+  PROTOCOL_VERSION_HEADER,
+  ROUTES,
+  SSE_DONE,
+  buildPath,
+  parseThreadEvent,
+  type ErrorCode,
+  type RouteName,
+  type ThreadEvent,
+} from "../index.js";
+import type { z } from "zod";
+
+export interface ContractOptions {
+  /** Wolf to run against. Default: the first wolf the server lists. */
+  wolf?: string;
+  /** Max ms to wait for a scripted turn to finish. Default 10000. */
+  turnTimeoutMs?: number;
+}
+
+interface Frame {
+  id?: number;
+  data: string;
+}
+interface StreamResult {
+  status: number;
+  frames: Frame[];
+  events: ThreadEvent[];
+  /** True when the stream ended with the [DONE] terminator. */
+  done: boolean;
+}
+
+/**
+ * Run the /v1 contract against any running server. `baseUrl` is a thunk so
+ * the server can be started in a beforeAll.
+ */
+export function runContractSuite(baseUrl: () => string, options: ContractOptions = {}): void {
+  const timeout = options.turnTimeoutMs ?? 10_000;
+
+  const call = (path: string, init: RequestInit = {}) => fetch(baseUrl() + path, init);
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+    call(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  async function expectJson<S extends z.ZodType>(res: Response, schema: S, status: readonly number[] = [200]): Promise<z.infer<S>> {
+    const body = await res.json();
+    expect(status, JSON.stringify(body)).toContain(res.status);
+    return schema.parse(body);
+  }
+
+  async function expectError(res: Response, code: ErrorCode): Promise<void> {
+    expect(res.status).toBe(ERROR_HTTP_STATUS[code]);
+    const env = ErrorEnvelopeSchema.parse(await res.json());
+    expect(env.code).toBe(code);
+  }
+
+  async function readStream(path: string, headers: Record<string, string> = {}, stopAfter?: number): Promise<StreamResult> {
+    const res = await call(path, { headers });
+    if (res.status !== 200) return { status: res.status, frames: [], events: [], done: false };
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    const frames: Frame[] = [];
+    const events: ThreadEvent[] = [];
+    let buf = "";
+    let done = false;
+    outer: for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const frame: Frame = { data: "" };
+        for (const line of block.split("\n")) {
+          if (line.startsWith("id: ")) frame.id = Number(line.slice(4));
+          else if (line.startsWith("data: ")) frame.data += line.slice(6);
+        }
+        frames.push(frame);
+        if (frame.data === SSE_DONE) {
+          done = true;
+          break outer;
+        }
+        const parsed = parseThreadEvent(JSON.parse(frame.data));
+        expect(parsed.kind).toBe("event");
+        if (parsed.kind === "event") {
+          expect(frame.id).toBe(parsed.event.id);
+          events.push(parsed.event);
+        }
+        if (stopAfter !== undefined && events.length >= stopAfter) break outer;
+      }
+    }
+    await reader.cancel().catch(() => {});
+    return { status: res.status, frames, events, done };
+  }
+
+  const getThread = async (id: string) => expectJson(await call(buildPath("getThread", { id })), ROUTES.getThread.response.schema);
+  const submit = (id: string, input: string, whenBusy?: string) =>
+    post(buildPath("submit", { id }), whenBusy === undefined ? { input } : { input, whenBusy });
+  const streamPath = (id: string) => buildPath("streamThread", { id });
+
+  async function waitIdle(id: string): Promise<void> {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      if (!(await getThread(id)).busy) return;
+      if (Date.now() > deadline) throw new Error(`thread ${id} never went idle`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  /** Submit on an idle thread and read its stream to the end. */
+  async function runTurn(id: string, input = "hi"): Promise<ThreadEvent[]> {
+    await waitIdle(id);
+    const ack = await expectJson(await submit(id, input, "reject"), ROUTES.submit.response.schema);
+    expect(ack.disposition).toBe("started");
+    const s = await readStream(streamPath(id));
+    expect(s.done).toBe(true);
+    return s.events;
+  }
+
+  describe("/v1 contract", () => {
+    let wolf = "";
+    let threadId = "";
+
+    it("GET /v1/wolves lists wolves", async () => {
+      const body = await expectJson(await call(buildPath("listWolves")), ROUTES.listWolves.response.schema);
+      expect(body.wolves.length).toBeGreaterThan(0);
+      wolf = options.wolf ?? body.wolves[0].name;
+      expect(body.wolves.some((w) => w.name === wolf)).toBe(true);
+    });
+
+    it("POST threads creates the home thread idempotently", async () => {
+      const path = buildPath("createThread", { name: wolf });
+      const first = await expectJson(await post(path, { kind: "home" }), ROUTES.createThread.response.schema, [200, 201]);
+      expect(first.kind).toBe("home");
+      expect(first.wolf).toBe(wolf);
+      const second = await expectJson(await post(path, { kind: "home" }), ROUTES.createThread.response.schema, [200]);
+      expect(second).toEqual(first);
+      threadId = first.id;
+      const list = await expectJson(await call(buildPath("listThreads", { name: wolf })), ROUTES.listThreads.response.schema);
+      expect(list.threads.filter((t) => t.kind === "home")).toHaveLength(1);
+      expect(list.threads.map((t) => t.id)).toContain(threadId);
+    });
+
+    it("create rejects non-home kinds and unknown wolves", async () => {
+      await expectError(await post(buildPath("createThread", { name: wolf }), { kind: "feature" }), "invalid_request");
+      await expectError(await post(buildPath("createThread", { name: wolf }), "not json"), "invalid_request");
+      await expectError(await post(buildPath("createThread", { name: "no-such-wolf" }), { kind: "home" }), "not_found");
+      await expectError(await call(buildPath("listThreads", { name: "no-such-wolf" })), "not_found");
+    });
+
+    it("GET thread returns ThreadDetail; unknown thread is a not_found envelope", async () => {
+      const t = await getThread(threadId);
+      expect(t.id).toBe(threadId);
+      await expectError(await call(buildPath("getThread", { id: "nope/nope" })), "not_found");
+      await expectError(await call(streamPath("nope/nope")), "not_found");
+      await expectError(await submit("nope/nope", "x", "reject"), "not_found");
+      await expectError(await post(buildPath("abort", { id: "nope/nope" }), {}), "not_found");
+    });
+
+    it("unknown routes are not_found envelopes", async () => {
+      await expectError(await call("/v1/nothing"), "not_found");
+    });
+
+    it("submit validates its body; whenBusy is required", async () => {
+      await waitIdle(threadId);
+      await expectError(await submit(threadId, "hi"), "invalid_request");
+      await expectError(await submit(threadId, "hi", "bogus"), "invalid_request");
+      await expectError(await post(buildPath("submit", { id: threadId }), "not json"), "invalid_request");
+      await expectError(await post(buildPath("submit", { id: threadId }), { whenBusy: "reject" }), "invalid_request");
+      expect((await getThread(threadId)).busy).toBe(false);
+    });
+
+    it("a turn streams monotonic server-minted ids, ends at turn-end with [DONE]", async () => {
+      await waitIdle(threadId);
+      const before = (await getThread(threadId)).lastEventId;
+      const events = await runTurn(threadId, "hello");
+      expect(events[0].type).toBe("turn-start");
+      expect(events.at(-1)?.type).toBe("turn-end");
+      expect(events.at(-1)).toMatchObject({ reason: "complete" });
+      const types = new Set(events.map((e) => e.type));
+      expect(types.has("text-delta")).toBe(true);
+      for (let i = 0; i < events.length; i++) {
+        expect(events[i].threadId).toBe(threadId);
+        if (i > 0) expect(events[i].id).toBeGreaterThan(events[i - 1].id);
+      }
+      expect(events[0].id).toBeGreaterThan(before);
+      await waitIdle(threadId);
+      const t = await getThread(threadId);
+      expect(t.lastEventId).toBe(events.at(-1)!.id);
+      expect(t.messages.some((m) => m.role === "user" && m.text === "hello")).toBe(true);
+      expect(t.messages.some((m) => m.role === "assistant")).toBe(true);
+    });
+
+    it("stream with no cursor replays the most recent turn then ends", async () => {
+      const events = await runTurn(threadId);
+      const again = await readStream(streamPath(threadId));
+      expect(again.done).toBe(true);
+      expect(again.events).toEqual(events);
+    });
+
+    it("replays buffered events after Last-Event-ID (header and ?from=) within the current turn", async () => {
+      const events = await runTurn(threadId);
+      const cursor = events[2].id;
+      const expected = events.filter((e) => e.id > cursor);
+      const viaHeader = await readStream(streamPath(threadId), { "Last-Event-ID": String(cursor) });
+      expect(viaHeader.events).toEqual(expected);
+      expect(viaHeader.done).toBe(true);
+      const viaQuery = await readStream(`${streamPath(threadId)}?from=${cursor}`);
+      expect(viaQuery.events).toEqual(expected);
+      const atEnd = await readStream(streamPath(threadId), { "Last-Event-ID": String(events.at(-1)!.id) });
+      expect(atEnd.events).toEqual([]);
+      expect(atEnd.done).toBe(true);
+    });
+
+    it("resumes mid-turn: replay then live, no gaps or duplicates", async () => {
+      await waitIdle(threadId);
+      await submit(threadId, "resume", "reject");
+      const head = await readStream(streamPath(threadId), {}, 2);
+      expect(head.events).toHaveLength(2);
+      const tail = await readStream(streamPath(threadId), { "Last-Event-ID": String(head.events[1].id) });
+      expect(tail.done).toBe(true);
+      const all = [...head.events, ...tail.events];
+      expect(all.at(-1)?.type).toBe("turn-end");
+      all.forEach((e, i) => {
+        if (i > 0) expect(e.id).toBe(all[i - 1].id + 1);
+      });
+      const full = await readStream(streamPath(threadId));
+      expect(full.events).toEqual(all);
+    });
+
+    it("sends a snapshot when the cursor predates the current turn (turn finished)", async () => {
+      const first = await runTurn(threadId, "one");
+      const second = await runTurn(threadId, "two");
+      expect(second[0].id).toBeGreaterThan(first[1].id + 1);
+      const s = await readStream(streamPath(threadId), { "Last-Event-ID": String(first[1].id) });
+      expect(s.done).toBe(true);
+      expect(s.events).toHaveLength(1);
+      const snap = s.events[0];
+      expect(snap.type).toBe("snapshot");
+      if (snap.type !== "snapshot") return;
+      expect(snap.upToId).toBe(second.at(-1)!.id);
+      expect(snap.thread.id).toBe(threadId);
+      expect(snap.thread.busy).toBe(false);
+      expect(snap.thread.lastEventId).toBe(snap.upToId);
+      expect(snap.thread.messages.some((m) => m.text === "two")).toBe(true);
+      expect(snap.inFlight).toBeUndefined();
+    });
+
+    it("snapshot then live when the stale cursor arrives mid-turn", async () => {
+      const prev = await runTurn(threadId, "prev");
+      await submit(threadId, "live", "reject");
+      const s = await readStream(streamPath(threadId), { "Last-Event-ID": String(prev[1].id) });
+      expect(s.done).toBe(true);
+      const snap = s.events[0];
+      expect(snap.type).toBe("snapshot");
+      if (snap.type !== "snapshot") return;
+      const rest = s.events.slice(1);
+      expect(rest.at(-1)?.type).toBe("turn-end");
+      for (const e of rest) expect(e.id).toBeGreaterThan(snap.upToId);
+      if (snap.thread.busy) expect(snap.inFlight?.turnId).toBeTruthy();
+    });
+
+    it("whenBusy=reject on a busy thread is a 409 busy envelope", async () => {
+      await waitIdle(threadId);
+      await submit(threadId, "first", "reject");
+      const res = await submit(threadId, "second", "reject");
+      await expectError(res, "busy");
+      await waitIdle(threadId);
+    });
+
+    it("whenBusy=steer on a busy thread is acked as steered", async () => {
+      await waitIdle(threadId);
+      await submit(threadId, "first", "reject");
+      const ack = await expectJson(await submit(threadId, "steer me", "steer"), ROUTES.submit.response.schema);
+      expect(ack.disposition).toBe("steered");
+      expect(ack.messageId).toBeTruthy();
+      await waitIdle(threadId);
+    });
+
+    it("whenBusy=followUp is queued and runs after the current turn", async () => {
+      await waitIdle(threadId);
+      const before = (await getThread(threadId)).messages.filter((m) => m.role === "assistant").length;
+      await submit(threadId, "first", "reject");
+      const ack = await expectJson(await submit(threadId, "later", "followUp"), ROUTES.submit.response.schema);
+      expect(ack.disposition).toBe("queued");
+      const deadline = Date.now() + timeout;
+      for (;;) {
+        const t = await getThread(threadId);
+        if (!t.busy && t.messages.filter((m) => m.role === "assistant").length >= before + 2) break;
+        if (Date.now() > deadline) throw new Error("follow-up never ran");
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+
+    it("whenBusy is ignored when idle: submit starts a turn", async () => {
+      await waitIdle(threadId);
+      for (const wb of ["steer", "followUp", "reject"]) {
+        const ack = await expectJson(await submit(threadId, "idle", wb), ROUTES.submit.response.schema);
+        expect(ack.disposition).toBe("started");
+        await waitIdle(threadId);
+      }
+    });
+
+    it("abort ends the turn with turn-end reason aborted", async () => {
+      await waitIdle(threadId);
+      await submit(threadId, "abort me", "reject");
+      const res = await post(buildPath("abort", { id: threadId }), {});
+      await expectJson(res, ROUTES.abort.response.schema);
+      const s = await readStream(streamPath(threadId));
+      expect(s.done).toBe(true);
+      expect(s.events.at(-1)).toMatchObject({ type: "turn-end", reason: "aborted" });
+      await waitIdle(threadId);
+    });
+
+    it("abort drops queued follow-ups", async () => {
+      await waitIdle(threadId);
+      await submit(threadId, "first", "reject");
+      await submit(threadId, "queued", "followUp");
+      await post(buildPath("abort", { id: threadId }), {});
+      await waitIdle(threadId);
+      await new Promise((r) => setTimeout(r, 100));
+      expect((await getThread(threadId)).busy).toBe(false);
+    });
+
+    it("protocol version: matching or absent is accepted, mismatch is 426 version_mismatch", async () => {
+      const ok = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) } });
+      expect(ok.status).toBe(200);
+      await ok.arrayBuffer();
+      const bad = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION + 1) } });
+      expect(bad.status).toBe(426);
+      await expectError(bad, "version_mismatch");
+      await expectError(await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: "abc" } }), "invalid_request");
+    });
+  });
+}
+
+export type { RouteName };

@@ -19,6 +19,47 @@ import type { ArtifactPartProps, LhMessage } from "@/src/core";
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
 
+/** One reasoning block: CONTROLLED open state (no remount tricks). A global
+ *  ⌘T (epoch bump) stomps it to the global state; a header click sets just
+ *  this block until the next ⌘T. A block that mounts late honors the last
+ *  global state. Any deliberate open/close disables the post-stream
+ *  auto-close so it can't undo the learner's choice. */
+function ThreadReasoning({
+	allOpen,
+	epoch,
+	isStreaming,
+	text,
+}: {
+	allOpen: boolean | null;
+	epoch: number;
+	isStreaming: boolean;
+	text: string;
+}) {
+	const [open, setOpen] = useState(allOpen ?? false);
+	const [deliberate, setDeliberate] = useState(allOpen !== null);
+	const [seenEpoch, setSeenEpoch] = useState(epoch);
+	if (seenEpoch !== epoch) {
+		setSeenEpoch(epoch);
+		setOpen(allOpen ?? false);
+		setDeliberate(true);
+	}
+	return (
+		<Reasoning
+			open={open}
+			onOpenChange={(v) => {
+				setOpen(v);
+				setDeliberate(true);
+			}}
+			autoClose={!deliberate}
+			isStreaming={isStreaming}
+			className="mb-2"
+		>
+			<ReasoningTrigger />
+			<ReasoningContent>{text}</ReasoningContent>
+		</Reasoning>
+	);
+}
+
 /**
  * The chat view for one ConsoleClient thread: the session model + projected
  * view (session-core / core view) driven by the thread transport — history
@@ -115,15 +156,13 @@ export function ThreadChat({
 																);
 															case "reasoning":
 																return (
-																	<Reasoning
-																		key={`${pi}:${thinkingEpoch}`}
-																		defaultOpen={allThinkingOpen ?? undefined}
+																	<ThreadReasoning
+																		key={part.id || pi}
+																		allOpen={allThinkingOpen}
+																		epoch={thinkingEpoch}
 																		isStreaming={status === "streaming" && isLastPart}
-																		className="mb-2"
-																	>
-																		<ReasoningTrigger />
-																		<ReasoningContent>{part.text ?? ""}</ReasoningContent>
-																	</Reasoning>
+																		text={part.text ?? ""}
+																	/>
 																);
 															case "step-start":
 																return pi > 0 ? <Separator key={pi} className="my-3" /> : null;

@@ -1,5 +1,6 @@
 /** startWolf end to end WITHOUT a model call: config -> engine store -> /v1. Real sqlite + pi-durable. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,8 +35,8 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const start = async (port?: number) => {
-  const w = await startWolf({ configPath: join(root, "wolf.yaml"), env, home: root, port });
+const start = async (port?: number, socket?: string) => {
+  const w = await startWolf({ configPath: join(root, "wolf.yaml"), env, home: root, port, socket });
   running.push(w);
   return w;
 };
@@ -76,5 +77,47 @@ describe("startWolf", () => {
       JSON.stringify({ location: "local", transport: "subscription", transportSource: "default", tiers: {}, steps: {}, warnings: [] }),
     );
     await expect(start()).rejects.toThrow(/subscription/);
+  });
+});
+
+const getOver = (socketPath: string, path: string): Promise<{ status: number; body: any }> =>
+  new Promise((resolve, reject) => {
+    const req = request({ socketPath, path }, (res) => {
+      let buf = "";
+      res.on("data", (d) => (buf += d));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(buf) }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+
+describe("startWolf over a unix socket", () => {
+  it("serves /v1/wolves on the socket (dir 0700), prints unix: url, removes the file on close", async () => {
+    const sock = join(root, "run", "bootwolf.sock");
+    const w = await start(undefined, sock);
+    expect(w.url).toBe(`unix:${sock}`);
+    expect(statSync(join(root, "run")).mode & 0o777).toBe(0o700);
+    const r = await getOver(sock, "/v1/wolves");
+    expect(r.status).toBe(200);
+    expect(r.body.wolves[0]).toMatchObject({ name: "bootwolf", status: "online" });
+    await w.close();
+    running.length = 0;
+    expect(existsSync(sock)).toBe(false);
+  });
+
+  it("removes a stale socket file before binding", async () => {
+    const sock = join(root, "stale.sock");
+    writeFileSync(sock, "");
+    const w = await start(undefined, sock);
+    expect((await getOver(sock, "/v1/wolves")).status).toBe(200);
+    expect(w.url).toBe(`unix:${sock}`);
+  });
+
+  it("refuses to bind (and never opens the store) when a live wolfd answers on the socket", async () => {
+    const sock = join(root, "live.sock");
+    await start(undefined, sock);
+    await expect(start(undefined, sock)).rejects.toThrow(/already serving/);
+    // the first one is untouched
+    expect((await getOver(sock, "/v1/wolves")).status).toBe(200);
   });
 });

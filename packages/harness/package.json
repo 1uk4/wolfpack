@@ -21,6 +21,7 @@
       "types": "./dist/engine/index.d.ts",
       "default": "./dist/engine/index.js"
     },
+    "./package.json": "./package.json",
     "./wolfd": {
       "types": "./dist/wolfd/index.d.ts",
       "default": "./dist/wolfd/index.js"

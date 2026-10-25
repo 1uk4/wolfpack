@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
- * wolfd --config <wolf.yaml> [--port N]
- * Runs ONE wolf serving the /v1 protocol on 127.0.0.1 (port: --port > serve.port > ephemeral) and prints the base URL.
+ * wolfd --config <wolf.yaml> [--socket <path> | --port N]
+ * Runs ONE wolf serving the /v1 protocol and prints `wolfd: <name> serving <url>` (http://127.0.0.1:N or unix:<path>).
+ * Listener precedence: --socket > --port > serve.port (explicit TCP in wolf.yaml) > serve.socket (config value or
+ * its default ~/.wolfpack/run/<name>.sock). serve.socket always resolves, so the final fallback is always a socket.
  */
 import { parseArgs } from "node:util";
+import { loadWolfConfig } from "@wolfpack/engine";
 import { startWolf } from "../wolfd/run.js";
 
-const USAGE = "usage: wolfd --config <wolf.yaml> [--port N]";
+const USAGE = "usage: wolfd --config <wolf.yaml> [--socket <path> | --port N]";
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
-    options: { config: { type: "string", short: "c" }, port: { type: "string", short: "p" }, help: { type: "boolean", short: "h" } },
+    options: { config: { type: "string", short: "c" }, port: { type: "string", short: "p" }, socket: { type: "string", short: "s" }, help: { type: "boolean", short: "h" } },
   });
   if (values.help) {
     console.log(USAGE);
@@ -28,7 +31,12 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
-  const wolf = await startWolf({ configPath: values.config, port, log: (l) => console.error(`[wolfd] ${l}`) });
+  let socket = values.socket;
+  if (socket === undefined && port === undefined) {
+    const { config } = loadWolfConfig(values.config);
+    if (config.serve.port === undefined) socket = config.serve.socket;
+  }
+  const wolf = await startWolf({ configPath: values.config, port: socket ? undefined : port, socket, log: (l) => console.error(`[wolfd] ${l}`) });
   console.log(`wolfd: ${wolf.config.identity.name} serving ${wolf.url}`);
   let stopping = false;
   const stop = () => {

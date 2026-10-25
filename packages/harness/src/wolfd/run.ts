@@ -6,7 +6,8 @@
  * root conversation (= the home thread) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.
  *
- * Port precedence: explicit option (--port) > serve.port > ephemeral.
+ * Listener precedence here (library): socket option > port option > serve.port > ephemeral TCP. (The wolfd bin
+ * resolves flags + config into these options; see bin/wolfd.ts.)
  * Agent state is only rewritten when it differs from what config + context say (configure appends a history entry).
  * Tier switching via configure is not wired yet (main tier only).
  */
@@ -23,12 +24,15 @@ import {
 } from "../engine/index.js";
 import { composeProjectContext } from "./context.js";
 import { WolfServer } from "./server.js";
+import { prepareSocketPath } from "./socket.js";
 
 export interface StartWolfOptions {
   /** Path to wolf.yaml. */
   configPath: string;
   /** Overrides serve.port. 0 = ephemeral. */
   port?: number;
+  /** Listen on this unix socket instead of TCP (wins over port). */
+  socket?: string;
   env?: NodeJS.ProcessEnv;
   /** Upper bound of the AGENTS.md/CLAUDE.md walk. Default: os.homedir(). */
   home?: string;
@@ -56,6 +60,9 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 
+  // Refuse before touching the store: a second wolfd on a live wolf's den would double-open its sqlite.
+  if (opts.socket) await prepareSocketPath(opts.socket);
+
   mkdirSync(config.den, { recursive: true });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
     extensions,
@@ -79,7 +86,7 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
     const server = new WolfServer({ name: config.identity.name, conversation, onError: (e) => log(`server error: ${String(e)}`) });
     await server.attach();
     engine.resume();
-    const url = await server.listen(opts.port ?? config.serve.port ?? 0);
+    const url = opts.socket ? await server.listenSocket(opts.socket) : await server.listen(opts.port ?? config.serve.port ?? 0);
     return {
       url,
       config,

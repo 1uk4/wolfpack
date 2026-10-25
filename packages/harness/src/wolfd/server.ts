@@ -18,6 +18,7 @@
  *   (plus a text-delta carrying the partial text) so a console reattaching sees a coherent turn.
  * Limits: one wolf, home thread only; a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
+import { rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -50,6 +51,7 @@ import {
   type MappedEvent,
   type ThreadEventDraft,
 } from "../engine/index.js";
+import { prepareSocketPath } from "./socket.js";
 import { appendMessage, messageFromEntry, messagesFromEntries } from "./messages.js";
 
 export interface WolfServerOptions {
@@ -83,6 +85,7 @@ export class WolfServer {
   private readonly summary: ThreadSummary;
   private readonly http: Server;
   private baseUrl = "";
+  private socketPath: string | undefined;
 
   // pump-owned thread state
   private seq = 0;
@@ -139,10 +142,23 @@ export class WolfServer {
     return this.baseUrl;
   }
 
+  /** Listen on a unix socket (dir 0700; stale file removed, live one refused). Returns `unix:<path>`. */
+  async listenSocket(path: string): Promise<string> {
+    await prepareSocketPath(path);
+    await new Promise<void>((resolve, reject) => {
+      this.http.once("error", reject);
+      this.http.listen(path, () => resolve());
+    });
+    this.socketPath = path;
+    this.baseUrl = `unix:${path}`;
+    return this.baseUrl;
+  }
+
   async close(): Promise<void> {
     this.closing = true;
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    if (this.socketPath) rmSync(this.socketPath, { force: true });
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
   }

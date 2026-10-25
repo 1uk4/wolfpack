@@ -1,0 +1,4503 @@
+{
+  "note": "A attached before submit; B at first message_update (mid-generation); C mid-tool; D after the turn; idle = fresh conversation.",
+  "idle": {
+    "label": "idle-attach",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [],
+      "tools": [],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {},
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 1,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "user",
+              "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+              "timestamp": 1792896174220
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "user",
+                  "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+                  "timestamp": 1792896174220
+                }
+              ],
+              "kind": "pi.user",
+              "id": 7,
+              "conversationId": 1
+            }
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "placed",
+              "entry": 7,
+              "id": 8
+            }
+          },
+          {
+            "type": "run_start",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 3,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896174223
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "system",
+                  "content": "",
+                  "sections": {
+                    "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+                  },
+                  "toolsAdded": [
+                    {
+                      "name": "echo",
+                      "description": "Echo back the given text.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "text"
+                        ],
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "add",
+                      "description": "Add two numbers and return the sum.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "a",
+                          "b"
+                        ],
+                        "properties": {
+                          "a": {
+                            "type": "number"
+                          },
+                          "b": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "slow",
+                      "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "seconds"
+                        ],
+                        "properties": {
+                          "seconds": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "ask_user",
+                      "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "question"
+                        ],
+                        "properties": {
+                          "question": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "timestamp": 1792896174223
+                }
+              ],
+              "kind": "pi.system",
+              "id": 10,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 621,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Ot",
+                  "index": 0
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 2,
+                "cacheRead": 795,
+                "cacheWrite": 0,
+                "totalTokens": 801,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000001,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0,
+                  "total": 0.00000935
+                },
+                "cacheWrite1h": 0
+              },
+              "stopReason": "pending",
+              "timestamp": 1792896174224,
+              "responseId": "<redacted>"
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 737,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ters slip through rivers cold,\nWhiskers twitching, bold"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 841,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and old.\nThey float on backs with pa"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 972,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ws held tight,\nSharing stones through day"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 1076,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and night.\nSleek and playful, sure and free,\nD"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 1195,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ancing in the shallow sea.\nTumbling, sliding, splashing b"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 1305,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "right,\nOtters bring the water light.\nCurious"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 9,
+        "tMs": 1416,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " eyes and tails that s"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 10,
+        "tMs": 1520,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "way,\nMischief dances all the day."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 11,
+        "tMs": 1626,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "toolcall_start",
+                "contentIndex": 1,
+                "block": {
+                  "type": "toolCall",
+                  "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 5
+                  },
+                  "partialJson": "{\"seconds\": 5",
+                  "index": 1
+                }
+              },
+              {
+                "type": "block",
+                "contentIndex": 0,
+                "block": {
+                  "type": "text",
+                  "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 12,
+        "tMs": 1753,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                      "name": "slow",
+                      "arguments": {
+                        "seconds": 5
+                      }
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                      "name": "echo",
+                      "arguments": {
+                        "text": "finished"
+                      }
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 4,
+                    "output": 224,
+                    "cacheRead": 795,
+                    "cacheWrite": 0,
+                    "totalTokens": 1023,
+                    "cost": {
+                      "input": 4.0000000000000003e-7,
+                      "output": 0.000112,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0,
+                      "total": 0.00012035
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "toolUse",
+                  "timestamp": 1792896174224,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "tool_use",
+                  "durationMs": 1743
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 11,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 4,
+                  "output": 224,
+                  "cacheRead": 795,
+                  "cacheWrite": 0,
+                  "totalTokens": 1023,
+                  "cost": {
+                    "input": 4.0000000000000003e-7,
+                    "output": 0.000112,
+                    "cacheRead": 0.00000795,
+                    "cacheWrite": 0,
+                    "total": 0.00012035
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      },
+      {
+        "n": 13,
+        "tMs": 1761,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "args": {
+              "seconds": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 14,
+        "tMs": 1764,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "args": {
+              "text": "finished"
+            }
+          }
+        ]
+      },
+      {
+        "n": 15,
+        "tMs": 1767,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+              "toolName": "echo",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo: finished"
+                }
+              ],
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896175985
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          }
+        ]
+      },
+      {
+        "n": 16,
+        "tMs": 2766,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "set": "tick 1/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 17,
+        "tMs": 2868,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 1,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 18,
+        "tMs": 3870,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 2/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 19,
+        "tMs": 3973,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 2,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 20,
+        "tMs": 4976,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 3/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 21,
+        "tMs": 5078,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 3,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 22,
+        "tMs": 6082,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 4/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 23,
+        "tMs": 6181,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 4,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 24,
+        "tMs": 7186,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 5/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 25,
+        "tMs": 7286,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 5,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 26,
+        "tMs": 7288,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 5,
+                "of": 5
+              },
+              "isError": false,
+              "durationMs": 5523,
+              "timestamp": 1792896181506
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 27,
+        "tMs": 7292,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 28,
+        "tMs": 7890,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 795,
+                "cacheWrite": 286,
+                "totalTokens": 1087,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0.00003575,
+                  "total": 0.000045900000000000004
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896181516,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 591
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "finished"
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 4,
+                    "cacheRead": 795,
+                    "cacheWrite": 286,
+                    "totalTokens": 1087,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000002,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0.00003575,
+                      "total": 0.000045900000000000004
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896181516,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 591
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 17,
+              "conversationId": 1,
+              "byTaskId": 16
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 17
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 228,
+                  "cacheRead": 1590,
+                  "cacheWrite": 286,
+                  "totalTokens": 2110,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.00011399999999999999,
+                    "cacheRead": 0.0000159,
+                    "cacheWrite": 0.00003575,
+                    "total": 0.00016625
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientA": {
+    "label": "clientA",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [],
+      "tools": [],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {},
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 1,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "user",
+              "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+              "timestamp": 1792896174220
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "user",
+                  "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+                  "timestamp": 1792896174220
+                }
+              ],
+              "kind": "pi.user",
+              "id": 7,
+              "conversationId": 1
+            }
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "placed",
+              "entry": 7,
+              "id": 8
+            }
+          },
+          {
+            "type": "run_start",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 3,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896174223
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "system",
+                  "content": "",
+                  "sections": {
+                    "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+                  },
+                  "toolsAdded": [
+                    {
+                      "name": "echo",
+                      "description": "Echo back the given text.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "text"
+                        ],
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "add",
+                      "description": "Add two numbers and return the sum.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "a",
+                          "b"
+                        ],
+                        "properties": {
+                          "a": {
+                            "type": "number"
+                          },
+                          "b": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "slow",
+                      "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "seconds"
+                        ],
+                        "properties": {
+                          "seconds": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "ask_user",
+                      "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "question"
+                        ],
+                        "properties": {
+                          "question": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "timestamp": 1792896174223
+                }
+              ],
+              "kind": "pi.system",
+              "id": 10,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 621,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Ot",
+                  "index": 0
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 2,
+                "cacheRead": 795,
+                "cacheWrite": 0,
+                "totalTokens": 801,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000001,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0,
+                  "total": 0.00000935
+                },
+                "cacheWrite1h": 0
+              },
+              "stopReason": "pending",
+              "timestamp": 1792896174224,
+              "responseId": "<redacted>"
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 737,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ters slip through rivers cold,\nWhiskers twitching, bold"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 841,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and old.\nThey float on backs with pa"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 972,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ws held tight,\nSharing stones through day"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 1076,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and night.\nSleek and playful, sure and free,\nD"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 1195,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ancing in the shallow sea.\nTumbling, sliding, splashing b"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 1305,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "right,\nOtters bring the water light.\nCurious"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 9,
+        "tMs": 1416,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " eyes and tails that s"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 10,
+        "tMs": 1520,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "way,\nMischief dances all the day."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 11,
+        "tMs": 1626,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "toolcall_start",
+                "contentIndex": 1,
+                "block": {
+                  "type": "toolCall",
+                  "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 5
+                  },
+                  "partialJson": "{\"seconds\": 5",
+                  "index": 1
+                }
+              },
+              {
+                "type": "block",
+                "contentIndex": 0,
+                "block": {
+                  "type": "text",
+                  "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 12,
+        "tMs": 1753,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                      "name": "slow",
+                      "arguments": {
+                        "seconds": 5
+                      }
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                      "name": "echo",
+                      "arguments": {
+                        "text": "finished"
+                      }
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 4,
+                    "output": 224,
+                    "cacheRead": 795,
+                    "cacheWrite": 0,
+                    "totalTokens": 1023,
+                    "cost": {
+                      "input": 4.0000000000000003e-7,
+                      "output": 0.000112,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0,
+                      "total": 0.00012035
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "toolUse",
+                  "timestamp": 1792896174224,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "tool_use",
+                  "durationMs": 1743
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 11,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 4,
+                  "output": 224,
+                  "cacheRead": 795,
+                  "cacheWrite": 0,
+                  "totalTokens": 1023,
+                  "cost": {
+                    "input": 4.0000000000000003e-7,
+                    "output": 0.000112,
+                    "cacheRead": 0.00000795,
+                    "cacheWrite": 0,
+                    "total": 0.00012035
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      },
+      {
+        "n": 13,
+        "tMs": 1761,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "args": {
+              "seconds": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 14,
+        "tMs": 1764,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "args": {
+              "text": "finished"
+            }
+          }
+        ]
+      },
+      {
+        "n": 15,
+        "tMs": 1767,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+              "toolName": "echo",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo: finished"
+                }
+              ],
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896175985
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          }
+        ]
+      },
+      {
+        "n": 16,
+        "tMs": 2766,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "set": "tick 1/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 17,
+        "tMs": 2868,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 1,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 18,
+        "tMs": 3870,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 2/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 19,
+        "tMs": 3973,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 2,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 20,
+        "tMs": 4976,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 3/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 21,
+        "tMs": 5078,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 3,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 22,
+        "tMs": 6082,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 4/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 23,
+        "tMs": 6181,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 4,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 24,
+        "tMs": 7186,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 5/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 25,
+        "tMs": 7286,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 5,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 26,
+        "tMs": 7288,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 5,
+                "of": 5
+              },
+              "isError": false,
+              "durationMs": 5523,
+              "timestamp": 1792896181506
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 27,
+        "tMs": 7292,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 28,
+        "tMs": 7890,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 795,
+                "cacheWrite": 286,
+                "totalTokens": 1087,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0.00003575,
+                  "total": 0.000045900000000000004
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896181516,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 591
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "finished"
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 4,
+                    "cacheRead": 795,
+                    "cacheWrite": 286,
+                    "totalTokens": 1087,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000002,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0.00003575,
+                      "total": 0.000045900000000000004
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896181516,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 591
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 17,
+              "conversationId": 1,
+              "byTaskId": 16
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 17
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 228,
+                  "cacheRead": 1590,
+                  "cacheWrite": 286,
+                  "totalTokens": 2110,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.00011399999999999999,
+                    "cacheRead": 0.0000159,
+                    "cacheWrite": 0.00003575,
+                    "total": 0.00016625
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientB_midGeneration": {
+    "label": "clientB-midgen",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [
+        {
+          "model": [
+            {
+              "role": "user",
+              "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+              "timestamp": 1792896174220
+            }
+          ],
+          "kind": "pi.user",
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "model": [
+            {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896174223
+            }
+          ],
+          "kind": "pi.system",
+          "id": 10,
+          "conversationId": 1,
+          "byTaskId": 9
+        }
+      ],
+      "run": {
+        "inputs": [
+          8
+        ]
+      },
+      "generation": {
+        "attempt": 1,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Ot",
+              "index": 0
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "anthropic",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 2,
+            "cacheRead": 795,
+            "cacheWrite": 0,
+            "totalTokens": 801,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000001,
+              "cacheRead": 0.00000795,
+              "cacheWrite": 0,
+              "total": 0.00000935
+            },
+            "cacheWrite1h": 0
+          },
+          "stopReason": "pending",
+          "timestamp": 1792896174224,
+          "responseId": "<redacted>"
+        }
+      },
+      "tools": [],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {},
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 116,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ters slip through rivers cold,\nWhiskers twitching, bold"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 220,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and old.\nThey float on backs with pa"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 351,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ws held tight,\nSharing stones through day"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 455,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " and night.\nSleek and playful, sure and free,\nD"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 574,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "ancing in the shallow sea.\nTumbling, sliding, splashing b"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 684,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "right,\nOtters bring the water light.\nCurious"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 795,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " eyes and tails that s"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 899,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "way,\nMischief dances all the day."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 1005,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 795,
+              "cacheWrite": 0,
+              "totalTokens": 801,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000795,
+                "cacheWrite": 0,
+                "total": 0.00000935
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "toolcall_start",
+                "contentIndex": 1,
+                "block": {
+                  "type": "toolCall",
+                  "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 5
+                  },
+                  "partialJson": "{\"seconds\": 5",
+                  "index": 1
+                }
+              },
+              {
+                "type": "block",
+                "contentIndex": 0,
+                "block": {
+                  "type": "text",
+                  "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 9,
+        "tMs": 1132,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                      "name": "slow",
+                      "arguments": {
+                        "seconds": 5
+                      }
+                    },
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                      "name": "echo",
+                      "arguments": {
+                        "text": "finished"
+                      }
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 4,
+                    "output": 224,
+                    "cacheRead": 795,
+                    "cacheWrite": 0,
+                    "totalTokens": 1023,
+                    "cost": {
+                      "input": 4.0000000000000003e-7,
+                      "output": 0.000112,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0,
+                      "total": 0.00012035
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "toolUse",
+                  "timestamp": 1792896174224,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "tool_use",
+                  "durationMs": 1743
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 11,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 4,
+                  "output": 224,
+                  "cacheRead": 795,
+                  "cacheWrite": 0,
+                  "totalTokens": 1023,
+                  "cost": {
+                    "input": 4.0000000000000003e-7,
+                    "output": 0.000112,
+                    "cacheRead": 0.00000795,
+                    "cacheWrite": 0,
+                    "total": 0.00012035
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      },
+      {
+        "n": 10,
+        "tMs": 1140,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "args": {
+              "seconds": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 11,
+        "tMs": 1143,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "args": {
+              "text": "finished"
+            }
+          }
+        ]
+      },
+      {
+        "n": 12,
+        "tMs": 1146,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+            "toolName": "echo",
+            "taskId": 13,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+              "toolName": "echo",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo: finished"
+                }
+              ],
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896175985
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "toolName": "echo",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "echo: finished"
+                    }
+                  ],
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896175985
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 14,
+              "conversationId": 1,
+              "byTaskId": 13
+            }
+          }
+        ]
+      },
+      {
+        "n": 13,
+        "tMs": 2145,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "set": "tick 1/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 14,
+        "tMs": 2247,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 1,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 15,
+        "tMs": 3249,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 2/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 16,
+        "tMs": 3352,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 2,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 17,
+        "tMs": 4355,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 3/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 18,
+        "tMs": 4457,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 3,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 19,
+        "tMs": 5461,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 4/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 20,
+        "tMs": 5560,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 4,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 21,
+        "tMs": 6565,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 5/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 22,
+        "tMs": 6665,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 5,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 23,
+        "tMs": 6667,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 5,
+                "of": 5
+              },
+              "isError": false,
+              "durationMs": 5523,
+              "timestamp": 1792896181506
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 24,
+        "tMs": 6671,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 25,
+        "tMs": 7269,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 795,
+                "cacheWrite": 286,
+                "totalTokens": 1087,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0.00003575,
+                  "total": 0.000045900000000000004
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896181516,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 591
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "finished"
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 4,
+                    "cacheRead": 795,
+                    "cacheWrite": 286,
+                    "totalTokens": 1087,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000002,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0.00003575,
+                      "total": 0.000045900000000000004
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896181516,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 591
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 17,
+              "conversationId": 1,
+              "byTaskId": 16
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 17
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 228,
+                  "cacheRead": 1590,
+                  "cacheWrite": 286,
+                  "totalTokens": 2110,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.00011399999999999999,
+                    "cacheRead": 0.0000159,
+                    "cacheWrite": 0.00003575,
+                    "total": 0.00016625
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientC_midTool": {
+    "label": "clientC-midtool",
+    "attachedAtMs": 1,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [
+        {
+          "model": [
+            {
+              "role": "user",
+              "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+              "timestamp": 1792896174220
+            }
+          ],
+          "kind": "pi.user",
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "model": [
+            {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896174223
+            }
+          ],
+          "kind": "pi.system",
+          "id": 10,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                },
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 5
+                  }
+                },
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "name": "echo",
+                  "arguments": {
+                    "text": "finished"
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 224,
+                "cacheRead": 795,
+                "cacheWrite": 0,
+                "totalTokens": 1023,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000112,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0,
+                  "total": 0.00012035
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1792896174224,
+              "responseId": "<redacted>",
+              "rawStopReason": "tool_use",
+              "durationMs": 1743
+            }
+          ],
+          "kind": "pi.assistant",
+          "id": 11,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "toolResult",
+              "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+              "toolName": "echo",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo: finished"
+                }
+              ],
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896175985
+            }
+          ],
+          "data": {
+            "diagnostics": []
+          },
+          "kind": "pi.tool-result",
+          "id": 14,
+          "conversationId": 1,
+          "byTaskId": 13
+        }
+      ],
+      "run": {
+        "inputs": [
+          8
+        ]
+      },
+      "tools": [
+        {
+          "callId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+          "name": "slow",
+          "taskId": 12,
+          "status": "running",
+          "output": "tick 1/5\ntick 2/5\n",
+          "details": {
+            "tick": 2,
+            "of": 5
+          }
+        },
+        {
+          "callId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+          "name": "echo",
+          "taskId": 13,
+          "status": "done",
+          "entry": 14
+        }
+      ],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {
+          "anthropic/claude-haiku-5-5": {
+            "input": 4,
+            "output": 224,
+            "cacheRead": 795,
+            "cacheWrite": 0,
+            "totalTokens": 1023,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000112,
+              "cacheRead": 0.00000795,
+              "cacheWrite": 0,
+              "total": 0.00012035
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          }
+        },
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 712,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 3/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 814,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 3,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 1818,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 4/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 1917,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 4,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 2922,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 5/5\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 3022,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 5,
+              "of": 5
+            }
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 3024,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 5,
+                "of": 5
+              },
+              "isError": false,
+              "durationMs": 5523,
+              "timestamp": 1792896181506
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 5,
+                    "of": 5
+                  },
+                  "isError": false,
+                  "durationMs": 5523,
+                  "timestamp": 1792896181506
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 3028,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 3626,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 795,
+                "cacheWrite": 286,
+                "totalTokens": 1087,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0.00003575,
+                  "total": 0.000045900000000000004
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896181516,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 591
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "finished"
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 4,
+                    "cacheRead": 795,
+                    "cacheWrite": 286,
+                    "totalTokens": 1087,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000002,
+                      "cacheRead": 0.00000795,
+                      "cacheWrite": 0.00003575,
+                      "total": 0.000045900000000000004
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896181516,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 591
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 17,
+              "conversationId": 1,
+              "byTaskId": 16
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 17
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 228,
+                  "cacheRead": 1590,
+                  "cacheWrite": 286,
+                  "totalTokens": 2110,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.00011399999999999999,
+                    "cacheRead": 0.0000159,
+                    "cacheWrite": 0.00003575,
+                    "total": 0.00016625
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientD_postTurn": {
+    "label": "clientD-postturn",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [
+        {
+          "model": [
+            {
+              "role": "user",
+              "content": "First write a 10-line poem about otters, then call the slow tool with seconds=5, then say 'finished'.",
+              "timestamp": 1792896174220
+            }
+          ],
+          "kind": "pi.user",
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "model": [
+            {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896174223
+            }
+          ],
+          "kind": "pi.system",
+          "id": 10,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Otters slip through rivers cold,\nWhiskers twitching, bold and old.\nThey float on backs with paws held tight,\nSharing stones through day and night.\nSleek and playful, sure and free,\nDancing in the shallow sea.\nTumbling, sliding, splashing bright,\nOtters bring the water light.\nCurious eyes and tails that sway,\nMischief dances all the day."
+                },
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 5
+                  }
+                },
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+                  "name": "echo",
+                  "arguments": {
+                    "text": "finished"
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 224,
+                "cacheRead": 795,
+                "cacheWrite": 0,
+                "totalTokens": 1023,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000112,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0,
+                  "total": 0.00012035
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1792896174224,
+              "responseId": "<redacted>",
+              "rawStopReason": "tool_use",
+              "durationMs": 1743
+            }
+          ],
+          "kind": "pi.assistant",
+          "id": 11,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "toolResult",
+              "toolCallId": "toolu_01PcrTEGVfZAYCDyynfw7GqM",
+              "toolName": "echo",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo: finished"
+                }
+              ],
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896175985
+            }
+          ],
+          "data": {
+            "diagnostics": []
+          },
+          "kind": "pi.tool-result",
+          "id": 14,
+          "conversationId": 1,
+          "byTaskId": 13
+        },
+        {
+          "model": [
+            {
+              "role": "toolResult",
+              "toolCallId": "toolu_01WDKzX5HeFUe4cvcbU2936A",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 5,
+                "of": 5
+              },
+              "isError": false,
+              "durationMs": 5523,
+              "timestamp": 1792896181506
+            }
+          ],
+          "data": {
+            "diagnostics": []
+          },
+          "kind": "pi.tool-result",
+          "id": 15,
+          "conversationId": 1,
+          "byTaskId": 12
+        },
+        {
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 795,
+                "cacheWrite": 286,
+                "totalTokens": 1087,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000795,
+                  "cacheWrite": 0.00003575,
+                  "total": 0.000045900000000000004
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896181516,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 591
+            }
+          ],
+          "kind": "pi.assistant",
+          "id": 17,
+          "conversationId": 1,
+          "byTaskId": 16
+        }
+      ],
+      "tools": [],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {
+          "anthropic/claude-haiku-5-5": {
+            "input": 6,
+            "output": 228,
+            "cacheRead": 1590,
+            "cacheWrite": 286,
+            "totalTokens": 2110,
+            "cost": {
+              "input": 6.000000000000001e-7,
+              "output": 0.00011399999999999999,
+              "cacheRead": 0.0000159,
+              "cacheWrite": 0.00003575,
+              "total": 0.00016625
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          }
+        },
+        "tools": {}
+      }
+    },
+    "batches": []
+  },
+  "commits": [
+    {
+      "seq": 1,
+      "kinds": [
+        "conversation",
+        "doc:pi.live",
+        "doc:pi.inbox",
+        "doc:pi.usage",
+        "doc:pi.provider",
+        "doc:pi.agent"
+      ]
+    },
+    {
+      "seq": 2,
+      "kinds": [
+        "entry",
+        "submission",
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 3,
+      "kinds": [
+        "task"
+      ]
+    },
+    {
+      "seq": 4,
+      "kinds": [
+        "entry",
+        "task"
+      ]
+    },
+    {
+      "seq": 5,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 6,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 7,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 8,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 9,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 10,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 11,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 12,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 13,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 14,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 15,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 16,
+      "kinds": [
+        "entry",
+        "task",
+        "task",
+        "task",
+        "doc:pi.live",
+        "doc:pi.usage"
+      ]
+    },
+    {
+      "seq": 17,
+      "kinds": [
+        "task",
+        "task"
+      ]
+    },
+    {
+      "seq": 18,
+      "kinds": [
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 19,
+      "kinds": [
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 20,
+      "kinds": [
+        "entry",
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 21,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 22,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 23,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 24,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 25,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 26,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 27,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 28,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 29,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 30,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 31,
+      "kinds": [
+        "entry",
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 32,
+      "kinds": [
+        "task"
+      ]
+    },
+    {
+      "seq": 33,
+      "kinds": [
+        "task",
+        "task",
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 34,
+      "kinds": [
+        "task"
+      ]
+    },
+    {
+      "seq": 35,
+      "kinds": [
+        "task"
+      ]
+    },
+    {
+      "seq": 36,
+      "kinds": [
+        "doc:pi.live"
+      ]
+    },
+    {
+      "seq": 37,
+      "kinds": [
+        "entry",
+        "submission",
+        "task",
+        "doc:pi.live",
+        "doc:pi.usage"
+      ]
+    }
+  ],
+  "seqExposedInEvents": false
+}

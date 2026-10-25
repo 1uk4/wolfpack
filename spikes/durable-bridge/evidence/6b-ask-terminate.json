@@ -1,0 +1,843 @@
+{
+  "turn1": {
+    "conversationId": 1,
+    "type": "input",
+    "status": "done",
+    "entry": 7,
+    "id": 8,
+    "answer": 11
+  },
+  "turn2": {
+    "conversationId": 1,
+    "type": "input",
+    "status": "done",
+    "entry": 14,
+    "id": 15,
+    "answer": 17
+  },
+  "transcript": [
+    {
+      "id": 7,
+      "kind": "pi.user"
+    },
+    {
+      "id": 10,
+      "kind": "pi.system"
+    },
+    {
+      "id": 11,
+      "kind": "pi.assistant"
+    },
+    {
+      "id": 13,
+      "kind": "pi.tool-result",
+      "data": {
+        "diagnostics": []
+      }
+    }
+  ],
+  "assistantTexts": [
+    "",
+    "Got it, Italian. I don't have a restaurant booking tool available, so I can't book a table directly. I can help in other ways, though, such as narrowing down options or drafting a reservation request you can send to a restaurant. Would you like me to do either of those? If so, let me know your preferred date, time, party size, and area."
+  ],
+  "rec": {
+    "label": "ask",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [],
+      "tools": [],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "When you need information from the user, call ask_user. After calling it, do not write anything else."
+      },
+      "usage": {
+        "models": {},
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 1,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "user",
+              "content": "I want to book a restaurant. Ask me what cuisine I want using the ask_user tool.",
+              "timestamp": 1792896205707
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "user",
+                  "content": "I want to book a restaurant. Ask me what cuisine I want using the ask_user tool.",
+                  "timestamp": 1792896205707
+                }
+              ],
+              "kind": "pi.user",
+              "id": 7,
+              "conversationId": 1
+            }
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "placed",
+              "entry": 7,
+              "id": 8
+            }
+          },
+          {
+            "type": "run_start",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 3,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nWhen you need information from the user, call ask_user. After calling it, do not write anything else.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896205709
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "system",
+                  "content": "",
+                  "sections": {
+                    "instructions": "<instructions>\nWhen you need information from the user, call ask_user. After calling it, do not write anything else.\n</instructions>"
+                  },
+                  "toolsAdded": [
+                    {
+                      "name": "echo",
+                      "description": "Echo back the given text.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "text"
+                        ],
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "add",
+                      "description": "Add two numbers and return the sum.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "a",
+                          "b"
+                        ],
+                        "properties": {
+                          "a": {
+                            "type": "number"
+                          },
+                          "b": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "slow",
+                      "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "seconds"
+                        ],
+                        "properties": {
+                          "seconds": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "ask_user",
+                      "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "question"
+                        ],
+                        "properties": {
+                          "question": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "timestamp": 1792896205709
+                }
+              ],
+              "kind": "pi.system",
+              "id": 10,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 1431,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "toolu_019yg9QzV41F99paJahYTXrv",
+                  "name": "ask_user",
+                  "arguments": {},
+                  "partialJson": "",
+                  "index": 0
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 16,
+                "cacheRead": 796,
+                "cacheWrite": 0,
+                "totalTokens": 816,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000008,
+                  "cacheRead": 0.00000796,
+                  "cacheWrite": 0,
+                  "total": 0.00001636
+                },
+                "cacheWrite1h": 0
+              },
+              "stopReason": "pending",
+              "timestamp": 1792896205711,
+              "responseId": "<redacted>"
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 1477,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "toolCall",
+                      "id": "toolu_019yg9QzV41F99paJahYTXrv",
+                      "name": "ask_user",
+                      "arguments": {
+                        "question": "What cuisine would you like for your restaurant booking?"
+                      }
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 4,
+                    "output": 64,
+                    "cacheRead": 796,
+                    "cacheWrite": 0,
+                    "totalTokens": 864,
+                    "cost": {
+                      "input": 4.0000000000000003e-7,
+                      "output": 0.000032,
+                      "cacheRead": 0.00000796,
+                      "cacheWrite": 0,
+                      "total": 0.00004036
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "toolUse",
+                  "timestamp": 1792896205711,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "tool_use",
+                  "durationMs": 1471
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 11,
+              "conversationId": 1,
+              "byTaskId": 9
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 4,
+                  "output": 64,
+                  "cacheRead": 796,
+                  "cacheWrite": 0,
+                  "totalTokens": 864,
+                  "cost": {
+                    "input": 4.0000000000000003e-7,
+                    "output": 0.000032,
+                    "cacheRead": 0.00000796,
+                    "cacheWrite": 0,
+                    "total": 0.00004036
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 1480,
+        "events": [
+          {
+            "type": "tool_execution_start",
+            "toolCallId": "toolu_019yg9QzV41F99paJahYTXrv",
+            "toolName": "ask_user",
+            "taskId": 12,
+            "args": {
+              "question": "What cuisine would you like for your restaurant booking?"
+            }
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 1482,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_019yg9QzV41F99paJahYTXrv",
+            "toolName": "ask_user",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_019yg9QzV41F99paJahYTXrv",
+                  "toolName": "ask_user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Question sent to user: What cuisine would you like for your restaurant booking?"
+                    }
+                  ],
+                  "details": {
+                    "pendingQuestion": "What cuisine would you like for your restaurant booking?"
+                  },
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896207188
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_019yg9QzV41F99paJahYTXrv",
+              "toolName": "ask_user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Question sent to user: What cuisine would you like for your restaurant booking?"
+                }
+              ],
+              "details": {
+                "pendingQuestion": "What cuisine would you like for your restaurant booking?"
+              },
+              "isError": false,
+              "durationMs": 0,
+              "timestamp": 1792896207188
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_019yg9QzV41F99paJahYTXrv",
+                  "toolName": "ask_user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Question sent to user: What cuisine would you like for your restaurant booking?"
+                    }
+                  ],
+                  "details": {
+                    "pendingQuestion": "What cuisine would you like for your restaurant booking?"
+                  },
+                  "isError": false,
+                  "durationMs": 0,
+                  "timestamp": 1792896207188
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 1485,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 11
+            }
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 1788,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "user",
+              "content": "Italian.",
+              "timestamp": 1792896207494
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "user",
+                  "content": "Italian.",
+                  "timestamp": 1792896207494
+                }
+              ],
+              "kind": "pi.user",
+              "id": 14,
+              "conversationId": 1
+            }
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "placed",
+              "entry": 14,
+              "id": 15
+            }
+          },
+          {
+            "type": "run_start",
+            "inputs": [
+              15
+            ]
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 2491,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Got it,",
+                  "index": 0
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 2,
+                "cacheRead": 897,
+                "cacheWrite": 0,
+                "totalTokens": 903,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000001,
+                  "cacheRead": 0.00000897,
+                  "cacheWrite": 0,
+                  "total": 0.00001037
+                },
+                "cacheWrite1h": 0
+              },
+              "stopReason": "pending",
+              "timestamp": 1792896207497,
+              "responseId": "<redacted>"
+            }
+          }
+        ]
+      },
+      {
+        "n": 9,
+        "tMs": 2665,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 897,
+              "cacheWrite": 0,
+              "totalTokens": 903,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000897,
+                "cacheWrite": 0,
+                "total": 0.00001037
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " Italian. I don't have a restaurant booking tool available, so I can't book a table directly. I can help in other ways,"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 10,
+        "tMs": 2770,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 897,
+              "cacheWrite": 0,
+              "totalTokens": 903,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000897,
+                "cacheWrite": 0,
+                "total": 0.00001037
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " though, such as narrowing down options or dr"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 11,
+        "tMs": 2874,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 897,
+              "cacheWrite": 0,
+              "totalTokens": 903,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000897,
+                "cacheWrite": 0,
+                "total": 0.00001037
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": "afting a reservation request you can send to a restaurant. Would you like me to do either"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 12,
+        "tMs": 2991,
+        "events": [
+          {
+            "type": "message_update",
+            "usage": {
+              "input": 4,
+              "output": 2,
+              "cacheRead": 897,
+              "cacheWrite": 0,
+              "totalTokens": 903,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000001,
+                "cacheRead": 0.00000897,
+                "cacheWrite": 0,
+                "total": 0.00001037
+              },
+              "cacheWrite1h": 0
+            },
+            "changes": [
+              {
+                "type": "text_delta",
+                "contentIndex": 0,
+                "delta": " of those? If so, let me know your pre"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "n": 13,
+        "tMs": 3058,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Got it, Italian. I don't have a restaurant booking tool available, so I can't book a table directly. I can help in other ways, though, such as narrowing down options or drafting a reservation request you can send to a restaurant. Would you like me to do either of those? If so, let me know your preferred date, time, party size, and area."
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 4,
+                    "output": 103,
+                    "cacheRead": 897,
+                    "cacheWrite": 0,
+                    "totalTokens": 1004,
+                    "cost": {
+                      "input": 4.0000000000000003e-7,
+                      "output": 0.0000515,
+                      "cacheRead": 0.00000897,
+                      "cacheWrite": 0,
+                      "total": 0.000060870000000000005
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896207497,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 1262
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 17,
+              "conversationId": 1,
+              "byTaskId": 16
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              15
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 14,
+              "id": 15,
+              "answer": 17
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 8,
+                  "output": 167,
+                  "cacheRead": 1693,
+                  "cacheWrite": 0,
+                  "totalTokens": 1868,
+                  "cost": {
+                    "input": 8.000000000000001e-7,
+                    "output": 0.0000835,
+                    "cacheRead": 0.000016930000000000002,
+                    "cacheWrite": 0,
+                    "total": 0.00010123
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "durable-bridge-spike",
+  "private": true,
+  "type": "module",
+  "description": "Standalone spike (NOT a workspace, NOT in turbo): raw pi-durable bridge behaviours. Run: node src/cli.ts <cmd>",
+  "scripts": {
+    "submit": "node src/cli.ts submit",
+    "attach": "node src/cli.ts attach",
+    "steer": "node src/cli.ts steer",
+    "abort": "node src/cli.ts abort",
+    "reconnect": "node src/cli.ts reconnect",
+    "tools": "node src/cli.ts tools",
+    "all": "node src/cli.ts all"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/chord": "1.4.0",
+    "typebox": "1.3.27"
+  }
+}

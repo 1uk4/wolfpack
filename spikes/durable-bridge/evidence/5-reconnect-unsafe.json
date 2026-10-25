@@ -1,0 +1,955 @@
+{
+  "replay": "unsafe",
+  "postCrashSnapshot": {
+    "type": "snapshot",
+    "entries": [
+      {
+        "model": [
+          {
+            "role": "user",
+            "content": "Call the slow tool with seconds=6, then say 'finished'.",
+            "timestamp": 1792896199064
+          }
+        ],
+        "kind": "pi.user",
+        "id": 7,
+        "conversationId": 1
+      },
+      {
+        "model": [
+          {
+            "role": "system",
+            "content": "",
+            "sections": {
+              "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+            },
+            "toolsAdded": [
+              {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "add",
+                "description": "Add two numbers and return the sum.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "a",
+                    "b"
+                  ],
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "slow",
+                "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "seconds"
+                  ],
+                  "properties": {
+                    "seconds": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "ask_user",
+                "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ],
+            "timestamp": 1792896199069
+          }
+        ],
+        "kind": "pi.system",
+        "id": 10,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+                "name": "slow",
+                "arguments": {
+                  "seconds": 6
+                }
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 4,
+              "output": 48,
+              "cacheRead": 782,
+              "cacheWrite": 0,
+              "totalTokens": 834,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000024,
+                "cacheRead": 0.00000782,
+                "cacheWrite": 0,
+                "total": 0.00003222
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "toolUse",
+            "timestamp": 1792896199101,
+            "responseId": "<redacted>",
+            "rawStopReason": "tool_use",
+            "durationMs": 1678
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 11,
+        "conversationId": 1,
+        "byTaskId": 9
+      }
+    ],
+    "run": {
+      "inputs": [
+        8
+      ]
+    },
+    "tools": [
+      {
+        "callId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+        "name": "slow",
+        "taskId": 12,
+        "status": "running",
+        "output": "tick 1/6\n",
+        "details": {
+          "tick": 1,
+          "of": 6
+        }
+      }
+    ],
+    "nestedTools": [],
+    "compactions": [],
+    "inbox": [],
+    "agent": {
+      "model": {
+        "provider": "anthropic",
+        "modelId": "claude-haiku-5-5"
+      },
+      "instructions": "Be extremely terse. Follow tool instructions exactly."
+    },
+    "usage": {
+      "models": {
+        "anthropic/claude-haiku-5-5": {
+          "input": 4,
+          "output": 48,
+          "cacheRead": 782,
+          "cacheWrite": 0,
+          "totalTokens": 834,
+          "cost": {
+            "input": 4.0000000000000003e-7,
+            "output": 0.000024,
+            "cacheRead": 0.00000782,
+            "cacheWrite": 0,
+            "total": 0.00003222
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    }
+  },
+  "postResume": {
+    "label": "post-resume",
+    "attachedAtMs": 0,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [
+        {
+          "model": [
+            {
+              "role": "user",
+              "content": "Call the slow tool with seconds=6, then say 'finished'.",
+              "timestamp": 1792896199064
+            }
+          ],
+          "kind": "pi.user",
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "model": [
+            {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896199069
+            }
+          ],
+          "kind": "pi.system",
+          "id": 10,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 6
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 48,
+                "cacheRead": 782,
+                "cacheWrite": 0,
+                "totalTokens": 834,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000024,
+                  "cacheRead": 0.00000782,
+                  "cacheWrite": 0,
+                  "total": 0.00003222
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1792896199101,
+              "responseId": "<redacted>",
+              "rawStopReason": "tool_use",
+              "durationMs": 1678
+            }
+          ],
+          "kind": "pi.assistant",
+          "id": 11,
+          "conversationId": 1,
+          "byTaskId": 9
+        }
+      ],
+      "run": {
+        "inputs": [
+          8
+        ]
+      },
+      "tools": [
+        {
+          "callId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+          "name": "slow",
+          "taskId": 12,
+          "status": "running",
+          "output": "tick 1/6\n",
+          "details": {
+            "tick": 1,
+            "of": 6
+          }
+        }
+      ],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {
+          "anthropic/claude-haiku-5-5": {
+            "input": 4,
+            "output": 48,
+            "cacheRead": 782,
+            "cacheWrite": 0,
+            "totalTokens": 834,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000024,
+              "cacheRead": 0.00000782,
+              "cacheWrite": 0,
+              "total": 0.00003222
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          }
+        },
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 1,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tick 1/6\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": "<harness>\n[error] Tool slow was interrupted and may have partially run\n</harness>"
+                    }
+                  ],
+                  "details": {
+                    "tick": 1,
+                    "of": 6
+                  },
+                  "isError": true,
+                  "timestamp": 1792896202320
+                }
+              ],
+              "data": {
+                "diagnostics": [
+                  {
+                    "severity": "error",
+                    "code": "interrupted",
+                    "message": "Tool slow was interrupted and may have partially run"
+                  }
+                ]
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "tick 1/6\n"
+                },
+                {
+                  "type": "text",
+                  "text": "<harness>\n[error] Tool slow was interrupted and may have partially run\n</harness>"
+                }
+              ],
+              "details": {
+                "tick": 1,
+                "of": 6
+              },
+              "isError": true,
+              "timestamp": 1792896202320
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tick 1/6\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": "<harness>\n[error] Tool slow was interrupted and may have partially run\n</harness>"
+                    }
+                  ],
+                  "details": {
+                    "tick": 1,
+                    "of": 6
+                  },
+                  "isError": true,
+                  "timestamp": 1792896202320
+                }
+              ],
+              "data": {
+                "diagnostics": [
+                  {
+                    "severity": "error",
+                    "code": "interrupted",
+                    "message": "Tool slow was interrupted and may have partially run"
+                  }
+                ]
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 2,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 602,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "The slow tool was",
+                  "index": 0
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 6,
+                "cacheRead": 878,
+                "cacheWrite": 0,
+                "totalTokens": 886,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000003,
+                  "cacheRead": 0.00000878,
+                  "cacheWrite": 0,
+                  "total": 0.00001198
+                },
+                "cacheWrite1h": 0
+              },
+              "stopReason": "pending",
+              "timestamp": 1792896202323,
+              "responseId": "<redacted>"
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 691,
+        "events": [
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "The slow tool was interrupted after tick 1/6 and may have only partially run. I'm not going to report it as finished."
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 40,
+                    "cacheRead": 878,
+                    "cacheWrite": 0,
+                    "totalTokens": 920,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000019999999999999998,
+                      "cacheRead": 0.00000878,
+                      "cacheWrite": 0,
+                      "total": 0.00002898
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896202323,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 683
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 14
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 15
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 88,
+                  "cacheRead": 1660,
+                  "cacheWrite": 0,
+                  "totalTokens": 1754,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.000044,
+                    "cacheRead": 0.0000166,
+                    "cacheWrite": 0,
+                    "total": 0.0000612
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "entries": [
+    {
+      "id": 7,
+      "kind": "pi.user"
+    },
+    {
+      "id": 10,
+      "kind": "pi.system"
+    },
+    {
+      "id": 11,
+      "kind": "pi.assistant"
+    },
+    {
+      "id": 13,
+      "kind": "pi.tool-result"
+    },
+    {
+      "id": 15,
+      "kind": "pi.assistant"
+    }
+  ],
+  "commitSeqsAfterReopen": [
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20
+  ],
+  "freshAfterRecoverySnapshot": {
+    "type": "snapshot",
+    "entries": [
+      {
+        "model": [
+          {
+            "role": "user",
+            "content": "Call the slow tool with seconds=6, then say 'finished'.",
+            "timestamp": 1792896199064
+          }
+        ],
+        "kind": "pi.user",
+        "id": 7,
+        "conversationId": 1
+      },
+      {
+        "model": [
+          {
+            "role": "system",
+            "content": "",
+            "sections": {
+              "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+            },
+            "toolsAdded": [
+              {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "add",
+                "description": "Add two numbers and return the sum.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "a",
+                    "b"
+                  ],
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "slow",
+                "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "seconds"
+                  ],
+                  "properties": {
+                    "seconds": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "ask_user",
+                "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ],
+            "timestamp": 1792896199069
+          }
+        ],
+        "kind": "pi.system",
+        "id": 10,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+                "name": "slow",
+                "arguments": {
+                  "seconds": 6
+                }
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 4,
+              "output": 48,
+              "cacheRead": 782,
+              "cacheWrite": 0,
+              "totalTokens": 834,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000024,
+                "cacheRead": 0.00000782,
+                "cacheWrite": 0,
+                "total": 0.00003222
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "toolUse",
+            "timestamp": 1792896199101,
+            "responseId": "<redacted>",
+            "rawStopReason": "tool_use",
+            "durationMs": 1678
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 11,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "toolResult",
+            "toolCallId": "toolu_01Kr4RJ1moD19UpmvpV5biXr",
+            "toolName": "slow",
+            "content": [
+              {
+                "type": "text",
+                "text": "tick 1/6\n"
+              },
+              {
+                "type": "text",
+                "text": "<harness>\n[error] Tool slow was interrupted and may have partially run\n</harness>"
+              }
+            ],
+            "details": {
+              "tick": 1,
+              "of": 6
+            },
+            "isError": true,
+            "timestamp": 1792896202320
+          }
+        ],
+        "data": {
+          "diagnostics": [
+            {
+              "severity": "error",
+              "code": "interrupted",
+              "message": "Tool slow was interrupted and may have partially run"
+            }
+          ]
+        },
+        "kind": "pi.tool-result",
+        "id": 13,
+        "conversationId": 1,
+        "byTaskId": 12
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "The slow tool was interrupted after tick 1/6 and may have only partially run. I'm not going to report it as finished."
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 2,
+              "output": 40,
+              "cacheRead": 878,
+              "cacheWrite": 0,
+              "totalTokens": 920,
+              "cost": {
+                "input": 2.0000000000000002e-7,
+                "output": 0.000019999999999999998,
+                "cacheRead": 0.00000878,
+                "cacheWrite": 0,
+                "total": 0.00002898
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "stop",
+            "timestamp": 1792896202323,
+            "responseId": "<redacted>",
+            "rawStopReason": "end_turn",
+            "durationMs": 683
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 15,
+        "conversationId": 1,
+        "byTaskId": 14
+      }
+    ],
+    "tools": [],
+    "nestedTools": [],
+    "compactions": [],
+    "inbox": [],
+    "agent": {
+      "model": {
+        "provider": "anthropic",
+        "modelId": "claude-haiku-5-5"
+      },
+      "instructions": "Be extremely terse. Follow tool instructions exactly."
+    },
+    "usage": {
+      "models": {
+        "anthropic/claude-haiku-5-5": {
+          "input": 6,
+          "output": 88,
+          "cacheRead": 1660,
+          "cacheWrite": 0,
+          "totalTokens": 1754,
+          "cost": {
+            "input": 6.000000000000001e-7,
+            "output": 0.000044,
+            "cacheRead": 0.0000166,
+            "cacheWrite": 0,
+            "total": 0.0000612
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    }
+  },
+  "sameIdsAcrossReopen": true,
+  "inspectPostCrash": [
+    {
+      "id": 12,
+      "state": "ready"
+    },
+    {
+      "id": 9,
+      "state": "waiting"
+    }
+  ]
+}

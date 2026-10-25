@@ -1,0 +1,1135 @@
+{
+  "replay": "safe",
+  "postCrashSnapshot": {
+    "type": "snapshot",
+    "entries": [
+      {
+        "model": [
+          {
+            "role": "user",
+            "content": "Call the slow tool with seconds=6, then say 'finished'.",
+            "timestamp": 1792896119792
+          }
+        ],
+        "kind": "pi.user",
+        "id": 7,
+        "conversationId": 1
+      },
+      {
+        "model": [
+          {
+            "role": "system",
+            "content": "",
+            "sections": {
+              "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+            },
+            "toolsAdded": [
+              {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "add",
+                "description": "Add two numbers and return the sum.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "a",
+                    "b"
+                  ],
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "slow",
+                "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "seconds"
+                  ],
+                  "properties": {
+                    "seconds": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "ask_user",
+                "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ],
+            "timestamp": 1792896119796
+          }
+        ],
+        "kind": "pi.system",
+        "id": 10,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+                "name": "slow",
+                "arguments": {
+                  "seconds": 6
+                }
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 4,
+              "output": 48,
+              "cacheRead": 782,
+              "cacheWrite": 0,
+              "totalTokens": 834,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000024,
+                "cacheRead": 0.00000782,
+                "cacheWrite": 0,
+                "total": 0.00003222
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "toolUse",
+            "timestamp": 1792896119828,
+            "responseId": "<redacted>",
+            "rawStopReason": "tool_use",
+            "durationMs": 1435
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 11,
+        "conversationId": 1,
+        "byTaskId": 9
+      }
+    ],
+    "run": {
+      "inputs": [
+        8
+      ]
+    },
+    "tools": [
+      {
+        "callId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+        "name": "slow",
+        "taskId": 12,
+        "status": "running",
+        "output": "tick 1/6\n",
+        "details": {
+          "tick": 1,
+          "of": 6
+        }
+      }
+    ],
+    "nestedTools": [],
+    "compactions": [],
+    "inbox": [],
+    "agent": {
+      "model": {
+        "provider": "anthropic",
+        "modelId": "claude-haiku-5-5"
+      },
+      "instructions": "Be extremely terse. Follow tool instructions exactly."
+    },
+    "usage": {
+      "models": {
+        "anthropic/claude-haiku-5-5": {
+          "input": 4,
+          "output": 48,
+          "cacheRead": 782,
+          "cacheWrite": 0,
+          "totalTokens": 834,
+          "cost": {
+            "input": 4.0000000000000003e-7,
+            "output": 0.000024,
+            "cacheRead": 0.00000782,
+            "cacheWrite": 0,
+            "total": 0.00003222
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    }
+  },
+  "postResume": {
+    "label": "post-resume",
+    "attachedAtMs": 1,
+    "snapshot": {
+      "type": "snapshot",
+      "entries": [
+        {
+          "model": [
+            {
+              "role": "user",
+              "content": "Call the slow tool with seconds=6, then say 'finished'.",
+              "timestamp": 1792896119792
+            }
+          ],
+          "kind": "pi.user",
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "model": [
+            {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+              },
+              "toolsAdded": [
+                {
+                  "name": "echo",
+                  "description": "Echo back the given text.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "text"
+                    ],
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "add",
+                  "description": "Add two numbers and return the sum.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "a",
+                      "b"
+                    ],
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "slow",
+                  "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "seconds"
+                    ],
+                    "properties": {
+                      "seconds": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "ask_user",
+                  "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "question"
+                    ],
+                    "properties": {
+                      "question": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ],
+              "timestamp": 1792896119796
+            }
+          ],
+          "kind": "pi.system",
+          "id": 10,
+          "conversationId": 1,
+          "byTaskId": 9
+        },
+        {
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+                  "name": "slow",
+                  "arguments": {
+                    "seconds": 6
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 4,
+                "output": 48,
+                "cacheRead": 782,
+                "cacheWrite": 0,
+                "totalTokens": 834,
+                "cost": {
+                  "input": 4.0000000000000003e-7,
+                  "output": 0.000024,
+                  "cacheRead": 0.00000782,
+                  "cacheWrite": 0,
+                  "total": 0.00003222
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1792896119828,
+              "responseId": "<redacted>",
+              "rawStopReason": "tool_use",
+              "durationMs": 1435
+            }
+          ],
+          "kind": "pi.assistant",
+          "id": 11,
+          "conversationId": 1,
+          "byTaskId": 9
+        }
+      ],
+      "run": {
+        "inputs": [
+          8
+        ]
+      },
+      "tools": [
+        {
+          "callId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+          "name": "slow",
+          "taskId": 12,
+          "status": "running",
+          "output": "tick 1/6\n",
+          "details": {
+            "tick": 1,
+            "of": 6
+          }
+        }
+      ],
+      "nestedTools": [],
+      "compactions": [],
+      "inbox": [],
+      "agent": {
+        "model": {
+          "provider": "anthropic",
+          "modelId": "claude-haiku-5-5"
+        },
+        "instructions": "Be extremely terse. Follow tool instructions exactly."
+      },
+      "usage": {
+        "models": {
+          "anthropic/claude-haiku-5-5": {
+            "input": 4,
+            "output": 48,
+            "cacheRead": 782,
+            "cacheWrite": 0,
+            "totalTokens": 834,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000024,
+              "cacheRead": 0.00000782,
+              "cacheWrite": 0,
+              "total": 0.00003222
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          }
+        },
+        "tools": {}
+      }
+    },
+    "batches": [
+      {
+        "n": 0,
+        "tMs": 6,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "set": ""
+            },
+            "details": null
+          }
+        ]
+      },
+      {
+        "n": 1,
+        "tMs": 1015,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "set": "tick 1/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 2,
+        "tMs": 1119,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 1,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 3,
+        "tMs": 2121,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 2/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 4,
+        "tMs": 2222,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 2,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 5,
+        "tMs": 3244,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 3/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 6,
+        "tMs": 3343,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 3,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 7,
+        "tMs": 4346,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 4/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 8,
+        "tMs": 4450,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 4,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 9,
+        "tMs": 5460,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 5/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 10,
+        "tMs": 5554,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 5,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 11,
+        "tMs": 6558,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "output": {
+              "append": "tick 6/6\n"
+            }
+          }
+        ]
+      },
+      {
+        "n": 12,
+        "tMs": 6657,
+        "events": [
+          {
+            "type": "tool_execution_update",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "details": {
+              "tick": 6,
+              "of": 6
+            }
+          }
+        ]
+      },
+      {
+        "n": 13,
+        "tMs": 6664,
+        "events": [
+          {
+            "type": "tool_execution_end",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "taskId": 12,
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 6,
+                    "of": 6
+                  },
+                  "isError": false,
+                  "durationMs": 6650,
+                  "timestamp": 1792896129458
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          },
+          {
+            "type": "message_start",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+              "toolName": "slow",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ],
+              "details": {
+                "tick": 6,
+                "of": 6
+              },
+              "isError": false,
+              "durationMs": 6650,
+              "timestamp": 1792896129458
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "toolResult",
+                  "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+                  "toolName": "slow",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "done"
+                    }
+                  ],
+                  "details": {
+                    "tick": 6,
+                    "of": 6
+                  },
+                  "isError": false,
+                  "durationMs": 6650,
+                  "timestamp": 1792896129458
+                }
+              ],
+              "data": {
+                "diagnostics": []
+              },
+              "kind": "pi.tool-result",
+              "id": 13,
+              "conversationId": 1,
+              "byTaskId": 12
+            }
+          }
+        ]
+      },
+      {
+        "n": 14,
+        "tMs": 6670,
+        "events": [
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "turn_start"
+          }
+        ]
+      },
+      {
+        "n": 15,
+        "tMs": 7665,
+        "events": [
+          {
+            "type": "message_start",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "finished"
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-haiku-5-5",
+              "usage": {
+                "input": 2,
+                "output": 4,
+                "cacheRead": 782,
+                "cacheWrite": 56,
+                "totalTokens": 844,
+                "cost": {
+                  "input": 2.0000000000000002e-7,
+                  "output": 0.000002,
+                  "cacheRead": 0.00000782,
+                  "cacheWrite": 0.000007,
+                  "total": 0.00001702
+                },
+                "cacheWrite1h": 0,
+                "reasoning": 0
+              },
+              "stopReason": "stop",
+              "timestamp": 1792896129529,
+              "responseId": "<redacted>",
+              "rawStopReason": "end_turn",
+              "durationMs": 931
+            }
+          },
+          {
+            "type": "message_end",
+            "entry": {
+              "model": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "finished"
+                    }
+                  ],
+                  "api": "anthropic-messages",
+                  "provider": "anthropic",
+                  "model": "claude-haiku-5-5",
+                  "usage": {
+                    "input": 2,
+                    "output": 4,
+                    "cacheRead": 782,
+                    "cacheWrite": 56,
+                    "totalTokens": 844,
+                    "cost": {
+                      "input": 2.0000000000000002e-7,
+                      "output": 0.000002,
+                      "cacheRead": 0.00000782,
+                      "cacheWrite": 0.000007,
+                      "total": 0.00001702
+                    },
+                    "cacheWrite1h": 0,
+                    "reasoning": 0
+                  },
+                  "stopReason": "stop",
+                  "timestamp": 1792896129529,
+                  "responseId": "<redacted>",
+                  "rawStopReason": "end_turn",
+                  "durationMs": 931
+                }
+              ],
+              "kind": "pi.assistant",
+              "id": 15,
+              "conversationId": 1,
+              "byTaskId": 14
+            }
+          },
+          {
+            "type": "turn_end"
+          },
+          {
+            "type": "run_end",
+            "inputs": [
+              8
+            ]
+          },
+          {
+            "type": "submission",
+            "record": {
+              "conversationId": 1,
+              "type": "input",
+              "status": "done",
+              "entry": 7,
+              "id": 8,
+              "answer": 15
+            }
+          },
+          {
+            "type": "usage_changed",
+            "usage": {
+              "models": {
+                "anthropic/claude-haiku-5-5": {
+                  "input": 6,
+                  "output": 52,
+                  "cacheRead": 1564,
+                  "cacheWrite": 56,
+                  "totalTokens": 1678,
+                  "cost": {
+                    "input": 6.000000000000001e-7,
+                    "output": 0.000026000000000000002,
+                    "cacheRead": 0.00001564,
+                    "cacheWrite": 0.000007,
+                    "total": 0.000049239999999999996
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                }
+              },
+              "tools": {}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "entries": [
+    {
+      "id": 7,
+      "kind": "pi.user"
+    },
+    {
+      "id": 10,
+      "kind": "pi.system"
+    },
+    {
+      "id": 11,
+      "kind": "pi.assistant"
+    },
+    {
+      "id": 13,
+      "kind": "pi.tool-result"
+    },
+    {
+      "id": 15,
+      "kind": "pi.assistant"
+    }
+  ],
+  "commitSeqsAfterReopen": [
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32
+  ],
+  "freshAfterRecoverySnapshot": {
+    "type": "snapshot",
+    "entries": [
+      {
+        "model": [
+          {
+            "role": "user",
+            "content": "Call the slow tool with seconds=6, then say 'finished'.",
+            "timestamp": 1792896119792
+          }
+        ],
+        "kind": "pi.user",
+        "id": 7,
+        "conversationId": 1
+      },
+      {
+        "model": [
+          {
+            "role": "system",
+            "content": "",
+            "sections": {
+              "instructions": "<instructions>\nBe extremely terse. Follow tool instructions exactly.\n</instructions>"
+            },
+            "toolsAdded": [
+              {
+                "name": "echo",
+                "description": "Echo back the given text.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "add",
+                "description": "Add two numbers and return the sum.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "a",
+                    "b"
+                  ],
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "slow",
+                "description": "Wait for the given number of seconds, reporting progress, then return 'done'.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "seconds"
+                  ],
+                  "properties": {
+                    "seconds": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "ask_user",
+                "description": "Ask the human a question. Ends your turn; their answer arrives as the next user message. Use whenever you need info only the human has.",
+                "parameters": {
+                  "type": "object",
+                  "required": [
+                    "question"
+                  ],
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ],
+            "timestamp": 1792896119796
+          }
+        ],
+        "kind": "pi.system",
+        "id": 10,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+                "name": "slow",
+                "arguments": {
+                  "seconds": 6
+                }
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 4,
+              "output": 48,
+              "cacheRead": 782,
+              "cacheWrite": 0,
+              "totalTokens": 834,
+              "cost": {
+                "input": 4.0000000000000003e-7,
+                "output": 0.000024,
+                "cacheRead": 0.00000782,
+                "cacheWrite": 0,
+                "total": 0.00003222
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "toolUse",
+            "timestamp": 1792896119828,
+            "responseId": "<redacted>",
+            "rawStopReason": "tool_use",
+            "durationMs": 1435
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 11,
+        "conversationId": 1,
+        "byTaskId": 9
+      },
+      {
+        "model": [
+          {
+            "role": "toolResult",
+            "toolCallId": "toolu_01A2qSFHEdUVPsnqJZga8kHM",
+            "toolName": "slow",
+            "content": [
+              {
+                "type": "text",
+                "text": "done"
+              }
+            ],
+            "details": {
+              "tick": 6,
+              "of": 6
+            },
+            "isError": false,
+            "durationMs": 6650,
+            "timestamp": 1792896129458
+          }
+        ],
+        "data": {
+          "diagnostics": []
+        },
+        "kind": "pi.tool-result",
+        "id": 13,
+        "conversationId": 1,
+        "byTaskId": 12
+      },
+      {
+        "model": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "finished"
+              }
+            ],
+            "api": "anthropic-messages",
+            "provider": "anthropic",
+            "model": "claude-haiku-5-5",
+            "usage": {
+              "input": 2,
+              "output": 4,
+              "cacheRead": 782,
+              "cacheWrite": 56,
+              "totalTokens": 844,
+              "cost": {
+                "input": 2.0000000000000002e-7,
+                "output": 0.000002,
+                "cacheRead": 0.00000782,
+                "cacheWrite": 0.000007,
+                "total": 0.00001702
+              },
+              "cacheWrite1h": 0,
+              "reasoning": 0
+            },
+            "stopReason": "stop",
+            "timestamp": 1792896129529,
+            "responseId": "<redacted>",
+            "rawStopReason": "end_turn",
+            "durationMs": 931
+          }
+        ],
+        "kind": "pi.assistant",
+        "id": 15,
+        "conversationId": 1,
+        "byTaskId": 14
+      }
+    ],
+    "tools": [],
+    "nestedTools": [],
+    "compactions": [],
+    "inbox": [],
+    "agent": {
+      "model": {
+        "provider": "anthropic",
+        "modelId": "claude-haiku-5-5"
+      },
+      "instructions": "Be extremely terse. Follow tool instructions exactly."
+    },
+    "usage": {
+      "models": {
+        "anthropic/claude-haiku-5-5": {
+          "input": 6,
+          "output": 52,
+          "cacheRead": 1564,
+          "cacheWrite": 56,
+          "totalTokens": 1678,
+          "cost": {
+            "input": 6.000000000000001e-7,
+            "output": 0.000026000000000000002,
+            "cacheRead": 0.00001564,
+            "cacheWrite": 0.000007,
+            "total": 0.000049239999999999996
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    }
+  },
+  "sameIdsAcrossReopen": true,
+  "inspectPostCrash": [
+    {
+      "id": 12,
+      "state": "ready"
+    },
+    {
+      "id": 9,
+      "state": "waiting"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-terminal dev stack: workerd (supervising every wolf in WOLVES_DIR) + console.
-#   npm run dev:stack
+#   npm run dev:stack            # browser console on :3000
+#   npm run dev:stack:desktop    # Electron app (console on :3210 inside)
 # Env (all optional):
 #   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/dev)
 #   WOLFPACK_MODELS_FILE  models.json (transport "api")     (default: first */models.json in WOLVES_DIR)
@@ -40,4 +41,5 @@ WORKERD_PID=$!
 cleanup() { kill "$WORKERD_PID" 2>/dev/null || true; wait "$WORKERD_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-WOLFPACK_API_URL="http://127.0.0.1:$WORKERD_PORT" npm run dev -w @wolfpack/console
+APP_WS="@wolfpack/${STACK_APP:-console}"
+WOLFPACK_API_URL="http://127.0.0.1:$WORKERD_PORT" npm run dev -w "$APP_WS"

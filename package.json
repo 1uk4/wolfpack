@@ -14,7 +14,8 @@
     "postbuild": "chmod +x packages/cli/dist/bin/wolfpack.js packages/kb/dist/cli.js packages/agent/dist/bin/wolfpack-agent.js packages/harness/dist/bin/harness.js packages/workerd/dist/bin/workerd.js",
     "dev": "turbo run dev --filter=@wolfpack/console",
     "verify": "turbo run build typecheck lint test",
-    "dev:stack": "bash scripts/dev-stack.sh"
+    "dev:stack": "bash scripts/dev-stack.sh",
+    "dev:stack:desktop": "STACK_APP=desktop bash scripts/dev-stack.sh"
   },
   "devDependencies": {
     "turbo": "^2.11.10",

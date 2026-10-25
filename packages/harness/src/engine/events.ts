@@ -16,6 +16,8 @@
  *   set/append/trimStart ops; details-only updates are dropped), tool-end carries the result text + isError from the
  *   result entry (absent entry = faulted tool = isError). Nested tool calls (parentToolCallId) are not surfaced.
  * - An assistant message that ends with stopReason "error" yields an `error` event before turn-end(error).
+ * - If the final text/thinking at message_end is NOT an extension of what streamed (a provider retry diverged), no tail
+ *   is emitted; a `{type:"resync", correction}` is surfaced instead. An empty final side is never treated as divergence.
  * - A mid-stream engine `snapshot` is surfaced as `{type:"resync"}`: the serving layer owns protocol snapshots.
  * - Everything else (usage, inbox, submission placement, agent_changed, user/system/tool-result messages...) is dropped.
  * - Steer lands after the current tool round (engine behaviour); nothing here assumes mid-tool delivery.
@@ -34,7 +36,14 @@ export type ThreadEventDraft = DistributiveOmit<Exclude<ThreadEvent, { type: "sn
 /** The engine lost our place (overflow); the serving layer should send a protocol snapshot and keep mapping. */
 export interface ResyncDraft {
   type: "resync";
-  snapshot: EngineSnapshot;
+  /** Engine overflow: re-base state on this snapshot. */
+  snapshot?: EngineSnapshot;
+  /**
+   * Stream divergence (a provider retry regenerated different text): the deltas already emitted for the current
+   * assistant message are stale. `stale*` is exactly what was streamed, `text`/`thinking` the authoritative final.
+   * The serving layer rewrites its in-flight view and sends a protocol snapshot.
+   */
+  correction?: { turnId: string; text: string; thinking: string; staleText: string; staleThinking: string };
 }
 
 export type MappedEvent = ThreadEventDraft | ResyncDraft;
@@ -142,6 +151,19 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     }
     if (final.text.length > s.text.length && final.text.startsWith(s.text)) {
       out.push({ type: "text-delta", turnId: s.turnId, text: final.text.slice(s.text.length) });
+    }
+    const diverged = (streamed: string, fin: string) => fin !== "" && fin !== streamed && !fin.startsWith(streamed);
+    if (diverged(s.text, final.text) || diverged(s.thinking, final.thinking)) {
+      out.push({
+        type: "resync",
+        correction: {
+          turnId: s.turnId,
+          text: final.text,
+          thinking: final.thinking,
+          staleText: s.text,
+          staleThinking: s.thinking,
+        },
+      });
     }
   };
 

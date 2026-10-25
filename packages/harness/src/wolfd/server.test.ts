@@ -76,6 +76,21 @@ describe("WolfServer", () => {
     expect(events.at(-1)?.type).toBe("turn-end");
   });
 
+  it("a diverged message_end reaches subscribers as a protocol snapshot carrying the final text", async () => {
+    const engine = new ScriptedEngine({ delayMs: 20, script: [{ kind: "text", text: "abandoned partial" }] });
+    engine.divergeNextFinal("the real answer");
+    const { url } = await boot(engine);
+    await post(url, SUBMIT, { input: "hi", whenBusy: "reject" });
+    const events = await readEvents(url, STREAM);
+    const snaps = events.filter((e) => e.type === "snapshot") as any[];
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0].thread.messages.at(-1).text).toBe("the real answer");
+    expect(snaps[0].inFlight.text).toBe("the real answer");
+    expect(events.at(-1)?.type).toBe("turn-end");
+    const text = events.filter((e) => e.type === "text-delta").map((e: any) => e.text).join("");
+    expect(text).toBe("abandoned partial"); // live deltas are not retracted; the snapshot is the reset
+  });
+
   it("attaching mid-run presents the in-flight turn", async () => {
     const engine = new ScriptedEngine({ delayMs: 30 });
     await engine.submit({ input: "early", whenBusy: "reject" });

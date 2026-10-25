@@ -48,6 +48,37 @@ describe("text reconciliation", () => {
     expect(out.filter((e) => e.type === "thinking-delta").map((e: any) => e.text)).toEqual(["hm", "m, ", "ok"]);
   });
 
+  it("a diverged final yields a corrective resync, no trailing delta", () => {
+    const out = map(start(), asstStart([]), delta("abandoned partial"), asstEnd([{ type: "text", text: "fresh answer" }]), end(), sub(1, "done"));
+    expect(out.map((e) => e.type)).toEqual(["turn-start", "text-delta", "resync", "turn-end"]);
+    expect(out[2]).toEqual({
+      type: "resync",
+      correction: { turnId: "turn-1", text: "fresh answer", thinking: "", staleText: "abandoned partial", staleThinking: "" },
+    });
+  });
+
+  it("a final that is a strict prefix of the streamed text also corrects", () => {
+    const out = map(start(), asstStart([]), delta("abcdef"), asstEnd([{ type: "text", text: "abc" }]), end(), sub(1, "done"));
+    expect(out.filter((e) => e.type === "resync")).toHaveLength(1);
+    expect(out.filter((e) => e.type === "text-delta")).toHaveLength(1);
+  });
+
+  it("a diverged thinking block corrects too; the next message starts clean", () => {
+    const out = map(
+      start(), asstStart([]), delta("old thought", "thinking_delta"), delta("same", "text_delta"),
+      asstEnd([{ type: "thinking", thinking: "new thought" }, { type: "text", text: "same" }]),
+      asstStart([{ type: "text", text: "next" }]), asstEnd([{ type: "text", text: "next" }]), end(), sub(1, "done"),
+    );
+    const r = out.filter((e) => e.type === "resync") as any[];
+    expect(r).toHaveLength(1);
+    expect(r[0].correction).toMatchObject({ thinking: "new thought", staleThinking: "old thought", text: "same", staleText: "same" });
+  });
+
+  it("matching or extending finals never resync", () => {
+    const out = map(start(), asstStart([]), delta("abc"), asstEnd([{ type: "text", text: "abcd" }]), end(), sub(1, "done"));
+    expect(out.some((e) => e.type === "resync")).toBe(false);
+  });
+
   it("ignores user/system/tool-result messages", () => {
     const out = map(start(), ev({ type: "message_start", message: { role: "user", content: "hi" } }), ev({ type: "message_start", message: { role: "toolResult", content: [{ type: "text", text: "x" }] } }), end(), sub(1, "done"));
     expect(out.map((e) => e.type)).toEqual(["turn-start", "turn-end"]);

@@ -48,6 +48,7 @@ export class ScriptedEngine implements EngineConversation {
   private entries: unknown[] = [];
   private run: Run | null = null;
   private followUps: string[] = [];
+  private finalOverride: string | undefined;
   private readonly watchers = new Set<(batch: readonly EngineEvent[]) => void>();
 
   constructor(opts: ScriptedEngineOptions = {}) {
@@ -81,6 +82,11 @@ export class ScriptedEngine implements EngineConversation {
     run.aborted = true;
     run.wake?.();
     await run.done;
+  }
+
+  /** The next closed assistant round carries `text` as its final content, whatever streamed (a diverged provider retry). */
+  divergeNextFinal(text: string): void {
+    this.finalOverride = text;
   }
 
   /** Push a mid-stream engine snapshot (what the engine does after an overflow); the mapper turns it into a resync. */
@@ -194,7 +200,9 @@ export class ScriptedEngine implements EngineConversation {
       const round = run.round;
       if (!round) return;
       run.round = undefined;
-      const content = [...(round.text ? [{ type: "text", text: round.text }] : []), ...extra];
+      const finalText = this.finalOverride ?? round.text;
+      this.finalOverride = undefined;
+      const content = [...(finalText ? [{ type: "text", text: finalText }] : []), ...extra];
       const message = { role: "assistant", content, stopReason };
       this.emit([ev({ type: "message_end", entry: this.entry("pi.assistant", message) })]);
     };

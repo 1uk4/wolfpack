@@ -49,6 +49,7 @@ import {
   type EngineWatch,
   type EventMapper,
   type MappedEvent,
+  type ResyncDraft,
   type ThreadEventDraft,
 } from "../engine/index.js";
 import { prepareSocketPath } from "./socket.js";
@@ -211,12 +212,37 @@ export class WolfServer {
   private applyMapped(events: MappedEvent[]): void {
     for (const ev of events) {
       if (ev.type === "resync") {
-        this.rebase(ev.snapshot, false);
+        if (ev.snapshot) this.rebase(ev.snapshot, false);
+        if (ev.correction) this.correctBuffer(ev.correction);
         const snap = this.snapshotEvent();
         for (const s of [...this.subs]) s(snap);
         this.notify();
       } else this.emit(ev);
     }
+  }
+
+  /**
+   * A diverged retry: the buffered deltas of the current message are stale. Rewrite them in place (ids stay, so
+   * replay keeps working): the earliest stale delta carries the authoritative text, the rest are blanked.
+   */
+  private correctBuffer(c: NonNullable<ResyncDraft["correction"]>): void {
+    const fix = (type: "text-delta" | "thinking-delta", stale: string, final: string) => {
+      if (stale === "" || final === "" || final === stale) return;
+      const hit: ThreadEvent[] = [];
+      let n = 0;
+      for (let i = this.buffer.length - 1; i >= 0 && n < stale.length; i--) {
+        const e = this.buffer[i];
+        if (e.type === type && e.turnId === c.turnId) {
+          hit.push(e);
+          n += e.text.length;
+        }
+      }
+      hit.forEach((e, i) => {
+        (e as { text: string }).text = i === hit.length - 1 ? final : "";
+      });
+    };
+    fix("text-delta", c.staleText, c.text);
+    fix("thinking-delta", c.staleThinking, c.thinking);
   }
 
   private emit(draft: ThreadEventDraft): void {

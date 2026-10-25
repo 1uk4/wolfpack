@@ -19,6 +19,20 @@ Run from the repo root (turbo):
 
 Packages have no linter yet (`lint` is a no-op echo). The console lints with eslint, including its import-law rules.
 
+## Run against a real wolf
+
+The console defaults to the mock. Set `WOLFPACK_API_URL` to point its server-side client at a wolf's `/v1` (an `HttpConsoleClient`):
+
+```sh
+# 1. a wolf (needs `npm run build -w @wolfpack/harness`, ANTHROPIC_API_KEY, and WOLFPACK_MODELS_FILE)
+set -a; . ~/.wolfpack/.env; set +a
+WOLFPACK_MODELS_FILE=/path/to/models.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
+# 2. the console against it
+WOLFPACK_API_URL=http://127.0.0.1:3141 npm run dev
+```
+
+A minimal `wolf.yaml` is `name: <wolf>` plus `workspace: <dir>`; use a scratch dir, not a real wolf's. Unset `WOLFPACK_API_URL` to go back to the mock. A stale-cursor snapshot from the wolf is logged server-side, not forwarded to the browser (full snapshot UX is planned).
+
 ## Test seams
 
 - **Console suite:** `apps/console/scripts/test.sh` runs `tsx --test` over `tests/*.test.{ts,tsx}`. Deterministic, no LLM, no network. It excludes known-failing files (TODO in the script).

@@ -166,3 +166,13 @@ describe("error matching", () => {
     assert.equal((await post).status, 409);
   });
 });
+
+describe("console client factory env switch", () => {
+	it("returns an HttpConsoleClient when WOLFPACK_API_URL is set, the mock otherwise", async () => {
+		const { createConsoleClient } = await import("../src/server/console-client.ts");
+		const { HttpConsoleClient } = await import("@wolfpack/client");
+		assert.ok(createConsoleClient({ WOLFPACK_API_URL: "http://127.0.0.1:1" }) instanceof HttpConsoleClient);
+		assert.ok(createConsoleClient({}) instanceof MockConsoleClient);
+		assert.ok(createConsoleClient({ WOLFPACK_API_URL: "  " }) instanceof MockConsoleClient);
+	});
+});

@@ -120,7 +120,12 @@ export function createThreadApi(source: ClientSource) {
 			try {
 				const client = source();
 				const id = await resolve(client, ref);
-				iterator = client.watch(id, { from: resumeCursor(req) })[Symbol.asyncIterator]();
+				iterator = client.watch(id, {
+					from: resumeCursor(req),
+					// A snapshot only fires on a stale cursor. The bridge's SSE contract has no snapshot
+					// frame yet (full snapshot UX is a later feature), so log and carry on with the events.
+					onSnapshot: (snap) => console.warn(`[thread-api] snapshot baseline for ${id} (stale cursor ${snap.id ?? "?"}); not forwarded`),
+				})[Symbol.asyncIterator]();
 			} catch (err) {
 				return failure(err);
 			}

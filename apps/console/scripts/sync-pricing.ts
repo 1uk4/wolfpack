@@ -19,15 +19,12 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
+// Resolve pi-ai's data dir from an exported subpath rather than assuming a
+// nested node_modules layout — npm hoisting moves the package around.
 const DATA_DIR = path.join(
-	import.meta.dirname,
-	"..",
-	"node_modules",
-	"@earendil-works",
-	"pi-ai",
-	"dist",
-	"providers",
+	path.dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai/providers/all"))),
 	"data",
 );
 const OUT = path.join(import.meta.dirname, "..", "src", "core", "prices.ts");

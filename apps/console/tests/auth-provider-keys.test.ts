@@ -21,8 +21,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { AUTH_PROVIDER_KEYS, isProviderEnvVar } from "../src/core/auth-keys.ts";
-import { builtinProviders } from "../node_modules/@earendil-works/pi-ai/dist/providers/all.js";
-import { findEnvKeys } from "../node_modules/@earendil-works/pi-ai/dist/env-api-keys.js";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+
+// env-api-keys.js sits at pi-ai's dist root and is not in its exports map;
+// resolve it relative to an exported sibling so npm hoisting can't break us.
+const { findEnvKeys } = (await import(
+	new URL("../env-api-keys.js", import.meta.resolve("@earendil-works/pi-ai/providers/all")).href
+)) as { findEnvKeys: (providerId: string, env: Record<string, string | undefined>) => string[] };
 
 /** pi-ai reads anthropic via AUTH_TOKEN/OAUTH_TOKEN alternates too — those
  *  stay env-only by owner spec; asserted absent below. */

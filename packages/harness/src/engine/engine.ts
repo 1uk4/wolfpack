@@ -54,6 +54,8 @@ export interface ConfigureOptions {
   /** Names of tools (from installed extensions) this conversation may use. */
   tools?: readonly string[];
   cwd?: string;
+  /** System-prompt instructions rendered after every extension section. `null` clears. */
+  instructions?: string | null;
 }
 
 export interface SubmitOptions {
@@ -136,6 +138,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     ...(c.thinkingLevel !== undefined ? { thinkingLevel: c.thinkingLevel } : {}),
     ...(c.tools ? { tools: toolsByName(c.tools) } : {}),
     ...(c.cwd ? { cwd: c.cwd } : {}),
+    ...(c.instructions !== undefined ? { instructions: c.instructions } : {}),
   });
 
   const wrap = (conv: Conversation): EngineConversation => ({

@@ -20,10 +20,15 @@
     "./engine": {
       "types": "./dist/engine/index.d.ts",
       "default": "./dist/engine/index.js"
+    },
+    "./wolfd": {
+      "types": "./dist/wolfd/index.d.ts",
+      "default": "./dist/wolfd/index.js"
     }
   },
   "bin": {
-    "wolfpack-harness": "dist/bin/harness.js"
+    "wolfpack-harness": "dist/bin/harness.js",
+    "wolfd": "dist/bin/wolfd.js"
   },
   "scripts": {
     "build": "tsc --build",
@@ -38,10 +43,12 @@
     "@earendil-works/pi-durable": "^1.4.0",
     "grammy": "^1.21.0",
     "yaml": "^2.6.0",
-    "@wolfpack/protocol": "*"
+    "@wolfpack/protocol": "*",
+    "@wolfpack/engine": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@wolfpack/client": "*"
   }
 }

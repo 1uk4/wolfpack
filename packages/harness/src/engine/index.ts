@@ -26,3 +26,4 @@ export {
 } from "./events.js";
 export { backupSessionStore, findBackup, type BackupOptions, type BackupResult } from "./backup.js";
 export { engineVersion } from "./version.js";
+export { resolveToolNames, TOOL_REGISTRY_NAMES, type ResolvedTools } from "./tools.js";

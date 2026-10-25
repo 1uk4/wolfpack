@@ -13,6 +13,8 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { ModelTable } from "@wolfpack/engine";
+import { backupSessionStore } from "./engine/backup.js";
+import { engineVersion } from "./engine/version.js";
 import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
@@ -24,6 +26,7 @@ import { initSweepManager, type SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 export { loadWolfConfig, type WolfConfig };
+export * from "./engine/index.js";
 export { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 export { createTelegramClient, type TelegramClient } from "./telegram/index.js";
 
@@ -186,6 +189,9 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
 
   // SQLite storage
   const storagePath = join(wolfDen, config.harness?.storage ?? "session.sqlite");
+  // The engine's sqlite migrations are one-way: snapshot the store once per engine version before opening it.
+  const backup = backupSessionStore(storagePath, { engineVersion: engineVersion() });
+  if (backup) console.log(`[harness] Backed up session store to ${backup.dir}`);
   const storage = await openNodeSqliteStorage(storagePath);
 
   // Harness with compaction settings

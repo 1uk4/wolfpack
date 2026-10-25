@@ -19,6 +19,7 @@
     { "path": "packages/memory" },
     { "path": "packages/kb" },
     { "path": "packages/client" },
+    { "path": "packages/protocol" },
     { "path": "packages/harness" },
     { "path": "packages/agent" },
     { "path": "packages/cli" }

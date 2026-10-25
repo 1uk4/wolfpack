@@ -71,12 +71,26 @@ describe("startWolf", () => {
     expect(detail2.id).toBe("bootwolf/home");
   });
 
-  it("rejects subscription-transport models files with a clear error", async () => {
+  it("boots a subscription-transport table onto the claude-bridge provider (no model call)", async () => {
+    const tier = { model: "claude-haiku-5-5", modelSource: "default", provider: "claude-agent-sdk", piModel: "claude-bridge/claude-haiku-5-5" };
     writeFileSync(
       join(root, "models.json"),
-      JSON.stringify({ location: "local", transport: "subscription", transportSource: "default", tiers: {}, steps: {}, warnings: [] }),
+      JSON.stringify({ location: "local", transport: "subscription", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }),
     );
-    await expect(start()).rejects.toThrow(/subscription/);
+    const w = await start();
+    const detail: any = await (await fetch(`${w.url}${buildPath("getThread", { id: "bootwolf/home" })}`)).json();
+    expect(detail.id).toBe("bootwolf/home");
+    const watch = await w.conversation.watch();
+    expect(watch.snapshot.agent.model).toMatchObject({ provider: "claude-bridge", modelId: "claude-haiku-5-5" });
+    await watch.stop();
+  });
+
+  it("rejects unknown transports with a clear error", async () => {
+    writeFileSync(
+      join(root, "models.json"),
+      JSON.stringify({ location: "local", transport: "carrier-pigeon", transportSource: "default", tiers: {}, steps: {}, warnings: [] }),
+    );
+    await expect(start()).rejects.toThrow(/transport/);
   });
 });
 

@@ -2,7 +2,7 @@
  * startWolf: boot ONE wolf process serving /v1 on 127.0.0.1.
  *
  * Sequence: load wolf.yaml -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
- * pack config; subscription transport throws) -> open the engine store at `<den>/session.sqlite` (backup on) ->
+ * pack config; subscription transport builds the claude-bridge provider) -> open the engine store at `<den>/session.sqlite` (backup on) ->
  * root conversation (= the home thread) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.
  *
@@ -23,6 +23,7 @@ import {
   type WolfEngine,
 } from "../engine/index.js";
 import { composeProjectContext } from "./context.js";
+import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
 import { prepareSocketPath } from "./socket.js";
 
@@ -64,7 +65,9 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   if (opts.socket) await prepareSocketPath(opts.socket);
 
   mkdirSync(config.den, { recursive: true });
+  const wolfModels = buildWolfModels(model, { cwd, env });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
+    ...(wolfModels.models ? { models: wolfModels.models } : {}),
     extensions,
     cwd,
     backup: true,
@@ -96,10 +99,12 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
       close: async () => {
         await server.close();
         await engine.close();
+        wolfModels.shutdown();
       },
     };
   } catch (e) {
     await engine.close().catch(() => {});
+    wolfModels.shutdown();
     throw e;
   }
 }

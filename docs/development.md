@@ -24,7 +24,7 @@ Packages have no linter yet (`lint` is a no-op echo). The console lints with esl
 The console defaults to the mock. Set `WOLFPACK_API_URL` to point its server-side client at a wolf's `/v1` (an `HttpConsoleClient`):
 
 ```sh
-# 1. a wolf (needs `npm run build -w @wolfpack/harness`, ANTHROPIC_API_KEY, and WOLFPACK_MODELS_FILE)
+# 1. a wolf (needs `npm run build -w @wolfpack/harness`, ANTHROPIC_API_KEY for an api table, and WOLFPACK_MODELS_FILE)
 set -a; . ~/.wolfpack/.env; set +a
 WOLFPACK_MODELS_FILE=/path/to/models.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
 # 2. the console against it
@@ -32,6 +32,14 @@ WOLFPACK_API_URL=http://127.0.0.1:3141 npm run dev
 ```
 
 A minimal `wolf.yaml` is `name: <wolf>` plus `workspace: <dir>`; use a scratch dir, not a real wolf's. Unset `WOLFPACK_API_URL` to go back to the mock. A stale-cursor snapshot from the wolf is logged server-side, not forwarded to the browser (full snapshot UX is planned).
+
+**Subscription variant (no API key).** A models file with `"transport": "subscription"` (tiers `provider: "claude-agent-sdk"`, `piModel: "claude-bridge/<model>"`) makes wolfd build the pi-claude-bridge provider (`pi-claude-bridge/core`, a git dep on the 1uk4 fork) and bill turns to your Claude subscription through your local Claude Code login. No `ANTHROPIC_API_KEY` is needed or used (the bridge strips it from the `claude` child; there is no fallback onto the key). Skip the `.env` step:
+
+```sh
+WOLFPACK_MODELS_FILE=/path/to/models.subscription.json node packages/harness/dist/bin/wolfd.js --config /path/to/wolf.yaml --port 3141
+```
+
+Live proof (tagged, never in CI): `WOLFD_LIVE=1 npm test -w @wolfpack/harness -- wolfd.subscription.live` runs a chat turn and a `read` tool turn against a real subscription wolf with the key removed from its env. To go back to the API key, point `WOLFPACK_MODELS_FILE` at an `api` table.
 
 ## Test seams
 

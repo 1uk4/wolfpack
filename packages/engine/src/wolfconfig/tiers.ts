@@ -1,9 +1,6 @@
 import { isTier, readModelTable, type ModelTable, type Tier, type ThinkingLevel, isThinkingLevel } from "../models.js";
 import type { WolfConfig } from "./schema.js";
 
-/** Task gating the subscription transport. */
-export const SUBSCRIPTION_BRIDGE_TASK = "work-wolfpack-p81a6iI";
-
 export class TierResolutionError extends Error {
   constructor(message: string) {
     super(message);
@@ -19,8 +16,8 @@ export interface ResolvedWolfModel {
   fellBack: boolean;
   modelId: string;
   thinking?: ThinkingLevel;
-  transport: "api";
-  /** Engine/pi provider for the transport. */
+  transport: "api" | "subscription";
+  /** pi provider id for the transport ("anthropic" for api, "claude-bridge" for subscription). */
   provider: string;
   piModel: string;
   /** True when wolf.yaml `tiers:` overrode the models file's model. */
@@ -29,8 +26,8 @@ export interface ResolvedWolfModel {
 
 /**
  * Resolve a tier for a wolf: models file (path or parsed table) + the wolf's
- * `tiers:` overrides. Subscription transport is rejected until the bridge
- * lands; a tier missing from the table falls back to `main`.
+ * `tiers:` overrides. Both transports resolve (subscription → the claude-bridge
+ * provider); a tier missing from the table falls back to `main`.
  */
 export function resolveWolfModel(
   config: Pick<WolfConfig, "capability">,
@@ -42,15 +39,10 @@ export function resolveWolfModel(
   }
   const table = typeof modelsFile === "string" ? readModelTable(modelsFile) : modelsFile;
 
-  if (table.transport === "subscription") {
+  if (table.transport !== "api" && table.transport !== "subscription") {
     throw new TierResolutionError(
-      `Models file uses transport "subscription", which the wolf process does not support yet ` +
-        `(subscription bridge pending: task ${SUBSCRIPTION_BRIDGE_TASK}). ` +
-        `Use transport "api" (set ANTHROPIC_API_KEY) in the models file or pack config.`,
+      `Models file has unknown transport "${String(table.transport)}" — expected api|subscription`,
     );
-  }
-  if (table.transport !== "api") {
-    throw new TierResolutionError(`Models file has unknown transport "${String(table.transport)}" — expected api`);
   }
 
   let used: Tier = tier;
@@ -67,7 +59,8 @@ export function resolveWolfModel(
   const modelId = override?.model ?? entry.model;
   const thinkingRaw = override?.thinking ?? entry.thinking;
   const thinking = isThinkingLevel(thinkingRaw) ? thinkingRaw : undefined;
-  const provider = entry.provider ?? "anthropic";
+  // Subscription tables carry the engine provider ("claude-agent-sdk"); the wolf's pi provider is the piModel prefix.
+  const provider = table.transport === "subscription" ? entry.piModel.split("/")[0] : (entry.provider ?? "anthropic");
 
   return {
     requestedTier: tier,
@@ -75,9 +68,9 @@ export function resolveWolfModel(
     fellBack: used !== tier,
     modelId,
     ...(thinking ? { thinking } : {}),
-    transport: "api",
+    transport: table.transport,
     provider,
-    piModel: override?.model ? `anthropic/${modelId}` : entry.piModel,
+    piModel: override?.model ? `${provider}/${modelId}` : entry.piModel,
     overridden: override?.model !== undefined,
   };
 }

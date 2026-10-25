@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
-import { resolveWolfModel, SUBSCRIPTION_BRIDGE_TASK, TierResolutionError } from "./tiers.js";
+import { resolveWolfModel, TierResolutionError } from "./tiers.js";
 import { STARTER_PACK_MODELS, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
@@ -129,12 +129,23 @@ describe("resolveWolfModel", () => {
     expect(r).toMatchObject({ modelId: "claude-sonnet-5-5", thinking: "low", overridden: true });
   });
 
-  it("rejects subscription transport naming the pending task", () => {
+  it("resolves subscription transport to the claude-bridge provider", () => {
     const sub = resolveModelTable({ pack: STARTER_PACK_MODELS, location: "local" });
     expect(sub.transport).toBe("subscription");
-    const run = () => resolveWolfModel(cfg(), "main", sub);
-    expect(run).toThrow(TierResolutionError);
-    expect(run).toThrow(SUBSCRIPTION_BRIDGE_TASK);
+    expect(resolveWolfModel(cfg(), "main", sub)).toMatchObject({
+      transport: "subscription",
+      provider: "claude-bridge",
+      piModel: "claude-bridge/claude-opus-5-5",
+      modelId: "claude-opus-5-5",
+      overridden: false,
+    });
+    const over = resolveWolfModel(cfg({ main: { model: "claude-haiku-5-5" } }), "main", sub);
+    expect(over).toMatchObject({ provider: "claude-bridge", piModel: "claude-bridge/claude-haiku-5-5", overridden: true });
+  });
+
+  it("rejects unknown transports", () => {
+    const bad = { ...resolveModelTable({ pack: STARTER_PACK_MODELS, location: "local" }), transport: "carrier-pigeon" } as unknown as ModelTable;
+    expect(() => resolveWolfModel(cfg(), "main", bad)).toThrow(TierResolutionError);
   });
 
   it("reads a models.json file path", () => {

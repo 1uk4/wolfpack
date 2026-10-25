@@ -42,14 +42,15 @@
     "@earendil-works/chord": "^1.4.0",
     "@earendil-works/pi-ai": "^1.4.0",
     "@earendil-works/pi-durable": "^1.4.0",
-    "grammy": "^1.21.0",
-    "yaml": "^2.6.0",
+    "@wolfpack/engine": "*",
     "@wolfpack/protocol": "*",
-    "@wolfpack/engine": "*"
+    "grammy": "^1.21.0",
+    "pi-claude-bridge": "github:1uk4/pi-claude-bridge#durable-core",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "@wolfpack/client": "*"
+    "@wolfpack/client": "*",
+    "typescript": "^5.7.0"
   }
 }

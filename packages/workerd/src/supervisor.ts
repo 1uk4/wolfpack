@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WolfConfig } from "@wolfpack/engine";
+import { UNIX_PREFIX, probeSocket } from "./socket.js";
 import type { WolfEntry, WolfRegistry } from "./registry.js";
 
 export type ChildState = "starting" | "online" | "restarting" | "failed" | "stopped";
@@ -18,8 +20,17 @@ export interface BackoffOptions {
 
 export interface SupervisorOptions {
   wolves: WolfConfig[];
-  /** Command (and leading args) that runs wolfd; `--config <file> --port 0` is appended. Default ["wolfd"]. */
+  /**
+   * Command (and leading args) that runs wolfd. Default: [node, <resolved @wolfpack/harness dist/bin/wolfd.js>],
+   * independent of PATH. `--config <file>` plus `--socket <serve.socket>` (or `--port 0`, see transport) is appended.
+   */
   command?: string[];
+  /**
+   * How children listen. "socket" (default when `command` is not overridden): `--socket <wolf serve.socket>`, a path
+   * that is stable across workerd restarts, which is what makes orphan adoption possible. "tcp" (default when
+   * `command` is overridden): `--port 0`; such children are unfindable after a workerd crash.
+   */
+  transport?: "socket" | "tcp";
   backoff?: Partial<BackoffOptions>;
   /** Consecutive failed restarts tolerated before a wolf is marked failed. Default 10. */
   maxRestarts?: number;
@@ -35,6 +46,8 @@ export interface ChildStatus {
   state: ChildState;
   pid: number | null;
   url: string | null;
+  /** True when this wolfd was found already running on its socket (orphan of a previous workerd) rather than spawned. */
+  adopted: boolean;
   /** Total restarts since the supervisor started. */
   restarts: number;
   /** Consecutive failures feeding the backoff. */
@@ -43,12 +56,21 @@ export interface ChildStatus {
   logFile: string;
 }
 
-const SERVING = /serving (https?:\/\/\S+)/;
+const SERVING = /serving (https?:\/\/\S+|unix:\S+)/;
+const ADOPT_POLL_MS = 1000;
+
+/** The wolfd entry point of the installed @wolfpack/harness, run with the current node (no PATH lookup). */
+export function defaultWolfdCommand(): string[] {
+  const pkg = createRequire(import.meta.url).resolve("@wolfpack/harness/package.json");
+  return [process.execPath, join(dirname(pkg), "dist", "bin", "wolfd.js")];
+}
 
 class Child {
   state: ChildState = "stopped";
   proc: ChildProcess | null = null;
   url: string | null = null;
+  adopted = false;
+  adoptTimer: NodeJS.Timeout | null = null;
   restarts = 0;
   failures = 0;
   nextRestartAt: number | null = null;
@@ -72,13 +94,15 @@ export class Supervisor implements WolfRegistry {
   private readonly maxRestarts: number;
   private readonly graceMs: number;
   private readonly command: string[];
+  private readonly transport: "socket" | "tcp";
   private stopping = false;
 
   constructor(private readonly opts: SupervisorOptions) {
     this.backoff = { baseMs: 500, capMs: 30_000, healthyResetMs: 60_000, ...opts.backoff };
     this.maxRestarts = opts.maxRestarts ?? 10;
     this.graceMs = opts.graceMs ?? 5000;
-    this.command = opts.command ?? ["wolfd"];
+    this.command = opts.command ?? defaultWolfdCommand();
+    this.transport = opts.transport ?? (opts.command ? "tcp" : "socket");
     for (const w of opts.wolves) this.children.set(w.identity.name, new Child(w));
   }
 
@@ -113,6 +137,7 @@ export class Supervisor implements WolfRegistry {
       state: c.state,
       pid: c.proc?.pid ?? null,
       url: c.url,
+      adopted: c.adopted,
       restarts: c.restarts,
       failures: c.failures,
       nextRestartInMs: c.nextRestartAt === null ? null : Math.max(0, c.nextRestartAt - Date.now()),
@@ -166,12 +191,60 @@ export class Supervisor implements WolfRegistry {
   }
 
   private spawnChild(c: Child): void {
-    const [cmd, ...lead] = this.command;
     c.state = "starting";
     c.url = null;
+    c.adopted = false;
     c.nextRestartAt = null;
     c.startedAt = Date.now();
-    const proc = spawn(cmd, [...lead, "--config", c.config.file, "--port", "0"], {
+    if (this.transport === "socket") {
+      void this.adoptOrSpawn(c);
+      return;
+    }
+    this.launch(c, ["--port", "0"]);
+  }
+
+  /**
+   * Socket mode: a live wolfd already answering on the wolf's socket is an orphan of a previous workerd — adopt it
+   * (never a second wolfd on the same den). A socket file nobody answers on is stale: remove it, then spawn.
+   */
+  private async adoptOrSpawn(c: Child): Promise<void> {
+    const sock = c.config.serve.socket;
+    if (await probeSocket(sock)) {
+      if (this.stopping || c.state !== "starting") return;
+      c.adopted = true;
+      c.url = UNIX_PREFIX + sock;
+      c.state = "online";
+      this.line(c, `supervisor: adopted orphan wolfd on ${sock}`);
+      this.watchAdopted(c, sock);
+      return;
+    }
+    if (this.stopping) return;
+    if (existsSync(sock)) {
+      rmSync(sock, { force: true });
+      this.line(c, `supervisor: removed stale socket ${sock}`);
+    }
+    this.launch(c, ["--socket", sock]);
+  }
+
+  /** An adopted wolfd has no process handle; poll it and fall back to the restart path if it stops answering. */
+  private watchAdopted(c: Child, sock: string): void {
+    c.adoptTimer = setInterval(() => {
+      void probeSocket(sock).then((alive) => {
+        if (alive || !c.adoptTimer || this.stopping) return;
+        clearInterval(c.adoptTimer);
+        c.adoptTimer = null;
+        c.url = null;
+        c.adopted = false;
+        this.line(c, "supervisor: adopted wolfd stopped answering");
+        this.scheduleRestart(c);
+      });
+    }, ADOPT_POLL_MS);
+    c.adoptTimer.unref();
+  }
+
+  private launch(c: Child, listenArgs: string[]): void {
+    const [cmd, ...lead] = this.command;
+    const proc = spawn(cmd, [...lead, "--config", c.config.file, ...listenArgs], {
       env: this.opts.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -193,6 +266,10 @@ export class Supervisor implements WolfRegistry {
       c.state = "stopped";
       return;
     }
+    this.scheduleRestart(c);
+  }
+
+  private scheduleRestart(c: Child): void {
     // A child that was up past the healthy window counts as a fresh failure sequence.
     if (Date.now() - c.startedAt >= this.backoff.healthyResetMs) c.failures = 0;
     c.failures += 1;
@@ -216,6 +293,10 @@ export class Supervisor implements WolfRegistry {
     if (c.timer) clearTimeout(c.timer);
     c.timer = null;
     if (c.healthyTimer) clearTimeout(c.healthyTimer);
+    if (c.adoptTimer) clearInterval(c.adoptTimer);
+    c.adoptTimer = null;
+    // An adopted wolfd was not started by us and is left running (that is the point of adoption).
+    c.adopted = false;
     const proc = c.proc;
     if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       if (c.state !== "failed") c.state = "stopped";

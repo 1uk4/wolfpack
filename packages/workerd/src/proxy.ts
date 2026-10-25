@@ -2,6 +2,7 @@ import { request as httpRequest, createServer, type IncomingHttpHeaders, type In
 import type { AddressInfo } from "node:net";
 import { ERROR_HTTP_STATUS, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER, matchRoute, type ErrorCode, type WolfSummary } from "@wolfpack/protocol";
 import type { WolfRegistry } from "./registry.js";
+import { getJson, socketOf } from "./socket.js";
 
 export interface WorkerdServerOptions {
   registry: WolfRegistry;
@@ -92,12 +93,15 @@ export class WorkerdServer {
     if (!wolf || !this.opts.registry.has(wolf)) return sendError(res, "not_found", `unknown wolf: ${wolf ?? "(none)"}`);
     const upstream = this.opts.registry.upstream(wolf);
     if (!upstream) return sendError(res, "engine_error", `wolf ${wolf} is offline`, true);
-    this.forward(req, res, new URL(req.url ?? "/", upstream), wolf);
+    this.forward(req, res, upstream, wolf);
   }
 
-  private forward(req: IncomingMessage, res: ServerResponse, target: URL, wolf: string): void {
+  private forward(req: IncomingMessage, res: ServerResponse, upstream: string, wolf: string): void {
+    const sock = socketOf(upstream);
+    const target = new URL(req.url ?? "/", sock ? "http://wolf" : upstream);
+    const where = sock ? { socketPath: sock } : { hostname: target.hostname, port: target.port };
     const up = httpRequest(
-      { hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers: forwardHeaders(req.headers) },
+      { ...where, path: target.pathname + target.search, method: req.method, headers: forwardHeaders(req.headers) },
       (ur) => {
         res.writeHead(ur.statusCode ?? 502, forwardHeaders(ur.headers));
         res.flushHeaders();
@@ -122,8 +126,7 @@ export class WorkerdServer {
         const upstream = this.opts.registry.upstream(w.name);
         if (!upstream) return base;
         try {
-          const r = await fetch(new URL("/v1/wolves", upstream), { signal: AbortSignal.timeout(timeout) });
-          const body = (await r.json()) as { wolves?: WolfSummary[] };
+          const body = (await getJson(upstream, "/v1/wolves", timeout)) as { wolves?: WolfSummary[] };
           const own = body.wolves?.find((x) => x.name === w.name);
           if (own) return { ...base, host: own.host, status: own.status };
         } catch {

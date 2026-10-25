@@ -12,7 +12,7 @@ export function makeWolves(...names: string[]) {
   const root = mkdtempSync(join(tmpdir(), "workerd-"));
   for (const n of names) {
     mkdirSync(join(root, n), { recursive: true });
-    writeFileSync(join(root, n, "wolf.yaml"), `name: ${n}\n`);
+    writeFileSync(join(root, n, "wolf.yaml"), `name: ${n}\nserve:\n  socket: ${join(root, `${n}.sock`)}\n`);
   }
   const found = discoverWolves(root);
   if (found.errors.length) throw new Error(found.errors.map((e) => e.message).join("; "));

@@ -34,8 +34,7 @@ echo "dev-stack: wolves=$WOLVES_DIR  models=$WOLFPACK_MODELS_FILE  workerd=:$WOR
 npx turbo run build --filter=@wolfpack/harness --filter=@wolfpack/workerd --output-logs=errors-only
 
 node "$ROOT/packages/workerd/dist/bin/workerd.js" \
-  --wolves "$WOLVES_DIR" --port "$WORKERD_PORT" \
-  --wolfd "node $ROOT/packages/harness/dist/bin/wolfd.js" &
+  --wolves "$WOLVES_DIR" --port "$WORKERD_PORT" &
 WORKERD_PID=$!
 
 cleanup() { kill "$WORKERD_PID" 2>/dev/null || true; wait "$WORKERD_PID" 2>/dev/null || true; }

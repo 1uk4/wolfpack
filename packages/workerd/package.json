@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@wolfpack/engine": "*",
+    "@wolfpack/harness": "*",
     "@wolfpack/protocol": "*"
   },
   "devDependencies": {

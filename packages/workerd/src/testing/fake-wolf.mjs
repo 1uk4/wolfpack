@@ -1,6 +1,6 @@
 // Fake wolfd for workerd tests: `node fake-wolf.mjs --config <wolf.yaml> --port N`. No engine, no model.
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const arg = (k) => args[args.indexOf(k) + 1];
@@ -39,7 +39,16 @@ const server = createServer((req, res) => {
   json(res, 404, { code: "not_found", message: "fake", retryable: false });
 });
 
-server.listen(Number(arg("--port") ?? 0), "127.0.0.1", () => {
-  console.log(`wolfd: ${name} serving http://127.0.0.1:${server.address().port}`);
-});
-process.on("SIGTERM", () => process.exit(0));
+if (args.includes("--socket")) {
+  const sock = arg("--socket");
+  server.listen(sock, () => console.log(`wolfd: ${name} serving unix:${sock}`));
+  process.on("SIGTERM", () => {
+    try { unlinkSync(sock); } catch {}
+    process.exit(0);
+  });
+} else {
+  server.listen(Number(arg("--port") ?? 0), "127.0.0.1", () => {
+    console.log(`wolfd: ${name} serving http://127.0.0.1:${server.address().port}`);
+  });
+  process.on("SIGTERM", () => process.exit(0));
+}

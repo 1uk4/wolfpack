@@ -45,7 +45,7 @@ export function ThreadChat({
 	initiallyInFlight?: boolean;
 }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
-	const { messages, status, error, send, clearError } = useChatSession({
+	const { messages, status, error, send, steer, clearError } = useChatSession({
 		chatId: threadId,
 		initialMessages,
 		initiallyInFlight,
@@ -57,10 +57,12 @@ export function ThreadChat({
 
 	const onSend = useCallback(() => {
 		const t = text.trim();
-		if (!t || busy) return;
+		if (!t) return;
 		setText("");
-		send({ type: "text", text: t });
-	}, [text, busy, send]);
+		// A running turn takes the text as a steer; Stop is the abort.
+		if (busy) steer(t);
+		else send({ type: "text", text: t });
+	}, [text, busy, send, steer]);
 
 	const onStop = useCallback(() => {
 		void fetch(transport.abortUrl!, { method: "POST" }).catch(() => {
@@ -170,12 +172,10 @@ export function ThreadChat({
 											onChange={setText}
 											onSend={onSend}
 											onStop={onStop}
-											// While a turn runs the composer is Stop-only: the
-											// client's default whenBusy=reject has no steer.
-											canSend={!busy && text.trim().length > 0}
+											canSend={text.trim().length > 0}
 											inputRef={inputRef}
 											autoFocus
-											placeholder="Message the wolf…"
+											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
 									</div>
 								</div>

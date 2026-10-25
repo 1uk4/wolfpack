@@ -45,7 +45,10 @@ export const TURN_WAIT_MAX_MS = 30_000;
  */
 export interface SessionTransport {
 	submitUrl: string;
-	submitBody(input: ChatInput): string;
+	submitBody(input: ChatInput, opts?: { whenBusy?: "steer" }): string;
+	/** Present: a mid-turn steer rides the submit route (whenBusy "steer")
+	 *  with a local echo, instead of the legacy /steer queue route. */
+	steersViaSubmit?: boolean;
 	recordUrl: string;
 	/** Raw record JSON → native messages (null: shape not recognized). */
 	parseRecord(json: unknown): LhMessage[] | null;
@@ -649,6 +652,7 @@ export class SessionModel {
 	async steer(text: string): Promise<void> {
 		const t = text.trim();
 		if (!t) return;
+		if (this.transport.steersViaSubmit) return this.steerViaSubmit(t);
 		const id = `steer_${localId()}`;
 		this.steerQueueValue = [...this.steerQueueValue, { id, text: t }];
 		this.onChange?.();
@@ -672,6 +676,36 @@ export class SessionModel {
 			this.setError((await res.text()) || `The steer failed (${res.status}).`);
 		} catch (err) {
 			dropSteer();
+			this.setError((err as Error).message);
+		}
+	}
+
+	/** Thread steer: the text is recorded in history inside the running turn,
+	 *  so echo it as a normal user message (local id; adoptRecord drops it
+	 *  once the record carries the server copy) and submit whenBusy "steer". */
+	private async steerViaSubmit(t: string): Promise<void> {
+		const echo = { ...newUserMessage(t), id: localId() } as LhMessage;
+		const dropEcho = () =>
+			this.mutate(() => {
+				this.tail = this.tail.filter((m) => m !== echo);
+			});
+		this.mutate(() => {
+			this.tail = [...this.tail, echo];
+		});
+		try {
+			const res = await this.fetch(this.transport.submitUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: this.transport.submitBody({ type: "text", text: t }, { whenBusy: "steer" }),
+			});
+			if (res.ok) {
+				await res.text().catch(() => {});
+				return;
+			}
+			dropEcho();
+			this.setError((await res.text()) || `The steer failed (${res.status}).`);
+		} catch (err) {
+			dropEcho();
 			this.setError((err as Error).message);
 		}
 	}

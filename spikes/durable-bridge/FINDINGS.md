@@ -148,3 +148,55 @@ Tools registered and called by the model: `add(17,25)` → `echo("42")`, then th
 | Crash recovery | open store → `resume()`; stale `running` tool slots in a pre-resume snapshot are normal; classify tool `replay` |
 | Ask | tool with `control.terminate`; pending question derived from last `ask_user` tool-result; answer = ordinary `submit` |
 | Wrap-up | engine interface owns its own event/snapshot types: `watchEvents` is experimental |
+
+## Subscription provider spike
+
+Ticket `work-wolfpack-Bdncvl1`. One real durable turn, NO tools, billed to the Claude Max subscription through a thin pi-ai `Provider` over `@anthropic-ai/claude-agent-sdk` (^0.3.310, installed in this spike only). **Result: PASS.**
+
+Run: `env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN node src/cli.ts sub` (the CLI also refuses to run if the key is present; `~/.wolfpack/.env` is never read by `sub`). Evidence: `evidence/sub-subscription.json`. Code: `src/sdk-provider.ts`.
+
+### Auth mechanism actually used
+- **No env token, no creds file**: `CLAUDE_CODE_OAUTH_TOKEN` unset, `~/.claude/.credentials.json` does not exist. The bundled `claude` CLI that the SDK spawns read the **macOS Keychain item `Claude Code-credentials`** (the `claude /login` OAuth login). Nothing was passed to it.
+- Proof of non-API billing: a probe `query()` with the key stripped reports `system/init` `apiKeySource: "none"` (API-key billing would say `ANTHROPIC_API_KEY`/etc.). `total_cost_usd` in the result (~$0.00016) is notional, not a charge.
+- **The child env must have `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` stripped** (`childEnv()`): Claude Code prefers the key over OAuth. The provider strips them itself, so even with the key in the parent (VPS wolves) the turn still bills the subscription. On a VPS with no Keychain, expect `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `~/.claude/.credentials.json`; not tested here.
+- Gate on pi-ai side: `createProvider({auth})` requires `auth.apiKey` or `auth.oauth`. Mirrored the old bridge's `apiKey: "not-used"`: `auth: { apiKey: { name, resolve: async () => ({ auth: { apiKey: "not-used" }, source: "claude-code-oauth" }) } }`. `resolve()` returning a result = "configured"; no credential store needed, no `login`.
+
+### Provider shape (pi-ai 1.4.0)
+- `createProvider({ id: "claude-bridge", auth, models, api: { stream, streamSimple } })`, then `models.setProvider(p)`. `ProviderStreams` needs both `stream` and `streamSimple`; both point at the same function. Model: `claude-haiku-5-5`, `api: "claude-bridge"` (`Api` accepts arbitrary strings), costs zero (subscription).
+- Durable agent config is just `model: { provider: "claude-bridge", modelId: "claude-haiku-5-5" }`; durable resolves it through the `Models` passed to `Harness.open`. Nothing in the engine knows about the SDK.
+- 1.4 passes providers a **`TranscriptContext`** (`messages` only, branded): the system prompt and tools are **folded into leading `role:"system"` messages** (`content`, `sections`, `toolsAdded`) rather than `context.systemPrompt/tools`. `convert()` joins system `content` + `sections` into the SDK `systemPrompt`; a single user message becomes the prompt verbatim; longer histories are flattened to `[user]/[assistant]/[tool result]` text (fine for no-tools; wrong for tools, see open questions).
+
+### Event mapping (SDK -> pi-ai `AssistantMessageEvent`)
+Query options: `tools: []`, `maxTurns: 1`, `persistSession: false`, `settingSources: []`, `strictMcpConfig`, `skills: []`, `includePartialMessages: true`, `systemPrompt: <string>` (custom, not the claude_code preset).
+| SDK | pi-ai |
+|---|---|
+| (before first message) | `start{partial}` |
+| `stream_event` `content_block_start` (text) | push `{type:"text",text:""}`, `text_start` |
+| `content_block_delta` `text_delta` | append to block, `text_delta{delta}` |
+| `content_block_stop` | `text_end{content}` |
+| `message_start.usage` / `message_delta.usage` | `usage.input/cacheRead/cacheWrite` / `usage.output` |
+| `result` success | `done{reason:"stop", message}` (if no stream events were seen, fall back to `result.result` as one text block) |
+| `result` `is_error` or non-success subtype | `error{reason:"error"}` with `errorMessage` |
+| abort signal | `query.close()`, `error{reason:"aborted"}` |
+- pi-ai needs: `start` first, a mutable shared `partial` (it is the live message, not a snapshot), exactly one terminal `done|error`, then `stream.end()`.
+- `AssistantMessage.usage.cost` is zeroed (no pricing for the subscription); usage tokens do flow into the durable `usage_changed` event (`claude-bridge/claude-haiku-5-5: input 2, output 69, cacheWrite 579`). `cacheWrite` is ~600 tokens on a one-line prompt: Claude Code's own fixed preamble is still sent even with a custom systemPrompt and `tools: []`.
+- Thinking is not mapped (`reasoning:false`); `thinking_*` events and `thinkingLevel` are ignored.
+
+### Durable behaviour with this provider
+- Event timeline is identical to the API-key path: `... message_start(assistant) > message_end(pi.assistant) > turn_end > run_end > submission(done) > usage_changed`. This run produced **zero `message_update` batches** (5 s turn): the stream is throttled to 100 ms partial commits and the SDK emitted text in a few big deltas. `message_start(assistant)` carried a partial ("... eats fish,") and the tail only existed in `message_end` (same lossy-middle finding as §1). Latency ~5.5 s for a one-sentence haiku turn (CLI spawn dominated).
+- Entry records `provider:"claude-bridge"`, `api:"claude-bridge"` as the assistant's origin, so a later switch to another provider mid-conversation sees foreign-provider history (pi-ai normally transforms that).
+
+### Surprises (1.4-specific)
+- `context.systemPrompt` / `context.tools` no longer exist for providers (transcript form only); the old bridge's `toBridgeContext` exists to undo exactly this.
+- `createProvider` demands `auth` even for ambient auth; the escape hatch is a `resolve()` that always succeeds. `Models.getAvailable()` will therefore always list this provider, even on a machine with no login; failures surface only at stream time as an `error` event (`/login` or auth text in the SDK `result`). A real provider should add `auth.apiKey.check` that verifies a login exists (Keychain/creds file/`CLAUDE_CODE_OAUTH_TOKEN`).
+- `Harness.open` with only a provider that needs no key works; no `ANTHROPIC_API_KEY` is needed anywhere in the engine for this path.
+
+### Open questions for the tool-streaming gate (ticket 2)
+1. **Where do tools execute?** With `tools: []` the SDK never calls anything. pi-durable owns tool execution/replay safety, so tools must be exposed to Claude as an in-process MCP server (as the old bridge does) whose handlers park until durable produces the result, OR the provider must stop the query at `tool_use` and resume. Parking a live subprocess across a durable crash is impossible: how does a rebuilt turn re-attach?
+2. **`maxTurns: 1` vs tool turns**: end the query at the first `tool_use`, emit `toolcall_start/delta/end` + `done{reason:"toolUse"}`, and start a **fresh query** next call with history rebuilt (including `tool_use`/`tool_result` pairs) as the prompt. Needs a faithful transcript -> SDK input conversion (structured `AsyncIterable<SDKUserMessage>` or session JSONL, not the text flattening used here). Cost: cache re-writes every tool round, since each call is a new CLI process (~600+ tokens of cacheWrite per call here).
+3. **Tool name mapping**: SDK-side names would be `mcp__<server>__<tool>`; map to/from pi tool names. Reject/ignore any CC built-in tool use (must be disabled; verify `tools: []` really blocks them with MCP present).
+4. **Streaming tool args**: confirm `input_json_delta` -> `toolcall_delta` and that `toolcall_end.toolCall.arguments` parses; SDK only validates against the MCP schema.
+5. **Replay safety/crash**: a SIGKILL mid-query leaves an orphan `claude` child; need process-group kill on durable resume, plus idempotency since the model call will be re-issued (and re-billed against quota).
+6. **Subscription limits**: rate-limit/usage-limit errors arrive as `result` text or assistant `error` (`rate_limit`, `authentication_failed`; see `isSdkInfraFailure` in `packages/engine/src/adapters/claude-agent-sdk.ts`); map to retryable pi-ai errors so durable's retry/backoff handles them.
+7. **Concurrency**: one CLI process per active turn; check whether parallel conversations on one Max login hit throttling.
+8. **Thinking/effort and images**: not mapped here; `thinkingLevel` -> SDK `thinking`/effort options and image blocks need the structured-input path from (2).

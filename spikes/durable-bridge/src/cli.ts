@@ -292,14 +292,58 @@ async function ask() {
   await rec.stop(); await rig.close();
 }
 
+// ---------------------------------------------------------------- sub (subscription provider, no tools)
+async function sub() {
+  log("== SUB: durable turn via claude-bridge (Agent SDK, subscription) ==");
+  log("ANTHROPIC_API_KEY in env:", process.env.ANTHROPIC_API_KEY ? "PRESENT (abort)" : "absent");
+  if (process.env.ANTHROPIC_API_KEY) { verdicts["SUB"] = "FAIL (key present)"; return; }
+  const { mkdirSync } = await import("node:fs");
+  const { NodeExecutionEnv } = await import("@earendil-works/pi-durable/env/node");
+  const { openNodeSqliteStorage } = await import("@earendil-works/pi-durable/storage/sqlite/node");
+  const { createModels } = await import("@earendil-works/pi-ai/models");
+  const { createRegistry, Harness } = await import("@earendil-works/pi-durable");
+  const { claudeBridgeProvider } = await import("./sdk-provider.ts");
+  const { SCRATCH } = await import("./lib.ts");
+  mkdirSync(SCRATCH, { recursive: true });
+  const models = createModels();
+  models.setProvider(claudeBridgeProvider());
+  const harness = await Harness.open(
+    await openNodeSqliteStorage(freshStore("sub")),
+    { models, registry: createRegistry(), env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? SCRATCH }), onReport: (e) => console.error("[onReport]", e instanceof Error ? e.message : e) },
+    ctx,
+  );
+  harness.resume();
+  const conv = await harness.root(ctx, { agent: { model: { provider: "claude-bridge", modelId: "claude-haiku-5-5" }, thinkingLevel: null, instructions: "Be extremely terse." } });
+  const rig = { harness } as any;
+  const rec = await record(rig, conv, "sub");
+  const s = await conv.submit({ type: "input", content: "In one sentence, what is an otter?" }, ctx);
+  const settled = await s.wait(ctx);
+  await sleep(200);
+  log("settled:", settled.status);
+  log("timeline:", timeline(rec).join(" > "));
+  const final = finalTextOf(rec);
+  const entry: any = (settled as any).answer;
+  log("streamed:", JSON.stringify(textOf(rec)));
+  log("FINAL TEXT:", JSON.stringify(final));
+  log("assistant entry model/usage:", JSON.stringify(entry?.model?.[0] && { provider: entry.model[0].provider, model: entry.model[0].model, usage: entry.model[0].usage, stopReason: entry.model[0].stopReason }));
+  const ok = settled.status === "done" && final.trim().length > 0;
+  verdicts["SUB"] = ok ? "PASS" : "FAIL";
+  console.log(ok ? "PASS: durable turn completed via claude-bridge with no ANTHROPIC_API_KEY" : "FAIL");
+  saveEvidence("sub-subscription.json", { settled, final, timeline: timeline(rec), rec: recToJson(rec) });
+  await rec.stop(); await harness.close(ctx);
+}
+
 // ---------------------------------------------------------------- main
 const cmds: Record<string, () => Promise<void>> = { submit, attach, steer, abort, reconnect, tools, ask };
+const extra: Record<string, () => Promise<void>> = { sub };
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "__child-turn") {
   await childTurn(rest[0]!, rest[1] as "safe" | "unsafe");
 } else if (cmd === "all") {
   for (const [k, f] of Object.entries(cmds)) { try { await f(); } catch (e) { verdicts[k] = `ERROR ${(e as Error).message}`; console.error(e); } }
   console.log("\nVERDICTS", verdicts); process.exit(0);
+} else if (cmd && extra[cmd]) {
+  await extra[cmd](); console.log("\nVERDICTS", verdicts); process.exit(0);
 } else if (cmd && cmds[cmd]) {
   await cmds[cmd](); console.log("\nVERDICTS", verdicts); process.exit(0);
 } else {

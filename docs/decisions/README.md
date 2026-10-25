@@ -10,3 +10,4 @@ Architecture decision records. Each is short: context, decision, consequences.
 |---|---|---|
 | 001 | [pi-durable as the single engine](001-pi-durable-single-engine.md) | Accepted |
 | 002 | [Hub / worker daemon split](002-hub-worker-daemon-split.md) | Accepted |
+| 003 | [Upstream-first dependencies](003-upstream-first-dependencies.md) | Accepted |

@@ -5,7 +5,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./stub": "./dist/stub/index.js",
+    "./contract": "./dist/contract/index.js"
   },
   "scripts": {
     "build": "tsc --build",

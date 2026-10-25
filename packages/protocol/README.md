@@ -26,3 +26,16 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 ## Layout
 
 `src/schemas.ts` holds all schemas and inferred types; `src/index.ts` re-exports them.
+
+## Routes, stub server, contract suite
+
+`src/routes.ts` (exported from the main entry) is the declarative `/v1` route table: `ROUTES` maps a name to `{method, path, body?, response, status, error}` with zod schema bindings; `matchRoute(method, pathname)` and `buildPath(name, params)` are the only helpers (no framework). Path params are URL-encoded (thread ids contain `/`). Routes: `GET /v1/wolves`, `GET|POST /v1/wolves/:name/threads` (create is home-only and idempotent: 201 new, 200 existing), `GET /v1/threads/:id`, `POST /v1/threads/:id/submit|abort`, `GET /v1/threads/:id/stream` (SSE).
+
+Normative serving semantics (implemented by the stub, asserted by the contract):
+
+- Event ids are minted per thread by the server. The replay buffer is **per turn**: cleared at turn-start, so it holds only the current or most recent turn.
+- Stream: `id: <eventId>` + `data: <ThreadEvent json>` frames; the stream **ends at the first turn-end** with `data: [DONE]` (same as the console bridge). No cursor = replay the current/most recent turn, then follow live. Resume via `Last-Event-ID` header or `?from=`: a cursor inside the buffer replays events after it then follows live; a stale (pre-turn) or future cursor gets a `snapshot` (`id` = last event id, `upToId` = last event id, `thread`, `inFlight` if a turn is running) then live events.
+- Submit: `whenBusy` required (else 400 `invalid_request`). Idle: starts (`started`). Busy: `reject` -> 409 `busy`; `followUp` -> `queued`, runs after the turn; `steer` -> `steered`. Abort ends the turn with `turn-end` reason `aborted` and drops queued follow-ups.
+- Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
+
+Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?})`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).

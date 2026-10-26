@@ -21,7 +21,7 @@ const ALIASES: Record<string, string> = {
   "visual-tools": "wolfpack-visual-tools",
 };
 
-function resolveName(name: string): string {
+export function resolveName(name: string): string {
   return ALIASES[name] ?? name;
 }
 
@@ -36,10 +36,30 @@ export interface LoaderConfig {
   runtime: Runtime;
   /** Full wolf config (for extension-specific config lookup) */
   wolfConfig: Record<string, unknown>;
+  /** Effective env handed to extension factories (sandbox redirect applied). Default: process.env. */
+  env?: NodeJS.ProcessEnv;
   /** Shared telegram state (if telegram is enabled) */
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+}
+
+/**
+ * Drop configured names an explicitly supplied extension already stands for: `provided` (e.g. wolfd's test-seam
+ * `extraExtensions`) REPLACES the configured extension of the same name, so nothing is installed or started twice.
+ * Matching is by resolved extension name (`memory` and `wolfpack-memory` are the same extension).
+ */
+export function withoutProvided(names: readonly string[] | undefined, provided: readonly { name: string }[]): string[] {
+  const taken = new Set(provided.map((e) => e.name));
+  return (names ?? []).filter((n) => !taken.has(resolveName(n)));
+}
+
+/** One log line per outcome, shared by every host so they all say the same thing. */
+export function reportLoad(result: LoadResult, log: { info(line: string): void; warn(line: string): void }): void {
+  for (const ext of result.extensions) log.info(`Extension ${ext.name} loaded`);
+  if (result.extensions.length > 0) log.info(`Loaded ${result.extensions.length} extension(s)`);
+  for (const f of result.failed) log.warn(`Extension ${f.name}: ${f.error}`);
+  if (result.unsupported.length > 0) log.info(`Skipped (no pi-durable support): ${result.unsupported.join(", ")}`);
 }
 
 export interface LoadResult {
@@ -89,6 +109,7 @@ export async function loadExtensions(
     wolfName,
     domains,
     wolfConfig,
+    ...(config.env ? { env: config.env } : {}),
     telegram: config.telegram,
     sweep: config.sweep,
   };

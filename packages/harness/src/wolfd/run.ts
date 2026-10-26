@@ -1,8 +1,9 @@
 /**
  * startWolf: boot ONE wolf process serving /v1 on 127.0.0.1.
  *
- * Sequence: load wolf.yaml -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
- * pack config; subscription transport builds the claude-bridge provider) -> open the engine store at `<den>/session.sqlite` (backup on) ->
+ * Sequence: load wolf.yaml -> sandbox redirect -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
+ * pack config; subscription transport builds the claude-bridge provider) -> wolf.yaml `extensions` via the harness loader
+ * (same as createWolfHarness, on the redirected den/env) -> open the engine store at `<den>/session.sqlite` (backup on) ->
  * root conversation (= the home thread) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.
  *
@@ -24,6 +25,7 @@ import {
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
+import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
@@ -45,6 +47,7 @@ export interface StartWolfOptions {
   models?: Models;
   /**
    * @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks).
+   * Additive, except that one named like a configured wolf.yaml extension (`wolfpack-memory`) replaces it.
    * A function receives the wolf's effective den and env (sandbox redirect already applied) so extensions that
    * read them at construction see the sandbox, not the live roots.
    */
@@ -113,7 +116,11 @@ async function startConfigured(
   const model = resolveWolfModel(config, "main", table);
   const { extensions: toolExtensions, tools } = resolveToolNames(config.capability.tools);
   const extra = typeof opts.extraExtensions === "function" ? opts.extraExtensions({ config, den: config.den, env, ...(sandbox ? { sandbox } : {}) }) : (opts.extraExtensions ?? []);
-  const extensions = [...toolExtensions, ...extra];
+  // The wolf's configured extensions, through the same loader createWolfHarness uses. This runs AFTER the sandbox
+  // redirect (config.den and env are the sandbox's) and the assertSandboxed gate above, so the extensions' own
+  // fail-closed gates (memoryGate) see the effective den/env.
+  const loaded = await loadConfiguredExtensions(config, env, extra, log);
+  const extensions = [...toolExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 
@@ -166,6 +173,34 @@ async function startConfigured(
     wolfModels.shutdown();
     throw e;
   }
+}
+
+/**
+ * Load wolf.yaml `extensions` via the harness loader (`<den>/extensions/<name>/index.js`, wolfpack-memory included).
+ * `extra` REPLACES a configured extension of the same name (it is not loaded at all), so tests that inject their own
+ * memory extension never get a second observer, consolidation timer or set of routes.
+ * wolfd has no host timer, so the memory extension's own consolidation timer is the one timer; the engine attaches the
+ * one conversation reader.
+ * A missing extension is a warning (as in createWolfHarness); one that is present but fails to build (a gate refusing
+ * a misconfigured sandbox, a broken bundle) refuses to start the wolf rather than booting quietly without it.
+ */
+async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, extra: readonly Extension[], log: (line: string) => void): Promise<Extension[]> {
+  const names = withoutProvided(config.extensions, extra);
+  if (names.length === 0) return [];
+  const blocks: Record<string, unknown> = { ...config.extensionConfig };
+  if (names.includes("memory")) blocks.memory = { ...config.extensionConfig.memory, ...config.memory };
+  const result = await loadExtensions(names, {
+    wolfDen: config.den,
+    wolfName: config.identity.name,
+    domains: config.identity.domains,
+    runtime: "pi-durable",
+    wolfConfig: { name: config.identity.name, domains: config.identity.domains, ...blocks, ...(config.sandbox ? { sandbox: config.sandbox } : {}) },
+    env,
+  });
+  reportLoad(result, { info: log, warn: (l) => log(`warning: ${l}`) });
+  const broken = result.failed.filter((f) => !f.error.startsWith("Not found:"));
+  if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
+  return result.extensions;
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */

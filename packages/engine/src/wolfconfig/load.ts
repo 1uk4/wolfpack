@@ -117,6 +117,13 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
+    extensions: v.extensions,
+    extensionConfig: Object.fromEntries(
+      v.extensions.flatMap((n) => {
+        const block = (doc as Record<string, unknown>)[n];
+        return block && typeof block === "object" && !Array.isArray(block) ? [[n, block as Record<string, unknown>]] : [];
+      }),
+    ),
     den: path.join(dir, "den"),
     dir,
     file: abs,

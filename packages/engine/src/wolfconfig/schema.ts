@@ -10,6 +10,7 @@
  *   tiers:                  # capability: per-tier overrides on the models file
  *     fast: { model: claude-sonnet-5-5, thinking: low }
  *   workspace: ~/Code/x     # capability: home-thread cwd (default: the wolf's dir)
+ *   extensions: [memory]    # extensions loaded from <den>/extensions/<name>/index.js (default none)
  *   serve:                  # all optional
  *     socket: ~/.wolfpack/run/1uk4.sock   # default shown
  *     port: 7421                          # optional TCP (127.0.0.1); unset = none
@@ -25,7 +26,7 @@
  *       interval: 4h        # timer / hybrid cadence
  *
  * There is NO `runtime` field: durable is the engine. Unknown keys (runtime,
- * profile, role, extensions, transport, models, …) are accepted, ignored, and
+ * profile, role, transport, models, …) are accepted, ignored, and
  * reported in `warnings`. `den` is derived: <dir>/den.
  */
 import { z } from "zod";
@@ -49,6 +50,7 @@ export const WolfFileSchema = z.object({
     .passthrough()
     .optional(),
   workspace: z.string().min(1).optional(),
+  extensions: z.array(z.string().min(1)).default([]),
   serve: z
     .object({
       socket: z.string().min(1).optional(),
@@ -84,6 +86,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "tools",
   "tiers",
   "workspace",
+  "extensions",
   "serve",
   "sandbox",
   "memory",
@@ -128,6 +131,13 @@ export interface WolfConfig {
       interval: string;
     };
   };
+  /**
+   * Extensions to load, by wolf.yaml short name (`memory`, `ask`, ...), in order. The loader that resolves them is
+   * the harness's; the same list drives createWolfHarness and wolfd.
+   */
+  extensions: string[];
+  /** The raw wolf.yaml block of each listed extension that has one (`memory:` etc.), as the loader hands it over. */
+  extensionConfig: Record<string, Record<string, unknown>>;
   /** Derived: <dir>/den. */
   den: string;
   /** Directory containing wolf.yaml. */

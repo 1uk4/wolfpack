@@ -79,10 +79,11 @@ extensions: [memory, ask]
     const { config, warnings } = loadWolfConfig(file);
     expect(config.identity.id).toBe("ddkyhT");
     expect(config.identity.domains).toEqual(["personal"]);
-    expect(warnings).toHaveLength(4);
+    expect(config.extensions).toEqual(["memory", "ask"]);
+    expect(warnings).toHaveLength(3);
     expect(warnings.join("\n")).toMatch(/"runtime" is ignored/);
     expect(warnings.join("\n")).toMatch(/"profile"/);
-    expect(warnings.join("\n")).toMatch(/"extensions"/);
+    expect(warnings.join("\n")).not.toMatch(/"extensions"/);
   });
 
   it("broken yaml → WolfConfigError", () => {

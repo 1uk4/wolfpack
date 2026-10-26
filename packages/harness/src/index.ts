@@ -18,7 +18,7 @@ import { backupSessionStore } from "./engine/backup.js";
 import { attachConversationReader } from "./engine/conversation-reader.js";
 import { engineVersion } from "./engine/version.js";
 import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
-import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
+import { loadExtensions as loadUnifiedExtensions, reportLoad } from "./loader.js";
 import { createWolfIdentityExtension } from "./extensions/wolf-identity.js";
 import { createFileToolsExtension } from "./extensions/file-tools.js";
 import { startLifecycles } from "./lifecycle.js";
@@ -188,24 +188,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     sweep: sweepManager,
   });
   
-  // Install loaded extensions
-  for (const ext of loadResult.extensions) {
-    registry.install(ext);
-    console.log(`[harness] Extension ${ext.name} loaded`);
-  }
-  
-  // Log load results
-  if (loadResult.extensions.length > 0) {
-    console.log(`[harness] Loaded ${loadResult.extensions.length} extension(s)`);
-  }
-  if (loadResult.failed.length > 0) {
-    for (const f of loadResult.failed) {
-      console.warn(`[harness] Extension ${f.name}: ${f.error}`);
-    }
-  }
-  if (loadResult.unsupported.length > 0) {
-    console.log(`[harness] Skipped (no pi-durable support): ${loadResult.unsupported.join(", ")}`);
-  }
+  for (const ext of loadResult.extensions) registry.install(ext);
+  reportLoad(loadResult, { info: (l) => console.log(`[harness] ${l}`), warn: (l) => console.warn(`[harness] ${l}`) });
 
   // SQLite storage
   const storagePath = join(wolfDen, config.harness?.storage ?? "session.sqlite");

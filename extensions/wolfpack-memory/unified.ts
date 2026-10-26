@@ -315,7 +315,7 @@ export default function createMemoryExtension(
   // Loaded lazily so a broken table surfaces as a tool error, not a crash.
   let table: ModelTable | null = null;
   function getTable(): ModelTable {
-    if (!table) table = loadModelTable().table;
+    if (!table) table = loadModelTable({ env: context.env ?? process.env }).table;
     return table;
   }
   function apiKeyFor(t: ModelTable): string | undefined {

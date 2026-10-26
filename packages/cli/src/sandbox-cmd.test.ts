@@ -68,6 +68,16 @@ describe("snapshot --from end to end", () => {
     expect(fs.existsSync(path.join(dev, "base/domains/wolfpack/entries"))).toBe(false);
   });
 
+  it("an empty <from>/base does not shadow a populated <from>/work/base", () => {
+    put(path.join(tmp, "src/work/ledger/work-events.jsonl"), '{"id":"a"}\n');
+    fs.mkdirSync(path.join(tmp, "src/base/domains/wolfpack/work"), { recursive: true });
+    put(path.join(tmp, "src/work/base/domains/wolfpack/work/work-wolfpack-a.md"), "# a\n");
+    fs.mkdirSync(path.join(tmp, "src/ops"));
+    fs.mkdirSync(path.join(tmp, "src/den"));
+    expect(localSnapshotSource(path.join(tmp, "src")).workBaseDir).toBe(path.join(tmp, "src/work/base"));
+    expect(takeSnapshot({ source: localSnapshotSource(path.join(tmp, "src")), devRoot: path.join(tmp, "dev") }).counts.workItems).toBe(1);
+  });
+
   it("an empty or missing base yields zero items without failing", () => {
     put(path.join(tmp, "src/work/ledger/work-events.jsonl"), '{"id":"a"}\n');
     fs.mkdirSync(path.join(tmp, "src/work/base"), { recursive: true });
@@ -104,6 +114,9 @@ describe("sandboxCmd wiring", () => {
       await sandboxCmd(["snapshot", "w", "--dev-root", path.join(tmp, "dev2"), "--from", src]);
       expect(fs.existsSync(path.join(tmp, "dev2/den/extensions/wolfpack-memory/index.js"))).toBe(true);
       expect(warn.mock.calls.flat().join("\n")).toMatch(/stale/);
+      fs.writeFileSync(path.join(src, "work/ledger/work-events.jsonl"), '{"id":"a"}\n');
+      await sandboxCmd(["snapshot", "w", "--dev-root", path.join(tmp, "dev4"), "--from", src, "--no-install-extensions"]);
+      expect(warn.mock.calls.flat().join("\n")).toMatch(/ledger has events but 0 work item/);
 
       await expect(sandboxCmd(["snapshot", "w", "--dev-root", path.join(tmp, "dev3"), "--from", src, "--extensions", "no-such"])).rejects.toThrow("exit");
       const msg = err.mock.calls.flat().join("\n");

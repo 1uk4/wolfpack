@@ -35,9 +35,24 @@ const USAGE =
 
 const DEFAULT_EXTENSION_KEYS = ["memory"];
 
-/** `--from <dir>` -> snapshot source. Item .md files: <dir>/base, else the work server's <dir>/work/base. */
+/** Does `base` hold at least one `domains/<d>/work/*.md` item file? */
+function hasWorkItems(base: string): boolean {
+  const domains = path.join(base, "domains");
+  if (!fs.existsSync(domains)) return false;
+  return fs.readdirSync(domains).some((d) => {
+    const w = path.join(domains, d, "work");
+    return fs.existsSync(w) && fs.readdirSync(w).some((f) => f.endsWith(".md"));
+  });
+}
+
+/**
+ * `--from <dir>` -> snapshot source. Item .md files come from whichever of <dir>/base and the work server's
+ * <dir>/work/base actually holds work items, preferring <dir>/base when both do (neither: <dir>/base).
+ */
 export function localSnapshotSource(from: string): SnapshotSource {
-  const base = fs.existsSync(path.join(from, "base")) ? path.join(from, "base") : path.join(from, "work", "base");
+  const direct = path.join(from, "base");
+  const served = path.join(from, "work", "base");
+  const base = hasWorkItems(direct) || !hasWorkItems(served) ? direct : served;
   return { workDir: path.join(from, "work"), workBaseDir: base, opsDir: path.join(from, "ops"), denDir: path.join(from, "den") };
 }
 
@@ -128,6 +143,9 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
     const m = takeSnapshot({ source, devRoot, force: values.force, includeSessions: values["include-sessions"], sshIdentity });
     console.log(c.bold(`Snapshot of ${wolf} -> ${devRoot}`));
     console.log(`  ledger events ${m.counts.ledgerEvents}, work items ${m.counts.workItems}, ops files ${m.counts.opsFiles}, den files ${m.counts.denFiles}`);
+    if (m.counts.ledgerEvents > 0 && m.counts.workItems === 0) {
+      console.warn(c.yellow("warning: the ledger has events but 0 work item .md files were copied (check where the item files live: <from>/base or <from>/work/base)"));
+    }
   } catch (err) {
     return fail(`Snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
   }

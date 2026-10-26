@@ -35,19 +35,23 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { kbBase, kbOps, workLedgerDir } from "../paths.js";
 
-const KB_BASE = kbBase();
-const WORK_LEDGER_DIR = workLedgerDir();
-
-function makeRoots(): KbRoots {
+/** KbRoots the Work API runs on, from the agent's env (the default mount). */
+export function defaultWorkRoots(): KbRoots {
   return {
-    kbBase: KB_BASE,
+    kbBase: kbBase(),
     opsRoot: kbOps(),
-    denLocal: WORK_LEDGER_DIR,
+    denLocal: workLedgerDir(),
   };
 }
 
-export function workRouter(): Router {
-  mkdirSync(`${WORK_LEDGER_DIR}/ledger`, { recursive: true });
+/**
+ * Work API routes over the given roots. `roots.denLocal` is the ledger dir;
+ * defaults to the agent's env-derived layout, resolved when the router is
+ * built (not at module load).
+ */
+export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
+  mkdirSync(`${roots.denLocal}/ledger`, { recursive: true });
+  const makeRoots = (): KbRoots => roots;
   const router = Router();
 
   // ── Query work items ──────────────────────────────────────────────────

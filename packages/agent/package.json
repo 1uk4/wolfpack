@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "wolfpack-agent": "dist/bin/wolfpack-agent.js"
+    "wolfpack-agent": "dist/bin/wolfpack-agent.js",
+    "wolfpack-work-server": "dist/bin/wolfpack-work-server.js"
   },
   "scripts": {
     "build": "tsc --build",

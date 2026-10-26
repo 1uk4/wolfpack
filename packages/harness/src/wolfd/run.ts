@@ -13,6 +13,8 @@
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { Models } from "@earendil-works/pi-ai/models";
+import type { Extension } from "@earendil-works/pi-durable";
 import { loadModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   openWolfEngine,
@@ -38,6 +40,10 @@ export interface StartWolfOptions {
   /** Upper bound of the AGENTS.md/CLAUDE.md walk. Default: os.homedir(). */
   home?: string;
   log?: (line: string) => void;
+  /** Test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
+  models?: Models;
+  /** Test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks). */
+  extraExtensions?: readonly Extension[];
 }
 
 export interface RunningWolf {
@@ -57,7 +63,8 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
 
   const { table } = loadModelTable({ env, wolfYaml: config.file });
   const model = resolveWolfModel(config, "main", table);
-  const { extensions, tools } = resolveToolNames(config.capability.tools);
+  const { extensions: toolExtensions, tools } = resolveToolNames(config.capability.tools);
+  const extensions = [...toolExtensions, ...(opts.extraExtensions ?? [])];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 
@@ -67,7 +74,7 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   mkdirSync(config.den, { recursive: true });
   const wolfModels = buildWolfModels(model, { cwd, env });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
-    ...(wolfModels.models ? { models: wolfModels.models } : {}),
+    ...((opts.models ?? wolfModels.models) ? { models: (opts.models ?? wolfModels.models)! } : {}),
     extensions,
     cwd,
     backup: true,

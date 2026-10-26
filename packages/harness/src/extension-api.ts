@@ -161,6 +161,8 @@ export interface ExtensionContext {
   domains: string[];
   /** Full wolf config (for advanced use) */
   wolfConfig: Record<string, unknown>;
+  /** Effective env (sandbox redirect applied). Default: process.env. */
+  env?: NodeJS.ProcessEnv;
   /** Shared telegram state (if telegram is enabled) */
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */

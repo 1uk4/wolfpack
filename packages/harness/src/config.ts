@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { loadModelTable, MODELS_FILE_ENV, type ModelTable } from "@wolfpack/engine";
+import { loadModelTable, MODELS_FILE_ENV, normalizeSandbox, type ModelTable } from "@wolfpack/engine";
 
 export interface WolfConfig {
   id?: string;
@@ -15,8 +15,12 @@ export interface WolfConfig {
     tokenEnv?: string;  // env var name for bot token (default: TELEGRAM_BOT_TOKEN)
     ownerId: number;    // allowed user id
   };
+  /** `sandbox: true` (dev root <wolf home>/sandbox) or `{root}` in wolf.yaml; loadWolfConfig normalizes it to `{root}`. */
+  sandbox?: { root: string };
   memory?: {
     enabled?: boolean;           // default: true if extensions includes 'memory'
+    /** Durable memory may write the live roots. Off unless set (fail closed); sandbox is the other way on. */
+    live?: boolean;
     consolidation?: {
       trigger?: "timer" | "threshold" | "hybrid" | "manual";  // default: hybrid
       interval?: string;         // e.g. "24h" - pi-durable only
@@ -52,6 +56,9 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
   }
+  const sandbox = normalizeSandbox(config.sandbox as unknown, homeDir);
+  if (sandbox) config.sandbox = sandbox;
+  else delete config.sandbox;
 
   return config;
 }

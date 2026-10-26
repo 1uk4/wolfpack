@@ -15,7 +15,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { loadModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { assertSandboxed, loadModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   openWolfEngine,
   resolveToolNames,
@@ -27,6 +27,7 @@ import {
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
+import { startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
 
 export interface StartWolfOptions {
@@ -42,8 +43,21 @@ export interface StartWolfOptions {
   log?: (line: string) => void;
   /** @internal test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
   models?: Models;
-  /** @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks). */
-  extraExtensions?: readonly Extension[];
+  /**
+   * @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks).
+   * A function receives the wolf's effective den and env (sandbox redirect already applied) so extensions that
+   * read them at construction see the sandbox, not the live roots.
+   */
+  extraExtensions?: readonly Extension[] | ((rt: ExtensionRuntime) => readonly Extension[]);
+  /** @internal test seam: how the sandbox's local Work server is started (default: @wolfpack/agent). */
+  startWorkServer?: StartWorkServer;
+}
+
+export interface ExtensionRuntime {
+  config: WolfConfig;
+  den: string;
+  env: NodeJS.ProcessEnv;
+  sandbox?: RunningSandbox;
 }
 
 export interface RunningWolf {
@@ -52,19 +66,53 @@ export interface RunningWolf {
   engine: WolfEngine;
   server: WolfServer;
   conversation: EngineConversation;
+  /** Set when wolf.yaml has `sandbox`: the redirect in force and the local Work server behind WORK_ENDPOINT. */
+  sandbox?: RunningSandbox;
   close(): Promise<void>;
 }
 
 export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   const env = opts.env ?? process.env;
   const log = opts.log ?? (() => {});
-  const { config, warnings } = loadWolfConfig(opts.configPath);
-  for (const w of warnings) log(`warning: ${w}`);
+  const loaded = loadWolfConfig(opts.configPath);
+  for (const w of loaded.warnings) log(`warning: ${w}`);
+
+  // Sandbox first: it decides the den every later step opens. Refuses to start (before any store is touched) if
+  // the dev root is not a snapshot or anything outward still resolves outside it.
+  let sandbox: RunningSandbox | undefined;
+  let config = loaded.config;
+  if (config.sandbox) {
+    sandbox = await startSandbox(config.sandbox.root, { startWorkServer: opts.startWorkServer });
+    config = { ...config, den: sandbox.resolved.den };
+    log(`sandbox: den=${config.den} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
+  }
+  // The default env is the process's own, which in-process clients (WorkClient, KB_OPS readers) read directly:
+  // patch it in place (sandbox wins over the ambient, live values) and restore on close.
+  const restoreEnv = sandbox && !opts.env ? patchProcessEnv(sandbox.env) : () => {};
+  try {
+    return await startConfigured(opts, config, sandbox ? { ...env, ...sandbox.env } : env, log, sandbox, restoreEnv);
+  } catch (e) {
+    restoreEnv();
+    await sandbox?.close().catch(() => {});
+    throw e;
+  }
+}
+
+async function startConfigured(
+  opts: StartWolfOptions,
+  config: WolfConfig,
+  env: NodeJS.ProcessEnv,
+  log: (line: string) => void,
+  sandbox: RunningSandbox | undefined,
+  restoreEnv: () => void,
+): Promise<RunningWolf> {
+  if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal } : {}) });
 
   const { table } = loadModelTable({ env, wolfYaml: config.file });
   const model = resolveWolfModel(config, "main", table);
   const { extensions: toolExtensions, tools } = resolveToolNames(config.capability.tools);
-  const extensions = [...toolExtensions, ...(opts.extraExtensions ?? [])];
+  const extra = typeof opts.extraExtensions === "function" ? opts.extraExtensions({ config, den: config.den, env, ...(sandbox ? { sandbox } : {}) }) : (opts.extraExtensions ?? []);
+  const extensions = [...toolExtensions, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 
@@ -103,10 +151,13 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
       engine,
       server,
       conversation,
+      ...(sandbox ? { sandbox } : {}),
       close: async () => {
         await server.close();
         await engine.close();
         wolfModels.shutdown();
+        await sandbox?.close();
+        restoreEnv();
       },
     };
   } catch (e) {
@@ -114,6 +165,17 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
     wolfModels.shutdown();
     throw e;
   }
+}
+
+function patchProcessEnv(patch: Record<string, string>): () => void {
+  const saved = Object.fromEntries(Object.keys(patch).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, patch);
+  return () => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */

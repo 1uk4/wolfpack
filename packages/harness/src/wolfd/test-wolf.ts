@@ -9,7 +9,7 @@ import { defineExtension, GenerationTask, hook, type Extension } from "@earendil
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { HttpConsoleClient, type ThreadEvent } from "@wolfpack/client";
 import { createScriptedModel, type FauxResponseStep, type ScriptedModel } from "./scripted-model.js";
-import { startWolf, type RunningWolf } from "./run.js";
+import { startWolf, type ExtensionRuntime, type RunningWolf } from "./run.js";
 
 export interface AfterResponseCall {
   message: AssistantMessage;
@@ -23,9 +23,11 @@ export interface TestWolfOptions {
   hooks?: {
     afterResponse?: (call: AfterResponseCall) => void | Promise<void>;
     /** Extra raw pi-durable extensions (tools, hooks) installed beside the coding tools. */
-    extensions?: Extension[];
+    extensions?: Extension[] | ((rt: ExtensionRuntime) => Extension[]);
   };
   name?: string;
+  /** Extra top-level wolf.yaml text appended after `name` / `workspace` (e.g. a `sandbox:` block). */
+  yaml?: string;
 }
 
 export interface TestWolf {
@@ -52,7 +54,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
     JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }),
   );
   mkdirSync(join(root, "work"));
-  writeFileSync(join(root, "wolf.yaml"), `name: ${name}\nworkspace: ${join(root, "work")}\n`);
+  writeFileSync(join(root, "wolf.yaml"), `name: ${name}\nworkspace: ${join(root, "work")}\n${opts.yaml ?? ""}`);
 
   const afterResponse: AfterResponseCall[] = [];
   const recorder = defineExtension({
@@ -75,7 +77,10 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
       env: { WOLFPACK_MODELS_FILE: join(root, "models.json") },
       home: root,
       models: scripted.models,
-      extraExtensions: [recorder, ...(opts.hooks?.extensions ?? [])],
+      extraExtensions: (rt) => {
+        const extra = opts.hooks?.extensions;
+        return [recorder, ...(typeof extra === "function" ? extra(rt) : (extra ?? []))];
+      },
     });
   } catch (e) {
     rmSync(root, { recursive: true, force: true });

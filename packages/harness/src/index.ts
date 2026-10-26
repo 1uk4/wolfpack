@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -22,6 +23,7 @@ import { createFileToolsExtension } from "./extensions/file-tools.js";
 import { startLifecycles } from "./lifecycle.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
+import { startSandbox, type RunningSandbox } from "./wolfd/sandbox.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
@@ -84,7 +86,9 @@ function parseInterval(interval: string): number {
 export async function createWolfHarness(): Promise<HarnessInstance> {
   const context = BACKGROUND_CONTEXT;
   const config = await loadWolfConfig();
-  const wolfDen = process.env.WOLF_DEN!;
+  let wolfDen = process.env.WOLF_DEN!;
+  // wolf.yaml, models.json and agent/ sit beside the LIVE den; a sandbox redirects the den, not these.
+  const liveHome = join(wolfDen, "..");
 
   // Resolved model table, shipped next to wolf.yaml by `wolfpack sync`. Must
   // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
@@ -103,6 +107,16 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   console.log(`[harness] Main agent via ${mainVia}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
   for (const w of table.warnings) console.warn(`[harness] models: ${w}`);
   console.log(`[harness] API key set: ${!!process.env.ANTHROPIC_API_KEY}`);
+  // Sandbox: serve the snapshot ledger locally and point den / KB_OPS / WORK_ENDPOINT at the dev root. From here
+  // on process.env is the sandbox's; a root that is not a snapshot (or resolves outside itself) refuses to start.
+  let sandbox: RunningSandbox | undefined;
+  if (config.sandbox) {
+    sandbox = await startSandbox(config.sandbox.root);
+    Object.assign(process.env, sandbox.env);
+    wolfDen = sandbox.resolved.den;
+    mkdirSync(wolfDen, { recursive: true });
+    console.log(`[harness] SANDBOX: den=${wolfDen} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
+  }
   const models = createModels();
   models.setProvider(anthropicProvider());
 
@@ -111,7 +125,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   registry.install(CodingTools);
   
   // Wolf identity extension — provides AGENTS.md, CLAUDE.md sections
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(wolfDen, "..", "agent");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(liveHome, "agent");
   registry.install(createWolfIdentityExtension({ config, wolfDen, model: main.model, agentDir }));
   registry.install(createFileToolsExtension(wolfDen));
   
@@ -337,6 +351,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       if (sweepTimer) clearInterval(sweepTimer);
       if (telegram) await telegram.stop();
       await harness.close(context);
+      await sandbox?.close();
     },
   };
 }

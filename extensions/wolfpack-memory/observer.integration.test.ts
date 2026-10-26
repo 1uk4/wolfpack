@@ -206,7 +206,7 @@ describe("full-transcript observer", () => {
     expect(await reader.classify(Number(subFork.id))).toMatchObject({ kind: "task", taskId: Number(taskId) });
   });
 
-  it("(e) the pool crossing memory.consolidation.threshold consolidates into dev den topics", async () => {
+  it("(e) the pool crossing memory.consolidation.threshold consolidates into session topics (not the den)", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startObserverWolf({
@@ -217,9 +217,10 @@ describe("full-transcript observer", () => {
     });
     expect(tw.wolf.config.memory.consolidation).toMatchObject({ threshold: 20, poolTarget: 1, trigger: "hybrid", interval: "4h" });
     await tw.submit(say("USER_ONE"));
-    const topics = join(dev, "den/memory/topics");
+    const topics = join(dev, "den/.memory/sessions/durable");
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(readFileSync(join(topics, "caching.md"), "utf8")).toContain("Cache session lookups");
+    expect(existsSync(join(dev, "den/memory/topics"))).toBe(false);
     expect(stub.steps).toContain("consolidate");
     // the archived observations left the pool
     const poolFile = join(dev, "den/.memory/pool/observations.jsonl");
@@ -312,7 +313,7 @@ describe("full-transcript observer", () => {
       },
     });
     await tw.submit(say("USER_ONE"));
-    const topics = join(dev, "den/memory/topics");
+    const topics = join(dev, "den/.memory/sessions/durable");
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(stub.steps.filter((x) => x === "consolidate")).toHaveLength(1); // below threshold: only the timer ran
     await tw.stop();

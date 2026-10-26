@@ -108,6 +108,10 @@ export * from "./crawl/index.js";
 // Work Memory — unified work item lifecycle
 export * from "./work/index.js";
 
+// Session-consolidation prompt (durable runtime consolidates its pool into session topics with the same prompt)
+export { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
+export { fillPromptTemplate } from "./config/prompts/template.js";
+
 // Task prompts
 export {
   NEW_WORK_PROMPT,

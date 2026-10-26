@@ -29,7 +29,8 @@ import {
   chunkSerialized,
   type RawObservation,
 } from "@wolfpack/memory";
-import { consolidatePool } from "@wolfpack/harness/memory";
+import { consolidatePool, durableSessionTopics, promoteSessionTopics, type ConsolidationResult } from "@wolfpack/harness/memory";
+import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
@@ -431,26 +432,43 @@ export default function createMemoryExtension(
     });
   }
 
+  // Consolidation and promote mutate the same session topics, so they run one at a time (pi's orchestrator does the same).
+  let opTail: Promise<unknown> = Promise.resolve();
+  function serialized<T>(op: () => Promise<T>): Promise<T> {
+    const run = opTail.then(op, op);
+    opTail = run.catch(() => {});
+    return run;
+  }
+
+  /** Pool → session topics (pi's consolidation). poolTarget undefined: the whole pool. */
+  function consolidateToSessions(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+    return serialized(() =>
+      consolidatePool({
+        wolfDen,
+        wolfName,
+        table: getTable(),
+        apiKey: apiKeyFor(getTable()),
+        kbRoots: kbRoots ?? undefined,
+        workStore: recordStore(),
+        ...(config.engine ? { engine: config.engine } : {}),
+        defaultDomain: domains[0] ?? "wolfpack",
+        domains,
+        sessionTopics: durableSessionTopics(wolfDen),
+        ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
+        minObservations: opts.minObservations,
+        onProgress: (msg) => console.log(`[memory] ${msg}`),
+      }),
+    );
+  }
+
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
   function runConsolidation(opts: { drain?: boolean } = {}): Promise<void> {
     if (consolidating) return consolidating;
     consolidating = (async () => {
       try {
-        const consResult = await consolidatePool({
-          wolfDen,
-          wolfName,
-          table: getTable(),
-          apiKey: apiKeyFor(getTable()),
-          kbRoots: kbRoots ?? undefined,
-          workStore: recordStore(),
-          ...(config.engine ? { engine: config.engine } : {}),
-          defaultDomain: domains[0] ?? "wolfpack",
-          domains,
-          ...(opts.drain ? {} : { poolTarget }),
-          minObservations: 1, // the trigger already decided; the manual-use size floor doesn't apply
-          onProgress: (msg) => console.log(`[memory] ${msg}`),
-        });
-        console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);
+        // minObservations 1: the trigger already decided; the manual-use size floor doesn't apply
+        const consResult = await consolidateToSessions({ ...(opts.drain ? {} : { poolTarget }), minObservations: 1 });
+        console.log(`[memory] Auto-consolidated into session topics: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated`);
       } catch (consErr) {
         console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
       } finally {
@@ -460,11 +478,45 @@ export default function createMemoryExtension(
     return consolidating;
   }
 
+  // ─── Actions (consolidate / promote) ──────────────────────────────────────
+  let promoting: string | null = null;
+  let jobSeq = 0;
+  const actions: MemoryActions = {
+    consolidate: () => consolidateToSessions({ minObservations: 1 }),
+    promote() {
+      if (promoting) return { status: "already_running", jobId: promoting };
+      const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
+      promoting = jobId;
+      const done = (async (): Promise<PromoteOutcome> => {
+        try {
+          // reconcileDen runs again inside promoteSessionTopics (pi: promote start); consolidate first, like /wolf:promote.
+          const consolidated = (await consolidateToSessions({ minObservations: 1 })).observationsProcessed;
+          const promoted = await serialized(() =>
+            promoteSessionTopics({
+              wolfDen,
+              wolfName,
+              engine: getEngine(),
+              kbRoots: kbRoots ?? undefined,
+              defaultDomain: domains[0] ?? "wolfpack",
+              onProgress: (msg) => console.log(`[memory] ${msg}`),
+            }),
+          );
+          return { consolidated, promoted };
+        } finally {
+          promoting = null;
+        }
+      })();
+      done.catch(() => {}); // the caller owns the rejection; never an unhandled one
+      return { status: "started", jobId, done };
+    },
+  };
+  registerMemoryActions(wolfDen, actions);
+
   return defineExtension({
     name: "wolfpack-memory",
     runtimes: ["pi", "pi-durable"],
 
-    lifecycle: { stop: stopTimer },
+    lifecycle: { stop: () => { stopTimer(); unregisterMemoryActions(wolfDen, actions); } },
 
     tools: [
       defineTool({
@@ -482,23 +534,12 @@ export default function createMemoryExtension(
               };
             }
 
-            const result = await consolidatePool({
-              wolfDen: ctx.wolfDen,
-              wolfName: ctx.wolfName,
-              table: getTable(),
-              apiKey: apiKeyFor(getTable()),
-              kbRoots: kbRoots ?? undefined,
-              workStore: recordStore(),
-              ...(config.engine ? { engine: config.engine } : {}),
-              defaultDomain: domains[0] ?? "wolfpack",
-              domains,
-              onProgress: (msg) => console.log(`[memory] ${msg}`),
-            });
+            const result = await actions.consolidate();
 
             return {
               content: [{
                 type: "text",
-                text: `Consolidated ${result.observationsProcessed} observations: ${result.topicsCreated} created, ${result.topicsMerged} updated, ${result.claimsSubmitted} emitted to KB.`,
+                text: `Consolidated ${result.observationsProcessed} observations into session topics: ${result.topicsCreated} created, ${result.topicsMerged} updated.`,
               }],
             };
           } catch (err) {

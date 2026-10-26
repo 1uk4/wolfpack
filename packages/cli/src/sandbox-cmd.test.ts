@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { takeSnapshot } from "@wolfpack/engine";
 import { installDevExtensions } from "./bundle.js";
-import { localSnapshotSource, resolveExtensionKeys, sandboxCmd } from "./commands/sandbox.js";
+import { localSnapshotSource, mixedSnapshotSource, protectedRoots, resolveExtensionKeys, sandboxCmd, syncthingFolderPaths } from "./commands/sandbox.js";
 
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cli-sandbox-")); });
@@ -129,4 +129,58 @@ describe("sandboxCmd wiring", () => {
       [log, warn, err, exit].forEach((m) => m.mockRestore());
     }
   }, 60_000);
+});
+
+describe("mixed sources (production-like dev sandbox)", () => {
+  const put = (f: string, body: string) => {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, body);
+  };
+
+  it("syncthingFolderPaths reads only <folder path=...> and protectedRoots adds the live KB, lanes, local and host mirrors", () => {
+    const xml = '<configuration><folder id="a" label="x" path="/Users/u/wolves/knowledge/base/domains/wolfpack" type="sendreceive"><device id="SECRET-DEVICE-ID"/></folder><folder id="b" path="~/wolves/librarian/inbox/1uk4"></folder><device id="D" name="n"><address>dynamic</address></device></configuration>';
+    expect(syncthingFolderPaths(xml)).toEqual(["/Users/u/wolves/knowledge/base/domains/wolfpack", path.join(os.homedir(), "wolves/librarian/inbox/1uk4")]);
+    const cfg = path.join(tmp, "config.xml");
+    fs.writeFileSync(cfg, xml);
+    const roots = protectedRoots({ wolvesRoot: "/w" }, cfg);
+    expect(roots).toEqual(expect.arrayContaining(["/w/knowledge", "/w/librarian", "/w/local", "/w/sfo-01", "/Users/u/wolves/knowledge/base/domains/wolfpack"]));
+    expect(protectedRoots({ wolvesRoot: "/w" }, path.join(tmp, "missing.xml"))).toHaveLength(4);
+  });
+
+  it("mixedSnapshotSource: the ledger/items are the only remote part; den, KB and ops stay local", () => {
+    const remote = mixedSnapshotSource({ den: "/d", kbBase: "/kb", ledgerRemote: { at: "root@h", kbRoot: "/var/wolfpack/kb", sharedKbBase: "/var/wolfpack/kb/base" } });
+    expect(remote).toEqual({ workDir: "root@h:/var/wolfpack/kb/work", workBaseDir: "root@h:/var/wolfpack/kb/base", denDir: "/d", kbBaseDir: "/kb" });
+    const local = mixedSnapshotSource({ den: "/d", workFrom: "/w", ops: "/o", opsLane: "1uk4-dev, x" });
+    expect(local).toEqual({ workDir: "/w", denDir: "/d", opsDir: "/o", opsLanes: ["1uk4-dev", "x"] });
+  });
+
+  it("sandbox snapshot --den --kb-base --work-from --shared builds a shared root; add-wolf adds the librarian's den; refresh keeps both", async () => {
+    put(path.join(tmp, "stand-in/ledger/work-events.jsonl"), '{"id":"a"}\n');
+    put(path.join(tmp, "stand-in/base/domains/wolfpack/work/work-wolfpack-a.md"), "# a\n");
+    put(path.join(tmp, "den/memory/t.md"), "t\n");
+    put(path.join(tmp, "kb/domains.yaml"), "domains: [wolfpack]\n");
+    const dev = path.join(tmp, "dev");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await sandboxCmd(["snapshot", "1uk4-dev", "--dev-root", dev, "--den", path.join(tmp, "den"), "--kb-base", path.join(tmp, "kb"), "--work-from", path.join(tmp, "stand-in"), "--shared", "--extensions", "memory"]);
+      const m = JSON.parse(fs.readFileSync(path.join(dev, "snapshot.json"), "utf8"));
+      expect(m.den).toBe("dens/1uk4-dev");
+      expect(m.counts).toMatchObject({ ledgerEvents: 1, workItems: 1, kbBaseFiles: 1 });
+      expect(fs.existsSync(path.join(dev, "dens/1uk4-dev/memory/t.md"))).toBe(true);
+      expect(fs.existsSync(path.join(dev, "dens/1uk4-dev/extensions/wolfpack-memory/index.js"))).toBe(true);
+      expect(fs.existsSync(path.join(dev, "kb-base/domains.yaml"))).toBe(true);
+
+      await sandboxCmd(["add-wolf", dev, "dewey-dev", "--extensions", "memory"]);
+      expect(fs.existsSync(path.join(dev, "dens/dewey-dev/extensions/wolfpack-memory/index.js"))).toBe(true);
+
+      put(path.join(tmp, "stand-in/ledger/work-events.jsonl"), '{"id":"a"}\n{"id":"b"}\n');
+      await sandboxCmd(["snapshot", "1uk4-dev", "--dev-root", dev, "--work-from", path.join(tmp, "stand-in"), "--refresh-work", "--den", path.join(tmp, "den")]);
+      expect(fs.readFileSync(path.join(dev, "ledger/work-events.jsonl"), "utf8")).toBe('{"id":"a"}\n{"id":"b"}\n');
+      expect(fs.existsSync(path.join(dev, "dens/dewey-dev/extensions/wolfpack-memory/index.js"))).toBe(true);
+      expect(fs.existsSync(path.join(dev, "kb-base/domains.yaml"))).toBe(true);
+    } finally {
+      [log, err].forEach((x) => x.mockRestore());
+    }
+  }, 90_000);
 });

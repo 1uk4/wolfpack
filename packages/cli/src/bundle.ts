@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
-import { writeModelTable, type ModelTable } from "@wolfpack/engine";
+import { wolfDenDir, writeModelTable, type ModelTable } from "@wolfpack/engine";
 import {
   getExtension,
   extensionsDir,
@@ -432,14 +432,16 @@ export async function buildDurableExtension(key: string, extDir: string, denExte
 
 /**
  * Install CURRENT extension bundles (built from this checkout exactly as `wolfpack sync` builds them) into a dev
- * root's den: `<devRoot>/den/extensions/<dir>/index.js`. Replaces the named extensions' dirs; others are untouched.
+ * root's den: `<devRoot>/den/extensions/<dir>/index.js` (`<devRoot>/dens/<wolf>/extensions/...` for a wolf of a shared sandbox). Replaces the named extensions' dirs; others are untouched.
  */
 export async function installDevExtensions(
   devRoot: string,
   keys: string[],
   denExtensionsDir?: string,
+  wolf?: string,
 ): Promise<{ included: string[]; missing: string[] }> {
-  const target = path.join(path.resolve(devRoot), "den", "extensions");
+  // `wolf` (shared sandbox): that wolf's own den, `<devRoot>/dens/<wolf>`; else the single-wolf `<devRoot>/den`.
+  const target = path.join(wolf ? wolfDenDir(path.resolve(devRoot), wolf) : path.join(path.resolve(devRoot), "den"), "extensions");
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-devext-"));
   const included: string[] = [];
   const missing: string[] = [];

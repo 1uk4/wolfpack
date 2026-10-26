@@ -13,6 +13,7 @@ import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/agent";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
+import { getSweepManager } from "../../packages/harness/src/sweep-worker.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension, { type MemoryConfig } from "./unified.js";
 import createTasksExtension from "./unified-tasks.js";
@@ -247,6 +248,31 @@ describe("sandbox: KB_BASE and task tools", () => {
     expect(() =>
       createMemoryExtension({ librarian: true }, { wolfDen: join(dev, "den"), wolfName: "t", domains: [], wolfConfig: { sandbox: { root: dev } }, env }),
     ).toThrow(/librarian/);
+  });
+
+  it("allows librarian mode ONLY on a KB copy: the gate and startWolf accept a snapshot with kb-base and refuse one without", async () => {
+    const live = await liveFixture();
+    const kbLive = join(live.root, "kbbase");
+    mkdirSync(join(kbLive, "domains/wolfpack/entries"), { recursive: true });
+    writeFileSync(join(kbLive, "domains/wolfpack/entries/kb-wolfpack-x.md"), "entry\n");
+    writeFileSync(join(kbLive, "domains.yaml"), "domains: [wolfpack]\n");
+    const kbBefore = hashTree(kbLive);
+
+    const dev = join(tmp("dev"), "snap");
+    takeSnapshot({ source: { ...live.source, kbBaseDir: kbLive }, devRoot: dev });
+    const ctx = (env: Record<string, string | undefined>, den = join(dev, "den")) => ({ wolfDen: den, wolfName: "dewey-dev", domains: ["wolfpack"], wolfConfig: { sandbox: { root: dev } }, env });
+    const good = { KB_BASE: join(dev, "kb-base"), KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1" };
+    expect(() => createMemoryExtension({ librarian: true }, ctx(good))).not.toThrow();
+    // the live KB next to a copy is refused, by the base gate and by the librarian gate
+    expect(() => createMemoryExtension({ librarian: true }, ctx({ ...good, KB_BASE: kbLive }))).toThrow(/KB_BASE/);
+    expect(() => createMemoryExtension({ librarian: true }, ctx({ ...good, KB_BASE: undefined }))).toThrow(/KB_BASE/);
+    // a den-local dir outside the root (the sweep lock and vectors live there) is refused
+    expect(() => createMemoryExtension({ librarian: true }, ctx({ ...good, KB_DEN_LOCAL: join(live.root, "elsewhere") }))).toThrow(/outside/);
+
+    const { engine } = stubEngine();
+    tw = await startMemoryWolf({ engine, memory: { librarian: true }, yaml: `sandbox:\n  root: ${dev}\nmemory:\n  librarian: true\n` });
+    expect(getSweepManager()).not.toBeNull(); // startWolf built the librarian's sweep manager on the KB copy
+    expect(hashTree(kbLive)).toEqual(kbBefore);
   });
 
   it("with a live KB_BASE fixture, a sandboxed turn leaves it byte-identical; a task tool writes only the snapshot ledger", async () => {

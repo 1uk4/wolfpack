@@ -1,17 +1,24 @@
 /**
- * Sandbox start path: validate the dev root, resolve the redirected roots, serve the snapshot ledger with the
- * local Work server, and prove (fail closed) that nothing outward still points at a live location.
+ * Sandbox start path: validate the dev root, resolve the redirected roots, get the snapshot ledger served by the ONE
+ * local Work server (own it, or attach to the owner's), and prove (fail closed) that nothing outward still points at
+ * a live location. A shared sandbox (several wolves, one root) has exactly one work-ledger writer, enforced on disk
+ * by the writer lock (see engine/sandbox/work-writer.ts); workerd normally owns it so it outlives the wolves.
  */
 import { randomBytes } from "node:crypto";
 import {
+  acquireWorkWriterLock,
+  assertLibrarianSandboxed,
   assertSandboxed,
   assertSandboxedPaths,
   SandboxError,
+  readWorkServerRunFile,
   requireSnapshotRoot,
   resolveSandbox,
   sandboxEnv,
   type ResolvedSandbox,
 } from "@wolfpack/engine";
+import { kbLockFile } from "@wolfpack/kb/librarian";
+import { ledgerFile, vectorsDir, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 
 export interface LocalWorkServerHandle {
   url: string;
@@ -50,20 +57,96 @@ export function patchProcessEnv(patch: Record<string, string>): () => void {
   };
 }
 
-export async function startSandbox(
+/** Everything a librarian's sweep writes besides KB_BASE/KB_OPS: den-local ledgers, vectors and the sweep lock. */
+export function librarianRoots(r: ResolvedSandbox): KbRoots & { extra: Record<string, string> } {
+  const roots: KbRoots = { kbBase: r.kbBase ?? "", opsRoot: r.kbOps, denLocal: r.kbDenLocal };
+  return {
+    ...roots,
+    extra: { sweepLock: kbLockFile(roots), vectors: vectorsDir(roots), kbLedger: ledgerFile(roots), workLedger: workLedgerFile(roots) },
+  };
+}
+
+/** Librarian mode needs a KB copy and every path it writes inside the root; anything else is refused. */
+export function assertLibrarianResolved(root: string, r: ResolvedSandbox): void {
+  const lr = librarianRoots(r);
+  assertLibrarianSandboxed(root, { kbBase: r.kbBase, kbOps: r.kbOps, denLocal: r.kbDenLocal, extra: lr.extra });
+}
+
+async function pingWorkServer(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${url}/ping`, { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The work server for `root`: attach to the live owner's (run file + /ping), else take the writer lock and start it.
+ * A live writer that cannot be attached to fails loudly (the lock refuses a second one); it never starts a second.
+ */
+async function acquireWorkServer(
   root: string,
-  opts: { startWorkServer?: StartWorkServer; librarian?: boolean } = {},
-): Promise<RunningSandbox> {
-  if (opts.librarian) throw new SandboxError("librarian mode mutates KB_BASE and is refused in a sandbox; remove memory.librarian");
-  if (active) throw new SandboxError(`a sandbox (${active}) is already running in this process; one sandboxed wolf per process`);
+  startWorkServer: StartWorkServer,
+  ledgerDir: string,
+): Promise<{ url: string; token: string; owned: boolean; close(): Promise<void> }> {
+  const run = readWorkServerRunFile(root);
+  if (run && (await pingWorkServer(run.url))) return { url: run.url, token: run.token, owned: false, close: async () => {} };
+  const lock = acquireWorkWriterLock(root); // throws SandboxError if a live process still holds the ledger
+  const token = randomBytes(24).toString("hex");
+  try {
+    const server = await startWorkServer({ ledgerDir, token });
+    lock.publish({ url: server.url, token });
+    return {
+      url: server.url,
+      token,
+      owned: true,
+      close: async () => {
+        try {
+          await server.close();
+        } finally {
+          lock.release();
+        }
+      },
+    };
+  } catch (e) {
+    lock.release();
+    throw e;
+  }
+}
+
+export interface SharedWorkServer {
+  url: string;
+  close(): Promise<void>;
+}
+
+/**
+ * Start (own) the single work server of a shared sandbox without any wolf: what workerd does once per dev root before it
+ * spawns the wolves. Throws if the root is not a snapshot or a live writer already exists.
+ */
+export async function startSharedWorkServer(root: string, opts: { startWorkServer?: StartWorkServer } = {}): Promise<SharedWorkServer> {
   requireSnapshotRoot(root);
   const pre = resolveSandbox(root);
   assertSandboxedPaths(root, pre);
+  const s = await acquireWorkServer(root, opts.startWorkServer ?? defaultStartWorkServer, pre.workLedgerDir);
+  if (!s.owned) throw new SandboxError(`the work ledger in ${root} already has a running work server (${s.url}); not starting a second`);
+  return { url: s.url, close: s.close };
+}
+
+export async function startSandbox(
+  root: string,
+  opts: { startWorkServer?: StartWorkServer; librarian?: boolean; wolf?: string } = {},
+): Promise<RunningSandbox> {
+  if (active) throw new SandboxError(`a sandbox (${active}) is already running in this process; one sandboxed wolf per process`);
+  requireSnapshotRoot(root);
+  const pre = resolveSandbox(root, { wolf: opts.wolf });
+  assertSandboxedPaths(root, pre);
+  // Librarian mode mutates KB_BASE: only on the sandbox's own KB copy, every path it writes inside the root.
+  if (opts.librarian) assertLibrarianResolved(root, pre);
   active = root;
-  const token = randomBytes(24).toString("hex");
-  let server: LocalWorkServerHandle;
+  let server: Awaited<ReturnType<typeof acquireWorkServer>>;
   try {
-    server = await (opts.startWorkServer ?? defaultStartWorkServer)({ ledgerDir: pre.workLedgerDir, token });
+    server = await acquireWorkServer(root, opts.startWorkServer ?? defaultStartWorkServer, pre.workLedgerDir);
   } catch (e) {
     active = undefined;
     throw e;
@@ -76,9 +159,9 @@ export async function startSandbox(
     await server.close();
   };
   try {
-    const resolved = resolveSandbox(root, { workEndpoint: server.url });
-    assertSandboxed(root, { den: resolved.den, kbOps: resolved.kbOps, kbDenLocal: resolved.kbDenLocal, workEndpoint: resolved.workEndpoint });
-    return { resolved, env: sandboxEnv(resolved, token), close };
+    const resolved = resolveSandbox(root, { workEndpoint: server.url, wolf: opts.wolf });
+    assertSandboxed(root, { den: resolved.den, kbOps: resolved.kbOps, kbDenLocal: resolved.kbDenLocal, kbBase: resolved.kbBase, workEndpoint: resolved.workEndpoint });
+    return { resolved, env: sandboxEnv(resolved, server.token), close };
   } catch (e) {
     await close().catch(() => {});
     throw e;

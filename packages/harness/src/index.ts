@@ -26,7 +26,8 @@ import { createTelegramClient, createTelegramSharedState, type TelegramClient, t
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
 import { memoryActionsFor } from "./memory/actions.js";
 import { patchProcessEnv, startSandbox, type RunningSandbox } from "./wolfd/sandbox.js";
-import { initSweepManager, type SweepManager } from "./sweep-worker.js";
+import { parseInterval, startLibrarianSweep, startSweepTimer } from "./sweep-host.js";
+import type { SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
 export { loadWolfConfig, type WolfConfig };
@@ -70,21 +71,6 @@ export interface HarnessInstance {
   close: () => Promise<void>;
 }
 
-/** Parse interval string (e.g., "4h", "30m", "1d") to milliseconds */
-function parseInterval(interval: string): number {
-  const match = interval.match(/^(\d+)(s|m|h|d)$/);
-  if (!match) return 4 * 60 * 60 * 1000; // default 4h
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  switch (unit) {
-    case "s": return value * 1000;
-    case "m": return value * 60 * 1000;
-    case "h": return value * 60 * 60 * 1000;
-    case "d": return value * 24 * 60 * 60 * 1000;
-    default: return 4 * 60 * 60 * 1000;
-  }
-}
-
 export async function createWolfHarness(): Promise<HarnessInstance> {
   const context = BACKGROUND_CONTEXT;
   const config = await loadWolfConfig();
@@ -114,7 +100,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   let sandbox: RunningSandbox | undefined;
   let restoreEnv: () => void = () => {};
   if (config.sandbox) {
-    sandbox = await startSandbox(config.sandbox.root, { librarian: config.memory?.librarian === true });
+    sandbox = await startSandbox(config.sandbox.root, { librarian: config.memory?.librarian === true, wolf: config.name });
     restoreEnv = patchProcessEnv(sandbox.env);
     wolfDen = sandbox.resolved.den;
     mkdirSync(wolfDen, { recursive: true });
@@ -153,23 +139,11 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   if (config.domains?.length) process.env.WOLF_DOMAINS ??= config.domains.join(",");
   const defaultDomain = config.memory?.defaultDomain ?? config.domains?.[0] ?? process.env.WOLFPACK_DOMAIN ?? "wolfpack";
 
-  // Initialize sweep manager if librarian mode is enabled
+  // Initialize sweep manager if librarian mode is enabled (sandbox: startSandbox already proved it runs on a KB copy)
   const isLibrarian = config.memory?.librarian === true;
-  let sweepManager: SweepManager | undefined;
-  
-  if (sandbox && isLibrarian) throw new Error("sandbox: librarian mode is refused (it mutates KB_BASE)");
-  if (isLibrarian && kbRoots) {
-    sweepManager = initSweepManager({
-      kbBase: kbRoots.kbBase,
-      kbOps: kbRoots.opsRoot,
-      denLocal: kbRoots.denLocal,
-      embedUrl: process.env.WOLFPACK_EMBED_URL,
-      embedModel: process.env.WOLFPACK_EMBED_MODEL,
-      models: table,
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
-    console.log("[librarian] Sweep manager initialized");
-  }
+  const sweepManager: SweepManager | undefined = isLibrarian && kbRoots
+    ? startLibrarianSweep({ roots: kbRoots, table, env: process.env, log: (l) => console.log(l) })
+    : undefined;
 
   // Create shared telegram state if telegram is configured
   const telegramState: TelegramSharedState | undefined = config.telegram
@@ -303,25 +277,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   }
 
   // Set up sweep timer if librarian mode with interval
-  let sweepTimer: ReturnType<typeof setInterval> | undefined;
   const sweepInterval = config.memory?.sweepInterval ?? (isLibrarian ? "1m" : undefined);
-  
-  if (sweepManager && sweepInterval) {
-    const sweepMs = parseInterval(sweepInterval);
-    console.log(`[librarian] Sweep timer: every ${sweepInterval}`);
-    
-    sweepTimer = setInterval(async () => {
-      if (sweepManager.isRunning()) {
-        console.log(`[librarian] Sweep already running, skipping timer trigger`);
-        return;
-      }
-      
-      const result = await sweepManager.start();
-      if (!result.started) {
-        console.log(`[librarian] Sweep not started: ${result.reason}`);
-      }
-    }, sweepMs);
-  }
+  const sweepTimer = sweepManager && sweepInterval ? startSweepTimer(sweepManager, sweepInterval, (l) => console.log(l)) : undefined;
 
   // Start Telegram client if configured
   let telegram: TelegramClient | undefined;

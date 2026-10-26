@@ -29,6 +29,9 @@ import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
+import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
+import type { SweepManager } from "../sweep-worker.js";
+import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
 
@@ -85,7 +88,7 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   let sandbox: RunningSandbox | undefined;
   let config = loaded.config;
   if (config.sandbox) {
-    sandbox = await startSandbox(config.sandbox.root, { startWorkServer: opts.startWorkServer, librarian: config.memory.librarian });
+    sandbox = await startSandbox(config.sandbox.root, { startWorkServer: opts.startWorkServer, librarian: config.memory.librarian, wolf: config.identity.name });
     config = { ...config, den: sandbox.resolved.den };
     log(`sandbox: den=${config.den} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
   }
@@ -110,7 +113,7 @@ async function startConfigured(
   sandbox: RunningSandbox | undefined,
   restoreEnv: () => void,
 ): Promise<RunningWolf> {
-  if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
+  if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, kbBase: env.KB_BASE, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
 
   const { table: fileTable } = loadModelTable({ env, wolfYaml: config.file });
   // The wolf's table: models file + wolf.yaml `tiers:`. Handed to extensions so memory's engine steps use the same models.
@@ -121,7 +124,10 @@ async function startConfigured(
   // The wolf's configured extensions, through the same loader createWolfHarness uses. This runs AFTER the sandbox
   // redirect (config.den and env are the sandbox's) and the assertSandboxed gate above, so the extensions' own
   // fail-closed gates (memoryGate) see the effective den/env.
-  const loaded = await loadConfiguredExtensions(config, env, table, extra, log);
+  // A librarian wolf's sweep (kb_sweep_* tools + the timer below), built from the same KB roots the memory extension
+  // uses: KB_BASE/KB_OPS from the effective env (a sandbox KB copy), den-local state under the wolf's den.
+  const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log) : undefined;
+  const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
   const extensions = [...toolExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
@@ -155,6 +161,8 @@ async function startConfigured(
     await server.attach();
     engine.resume();
     const url = opts.socket ? await server.listenSocket(opts.socket) : await server.listen(opts.port ?? config.serve.port ?? 0);
+    // Timer last, once the wolf serves: a librarian sweeps on its interval (default 1m), like the VPS harness.
+    const sweepTimer = sweep ? startSweepTimer(sweep, config.memory.sweepInterval ?? "1m", log) : undefined;
     return {
       url,
       config,
@@ -163,6 +171,7 @@ async function startConfigured(
       conversation,
       ...(sandbox ? { sandbox } : {}),
       close: async () => {
+        if (sweepTimer) clearInterval(sweepTimer);
         await server.close();
         await engine.close();
         wolfModels.shutdown();
@@ -189,7 +198,7 @@ async function startConfigured(
  * A missing extension is a warning (as in createWolfHarness); one that is present but fails to build (a gate refusing
  * a misconfigured sandbox, a broken bundle) refuses to start the wolf rather than booting quietly without it.
  */
-async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, modelTable: ModelTable, extra: readonly Extension[], log: (line: string) => void): Promise<Extension[]> {
+async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, modelTable: ModelTable, extra: readonly Extension[], log: (line: string) => void, sweep?: SweepManager): Promise<Extension[]> {
   const names = withoutProvided(config.extensions, extra);
   if (names.length === 0) return [];
   const blocks: Record<string, unknown> = { ...config.extensionConfig };
@@ -202,11 +211,18 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
     wolfConfig: { name: config.identity.name, domains: config.identity.domains, ...blocks, ...(config.sandbox ? { sandbox: config.sandbox } : {}) },
     env,
     modelTable,
+    ...(sweep ? { sweep } : {}),
   });
   reportLoad(result, { info: log, warn: (l) => log(`warning: ${l}`) });
   const broken = result.failed.filter((f) => !f.notFound);
   if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
   return result.extensions;
+}
+
+function librarianSweepFor(config: WolfConfig, env: NodeJS.ProcessEnv, table: ModelTable, log: (line: string) => void): SweepManager {
+  if (!env.KB_BASE || !env.KB_OPS) throw new Error(`${config.identity.name}: memory.librarian needs KB_BASE and KB_OPS (a sandbox with a KB copy provides them)`);
+  const roots: KbRoots = { kbBase: env.KB_BASE, opsRoot: env.KB_OPS, denLocal: join(config.den, "kb") };
+  return startLibrarianSweep({ roots, table, env, log });
 }
 
 /** Is the memory extension among what was installed (configured, or injected by a test)? */

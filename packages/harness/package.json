@@ -22,6 +22,10 @@
       "default": "./dist/engine/index.js"
     },
     "./package.json": "./package.json",
+    "./sandbox": {
+      "types": "./dist/wolfd/sandbox.d.ts",
+      "default": "./dist/wolfd/sandbox.js"
+    },
     "./wolfd": {
       "types": "./dist/wolfd/index.d.ts",
       "default": "./dist/wolfd/index.js"

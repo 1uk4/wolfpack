@@ -35,8 +35,9 @@ import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, typ
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
 import { readBoundTask } from "./unified-tasks.js";
-import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
+import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
+import { assertLibrarianSandboxed, assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -92,11 +93,22 @@ export function memoryGate(config: MemoryConfig, context: ExtensionContext): Mem
       den: context.wolfDen,
       kbOps: env.KB_OPS,
       kbDenLocal: env.KB_DEN_LOCAL ?? join(context.wolfDen, "kb"),
+      kbBase: env.KB_BASE,
       workEndpoint: env.WORK_ENDPOINT,
     });
-    // KB_BASE stays readable (context, classification) but nothing mutating may receive it: the librarian tools
-    // (reorg, retire, split-fat) are the only writers and are refused above, so they are never registered.
-    if (config.librarian) throw new Error("sandbox: librarian mode mutates KB_BASE and is refused in a sandbox; remove memory.librarian");
+    // KB_BASE is the sandbox's KB copy when the snapshot has one (asserted above), else the ambient live KB, read-only
+    // here. The librarian tools (reorg, retire, split-fat, the sweep) are the only writers, so librarian mode is
+    // allowed ONLY on a KB copy with every path the librarian writes (sweep lock, vectors, ledgers) inside the root.
+    if (config.librarian) {
+      const denLocal = env.KB_DEN_LOCAL ?? join(context.wolfDen, "kb");
+      const roots = { kbBase: env.KB_BASE ?? "", opsRoot: env.KB_OPS ?? "", denLocal };
+      assertLibrarianSandboxed(root, {
+        kbBase: env.KB_BASE,
+        kbOps: env.KB_OPS,
+        denLocal,
+        extra: { sweepLock: kbLockFile(roots), vectors: vectorsDir(roots), kbLedger: ledgerFile(roots), workLedger: workLedgerFile(roots) },
+      });
+    }
     return { enabled: config.enabled !== false, reason: config.enabled === false ? "disabled by memory.enabled: false" : `sandbox (${root})` };
   }
   if (config.enabled === false) return { enabled: false, reason: "disabled by memory.enabled: false" };

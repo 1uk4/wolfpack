@@ -8,8 +8,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ThreadEvent, ThreadMessage } from "@wolfpack/client";
 import { SessionModel } from "../components/session-core.ts";
 import { threadTransport } from "../components/thread-transport.ts";
-import { ToolRow, truncateResult } from "../components/tool-row.tsx";
-import { renderItems, summarizeArgs, threadMessagesToNative, toolEntryOf } from "../src/core/index.ts";
+import { ToolGroup, ToolRow, truncateResult } from "../components/tool-row.tsx";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, stripCd, summarizeArgs, summarizeGroup, threadMessagesToNative, toolEntryOf } from "../src/core/index.ts";
 
 const base = { threadId: "t", at: "2026-01-01T00:00:00.000Z", turnId: "a" };
 let n = 0;
@@ -57,7 +57,7 @@ function describeView(model: SessionModel) {
 		.messages.filter((m) => m.role === "assistant")
 		.map((m) =>
 			renderItems(m.parts, false).map((i) =>
-				i.kind === "tool" ? { kind: i.kind, ...i.entry } : i.kind === "text" ? { kind: i.kind, text: i.part.text } : { kind: i.kind },
+				i.kind === "tool" ? { kind: i.kind, ...i.entry } : i.kind === "group" ? { kind: i.kind, entries: i.entries } : i.kind === "text" ? { kind: i.kind, text: i.part.text } : { kind: i.kind },
 			),
 		);
 }
@@ -74,9 +74,14 @@ describe("tool rows", () => {
 		const [turn] = describeView(liveModel());
 		assert.deepEqual(
 			turn!.map((i) => i.kind),
-			["tool", "text", "tool", "tool", "text"],
+			["tool", "text", "group", "text"],
 		);
-		const tools = turn!.filter((i) => i.kind === "tool") as Array<{ name: string; summary: string; status: string; result: string }>;
+		const tools = turn!.flatMap((i) => (i.kind === "group" ? (i as { entries: unknown[] }).entries : i.kind === "tool" ? [i] : [])) as Array<{
+			name: string;
+			summary: string;
+			status: string;
+			result: string;
+		}>;
 		assert.deepEqual(
 			tools.map((t) => [t.name, t.summary, t.status, t.result === LONG ? "LONG" : t.result]),
 			[
@@ -181,5 +186,112 @@ describe("history seam handling", () => {
 		]);
 		const first = native[0] as { content: Array<{ type: string; text?: string }> };
 		assert.equal(first.content[0]!.text, "x\n");
+	});
+});
+
+const call = (id: string, name: string, state: string, input: unknown = { command: id }) => ({
+	type: `tool-${name}`,
+	toolCallId: id,
+	state,
+	input,
+	output: "o",
+	errorText: "e",
+});
+
+describe("tool groups", () => {
+	it("a run of consecutive calls becomes one group; a single call stays a row", () => {
+		const items = renderItems([{ type: "step-start" }, call("a", "bash", "output-available"), call("b", "read", "output-available", { path: "x" }), { type: "text", text: "hi" }, call("c", "bash", "output-available")], false);
+		assert.deepEqual(items.map((i) => i.kind), ["group", "text", "tool"]);
+	});
+
+	it("empty thinking does not split a group; real thinking and text do", () => {
+		const run = (mid: Array<Record<string, unknown>>) =>
+			renderItems([{ type: "step-start" }, call("a", "bash", "output-available"), ...mid, call("b", "bash", "output-available")] as never, false).map((i) => i.kind);
+		assert.deepEqual(run([{ type: "step-start" }, { type: "reasoning", text: "" }]), ["group"]);
+		assert.deepEqual(run([{ type: "step-start" }, { type: "reasoning", text: "thinking" }]), ["tool", "reasoning", "tool"]);
+		assert.deepEqual(run([{ type: "step-start" }, { type: "text", text: "t" }]), ["tool", "text", "tool"]);
+	});
+
+	it("summary: counts in first-seen order, latest/running call, overall status", () => {
+		const e = (name: string, status: "running" | "done" | "error" | "pending", summary: string) => ({ callId: summary, name, summary, status });
+		const s = summarizeGroup([e("bash", "done", "1"), e("read", "done", "2"), e("bash", "running", "3"), e("bash", "done", "4")]);
+		assert.deepEqual(s.counts, [{ name: "bash", count: 3 }, { name: "read", count: 1 }]);
+		assert.equal(s.status, "running");
+		assert.equal(s.latest.summary, "3");
+		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "error", "2"), e("bash", "done", "3")]).status, "error");
+		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "done", "2")]).latest.summary, "2");
+	});
+
+	it("ToolGroup renders counts, latest summary, status, and the rows", () => {
+		const entries = [
+			{ callId: "a", name: "bash", summary: "one", status: "done" as const },
+			{ callId: "b", name: "bash", summary: "two", status: "done" as const },
+			{ callId: "c", name: "read", summary: "/x", status: "error" as const },
+		];
+		const html = renderToStaticMarkup(
+			<ToolGroup entries={entries}>
+				{entries.map((en) => (
+					<ToolRow key={en.callId} entry={en} />
+				))}
+			</ToolGroup>,
+		);
+		assert.match(html, /data-testid="tool-group"/);
+		assert.match(html, /bash ×2 · read/);
+		assert.match(html, /\/x/);
+		assert.match(html, /data-status="error"/);
+		assert.equal((html.match(/data-testid="tool-row"/g) ?? []).length, 3);
+		assert.doesNotMatch(html, /<details[^>]*data-testid="tool-group"[^>]* open/);
+	});
+
+	it("live and reload group identically", () => {
+		const live = new SessionModel({ chatId: "t", initialMessages: [], transport: threadTransport("w", "t") });
+		const wire = threadTransport("w", "t").createWire();
+		for (const e of liveEvents()) for (const w of wire(e as never)) live.applyWireEvent(w);
+		const hist = new SessionModel({ chatId: "t", initialMessages: threadMessagesToNative(history), transport: threadTransport("w", "t") });
+		const keys = (m: SessionModel) =>
+			m.getState().messages.filter((x) => x.role === "assistant").flatMap((x) => renderItems(x.parts, false).map((i) => (i.kind === "group" ? i.key : i.kind)));
+		assert.deepEqual(keys(hist), keys(live));
+		assert.ok(keys(live).includes("group:c2"));
+	});
+});
+
+describe("bash summary", () => {
+	it("strips a leading cd <path> && / ;", () => {
+		assert.equal(stripCd("cd /Users/x/wt/1uk4-dev && npm test"), "npm test");
+		assert.equal(stripCd("cd /a/b; ls -la"), "ls -la");
+		assert.equal(stripCd('cd "/a b/c" && git status'), "git status");
+		assert.equal(stripCd("cd /a && cd /b && make"), "make");
+		assert.equal(stripCd("ls && cd /a"), "ls && cd /a");
+		assert.equal(stripCd("cd /only"), "cd /only");
+		assert.equal(summarizeArgs("bash", { command: "cd /Users/lukaflores/Code/wolfpack-wt/1uk4-dev && npm test" }), "npm test");
+	});
+
+	it("keeps the full command for the expanded view", () => {
+		const entry = toolEntryOf({ type: "tool-bash", toolCallId: "c", state: "output-available", input: { command: "cd /w && npm test" }, output: "ok" });
+		assert.equal(entry.summary, "npm test");
+		assert.equal(entry.command, "cd /w && npm test");
+		const html = renderToStaticMarkup(<ToolRow entry={entry} />);
+		assert.match(html, /data-testid="tool-row-command"[^>]*>cd \/w &amp;&amp; npm test</);
+	});
+});
+
+describe("prose wrapping", () => {
+	it("prose blocks and the assistant column can shrink and wrap; tool rows never leak nowrap into the layout", () => {
+		for (const cls of [PROSE_BLOCK_CLASS, ASSISTANT_CONTENT_CLASS]) assert.match(cls, /\bmin-w-0\b/);
+		assert.match(PROSE_BLOCK_CLASS, /break-words/);
+		assert.doesNotMatch(`${PROSE_BLOCK_CLASS} ${ASSISTANT_CONTENT_CLASS}`, /nowrap|truncate/);
+		const row = renderToStaticMarkup(<ToolRow entry={{ callId: "c", name: "bash", summary: "x", status: "done" }} />);
+		const root = row.match(/<details[^>]*>/)![0];
+		assert.match(root, /min-w-0/);
+		assert.doesNotMatch(root, /nowrap|truncate/);
+	});
+});
+
+describe("thread-chat wiring", () => {
+	it("applies the prose layout contract to the assistant column and text blocks", async () => {
+		const { readFileSync } = await import("node:fs");
+		const src = readFileSync(new URL("../components/thread-chat.tsx", import.meta.url), "utf8");
+		assert.match(src, /<MessageContent className=\{ASSISTANT_CONTENT_CLASS\}>/);
+		assert.match(src, /className=\{PROSE_BLOCK_CLASS\}/);
 	});
 });

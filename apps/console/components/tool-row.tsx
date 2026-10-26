@@ -5,7 +5,8 @@ import { ChevronRight } from "lucide-react";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import type { ComponentType } from "react";
-import type { ArtifactPartProps, ToolEntry } from "@/src/core";
+import type { ReactNode } from "react";
+import { summarizeGroup, type ArtifactPartProps, type ToolEntry, type ToolStatus } from "@/src/core";
 
 /**
  * One tool call as a compact row: name, one-line argument summary, status.
@@ -43,7 +44,7 @@ export function ToolRow({
 			data-testid="tool-row"
 			data-tool={entry.name}
 			data-status={entry.status}
-			className="group my-1 w-full max-w-2xl select-none"
+			className="group my-1 w-full min-w-0 max-w-2xl select-none"
 		>
 			<summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
 				{entry.status === "running" && <BrailleSpinner label={`${entry.name} — running`} />}
@@ -67,6 +68,14 @@ export function ToolRow({
 					<div className="italic text-muted-foreground">{entry.status === "running" ? "running…" : "no result recorded"}</div>
 				) : (
 					<>
+						{entry.command && (
+							<pre
+								data-testid="tool-row-command"
+								className="select-text mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed"
+							>
+								{entry.command}
+							</pre>
+						)}
 						<div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">{failed ? "Error" : "Output"}</div>
 						<pre
 							data-testid="tool-row-output"
@@ -82,6 +91,32 @@ export function ToolRow({
 					</>
 				)}
 			</div>
+		</details>
+	);
+}
+
+/**
+ * A run of consecutive calls as ONE collapsed line: per-name counts, the latest
+ * (or running) call's summary, the overall status. Expands to the individual rows.
+ */
+export function ToolGroup({ entries, children }: { entries: readonly ToolEntry[]; children: ReactNode }) {
+	const { counts, latest, status } = summarizeGroup(entries);
+	const failed = status === "error";
+	const label: ToolStatus = status;
+	return (
+		<details data-testid="tool-group" data-status={status} className="group my-1 w-full min-w-0 max-w-2xl select-none">
+			<summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+				{status === "running" && <BrailleSpinner label="tools — running" />}
+				<span data-testid="tool-group-counts" className={`shrink-0 font-medium uppercase tracking-wide ${failed ? "text-red-500" : ""}`}>
+					{counts.map((c) => (c.count > 1 ? `${c.name} ×${c.count}` : c.name)).join(" · ")}
+				</span>
+				{latest.summary && <span className="min-w-0 truncate font-mono text-[11px]">{latest.summary}</span>}
+				<span data-testid="tool-group-status" className={`ml-auto shrink-0 ${failed ? "text-red-500" : "opacity-60"}`}>
+					{STATUS_LABEL[label]}
+				</span>
+				<ChevronRight className="size-3 shrink-0 opacity-50 transition-transform group-open:rotate-90" />
+			</summary>
+			<div className="mt-1 min-w-0 pl-3">{children}</div>
 		</details>
 	);
 }

@@ -6,7 +6,7 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { ToolRow } from "@/components/tool-row";
+import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { artifactRenderers } from "@/components/artifacts";
 import { Separator } from "@/components/ui/separator";
 import { Composer } from "@/components/composer";
@@ -14,7 +14,7 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { renderItems, type ArtifactPartProps, type LhMessage } from "@/src/core";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -70,6 +70,11 @@ function ThreadReasoning({
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
+function ToolItemRow({ item }: { item: ToolItem }) {
+	const Renderer = artifactRenderers[item.entry.name];
+	return <ToolRow entry={item.entry} artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined} />;
+}
+
 export function ThreadChat({
 	wolf,
 	slug,
@@ -144,12 +149,12 @@ export function ThreadChat({
 											</div>
 										) : (
 											<Message from="assistant" className="max-w-full">
-												<MessageContent className="w-full">
+												<MessageContent className={ASSISTANT_CONTENT_CLASS}>
 													{renderItems(m.parts, status === "streaming" && mi === messages.length - 1).map((item) => {
 														switch (item.kind) {
 															case "text":
 																return (
-																	<div key={item.part.id || item.index}>
+																	<div key={item.part.id || item.index} className={PROSE_BLOCK_CLASS}>
 																		<MessageResponse>{item.part.text}</MessageResponse>
 																	</div>
 																);
@@ -166,16 +171,15 @@ export function ThreadChat({
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":
-															{
-																const Renderer = artifactRenderers[item.entry.name];
+																return <ToolItemRow key={item.key} item={item} />;
+															case "group":
 																return (
-																	<ToolRow
-																		key={item.key}
-																		entry={item.entry}
-																		artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined}
-																	/>
+																	<ToolGroup key={item.key} entries={item.entries}>
+																		{item.items.map((t) => (
+																			<ToolItemRow key={t.key} item={t} />
+																		))}
+																	</ToolGroup>
 																);
-															}
 														}
 													})}
 												</MessageContent>

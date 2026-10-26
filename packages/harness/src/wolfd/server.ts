@@ -241,7 +241,7 @@ export class WolfServer {
    */
   private correctBuffer(c: NonNullable<ResyncDraft["correction"]>): void {
     const fix = (type: "text-delta" | "thinking-delta", stale: string, final: string) => {
-      if (stale === "" || final === "" || final === stale) return;
+      if (final === stale) return;
       const hit: ThreadEvent[] = [];
       let n = 0;
       for (let i = this.buffer.length - 1; i >= 0 && n < stale.length; i--) {
@@ -251,9 +251,12 @@ export class WolfServer {
           n += e.text.length;
         }
       }
+      // Earliest stale delta carries the authoritative text (empty when the side shrank to nothing), the rest are blanked.
       hit.forEach((e, i) => {
         (e as { text: string }).text = i === hit.length - 1 ? final : "";
       });
+      // Nothing stale was buffered for this side: the authoritative text has to be emitted as a new delta.
+      if (hit.length === 0 && final !== "") this.emit({ type, turnId: c.turnId, text: final });
     };
     fix("text-delta", c.staleText, c.text);
     fix("thinking-delta", c.staleThinking, c.thinking);

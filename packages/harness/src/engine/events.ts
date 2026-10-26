@@ -124,13 +124,12 @@ function resultText(message: unknown): string {
     .join("");
 }
 
-const debugStream = () => process.env.WOLFPACK_DEBUG_STREAM === "1";
-
 const turnIdFor = (input: number | undefined) => `turn-${input ?? "unknown"}`;
 
 /** Seed from an attach snapshot so a mid-run joiner's deltas map to the right turn. */
 export function createEventMapper(seed?: EngineSnapshot): EventMapper {
   const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map() };
+  const debugStream = process.env.WOLFPACK_DEBUG_STREAM === "1";
 
   /** Re-seed the block map from a (partial) message's content. */
   const seedBlocks = (message: unknown) => {
@@ -159,26 +158,38 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     else if (b?.type === "thinking") s.blocks.set(`thinking:${index}`, { kind: "thinking", index, text: b.thinking ?? "" });
   };
 
-  /** Emit the difference between what has streamed and the block map: a suffix delta, or a correction. */
+  /**
+   * Bring one side (text or thinking) of the stream up to `next`. An extension is emitted as a suffix delta; anything
+   * else is a divergence the caller reports as a correction. Returns what the side's stale value is for that correction
+   * (the value now streamed when it extended, the old one when it diverged).
+   */
+  const advance = (kind: "text" | "thinking", next: string, out: MappedEvent[]): { diverged: boolean; stale: string } => {
+    const streamed = s[kind];
+    if (next.startsWith(streamed)) {
+      if (next.length > streamed.length) out.push({ type: kind === "text" ? "text-delta" : "thinking-delta", turnId: s.turnId!, text: next.slice(streamed.length) });
+      s[kind] = next;
+      return { diverged: false, stale: next };
+    }
+    s[kind] = next;
+    return { diverged: true, stale: streamed };
+  };
+
+  /** Emit the difference between what has streamed and the block map: a suffix delta per side that still extends, one correction for a side that diverged. */
   const syncStreamed = (out: MappedEvent[]) => {
     if (!s.turnId) return;
     const text = aggregate("text");
     const thinking = aggregate("thinking");
-    const textOk = text.startsWith(s.text);
-    const thinkingOk = thinking.startsWith(s.thinking);
-    if (textOk && thinkingOk) {
-      if (thinking.length > s.thinking.length) out.push({ type: "thinking-delta", turnId: s.turnId, text: thinking.slice(s.thinking.length) });
-      if (text.length > s.text.length) out.push({ type: "text-delta", turnId: s.turnId, text: text.slice(s.text.length) });
-    } else {
+    const t = advance("text", text, out);
+    const k = advance("thinking", thinking, out);
+    if (t.diverged || k.diverged) {
       out.push({
         type: "resync",
-        correction: { turnId: s.turnId, text, thinking, staleText: s.text, staleThinking: s.thinking },
+        correction: { turnId: s.turnId, text, thinking, staleText: t.stale, staleThinking: k.stale },
       });
     }
-    s.text = text;
-    s.thinking = thinking;
   };
 
+  // The block map is seeded alongside the flat text/thinking totals so a mid-run joiner's later block changes diff correctly.
   const seedFrom = (snap: EngineSnapshot) => {
     s.turnId = snap.run ? turnIdFor(Number(snap.run.inputs[0])) : undefined;
     s.ended = undefined;
@@ -198,25 +209,21 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     s.hint = "complete";
   };
 
-  /** Emit whatever part of `final` the stream has not shown yet. */
+  /** Emit whatever part of `final` the stream has not shown yet. An empty final side is never a divergence. */
   const reconcile = (out: MappedEvent[], final: { text: string; thinking: string }) => {
     if (!s.turnId) return;
-    if (final.thinking.length > s.thinking.length && final.thinking.startsWith(s.thinking)) {
-      out.push({ type: "thinking-delta", turnId: s.turnId, text: final.thinking.slice(s.thinking.length) });
-    }
-    if (final.text.length > s.text.length && final.text.startsWith(s.text)) {
-      out.push({ type: "text-delta", turnId: s.turnId, text: final.text.slice(s.text.length) });
-    }
-    const diverged = (streamed: string, fin: string) => fin !== "" && fin !== streamed && !fin.startsWith(streamed);
-    if (diverged(s.text, final.text) || diverged(s.thinking, final.thinking)) {
+    const side = (kind: "text" | "thinking") => (final[kind] === "" ? { diverged: false, stale: s[kind] } : advance(kind, final[kind], out));
+    const k = side("thinking");
+    const t = side("text");
+    if (t.diverged || k.diverged) {
       out.push({
         type: "resync",
         correction: {
           turnId: s.turnId,
-          text: final.text,
-          thinking: final.thinking,
-          staleText: s.text,
-          staleThinking: s.thinking,
+          text: t.diverged ? final.text : s.text,
+          thinking: k.diverged ? final.thinking : s.thinking,
+          staleText: t.stale,
+          staleThinking: k.stale,
         },
       });
     }
@@ -263,7 +270,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
 
       case "message_update": {
         if (!s.turnId) return;
-        if (debugStream()) console.debug(`[wolfd stream] message_update changes=[${e.changes.map((c) => c.type).join(",")}]`);
+        if (debugStream) console.debug(`[wolfd stream] message_update changes=[${e.changes.map((c) => c.type).join(",")}]`);
         for (const c of e.changes) {
           switch (c.type) {
             case "text_start":

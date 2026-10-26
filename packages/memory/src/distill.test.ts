@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LlmInfraError, type Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { promoteTopics, distillTopic, existingFor, readDistillRecord, type PromoteTopic } from "./distill.js";
+import { promoteTopics, distillTopic, existingFor, readDistillRecord, DistillOutputSchema, type PromoteTopic } from "./distill.js";
 import { writeDenTopic, readDenTopics } from "./den.js";
 import { denTopicStates, isAbsorbed } from "./den-reconcile.js";
 
@@ -26,6 +26,14 @@ const engineOf = (...answers: unknown[]) => {
 };
 const inbox = () => (existsSync(join(roots.opsRoot, "inbox", WOLF)) ? readdirSync(join(roots.opsRoot, "inbox", WOLF)) : []);
 const opts = (engine: Engine, extra = {}) => ({ engine, roots, wolf: WOLF, defaultDomain: "wolfpack", today: "2026-10-22", ...extra });
+
+describe("DistillOutputSchema", () => {
+  it("treats a null target as absent (models say 'no existing entry' as null)", () => {
+    const base = { slug: "x", title: "Title x", summary: "s", body: "# Title x\n\nb" };
+    const out = DistillOutputSchema.parse({ contributions: [{ ...base, target: null }, { ...base, target: "kb-a" }, base] });
+    expect(out.contributions.map((c) => c.target)).toEqual([undefined, "kb-a", undefined]);
+  });
+});
 
 describe("distillTopic", () => {
   it("retries once with the findings, then strips; clean second answer is emitted", async () => {

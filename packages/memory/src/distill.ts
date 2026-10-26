@@ -52,8 +52,9 @@ export const DistillOutputSchema = z.object({
         initiative: z.boolean().optional(),
         /** Standing-feature graduation: the one contribution whose summary describes the feature itself. */
         feature: z.boolean().optional(),
-        /** An id from EXISTING ENTRIES: the entry this contribution is about. */
-        target: z.string().optional(),
+        /** An id from EXISTING ENTRIES: the entry this contribution is about. Models
+         *  often say "no existing entry" as null, so null means the same as absent. */
+        target: z.string().nullish().transform((t) => t ?? undefined),
       })
     )
     .min(1)

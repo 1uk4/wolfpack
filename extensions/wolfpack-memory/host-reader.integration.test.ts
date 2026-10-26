@@ -16,6 +16,21 @@ import { attachConversationReader, conversationReaderFor } from "../../packages/
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 
+/**
+ * The pool is written with appendFile (open+create, THEN write), so the file can exist while still empty:
+ * existence is not completion. Wait for the content the assertion needs: `lines` complete (newline-terminated) rows.
+ */
+async function waitForPoolLines(pool: string, lines: number): Promise<string> {
+  const deadline = Date.now() + 12_000;
+  let text = "";
+  while (Date.now() < deadline) {
+    text = existsSync(pool) ? readFileSync(pool, "utf8") : "";
+    if (text.split("\n").length - 1 >= lines) return text;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`pool never reached ${lines} line(s); last content: ${JSON.stringify(text)}`);
+}
+
 let dir: string;
 afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
 
@@ -38,17 +53,14 @@ it("a Harness opened the createWolfHarness way (reader attached) observes a turn
   harness.resume();
   await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
-  // The watermark file is first written as a SEED, before the observer has run: wait for the pool, which is written
-  // before the final watermark, not for the watermark.
-  const pool = join(dir, ".memory/pool/observations.jsonl");
-  for (let i = 0; i < 330 && !existsSync(pool); i++) await new Promise((r) => setTimeout(r, 30));
-  expect(existsSync(pool)).toBe(true);
+  // The watermark file is first written as a SEED, before the observer has run: wait for the pool's content.
+  const poolText = await waitForPoolLines(join(dir, ".memory/pool/observations.jsonl"), 1);
   expect(prompts.join("\n")).toContain("HOSTUSER");
-  expect(readFileSync(join(dir, ".memory/pool/observations.jsonl"), "utf8")).toContain("Cache lookups");
+  expect(poolText).toContain("Cache lookups");
   detach();
   expect(conversationReaderFor(dir)).toBeUndefined();
   await harness.close(ctx);
-});
+}, 20_000);
 
 it("(f) the createWolfHarness path tags per observation with domain context, and stamps untagged ones with defaultDomain", async () => {
   dir = mkdtempSync(join(tmpdir(), "host-domain-"));
@@ -79,12 +91,10 @@ it("(f) the createWolfHarness path tags per observation with domain context, and
   harness.resume();
   await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
-  const pool = join(dir, ".memory/pool/observations.jsonl");
-  for (let i = 0; i < 330 && !existsSync(pool); i++) await new Promise((r) => setTimeout(r, 30));
-  const obs = readFileSync(join(dir, ".memory/pool/observations.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const obs = (await waitForPoolLines(join(dir, ".memory/pool/observations.jsonl"), 2)).trim().split("\n").map((l) => JSON.parse(l));
   expect(systems[0]).toContain("Domains this wolf subscribes to:");
   expect(systems[0]).toContain("billing: Invoices and payments");
   expect(obs.map((o) => [o.content, o.domain])).toEqual([["Tagged one", "billing"], ["Untagged one", "devtools"]]);
   detach();
   await harness.close(ctx);
-});
+}, 20_000);

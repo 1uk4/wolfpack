@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertSandboxed, realPathLoose, requireSnapshotRoot, resolveSandbox, sandboxEnv, SandboxError } from "./resolve.js";
-import { DEN_STATE_EXCLUDES, isRemoteSpec, RSYNC_RULES, rsyncArgv, sshCommand, takeSnapshot, type SnapshotSource } from "./snapshot.js";
+import { DEN_BUNDLE_EXCLUDES, DEN_STATE_EXCLUDES, isRemoteSpec, RSYNC_RULES, rsyncArgv, sshCommand, takeSnapshot, type SnapshotSource } from "./snapshot.js";
 import { loadWolfConfig, normalizeSandbox } from "../wolfconfig/load.js";
 
 const tmps: string[] = [];
@@ -42,6 +42,7 @@ function liveFixture(): { root: string; source: SnapshotSource } {
   put(join(root, "den/archive/old.md"), "archived\n");
   put(join(root, "den/JOURNEY.md"), "journey\n");
   put(join(root, "den/kb/entry.md"), "kb\n");
+  put(join(root, "den/extensions/wolfpack-memory/index.js"), "// stale deployed bundle\n");
   return { root, source: { workDir: join(root, "work"), workBaseDir: join(root, "base"), opsDir: join(root, "ops"), denDir: join(root, "den") } };
 }
 
@@ -92,7 +93,17 @@ describe("takeSnapshot (local sources)", () => {
     const m = takeSnapshot({ source, devRoot: dev, includeSessions: true });
     expect(existsSync(join(dev, "den/factory/conversations/1/binding.json"))).toBe(true);
     expect(existsSync(join(dev, "den/.memory/pool/observations.jsonl"))).toBe(true);
-    expect(m.excluded).toEqual([]);
+    expect(m.excluded).toEqual(DEN_BUNDLE_EXCLUDES);
+  });
+
+  it("never copies the host's deployed extension bundles (they can predate the checkout), with or without sessions", () => {
+    const { source } = liveFixture();
+    for (const includeSessions of [false, true]) {
+      const dev = join(tmp("dev"), "snap");
+      const m = takeSnapshot({ source, devRoot: dev, includeSessions });
+      expect(existsSync(join(dev, "den/extensions")), `includeSessions=${includeSessions}`).toBe(false);
+      expect(m.excluded).toContain("extensions");
+    }
   });
 
   it("includes session stores only on request", () => {
@@ -230,7 +241,7 @@ describe("remote rsync (argv + filters)", () => {
 
   it("den state rules are anchored excludes and strip the same paths as the local copy", () => {
     expect(RSYNC_RULES.denState).toEqual([
-      "--exclude=/factory/conversations", "--exclude=/tasks/active.json*", "--exclude=/.memory/pool", "--exclude=/.memory/watermarks",
+      "--exclude=/factory/conversations", "--exclude=/tasks/active.json*", "--exclude=/.memory/pool", "--exclude=/.memory/watermarks", "--exclude=/extensions",
     ]);
     const { source } = liveFixture();
     put(join(source.denDir, "nested/factory/conversations/x.md"), "deeper, not the root path\n");
@@ -238,7 +249,7 @@ describe("remote rsync (argv + filters)", () => {
     const rules = [...RSYNC_RULES.denState, "--exclude=session.sqlite*"];
     const r = spawnSync("rsync", rsyncArgv(source.denDir, dest, rules, undefined, { local: true }), { encoding: "utf8" });
     expect(r.status).toBe(0);
-    for (const gone of ["factory/conversations", "tasks/active.json", "tasks/active.json.migrated", ".memory/pool", ".memory/watermarks", "session.sqlite"]) {
+    for (const gone of ["factory/conversations", "tasks/active.json", "tasks/active.json.migrated", ".memory/pool", ".memory/watermarks", "session.sqlite", "extensions"]) {
       expect(existsSync(join(dest, gone)), gone).toBe(false);
     }
     for (const kept of ["tasks/t-keep.md", ".memory/sessions/hal/topic.md", "memory/topics/k.md", "JOURNEY.md", "nested/factory/conversations/x.md"]) {

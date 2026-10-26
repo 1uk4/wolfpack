@@ -377,6 +377,89 @@ export interface BuiltHarnessBundle {
 }
 
 /**
+ * Build one pi-durable extension into `<extDir>/<dir>/index.js` (the layout `wolfpack sync` ships and wolfd/harness
+ * load from `<den>/extensions/`). A repo extension is bundled from its package.json `pi-durable` entrypoint; any other
+ * key is an owner extension looked up in `denExtensionsDir`. Returns false (skipped) when it can't be built.
+ */
+export async function buildDurableExtension(key: string, extDir: string, denExtensionsDir?: string): Promise<boolean> {
+  const ext = getExtension(key);
+  if (!ext) {
+    // Not a repo extension: an owner extension from the wolf's den?
+    const denSrc = denExtensionsDir ? findDenExtension(denExtensionsDir, key) : undefined;
+    if (!denSrc) return false;
+    try {
+      await buildDenExtension(denSrc, path.join(extDir, key, "index.js"));
+      return true;
+    } catch (err) {
+      console.warn(`Den extension ${key}: build failed: ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
+  const srcDir = path.join(extensionsDir(), ext.dir);
+  if (!fs.existsSync(srcDir)) return false;
+
+  const pkgPath = path.join(srcDir, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+    "pi-durable"?: { extensions?: string[] };
+  };
+  const durableEntries = pkg["pi-durable"]?.extensions;
+  if (!durableEntries || durableEntries.length === 0) return false;
+
+  const entryFile = path.resolve(srcDir, durableEntries[0]);
+  if (!fs.existsSync(entryFile)) {
+    console.warn(`Extension ${key}: pi-durable entrypoint not found: ${durableEntries[0]}`);
+    return false;
+  }
+
+  const extOutDir = path.join(extDir, ext.dir);
+  fs.mkdirSync(extOutDir, { recursive: true });
+  await esbuild.build({
+    entryPoints: [entryFile],
+    outfile: path.join(extOutDir, "index.js"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node20",
+    external: [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-tui",
+      "grammy",
+    ],
+    logLevel: "silent",
+  });
+  return true;
+}
+
+/**
+ * Install CURRENT extension bundles (built from this checkout exactly as `wolfpack sync` builds them) into a dev
+ * root's den: `<devRoot>/den/extensions/<dir>/index.js`. Replaces the named extensions' dirs; others are untouched.
+ */
+export async function installDevExtensions(
+  devRoot: string,
+  keys: string[],
+  denExtensionsDir?: string,
+): Promise<{ included: string[]; missing: string[] }> {
+  const target = path.join(path.resolve(devRoot), "den", "extensions");
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-devext-"));
+  const included: string[] = [];
+  const missing: string[] = [];
+  try {
+    for (const key of keys) {
+      if (await buildDurableExtension(key, staging, denExtensionsDir)) included.push(key);
+      else missing.push(key);
+    }
+    for (const dir of fs.readdirSync(staging)) {
+      fs.rmSync(path.join(target, dir), { recursive: true, force: true });
+      fs.mkdirSync(target, { recursive: true });
+      fs.cpSync(path.join(staging, dir), path.join(target, dir), { recursive: true });
+    }
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+  return { included, missing };
+}
+
+/**
  * Bundle @wolfpack/harness + extensions for pi-durable runtime.
  *
  * Uses esbuild to produce:
@@ -415,60 +498,10 @@ export async function buildHarnessBundle(
   // 2. Bundle extensions separately
   const extDir = path.join(outDir, "extensions");
   fs.mkdirSync(extDir, { recursive: true });
-  const base = extensionsDir();
 
   for (const key of cfg.extensions) {
-    const ext = getExtension(key);
-    if (!ext) {
-      // Not a repo extension: an owner extension from the wolf's den?
-      const denSrc = cfg.denExtensionsDir ? findDenExtension(cfg.denExtensionsDir, key) : undefined;
-      if (!denSrc) { missing.push(key); continue; }
-      try {
-        await buildDenExtension(denSrc, path.join(extDir, key, "index.js"));
-        included.push(key);
-      } catch (err) {
-        console.warn(`Den extension ${key}: build failed: ${err instanceof Error ? err.message : err}`);
-        missing.push(key);
-      }
-      continue;
-    }
-    const srcDir = path.join(base, ext.dir);
-    if (!fs.existsSync(srcDir)) { missing.push(key); continue; }
-
-    const pkgPath = path.join(srcDir, "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
-      "pi-durable"?: { extensions?: string[] };
-    };
-    const durableEntries = pkg["pi-durable"]?.extensions;
-    if (!durableEntries || durableEntries.length === 0) {
-      missing.push(key);
-      continue;
-    }
-
-    const entryFile = path.resolve(srcDir, durableEntries[0]);
-    if (!fs.existsSync(entryFile)) {
-      console.warn(`Extension ${key}: pi-durable entrypoint not found: ${durableEntries[0]}`);
-      missing.push(key);
-      continue;
-    }
-
-    const extOutDir = path.join(extDir, ext.dir);
-    fs.mkdirSync(extOutDir, { recursive: true });
-    await esbuild.build({
-      entryPoints: [entryFile],
-      outfile: path.join(extOutDir, "index.js"),
-      bundle: true,
-      platform: "node",
-      format: "cjs",
-      target: "node20",
-      external: [
-        "@earendil-works/pi-coding-agent",
-        "@earendil-works/pi-tui",
-        "grammy",
-      ],
-      logLevel: "silent",
-    });
-    included.push(key);
+    if (await buildDurableExtension(key, extDir, cfg.denExtensionsDir)) included.push(key);
+    else missing.push(key);
   }
 
   // 3. Generate wolf.yaml

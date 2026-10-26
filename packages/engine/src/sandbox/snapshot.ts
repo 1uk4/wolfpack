@@ -65,6 +65,13 @@ const SESSION_EXCLUDES = ["session.sqlite*", "session-backups", "backups"];
  */
 export const DEN_STATE_EXCLUDES = ["factory/conversations", "tasks/active.json*", ".memory/pool", ".memory/watermarks"];
 
+/**
+ * Never copied, with or without sessions: the host's deployed extension bundles. They are built for the host's checkout
+ * and can predate this one (a stale memory bundle leaves the feature inert); the CLI installs current ones instead
+ * (`wolfpack sandbox install-extensions`).
+ */
+export const DEN_BUNDLE_EXCLUDES = ["extensions"];
+
 function walkFiles(dir: string): string[] {
   const out: string[] = [];
   if (!existsSync(dir)) return out;
@@ -121,7 +128,7 @@ export const RSYNC_RULES = {
   ledger: ["--include=/ledger/", "--include=/ledger/work-events.jsonl", "--exclude=*"],
   workMd: ["--include=/domains/", "--include=/domains/*/", "--include=/domains/*/work/", "--include=/domains/*/work/*.md", "--exclude=*"],
   /** Anchored to the den root, so a same-named path deeper in the tree is untouched. */
-  denState: DEN_STATE_EXCLUDES.map((e) => `--exclude=/${e}`),
+  denState: [...DEN_STATE_EXCLUDES, ...DEN_BUNDLE_EXCLUDES].map((e) => `--exclude=/${e}`),
   ops: ["--include=/inbox/", "--include=/inbox/**", "--include=/receipts/", "--include=/receipts/**", "--include=/parked/", "--include=/parked/**", "--exclude=*"],
 } as const;
 
@@ -178,7 +185,7 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   mkdirSync(devRoot, { recursive: true });
 
   const sessionExcludes = opts.includeSessions ? [] : SESSION_EXCLUDES;
-  const stateExcludes = opts.includeSessions ? [] : DEN_STATE_EXCLUDES;
+  const stateExcludes = [...(opts.includeSessions ? [] : DEN_STATE_EXCLUDES), ...DEN_BUNDLE_EXCLUDES];
   const ledgerRel = (rel: string, _isDir?: boolean) => rel === "ledger" || rel === join("ledger", "work-events.jsonl");
   const isWorkMd = (rel: string, isDir: boolean) => {
     const parts = rel.split(sep);

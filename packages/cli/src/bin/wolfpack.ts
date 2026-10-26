@@ -100,7 +100,8 @@ ${c.bold("DOMAIN (advanced)")}
   domain wolves <name>            Manage a domain's subscribers (picker)
 
 ${c.bold("SANDBOX (advanced)")}
-  sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes) [--force] [--include-sessions]
+  sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes) [--force] [--include-sessions] [--no-install-extensions]
+  sandbox install-extensions <dev-root> [--extensions k1,k2]   (rebuild current bundles into the dev den)
                                   Copy a host's work ledger, KB lanes and the wolf's den into a dev root;
                                   run the wolf against it with \`sandbox: true\` in wolf.yaml
 

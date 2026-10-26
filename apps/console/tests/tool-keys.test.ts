@@ -89,16 +89,33 @@ describe("tool row keys are unique", () => {
 		assertUnique(make(threadMessagesToNative(history)));
 	});
 
-	it("history whose server data repeats a callId (across two messages and within one)", () => {
-		const dup: ThreadMessage[] = [
-			history[0]!,
-			{ ...history[1]!, tools: [...history[1]!.tools!, history[1]!.tools![0]!] },
-			{ ...history[1]!, id: "entry-9" },
-		];
-		const model = make(threadMessagesToNative(dup));
+	it("a reused id (call_0) in two separate turns keeps both calls, each with its own result", () => {
+		const turn = (id: string, result: string): ThreadMessage => ({
+			id,
+			role: "assistant",
+			text: "",
+			at: base.at,
+			tools: [{ callId: "call_0", name: "bash", args: { command: "git status" }, result, isError: false, textOffset: 0 }],
+		});
+		const model = make(
+			threadMessagesToNative([
+				{ id: "u1", role: "user", text: "one", at: base.at },
+				turn("entry-2", "first"),
+				{ id: "u2", role: "user", text: "two", at: base.at },
+				turn("entry-5", "second"),
+			]),
+		);
 		assertUnique(model);
 		const calls = model.getState().messages.flatMap((m) => m.parts).filter((p) => p.type.startsWith("tool-"));
-		assert.deepEqual(calls.map((p) => p.toolCallId), ["a", "b", "c", "d"]);
+		assert.deepEqual(calls.map((p) => p.output), ["first", "second"]);
+	});
+
+	it("a reused id repeated across rounds of ONE turn (same record) keeps every call, with unique keys", () => {
+		const call = (r: string) => ({ callId: "call_0", name: "bash", args: { command: "git status" }, result: r, isError: false, textOffset: 0 });
+		const model = make(threadMessagesToNative([{ id: "u", role: "user", text: "x", at: base.at }, { id: "entry-2", role: "assistant", text: "", at: base.at, tools: [call("r1"), call("r2")] }]));
+		assertUnique(model);
+		const calls = model.getState().messages.flatMap((m) => m.parts).filter((p) => p.type.startsWith("tool-"));
+		assert.equal(calls.length, 2);
 	});
 
 	it("live replay over a record that already holds the same calls (settle refetch / reattach)", () => {
@@ -107,6 +124,13 @@ describe("tool row keys are unique", () => {
 		assertUnique(model);
 		const calls = model.getState().messages.flatMap((m) => m.parts).filter((p) => p.type.startsWith("tool-"));
 		assert.deepEqual(calls.map((p) => p.toolCallId), ["a", "b", "c", "d"]);
+	});
+
+	it("a replay holding only folded calls adds no empty reasoning placeholder", () => {
+		const model = make(threadMessagesToNative(history));
+		replay(model);
+		const parts = model.getState().messages.flatMap((m) => m.parts);
+		assert.equal(parts.filter((p) => p.type === "reasoning").length, 0);
 	});
 });
 

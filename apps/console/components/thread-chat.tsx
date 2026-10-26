@@ -14,7 +14,7 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -60,6 +60,18 @@ function ThreadReasoning({
 	);
 }
 
+function ToolItemRow({ item, open, onOpenChange }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void }) {
+	const Renderer = artifactRenderers[item.entry.name];
+	return (
+		<ToolRow
+			entry={item.entry}
+			open={open}
+			onOpenChange={onOpenChange}
+			artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined}
+		/>
+	);
+}
+
 /**
  * The chat view for one ConsoleClient thread: the session model + projected
  * view (session-core / core view) driven by the thread transport — history
@@ -70,11 +82,6 @@ function ThreadReasoning({
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
-function ToolItemRow({ item }: { item: ToolItem }) {
-	const Renderer = artifactRenderers[item.entry.name];
-	return <ToolRow entry={item.entry} artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined} />;
-}
-
 export function ThreadChat({
 	wolf,
 	slug,
@@ -100,6 +107,12 @@ export function ThreadChat({
 	});
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
+	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
+	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
+	const setRowOpen = useCallback(
+		(key: string) => (open: boolean) => setOpenRows((prev) => (prev[key] === open ? prev : { ...prev, [key]: open })),
+		[],
+	);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
@@ -171,12 +184,17 @@ export function ThreadChat({
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":
-																return <ToolItemRow key={item.key} item={item} />;
+																return <ToolItemRow key={item.key} item={item} open={runOpen(openRows, item.key)} onOpenChange={setRowOpen(item.key)} />;
 															case "group":
 																return (
-																	<ToolGroup key={item.key} entries={item.entries}>
+																	<ToolGroup
+																		key={item.key}
+																		entries={item.entries}
+																		open={runOpen(openRows, item.key, item.items[0]!.key)}
+																		onOpenChange={setRowOpen(item.key)}
+																	>
 																		{item.items.map((t) => (
-																			<ToolItemRow key={t.key} item={t} />
+																			<ToolItemRow key={t.key} item={t} open={runOpen(openRows, t.key)} onOpenChange={setRowOpen(t.key)} />
 																		))}
 																	</ToolGroup>
 																);

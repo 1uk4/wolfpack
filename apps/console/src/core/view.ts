@@ -129,21 +129,32 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		return undefined;
 	};
 
-	// A call that reaches the projection twice (the same record read twice, or a
-	// live replay on top of a record that already holds it) renders ONCE. Only
-	// an identical repeat (same id, name, arguments) is folded: legacy records
-	// reuse ids with different arguments and keep each call.
-	const seenCalls = new Map<string, { part: LhViewPart; signature: string }[]>();
-	const foldRepeat = (block: { id: string; name: string; arguments?: unknown }, part: LhViewPart): boolean => {
+	// A REPLAY folds, a reuse does not. A record that already holds a turn's
+	// calls can meet a live replay of the same round (settle refetch /
+	// reattach): that repeat is one call. Providers that reuse ids across
+	// rounds (DeepSeek's per-response `call_0`) repeat an id legitimately, so
+	// a repeat folds only when it (a) sits in the SAME turn group (a user
+	// message separates turns), (b) is identical (name + arguments), (c) comes
+	// from the other side of the seam (record vs live tail: local `c_` ids),
+	// and (d) the earlier call has not already been matched.
+	type Seen = { group: number; signature: string; local: boolean; matched: boolean; part: LhViewPart };
+	const seenCalls = new Map<string, Seen[]>();
+	const foldRepeat = (
+		block: { id: string; name: string; arguments?: unknown },
+		part: LhViewPart,
+		group: number,
+		local: boolean,
+	): boolean => {
 		const signature = `${block.name}\u0000${JSON.stringify(block.arguments ?? null)}`;
 		const seen = seenCalls.get(block.id) ?? [];
-		const prior = seen.find((s) => s.signature === signature);
+		const prior = seen.find((x) => x.group === group && x.signature === signature && x.local !== local && !x.matched);
 		if (prior) {
-			// A repeat that is streaming right now outranks a settled-looking pending copy.
+			prior.matched = true;
+			// A replayed call that is streaming right now outranks a settled-looking pending copy.
 			if (part.state === "input-streaming" && prior.part.state === "input-available") prior.part.state = "input-streaming";
 			return true;
 		}
-		seenCalls.set(block.id, [...seen, { part, signature }]);
+		seenCalls.set(block.id, [...seen, { group, signature, local, matched: false, part }]);
 		return false;
 	};
 
@@ -212,6 +223,9 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 			// back to a spinner mid-transcript; live cards belong at the
 			// bottom, and this gate is what puts them there by construction).
 			const streamingMessage = live?.streamingIds.has(m.id) === true;
+			const group = lastAssistant() ? out.length - 1 : out.length; // the turn group's slot in `out`
+			const local = typeof m.id === "string" && m.id.startsWith("c_");
+			let folded = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					rest.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
@@ -219,7 +233,8 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
 					const part = toolPartOf(block, live, streamingMessage);
-					if (!foldRepeat(block, part)) rest.push(part);
+					if (foldRepeat(block, part, group, local)) folded++;
+					else rest.push(part);
 				}
 			}
 			const parts: LhViewPart[] = [...reasoning, ...rest];
@@ -232,16 +247,16 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 				// shimmer as the placeholder it replaces — the handoff is
 				// seamless and the two can never double). Settled empty
 				// messages stay hidden (presentation-only).
-				if (live?.streamingIds.has(m.id)) {
+				if (live?.streamingIds.has(m.id) && folded === 0) {
 					parts.push({ type: "reasoning", id: `${m.id}-r0`, text: "", state: "done" });
 				} else {
 					continue;
 				}
 			}
-			const group = lastAssistant();
-			if (group) {
+			const existing = lastAssistant();
+			if (existing) {
 				// Same group: the step separator renders between the steps.
-				group.parts.push({ type: "step-start" }, ...parts);
+				existing.parts.push({ type: "step-start" }, ...parts);
 			} else {
 				out.push({ id: m.id, role: "assistant", parts: [{ type: "step-start" }, ...parts] });
 			}

@@ -37,7 +37,7 @@ function str(v: unknown): string | undefined {
 
 /** A workspace prefix (`cd <path> && ` / `cd <path>; `) says nothing about the command: drop it from the summary. */
 export function stripCd(command: string): string {
-	const prefix = /^\s*cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/;
+	const prefix = /^\s*cd\s+(?:"(?:[^"\\]|\\.)*"|'[^']*'|(?:[^\s;&|\\]|\\.)+)\s*(?:&&|;)\s*/;
 	let out = command;
 	for (let m = prefix.exec(out); m && out.length > m[0].length; m = prefix.exec(out)) out = out.slice(m[0].length);
 	return out;
@@ -188,5 +188,15 @@ function groupRuns(items: RenderItem[]): RenderItem[] {
  * each block, a long unbroken run sizes the column past the window and the
  * paragraph is clipped at the edge instead of wrapping.
  */
-export const PROSE_BLOCK_CLASS = "min-w-0 max-w-full break-words [overflow-wrap:anywhere]";
+export const PROSE_BLOCK_CLASS =
+	"min-w-0 max-w-full break-words [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_code]:[overflow-wrap:normal]";
 export const ASSISTANT_CONTENT_CLASS = "w-full min-w-0 max-w-full";
+
+/**
+ * Expand state lives in one map keyed by row key, so it survives a lone row
+ * becoming part of a group when the next call arrives: a group with no state
+ * of its own inherits its first row's.
+ */
+export function runOpen(open: Readonly<Record<string, boolean>>, key: string, firstRowKey?: string): boolean {
+	return open[key] ?? (firstRowKey === undefined ? undefined : open[firstRowKey]) ?? false;
+}

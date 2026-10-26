@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import type { ComponentType } from "react";
-import type { ReactNode } from "react";
-import { summarizeGroup, type ArtifactPartProps, type ToolEntry, type ToolStatus } from "@/src/core";
+import { summarizeGroup, type ArtifactPartProps, type ToolEntry } from "@/src/core";
 
 /**
  * One tool call as a compact row: name, one-line argument summary, status.
@@ -30,8 +28,13 @@ const STATUS_LABEL = { running: "running", done: "done", error: "error", pending
 export function ToolRow({
 	entry,
 	artifact,
+	open,
+	onOpenChange,
 }: {
 	entry: ToolEntry;
+	/** Controlled expand state (lifted by the thread so it survives a row becoming part of a group). */
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
 	/** A registered artifact renderer for this tool + its view part: it IS the expanded content (settled calls only). */
 	artifact?: { Renderer: ComponentType<ArtifactPartProps>; part: ArtifactPartProps["part"] };
 }) {
@@ -44,6 +47,8 @@ export function ToolRow({
 			data-testid="tool-row"
 			data-tool={entry.name}
 			data-status={entry.status}
+			open={open}
+			onToggle={onOpenChange && ((e) => onOpenChange(e.currentTarget.open))}
 			className="group my-1 w-full min-w-0 max-w-2xl select-none"
 		>
 			<summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
@@ -62,20 +67,20 @@ export function ToolRow({
 				<ChevronRight className="size-3 shrink-0 opacity-50 transition-transform group-open:rotate-90" />
 			</summary>
 			<div className="mt-2 rounded-xl border bg-card p-3 text-xs">
+				{entry.command && (
+					<pre
+						data-testid="tool-row-command"
+						className="select-text mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed"
+					>
+						{entry.command}
+					</pre>
+				)}
 				{artifact && (entry.status === "done" || entry.status === "error") ? (
 					<artifact.Renderer part={artifact.part} />
 				) : entry.status === "running" || entry.status === "pending" ? (
 					<div className="italic text-muted-foreground">{entry.status === "running" ? "running…" : "no result recorded"}</div>
 				) : (
 					<>
-						{entry.command && (
-							<pre
-								data-testid="tool-row-command"
-								className="select-text mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed"
-							>
-								{entry.command}
-							</pre>
-						)}
 						<div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">{failed ? "Error" : "Output"}</div>
 						<pre
 							data-testid="tool-row-output"
@@ -99,12 +104,27 @@ export function ToolRow({
  * A run of consecutive calls as ONE collapsed line: per-name counts, the latest
  * (or running) call's summary, the overall status. Expands to the individual rows.
  */
-export function ToolGroup({ entries, children }: { entries: readonly ToolEntry[]; children: ReactNode }) {
+export function ToolGroup({
+	entries,
+	children,
+	open,
+	onOpenChange,
+}: {
+	entries: readonly ToolEntry[];
+	children: ReactNode;
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
+}) {
 	const { counts, latest, status } = summarizeGroup(entries);
 	const failed = status === "error";
-	const label: ToolStatus = status;
 	return (
-		<details data-testid="tool-group" data-status={status} className="group my-1 w-full min-w-0 max-w-2xl select-none">
+		<details
+			data-testid="tool-group"
+			data-status={status}
+			open={open}
+			onToggle={onOpenChange && ((e) => onOpenChange(e.currentTarget.open))}
+			className="group my-1 w-full min-w-0 max-w-2xl select-none"
+		>
 			<summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
 				{status === "running" && <BrailleSpinner label="tools — running" />}
 				<span data-testid="tool-group-counts" className={`shrink-0 font-medium uppercase tracking-wide ${failed ? "text-red-500" : ""}`}>
@@ -112,7 +132,7 @@ export function ToolGroup({ entries, children }: { entries: readonly ToolEntry[]
 				</span>
 				{latest.summary && <span className="min-w-0 truncate font-mono text-[11px]">{latest.summary}</span>}
 				<span data-testid="tool-group-status" className={`ml-auto shrink-0 ${failed ? "text-red-500" : "opacity-60"}`}>
-					{STATUS_LABEL[label]}
+					{STATUS_LABEL[status]}
 				</span>
 				<ChevronRight className="size-3 shrink-0 opacity-50 transition-transform group-open:rotate-90" />
 			</summary>

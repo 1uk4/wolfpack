@@ -9,7 +9,7 @@ import type { ThreadEvent, ThreadMessage } from "@wolfpack/client";
 import { SessionModel } from "../components/session-core.ts";
 import { threadTransport } from "../components/thread-transport.ts";
 import { ToolGroup, ToolRow, truncateResult } from "../components/tool-row.tsx";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, stripCd, summarizeArgs, summarizeGroup, threadMessagesToNative, toolEntryOf } from "../src/core/index.ts";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, stripCd, summarizeArgs, summarizeGroup, threadMessagesToNative, toolEntryOf } from "../src/core/index.ts";
 
 const base = { threadId: "t", at: "2026-01-01T00:00:00.000Z", turnId: "a" };
 let n = 0;
@@ -222,6 +222,28 @@ describe("tool groups", () => {
 		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "done", "2")]).latest.summary, "2");
 	});
 
+	it("summary status precedence: running beats error beats done; all-pending stays pending", () => {
+		const e = (status: "running" | "done" | "error" | "pending") => ({ callId: status, name: "bash", summary: status, status });
+		assert.equal(summarizeGroup([e("done"), e("running")]).status, "running");
+		assert.equal(summarizeGroup([e("error"), e("running"), e("done")]).status, "running");
+		assert.equal(summarizeGroup([e("done"), e("error")]).status, "error");
+		assert.equal(summarizeGroup([e("error"), e("done")]).status, "error");
+		assert.equal(summarizeGroup([e("pending"), e("pending")]).status, "pending");
+		assert.equal(summarizeGroup([e("pending"), e("done")]).status, "done");
+	});
+
+	it("expand state survives a lone row growing into a group", () => {
+		const open = { c1: true };
+		assert.equal(runOpen(open, "c1"), true); // the lone row
+		assert.equal(runOpen(open, "group:c1", "c1"), true); // the group inherits
+		assert.equal(runOpen(open, "c1"), true); // and the row inside it stays expanded
+		assert.equal(runOpen({ ...open, "group:c1": false }, "group:c1", "c1"), false); // an explicit collapse wins
+		assert.equal(runOpen({}, "group:c1", "c1"), false);
+		const entry = { callId: "c1", name: "bash", summary: "x", status: "done" as const };
+		assert.match(renderToStaticMarkup(<ToolRow entry={entry} open />), /<details[^>]* open/);
+		assert.doesNotMatch(renderToStaticMarkup(<ToolRow entry={entry} open={false} />), /<details[^>]* open/);
+	});
+
 	it("ToolGroup renders counts, latest summary, status, and the rows", () => {
 		const entries = [
 			{ callId: "a", name: "bash", summary: "one", status: "done" as const },
@@ -251,6 +273,13 @@ describe("tool groups", () => {
 		const keys = (m: SessionModel) =>
 			m.getState().messages.filter((x) => x.role === "assistant").flatMap((x) => renderItems(x.parts, false).map((i) => (i.kind === "group" ? i.key : i.kind)));
 		assert.deepEqual(keys(hist), keys(live));
+		const shape = (m: SessionModel) =>
+			m.getState().messages.filter((x) => x.role === "assistant").flatMap((x) =>
+				renderItems(x.parts, false).map((i) =>
+					i.kind === "group" ? { kind: i.kind, key: i.key, rows: i.items.map((t) => [t.key, t.entry.name, t.entry.status]) } : i.kind === "tool" ? { kind: i.kind, key: i.key, name: i.entry.name } : { kind: i.kind },
+				),
+			);
+		assert.deepEqual(shape(hist), shape(live));
 		assert.ok(keys(live).includes("group:c2"));
 	});
 });
@@ -263,6 +292,10 @@ describe("bash summary", () => {
 		assert.equal(stripCd("cd /a && cd /b && make"), "make");
 		assert.equal(stripCd("ls && cd /a"), "ls && cd /a");
 		assert.equal(stripCd("cd /only"), "cd /only");
+		assert.equal(stripCd("cd /a;cd /b; ls"), "ls"); // nested, `;` without a space
+		assert.equal(stripCd("cd '/a b' && cd \"/c d\" && ls"), "ls"); // quoted paths
+		assert.equal(stripCd('cd "/a \\"b\\"" && ls'), "ls"); // escaped quote inside a quoted path
+		assert.equal(stripCd("cd /a\\ b && ls"), "ls"); // escaped space
 		assert.equal(summarizeArgs("bash", { command: "cd /Users/lukaflores/Code/wolfpack-wt/1uk4-dev && npm test" }), "npm test");
 	});
 
@@ -272,6 +305,10 @@ describe("bash summary", () => {
 		assert.equal(entry.command, "cd /w && npm test");
 		const html = renderToStaticMarkup(<ToolRow entry={entry} />);
 		assert.match(html, /data-testid="tool-row-command"[^>]*>cd \/w &amp;&amp; npm test</);
+		for (const status of ["running", "pending"] as const) {
+			const pending = renderToStaticMarkup(<ToolRow entry={{ ...entry, status, result: undefined }} />);
+			assert.match(pending, /data-testid="tool-row-command"[^>]*>cd \/w &amp;&amp; npm test</);
+		}
 	});
 });
 
@@ -279,6 +316,9 @@ describe("prose wrapping", () => {
 	it("prose blocks and the assistant column can shrink and wrap; tool rows never leak nowrap into the layout", () => {
 		for (const cls of [PROSE_BLOCK_CLASS, ASSISTANT_CONTENT_CLASS]) assert.match(cls, /\bmin-w-0\b/);
 		assert.match(PROSE_BLOCK_CLASS, /break-words/);
+		// anywhere would squash table min-content; pre/table/code keep normal wrapping
+		assert.doesNotMatch(PROSE_BLOCK_CLASS, /anywhere/);
+		for (const el of ["pre", "table", "code"]) assert.match(PROSE_BLOCK_CLASS, new RegExp(`\\[&_${el}\\]:\\[overflow-wrap:normal\\]`));
 		assert.doesNotMatch(`${PROSE_BLOCK_CLASS} ${ASSISTANT_CONTENT_CLASS}`, /nowrap|truncate/);
 		const row = renderToStaticMarkup(<ToolRow entry={{ callId: "c", name: "bash", summary: "x", status: "done" }} />);
 		const root = row.match(/<details[^>]*>/)![0];

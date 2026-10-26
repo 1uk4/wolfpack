@@ -176,8 +176,9 @@ function formatHierarchy(
   return lines.join("\n");
 }
 
-function makeClient(): WorkClient {
-  return new WorkClient();
+/** With an explicit context.env (sandbox) the client never falls back to process.env. */
+function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
+  return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "") : new WorkClient();
 }
 
 // ─── Extension Factory ─────────────────────────────────────────────────────
@@ -189,7 +190,8 @@ export default function createTasksExtension(
   const { wolfDen, wolfName, domains } = context;
   const autoShip = config.autoShip ?? true;
 
-  const client = makeClient();
+  const env = context.env ?? process.env;
+  const client = makeClient(context.env);
 
   // ── Cache: sections read sync, tools write async ────────────────────────
   interface TaskCache {
@@ -301,14 +303,14 @@ export default function createTasksExtension(
   const previewFile = (token: string) => join(previewDir(), `${token.replace(/[^a-f0-9]/g, "")}.json`);
   function graduationRoots(): KbRoots | null {
     if (config.kbRoots) return config.kbRoots;
-    const kbBase = process.env.KB_BASE;
-    const kbOps = process.env.KB_OPS;
+    const kbBase = env.KB_BASE;
+    const kbOps = env.KB_OPS;
     return kbBase && kbOps ? { kbBase, opsRoot: kbOps, denLocal: join(wolfDen, "kb") } : null;
   }
   function graduationEngine(): Engine {
     if (config.engine) return config.engine();
     const t = loadModelTable().table;
-    const apiKey = t.tiers.smart.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : undefined;
+    const apiKey = t.tiers.smart.provider === "anthropic" ? env.ANTHROPIC_API_KEY : undefined;
     return createEngine({
       provider: t.tiers.smart.provider,
       ...(apiKey ? { apiKey } : {}),

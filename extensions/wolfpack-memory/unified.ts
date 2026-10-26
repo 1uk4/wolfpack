@@ -63,7 +63,8 @@ export interface MemoryGate {
 /**
  * Fail-closed gate for durable memory. It starts only when the wolf is sandboxed (`sandbox:` in wolf.yaml,
  * normalized to `{root}`) or has `memory.live: true`; nothing sets `live` until cutover. In a sandbox it also
- * proves the den and env really point into the dev root, and throws if not (a misconfigured sandbox must not boot).
+ * proves the den and env (incl. a loopback WORK_ENDPOINT) really point into the dev root, and throws if not (a
+ * misconfigured sandbox must not boot). `context.env` wins over process.env everywhere in this extension.
  */
 export function memoryGate(config: MemoryConfig, context: ExtensionContext): MemoryGate {
   const env = context.env ?? process.env;
@@ -77,6 +78,9 @@ export function memoryGate(config: MemoryConfig, context: ExtensionContext): Mem
       kbDenLocal: env.KB_DEN_LOCAL ?? join(context.wolfDen, "kb"),
       workEndpoint: env.WORK_ENDPOINT,
     });
+    // KB_BASE stays readable (context, classification) but nothing mutating may receive it: the librarian tools
+    // (reorg, retire, split-fat) are the only writers and are refused above, so they are never registered.
+    if (config.librarian) throw new Error("sandbox: librarian mode mutates KB_BASE and is refused in a sandbox; remove memory.librarian");
     return { enabled: config.enabled !== false, reason: config.enabled === false ? "disabled by memory.enabled: false" : `sandbox (${root})` };
   }
   if (config.enabled === false) return { enabled: false, reason: "disabled by memory.enabled: false" };
@@ -183,7 +187,7 @@ export default function createMemoryExtension(
     return table;
   }
   function apiKeyFor(t: ModelTable): string | undefined {
-    return t.tiers.smart.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : undefined;
+    return t.tiers.smart.provider === "anthropic" ? (context.env ?? process.env).ANTHROPIC_API_KEY : undefined;
   }
   /** Engine on the table's models/transport. */
   function makeEngine(): Engine {

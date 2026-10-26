@@ -15,6 +15,7 @@ import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension, { type MemoryConfig } from "./unified.js";
+import createTasksExtension from "./unified-tasks.js";
 
 const dirs: string[] = [];
 const tmp = (p: string) => {
@@ -141,7 +142,7 @@ describe("sandbox over a snapshot", () => {
     const sb = tw.wolf.sandbox!;
     expect(tw.wolf.config.den).toBe(join(dev, "den"));
     expect(sb.env).toMatchObject({ WOLF_DEN: join(dev, "den"), KB_OPS: join(dev, "ops"), KB_DEN_LOCAL: join(dev, "den", "kb") });
-    expect(sb.resolved.workEndpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/work$/);
+    expect(sb.resolved.workEndpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 
     await tw.submit("hello");
     await waitFor(() => poolHas(join(dev, "den")));
@@ -152,7 +153,7 @@ describe("sandbox over a snapshot", () => {
 
     // The snapshot ledger is served: the live item is visible, and a write lands in the dev ledger only.
     const call = (method: string, path: string, body?: unknown) =>
-      fetch(`${sb.resolved.workEndpoint}${path}`, {
+      fetch(`${sb.resolved.workEndpoint}/work${path}`, {
         method,
         headers: { "Content-Type": "application/json", "X-API-Key": sb.env.WORK_TOKEN },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -187,6 +188,55 @@ describe("sandbox over a snapshot", () => {
     expect(() => createMemoryExtension({}, ctx({ ...goodEnv, WORK_ENDPOINT: "http://100.120.154.69:3141" }))).toThrow(/loopback/);
     expect(() => createMemoryExtension({}, ctx(goodEnv, join(live.root, "den")))).toThrow(/den .* outside the dev root/);
     expect(() => createMemoryExtension({}, { ...ctx(goodEnv), wolfConfig: { sandbox: true } })).toThrow(/no resolved dev root/);
+  });
+});
+
+describe("sandbox: KB_BASE and task tools", () => {
+  it("refuses librarian mode in a sandbox (startWolf and the memory gate)", async () => {
+    const live = await liveFixture();
+    const dev = join(tmp("dev"), "snap");
+    takeSnapshot({ source: live.source, devRoot: dev });
+    const { engine } = stubEngine();
+    await expect(startMemoryWolf({ engine, yaml: `sandbox:\n  root: ${dev}\nmemory:\n  librarian: true\n` })).rejects.toThrow(/librarian/);
+    const env = { KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1/work" };
+    expect(() =>
+      createMemoryExtension({ librarian: true }, { wolfDen: join(dev, "den"), wolfName: "t", domains: [], wolfConfig: { sandbox: { root: dev } }, env }),
+    ).toThrow(/librarian/);
+  });
+
+  it("with a live KB_BASE fixture, a sandboxed turn leaves it byte-identical; a task tool writes only the snapshot ledger", async () => {
+    const live = await liveFixture();
+    const kbBase = join(live.root, "kbbase");
+    mkdirSync(join(kbBase, "domains/wolfpack/entries"), { recursive: true });
+    writeFileSync(join(kbBase, "domains/wolfpack/entries/kb-wolfpack-x.md"), "entry\n");
+    const before = hashTree(live.root);
+    const dev = join(tmp("dev"), "snap");
+    takeSnapshot({ source: live.source, devRoot: dev });
+    const { engine } = stubEngine();
+    let tasks: ReturnType<typeof createTasksExtension> | undefined;
+    tw = await startTestWolf({
+      script: [fauxAssistantMessage(LONG_REPLY)],
+      yaml: `sandbox:\n  root: ${dev}\n`,
+      hooks: {
+        extensions: ({ config, den, env }) => {
+          const senv = { ...env, KB_BASE: kbBase };
+          const ctx = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: senv };
+          tasks = createTasksExtension({}, ctx);
+          return [adaptToDurable(createMemoryExtension({ engine }, ctx), { wolfDen: den, wolfName: "testwolf" })];
+        },
+      },
+    });
+    await tw.submit("hello");
+    await waitFor(() => poolHas(join(dev, "den")));
+    const create = tasks!.tools!.find((t) => t.name === "task_create")!;
+    // Deliberately NOT process.env: a live endpoint in the ambient env must not be used.
+    const res = await create.execute(
+      { kind: "task", domain: "wolfpack", title: "tool-made task", successCriteria: "ok", bind: false },
+      { cwd: dev, wolfDen: join(dev, "den"), wolfName: "testwolf", conversationId: 1 },
+    );
+    expect(res.isError ? JSON.stringify(res.content) : "").toBe("");
+    expect(readFileSync(join(dev, "ledger/work-events.jsonl"), "utf8")).toContain("tool-made task");
+    expect(hashTree(live.root)).toEqual(before);
   });
 });
 

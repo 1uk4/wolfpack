@@ -150,7 +150,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     : undefined;
   // Expose the wolf.yaml subscription to extensions (listSubscribedDomains).
   if (config.domains?.length) process.env.WOLF_DOMAINS ??= config.domains.join(",");
-  const defaultDomain = config.domains?.[0] ?? process.env.WOLFPACK_DOMAIN ?? "wolfpack";
+  const defaultDomain = config.memory?.defaultDomain ?? config.domains?.[0] ?? process.env.WOLFPACK_DOMAIN ?? "wolfpack";
 
   // Initialize sweep manager if librarian mode is enabled
   const isLibrarian = config.memory?.librarian === true;

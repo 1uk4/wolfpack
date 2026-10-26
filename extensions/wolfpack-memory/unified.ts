@@ -27,13 +27,14 @@ import {
   reconcileDen,
   serializeBranchEntries,
   chunkSerialized,
+  buildDomainContext,
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { assertSandboxed, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { assertSandboxed, defaultDomainProblem, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ export interface MemoryConfig {
     poolTarget?: number;
     interval?: string;
   };
+  /** `memory.defaultDomain` in wolf.yaml: domain for observations the observer leaves untagged (default: first of `domains`). */
+  defaultDomain?: string;
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
 }
@@ -221,6 +224,7 @@ async function writeToPool(
   wolfDen: string,
   observations: RawObservation[],
   bound: { taskId: string; featureId?: string } | null = null,
+  defaultDomain?: string,
 ): Promise<void> {
   if (observations.length === 0) return;
   const poolDir = join(wolfDen, ".memory", "pool");
@@ -230,6 +234,8 @@ async function writeToPool(
   const lines = observations.map(obs =>
     JSON.stringify({
       ...obs,
+      // Stamped at observe time (as pi's orchestrator does), so consolidation never has to guess a domain.
+      ...(defaultDomain ? { domain: obs.domain || defaultDomain } : {}),
       recordedAt: timestamp,
       ...(bound ? { work: bound.taskId, ...(bound.featureId ? { feature: bound.featureId } : {}) } : {}),
     }) + "\n"
@@ -283,6 +289,12 @@ export default function createMemoryExtension(
   const gate = memoryGate(config, context);
   console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
   if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
+
+  const defaultDomain = config.defaultDomain ?? domains[0] ?? "wolfpack";
+  const badDefault = defaultDomainProblem(config.defaultDomain, domains);
+  if (badDefault) throw new Error(badDefault);
+  // Per-observation classification, as pi: built once, only when there is a choice to make.
+  const domainContext = domains.length > 1 ? buildDomainContext(domains, (context.env ?? process.env).KB_BASE) : "";
 
   const consolidationThreshold = consolidation?.threshold ?? DEFAULT_CONSOLIDATE_AT;
   const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;
@@ -385,8 +397,8 @@ export default function createMemoryExtension(
     let at = watermark.lastEntryId;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
-      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx)); // re-read every chunk, never cached
+      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation", domainContext: domainContext || undefined });
+      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx), defaultDomain); // re-read every chunk, never cached
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;
       at = last ? next.lastEntryId : chunkEntryId(chunk.id);
@@ -444,7 +456,7 @@ export default function createMemoryExtension(
           kbRoots: kbRoots ?? undefined,
           workStore: recordStore(),
           ...(config.engine ? { engine: config.engine } : {}),
-          defaultDomain: domains[0] ?? "wolfpack",
+          defaultDomain,
           domains,
           ...(opts.drain ? {} : { poolTarget }),
           minObservations: 1, // the trigger already decided; the manual-use size floor doesn't apply
@@ -490,7 +502,7 @@ export default function createMemoryExtension(
               kbRoots: kbRoots ?? undefined,
               workStore: recordStore(),
               ...(config.engine ? { engine: config.engine } : {}),
-              defaultDomain: domains[0] ?? "wolfpack",
+              defaultDomain,
               domains,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
             });

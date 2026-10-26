@@ -19,6 +19,12 @@ export interface LoadedWolfConfig {
   warnings: string[];
 }
 
+/** Why `defaultDomain` is not a valid choice for a wolf subscribed to `domains`, or null when it is (or is unset). */
+export function defaultDomainProblem(defaultDomain: string | undefined, domains: readonly string[]): string | null {
+  if (defaultDomain === undefined || domains.includes(defaultDomain)) return null;
+  return `memory.defaultDomain "${defaultDomain}" is not one of the subscribed domains (${domains.join(", ") || "none"})`;
+}
+
 /** Default socket: ~/.wolfpack/run/<name>.sock */
 export function defaultSocketPath(name: string, home: string = os.homedir()): string {
   return path.join(home, ".wolfpack", "run", `${name}.sock`);
@@ -82,6 +88,8 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
   }
 
   const v = parsed.data;
+  const badDefault = defaultDomainProblem(v.memory.defaultDomain, v.domains);
+  if (badDefault) throw new WolfConfigError(`invalid wolf.yaml: ${badDefault}`, abs);
   const dir = path.dirname(abs);
   const sandbox = normalizeSandbox(v.sandbox, dir, home);
   const config: WolfConfig = {
@@ -99,6 +107,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
     memory: {
       live: v.memory.live === true,
       librarian: v.memory.librarian === true,
+      ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
     den: path.join(dir, "den"),

@@ -133,7 +133,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Memory config for timer-based consolidation
   const memoryEnabled = config.memory?.enabled ?? config.extensions?.includes("memory") ?? false;
   const consolidationConfig = config.memory?.consolidation;
-  const consolidationTrigger = consolidationConfig?.trigger ?? "threshold";
+  const consolidationTrigger = consolidationConfig?.trigger ?? "hybrid";
   
   // KB roots (requires KB_OPS). In a sandbox KB_BASE stays the ambient (live) path and is READ-ONLY here: its
   // consumers are domain context / prompt rendering (reads), reconcileDen and promoteTopics (write only opsRoot and

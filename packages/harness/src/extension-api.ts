@@ -89,6 +89,8 @@ export interface ConversationReads {
   classify(): Promise<ConversationClass | undefined>;
   /** Own messages with entry id > `afterEntryId`, oldest first (a fork's inherited history is excluded). */
   messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
+  /** Run `fn` once when the engine closes (to clear timers). */
+  onEngineClose?(fn: () => void): void;
 }
 
 export interface HookContext {

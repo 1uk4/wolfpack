@@ -21,12 +21,21 @@ describe("serializeBranchEntries", () => {
   });
 });
 
-describe("pi-durable message shapes", () => {
-  it("reads toolCall blocks and toolResult messages", () => {
-    const out = serializeBranchEntries([
-      msg("1", "assistant", [{ type: "toolCall", name: "write", arguments: { path: "a.txt" } }]),
-      msg("2", "toolResult", [{ type: "text", text: "wrote a.txt" }]),
-    ]);
+describe("pi-durable message shapes (opt-in tools)", () => {
+  const durable = [
+    msg("1", "assistant", [{ type: "toolCall", name: "write", arguments: { path: "a.txt" } }]),
+    msg("2", "toolResult", [{ type: "text", text: "wrote a.txt" }]),
+  ];
+  it("default output (pi's path) ignores toolCall blocks and toolResult messages, byte-identical to before", () => {
+    expect(serializeBranchEntries(durable)).toEqual([]);
+    expect(serializeBranchEntries([msg("1", "assistant", [{ type: "text", text: "hi" }, { type: "tool_use", name: "bash", input: { c: "ls" } }]), msg("2", "tool", "out")]))
+      .toEqual([
+        { id: "1", text: '[assistant] hi\n[Tool call: bash({"c":"ls"})]', tokens: Math.ceil('hi\n[Tool call: bash({"c":"ls"})]'.length / 4) },
+        { id: "2", text: "[tool] [Tool result: out]", tokens: Math.ceil("[Tool result: out]".length / 4) },
+      ]);
+  });
+  it("reads toolCall blocks and toolResult messages with { tools: true }", () => {
+    const out = serializeBranchEntries(durable, { tools: true });
     expect(out[0].text).toContain('[Tool call: write({"path":"a.txt"})]');
     expect(out[1].text).toBe("[toolResult] [Tool result: wrote a.txt]");
   });

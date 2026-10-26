@@ -103,6 +103,7 @@ export function adaptToDurable(
                   conversation: {
                     classify: () => reader.classify(conversationId),
                     messagesSince: (after) => reader.messagesSince(conversationId, after),
+                    onEngineClose: (fn) => reader.onClose(fn),
                   },
                 }
               : {}),

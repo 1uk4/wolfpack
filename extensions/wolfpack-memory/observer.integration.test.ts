@@ -36,13 +36,15 @@ const toolTurn = (callMarker: string): FauxResponseStep =>
   fauxAssistantMessage([fauxText(say(callMarker)), fauxToolCall("write", { path: "out.txt", content: "TOOLFILE" })], { stopReason: "toolUse" });
 
 /** Engine stub: every classify call is recorded (its prompt) and yields one distinct observation. */
-function stubEngine() {
+function stubEngine(opts: { failClassifyCall?: number } = {}) {
   const prompts: string[] = [];
   const steps: string[] = [];
+  let classifyCalls = 0;
   const engine = {
     call: async (step: string, schema: { parse: (v: unknown) => unknown }, args: { prompt: string }) => {
       steps.push(step);
       if (step === "classify") {
+        if (opts.failClassifyCall === ++classifyCalls) throw new Error("boom");
         prompts.push(args.prompt);
         return schema.parse({ observations: [{ timestamp: `2026-10-25 10:${String(prompts.length).padStart(2, "0")}`, content: `Observation number ${prompts.length} about caching` }] });
       }
@@ -89,15 +91,25 @@ function startObserverWolf(opts: { dev: string; script: FauxResponseStep[]; engi
   });
 }
 
-async function waitFor(cond: () => boolean, ms = 4000): Promise<void> {
+async function waitFor(cond: () => boolean | Promise<boolean>, ms = 4000): Promise<void> {
   const end = Date.now() + ms;
-  while (!cond()) {
+  while (!(await cond())) {
     if (Date.now() > end) throw new Error("waitFor: timed out");
     await new Promise((r) => setTimeout(r, 25));
   }
 }
-/** Observation is fire-and-forget after the turn: let it settle before asserting on absence/exact counts. */
-const settle = () => new Promise((r) => setTimeout(r, 400));
+/** Positive signal: the conversation's watermark has caught up with its newest committed entry (observation done). */
+async function observed(t: TestWolf, cid = 1): Promise<void> {
+  const den = t.wolf.config.den;
+  const reader = conversationReaderFor(den)!;
+  await waitFor(async () => {
+    const msgs = await reader.messagesSince(cid, 0);
+    if (!msgs.length || !existsSync(watermarkFile(den, cid))) return false;
+    return JSON.parse(readFileSync(watermarkFile(den, cid), "utf8")).lastEntryId >= msgs[msgs.length - 1].entryId;
+  });
+}
+/** Negative case only (nothing to wait for): a short quiet period. */
+const quiet = () => new Promise((r) => setTimeout(r, 300));
 const count = (hay: string, needle: string) => hay.split(needle).length - 1;
 const watermarkFile = (den: string, cid: number) => join(den, ".memory", "watermarks", `${cid}.json`);
 
@@ -120,8 +132,7 @@ describe("full-transcript observer", () => {
     const stub = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub.engine, script: [toolTurn("ASSISTANT_CALL"), reply("ASSISTANT_FINAL")] });
     await tw.submit(say("USER_ONE"));
-    await waitFor(() => count(stub.text(), "ASSISTANT_FINAL") >= 1);
-    await settle();
+    await observed(tw);
 
     expect(tw.afterResponse).toHaveLength(2); // a tool round fires afterResponse twice
     const all = stub.text();
@@ -139,13 +150,11 @@ describe("full-transcript observer", () => {
     const stub = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_ONE"), reply("A_TWO")] });
     await tw.submit(say("USER_ONE"));
-    await waitFor(() => count(stub.text(), "A_ONE") >= 1);
-    await settle();
+    await observed(tw);
     const firstTurn = stub.prompts.length;
 
     await tw.submit(say("USER_TWO"));
-    await waitFor(() => count(stub.text(), "A_TWO") >= 1);
-    await settle();
+    await observed(tw);
 
     const second = stub.prompts.slice(firstTurn).join("\n");
     expect(second).toContain("USER_TWO");
@@ -160,16 +169,14 @@ describe("full-transcript observer", () => {
     const stub = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_ROOT"), reply("A_FORK"), reply("A_SUBAGENT")] });
     await tw.submit(say("USER_ROOT"));
-    await waitFor(() => count(stub.text(), "A_ROOT") >= 1);
-    await settle();
+    await observed(tw);
     const before = stub.prompts.length;
     const den = join(dev, "den");
 
     const { h, root, newest, agent } = await harnessOf(tw);
     const fork = await root.fork((await newest()).id, { ownership: { kind: "ownerless" }, agent }, ctx);
     await runOn(fork, say("USER_FORK"));
-    await waitFor(() => count(stub.text(), "A_FORK") >= 1);
-    await settle();
+    await observed(tw, Number(fork.id));
 
     const reader = conversationReaderFor(den)!;
     expect(await reader.classify(1)).toEqual({ kind: "root" });
@@ -188,11 +195,15 @@ describe("full-transcript observer", () => {
     expect(await reader.classify(Number(sub.id))).toMatchObject({ kind: "task", taskId: Number(taskId) });
     const calls = stub.prompts.length;
     await runOn(sub, say("USER_SUBAGENT"));
-    await settle();
+    await quiet();
     expect(stub.prompts.length).toBe(calls);
     expect(stub.text()).not.toContain("A_SUBAGENT");
     expect(stub.text()).not.toContain("USER_SUBAGENT");
     expect(existsSync(watermarkFile(den, Number(sub.id)))).toBe(false);
+    // a fork of a task-owned conversation is a branch of subagent work: also quiet
+    const subEntries = (await sub.entries({ order: "descending" }, 1, undefined, ctx)).items;
+    const subFork = await sub.fork(subEntries[0].id, { ownership: { kind: "ownerless" }, agent }, ctx);
+    expect(await reader.classify(Number(subFork.id))).toMatchObject({ kind: "task", taskId: Number(taskId) });
   });
 
   it("(e) the pool crossing memory.consolidation.threshold consolidates into dev den topics", async () => {
@@ -220,8 +231,7 @@ describe("full-transcript observer", () => {
     const stub = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_ONE")] });
     await tw.submit(say("USER_ONE"));
-    await waitFor(() => stub.prompts.length >= 1);
-    await settle();
+    await observed(tw);
     expect(stub.steps).not.toContain("consolidate");
     expect(existsSync(join(dev, "den/memory/topics"))).toBe(false);
   });
@@ -231,8 +241,7 @@ describe("full-transcript observer", () => {
     const stub = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_ONE")] });
     await tw.submit(say("USER_ONE"));
-    await waitFor(() => count(stub.text(), "A_ONE") >= 1);
-    await settle();
+    await observed(tw);
     const wm = JSON.parse(readFileSync(watermarkFile(join(dev, "den"), 1), "utf8"));
     expect(wm.lastEntryId).toBeGreaterThan(0);
     await tw.stop();
@@ -241,10 +250,75 @@ describe("full-transcript observer", () => {
     const stub2 = stubEngine();
     tw = await startObserverWolf({ dev, engine: stub2.engine, script: [reply("A_TWO")] });
     await tw.submit(say("USER_TWO"));
-    await waitFor(() => count(stub2.text(), "A_TWO") >= 1);
-    await settle();
+    await observed(tw);
     expect(stub2.text()).toContain("USER_TWO");
     expect(stub2.text()).not.toContain("USER_ONE");
     expect(stub2.text()).not.toContain("A_ONE");
+  });
+
+  it("(g) a conversation with prior history and no watermark observes only the newest turn", async () => {
+    const dev = await devRoot();
+    const stub = stubEngine();
+    // First run with memory inert (no sandbox memory): produce history, then start memory over the same root.
+    const inert = await startTestWolf({ script: [reply("A_OLD")], yaml: `sandbox:\n  root: ${dev}\n` });
+    await inert.submit(say("USER_OLD"));
+    await inert.stop();
+
+    tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_NEW")] });
+    await tw.submit(say("USER_NEW"));
+    await observed(tw);
+    expect(stub.text()).toContain("USER_NEW");
+    expect(stub.text()).toContain("A_NEW");
+    expect(stub.text()).not.toContain("USER_OLD");
+    expect(stub.text()).not.toContain("A_OLD");
+  });
+
+  it("(h) a chunk failure keeps the earlier chunk's watermark: the retry does not duplicate it", async () => {
+    const dev = await devRoot();
+    const stub = stubEngine({ failClassifyCall: 2 });
+    const big = "BIGUSER " + "x".repeat(21000); // > one chunk: user message alone, assistant reply is chunk 2
+    tw = await startObserverWolf({ dev, engine: stub.engine, script: [reply("A_ONE"), reply("A_TWO")] });
+    await tw.submit(big);
+    await waitFor(() => stub.prompts.length >= 1);
+    await quiet();
+    const den = tw.wolf.config.den;
+    const wm = JSON.parse(readFileSync(watermarkFile(den, 1), "utf8"));
+    expect(count(stub.text(), "BIGUSER")).toBe(1);
+    expect(wm.lastEntryId).toBeGreaterThan(0);
+
+    await tw.submit(say("USER_TWO"));
+    await observed(tw);
+    expect(count(stub.text(), "BIGUSER")).toBe(1); // chunk 1 not re-observed
+    expect(count(stub.text(), "A_ONE")).toBe(1); // chunk 2 retried
+    expect(count(stub.text(), "A_TWO")).toBe(1);
+  });
+
+  it("(i) trigger hybrid: the interval timer consolidates the pool down to poolTarget, and stops on close", async () => {
+    const dev = await devRoot();
+    const stub = stubEngine();
+    tw = await startTestWolf({
+      script: [reply("A_ONE")],
+      yaml: `sandbox:\n  root: ${dev}\nmemory:\n  consolidation:\n    threshold: 999999\n    poolTarget: 0\n`,
+      hooks: {
+        extensions: ({ config, den, env }) => [
+          adaptToDurable(
+            createMemoryExtension(
+              { ...config.memory, engine: stub.engine, intervalMs: 100 },
+              { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env },
+            ),
+            { wolfDen: den, wolfName: "testwolf" },
+          ),
+        ],
+      },
+    });
+    await tw.submit(say("USER_ONE"));
+    const topics = join(dev, "den/memory/topics");
+    await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
+    expect(stub.steps.filter((x) => x === "consolidate")).toHaveLength(1); // below threshold: only the timer ran
+    await tw.stop();
+    tw = undefined;
+    const n = stub.steps.length;
+    await quiet();
+    expect(stub.steps.length).toBe(n); // timer cleared with the engine
   });
 });

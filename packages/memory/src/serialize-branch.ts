@@ -4,7 +4,13 @@
  * entries (subagent reports, status, notifications) are not read; the
  * orchestrator relays what matters in its own words.
  */
-export function serializeBranchEntries(entries: any[]): Array<{ id: string; text: string; tokens: number }> {
+export function serializeBranchEntries(
+  entries: any[],
+  opts: { tools?: boolean } = {},
+): Array<{ id: string; text: string; tokens: number }> {
+  // `tools` (the durable observer only): also read pi-ai's `toolCall` blocks and `toolResult` messages.
+  // Pi's own path leaves it off and its output is unchanged.
+  const withTools = opts.tools === true;
   const chunks: Array<{ id: string; text: string; tokens: number }> = [];
 
   for (const entry of entries) {
@@ -32,13 +38,13 @@ export function serializeBranchEntries(entries: any[]): Array<{ id: string; text
         for (const block of msg.content) {
           if (block.type === "tool_use") {
             text += `\n[Tool call: ${block.name}(${JSON.stringify(block.input).slice(0, 500)})]`;
-          } else if (block.type === "toolCall") {
+          } else if (withTools && block.type === "toolCall") {
             // pi-ai / pi-durable shape: { type: "toolCall", name, arguments }
             text += `\n[Tool call: ${block.name}(${JSON.stringify(block.arguments ?? {}).slice(0, 500)})]`;
           }
         }
       }
-    } else if (role === "tool" || role === "toolResult") {
+    } else if (role === "tool" || (withTools && role === "toolResult")) {
       // Tool result message
       const content = typeof msg.content === "string"
         ? msg.content.slice(0, 2000)
@@ -58,7 +64,8 @@ export function serializeBranchEntries(entries: any[]): Array<{ id: string; text
 
 /**
  * Group serialized entries into chunks of at most `tokenLimit` tokens (an oversized entry gets a chunk of its own).
- * A chunk's `id` is its last entry's id, the watermark a caller records once the chunk is observed.
+ * A chunk's `id` is its LAST entry's id (the watermark a caller records once the chunk is observed). Pi's own
+ * chunker in extensions/wolfpack-memory/index.ts instead ids a mid-stream chunk by its first entry; it keeps that.
  */
 export function chunkSerialized(
   serialized: Array<{ id: string; text: string; tokens: number }>,

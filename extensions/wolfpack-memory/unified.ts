@@ -42,6 +42,8 @@ export interface MemoryConfig {
   enabled?: boolean;
   /** `memory.live: true` in wolf.yaml: durable memory may write the LIVE den / KB_OPS / Work API. */
   live?: boolean;
+  /** @internal test seam: timer period in ms, instead of `consolidation.interval`. */
+  intervalMs?: number;
   /** @internal test seam: replaces the lazily-built model engine (the established `engine.call` stub). */
   engine?: Engine;
   /** Minimum text length to trigger observation (default: 100) */
@@ -97,37 +99,61 @@ export function memoryGate(config: MemoryConfig, context: ExtensionContext): Mem
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-/** How long the observer waits for the reported response to be committed before using the hook's copy. */
-const COMMIT_WAIT_MS = 50;
-const COMMIT_WAIT_ATTEMPTS = 20;
+/** Waits between polls for the reported response to be committed (then the hook's copy is used): ~1s in all. */
+const COMMIT_WAITS_MS = [10, 20, 40, 80, 160, 160, 160, 160, 160];
 
 /** Pi's defaults (extensions/wolfpack-memory/index.ts CONSOLIDATE_AT / POOL_TARGET). */
 export const DEFAULT_CONSOLIDATE_AT = 20000;
 export const DEFAULT_POOL_TARGET = 10000;
+
+/** "30s" | "15m" | "4h" | "1d" -> ms; anything else falls back to 4h. */
+function parseInterval(interval: string): number {
+  const m = interval.match(/^(\d+)(s|m|h|d)$/);
+  if (!m) return 4 * 3600_000;
+  return Number(m[1]) * { s: 1000, m: 60_000, h: 3600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+}
 
 // ─── Watermarks ────────────────────────────────────────────────────────────
 
 /**
  * Per-conversation observer position, `<den>/.memory/watermarks/<conversationId>.json`.
  *
- * `lastEntryId` is the newest committed entry already observed. afterResponse fires before the response it reports is
- * committed, so the observer also reads that response from the hook itself; `tail` fingerprints it, and when the entry
- * shows up in a later read it is skipped instead of observed twice.
+ * `lastEntryId` is the newest committed entry already observed, advanced after each pooled chunk. afterResponse fires
+ * before the response it reports is committed, so the observer may read that response from the hook itself; `tail`
+ * fingerprints it and `tailAfter` is the entry position it was observed at. Its committed twin is the first entry after
+ * `tailAfter`; when it shows up it is skipped instead of observed twice.
  */
 export interface Watermark {
   lastEntryId: number;
   tail?: string;
+  tailAfter?: number;
 }
 
 const watermarkFile = (den: string, conversationId: number) => join(den, ".memory", "watermarks", `${conversationId}.json`);
 
-export async function readWatermark(den: string, conversationId: number): Promise<Watermark> {
+/** `undefined` when this conversation has never been observed (no file). */
+export async function readWatermark(den: string, conversationId: number): Promise<Watermark | undefined> {
   try {
     const w = JSON.parse(await readFile(watermarkFile(den, conversationId), "utf-8")) as Watermark;
     if (typeof w.lastEntryId === "number") return w;
   } catch { /* none yet */ }
-  return { lastEntryId: 0 };
+  return undefined;
 }
+
+/**
+ * Start from now: with no watermark, everything before the current turn's first user message is skipped (no backfill
+ * of history from before the observer ran). A brand-new conversation's only user message is its first, so it is
+ * captured whole; a fork's own entries start at the fork point.
+ */
+export function seedWatermark(committed: ConversationMessage[]): Watermark {
+  for (let i = committed.length - 1; i >= 0; i--) {
+    if (committed[i].message.role === "user") return { lastEntryId: committed[i].entryId - 1 };
+  }
+  return { lastEntryId: committed.length ? committed[committed.length - 1].entryId : 0 };
+}
+
+/** Chunk id -> the entry watermark it covers. A `:current` chunk (the hook's uncommitted copy) covers its prefix. */
+export const chunkEntryId = (id: string): number => Number(id.split(":")[0]);
 
 async function writeWatermark(den: string, conversationId: number, w: Watermark): Promise<void> {
   const file = watermarkFile(den, conversationId);
@@ -149,12 +175,14 @@ function fingerprint(content: unknown): string {
 
 /**
  * The text the observer reads for one afterResponse: the conversation's own messages past the watermark, via pi's
- * chunk serializer (user / assistant / tool results).
+ * chunk serializer (user / assistant / tool results, tools opted in).
  *
  * afterResponse fires before the response it reports is committed, so right then `committed` may not hold it yet.
  * Returns undefined while it is missing and `settled` is false (the caller retries). Once settled, a response that
- * still isn't committed is observed from the hook's own copy and fingerprinted in `tail`, so that when it is committed
- * later it is skipped instead of observed twice.
+ * still isn't committed is observed from the hook's own copy and fingerprinted in `tail`/`tailAfter`, so that when it
+ * is committed later it is skipped instead of observed twice. Only the entry directly after `tailAfter` can be that
+ * twin: a user message in between means the observed response never committed (aborted), and a later identical reply
+ * is new.
  */
 export function newObserverChunks(
   committed: ConversationMessage[],
@@ -163,20 +191,25 @@ export function newObserverChunks(
   settled: boolean,
 ): { chunks: Array<{ id: string; text: string; tokenCount: number }>; next: Watermark } | undefined {
   let rest = committed;
-  if (watermark.tail) {
-    // The response observed last time as the hook's copy has been committed since; skip that copy.
-    const i = rest.findIndex((m) => m.message.role === "assistant");
-    if (i >= 0 && fingerprint(rest[i].message.content) === watermark.tail) rest = [...rest.slice(0, i), ...rest.slice(i + 1)];
+  if (watermark.tail && watermark.tailAfter !== undefined) {
+    const first = rest[0];
+    if (first && first.entryId > watermark.tailAfter && first.message.role === "assistant" && fingerprint(first.message.content) === watermark.tail) {
+      rest = rest.slice(1);
+    }
   }
   const lastEntryId = committed.length ? committed[committed.length - 1].entryId : watermark.lastEntryId;
   const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.map((m) => ({ type: "message", id: String(m.entryId), message: m.message }));
+  const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true }));
 
   const fp = fingerprint(current.content);
+  // Any unobserved assistant entry may be the reported response: when the observer lags (a tool round runs on while
+  // it polls) the reported call is no longer the latest assistant entry. A false match is harmless: nothing is
+  // dropped, the watermark only ever advances to committed entries and the real response is read once it commits.
   const isCommitted = fp === "" || rest.some((m) => m.message.role === "assistant" && fingerprint(m.message.content) === fp);
-  if (isCommitted) return { chunks: chunkSerialized(serializeBranchEntries(entries)), next: { lastEntryId } };
+  if (isCommitted) return { chunks: chunk(), next: { lastEntryId } };
   if (!settled) return undefined;
   entries.push({ type: "message", id: `${lastEntryId}:current`, message: { role: "assistant", content: current.content } });
-  return { chunks: chunkSerialized(serializeBranchEntries(entries)), next: { lastEntryId, tail: fp } };
+  return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 
 /**
@@ -325,36 +358,75 @@ export default function createMemoryExtension(
     const cls = await reads.classify();
     if (!cls || cls.kind === "task") return;
 
-    const watermark = await readWatermark(ctx.wolfDen, ctx.conversationId);
+    let watermark = await readWatermark(ctx.wolfDen, ctx.conversationId);
+    if (!watermark) {
+      watermark = seedWatermark(await reads.messagesSince(0));
+      await writeWatermark(ctx.wolfDen, ctx.conversationId, watermark);
+    }
     let planned: ReturnType<typeof newObserverChunks>;
     for (let attempt = 0; !planned; attempt++) {
+      if (attempt === 0) await new Promise((r) => setImmediate(r));
       const committed = await reads.messagesSince(watermark.lastEntryId);
-      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAIT_ATTEMPTS);
-      if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAIT_MS));
+      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
+      if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     const { chunks, next } = planned;
     if (chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
     const eng = getEngine();
-    for (const chunk of chunks) {
+    let at = watermark.lastEntryId;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
       if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, readBoundTask(ctx.wolfDen));
+      // Persist per chunk: a failure in a later chunk retries from here, not from the start.
+      const last = i === chunks.length - 1;
+      at = last ? next.lastEntryId : chunkEntryId(chunk.id);
+      await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
-    await writeWatermark(ctx.wolfDen, ctx.conversationId, next);
 
-    if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") await maybeConsolidate(ctx);
+    startTimer(ctx);
+    if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
 
-  async function maybeConsolidate(ctx: HookContext): Promise<void> {
+  // ─── Interval timer (trigger: timer | hybrid) ─────────────────────────────
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stopTimer = () => {
+    if (timer) clearInterval(timer);
+    timer = undefined;
+  };
+  /** Started on the first observation (durable has no extension start hook); cleared when the engine closes. */
+  function startTimer(ctx: HookContext): void {
+    if (timer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
+    const ms = config.intervalMs ?? parseInterval(consolidation?.interval ?? "4h");
+    timer = setInterval(() => {
+      void (async () => {
+        if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
+        console.log("[memory] Timer-triggered consolidation");
+        await runConsolidation();
+      })();
+    }, ms);
+    timer.unref?.();
+    ctx.conversation?.onEngineClose?.(stopTimer);
+  }
+
+  function maybeConsolidate(ctx: HookContext): Promise<void> {
     if (consolidating) return consolidating;
-    const stats = await getPoolStats(ctx.wolfDen);
-    if (stats.tokens < consolidationThreshold) return;
-    console.log(`[memory] Threshold reached (${stats.tokens} >= ${consolidationThreshold}), consolidating...`);
+    return getPoolStats(ctx.wolfDen).then((stats) => {
+      if (stats.tokens < consolidationThreshold) return;
+      console.log(`[memory] Threshold reached (${stats.tokens} >= ${consolidationThreshold}), consolidating...`);
+      return runConsolidation();
+    });
+  }
+
+  /** Consolidate the pool down to poolTarget. Never overlaps itself. */
+  function runConsolidation(): Promise<void> {
+    if (consolidating) return consolidating;
     consolidating = (async () => {
       try {
         const consResult = await consolidatePool({
-          wolfDen: ctx.wolfDen,
-          wolfName: ctx.wolfName,
+          wolfDen,
+          wolfName,
           table: getTable(),
           apiKey: apiKeyFor(getTable()),
           kbRoots: kbRoots ?? undefined,
@@ -363,7 +435,7 @@ export default function createMemoryExtension(
           defaultDomain: domains[0] ?? "wolfpack",
           domains,
           poolTarget,
-          minObservations: 1, // the threshold already decided; the manual-use size floor doesn't apply
+          minObservations: 1, // the trigger already decided; the manual-use size floor doesn't apply
           onProgress: (msg) => console.log(`[memory] ${msg}`),
         });
         console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);
@@ -379,6 +451,8 @@ export default function createMemoryExtension(
   return defineExtension({
     name: "wolfpack-memory",
     runtimes: ["pi", "pi-durable"],
+
+    lifecycle: { stop: stopTimer },
 
     tools: [
       defineTool({

@@ -131,7 +131,8 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     ctx,
   );
 
-  const unregisterReader = registerConversationReader(dirname(storagePath), createConversationReader(harness));
+  const reader = createConversationReader(harness);
+  const unregisterReader = registerConversationReader(dirname(storagePath), reader);
 
   const toolsByName = (names: readonly string[]) => {
     const all = registry.snapshot().tools();
@@ -222,6 +223,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     harness,
     resume: () => harness.resume(),
     close: async () => {
+      reader.close();
       unregisterReader();
       await harness.close(ctx);
     },

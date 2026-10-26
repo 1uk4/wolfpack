@@ -19,10 +19,15 @@ export interface ConversationReader {
    * first. A fork's inherited history is excluded, so a fork reads only what happened after the fork point.
    */
   messagesSince(conversationId: number, afterEntryId?: number): Promise<ConversationMessage[]>;
+  /** Run `fn` when the engine closes. */
+  onClose(fn: () => void): void;
+  /** Called by the engine on close. */
+  close(): void;
 }
 
 export function createConversationReader(harness: Harness): ConversationReader {
   const classes = new Map<number, ConversationClass>();
+  const closers = new Set<() => void>();
 
   async function classify(id: number): Promise<ConversationClass | undefined> {
     const hit = classes.get(id);
@@ -34,10 +39,10 @@ export function createConversationReader(harness: Harness): ConversationReader {
       cls = { kind: "task", taskId: Number(record.owner.taskId), ownerConversationId: Number(record.owner.conversationId) };
     } else if (record.parent) {
       const parent = await classify(Number(record.parent.conversationId));
-      // A fork of a task-owned conversation stays task-owned in spirit, but only ownership makes a conversation
-      // task-owned; a user fork of anything resolves to the root of its lineage.
+      // A fork of a task-owned conversation is a branch of a subagent's work: it stays task (quiet, no capture,
+      // no binding). Any other fork resolves to the root of its lineage.
       const lineageRoot = parent?.kind === "fork" ? parent.lineageRoot : Number(record.parent.conversationId);
-      cls = { kind: "fork", parentConversationId: Number(record.parent.conversationId), forkedAt: Number(record.parent.at), lineageRoot };
+      cls = parent?.kind === "task" ? parent : { kind: "fork", parentConversationId: Number(record.parent.conversationId), forkedAt: Number(record.parent.at), lineageRoot };
     } else {
       cls = { kind: "root" };
     }
@@ -62,14 +67,26 @@ export function createConversationReader(harness: Harness): ConversationReader {
     return out;
   }
 
-  return { classify, messagesSince };
+  return {
+    classify,
+    messagesSince,
+    onClose: (fn) => void closers.add(fn),
+    close: () => {
+      for (const fn of closers) {
+        try { fn(); } catch { /* best effort */ }
+      }
+      closers.clear();
+    },
+  };
 }
 
 // ─── Registry (per den) ────────────────────────────────────────────────────
 
 const readers = new Map<string, ConversationReader>();
 
+/** One engine per den: registering a second reader for the same den replaces the first (and warns). */
 export function registerConversationReader(den: string, reader: ConversationReader): () => void {
+  if (readers.has(den)) console.warn(`[engine] conversation reader for ${den} replaced: two engines open on one den`);
   readers.set(den, reader);
   return () => {
     if (readers.get(den) === reader) readers.delete(den);

@@ -14,6 +14,9 @@
  *   --ledger-from-host <h>     work ledger + work item .md files from host <h>: the ONLY remote part (needs --yes).
  *                              rsync, remote path as SOURCE only, no --delete, explicit include/exclude filters; the
  *                              remote ledger is hashed (read-only `sha256sum`) before and after and must equal the copy.
+ *   --work-md-from <dir>       local KB base whose domains/<d>/work/<id>.md are the item files (read-only). With --ledger-from-host it
+ *                              is the ONLY source of .md files (default ~/wolves/knowledge/base, the Syncthing mirror); nothing
+ *                              but the ledger is rsynced from the host. Fails if the ledger has events and 0 .md were found.
  *   --work-from <dir>          the same ledger/items from a local dir <dir>/{ledger/work-events.jsonl,base} instead (tests, stand-ins)
  *   --shared                   den goes to <dev-root>/dens/<wolf> (several wolves share the root)
  *   --refresh-work             re-pull ONLY ledger + items into an existing root (old ones are moved aside, never deleted)
@@ -40,7 +43,7 @@ import { parseArgs } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertNotProtected, dryRunRemote, loadWolfConfig, remotePlan, seedLibrarianState, takeSnapshot, wolfDenDir, type SnapshotSource } from "@wolfpack/engine";
+import { assertNotProtected, crossCheckWork, dryRunRemote, loadWolfConfig, remotePlan, seedLibrarianState, takeSnapshot, wolfDenDir, type SnapshotSource } from "@wolfpack/engine";
 import { installDevExtensions } from "../bundle.js";
 import { getExtension } from "../extensions.js";
 import { loadConfig, getHost, type CliConfig } from "../config.js";
@@ -48,7 +51,7 @@ import { remotePathsFrom } from "../paths.js";
 import { c } from "../render.js";
 
 const USAGE =
-  "Usage: wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | --den <dir> [--kb-base <dir>] [--ops <dir> [--ops-lane a,b]] (--ledger-from-host <h> --yes | --work-from <dir>) [--shared] [--refresh-work] [--dry-run] [--print-plan]) [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2] [--wolf-yaml <file>]\n" +
+  "Usage: wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | --den <dir> [--kb-base <dir>] [--ops <dir> [--ops-lane a,b]] (--ledger-from-host <h> --yes [--work-md-from <dir>] | --work-from <dir>) [--shared] [--refresh-work] [--dry-run] [--print-plan]) [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2] [--wolf-yaml <file>]\n" +
   "       wolfpack sandbox install-extensions <dev-root> [--extensions k1,k2] [--den-extensions <dir>] [--wolf <name>]\n" +
   "       wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>] [--librarian-state <den>]";
 
@@ -115,11 +118,11 @@ export function protectedRoots(config: Pick<CliConfig, "wolvesRoot">, syncthingC
  * (the only remote part, filtered to exactly those) or a local dir; den, KB copy and ops are always local.
  */
 export function mixedSnapshotSource(v: {
-  den?: string; kbBase?: string; ops?: string; opsLane?: string; workFrom?: string; ledgerRemote?: { at: string; kbRoot: string; sharedKbBase: string };
+  den?: string; kbBase?: string; ops?: string; opsLane?: string; workFrom?: string; workMdFrom?: string; ledgerRemote?: { at: string; kbRoot: string };
 }): SnapshotSource {
   const workPart: Pick<SnapshotSource, "workDir" | "workBaseDir"> = v.ledgerRemote
-    ? { workDir: `${v.ledgerRemote.at}:${v.ledgerRemote.kbRoot}/work`, workBaseDir: `${v.ledgerRemote.at}:${v.ledgerRemote.sharedKbBase}` }
-    : { workDir: v.workFrom!, ...(hasWorkItems(path.join(v.workFrom!, "base")) ? { workBaseDir: path.join(v.workFrom!, "base") } : {}) };
+    ? { workDir: `${v.ledgerRemote.at}:${v.ledgerRemote.kbRoot}/work`, workBaseDir: v.workMdFrom! }
+    : { workDir: v.workFrom!, ...(v.workMdFrom ? { workBaseDir: v.workMdFrom } : hasWorkItems(path.join(v.workFrom!, "base")) ? { workBaseDir: path.join(v.workFrom!, "base") } : {}) };
   return {
     ...workPart,
     ...(v.ops ? { opsDir: v.ops } : {}),
@@ -159,6 +162,7 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       "ops-lane": { type: "string" },
       "work-from": { type: "string" },
       "ledger-from-host": { type: "string" },
+      "work-md-from": { type: "string" },
       shared: { type: "boolean" },
       "refresh-work": { type: "boolean" },
       "dry-run": { type: "boolean" },
@@ -217,15 +221,15 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
   if (mixed) {
     const config = loadConfig();
     const rp = remotePathsFrom(config);
-    let ledgerRemote: { at: string; kbRoot: string; sharedKbBase: string } | undefined;
+    let ledgerRemote: { at: string; kbRoot: string } | undefined;
     if (values["ledger-from-host"]) {
       const host = getHost(config, values["ledger-from-host"]);
       if (!host) return fail(`Host '${values["ledger-from-host"]}' not found in ~/.wolfpack/config.yaml.`);
-      ledgerRemote = { at: `${host.ssh.user}@${host.address}`, kbRoot: rp.kbRoot, sharedKbBase: rp.sharedKbBase };
+      ledgerRemote = { at: `${host.ssh.user}@${host.address}`, kbRoot: rp.kbRoot };
       sshIdentity = host.ssh.key;
     }
     const abs = (p?: string) => (p ? path.resolve(p) : undefined);
-    source = mixedSnapshotSource({ den: abs(values.den) ?? "", kbBase: abs(values["kb-base"]), ops: abs(values.ops), opsLane: values["ops-lane"], workFrom: abs(values["work-from"]), ledgerRemote });
+    source = mixedSnapshotSource({ den: abs(values.den) ?? "", kbBase: abs(values["kb-base"]), ops: abs(values.ops), opsLane: values["ops-lane"], workFrom: abs(values["work-from"]), workMdFrom: abs(values["work-md-from"]) ?? (ledgerRemote ? path.join(config.wolvesRoot, "knowledge", "base") : undefined), ledgerRemote });
     if (values["print-plan"]) {
       for (const step of remotePlan(source, sshIdentity)) console.log(`${step.label}:\n  ${step.command}`);
       return;
@@ -269,10 +273,18 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       source, devRoot, force: values.force, includeSessions: values["include-sessions"], sshIdentity, forbiddenRoots,
       ...(mixed && values.shared ? { denName: wolf } : {}),
       ...(refresh ? { workOnly: true } : {}),
+      ...(mixed ? { requireWorkItems: true } : {}),
     });
     console.log(c.bold(`${refresh ? "Refreshed work of" : "Snapshot of"} ${wolf} -> ${devRoot}`));
     console.log(`  ledger events ${m.counts.ledgerEvents}, work items ${m.counts.workItems}, ops files ${m.counts.opsFiles}, den files ${m.counts.denFiles} (${m.den}), kb-base files ${m.counts.kbBaseFiles}`);
     if (m.ledgerSha256) console.log(`  ledger sha256 ${m.ledgerSha256}`);
+    if (mixed) {
+      const x = crossCheckWork(path.join(devRoot, "ledger", "work-events.jsonl"), path.join(devRoot, "base"));
+      const few = (a: string[]) => (a.length ? `: ${a.slice(0, 5).join(", ")}${a.length > 5 ? ", ..." : ""}` : "");
+      console.log(`  work cross-check: ${x.ledgerIds} ledger ids, ${x.mdFiles} .md files`);
+      console.log(`    ledger ids without .md: ${x.missingMd.length}${few(x.missingMd)}`);
+      console.log(`    .md files not in the ledger: ${x.missingLedger.length}${few(x.missingLedger)}`);
+    }
     if (refresh) return;
     if (m.counts.ledgerEvents > 0 && m.counts.workItems === 0) {
       console.warn(c.yellow("warning: the ledger has events but 0 work item .md files were copied (check where the item files live: <from>/base or <from>/work/base)"));

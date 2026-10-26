@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  assertLibrarianSandboxed, assertReadOnlyRsyncArgv, assertSandboxed, acquireWorkWriterLock, dryRunRemote, parseSha256sum,
+  assertLibrarianSandboxed, crossCheckWork, assertReadOnlyRsyncArgv, assertSandboxed, acquireWorkWriterLock, dryRunRemote, parseSha256sum,
   readWorkServerRunFile, remotePlan, remoteSha256Argv, resolveSandbox, rsyncArgv, sandboxEnv, sandboxPaths, SandboxError, splitRemote,
   seedLibrarianState, takeSnapshot, wolfDenDir, RSYNC_RULES, type Runner, type SnapshotSource,
 } from "./index.js";
@@ -408,5 +408,56 @@ describe("seedLibrarianState", () => {
     expect(hashTree(src)).toBe(before);
     expect(() => seedLibrarianState(src, dest)).toThrow(/already has a KB ledger/);
     expect(() => seedLibrarianState(tmp("empty"), join(tmp("d2"), "x"))).toThrow(/no ledger/);
+  });
+});
+
+describe("remote ledger + local work-md mirror", () => {
+  const HOST = "root@100.1.2.3";
+  const LEDGER = '{"type":"work.created","id":"work-wolfpack-a"}\n{"type":"work.created","id":"work-wolfpack-ghost"}\n';
+  const runnerFor = (ledger: string) => {
+    const rsyncs: string[][] = [];
+    const h = sha(ledger);
+    const runner: Runner = {
+      rsync(argv) {
+        rsyncs.push(argv);
+        put(join(argv[argv.length - 1], "ledger/work-events.jsonl"), ledger);
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      ssh: () => ({ status: 0, stdout: `${h}  /x\n`, stderr: "" }),
+    };
+    return { runner, rsyncs };
+  };
+
+  it("only the ledger is rsynced; item files come from the local mirror (read-only) and the plan shows no .md rsync", () => {
+    const { root } = fixture();
+    const mirror = join(root, "mirror");
+    put(join(mirror, "domains/wolfpack/work/work-wolfpack-a.md"), "# a\n");
+    put(join(mirror, "domains/wolfpack/work/work-wolfpack-extra.md"), "# x\n");
+    put(join(mirror, "domains/wolfpack/entries/kb.md"), "not work\n");
+    const before = hashTree(mirror);
+    const source: SnapshotSource = { workDir: `${HOST}:/var/wolfpack/kb/work`, workBaseDir: mirror, denDir: join(root, "den") };
+    const plan = remotePlan(source, "/k");
+    expect(plan.map((p) => p.label)).toEqual(["ledger hash (before)", "ledger", "ledger hash (after)"]);
+    const dev = join(tmp("dev"), "box");
+    const { runner, rsyncs } = runnerFor(LEDGER);
+    takeSnapshot({ source, devRoot: dev, runner, requireWorkItems: true });
+    expect(rsyncs).toHaveLength(1);
+    expect(rsyncs[0].join(" ")).not.toContain("/domains/");
+    expect(existsSync(join(dev, "base/domains/wolfpack/work/work-wolfpack-a.md"))).toBe(true);
+    expect(existsSync(join(dev, "base/domains/wolfpack/entries"))).toBe(false);
+    expect(hashTree(mirror)).toBe(before);
+    expect(dryRunRemote(source, "/k", runner).map((p) => p.label)).toEqual(["ledger"]);
+    const x = crossCheckWork(join(dev, "ledger/work-events.jsonl"), join(dev, "base"));
+    expect(x).toEqual({ ledgerIds: 2, mdFiles: 2, missingMd: ["work-wolfpack-ghost"], missingLedger: ["work-wolfpack-extra"] });
+  });
+
+  it("fails loudly, installing nothing, when the ledger has events but the mirror has 0 .md files", () => {
+    const { root } = fixture();
+    const mirror = join(root, "empty-mirror");
+    mkdirSync(mirror, { recursive: true });
+    const dev = join(tmp("dev"), "box");
+    expect(() => takeSnapshot({ source: { workDir: `${HOST}:/var/wolfpack/kb/work`, workBaseDir: mirror, denDir: join(root, "den") }, devRoot: dev, runner: runnerFor(LEDGER).runner, requireWorkItems: true })).toThrow(/0 work item \.md files/);
+    expect(existsSync(join(dev, "snapshot.json"))).toBe(false);
+    expect(existsSync(join(dev, "ledger"))).toBe(false);
   });
 });

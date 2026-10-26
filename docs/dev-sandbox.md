@@ -87,8 +87,10 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 ### The remote pull
 
 * rsync with the remote path as **source only**; no `--delete*`, no `--remove-source-files`, no `--rsync-path`
-  (`assertReadOnlyRsyncArgv` refuses them before spawning); explicit filters: only `/ledger/work-events.jsonl` under
-  `/var/wolfpack/kb/work/` and `/domains/*/work/*.md` under `/var/wolfpack/kb/base/`. No den, ops or KB comes from the host.
+  (`assertReadOnlyRsyncArgv` refuses them before spawning); explicit filter: only `/ledger/work-events.jsonl` under
+  `/var/wolfpack/kb/work/`. The work item `.md` files are NOT pulled from the host: they are copied read-only from the local
+  Syncthing mirror (`--work-md-from`, default `~/wolves/knowledge/base`). After install the snapshot prints a cross-check of
+  ledger ids vs `.md` files, and fails (installing nothing) if the ledger has events but no `.md` was found. No den, ops or KB comes from the host.
 * The remote ledger is hashed over ssh before and after (`sha256sum -- <file>`, read-only). The snapshot fails loudly,
   installing nothing, if the copy's sha256 differs from the hash taken before, or the two remote hashes differ (a live
   append: just rerun). `--dry-run` runs `rsync -n --itemize-changes` only: nothing written, no hash.

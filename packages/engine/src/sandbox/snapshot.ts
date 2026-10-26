@@ -57,6 +57,8 @@ export interface SnapshotOptions {
   workOnly?: boolean;
   /** Paths the dev root must not overlap (live KB, Syncthing folders, other wolves' homes...). Checked both ways. */
   forbiddenRoots?: string[];
+  /** Fail (installing nothing) when the ledger has events but no work item .md file was copied. */
+  requireWorkItems?: boolean;
   /** Test seam: the process spawner for rsync/ssh. Default: child_process.spawnSync. */
   runner?: Runner;
   now?: () => Date;
@@ -78,6 +80,36 @@ export const defaultRunner: Runner = {
 function run(cmd: string, argv: string[]): RunResult {
   const r = spawnSync(cmd, argv, { encoding: "utf8" });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? (r.error ? r.error.message : "") };
+}
+
+export interface WorkCrossCheck {
+  ledgerIds: number;
+  mdFiles: number;
+  /** Ledger ids with no .md file. */
+  missingMd: string[];
+  /** .md files whose id the ledger never mentions. */
+  missingLedger: string[];
+}
+
+/** Compare the work ids the ledger references (`id` of each event) with the item files under `<workBase>/domains/<d>/work/`. */
+export function crossCheckWork(ledgerFile: string, workBase: string): WorkCrossCheck {
+  const ids = new Set<string>();
+  if (existsSync(ledgerFile)) {
+    for (const line of readFileSync(ledgerFile, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const id = (JSON.parse(line) as { id?: unknown }).id;
+        if (typeof id === "string" && id.startsWith("work-")) ids.add(id);
+      } catch { /* torn/garbage line */ }
+    }
+  }
+  const md = new Set(walkFiles(join(workBase, "domains")).filter((f) => f.endsWith(".md")).map((f) => f.slice(f.lastIndexOf(sep) + 1, -3)));
+  return {
+    ledgerIds: ids.size,
+    mdFiles: md.size,
+    missingMd: [...ids].filter((i) => !md.has(i)).sort(),
+    missingLedger: [...md].filter((i) => !ids.has(i)).sort(),
+  };
 }
 
 export interface SnapshotManifest {
@@ -445,6 +477,10 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   // A torn line is never valid JSON; an empty ledger must still exist so the work server starts clean.
   if (remoteLedger && trimTornLine(sp.ledgerFile) === 0) {
     throw new Error(`snapshot: remote ledger ${source.workDir} yielded 0 events (wrong path or filter?); refusing a silent empty snapshot`);
+  }
+
+  if (opts.requireWorkItems && trimTornLine(sp.ledgerFile) > 0 && walkFiles(join(sp.workBase, "domains")).filter((f) => f.endsWith(".md")).length === 0) {
+    throw new Error(`snapshot: the ledger has events but 0 work item .md files were found (work-md source ${source.workBaseDir ?? "none"}); nothing was installed (staging kept in ${stage})`);
   }
 
   // ── the rest (local only) ─────────────────────────────────────────────────

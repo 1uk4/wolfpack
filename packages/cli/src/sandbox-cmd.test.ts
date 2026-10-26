@@ -148,8 +148,8 @@ describe("mixed sources (production-like dev sandbox)", () => {
   });
 
   it("mixedSnapshotSource: the ledger/items are the only remote part; den, KB and ops stay local", () => {
-    const remote = mixedSnapshotSource({ den: "/d", kbBase: "/kb", ledgerRemote: { at: "root@h", kbRoot: "/var/wolfpack/kb", sharedKbBase: "/var/wolfpack/kb/base" } });
-    expect(remote).toEqual({ workDir: "root@h:/var/wolfpack/kb/work", workBaseDir: "root@h:/var/wolfpack/kb/base", denDir: "/d", kbBaseDir: "/kb" });
+    const remote = mixedSnapshotSource({ den: "/d", kbBase: "/kb", workMdFrom: "/mirror", ledgerRemote: { at: "root@h", kbRoot: "/var/wolfpack/kb" } });
+    expect(remote).toEqual({ workDir: "root@h:/var/wolfpack/kb/work", workBaseDir: "/mirror", denDir: "/d", kbBaseDir: "/kb" });
     const local = mixedSnapshotSource({ den: "/d", workFrom: "/w", ops: "/o", opsLane: "1uk4-dev, x" });
     expect(local).toEqual({ workDir: "/w", denDir: "/d", opsDir: "/o", opsLanes: ["1uk4-dev", "x"] });
   });

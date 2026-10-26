@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startLocalWorkServer, type LocalWorkServer } from "./work-server.js";
@@ -9,6 +9,8 @@ const TOKEN = "test-token";
 describe("local work server", () => {
   let dir: string;
   let srv: LocalWorkServer;
+  let sentinel: string;
+  const saved = { KB_BASE: process.env.KB_BASE, WORK_LEDGER_DIR: process.env.WORK_LEDGER_DIR };
 
   const call = (method: string, path: string, body?: unknown, token: string | null = TOKEN) =>
     fetch(`${srv.url}/work${path}`, {
@@ -22,9 +24,18 @@ describe("local work server", () => {
 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), "work-server-test-"));
+    sentinel = mkdtempSync(join(tmpdir(), "work-server-sentinel-"));
+    process.env.KB_BASE = join(sentinel, "base");
+    process.env.WORK_LEDGER_DIR = join(sentinel, "work");
     srv = await startLocalWorkServer({ ledgerDir: dir, token: TOKEN });
   });
-  afterAll(() => srv.close());
+  afterAll(async () => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await srv.close();
+  });
 
   it("rejects requests without the token", async () => {
     expect((await call("GET", "", undefined, null)).status).toBe(401);
@@ -52,8 +63,9 @@ describe("local work server", () => {
     expect(events.length).toBeGreaterThanOrEqual(3);
     const mine = events.filter((e) => e.id === id);
     expect(mine.map((e) => e.type)).toEqual(expect.arrayContaining(["work.created", "work.staged", "work.noted"]));
-    // Nothing leaked to the agent's default ledger location.
-    expect(existsSync(join(process.cwd(), "ledger", "work-events.jsonl"))).toBe(false);
+    // Materialized file lives inside ledgerDir; env-default roots stay untouched.
+    expect(existsSync(join(dir, "base", "domains", "snapjack", "work", `${id}.md`))).toBe(true);
+    expect(readdirSync(sentinel)).toEqual([]);
 
     const got = (await (await call("GET", `/${id}`)).json()) as { item: { stage: string } };
     expect(got.item.stage).toBe("approved");

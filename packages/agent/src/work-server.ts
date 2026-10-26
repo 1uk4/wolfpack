@@ -8,6 +8,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import express from "express";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -31,8 +32,9 @@ export interface LocalWorkServer {
   close(): Promise<void>;
 }
 
-export function startLocalWorkServer(opts: LocalWorkServerOptions): Promise<LocalWorkServer> {
+export async function startLocalWorkServer(opts: LocalWorkServerOptions): Promise<LocalWorkServer> {
   if (!opts.token) throw new Error("startLocalWorkServer: token is required");
+  const expected = Buffer.from(opts.token);
   const roots: KbRoots = {
     kbBase: join(opts.ledgerDir, "base"),
     opsRoot: join(opts.ledgerDir, "ops"),
@@ -45,7 +47,8 @@ export function startLocalWorkServer(opts: LocalWorkServerOptions): Promise<Loca
     res.json({ status: "ok" });
   });
   app.use((req, res, next) => {
-    if (req.headers["x-api-key"] !== opts.token) {
+    const provided = Buffer.from(String(req.headers["x-api-key"] ?? ""));
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }

@@ -2,7 +2,7 @@
  * Work API routes — shared task/work item management.
  *
  * All wolves hit these routes over Tailscale. Storage:
- *   - Event ledger: <kbRoot>/work-events.jsonl
+ *   - Event ledger: <denLocal>/ledger/work-events.jsonl
  *   - Materialized .md: <KB_BASE>/domains/<domain>/work/<id>.md
  *
  * Auth: same agent API key (X-API-Key header).
@@ -51,7 +51,6 @@ export function defaultWorkRoots(): KbRoots {
  */
 export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
   mkdirSync(`${roots.denLocal}/ledger`, { recursive: true });
-  const makeRoots = (): KbRoots => roots;
   const router = Router();
 
   // ── Query work items ──────────────────────────────────────────────────
@@ -65,7 +64,7 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
       if (req.query.area) query.area = String(req.query.area);
       if (req.query.partOf) query.partOf = String(req.query.partOf);
 
-      const items = queryWork(makeRoots(), query);
+      const items = queryWork(roots, query);
       res.json({ items });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -75,7 +74,6 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
   // ── Get single item ───────────────────────────────────────────────────
   router.get("/:id", (req: Request, res: Response) => {
     try {
-      const roots = makeRoots();
       const items = loadWorkState(roots);
       const item = items.get(req.params.id as any);
       if (!item) {
@@ -100,7 +98,7 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
         res.status(400).json({ error: "kind, domain, title, and assignee are required" });
         return;
       }
-      const result = createWork(makeRoots(), body);
+      const result = createWork(roots, body);
       res.status(201).json({ id: result.id, item: result.item });
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -110,7 +108,6 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
   // ── Update work item (multipurpose PATCH) ─────────────────────────────
   router.patch("/:id", (req: Request, res: Response) => {
     try {
-      const roots = makeRoots();
       const id = req.params.id;
       const body = req.body as Record<string, unknown>;
 
@@ -176,7 +173,7 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
   // ── Delete work item (with cascade) ───────────────────────────────────
   router.delete("/:id", (req: Request, res: Response) => {
     try {
-      const result = deleteWork(makeRoots(), req.params.id);
+      const result = deleteWork(roots, req.params.id);
       res.json({ deleted: result.items.map((i) => i.id) });
     } catch (err) {
       res.status(400).json({ error: String(err) });
@@ -186,7 +183,7 @@ export function workRouter(roots: KbRoots = defaultWorkRoots()): Router {
   // ── Graduate work item ─ marks graduated=now on the authoritative ledger. ──
   router.post("/:id/graduate", (req: Request, res: Response) => {
     try {
-      const r = graduateWork(makeRoots(), req.params.id);
+      const r = graduateWork(roots, req.params.id);
       res.json({ item: r.item });
     } catch (err) {
       res.status(400).json({ error: String(err) });

@@ -41,6 +41,8 @@ export function startLibrarianSweep(opts: LibrarianSweepOptions): SweepManager {
     embedModel: opts.env.WOLFPACK_EMBED_MODEL,
     models: opts.table,
     apiKey: opts.env.ANTHROPIC_API_KEY,
+    workEndpoint: opts.env.WORK_ENDPOINT,
+    workToken: opts.env.WORK_TOKEN,
   });
   opts.log("[librarian] Sweep manager initialized");
   return manager;

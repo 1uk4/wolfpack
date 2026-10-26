@@ -184,3 +184,20 @@ describe("mixed sources (production-like dev sandbox)", () => {
     }
   }, 90_000);
 });
+
+describe("add-wolf on a single-wolf root", () => {
+  it("refuses with a clear message and changes nothing", async () => {
+    const root = path.join(tmp, "single");
+    fs.mkdirSync(path.join(root, "den"), { recursive: true });
+    fs.writeFileSync(path.join(root, "snapshot.json"), "{}");
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit"); }) as never);
+    try {
+      await expect(sandboxCmd(["add-wolf", root, "dewey-dev"])).rejects.toThrow("exit");
+      expect(err.mock.calls.flat().join("\n")).toMatch(/single-wolf sandbox .*--shared/);
+      expect(fs.existsSync(path.join(root, "dens"))).toBe(false);
+    } finally {
+      [err, exit].forEach((m) => m.mockRestore());
+    }
+  });
+});

@@ -40,6 +40,9 @@ export interface SweepWorkerConfig {
   models: ModelTable;
   /** Required by the api transport; unused on subscription. */
   apiKey?: string;
+  /** Work API the sweep posts link-back notes to (the host's effective env, never read ambiently from here). */
+  workEndpoint?: string;
+  workToken?: string;
 }
 
 // ─── Sweep Manager ─────────────────────────────────────────────────────────
@@ -98,7 +101,7 @@ export class SweepManager {
 
     try {
       // Dynamic import to keep startup fast
-      const { runSweepTick, createLibrarianEngine } = await import("@wolfpack/kb/librarian");
+      const { runSweepTick, createLibrarianEngine, httpNotePoster } = await import("@wolfpack/kb/librarian");
 
       // Set up embedder environment
       if (this.config.embedUrl) {
@@ -120,6 +123,7 @@ export class SweepManager {
         createEngine: () => createLibrarianEngine(this.config.models, this.config.apiKey),
         notify: (msg: string) => this.updateProgress(msg),
         alert: (msg: string) => this.onComplete?.(msg),
+        notePoster: httpNotePoster(this.config.workEndpoint, this.config.workToken),
       });
       if (tick.outcome !== "ran") {
         this.status = { state: "idle" };

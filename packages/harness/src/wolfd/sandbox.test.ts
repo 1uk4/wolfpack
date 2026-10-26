@@ -127,3 +127,24 @@ describe("startSandbox: librarian only on a KB copy", () => {
     for (const k of ["KB_BASE", "KB_OPS", "KB_DEN_LOCAL", "WOLF_DEN"]) expect(a.env[k].startsWith(dev)).toBe(true);
   });
 });
+
+describe("startSandbox: publish failure", () => {
+  it("closes the started work server BEFORE releasing the lock, and leaves no lock behind", async () => {
+    const dev = snapshot();
+    const events: string[] = [];
+    const start: StartWorkServer = async (o) => {
+      // publish() writes <root>/run/work-server.json: make that path a directory so it throws
+      mkdirSync(sandboxPaths(dev).workServerFile, { recursive: true });
+      events.push(`started(lock held: ${existsSync(sandboxPaths(dev).workServerLock)})`);
+      return {
+        url: "http://127.0.0.1:45999",
+        close: async () => {
+          events.push(`closed(lock still held: ${existsSync(sandboxPaths(dev).workServerLock)})`);
+        },
+      };
+    };
+    await expect(startSandbox(dev, { startWorkServer: start, wolf: "1uk4-dev" })).rejects.toThrow();
+    expect(events).toEqual(["started(lock held: true)", "closed(lock still held: true)"]);
+    expect(existsSync(sandboxPaths(dev).workServerLock)).toBe(false);
+  });
+});

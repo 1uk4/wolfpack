@@ -16,6 +16,7 @@
     "test": "vitest run --root ../.. --config vitest.config.ts packages/agent/src"
   },
   "dependencies": {
+    "@wolfpack/engine": "*",
     "@wolfpack/kb": "*",
     "express": "^4.21.0",
     "yaml": "^2.6.0",

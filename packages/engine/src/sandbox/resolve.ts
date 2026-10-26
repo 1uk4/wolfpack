@@ -5,7 +5,7 @@
  * the snapshot's KB copy (`<root>/kb-base`) when the snapshot carries one; without a copy it stays ambient and
  * read-only (and a librarian is then refused, see {@link assertLibrarianSandboxed}).
  */
-import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sandboxPaths, wolfDenDir } from "./layout.js";
 
@@ -134,7 +134,22 @@ export function assertLibrarianSandboxed(
     if (!value) throw new SandboxError(`librarian ${label} is not set (would fall back to the live location)`);
     if (!within(realRoot, realPathLoose(value))) throw new SandboxError(`librarian ${label} ${value} resolves outside the dev root ${root}`);
   }
+  const link = findSymlink(p.kbBase);
+  if (link) throw new SandboxError(`librarian: the KB copy contains a symlink (${link}); a sweep could write through it outside the root`);
   if (realPathLoose(roots.kbBase!) !== realPathLoose(p.kbBase)) throw new SandboxError(`librarian kbBase ${roots.kbBase} is not the sandbox KB copy ${p.kbBase}`);
+}
+
+/** First symlink anywhere under `dir` (lstat walk; links are never followed), or undefined. */
+function findSymlink(dir: string): string | undefined {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const f = join(dir, e.name);
+    if (e.isSymbolicLink()) return f;
+    if (e.isDirectory()) {
+      const inner = findSymlink(f);
+      if (inner) return inner;
+    }
+  }
+  return undefined;
 }
 
 /** The env a sandboxed wolf runs with. */

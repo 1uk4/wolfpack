@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realPathLoose } from "./resolve.js";
 import { sandboxPaths, SNAPSHOT_MANIFEST, wolfDenDir, type SandboxPaths } from "./layout.js";
-import { readWorkServerRunFile } from "./work-writer.js";
+import { liveWorkWriterPid } from "./work-writer.js";
 
 export interface SnapshotSource {
   /** Dir holding `ledger/work-events.jsonl` (sfo-01: /var/wolfpack/kb/work). */
@@ -59,6 +59,10 @@ export interface SnapshotOptions {
   forbiddenRoots?: string[];
   /** Fail (installing nothing) when the ledger has events but no work item .md file was copied. */
   requireWorkItems?: boolean;
+  /** Proceed despite an `.install-in-progress` marker from an earlier failed install (after you restored the named parts). */
+  recover?: boolean;
+  /** Test seams (no production caller): run right before the live-writer re-check, and after each installed part. */
+  hooks?: { beforeInstall?: () => void; afterStep?: (rel: string) => void };
   /** Test seam: the process spawner for rsync/ssh. Default: child_process.spawnSync. */
   runner?: Runner;
   now?: () => Date;
@@ -119,7 +123,7 @@ export interface SnapshotManifest {
   counts: { ledgerEvents: number; workItems: number; opsFiles: number; denFiles: number; kbBaseFiles: number };
   /** Where the den was copied to, relative to the root (`den` or `dens/<wolf>`). */
   den: string;
-  /** sha256 of the ledger file as copied (the value the remote hash was checked against for a remote ledger). */
+  /** sha256 of the ledger file as installed. For a remote ledger it equals the remote hash taken BEFORE the copy (the snapshot fails otherwise). */
   ledgerSha256?: string;
   includeSessions: boolean;
   /** Den paths (relative to the den root; trailing * = prefix) left out of this snapshot. */
@@ -205,27 +209,53 @@ export function sshCommand(identity?: string): string {
  * `dryRun` adds `-n --itemize-changes` (lists what would be copied, copies nothing).
  */
 export function rsyncArgv(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean; dryRun?: boolean } = {}): string[] {
+  if (!opts.local && isRemoteSpec(spec)) assertSafeRemoteSpec(spec.replace(/\/+$/, ""));
   return [
     "-a", "--no-links",
     ...(opts.dryRun ? ["-n", "--itemize-changes"] : []),
     ...(opts.local ? [] : ["-e", sshCommand(identity)]),
-    ...rules, "--", spec.replace(/\/?$/, "/"), `${dest}/`,
+    ...rules, "--", `${spec.replace(/\/+$/, "")}/`, `${dest.replace(/\/+$/, "")}/`,
   ];
 }
 
+/** Host and path of a remote spec are used verbatim in argv: only conservative characters, and never a leading `-`. */
+export function assertSafeRemoteSpec(spec: string): void {
+  const { host, path } = splitRemote(spec);
+  if (!/^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(host)) throw new Error(`snapshot: unsafe host in remote spec '${spec}' (letters, digits, . _ - and an optional user@; no leading '-')`);
+  if (!/^[\w./-]+$/.test(path) || path.includes("..")) throw new Error(`snapshot: unsafe remote path in '${spec}' (only [A-Za-z0-9_./-], no '..')`);
+}
+
 /**
- * Refuse any rsync argv that could write, delete or move on the remote: no --delete*, no --remove-source-files, no
- * --move*, the remote spec is the one source (before the local destination), the destination is a local path.
- * `copyRemote` runs this on every argv before spawning, so the rule holds whoever builds the argv.
+ * ALLOW-list of exactly the rsync flags this module builds: `-a --no-links [-n --itemize-changes] [-e "ssh ..."]
+ * --include=<rule> --exclude=<rule> -- <source> <dest>`. Anything else (--delete*, --remove-source-files, --rsync-path,
+ * --files-from, --daemon, any unknown short flag...) is refused before spawning, whoever built the argv. The remote spec is
+ * the source, the destination is local.
  */
 export function assertReadOnlyRsyncArgv(argv: string[]): void {
-  const sep = argv.indexOf("--");
-  if (sep < 0 || argv.length !== sep + 3) throw new Error("snapshot: rsync argv must end with `-- <source> <dest>`");
-  const [source, dest] = argv.slice(sep + 1);
-  const bad = argv.slice(0, sep).find((a) => /^--(delete|remove-source-files|remove-sent-files|move|force|backup|rsync-path|files-from|write-batch|only-write-batch|daemon)/.test(a) || /^-[a-zA-Z]*[Dd]/.test(a));
-  if (bad) throw new Error(`snapshot: refusing rsync flag ${bad} (the remote is read-only)`);
+  const sepAt = argv.indexOf("--");
+  if (sepAt < 0 || argv.length !== sepAt + 3) throw new Error("snapshot: rsync argv must end with `-- <source> <dest>`");
+  const [source, dest] = argv.slice(sepAt + 1);
+  const flags = argv.slice(0, sepAt);
+  let remote = false;
+  for (let i = 0; i < flags.length; i++) {
+    const f = flags[i];
+    if (f === "-a" || f === "--no-links" || f === "-n" || f === "--itemize-changes") continue;
+    if (f === "-e") {
+      const cmd = flags[++i];
+      if (cmd === undefined || !/^ssh /.test(cmd)) throw new Error("snapshot: rsync -e must be an `ssh ...` command");
+      remote = true;
+      continue;
+    }
+    if (/^--(include|exclude)=./.test(f)) continue;
+    throw new Error(`snapshot: refusing rsync flag ${f} (not on the allow-list; the remote is read-only)`);
+  }
   if (isRemoteSpec(dest)) throw new Error(`snapshot: rsync destination ${dest} must be local`);
-  if (argv.includes("-e") && !isRemoteSpec(source)) throw new Error(`snapshot: rsync source ${source} must be the remote spec`);
+  if (remote) {
+    if (!isRemoteSpec(source)) throw new Error(`snapshot: rsync source ${source} must be the remote spec`);
+    assertSafeRemoteSpec(source.replace(/\/$/, ""));
+  } else if (isRemoteSpec(source)) {
+    throw new Error(`snapshot: rsync source ${source} is remote but no ssh transport was given`);
+  }
 }
 
 /** Filter rules per part; `ledger` copies <src>/ledger/work-events.jsonl into <dest>/ledger/. */
@@ -256,6 +286,7 @@ const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
 /** The read-only ssh argv that hashes one remote file: `sha256sum -- <file>` and nothing else. */
 export function remoteSha256Argv(spec: string, identity?: string): string[] {
+  assertSafeRemoteSpec(spec);
   const { host, path } = splitRemote(spec);
   return [...sshArgs(identity), host, `sha256sum -- ${shq(path)}`];
 }
@@ -276,23 +307,37 @@ export function sha256File(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-/** The remote commands a snapshot of `source` would run, nothing executed (for review before anyone approves). */
-export function remotePlan(source: SnapshotSource, identity?: string): { label: string; command: string }[] {
-  const plan: { label: string; command: string }[] = [];
-  // Display only (the real argv is never joined into a shell string): quote what a human would need to quote to paste it.
-  const q = (a: string) => (!/[\s'*]/.test(a) ? a : a.includes("'") ? `"${a}"` : `'${a}'`);
-  const show = (cmd: string, argv: string[]) => [cmd, ...argv.map(q)].join(" ");
+/** Shell-pasteable display of an argv (display only; the real argv is never joined into a shell string). */
+export function formatCommand(cmd: string, argv: string[]): string {
+  const q = (a: string) => (!/[\s'*<>]/.test(a) ? a : a.includes("'") ? `"${a}"` : `'${a}'`);
+  return [cmd, ...argv.map(q)].join(" ");
+}
+
+export interface PlanStep {
+  label: string;
+  cmd: "ssh" | "rsync";
+  argv: string[];
+  command: string;
+}
+
+/** Where the plan says rsync writes: the staging dir takeSnapshot really uses is `<dev-root>/.staging-<timestamp>`. */
+export const PLAN_DEST = "<dev-root>/.staging-<timestamp>";
+
+/**
+ * The remote commands a snapshot of `source` would run, nothing executed (for review before anyone approves). Built by the
+ * same functions takeSnapshot calls, so what is printed is what runs (with `dest` = the real staging dir).
+ */
+export function remotePlan(source: SnapshotSource, identity?: string, dest: string = PLAN_DEST): PlanStep[] {
+  const plan: PlanStep[] = [];
+  const add = (label: string, cmd: "ssh" | "rsync", argv: string[]) => plan.push({ label, cmd, argv, command: formatCommand(cmd, argv) });
+  const hashSpec = isRemoteSpec(source.workDir) ? `${source.workDir.replace(/\/+$/, "")}/ledger/work-events.jsonl` : "";
+  if (hashSpec) add("ledger hash (before)", "ssh", remoteSha256Argv(hashSpec, identity));
   const part = (label: string, spec: string | undefined, rules: readonly string[]) => {
-    if (spec && isRemoteSpec(spec)) plan.push({ label, command: show("rsync", rsyncArgv(spec, "<dev-root>/<part>", [...rules], identity)) });
+    if (spec && isRemoteSpec(spec)) add(label, "rsync", rsyncArgv(spec, dest, [...rules], identity));
   };
-  if (isRemoteSpec(source.workDir)) {
-    plan.push({ label: "ledger hash (before)", command: show("ssh", remoteSha256Argv(`${source.workDir}/ledger/work-events.jsonl`, identity)) });
-  }
   part("ledger", source.workDir, RSYNC_RULES.ledger);
-  if (isRemoteSpec(source.workDir)) {
-    plan.push({ label: "ledger hash (after)", command: show("ssh", remoteSha256Argv(`${source.workDir}/ledger/work-events.jsonl`, identity)) });
-  }
   part("work items", source.workBaseDir, RSYNC_RULES.workMd);
+  if (hashSpec) add("ledger hash (after)", "ssh", remoteSha256Argv(hashSpec, identity));
   return plan;
 }
 
@@ -394,6 +439,7 @@ function trimTornLine(file: string): number {
 }
 
 const STAGING = /^\.(staging|replaced|failed)-/;
+export const INSTALL_MARKER = ".install-in-progress";
 
 /** KB copy filter: everything except the work item files (the work server's) and OS litter. */
 function kbCopyExcluded(rel: string): boolean {
@@ -415,9 +461,14 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   const runner = opts.runner ?? defaultRunner;
   assertDisjoint(devRoot, source, opts.forbiddenRoots);
   if (source.kbBaseDir && isRemoteSpec(source.kbBaseDir)) throw new Error("snapshot: the KB base is only copied from a local path (never pulled from a host)");
+  for (const spec of [source.workDir, source.workBaseDir, source.opsDir, source.denDir]) if (spec && isRemoteSpec(spec)) assertSafeRemoteSpec(spec.replace(/\/+$/, ""));
+  const markerFile = join(devRoot, INSTALL_MARKER);
+  if (existsSync(markerFile) && !opts.recover) {
+    throw new Error(`snapshot: an earlier install in ${devRoot} did not finish (${markerFile}). Restore the parts it names (nothing was deleted: they are under its .replaced-* dir), remove the marker, or re-run with --recover.\n${readFileSync(markerFile, "utf8")}`);
+  }
   if (opts.workOnly && !existsSync(paths.manifest)) throw new Error(`snapshot: ${devRoot} is not a snapshot; nothing to refresh`);
 
-  const existing = existsSync(devRoot) ? readdirSync(devRoot).filter((n) => !STAGING.test(n)) : [];
+  const existing = existsSync(devRoot) ? readdirSync(devRoot).filter((n) => !STAGING.test(n) && n !== INSTALL_MARKER) : [];
   const replacing = existing.length > 0 && !opts.workOnly;
   if (replacing) {
     if (!existsSync(paths.manifest)) throw new Error(`snapshot: ${devRoot} exists, is not empty and is not a snapshot; refusing`);
@@ -425,8 +476,8 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   }
   if (existing.length > 0) {
     // The ledger copy has exactly one writer (the local work server); swapping it under that process would corrupt it.
-    const live = readWorkServerRunFile(devRoot);
-    if (live) throw new Error(`snapshot: the sandbox work server is running (pid ${live.pid}); stop the dev stack before replacing the ledger`);
+    const live = liveWorkWriterPid(devRoot);
+    if (live) throw new Error(`snapshot: the sandbox work server is running (pid ${live}); stop the dev stack before replacing the ledger`);
   }
   mkdirSync(devRoot, { recursive: true });
 
@@ -504,17 +555,41 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   const parts: [string, string][] = opts.workOnly
     ? [["ledger", join(devRoot, "ledger")], ["base", paths.workBase]]
     : [["ledger", join(devRoot, "ledger")], ["base", paths.workBase], ["ops", paths.kbOps], [denRel, finalDen], ["kb-base", paths.kbBase]];
-  for (const [rel, finalPath] of parts) {
-    if (!existsSync(join(stage, rel))) continue; // not part of this run: the existing one stays
-    if (existsSync(finalPath)) moveAside(finalPath, join(aside, relative(devRoot, resolve(finalPath, ".."))));
-    mkdirSync(resolve(finalPath, ".."), { recursive: true });
-    renameSync(join(stage, rel), finalPath);
+  const prev = opts.workOnly ? ({ den: "den", ...JSON.parse(readFileSync(paths.manifest, "utf8")) } as SnapshotManifest) : undefined;
+
+  // The writer can have started since the first check (the copy above takes a while): re-check, by lock pid AND run file,
+  // immediately before anything is moved.
+  opts.hooks?.beforeInstall?.();
+  const writer = liveWorkWriterPid(devRoot);
+  if (writer) throw new Error(`snapshot: the sandbox work server started during the snapshot (pid ${writer}); nothing was installed (staging kept in ${stage})`);
+
+  const plan = parts
+    .filter(([rel]) => existsSync(join(stage, rel)))
+    .map(([rel, finalPath]) => ({ rel, staged: join(stage, rel), final: finalPath, aside: join(aside, relative(devRoot, finalPath)) }));
+  const manifestAside = join(aside, "snapshot.json");
+  writeFileSync(markerFile, JSON.stringify({ startedAt: new Date().toISOString(), stage, aside, plan, manifestAside, manifest: paths.manifest }, null, 2) + "\n");
+  try {
+    for (const step of plan) {
+      if (existsSync(step.final)) moveAside(step.final, join(aside, relative(devRoot, resolve(step.final, ".."))));
+      mkdirSync(resolve(step.final, ".."), { recursive: true });
+      renameSync(step.staged, step.final);
+      opts.hooks?.afterStep?.(step.rel);
+    }
+    if (existsSync(paths.manifest)) moveAside(paths.manifest, aside);
+  } catch (e) {
+    const fix = [
+      ...plan.flatMap((st) => [
+        `  [ -e '${st.aside}' ] && { mv '${st.final}' '${st.staged}' 2>/dev/null; mv '${st.aside}' '${st.final}'; }`,
+      ]),
+      `  [ -e '${manifestAside}' ] && mv '${manifestAside}' '${paths.manifest}'`,
+      `  rm '${markerFile}'   # only after the lines above`,
+    ];
+    throw new Error(`snapshot: install failed midway (${e instanceof Error ? e.message : String(e)}). Nothing was deleted. Undo it: for each part, put the new copy back into staging and move the old one back from ${aside}:\n${fix.join("\n")}\n(or re-run with --recover once the old parts are back)`);
   }
-  if (!opts.workOnly && existsSync(paths.manifest)) moveAside(paths.manifest, aside);
+  rmSync(markerFile, { force: true });
   rmSync(stage, { recursive: true, force: true }); // our staging dir: its parts were all renamed out, only empty dirs remain
   if (!opts.workOnly && !existsSync(paths.kbBase) && source.kbBaseDir) throw new Error("snapshot: KB copy missing after install");
 
-  const prev = opts.workOnly ? ({ den: "den", ...JSON.parse(readFileSync(paths.manifest, "utf8")) } as SnapshotManifest) : undefined;
   const manifest: SnapshotManifest = {
     version: 1,
     createdAt: (opts.now?.() ?? new Date()).toISOString(),
@@ -531,6 +606,7 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
     includeSessions: prev ? prev.includeSessions : !!opts.includeSessions,
     excluded: prev ? prev.excluded : [...sessionExcludes, ...stateExcludes],
   };
+  if (existsSync(paths.manifest)) moveAside(paths.manifest, aside); // never overwrite a manifest in place
   writeFileSync(paths.manifest, JSON.stringify(manifest, null, 2) + "\n");
   return { ...manifest, paths };
 }

@@ -23,14 +23,14 @@ describe("startLibrarianSweep", () => {
     const m = startLibrarianSweep({
       roots: { kbBase: "/s/kb-base", opsRoot: "/s/ops", denLocal: "/s/den/kb" },
       table,
-      env: { WOLFPACK_EMBED_URL: "http://127.0.0.1:11434", WOLFPACK_EMBED_MODEL: "nomic-embed-text", ANTHROPIC_API_KEY: "k" },
+      env: { WOLFPACK_EMBED_URL: "http://127.0.0.1:11434", WOLFPACK_EMBED_MODEL: "nomic-embed-text", ANTHROPIC_API_KEY: "k", WORK_ENDPOINT: "http://127.0.0.1:9/work", WORK_TOKEN: "t" },
       log: (l) => logs.push(l),
     });
     expect(logs).toEqual(["[librarian] Sweep manager initialized"]);
     expect(getSweepManager()).toBe(m);
     expect((m as unknown as { config: Record<string, unknown> }).config).toEqual({
       kbBase: "/s/kb-base", kbOps: "/s/ops", denLocal: "/s/den/kb",
-      embedUrl: "http://127.0.0.1:11434", embedModel: "nomic-embed-text", models: table, apiKey: "k",
+      embedUrl: "http://127.0.0.1:11434", embedModel: "nomic-embed-text", models: table, apiKey: "k", workEndpoint: "http://127.0.0.1:9/work", workToken: "t",
     });
   });
 });

@@ -20,6 +20,7 @@
  *   --work-from <dir>          the same ledger/items from a local dir <dir>/{ledger/work-events.jsonl,base} instead (tests, stand-ins)
  *   --shared                   den goes to <dev-root>/dens/<wolf> (several wolves share the root)
  *   --refresh-work             re-pull ONLY ledger + items into an existing root (old ones are moved aside, never deleted)
+ *   --recover                  proceed past an `.install-in-progress` marker left by a failed install (restore the parts it names first)
  *   --dry-run                  rsync -n: list what the remote part would copy; nothing is written, no hash is taken
  *   --print-plan               print the exact remote commands and exit; contacts nothing
  *
@@ -51,7 +52,7 @@ import { remotePathsFrom } from "../paths.js";
 import { c } from "../render.js";
 
 const USAGE =
-  "Usage: wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | --den <dir> [--kb-base <dir>] [--ops <dir> [--ops-lane a,b]] (--ledger-from-host <h> --yes [--work-md-from <dir>] | --work-from <dir>) [--shared] [--refresh-work] [--dry-run] [--print-plan]) [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2] [--wolf-yaml <file>]\n" +
+  "Usage: wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | --den <dir> [--kb-base <dir>] [--ops <dir> [--ops-lane a,b]] (--ledger-from-host <h> --yes [--work-md-from <dir>] | --work-from <dir>) [--shared] [--refresh-work] [--recover] [--dry-run] [--print-plan]) [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2] [--wolf-yaml <file>]\n" +
   "       wolfpack sandbox install-extensions <dev-root> [--extensions k1,k2] [--den-extensions <dir>] [--wolf <name>]\n" +
   "       wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>] [--librarian-state <den>]";
 
@@ -165,6 +166,7 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       "work-md-from": { type: "string" },
       shared: { type: "boolean" },
       "refresh-work": { type: "boolean" },
+      recover: { type: "boolean" },
       "dry-run": { type: "boolean" },
       "print-plan": { type: "boolean" },
       "librarian-state": { type: "string" },
@@ -195,6 +197,9 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
     if (!root || !name) return fail(USAGE);
     const devRoot = path.resolve(root);
     if (!fs.existsSync(path.join(devRoot, "snapshot.json"))) return fail(`${devRoot} is not a snapshot (no snapshot.json)`);
+    if (fs.existsSync(path.join(devRoot, "den")) && !fs.existsSync(path.join(devRoot, "dens"))) {
+      return fail(`${devRoot} is a single-wolf sandbox (den/ exists, no dens/): add-wolf needs a shared root. Re-snapshot with --shared (--force keeps the old parts under .replaced-*).`);
+    }
     try {
       const den = wolfDenDir(devRoot, name);
       fs.mkdirSync(den, { recursive: true });
@@ -273,6 +278,7 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       source, devRoot, force: values.force, includeSessions: values["include-sessions"], sshIdentity, forbiddenRoots,
       ...(mixed && values.shared ? { denName: wolf } : {}),
       ...(refresh ? { workOnly: true } : {}),
+      ...(values.recover ? { recover: true } : {}),
       ...(mixed ? { requireWorkItems: true } : {}),
     });
     console.log(c.bold(`${refresh ? "Refreshed work of" : "Snapshot of"} ${wolf} -> ${devRoot}`));

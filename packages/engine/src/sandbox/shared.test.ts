@@ -3,12 +3,12 @@
  * ledger part (argv, filters and hash checks with a fake runner; no network).
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  assertLibrarianSandboxed, crossCheckWork, assertReadOnlyRsyncArgv, assertSandboxed, acquireWorkWriterLock, dryRunRemote, parseSha256sum,
+  assertLibrarianSandboxed, assertSafeRemoteSpec, crossCheckWork, formatCommand, INSTALL_MARKER, liveWorkWriterPid, TORN_LOCK_MAX_AGE_MS, assertReadOnlyRsyncArgv, assertSandboxed, acquireWorkWriterLock, dryRunRemote, parseSha256sum,
   readWorkServerRunFile, remotePlan, remoteSha256Argv, resolveSandbox, rsyncArgv, sandboxEnv, sandboxPaths, SandboxError, splitRemote,
   seedLibrarianState, takeSnapshot, wolfDenDir, RSYNC_RULES, type Runner, type SnapshotSource,
 } from "./index.js";
@@ -219,7 +219,7 @@ describe("remote ledger: read-only by construction", () => {
       expect(() => assertReadOnlyRsyncArgv([...base.slice(0, -3), bad, ...base.slice(-3)]), bad).toThrow(/refusing/);
     }
     expect(() => assertReadOnlyRsyncArgv(["-a", "--", "/local/a", `${HOST}:/remote/`])).toThrow(/must be local/);
-    expect(() => assertReadOnlyRsyncArgv(["-a", "-e", "ssh", "--", "/local/a", "/b/"])).toThrow(/remote spec/);
+    expect(() => assertReadOnlyRsyncArgv(["-a", "-e", "ssh x", "--", "/local/a", "/b/"])).toThrow(/remote spec/);
     expect(() => assertReadOnlyRsyncArgv(["-a", "--delete"])).toThrow(/end with/);
   });
 
@@ -236,10 +236,10 @@ describe("remote ledger: read-only by construction", () => {
   it("remotePlan lists exactly: hash, rsync ledger, hash, rsync items; and only remote parts", () => {
     const { source } = fixture();
     const plan = remotePlan(remoteSource(source), "/k/id");
-    expect(plan.map((p) => p.label)).toEqual(["ledger hash (before)", "ledger", "ledger hash (after)", "work items"]);
+    expect(plan.map((p) => p.label)).toEqual(["ledger hash (before)", "ledger", "work items", "ledger hash (after)"]);
     expect(plan[0].command).toContain("sha256sum -- ");
     expect(plan[1].command).toContain("--include=/ledger/work-events.jsonl");
-    expect(plan[3].command).toContain("--include=/domains/*/work/*.md");
+    expect(plan[2].command).toContain("--include=/domains/*/work/*.md");
     expect(remotePlan(source)).toEqual([]);
     for (const p of plan) expect(p.command).not.toMatch(/--delete|\/den|\/ops|kb-base/);
   });
@@ -459,5 +459,177 @@ describe("remote ledger + local work-md mirror", () => {
     expect(() => takeSnapshot({ source: { workDir: `${HOST}:/var/wolfpack/kb/work`, workBaseDir: mirror, denDir: join(root, "den") }, devRoot: dev, runner: runnerFor(LEDGER).runner, requireWorkItems: true })).toThrow(/0 work item \.md files/);
     expect(existsSync(join(dev, "snapshot.json"))).toBe(false);
     expect(existsSync(join(dev, "ledger"))).toBe(false);
+  });
+});
+
+describe("writer lock hardening", () => {
+  it("a torn (unparseable) lock counts as HELD while fresh, and is taken over only once old", () => {
+    const root = tmp("torn");
+    const p = sandboxPaths(root);
+    put(p.workServerLock, '{"pid": 12'); // torn write
+    expect(() => acquireWorkWriterLock(root)).toThrow(/already has a writer/);
+    expect(liveWorkWriterPid(root)).toBeUndefined();
+    const old = new Date(Date.now() - TORN_LOCK_MAX_AGE_MS - 5000);
+    utimesSync(p.workServerLock, old, old);
+    const l = acquireWorkWriterLock(root);
+    expect(JSON.parse(readFileSync(p.workServerLock, "utf8")).pid).toBe(process.pid);
+    l.release();
+  });
+
+  it("the lock appears complete (no temp litter, never empty) and is never visible half-written", () => {
+    const root = tmp("atomic");
+    const l = acquireWorkWriterLock(root);
+    expect(JSON.parse(readFileSync(sandboxPaths(root).workServerLock, "utf8")).pid).toBe(process.pid);
+    expect(readdirSync(sandboxPaths(root).runDir).filter((n) => n !== "work-server.lock")).toEqual([]);
+    l.release();
+  });
+
+  it("two contenders racing for a stale lock: exactly one wins, and neither ever removes the winner's live lock", () => {
+    const root = tmp("race");
+    const p = sandboxPaths(root);
+    put(p.workServerLock, JSON.stringify({ pid: 2 ** 22 + 4242 })); // dead owner
+    const a = acquireWorkWriterLock(root, process.pid);
+    // the second contender (a live pid) arrives after A holds the lock
+    expect(() => acquireWorkWriterLock(root, process.ppid)).toThrow(/already has a writer \(pid \d+/);
+    expect(JSON.parse(readFileSync(p.workServerLock, "utf8")).pid).toBe(process.pid);
+    a.release();
+    // sequential stale takeovers by both: the second finds a live lock, not a stale one
+    put(p.workServerLock, JSON.stringify({ pid: 2 ** 22 + 4243 }));
+    const results: string[] = [];
+    for (const pid of [process.pid, process.ppid]) {
+      try {
+        acquireWorkWriterLock(root, pid);
+        results.push("won");
+      } catch {
+        results.push("refused");
+      }
+    }
+    expect(results).toEqual(["won", "refused"]);
+    expect(JSON.parse(readFileSync(p.workServerLock, "utf8")).pid).toBe(process.pid);
+    expect(readdirSync(p.runDir).sort()).toEqual(["work-server.lock"]);
+  });
+});
+
+describe("install safety", () => {
+  it("re-checks for a live writer (lock pid too) right before the install; nothing is moved", () => {
+    const { source } = fixture();
+    const dev = join(tmp("dev"), "box");
+    takeSnapshot({ source, devRoot: dev, denName: "w" });
+    const before = readFileSync(join(dev, "ledger/work-events.jsonl"), "utf8");
+    const lockPath = sandboxPaths(dev).workServerLock;
+    // a writer that only has the LOCK (no run file yet) appears after the first check passed
+    expect(() => takeSnapshot({ source, devRoot: dev, denName: "w", force: true, hooks: { beforeInstall: () => put(lockPath, JSON.stringify({ pid: process.ppid })) } })).toThrow(/started during the snapshot/);
+    expect(readFileSync(join(dev, "ledger/work-events.jsonl"), "utf8")).toBe(before);
+    expect(existsSync(join(dev, INSTALL_MARKER))).toBe(false);
+    expect(readdirSync(dev).some((n) => n.startsWith(".replaced-"))).toBe(false);
+  });
+
+  it("the first check also sees a lock-only writer", () => {
+    const { source } = fixture();
+    const dev = join(tmp("dev"), "box");
+    takeSnapshot({ source, devRoot: dev });
+    put(sandboxPaths(dev).workServerLock, JSON.stringify({ pid: process.ppid }));
+    expect(() => takeSnapshot({ source, devRoot: dev, force: true })).toThrow(/work server is running/);
+  });
+
+  it("a mid-install failure leaves an .install-in-progress marker, names the recovery, refuses new snapshots until --recover", () => {
+    const { source } = fixture();
+    const dev = join(tmp("dev"), "box");
+    takeSnapshot({ source, devRoot: dev, denName: "w" });
+    let err = "";
+    try {
+      takeSnapshot({ source, devRoot: dev, denName: "w", force: true, now: () => new Date("2026-10-27T00:00:00Z"), hooks: { afterStep: (rel) => { if (rel === "base") throw new Error("disk went away"); } } });
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    expect(err).toMatch(/install failed midway \(disk went away\)/);
+    expect(err).toMatch(/\.replaced-2026-10-27T00-00-00-000Z/);
+    expect(err).toMatch(/mv '.*\.replaced-.*ledger' '.*\/ledger'/);
+    expect(err).toMatch(/Nothing was deleted/);
+    const marker = JSON.parse(readFileSync(join(dev, INSTALL_MARKER), "utf8"));
+    expect(marker.plan.map((x: { rel: string }) => x.rel)).toContain("ledger");
+    // the old ledger is safe in .replaced-*
+    expect(readFileSync(join(dev, ".replaced-2026-10-27T00-00-00-000Z/ledger/work-events.jsonl"), "utf8")).toContain('"id":"a"');
+    // new snapshots are refused while the marker exists ...
+    expect(() => takeSnapshot({ source, devRoot: dev, denName: "w", force: true })).toThrow(/did not finish/);
+    expect(() => takeSnapshot({ source, devRoot: dev, workOnly: true })).toThrow(/did not finish/);
+    // ... unless --recover
+    expect(() => takeSnapshot({ source, devRoot: dev, denName: "w", force: true, recover: true })).not.toThrow();
+    expect(existsSync(join(dev, INSTALL_MARKER))).toBe(false);
+  });
+
+  it("workOnly moves snapshot.json aside instead of overwriting it", () => {
+    const { source } = fixture();
+    const dev = join(tmp("dev"), "box");
+    takeSnapshot({ source, devRoot: dev, denName: "w", now: () => new Date("2026-10-26T00:00:00Z") });
+    takeSnapshot({ source: { ...source, kbBaseDir: undefined }, devRoot: dev, workOnly: true, now: () => new Date("2026-10-26T05:00:00Z") });
+    const aside = readdirSync(dev).find((n) => n.startsWith(".replaced-"))!;
+    expect(JSON.parse(readFileSync(join(dev, aside, "snapshot.json"), "utf8")).createdAt).toBe("2026-10-26T00:00:00.000Z");
+    expect(JSON.parse(readFileSync(join(dev, "snapshot.json"), "utf8")).createdAt).toBe("2026-10-26T05:00:00.000Z");
+  });
+});
+
+describe("remote path safety", () => {
+  it("validates host and path; rejects leading '-' and odd characters", () => {
+    expect(() => assertSafeRemoteSpec("root@100.1.2.3:/var/wolfpack/kb/work")).not.toThrow();
+    for (const bad of ["-oProxyCommand=x:/a", "root@-h:/a", "root@h:/a b", "root@h:/a;rm", "root@h:/a/../b", "root@h:/$(x)", "root@h:/a'b", "h@@x:/a"]) {
+      expect(() => assertSafeRemoteSpec(bad), bad).toThrow(/unsafe/);
+    }
+    expect(() => rsyncArgv("-evil:/a", "/d", [], "/k")).toThrow(/unsafe/);
+    expect(() => remoteSha256Argv("root@h:/a b", "/k")).toThrow(/unsafe/);
+    expect(() => takeSnapshot({ source: { workDir: "-evil:/x", denDir: "/nonexistent" }, devRoot: join(tmp("d"), "b") })).toThrow(/unsafe/);
+  });
+
+  it("the argv check is an ALLOW-list: unknown short/long flags are refused, the built argvs pass", () => {
+    const ok = rsyncArgv("root@h:/p", "/d", [...RSYNC_RULES.ledger, ...RSYNC_RULES.denState], "/k", { dryRun: true });
+    expect(() => assertReadOnlyRsyncArgv(ok)).not.toThrow();
+    for (const flag of ["-z", "--inplace", "--partial", "--chmod=777", "-aP", "-e2", "--out-format=x", "--include", "--link-dest=/x", "--compare-dest=/y"]) {
+      expect(() => assertReadOnlyRsyncArgv([...ok.slice(0, -3), flag, ...ok.slice(-3)]), flag).toThrow(/refusing rsync flag/);
+    }
+    expect(() => assertReadOnlyRsyncArgv(["-a", "-e", "sh -c evil", "--", "root@h:/p/", "/d/"])).toThrow(/ssh/);
+  });
+});
+
+describe("--print-plan is what takeSnapshot runs", () => {
+  it("every rsync/ssh argv the snapshot executes, in order, equals the plan byte-for-byte", () => {
+    const { source } = fixture();
+    const mirror = tmp("mirror");
+    put(join(mirror, "domains/wolfpack/work/work-wolfpack-a.md"), "# a\n");
+    const LEDGER = '{"type":"work.created","id":"work-wolfpack-a"}\n';
+    const ran: { cmd: string; argv: string[] }[] = [];
+    const runner: Runner = {
+      rsync(argv) {
+        ran.push({ cmd: "rsync", argv });
+        put(join(argv[argv.length - 1], "ledger/work-events.jsonl"), LEDGER);
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      ssh(argv) {
+        ran.push({ cmd: "ssh", argv });
+        return { status: 0, stdout: `${sha(LEDGER)}  /x\n`, stderr: "" };
+      },
+    };
+    const src: SnapshotSource = { ...source, workDir: "root@100.1.2.3:/var/wolfpack/kb/work/", workBaseDir: mirror };
+    takeSnapshot({ source: src, devRoot: join(tmp("dev"), "box"), runner, sshIdentity: "/k/my key", requireWorkItems: true });
+    const stage = ran.find((r) => r.cmd === "rsync")!.argv.at(-1)!.replace(/\/$/, "");
+    const plan = remotePlan(src, "/k/my key", stage);
+    expect(plan.map((p) => p.command)).toEqual(ran.map((r) => formatCommand(r.cmd, r.argv)));
+    // and the default placeholder dest is shown quoted, with no doubled slash
+    const shown = remotePlan(src, "/k/my key")[1].command;
+    expect(shown).toMatch(/'<dev-root>\/\.staging-<timestamp>\/'$/);
+    expect(shown).toContain("root@100.1.2.3:/var/wolfpack/kb/work/ ");
+    expect(shown).not.toContain("//");
+  });
+});
+
+describe("librarian gate walks the KB copy for symlinks", () => {
+  it("refuses a kb-base containing a symlink", () => {
+    const { source } = fixture();
+    const dev = join(tmp("dev"), "box");
+    takeSnapshot({ source, devRoot: dev });
+    const r = resolveSandbox(dev);
+    const good = { kbBase: r.kbBase, kbOps: r.kbOps, denLocal: r.kbDenLocal, extra: {} };
+    expect(() => assertLibrarianSandboxed(dev, good)).not.toThrow();
+    symlinkSync(tmp("elsewhere"), join(dev, "kb-base/domains/wolfpack/entries/escape"));
+    expect(() => assertLibrarianSandboxed(dev, good)).toThrow(/contains a symlink/);
   });
 });

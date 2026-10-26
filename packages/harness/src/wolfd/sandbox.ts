@@ -16,6 +16,7 @@ import {
   resolveSandbox,
   sandboxEnv,
   type ResolvedSandbox,
+  type WriterLock,
 } from "@wolfpack/engine";
 import { kbLockFile } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
@@ -24,7 +25,7 @@ export interface LocalWorkServerHandle {
   url: string;
   close(): Promise<void>;
 }
-export type StartWorkServer = (opts: { ledgerDir: string; token: string }) => Promise<LocalWorkServerHandle>;
+export type StartWorkServer = (opts: { ledgerDir: string; token: string; writerLock?: WriterLock }) => Promise<LocalWorkServerHandle>;
 
 export interface RunningSandbox {
   resolved: ResolvedSandbox;
@@ -94,22 +95,28 @@ async function acquireWorkServer(
   if (run && (await pingWorkServer(run.url))) return { url: run.url, token: run.token, owned: false, close: async () => {} };
   const lock = acquireWorkWriterLock(root); // throws SandboxError if a live process still holds the ledger
   const token = randomBytes(24).toString("hex");
+  let server: LocalWorkServerHandle | undefined;
   try {
-    const server = await startWorkServer({ ledgerDir, token });
+    server = await startWorkServer({ ledgerDir, token, writerLock: lock });
     lock.publish({ url: server.url, token });
+    const started = server;
     return {
-      url: server.url,
+      url: started.url,
       token,
       owned: true,
       close: async () => {
         try {
-          await server.close();
+          await started.close();
         } finally {
           lock.release();
         }
       },
     };
   } catch (e) {
+    // Never leave a listening server behind a released lock (a second writer could then start): close it FIRST.
+    try {
+      await server?.close();
+    } catch { /* closing best effort; the lock is released either way */ }
     lock.release();
     throw e;
   }

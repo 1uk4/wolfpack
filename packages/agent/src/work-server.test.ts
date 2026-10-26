@@ -79,3 +79,27 @@ describe("local work server", () => {
     expect(readFileSync(file, "utf-8")).toBe(before);
   });
 });
+
+describe("local work server on a sandbox root takes the single-writer lock itself", () => {
+  it("a second server over the same sandbox ledger fails loudly; close releases; a plain ledger dir is not locked", async () => {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const root = mkdtempSync(join(tmpdir(), "ws-sbx-"));
+    writeFileSync(join(root, "snapshot.json"), "{}");
+    mkdirSync(join(root, "ledger"), { recursive: true });
+    const a = await startLocalWorkServer({ ledgerDir: root, token: "t" });
+    const run = JSON.parse(readFileSync(join(root, "run", "work-server.json"), "utf8"));
+    expect(run).toMatchObject({ url: a.url, token: "t", pid: process.pid });
+    // another live process would be refused: simulate by a lock owned by the parent
+    await a.close();
+    expect(existsSync(join(root, "run", "work-server.lock"))).toBe(false);
+    writeFileSync(join(root, "run", "work-server.lock"), JSON.stringify({ pid: process.ppid }));
+    await expect(startLocalWorkServer({ ledgerDir: root, token: "t" })).rejects.toThrow(/already has a writer/);
+    // same-process second start is also refused while the first runs
+    const plain = mkdtempSync(join(tmpdir(), "ws-plain-"));
+    const p1 = await startLocalWorkServer({ ledgerDir: plain, token: "t" });
+    const p2 = await startLocalWorkServer({ ledgerDir: plain, token: "t" });
+    expect(existsSync(join(plain, "run"))).toBe(false);
+    await p1.close();
+    await p2.close();
+  });
+});

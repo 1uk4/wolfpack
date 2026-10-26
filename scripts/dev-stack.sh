@@ -10,7 +10,8 @@
 # file's transport is "api"; a "subscription" table runs through the Claude Agent SDK bridge (your local login).
 #
 # Sandboxed wolves (wolf.yaml `sandbox:`) share ONE dev root (default ~/wolves/dev/sandbox: ledger copy, KB copy, ops
-# lanes, a den per wolf). workerd starts the single local work server for it; a librarian wolf (dewey-dev) sweeps the KB
+# lanes, a den per wolf). workerd starts the single local work server for it (any starter of that ledger takes the
+# <root>/run/work-server.lock itself, so a second writer fails loudly; this script starts none); a librarian wolf (dewey-dev) sweeps the KB
 # copy on its own timer and needs Ollama at 127.0.0.1:11434 (nomic-embed-text). See docs/dev-sandbox.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

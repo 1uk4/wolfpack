@@ -1,10 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertSandboxed, requireSnapshotRoot, resolveSandbox, sandboxEnv, SandboxError } from "./resolve.js";
-import { isRemoteSpec, takeSnapshot, type SnapshotSource } from "./snapshot.js";
-import { loadWolfConfig } from "../wolfconfig/load.js";
+import { assertSandboxed, realPathLoose, requireSnapshotRoot, resolveSandbox, sandboxEnv, SandboxError } from "./resolve.js";
+import { isRemoteSpec, RSYNC_RULES, rsyncArgv, sshCommand, takeSnapshot, type SnapshotSource } from "./snapshot.js";
+import { loadWolfConfig, normalizeSandbox } from "../wolfconfig/load.js";
 
 const tmps: string[] = [];
 const tmp = (p: string) => {
@@ -160,5 +161,69 @@ describe("wolf.yaml sandbox / memory.live", () => {
     expect(b.config.sandbox).toEqual({ root: "/tmp/snap" });
     expect(b.config.memory.live).toBe(true);
     expect(load("sandbox: false\n").config.sandbox).toBeUndefined();
+  });
+});
+
+describe("remote rsync (argv + filters)", () => {
+  it("builds the exact argv: ssh -e with a quoted identity, rules, -- before the paths", () => {
+    expect(sshCommand("/k/my key")).toBe("ssh -o BatchMode=yes -o ConnectTimeout=5 -i '/k/my key' -o IdentitiesOnly=yes -o IdentityAgent=none");
+    expect(rsyncArgv("root@h:/var/wolfpack/kb/work", "/dev/snap", [...RSYNC_RULES.ledger], "/k/id")).toEqual([
+      "-a", "--no-links", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5 -i '/k/id' -o IdentitiesOnly=yes -o IdentityAgent=none",
+      "--include=/ledger/", "--include=/ledger/work-events.jsonl", "--exclude=*",
+      "--", "root@h:/var/wolfpack/kb/work/", "/dev/snap/",
+    ]);
+  });
+
+  it("the filters copy exactly the right files (rsync local mode, no ssh)", () => {
+    const { source } = liveFixture();
+    const run = (src: string, dest: string, rules: readonly string[]) => {
+      const r = spawnSync("rsync", rsyncArgv(src, dest, [...rules], undefined, { local: true }), { encoding: "utf8" });
+      expect(r.status).toBe(0);
+    };
+    const dev = tmp("rsync-dev");
+    run(source.workDir, dev, RSYNC_RULES.ledger);
+    expect(readFileSync(join(dev, "ledger/work-events.jsonl"), "utf8")).toContain('"id":"a"');
+    const base = join(dev, "base");
+    run(source.workBaseDir!, base, RSYNC_RULES.workMd);
+    expect(existsSync(join(base, "domains/wolfpack/work/work-wolfpack-a.md"))).toBe(true);
+    expect(existsSync(join(base, "domains/wolfpack/entries"))).toBe(false);
+    const ops = join(dev, "ops");
+    run(source.opsDir, ops, RSYNC_RULES.ops);
+    expect(existsSync(join(ops, "inbox/hal/c1.md"))).toBe(true);
+    expect(existsSync(join(ops, "parked/hal/p1.md"))).toBe(true);
+    expect(existsSync(join(ops, "rejected"))).toBe(false);
+  });
+});
+
+describe("hardening", () => {
+  it("normalizeSandbox throws on malformed values instead of running live", () => {
+    for (const bad of ["yes", {}, { root: 5 }, { root: "" }, 1, []]) expect(() => normalizeSandbox(bad, "/w")).toThrow(/invalid sandbox/);
+    expect(normalizeSandbox(undefined, "/w")).toBeUndefined();
+    expect(normalizeSandbox(false, "/w")).toBeUndefined();
+    expect(normalizeSandbox(true, "/w")).toEqual({ root: "/w/sandbox" });
+  });
+
+  it("assertSandboxed requires a loopback WORK_ENDPOINT", () => {
+    const root = tmp("root");
+    const r = resolveSandbox(root);
+    expect(() => assertSandboxed(root, r)).toThrow(/WORK_ENDPOINT is not set/);
+  });
+
+  it("realPathLoose resolves dangling symlinks and rejects ones that point outside", () => {
+    const root = tmp("root");
+    const live = tmp("live");
+    symlinkSync(join(live, "not-yet"), join(root, "den"));
+    expect(realPathLoose(join(root, "den", "x"))).toBe(join(realPathLoose(live), "not-yet", "x"));
+    const ok = resolveSandbox(root, { workEndpoint: "http://127.0.0.1:1/work" });
+    expect(() => assertSandboxed(root, ok)).toThrow(/outside the dev root/);
+  });
+
+  it("realPathLoose at the filesystem root and a '..x' directory name inside the root", () => {
+    expect(realPathLoose("/")).toBe("/");
+    expect(realPathLoose("/definitely-missing-dir-xyz/a")).toBe("/definitely-missing-dir-xyz/a");
+    const root = tmp("root");
+    mkdirSync(join(root, "..odd"), { recursive: true });
+    const ep = "http://127.0.0.1:1/work";
+    expect(() => assertSandboxed(root, { den: join(root, "..odd"), kbOps: join(root, "ops"), kbDenLocal: join(root, "kb"), workEndpoint: ep })).not.toThrow();
   });
 });

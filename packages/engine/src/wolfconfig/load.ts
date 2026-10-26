@@ -30,13 +30,18 @@ function expand(p: string, base: string, home: string): string {
   return path.resolve(base, p);
 }
 
-/** `sandbox: true` -> <dir>/sandbox; `{root}` -> that path; false/absent -> undefined. */
+/**
+ * `sandbox: true` -> <dir>/sandbox; `{root}` -> that path; false/null/absent -> undefined.
+ * Anything else throws: a malformed value must never silently run live.
+ */
 export function normalizeSandbox(raw: unknown, dir: string, home: string = os.homedir()): { root: string } | undefined {
+  if (raw === undefined || raw === null || raw === false) return undefined;
   if (raw === true) return { root: path.join(dir, "sandbox") };
-  if (raw && typeof raw === "object" && typeof (raw as { root?: unknown }).root === "string") {
-    return { root: expand((raw as { root: string }).root, dir, home) };
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const root = (raw as { root?: unknown }).root;
+    if (typeof root === "string" && root.length > 0) return { root: expand(root, dir, home) };
   }
-  return undefined;
+  throw new Error(`invalid sandbox value ${JSON.stringify(raw)}: expected true, false or { root: <path> }`);
 }
 
 /** Load and normalize one wolf.yaml. Throws WolfConfigError on unreadable/invalid files. */
@@ -91,7 +96,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
     ...(sandbox ? { sandbox } : {}),
-    memory: { live: v.memory.live === true },
+    memory: { live: v.memory.live === true, librarian: v.memory.librarian === true },
     den: path.join(dir, "den"),
     dir,
     file: abs,

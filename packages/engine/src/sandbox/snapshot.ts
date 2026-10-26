@@ -84,23 +84,36 @@ function copyLocal(src: string, dest: string, filter: (rel: string, isDir: boole
   });
 }
 
-function sshCommand(identity?: string): string {
+/** ssh transport for rsync -e. The identity is one argv element, quoted for rsync's own re-splitting. */
+export function sshCommand(identity?: string): string {
   const base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
   // Same hygiene as the wolfpack CLI: only the given key, never a desktop ssh-agent.
-  if (identity) base.push("-i", identity, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
+  if (identity) base.push("-i", `'${identity.replace(/'/g, `'\\''`)}'`, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
   return base.join(" ");
 }
 
-function copyRemote(spec: string, dest: string, rules: string[], identity?: string): void {
+/** Pure: the exact rsync argv for one remote part. `--` guards against a spec starting with `-`. */
+export function rsyncArgv(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean } = {}): string[] {
+  return ["-a", "--no-links", ...(opts.local ? [] : ["-e", sshCommand(identity)]), ...rules, "--", spec.replace(/\/?$/, "/"), `${dest}/`];
+}
+
+/** Filter rules per part; `ledger` copies <src>/ledger/work-events.jsonl into <dest>/ledger/. */
+export const RSYNC_RULES = {
+  ledger: ["--include=/ledger/", "--include=/ledger/work-events.jsonl", "--exclude=*"],
+  workMd: ["--include=/domains/", "--include=/domains/*/", "--include=/domains/*/work/", "--include=/domains/*/work/*.md", "--exclude=*"],
+  ops: ["--include=/inbox/", "--include=/inbox/**", "--include=/receipts/", "--include=/receipts/**", "--include=/parked/", "--include=/parked/**", "--exclude=*"],
+} as const;
+
+/** @internal `local` runs rsync's local mode (no ssh) so tests can prove the filters on a plain directory. */
+export function copyRemote(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean } = {}): void {
   mkdirSync(dest, { recursive: true });
-  const args = ["-a", "--no-links", "-e", sshCommand(identity), ...rules, `${spec.replace(/\/?$/, "/")}`, `${dest}/`];
-  const r = spawnSync("rsync", args, { encoding: "utf8" });
+  const r = spawnSync("rsync", rsyncArgv(spec, dest, rules, identity, opts), { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`rsync from ${spec} failed (${r.status ?? r.error?.message}): ${(r.stderr ?? "").trim().split("\n")[0]}`);
 }
 
 function insideOrEqual(parent: string, child: string): boolean {
   const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** Refuse a dev root that overlaps any local source (snapshotting into the live tree would be the whole bug). */
@@ -153,19 +166,19 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   const opsLane = (rel: string) => ["inbox", "receipts", "parked"].includes(rel.split(sep)[0]);
 
   if (isRemoteSpec(source.workDir)) {
-    copyRemote(source.workDir, join(devRoot, "ledger"), ["--include=work-events.jsonl", "--exclude=*"], opts.sshIdentity);
+    copyRemote(source.workDir, devRoot, [...RSYNC_RULES.ledger], opts.sshIdentity);
   } else {
     copyLocal(source.workDir, devRoot, ledgerRel);
   }
   if (source.workBaseDir) {
     if (isRemoteSpec(source.workBaseDir)) {
-      copyRemote(source.workBaseDir, paths.workBase, ["--include=/domains/", "--include=/domains/*/", "--include=/domains/*/work/", "--include=/domains/*/work/*.md", "--exclude=*"], opts.sshIdentity);
+      copyRemote(source.workBaseDir, paths.workBase, [...RSYNC_RULES.workMd], opts.sshIdentity);
     } else {
       copyLocal(source.workBaseDir, paths.workBase, isWorkMd);
     }
   }
   if (isRemoteSpec(source.opsDir)) {
-    copyRemote(source.opsDir, paths.kbOps, ["--include=/inbox/", "--include=/inbox/**", "--include=/receipts/", "--include=/receipts/**", "--include=/parked/", "--include=/parked/**", "--exclude=*"], opts.sshIdentity);
+    copyRemote(source.opsDir, paths.kbOps, [...RSYNC_RULES.ops], opts.sshIdentity);
   } else {
     copyLocal(source.opsDir, paths.kbOps, opsLane);
   }
@@ -177,6 +190,9 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   // A torn line is never valid JSON; an empty ledger must still exist so the work server starts clean.
   mkdirSync(join(devRoot, "ledger"), { recursive: true });
   if (!existsSync(paths.ledgerFile)) writeFileSync(paths.ledgerFile, "");
+  if (isRemoteSpec(source.workDir) && trimTornLine(paths.ledgerFile) === 0) {
+    throw new Error(`snapshot: remote ledger ${source.workDir} yielded 0 events (wrong path or filter?); refusing a silent empty snapshot`);
+  }
   mkdirSync(paths.kbOps, { recursive: true });
   mkdirSync(paths.den, { recursive: true });
 

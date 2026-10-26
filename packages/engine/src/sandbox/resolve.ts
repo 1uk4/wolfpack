@@ -4,8 +4,8 @@
  * (den, KB_DEN_LOCAL, KB_OPS lanes, Work Record via WORK_ENDPOINT) goes to the snapshot; KB_BASE stays
  * read-only and is not redirected.
  */
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sandboxPaths } from "./layout.js";
 
 export interface ResolvedSandbox {
@@ -15,7 +15,7 @@ export interface ResolvedSandbox {
   kbDenLocal: string;
   /** Local work server ledger dir (pass to startLocalWorkServer). */
   workLedgerDir: string;
-  /** `<server url>/work`; undefined until the local work server is up. */
+  /** The local Work server's base URL (clients append `/work`, like the live WORK_ENDPOINT); undefined until the local work server is up. */
   workEndpoint?: string;
 }
 
@@ -28,20 +28,29 @@ export class SandboxError extends Error {
 
 function within(root: string, p: string): boolean {
   const rel = relative(root, p);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
-/** realpath that tolerates a missing tail: follows symlinks for the deepest existing ancestor, so a den symlinked to a live dir is caught. */
-export function realPathLoose(p: string): string {
-  let cur = resolve(p);
+/**
+ * realpath that tolerates a missing tail. Walks up to the deepest existing (lstat) component; a symlink there,
+ * including a dangling one, is followed through readlink so a den pointing at a not-yet-existing live dir is caught.
+ */
+export function realPathLoose(p: string, depth = 0): string {
+  if (depth > 40) throw new SandboxError(`too many symlinks resolving ${p}`);
+  const abs = resolve(p);
+  let cur = abs;
   const tail: string[] = [];
-  while (!existsSync(cur)) {
-    const parent = resolve(cur, "..");
-    if (parent === cur) return resolve(p);
-    tail.unshift(cur.slice(parent.length + 1));
+  for (;;) {
+    const st = lstatSync(cur, { throwIfNoEntry: false });
+    if (st) {
+      if (st.isSymbolicLink()) return realPathLoose(join(resolve(dirname(cur), readlinkSync(cur)), ...tail), depth + 1);
+      return join(realpathSync(cur), ...tail);
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return abs;
+    tail.unshift(basename(cur));
     cur = parent;
   }
-  return resolve(realpathSync(cur), ...tail);
 }
 
 export function isLoopbackUrl(url: string): boolean {
@@ -65,22 +74,27 @@ export function resolveSandbox(devRoot: string, opts: { workEndpoint?: string } 
   };
 }
 
+/** Every outward path must be inside the (real) dev root. */
+export function assertSandboxedPaths(root: string, actual: { den?: string; kbOps?: string; kbDenLocal?: string }): void {
+  const realRoot = realPathLoose(root);
+  for (const [label, value] of Object.entries(actual)) {
+    if (!value) throw new SandboxError(`${label} is not set (would fall back to the live location)`);
+    if (!within(realRoot, realPathLoose(value))) throw new SandboxError(`${label} ${value} resolves outside the dev root ${root}`);
+  }
+}
+
 /**
- * Fail closed: throw unless every outward root is inside the (real) dev root and WORK_ENDPOINT, when set, is
- * loopback. `actual` is what the process will really use (den, env) — not what we meant to configure.
+ * Fail closed: throw unless every outward root is inside the (real) dev root and WORK_ENDPOINT is set and
+ * loopback. `actual` is what the process will really use (den, env), not what we meant to configure.
  */
 export function assertSandboxed(
   root: string,
   actual: { den?: string; kbOps?: string; kbDenLocal?: string; workEndpoint?: string },
 ): void {
-  const realRoot = realPathLoose(root);
-  for (const [label, value] of Object.entries(actual)) {
-    if (label === "workEndpoint") continue;
-    if (!value) throw new SandboxError(`${label} is not set (would fall back to the live location)`);
-    if (!within(realRoot, realPathLoose(value))) throw new SandboxError(`${label} ${value} resolves outside the dev root ${root}`);
-  }
-  const ep = actual.workEndpoint;
-  if (ep !== undefined && !isLoopbackUrl(ep)) throw new SandboxError(`WORK_ENDPOINT ${ep} is not a loopback address`);
+  const { workEndpoint: ep, ...paths } = actual;
+  assertSandboxedPaths(root, paths);
+  if (!ep) throw new SandboxError("WORK_ENDPOINT is not set (Record writes would fall back to the live Work API)");
+  if (!isLoopbackUrl(ep)) throw new SandboxError(`WORK_ENDPOINT ${ep} is not a loopback address`);
 }
 
 /** The env a sandboxed wolf runs with. */

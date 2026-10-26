@@ -48,7 +48,7 @@ export const WolfFileSchema = z.object({
     .passthrough()
     .default({}),
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
-  memory: z.object({ live: z.boolean().optional() }).passthrough().default({}),
+  memory: z.object({ live: z.boolean().optional(), librarian: z.boolean().optional() }).passthrough().default({}),
 });
 
 /** Keys the v2 file schema knows; anything else is ignored with a warning. */
@@ -89,6 +89,8 @@ export interface WolfConfig {
   memory: {
     /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */
     live: boolean;
+    /** Librarian mode (mutates KB_BASE); refused in a sandbox. */
+    librarian: boolean;
   };
   /** Derived: <dir>/den. */
   den: string;

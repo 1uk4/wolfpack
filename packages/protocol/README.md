@@ -27,6 +27,21 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 
 `MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId`, `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata plus a redacted one-line summary; never full observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`. Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
 
+## Memory actions
+
+`POST /v1/wolves/:name/memory/consolidate` -> 200 `ConsolidateResponse` (counts + `topicIds`, no text). `POST /v1/wolves/:name/memory/promote` -> 202 `PromoteResponse {jobId, status:"started"}`; the job's outcome arrives as `promote_finished|failed` MemoryEvents with that `jobId` (the routes emit nothing themselves).
+
+| Case | Status | Body |
+|---|---|---|
+| consolidate ok | 200 | `ConsolidateResponse` |
+| promote started | 202 | `{jobId, status:"started"}` |
+| promote while one runs | 409 | `{jobId, status:"already_running"}` (a `PromoteResponse`, not an envelope; nothing started) |
+| memory inert / not loaded | 409 | envelope `memory_unavailable` |
+| no KB roots (promote only) | 409 | envelope `promote_unavailable` |
+| unknown wolf | 404 | envelope `not_found` |
+
+Both new codes are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running`, rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
+
 ## Layout
 
 `src/schemas.ts` holds all schemas and inferred types; `src/index.ts` re-exports them.

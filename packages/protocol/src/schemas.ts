@@ -19,6 +19,10 @@ export const ErrorCodeSchema = z.enum([
   "version_mismatch",
   "engine_error",
   "invalid_request",
+  /** The wolf's memory is inert or not loaded (fail-closed gate): memory actions have nothing to run. */
+  "memory_unavailable",
+  /** Promote needs KB roots and this wolf has none; consolidate still works. */
+  "promote_unavailable",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -37,6 +41,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   version_mismatch: 426,
   engine_error: 502,
   invalid_request: 400,
+  memory_unavailable: 409,
+  promote_unavailable: 409,
 };
 
 // ------------------------------------------------------------ resources
@@ -283,6 +289,35 @@ export function parseMemoryEvent(input: unknown): ParsedMemoryEvent {
   const ev = MemoryEventSchema.safeParse(input);
   return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
 }
+
+// ------------------------------------------------------- memory actions
+
+/** Result of `POST /v1/wolves/:name/memory/consolidate`: counts only, never observation text or topic bodies. */
+export const ConsolidateResponseSchema = z.object({
+  observationsProcessed: z.number().int().nonnegative(),
+  topicsCreated: z.number().int().nonnegative(),
+  topicsMerged: z.number().int().nonnegative(),
+  topicsSkipped: z.number().int().nonnegative(),
+  claimsSubmitted: z.number().int().nonnegative(),
+  /** Work Records rewritten from tagged observations. */
+  recordsWritten: z.number().int().nonnegative().optional(),
+  /** Tagged observations left in the pool (the Work API or model was unavailable). */
+  observationsPending: z.number().int().nonnegative().optional(),
+  /** Ids of the session topics created or merged by this run. */
+  topicIds: z.array(z.string()),
+});
+export type ConsolidateResponse = z.infer<typeof ConsolidateResponseSchema>;
+
+/**
+ * Result of `POST /v1/wolves/:name/memory/promote`. The job runs in the background; its outcome is reported as
+ * `promote_finished` / `promote_failed` MemoryEvents carrying the same `jobId`. `already_running` (HTTP 409) names
+ * the job in flight and starts nothing.
+ */
+export const PromoteResponseSchema = z.object({
+  jobId: z.string(),
+  status: z.enum(["started", "already_running"]),
+});
+export type PromoteResponse = z.infer<typeof PromoteResponseSchema>;
 
 // ------------------------------------------------------------- commands
 

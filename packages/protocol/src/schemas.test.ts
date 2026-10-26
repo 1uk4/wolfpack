@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   AbortRequestSchema,
   ActorSchema,
+  ConsolidateResponseSchema,
   CreateThreadRequestSchema,
+  PromoteResponseSchema,
   CreateThreadResponseSchema,
   ERROR_HTTP_STATUS,
   ErrorCodeSchema,
@@ -219,5 +221,27 @@ describe("MemoryEvent", () => {
   it("is not a ThreadEvent and needs no protocol bump", () => {
     expect(PROTOCOL_VERSION).toBe(1);
     expect(parseThreadEvent(variants[0])).toMatchObject({ kind: "invalid" });
+  });
+});
+
+describe("memory action responses", () => {
+  const counts = { observationsProcessed: 3, topicsCreated: 1, topicsMerged: 1, topicsSkipped: 0, claimsSubmitted: 0, topicIds: ["caching"] };
+  it("consolidate: counts and topic ids; optional extras", () => {
+    expect(ConsolidateResponseSchema.parse(counts)).toEqual(counts);
+    expect(ConsolidateResponseSchema.safeParse({ ...counts, recordsWritten: 2, observationsPending: 1 }).success).toBe(true);
+    expect(ConsolidateResponseSchema.safeParse({ ...counts, topicsCreated: -1 }).success).toBe(false);
+    const { topicIds: _t, ...noIds } = counts;
+    expect(ConsolidateResponseSchema.safeParse(noIds).success).toBe(false);
+  });
+  it("promote: started | already_running with a job id", () => {
+    expect(PromoteResponseSchema.parse({ jobId: "promote-1", status: "started" }).status).toBe("started");
+    expect(PromoteResponseSchema.parse({ jobId: "promote-1", status: "already_running" }).status).toBe("already_running");
+    expect(PromoteResponseSchema.safeParse({ jobId: "promote-1", status: "done" }).success).toBe(false);
+    expect(PromoteResponseSchema.safeParse({ status: "started" }).success).toBe(false);
+  });
+  it("new error codes map to 409 and need no protocol bump", () => {
+    expect(ERROR_HTTP_STATUS.memory_unavailable).toBe(409);
+    expect(ERROR_HTTP_STATUS.promote_unavailable).toBe(409);
+    expect(PROTOCOL_VERSION).toBe(1);
   });
 });

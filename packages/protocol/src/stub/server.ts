@@ -186,6 +186,11 @@ export class StubServer {
       }
       case "streamThread":
         return this.stream(this.thread(params.id), req, res, url);
+      case "consolidateMemory":
+      case "promoteMemory":
+        this.wolf(params.name);
+        // The stub has no memory system: its wolves are the inert case.
+        throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       case "streamWolfEvents": {
         this.wolf(params.name);
         // The stub emits no memory events: an open, empty stream.

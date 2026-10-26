@@ -146,6 +146,8 @@ export interface ConsolidationResult {
   recordsWritten?: number;
   /** Tagged observations left in the pool (the Work API or model was unavailable). */
   observationsPending?: number;
+  /** Ids of the topics created or merged by this run (distinct, in write order). */
+  topicIds?: string[];
 }
 
 /**
@@ -226,7 +228,19 @@ async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<
  * instead of session topics. After writing to den, emits deltas to KB
  * (same as /wolf:promote).
  */
-export async function consolidatePool(
+export async function consolidatePool(config: ConsolidationConfig): Promise<ConsolidationResult> {
+  const ids = new Set<string>();
+  const result = await consolidatePoolInner({
+    ...config,
+    onTopic: (t) => {
+      ids.add(t.id);
+      config.onTopic?.(t);
+    },
+  });
+  return { ...result, topicIds: [...ids] };
+}
+
+async function consolidatePoolInner(
   config: ConsolidationConfig
 ): Promise<ConsolidationResult> {
   const {

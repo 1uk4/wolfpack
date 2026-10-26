@@ -181,3 +181,32 @@ describe("HttpConsoleClient", () => {
     ]);
   });
 });
+
+describe("memory actions", () => {
+  it("map the stub's inert wolf to ProtocolError memory_unavailable", async () => {
+    const c = make();
+    const wolf = (await c.listWolves())[0].name;
+    await expect(c.consolidateMemory(wolf)).rejects.toMatchObject({ name: "ProtocolError", code: "memory_unavailable" });
+    await expect(c.promoteMemory(wolf)).rejects.toMatchObject({ code: "memory_unavailable" });
+    await expect(c.promoteMemory("nope")).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  it("promote: 202 started, 409 already_running resolves (not an error), 409 envelope rejects", async () => {
+    const replies = [
+      json(202, { jobId: "j1", status: "started" }),
+      json(409, { jobId: "j1", status: "already_running" }),
+      json(409, { code: "promote_unavailable", message: "no kb roots", retryable: false }),
+    ];
+    const c = make({ fetch: (async () => replies.shift()!) as typeof fetch });
+    expect(await c.promoteMemory("w")).toEqual({ jobId: "j1", status: "started" });
+    expect(await c.promoteMemory("w")).toEqual({ jobId: "j1", status: "already_running" });
+    await expect(c.promoteMemory("w")).rejects.toMatchObject({ code: "promote_unavailable" });
+  });
+
+  it("consolidate parses the response", async () => {
+    const body = { observationsProcessed: 2, topicsCreated: 1, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, topicIds: ["a"] };
+    const c = make({ fetch: (async () => json(200, body)) as typeof fetch });
+    expect(await c.consolidateMemory("w")).toEqual(body);
+  });
+});

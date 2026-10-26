@@ -1,5 +1,6 @@
 import {
   ErrorEnvelopeSchema,
+  PromoteResponseSchema,
   LAST_EVENT_ID_HEADER,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -16,6 +17,8 @@ import {
   ProtocolError,
   type Actor,
   type ConsoleClient,
+  type ConsolidateResponse,
+  type PromoteResponse,
   type MemoryEvent,
   type SubmitAck,
   type SubmitOptions,
@@ -132,6 +135,29 @@ export class HttpConsoleClient implements ConsoleClient {
         ctl.abort();
       }
     }
+  }
+
+  async consolidateMemory(wolf: string): Promise<ConsolidateResponse> {
+    return (await this.json("consolidateMemory", { name: wolf }, ROUTES.consolidateMemory.response.schema, undefined, wolf)) as ConsolidateResponse;
+  }
+
+  /** Never waits for the job. 409 `already_running` is a normal answer (the body is a PromoteResponse), not an error. */
+  async promoteMemory(wolf: string): Promise<PromoteResponse> {
+    const res = await this.fetchFn(this.base + buildPath("promoteMemory", { name: wolf }), {
+      method: "POST",
+      headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+    });
+    if (res.ok) {
+      const parsed = PromoteResponseSchema.safeParse(await res.json().catch(() => undefined));
+      if (parsed.success) return parsed.data;
+      throw new ProtocolError("engine_error", "unexpected response shape", false);
+    }
+    if (res.status === 409) {
+      const body: unknown = await res.clone().json().catch(() => undefined);
+      const running = PromoteResponseSchema.safeParse(body);
+      if (running.success) return running.data;
+    }
+    throw await this.toError(res, wolf);
   }
 
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */

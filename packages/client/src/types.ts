@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, ErrorCode, MemoryEvent, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
+import type { Actor, ConsolidateResponse, ErrorCode, MemoryEvent, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -30,7 +30,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
-export type { MemoryEvent, MemoryEventType, MemoryTarget } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
 export type ThreadKind = ThreadSummary["kind"];
@@ -70,6 +70,18 @@ export interface ConsoleClient {
    * `signal`. Optional: not every client (e.g. the mock) has a wolf stream.
    */
   watchMemory?(wolf: string, opts?: { signal?: AbortSignal }): AsyncIterable<MemoryEvent>;
+  /**
+   * Fold the wolf's observation pool into session topics; resolves with counts and topic ids. Rejects with a
+   * ProtocolError `memory_unavailable` when the wolf's memory is inert or not loaded. Optional like watchMemory.
+   */
+  consolidateMemory?(wolf: string): Promise<ConsolidateResponse>;
+  /**
+   * Start promote as a background job; resolves at once with `{jobId, status}`. `status` is `"already_running"` (with
+   * the running job's id) instead of rejecting when one is in flight. The outcome arrives as promote_finished /
+   * promote_failed MemoryEvents with that jobId (watchMemory). Rejects with ProtocolError `memory_unavailable` or
+   * `promote_unavailable` (no KB roots). Optional like watchMemory.
+   */
+  promoteMemory?(wolf: string): Promise<PromoteResponse>;
 }
 
 export class BusyError extends Error {

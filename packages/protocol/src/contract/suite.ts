@@ -330,6 +330,22 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect((await getThread(threadId)).busy).toBe(false);
     });
 
+    it("memory actions: unknown wolf is not_found; otherwise a valid result or a memory_unavailable envelope", async () => {
+      await expectError(await post(buildPath("consolidateMemory", { name: "no-such-wolf" }), {}), "not_found");
+      await expectError(await post(buildPath("promoteMemory", { name: "no-such-wolf" }), {}), "not_found");
+      // A server may or may not run memory for this wolf: both outcomes are legal, nothing else is.
+      const c = await post(buildPath("consolidateMemory", { name: wolf }), {});
+      if (c.status === 200) ROUTES.consolidateMemory.response.schema.parse(await c.json());
+      else await expectError(c, "memory_unavailable");
+      const p = await post(buildPath("promoteMemory", { name: wolf }), {});
+      if (p.status === 202) expect(ROUTES.promoteMemory.response.schema.parse(await p.json()).status).toBe("started");
+      else if (p.status === 409) {
+        const body = await p.json();
+        if (ErrorEnvelopeSchema.safeParse(body).success) expect(["memory_unavailable", "promote_unavailable"]).toContain(body.code);
+        else expect(ROUTES.promoteMemory.response.schema.parse(body).status).toBe("already_running");
+      } else expect.fail(`unexpected promote status ${p.status}`);
+    });
+
     it("protocol version: matching or absent is accepted, mismatch is 426 version_mismatch", async () => {
       const ok = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) } });
       expect(ok.status).toBe(200);

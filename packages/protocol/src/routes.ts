@@ -1,9 +1,11 @@
 import { z } from "zod";
 import {
+  ConsolidateResponseSchema,
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
   ErrorEnvelopeSchema,
   MemoryEventSchema,
+  PromoteResponseSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
   ThreadDetailSchema,
@@ -69,6 +71,30 @@ export const ROUTES = {
    * unlike a thread stream it never ends with `[DONE]`, it stays open until the client disconnects.
    */
   streamWolfEvents: { method: "GET", path: "/v1/wolves/:name/events", response: { kind: "sse", event: MemoryEventSchema }, status: [200], error: err },
+  /**
+   * Fold the observation pool into session topics; answers with the counts. 409 `memory_unavailable` when the wolf's
+   * memory is inert or not loaded.
+   */
+  consolidateMemory: {
+    method: "POST",
+    path: "/v1/wolves/:name/memory/consolidate",
+    response: { kind: "json", schema: ConsolidateResponseSchema },
+    status: [200],
+    error: err,
+  },
+  /**
+   * Start promote as a background job: 202 `{jobId, status:"started"}` immediately; completion is reported as
+   * `promote_finished` / `promote_failed` MemoryEvents with that jobId. While one runs: 409 with the NON-envelope body
+   * `{jobId, status:"already_running"}` (a PromoteResponse, nothing started). Other failures are envelopes: 409
+   * `memory_unavailable` (memory inert / not loaded) and 409 `promote_unavailable` (no KB roots).
+   */
+  promoteMemory: {
+    method: "POST",
+    path: "/v1/wolves/:name/memory/promote",
+    response: { kind: "json", schema: PromoteResponseSchema },
+    status: [202, 409],
+    error: err,
+  },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

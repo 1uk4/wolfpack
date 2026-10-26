@@ -27,17 +27,24 @@ export interface MemoryActions {
   promote(): PromoteStart;
 }
 
-const registry = new Map<string, MemoryActions>();
+// On globalThis (as the event buses are): the memory extension and wolfd's server must see one registry even when this
+// module is loaded twice (source and dist copies).
+const REGISTRY = Symbol.for("wolfpack.memoryActions");
+function getRegistry(): Map<string, MemoryActions> {
+  const g = globalThis as Record<symbol, unknown>;
+  return (g[REGISTRY] ??= new Map<string, MemoryActions>()) as Map<string, MemoryActions>;
+}
 
 /** The actions of the memory extension running on this den (undefined: memory inert or not started). */
 export function memoryActionsFor(wolfDen: string): MemoryActions | undefined {
-  return registry.get(wolfDen);
+  return getRegistry().get(wolfDen);
 }
 
 export function registerMemoryActions(wolfDen: string, actions: MemoryActions): void {
-  registry.set(wolfDen, actions);
+  getRegistry().set(wolfDen, actions);
 }
 
 export function unregisterMemoryActions(wolfDen: string, actions: MemoryActions): void {
+  const registry = getRegistry();
   if (registry.get(wolfDen) === actions) registry.delete(wolfDen);
 }

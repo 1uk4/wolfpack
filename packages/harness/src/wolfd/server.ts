@@ -30,8 +30,10 @@ import {
   SubmitBodySchema,
   matchRoute,
   type Actor,
+  type ConsolidateResponse,
   type ErrorCode,
   type InFlightPartial,
+  type PromoteResponse,
   type SubmitAck,
   type ThreadDetail,
   type ThreadEvent,
@@ -52,6 +54,7 @@ import {
   type ResyncDraft,
   type ThreadEventDraft,
 } from "../engine/index.js";
+import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import { prepareSocketPath } from "./socket.js";
 import { appendMessage, messageFromEntry, messagesFromEntries } from "./messages.js";
@@ -346,7 +349,42 @@ export class WolfServer {
       case "streamWolfEvents":
         this.checkWolf(params.name);
         return this.memoryStream(req, res);
+      case "consolidateMemory": {
+        this.checkWolf(params.name);
+        const r = await this.memoryActions().consolidate().catch((e: unknown) => {
+          throw new HttpError("engine_error", `consolidate failed: ${firstLine(e)}`);
+        });
+        const body: ConsolidateResponse = {
+          observationsProcessed: r.observationsProcessed,
+          topicsCreated: r.topicsCreated,
+          topicsMerged: r.topicsMerged,
+          topicsSkipped: r.topicsSkipped,
+          claimsSubmitted: r.claimsSubmitted,
+          ...(r.recordsWritten !== undefined ? { recordsWritten: r.recordsWritten } : {}),
+          ...(r.observationsPending !== undefined ? { observationsPending: r.observationsPending } : {}),
+          topicIds: r.topicIds ?? [],
+        };
+        return this.json(res, 200, body);
+      }
+      case "promoteMemory": {
+        this.checkWolf(params.name);
+        const actions = this.memoryActions();
+        if (!actions.promoteEnabled) throw new HttpError("promote_unavailable", "promote needs KB roots (KB_BASE and KB_OPS); this wolf has none");
+        const start = actions.promote();
+        // The extension emits promote_started/finished/failed itself; `done` is only observed here so a failed job
+        // is not an unhandled rejection.
+        if (start.status === "started") start.done.catch(() => {});
+        const body: PromoteResponse = { jobId: start.jobId, status: start.status };
+        return this.json(res, start.status === "started" ? 202 : 409, body);
+      }
     }
+  }
+
+  /** The memory extension's actions for this wolf; `memory_unavailable` when memory is inert or not loaded. */
+  private memoryActions(): MemoryActions {
+    const actions = this.opts.den ? memoryActionsFor(this.opts.den) : undefined;
+    if (!actions) throw new HttpError("memory_unavailable", "memory is inert or not loaded on this wolf");
+    return actions;
   }
 
   private json(res: ServerResponse, status: number, body: unknown): void {
@@ -490,6 +528,10 @@ export class WolfServer {
     this.subs.add(sub);
     res.on("close", () => this.subs.delete(sub));
   }
+}
+
+function firstLine(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 200);
 }
 
 function textOf(message: unknown): string {

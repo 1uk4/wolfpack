@@ -323,6 +323,29 @@ describe("ThreadEventAdapter: snapshot frames", () => {
 		assert.equal(blocks(u[0]!)[0]?.text, "step two");
 	});
 
+	it("emits nothing for an empty snapshot when no message is open", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 1, type: "turn-start", turnId: "t" } as ThreadEvent);
+		assert.deepEqual(a.apply(snapshot("")), []);
+	});
+
+	it("does not replace on a fresh adapter (mid-turn reattach): earlier messages would duplicate", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 5, type: "text-delta", turnId: "t", text: "step two" } as ThreadEvent);
+		assert.deepEqual(a.apply(snapshot("step one. step two")), []);
+		const out = a.apply({ ...env, id: 6, type: "turn-end", turnId: "t", reason: "complete" } as ThreadEvent);
+		assert.equal(blocks(out.find((e) => e.type === "message_end")!)[0]?.text, "step two");
+	});
+
+	it("ignores a snapshot that does not extend the closed messages", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 1, type: "turn-start", turnId: "t" } as ThreadEvent);
+		a.apply({ ...env, id: 2, type: "text-delta", turnId: "t", text: "step one. " } as ThreadEvent);
+		a.apply({ ...env, id: 3, type: "tool-start", turnId: "t", callId: "c", name: "x", args: {} } as ThreadEvent);
+		a.apply({ ...env, id: 4, type: "tool-end", turnId: "t", callId: "c", result: "r", isError: false } as ThreadEvent);
+		assert.deepEqual(a.apply(snapshot("unrelated")), []);
+	});
+
 	it("ignores a snapshot without an in-flight turn", () => {
 		const a = new ThreadEventAdapter();
 		const s = snapshot("x") as { inFlight?: unknown };

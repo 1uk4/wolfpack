@@ -125,7 +125,13 @@ export function createThreadApi(source: ClientSource) {
 				const id = await resolve(client, ref);
 				iterator = client.watch(id, {
 					from: resumeCursor(req),
-					onSnapshot: (snap) => out?.enqueue(sseFrame(snap)),
+					onSnapshot: (snap) => {
+						try {
+							out?.enqueue(sseFrame(snap));
+						} catch {
+							// The stream is closed (client gone): throwing would make watch() reconnect.
+						}
+					},
 				})[Symbol.asyncIterator]();
 			} catch (err) {
 				return failure(err);

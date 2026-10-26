@@ -78,6 +78,8 @@ export class ThreadEventAdapter {
 	/** Text/thinking of this turn's already-closed messages (a snapshot's turn-wide partial is relative to it). */
 	private closedText = "";
 	private closedThinking = "";
+	/** A turn-start was seen, so closedText/closedThinking cover the whole turn (false after a mid-turn reattach). */
+	private sawTurnStart = false;
 
 	apply(ev: ThreadEvent | SnapshotEvent): WireEvent[] {
 		const at = Date.parse(ev.at) || 0;
@@ -117,6 +119,7 @@ export class ThreadEventAdapter {
 		this.lastError = undefined;
 		this.closedText = "";
 		this.closedThinking = "";
+		this.sawTurnStart = true;
 	}
 
 	/**
@@ -127,9 +130,18 @@ export class ThreadEventAdapter {
 	private applySnapshot(ev: SnapshotEvent, at: number): WireEvent[] {
 		const f = ev.inFlight;
 		if (!f) return [];
-		const rest = (full: string, closed: string) => (full.startsWith(closed) ? full.slice(closed.length) : full);
-		const text = rest(f.text, this.closedText);
-		const thinking = rest(f.thinking ?? "", this.closedThinking);
+		// Without the turn's start, what earlier messages showed is unknown: replacing would duplicate them. The
+		// settle refetch repairs the view instead.
+		if (!this.sawTurnStart) return [];
+		const fullThinking = f.thinking ?? "";
+		if (!f.text.startsWith(this.closedText) || !fullThinking.startsWith(this.closedThinking)) {
+			if (process.env.WOLFPACK_DEBUG_STREAM === "1") console.debug("[thread-adapter] snapshot does not extend the closed messages; ignored");
+			return [];
+		}
+		const text = f.text.slice(this.closedText.length);
+		const thinking = fullThinking.slice(this.closedThinking.length);
+		if (this.blocks === null && !text && !thinking) return [];
+		// Rebuild order mirrors the stream: thinking first, then text, then the tool calls already issued.
 		return this.grow(at, (blocks) => [
 			...(thinking ? [{ type: "thinking", thinking } as Block] : []),
 			...(text ? [{ type: "text", text } as Block] : []),

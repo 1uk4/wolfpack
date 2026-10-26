@@ -48,6 +48,8 @@ export interface MemoryConfig {
   intervalMs?: number;
   /** @internal test seam: replaces the lazily-built model engine (the established `engine.call` stub). */
   engine?: Engine;
+  /** Longest a durable compaction waits for the pre-compaction capture (default 45000 ms); the capture then finishes in the background. */
+  compactFlushTimeoutMs?: number;
   /** Minimum text length to trigger observation (default: 100) */
   minTextLength?: number;
   /** Consolidation settings */
@@ -424,10 +426,32 @@ export default function createMemoryExtension(
   /**
    * Before a durable conversation compacts: observe everything since its watermark, whatever its size, so nothing the
    * summary replaces goes uncaptured. Runs on the conversation's observer queue (after any in-flight observation).
-   * Nothing is committed beyond the entries already there, so the usual watermark keeps it from double counting.
+   * Compaction waits at most `compactFlushTimeoutMs` (or until aborted): past that it proceeds and the capture keeps
+   * running in the background. The messages are still in the log, and the watermark only advances per observed chunk.
    */
-  function flushBeforeCompact(ctx: HookContext): Promise<void> {
+  async function flushBeforeCompact(ctx: HookContext, signal?: AbortSignal): Promise<void> {
+    const run = queueFlush(ctx);
+    const ms = config.compactFlushTimeoutMs ?? 45_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const why = await Promise.race([
+      run.then(() => "done" as const),
+      new Promise<"timeout">((r) => { timer = setTimeout(() => r("timeout"), ms); }),
+      new Promise<"aborted">((r) => {
+        if (signal?.aborted) return r("aborted");
+        onAbort = () => r("aborted");
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    if (why !== "done") console.warn(`[memory] pre-compaction capture ${why === "timeout" ? `still running after ${ms}ms` : "aborted"}: compacting anyway; it finishes in the background`);
+  }
+
+  function queueFlush(ctx: HookContext): Promise<void> {
     const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
+    // The flush reads everything from the committed log; no response is being reported, hence the empty `message`.
+    // An empty content fingerprints as "" which newObserverChunks treats as already committed (nothing synthesized).
     const run = prev.then(() => observeConversation({ content: [] } as unknown as AssistantMessage, ctx, { flush: true })).catch((err) => {
       console.error("[memory] pre-compaction capture error:", err instanceof Error ? err.message : err);
     });
@@ -1049,7 +1073,7 @@ export default function createMemoryExtension(
     ],
 
     hooks: {
-      beforeCompact: (_compaction, ctx) => flushBeforeCompact(ctx),
+      beforeCompact: (compaction, ctx) => flushBeforeCompact(ctx, compaction.signal),
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).

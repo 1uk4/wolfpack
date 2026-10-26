@@ -118,7 +118,7 @@ export interface Hooks {
    * compaction waits, so what it is about to replace can be captured first. Runtime: durable only. Returning nothing
    * lets the default summarizer run.
    */
-  beforeCompact?: (compaction: { reason: "manual" | "threshold" | "overflow" }, context: HookContext) => void | Promise<void>;
+  beforeCompact?: (compaction: { reason: "manual" | "threshold" | "overflow"; signal?: AbortSignal }, context: HookContext) => void | Promise<void>;
 }
 
 // ─── Shared State Types ────────────────────────────────────────────────────

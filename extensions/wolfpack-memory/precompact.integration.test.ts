@@ -12,8 +12,9 @@ import type { Engine } from "@wolfpack/engine";
 import { createRegistry, Harness } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/index.js";
 import { NodeExecutionEnv } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/env/node.js";
 import { openNodeSqliteStorage } from "../../packages/harness/node_modules/@earendil-works/pi-durable/dist/storage/sqlite/node.js";
+import { seedWatermark } from "./unified.js";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
-import { attachConversationReader } from "../../packages/harness/src/engine/conversation-reader.js";
+import { attachConversationReader, conversationReaderFor } from "../../packages/harness/src/engine/conversation-reader.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { Park, parkExtension } from "../../packages/harness/src/wolfd/test-wolf.js";
@@ -43,16 +44,21 @@ function stubEngine() {
   return { engine, prompts, text: () => prompts.join("\n=====\n") };
 }
 
-async function openHost(script: ReturnType<typeof fauxAssistantMessage>[]) {
+async function openHost(
+  script: ReturnType<typeof fauxAssistantMessage>[],
+  opts: { memory?: Record<string, unknown>; compaction?: Record<string, unknown> } = {},
+) {
   const dir = tmp("host");
   const stub = stubEngine();
   const sm = createScriptedModel(script);
   const registry = createRegistry();
   registry.install(parkExtension);
-  registry.install(adaptToDurable(createMemoryExtension({ live: true, engine: stub.engine }, { wolfDen: dir, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} }), { wolfDen: dir, wolfName: "w" }));
+  const reasons: string[] = [];
+  registry.install(adaptToDurable({ name: "reason-spy", hooks: { beforeCompact: (c) => void reasons.push(c.reason) } }, { wolfDen: dir, wolfName: "w" }));
+  registry.install(adaptToDurable(createMemoryExtension({ live: true, engine: stub.engine, ...opts.memory }, { wolfDen: dir, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} }), { wolfDen: dir, wolfName: "w" }));
   const harness = await Harness.open(
     await openNodeSqliteStorage(join(dir, "session.sqlite")),
-    { models: sm.models, registry, settings: { compaction: { keepRecentTokens: 1 } }, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir }) },
+    { models: sm.models, registry, settings: { compaction: { keepRecentTokens: 1, ...opts.compaction } }, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir }) },
     ctx,
   );
   const detach = attachConversationReader(harness, dir, { hostConsolidationTimer: true });
@@ -61,7 +67,7 @@ async function openHost(script: ReturnType<typeof fauxAssistantMessage>[]) {
     await harness.close(ctx);
   });
   const agent = { model: { provider: sm.provider, modelId: sm.modelId } };
-  return { dir, stub, harness, agent };
+  return { dir, stub, harness, agent, reasons };
 }
 
 async function waitFor(cond: () => boolean, ms = 4000): Promise<void> {
@@ -123,6 +129,7 @@ describe("pre-compaction capture", () => {
     await waitFor(() => stub.prompts.length > calls);
     const added = stub.prompts.slice(calls).join("\n");
     expect(added).toContain("NEWUSER");
+    expect(added).not.toContain("SUMMARY"); // the compaction summary is not talk
     for (const m of ["U1", "U3", "R1", "R3"]) expect(added).not.toContain(m);
     for (const m of ["U1", "R3"]) expect(count(stub.text(), m)).toBe(1);
   });
@@ -149,5 +156,41 @@ describe("pre-compaction capture", () => {
     harness.resume();
     await turns(root, "U", 3, dir);
     expect(await compact(harness, root)).toBe(true);
+  });
+
+  it("the reader skips the compaction summary, so a seed anchors at the real newest user message", async () => {
+    const { dir, harness, agent } = await openHost(["R1", "R2", "R3", "SUMMARY"].map((t) => fauxAssistantMessage(t)));
+    const root = await harness.root(ctx, { agent });
+    harness.resume();
+    await turns(root, "U", 3, dir);
+    expect(await compact(harness, root)).toBe(true);
+    const msgs = await conversationReaderFor(dir)!.messagesSince(1, 0);
+    expect(JSON.stringify(msgs)).not.toContain("SUMMARY");
+    const u3 = msgs.find((m) => JSON.stringify(m.message.content).includes("U3"))!;
+    expect(seedWatermark(msgs).lastEntryId).toBe(u3.entryId - 1);
+  });
+
+  it("a hung engine holds the compaction only until the deadline", async () => {
+    const { dir, stub, harness, agent } = await openHost(["R1", "R2", "R3", "SUMMARY"].map((t) => fauxAssistantMessage(t)), { memory: { compactFlushTimeoutMs: 200 } });
+    const root = await harness.root(ctx, { agent });
+    harness.resume();
+    await turns(root, "U", 3, dir);
+    stub.engine.call = (() => new Promise(() => {})) as never; // never settles
+    const t0 = Date.now();
+    expect(await compact(harness, root)).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it("a threshold (generation-owned) compaction flushes too", async () => {
+    const { dir, stub, harness, agent, reasons } = await openHost(
+      ["R1", "R2", "R3", "SUMMARY", "R4"].map((t) => fauxAssistantMessage(t)),
+      { compaction: { enabled: true, reserveTokens: 1_000_000, backgroundTokens: 0 } },
+    );
+    const root = await harness.root(ctx, { agent });
+    harness.resume();
+    await turns(root, "U", 3, dir);
+    await waitFor(() => stub.prompts.length > 0, 8000);
+    expect(stub.text()).toContain("U2");
+    expect(reasons).toContain("threshold"); // generation-owned, not a manual compact()
   });
 });

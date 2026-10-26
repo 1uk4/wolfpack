@@ -58,7 +58,7 @@ describe("scripted model turns", () => {
           description: "bind",
           parameters: { type: "object" as const, properties: {}, required: [] },
           async execute() {
-            return { content: [{ type: "text" as const, text: "ok" }] };
+            return { output: [{ type: "text" as const, text: "ok" }] };
           },
         }),
       ],

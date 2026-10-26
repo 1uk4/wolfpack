@@ -6,15 +6,14 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { LiveToolCard } from "@/components/artifacts/live-tool-card";
-import { artifactRenderers } from "@/components/artifacts";
+import { ToolRow } from "@/components/tool-row";
 import { Separator } from "@/components/ui/separator";
 import { Composer } from "@/components/composer";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import type { ArtifactPartProps, LhMessage } from "@/src/core";
+import { renderItems, type LhMessage } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -145,36 +144,28 @@ export function ThreadChat({
 										) : (
 											<Message from="assistant" className="max-w-full">
 												<MessageContent className="w-full">
-													{m.parts.map((part, pi) => {
-														const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
-														switch (part.type) {
+													{renderItems(m.parts, status === "streaming" && mi === messages.length - 1).map((item) => {
+														switch (item.kind) {
 															case "text":
 																return (
-																	<div key={part.id || pi}>
-																		<MessageResponse>{part.text}</MessageResponse>
+																	<div key={item.part.id || item.index}>
+																		<MessageResponse>{item.part.text}</MessageResponse>
 																	</div>
 																);
 															case "reasoning":
 																return (
 																	<ThreadReasoning
-																		key={part.id || pi}
+																		key={item.part.id || item.index}
 																		allOpen={allThinkingOpen}
 																		epoch={thinkingEpoch}
-																		isStreaming={status === "streaming" && isLastPart}
-																		text={part.text ?? ""}
+																		isStreaming={status === "streaming" && mi === messages.length - 1 && item.index === m.parts.length - 1}
+																		text={item.part.text ?? ""}
 																	/>
 																);
-															case "step-start":
-																return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
-															default: {
-																if (!part.type.startsWith("tool-")) return null;
-																const p = part as ArtifactPartProps["part"];
-																// Calls being run render the live card; settled
-																// ones go through the artifact registry.
-																if (part.state === "input-streaming") return <LiveToolCard key={pi} part={p} />;
-																const Renderer = artifactRenderers[part.type.slice("tool-".length)];
-																return Renderer ? <Renderer key={pi} part={p} /> : null;
-															}
+															case "separator":
+																return <Separator key={`sep-${item.index}`} className="my-3" />;
+															case "tool":
+																return <ToolRow key={item.entry.callId || item.index} entry={item.entry} />;
 														}
 													})}
 												</MessageContent>

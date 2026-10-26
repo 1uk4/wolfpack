@@ -23,6 +23,7 @@
 
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import type { SnapshotEvent, ThreadEvent, ThreadMessage } from "@wolfpack/client";
+type ThreadToolCall = NonNullable<ThreadMessage["tools"]>[number];
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { LhMessage } from "./native-messages.ts";
 
@@ -53,17 +54,60 @@ function assistantShell(content: Block[], timestamp: number, stopReason: Assista
 	} as unknown as AssistantMessage;
 }
 
-/** History (ThreadMessage[]) → the native record the session model seeds from. */
+/** Strip the blank-line seam the server joins merged rounds with. */
+const trimSeam = (t: string): string => t.replace(/^\n+|\n+$/g, "");
+
+/**
+ * History (ThreadMessage[]) → the native record the session model seeds from.
+ * An assistant message with `tools` expands to the live shape: one assistant
+ * step per run of calls sharing a `textOffset` (text before it + the toolCalls),
+ * each followed by its toolResults, then the remaining text as a final message.
+ * A message without `tools` (old servers) stays a single text message.
+ */
 export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMessage[] {
-	return messages.map((m): LhMessage => {
+	return messages.flatMap((m): LhMessage[] => {
 		const timestamp = Date.parse(m.at) || 0;
 		if (m.role === "user") {
-			return { id: m.id, role: "user", content: m.text, timestamp } as UserMessage & { id: string };
+			return [{ id: m.id, role: "user", content: m.text, timestamp } as UserMessage & { id: string }];
 		}
-		return {
-			id: m.id,
-			...assistantShell([{ type: "text", text: m.text }], timestamp, "stop"),
-		} as LhMessage;
+		const tools = m.tools ?? [];
+		if (tools.length === 0) {
+			return [{ id: m.id, ...assistantShell([{ type: "text", text: m.text }], timestamp, "stop") } as LhMessage];
+		}
+		const out: LhMessage[] = [];
+		let cursor = 0;
+		let i = 0;
+		let step = 0;
+		while (i < tools.length) {
+			const at = (n: number) => Math.min(Math.max(tools[n]!.textOffset ?? cursor, cursor), m.text.length);
+			const offset = at(i);
+			const group: ThreadToolCall[] = [];
+			while (i < tools.length && at(i) === offset) group.push(tools[i++]!);
+			const text = trimSeam(m.text.slice(cursor, offset));
+			cursor = offset;
+			const content: Block[] = [
+				...(text ? [{ type: "text", text } as Block] : []),
+				...group.map((c) => ({ type: "toolCall", id: c.callId, name: c.name, arguments: c.args ?? {} }) as Block),
+			];
+			out.push({ id: step === 0 ? m.id : `${m.id}-s${step}`, ...assistantShell(content, timestamp, "toolUse") } as LhMessage);
+			step++;
+			for (const c of group) {
+				if (c.result === undefined) continue;
+				const result = c.resultTruncated ? `${c.result}\n… (truncated)` : c.result;
+				out.push({
+					role: "toolResult",
+					toolCallId: c.callId,
+					toolName: c.name,
+					content: [{ type: "text", text: result }],
+					details: result,
+					isError: c.isError === true,
+					timestamp,
+				} as unknown as LhMessage);
+			}
+		}
+		const tail = trimSeam(m.text.slice(cursor));
+		if (tail) out.push({ id: `${m.id}-s${step}`, ...assistantShell([{ type: "text", text: tail }], timestamp, "stop") } as LhMessage);
+		return out;
 	});
 }
 

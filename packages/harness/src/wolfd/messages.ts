@@ -142,7 +142,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       // The most recent UNRESOLVED call with this id (reused ids pair each result to its own call); a result for an
       // already-resolved call (a replay) lands on the most recent one.
       const matches = (list[i].tools ?? []).filter((c) => c.callId === msg.toolCallId);
-      const call = matches.findLast((c) => c.result === undefined) ?? matches.at(-1);
+      const call = [...matches].reverse().find((c) => c.result === undefined) ?? matches.at(-1);
       if (!call) continue;
       const text = blocksOf(entry).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
       call.result = sliceSafe(text, TOOL_CAP);

@@ -356,7 +356,7 @@ export default function createMemoryExtension(
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -381,7 +381,7 @@ export default function createMemoryExtension(
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     const { chunks, next } = planned;
-    if (chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
+    if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
     const eng = getEngine();
     let at = watermark.lastEntryId;
@@ -401,6 +401,23 @@ export default function createMemoryExtension(
     }
     startTimer(ctx);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
+  }
+
+  /**
+   * Before a durable conversation compacts: observe everything since its watermark, whatever its size, so nothing the
+   * summary replaces goes uncaptured. Runs on the conversation's observer queue (after any in-flight observation).
+   * Nothing is committed beyond the entries already there, so the usual watermark keeps it from double counting.
+   */
+  function flushBeforeCompact(ctx: HookContext): Promise<void> {
+    const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
+    const run = prev.then(() => observeConversation({ content: [] } as unknown as AssistantMessage, ctx, { flush: true })).catch((err) => {
+      console.error("[memory] pre-compaction capture error:", err instanceof Error ? err.message : err);
+    });
+    observing.set(ctx.conversationId, run);
+    void run.finally(() => {
+      if (observing.get(ctx.conversationId) === run) observing.delete(ctx.conversationId);
+    });
+    return run;
   }
 
   // ─── Interval timer (trigger: timer | hybrid) ─────────────────────────────
@@ -1014,6 +1031,7 @@ export default function createMemoryExtension(
     ],
 
     hooks: {
+      beforeCompact: (_compaction, ctx) => flushBeforeCompact(ctx),
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).

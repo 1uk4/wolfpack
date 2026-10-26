@@ -113,6 +113,12 @@ export interface HookContext {
 export interface Hooks {
   /** Called after each assistant response */
   afterResponse?: (message: AssistantMessage, context: HookContext) => void | Promise<void>;
+  /**
+   * Called before a durable conversation compacts, after the range is selected and before it is summarized. Awaited:
+   * compaction waits, so what it is about to replace can be captured first. Runtime: durable only. Returning nothing
+   * lets the default summarizer run.
+   */
+  beforeCompact?: (compaction: { reason: "manual" | "threshold" | "overflow" }, context: HookContext) => void | Promise<void>;
 }
 
 // ─── Shared State Types ────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
   section as piSection,
   hook,
   GenerationTask,
+  CompactionTask,
   type Extension as PiDurableExtension,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
@@ -110,6 +111,40 @@ export function adaptToDurable(
 
   // Adapt hooks
   const hooks = [];
+  if (ext.hooks?.beforeCompact) {
+    const beforeCompact = ext.hooks.beforeCompact;
+    hooks.push(
+      hook(CompactionTask, {
+        beforeCompact: async (compaction, api) => {
+          const conversationId = Number(api.conversationId);
+          const reader = conversationReaderFor(wolfDen);
+          const context: HookContext = {
+            wolfDen,
+            wolfName,
+            conversationId,
+            ...(reader
+              ? {
+                  conversation: {
+                    classify: () => reader.classify(conversationId),
+                    classifyOther: (id) => reader.classify(id),
+                    messagesSince: (after) => reader.messagesSince(conversationId, after),
+                    onEngineClose: (fn) => reader.onClose(fn),
+                    hostConsolidationTimer: reader.hostConsolidationTimer === true,
+                  },
+                }
+              : {}),
+          };
+          try {
+            await beforeCompact({ reason: compaction.reason }, context);
+          } catch (err) {
+            // Capturing is best effort: it must never block or fail a compaction.
+            console.error("[harness] beforeCompact hook failed:", err instanceof Error ? err.message : err);
+          }
+          return undefined;
+        },
+      })
+    );
+  }
   if (ext.hooks?.afterResponse) {
     const afterResponse = ext.hooks.afterResponse;
     hooks.push(

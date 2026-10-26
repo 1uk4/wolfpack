@@ -17,6 +17,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness, Conversation } from "@earendil-works/pi-durable";
 import { AssistantEntry } from "@earendil-works/pi-durable";
 import { watchEvents, type AgentEvent, type AgentEventStream } from "@earendil-works/pi-durable";
+import { createPreviewTracker, type PreviewTracker } from "./preview.js";
 import { createTelegramSharedState, VALID_REACTIONS, type TelegramSharedState, type TelegramButton, type ReplyKeyboard } from "./shared-state.js";
 
 export { createTelegramSharedState, VALID_REACTIONS, type TelegramSharedState, type TelegramButton, type ReplyKeyboard } from "./shared-state.js";
@@ -86,6 +87,7 @@ export async function createTelegramClient(
     stream: AgentEventStream;
     conversationId: string;
     pendingText: string;
+    preview?: PreviewTracker;
     lastSentText: string;
     messageId?: number;
     replyToId?: number;
@@ -249,13 +251,15 @@ export async function createTelegramClient(
     
     if (!state.listening) return;
 
+    // One preview tracker per run (reset at run_end); it also reconciles message_end text.
+    state.preview ??= createPreviewTracker();
+    state.pendingText = state.preview.push(events);
+
     for (const event of events) {
       if (event.type === "message_update" && state.listening) {
-        // Track text and log tool calls
+        // Log tool calls
         for (const change of event.changes) {
-          if (change.type === "text_delta") {
-            state.pendingText += change.delta;
-          } else if (change.type === "toolcall_start") {
+          if (change.type === "toolcall_start") {
             const tc = change as { name?: string };
             if (tc.name) {
               console.log(`[tg] ⚙ ${tc.name}`);
@@ -280,19 +284,6 @@ export async function createTelegramClient(
             } catch { /* ignore */ }
           }
         }
-      } else if (event.type === "message_end" && state.listening) {
-        // Extract text from the completed message entry
-        const entry = (event as { entry?: { value?: { content?: Array<{ type: string; text?: string }> } } }).entry;
-        if (entry?.value?.content) {
-          const text = entry.value.content
-            .filter((b): b is { type: string; text: string } => b.type === "text" && typeof b.text === "string")
-            .map((b) => b.text)
-            .join("");
-          if (text && !state.pendingText) {
-            state.pendingText = text;
-
-          }
-        }
       } else if (event.type === "run_end" && state.listening) {
         console.log(`[tg] Run complete`);
         // Run completed - clear timers (we use submission.wait for sending)
@@ -303,6 +294,7 @@ export async function createTelegramClient(
         await sendAttachments(chatId, state.conversationId);
         // Stop listening but keep stream alive for next message
         state.listening = false;
+        state.preview = undefined;
         state.pendingText = "";
         state.lastSentText = "";
         state.messageId = undefined;
@@ -358,6 +350,7 @@ export async function createTelegramClient(
         });
       } else {
         // Reset state for new message
+        state.preview = undefined;
         state.pendingText = "";
         state.lastSentText = "";
         state.messageId = undefined;

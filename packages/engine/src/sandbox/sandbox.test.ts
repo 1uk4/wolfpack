@@ -233,7 +233,7 @@ describe("remote rsync (argv + filters)", () => {
     expect(existsSync(join(base, "domains/wolfpack/work/work-wolfpack-a.md"))).toBe(true);
     expect(existsSync(join(base, "domains/wolfpack/entries"))).toBe(false);
     const ops = join(dev, "ops");
-    run(source.opsDir, ops, RSYNC_RULES.ops);
+    run(source.opsDir!, ops, RSYNC_RULES.ops);
     expect(existsSync(join(ops, "inbox/hal/c1.md"))).toBe(true);
     expect(existsSync(join(ops, "parked/hal/p1.md"))).toBe(true);
     expect(existsSync(join(ops, "rejected"))).toBe(false);

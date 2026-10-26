@@ -64,6 +64,7 @@ export const WolfFileSchema = z.object({
       live: z.boolean().optional(),
       librarian: z.boolean().optional(),
       defaultDomain: z.string().min(1).optional(),
+      sweepInterval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30s", "1m", "1h"').optional(),
       consolidation: z
         .object({
           threshold: z.number().int().positive().optional(),
@@ -117,8 +118,10 @@ export interface WolfConfig {
   memory: {
     /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */
     live: boolean;
-    /** Librarian mode (mutates KB_BASE); refused in a sandbox. */
+    /** Librarian mode (mutates KB_BASE); in a sandbox only on a KB copy (`<root>/kb-base`), otherwise refused. */
     librarian: boolean;
+    /** Librarian sweep interval (e.g. "1m"); default 1m. */
+    sweepInterval?: string;
     /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */
     defaultDomain?: string;
     /** Pool thresholds and trigger, defaults applied. */

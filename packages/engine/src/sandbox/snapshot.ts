@@ -6,22 +6,33 @@
  * Tests and local dev use local paths; the remote variant exists for sfo-01 and is never exercised in CI.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-  cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realPathLoose } from "./resolve.js";
-import { sandboxPaths, SNAPSHOT_MANIFEST, type SandboxPaths } from "./layout.js";
+import { sandboxPaths, SNAPSHOT_MANIFEST, wolfDenDir, type SandboxPaths } from "./layout.js";
+import { readWorkServerRunFile } from "./work-writer.js";
 
 export interface SnapshotSource {
   /** Dir holding `ledger/work-events.jsonl` (sfo-01: /var/wolfpack/kb/work). */
   workDir: string;
   /** Dir holding `domains/<d>/work/*.md` (sfo-01: /var/wolfpack/kb/base). Optional: the ledger alone is enough. */
   workBaseDir?: string;
-  /** KB ops root with `inbox|receipts|parked/<wolf>` (sfo-01: /var/wolfpack/kb/ops). */
-  opsDir: string;
+  /** KB ops root with `inbox|receipts|parked/<wolf>` (sfo-01: /var/wolfpack/kb/ops). Absent: the sandbox starts with empty lanes. */
+  opsDir?: string;
+  /** Copy only these wolves' lanes (`inbox|receipts|parked/<lane>`) of a LOCAL opsDir. Absent: every lane. */
+  opsLanes?: string[];
   /** The wolf's den (sfo-01: /home/wolf-<id>/den). */
   denDir: string;
+  /**
+   * A KB base to COPY (read-only source) into `<root>/kb-base`: the sandbox then runs with KB_BASE there and a librarian
+   * may be enabled on it. LOCAL path only (a remote KB is never pulled). `domains/<d>/work/` is left out: the work
+   * server owns the item files.
+   */
+  kbBaseDir?: string;
 }
 
 export interface SnapshotOptions {
@@ -37,14 +48,47 @@ export interface SnapshotOptions {
   includeSessions?: boolean;
   /** ssh identity file for remote parts. */
   sshIdentity?: string;
+  /** Shared layout: the den lands in `<root>/dens/<denName>` (several wolves share one root) instead of `<root>/den`. */
+  denName?: string;
+  /**
+   * Refresh ONLY the work ledger + work item files of an existing snapshot (the one remote part), leaving dens, ops and
+   * the KB copy alone. The previous ledger/items are moved aside, never deleted.
+   */
+  workOnly?: boolean;
+  /** Paths the dev root must not overlap (live KB, Syncthing folders, other wolves' homes...). Checked both ways. */
+  forbiddenRoots?: string[];
+  /** Test seam: the process spawner for rsync/ssh. Default: child_process.spawnSync. */
+  runner?: Runner;
   now?: () => Date;
+}
+
+export interface RunResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+export interface Runner {
+  rsync(argv: string[]): RunResult;
+  ssh(argv: string[]): RunResult;
+}
+export const defaultRunner: Runner = {
+  rsync: (argv) => run("rsync", argv),
+  ssh: (argv) => run("ssh", argv),
+};
+function run(cmd: string, argv: string[]): RunResult {
+  const r = spawnSync(cmd, argv, { encoding: "utf8" });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? (r.error ? r.error.message : "") };
 }
 
 export interface SnapshotManifest {
   version: 1;
   createdAt: string;
   source: SnapshotSource;
-  counts: { ledgerEvents: number; workItems: number; opsFiles: number; denFiles: number };
+  counts: { ledgerEvents: number; workItems: number; opsFiles: number; denFiles: number; kbBaseFiles: number };
+  /** Where the den was copied to, relative to the root (`den` or `dens/<wolf>`). */
+  den: string;
+  /** sha256 of the ledger file as copied (the value the remote hash was checked against for a remote ledger). */
+  ledgerSha256?: string;
   includeSessions: boolean;
   /** Den paths (relative to the den root; trailing * = prefix) left out of this snapshot. */
   excluded: string[];
@@ -110,17 +154,46 @@ function copyLocal(src: string, dest: string, filter: (rel: string, isDir: boole
   });
 }
 
-/** ssh transport for rsync -e. The identity is one argv element, quoted for rsync's own re-splitting. */
-export function sshCommand(identity?: string): string {
-  const base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
-  // Same hygiene as the wolfpack CLI: only the given key, never a desktop ssh-agent.
-  if (identity) base.push("-i", `'${identity.replace(/'/g, `'\\''`)}'`, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
-  return base.join(" ");
+/** ssh options shared by the rsync transport and the read-only hash command. Key only, never a desktop ssh-agent. */
+export function sshArgs(identity?: string): string[] {
+  const base = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
+  if (identity) base.push("-i", identity, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
+  return base;
 }
 
-/** Pure: the exact rsync argv for one remote part. `--` guards against a spec starting with `-`. */
-export function rsyncArgv(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean } = {}): string[] {
-  return ["-a", "--no-links", ...(opts.local ? [] : ["-e", sshCommand(identity)]), ...rules, "--", spec.replace(/\/?$/, "/"), `${dest}/`];
+/** ssh transport for rsync -e. The identity is one argv element, quoted for rsync's own re-splitting. */
+export function sshCommand(identity?: string): string {
+  const quoted = sshArgs(identity).map((a) => (a === identity ? `'${a.replace(/'/g, `'\\''`)}'` : a));
+  return ["ssh", ...quoted].join(" ");
+}
+
+/**
+ * Pure: the exact rsync argv for one remote part. `--` guards against a spec starting with `-`. The remote spec is the
+ * SOURCE and the local dir the destination; there is no --delete and nothing is ever written to the remote side.
+ * `dryRun` adds `-n --itemize-changes` (lists what would be copied, copies nothing).
+ */
+export function rsyncArgv(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean; dryRun?: boolean } = {}): string[] {
+  return [
+    "-a", "--no-links",
+    ...(opts.dryRun ? ["-n", "--itemize-changes"] : []),
+    ...(opts.local ? [] : ["-e", sshCommand(identity)]),
+    ...rules, "--", spec.replace(/\/?$/, "/"), `${dest}/`,
+  ];
+}
+
+/**
+ * Refuse any rsync argv that could write, delete or move on the remote: no --delete*, no --remove-source-files, no
+ * --move*, the remote spec is the one source (before the local destination), the destination is a local path.
+ * `copyRemote` runs this on every argv before spawning, so the rule holds whoever builds the argv.
+ */
+export function assertReadOnlyRsyncArgv(argv: string[]): void {
+  const sep = argv.indexOf("--");
+  if (sep < 0 || argv.length !== sep + 3) throw new Error("snapshot: rsync argv must end with `-- <source> <dest>`");
+  const [source, dest] = argv.slice(sep + 1);
+  const bad = argv.slice(0, sep).find((a) => /^--(delete|remove-source-files|remove-sent-files|move|force|backup|rsync-path|files-from|write-batch|only-write-batch|daemon)/.test(a) || /^-[a-zA-Z]*[Dd]/.test(a));
+  if (bad) throw new Error(`snapshot: refusing rsync flag ${bad} (the remote is read-only)`);
+  if (isRemoteSpec(dest)) throw new Error(`snapshot: rsync destination ${dest} must be local`);
+  if (argv.includes("-e") && !isRemoteSpec(source)) throw new Error(`snapshot: rsync source ${source} must be the remote spec`);
 }
 
 /** Filter rules per part; `ledger` copies <src>/ledger/work-events.jsonl into <dest>/ledger/. */
@@ -133,10 +206,86 @@ export const RSYNC_RULES = {
 } as const;
 
 /** @internal `local` runs rsync's local mode (no ssh) so tests can prove the filters on a plain directory. */
-export function copyRemote(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean } = {}): void {
+export function copyRemote(spec: string, dest: string, rules: string[], identity?: string, opts: { local?: boolean; runner?: Runner } = {}): void {
   mkdirSync(dest, { recursive: true });
-  const r = spawnSync("rsync", rsyncArgv(spec, dest, rules, identity, opts), { encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`rsync from ${spec} failed (${r.status ?? r.error?.message}): ${(r.stderr ?? "").trim().split("\n")[0]}`);
+  const argv = rsyncArgv(spec, dest, rules, identity, opts);
+  assertReadOnlyRsyncArgv(argv);
+  const r = (opts.runner ?? defaultRunner).rsync(argv);
+  if (r.status !== 0) throw new Error(`rsync from ${spec} failed (${r.status}): ${r.stderr.trim().split("\n")[0]}`);
+}
+
+/** `[user@]host:/abs/path` -> the ssh destination and the path on it. */
+export function splitRemote(spec: string): { host: string; path: string } {
+  const i = spec.indexOf(":");
+  return { host: spec.slice(0, i), path: spec.slice(i + 1) };
+}
+
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+/** The read-only ssh argv that hashes one remote file: `sha256sum -- <file>` and nothing else. */
+export function remoteSha256Argv(spec: string, identity?: string): string[] {
+  const { host, path } = splitRemote(spec);
+  return [...sshArgs(identity), host, `sha256sum -- ${shq(path)}`];
+}
+
+export function parseSha256sum(stdout: string): string {
+  const m = stdout.trim().match(/^([0-9a-f]{64})\s/);
+  if (!m) throw new Error(`snapshot: unexpected sha256sum output: ${stdout.trim().slice(0, 80)}`);
+  return m[1];
+}
+
+export function remoteSha256(spec: string, identity: string | undefined, runner: Runner = defaultRunner): string {
+  const r = runner.ssh(remoteSha256Argv(spec, identity));
+  if (r.status !== 0) throw new Error(`snapshot: could not hash remote ${spec} (${r.status}): ${r.stderr.trim().split("\n")[0]}`);
+  return parseSha256sum(r.stdout);
+}
+
+export function sha256File(file: string): string {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+/** The remote commands a snapshot of `source` would run, nothing executed (for review before anyone approves). */
+export function remotePlan(source: SnapshotSource, identity?: string): { label: string; command: string }[] {
+  const plan: { label: string; command: string }[] = [];
+  // Display only (the real argv is never joined into a shell string): quote what a human would need to quote to paste it.
+  const q = (a: string) => (!/[\s'*]/.test(a) ? a : a.includes("'") ? `"${a}"` : `'${a}'`);
+  const show = (cmd: string, argv: string[]) => [cmd, ...argv.map(q)].join(" ");
+  const part = (label: string, spec: string | undefined, rules: readonly string[]) => {
+    if (spec && isRemoteSpec(spec)) plan.push({ label, command: show("rsync", rsyncArgv(spec, "<dev-root>/<part>", [...rules], identity)) });
+  };
+  if (isRemoteSpec(source.workDir)) {
+    plan.push({ label: "ledger hash (before)", command: show("ssh", remoteSha256Argv(`${source.workDir}/ledger/work-events.jsonl`, identity)) });
+  }
+  part("ledger", source.workDir, RSYNC_RULES.ledger);
+  if (isRemoteSpec(source.workDir)) {
+    plan.push({ label: "ledger hash (after)", command: show("ssh", remoteSha256Argv(`${source.workDir}/ledger/work-events.jsonl`, identity)) });
+  }
+  part("work items", source.workBaseDir, RSYNC_RULES.workMd);
+  return plan;
+}
+
+/**
+ * `--dry-run`: run `rsync -n --itemize-changes` for each remote part into a throwaway dir and return what it lists.
+ * Copies nothing, hashes nothing, writes nothing under any dev root.
+ */
+export function dryRunRemote(source: SnapshotSource, identity?: string, runner: Runner = defaultRunner): { label: string; lines: string[] }[] {
+  const tmp = mkdtempSync(join(tmpdir(), "snapshot-dry-"));
+  try {
+    const out: { label: string; lines: string[] }[] = [];
+    const part = (label: string, spec: string | undefined, rules: readonly string[]) => {
+      if (!spec || !isRemoteSpec(spec)) return;
+      const argv = rsyncArgv(spec, tmp, [...rules], identity, { dryRun: true });
+      assertReadOnlyRsyncArgv(argv);
+      const r = runner.rsync(argv);
+      if (r.status !== 0) throw new Error(`rsync -n from ${spec} failed (${r.status}): ${r.stderr.trim().split("\n")[0]}`);
+      out.push({ label, lines: r.stdout.split("\n").filter((l) => l.trim()) });
+    };
+    part("ledger", source.workDir, RSYNC_RULES.ledger);
+    part("work items", source.workBaseDir, RSYNC_RULES.workMd);
+    return out;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true }); // our own mkdtemp dir, always empty after a dry run
+  }
 }
 
 function insideOrEqual(parent: string, child: string): boolean {
@@ -145,13 +294,19 @@ function insideOrEqual(parent: string, child: string): boolean {
 }
 
 /** Refuse a dev root that overlaps any local source (snapshotting into the live tree would be the whole bug). */
-function assertDisjoint(devRoot: string, source: SnapshotSource): void {
+function assertDisjoint(devRoot: string, source: SnapshotSource, forbidden: string[] = []): void {
   const root = realPathLoose(devRoot);
   for (const [label, spec] of Object.entries(source)) {
-    if (typeof spec !== "string" || isRemoteSpec(spec)) continue;
+    if (typeof spec !== "string" || !spec || isRemoteSpec(spec)) continue;
     const s = realPathLoose(spec);
     if (insideOrEqual(s, root) || insideOrEqual(root, s)) {
       throw new Error(`snapshot: dev root ${devRoot} overlaps source ${label} ${spec}`);
+    }
+  }
+  for (const f of forbidden) {
+    const real = realPathLoose(f);
+    if (insideOrEqual(real, root) || insideOrEqual(root, real)) {
+      throw new Error(`snapshot: dev root ${devRoot} overlaps protected/synced path ${f}`);
     }
   }
 }
@@ -167,22 +322,52 @@ function trimTornLine(file: string): number {
   return text.split("\n").filter((l) => l.trim()).length;
 }
 
+const STAGING = /^\.(staging|replaced|failed)-/;
+
+/** KB copy filter: everything except the work item files (the work server's) and OS litter. */
+function kbCopyExcluded(rel: string): boolean {
+  const parts = rel.split(sep);
+  return parts.includes(".DS_Store") || parts.includes("sweep.lock") || (parts[0] === "domains" && parts[2] === "work");
+}
+
+/** Move `from` to `<aside>/<name>`; nothing is ever deleted by a re-snapshot. */
+function moveAside(from: string, aside: string): void {
+  if (!existsSync(from)) return;
+  mkdirSync(aside, { recursive: true });
+  renameSync(from, join(aside, relative(resolve(from, ".."), from)));
+}
+
 export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths: SandboxPaths } {
   const { source } = opts;
   const devRoot = resolve(opts.devRoot);
   const paths = sandboxPaths(devRoot);
-  assertDisjoint(devRoot, source);
+  const runner = opts.runner ?? defaultRunner;
+  assertDisjoint(devRoot, source, opts.forbiddenRoots);
+  if (source.kbBaseDir && isRemoteSpec(source.kbBaseDir)) throw new Error("snapshot: the KB base is only copied from a local path (never pulled from a host)");
+  if (opts.workOnly && !existsSync(paths.manifest)) throw new Error(`snapshot: ${devRoot} is not a snapshot; nothing to refresh`);
 
-  if (existsSync(devRoot) && readdirSync(devRoot).length > 0) {
+  const existing = existsSync(devRoot) ? readdirSync(devRoot).filter((n) => !STAGING.test(n)) : [];
+  const replacing = existing.length > 0 && !opts.workOnly;
+  if (replacing) {
     if (!existsSync(paths.manifest)) throw new Error(`snapshot: ${devRoot} exists, is not empty and is not a snapshot; refusing`);
     if (!opts.force) throw new Error(`snapshot: ${devRoot} already holds a snapshot (use force to replace)`);
-    for (const part of ["ledger", "base", "ops", "den", SNAPSHOT_MANIFEST]) {
-      // Only the dirs a snapshot creates; anything else under the root is left alone.
-      const p = join(devRoot, part);
-      if (existsSync(p)) rmSync(p, { recursive: true, force: true });
-    }
+  }
+  if (existing.length > 0) {
+    // The ledger copy has exactly one writer (the local work server); swapping it under that process would corrupt it.
+    const live = readWorkServerRunFile(devRoot);
+    if (live) throw new Error(`snapshot: the sandbox work server is running (pid ${live.pid}); stop the dev stack before replacing the ledger`);
   }
   mkdirSync(devRoot, { recursive: true });
+
+  // Everything is copied and verified in a staging dir first; only a fully verified snapshot is moved into place, so a
+  // failed or mismatching run leaves the previous snapshot untouched (and nothing half-written at the real paths).
+  const stamp = (opts.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-");
+  const stage = join(devRoot, `.staging-${stamp}`);
+  rmSync(stage, { recursive: true, force: true }); // only ever our own staging dir of the same timestamp
+  const sp = sandboxPaths(stage);
+  const denRel = opts.denName ? wolfDenDir("", opts.denName) : "den";
+  const stagedDen = join(stage, denRel);
+  const finalDen = join(devRoot, denRel);
 
   const sessionExcludes = opts.includeSessions ? [] : SESSION_EXCLUDES;
   const stateExcludes = [...(opts.includeSessions ? [] : DEN_STATE_EXCLUDES), ...DEN_BUNDLE_EXCLUDES];
@@ -192,51 +377,84 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
     if (isDir) return parts.length < 3 || (parts[0] === "domains" && (parts.length === 2 || parts[2] === "work"));
     return parts[0] === "domains" && parts[2] === "work" && rel.endsWith(".md");
   };
-  const opsLane = (rel: string) => ["inbox", "receipts", "parked"].includes(rel.split(sep)[0]);
+  const lanes = source.opsLanes;
+  const opsLane = (rel: string) => {
+    const [kind, lane] = rel.split(sep);
+    return ["inbox", "receipts", "parked"].includes(kind) && (!lanes || lane === undefined || lanes.includes(lane));
+  };
 
-  if (isRemoteSpec(source.workDir)) {
-    copyRemote(source.workDir, devRoot, [...RSYNC_RULES.ledger], opts.sshIdentity);
-  } else {
-    copyLocal(source.workDir, devRoot, ledgerRel);
-  }
+  // ── work ledger + items (the only parts that may be remote) ───────────────
+  const remoteLedger = isRemoteSpec(source.workDir);
+  const remoteLedgerFile = remoteLedger ? `${source.workDir.replace(/\/$/, "")}/ledger/work-events.jsonl` : "";
+  const hashBefore = remoteLedger ? remoteSha256(remoteLedgerFile, opts.sshIdentity, runner) : undefined;
+  if (remoteLedger) copyRemote(source.workDir, stage, [...RSYNC_RULES.ledger], opts.sshIdentity, { runner });
+  else copyLocal(source.workDir, stage, ledgerRel);
   if (source.workBaseDir) {
-    if (isRemoteSpec(source.workBaseDir)) {
-      copyRemote(source.workBaseDir, paths.workBase, [...RSYNC_RULES.workMd], opts.sshIdentity);
-    } else {
-      copyLocal(source.workBaseDir, paths.workBase, isWorkMd);
-    }
+    if (isRemoteSpec(source.workBaseDir)) copyRemote(source.workBaseDir, sp.workBase, [...RSYNC_RULES.workMd], opts.sshIdentity, { runner });
+    else copyLocal(source.workBaseDir, sp.workBase, isWorkMd);
   }
-  if (isRemoteSpec(source.opsDir)) {
-    copyRemote(source.opsDir, paths.kbOps, [...RSYNC_RULES.ops], opts.sshIdentity);
-  } else {
-    copyLocal(source.opsDir, paths.kbOps, opsLane);
-  }
-  if (isRemoteSpec(source.denDir)) {
-    copyRemote(source.denDir, paths.den, [...stateExcludes.map((e) => `--exclude=/${e}`), ...sessionExcludes.map((e) => `--exclude=${e}`)], opts.sshIdentity);
-  } else {
-    copyLocal(source.denDir, paths.den, (rel) => !denExcluded(rel, sessionExcludes, stateExcludes));
+  mkdirSync(join(stage, "ledger"), { recursive: true });
+  if (!existsSync(sp.ledgerFile)) writeFileSync(sp.ledgerFile, "");
+  const copiedSha = sha256File(sp.ledgerFile);
+  if (remoteLedger) {
+    // Verify BEFORE trusting the copy: the file we hold must be exactly the file the host had before we copied, and the
+    // host's file must not have moved while we copied (a live append would make the copy a torn mix).
+    const hashAfter = remoteSha256(remoteLedgerFile, opts.sshIdentity, runner);
+    if (copiedSha !== hashBefore) throw new Error(`snapshot: copied ledger sha256 ${copiedSha} != remote ${hashBefore} taken before the copy; nothing was installed (staging kept in ${stage})`);
+    if (hashAfter !== hashBefore) throw new Error(`snapshot: the remote ledger changed during the snapshot (sha256 ${hashBefore} -> ${hashAfter}); nothing was installed, re-run (staging kept in ${stage})`);
   }
   // A torn line is never valid JSON; an empty ledger must still exist so the work server starts clean.
-  mkdirSync(join(devRoot, "ledger"), { recursive: true });
-  if (!existsSync(paths.ledgerFile)) writeFileSync(paths.ledgerFile, "");
-  if (isRemoteSpec(source.workDir) && trimTornLine(paths.ledgerFile) === 0) {
+  if (remoteLedger && trimTornLine(sp.ledgerFile) === 0) {
     throw new Error(`snapshot: remote ledger ${source.workDir} yielded 0 events (wrong path or filter?); refusing a silent empty snapshot`);
   }
-  mkdirSync(paths.kbOps, { recursive: true });
-  mkdirSync(paths.den, { recursive: true });
 
+  // ── the rest (local only) ─────────────────────────────────────────────────
+  if (!opts.workOnly) {
+    if (source.opsDir) {
+      if (isRemoteSpec(source.opsDir)) copyRemote(source.opsDir, sp.kbOps, [...RSYNC_RULES.ops], opts.sshIdentity, { runner });
+      else copyLocal(source.opsDir, sp.kbOps, opsLane);
+    }
+    if (isRemoteSpec(source.denDir)) {
+      copyRemote(source.denDir, stagedDen, [...stateExcludes.map((e) => `--exclude=/${e}`), ...sessionExcludes.map((e) => `--exclude=${e}`)], opts.sshIdentity, { runner });
+    } else {
+      copyLocal(source.denDir, stagedDen, (rel) => !denExcluded(rel, sessionExcludes, stateExcludes));
+    }
+    if (source.kbBaseDir) copyLocal(source.kbBaseDir, sp.kbBase, (rel) => !kbCopyExcluded(rel));
+    mkdirSync(sp.kbOps, { recursive: true });
+    mkdirSync(stagedDen, { recursive: true });
+  }
+
+  // ── install: move the previous parts aside (never delete), then the verified ones into place ──
+  const aside = join(devRoot, `.replaced-${stamp}`);
+  const parts: [string, string][] = opts.workOnly
+    ? [["ledger", join(devRoot, "ledger")], ["base", paths.workBase]]
+    : [["ledger", join(devRoot, "ledger")], ["base", paths.workBase], ["ops", paths.kbOps], [denRel, finalDen], ["kb-base", paths.kbBase]];
+  for (const [rel, finalPath] of parts) {
+    if (!existsSync(join(stage, rel))) continue; // not part of this run: the existing one stays
+    if (existsSync(finalPath)) moveAside(finalPath, join(aside, relative(devRoot, resolve(finalPath, ".."))));
+    mkdirSync(resolve(finalPath, ".."), { recursive: true });
+    renameSync(join(stage, rel), finalPath);
+  }
+  if (!opts.workOnly && existsSync(paths.manifest)) moveAside(paths.manifest, aside);
+  rmSync(stage, { recursive: true, force: true }); // our staging dir: its parts were all renamed out, only empty dirs remain
+  if (!opts.workOnly && !existsSync(paths.kbBase) && source.kbBaseDir) throw new Error("snapshot: KB copy missing after install");
+
+  const prev = opts.workOnly ? ({ den: "den", ...JSON.parse(readFileSync(paths.manifest, "utf8")) } as SnapshotManifest) : undefined;
   const manifest: SnapshotManifest = {
     version: 1,
     createdAt: (opts.now?.() ?? new Date()).toISOString(),
-    source,
+    source: prev ? { ...prev.source, workDir: source.workDir, ...(source.workBaseDir ? { workBaseDir: source.workBaseDir } : {}) } : source,
     counts: {
       ledgerEvents: trimTornLine(paths.ledgerFile),
       workItems: walkFiles(join(paths.workBase, "domains")).length,
       opsFiles: walkFiles(paths.kbOps).length,
-      denFiles: walkFiles(paths.den).length,
+      denFiles: walkFiles(prev ? join(devRoot, prev.den) : finalDen).length,
+      kbBaseFiles: walkFiles(paths.kbBase).length,
     },
-    includeSessions: !!opts.includeSessions,
-    excluded: [...sessionExcludes, ...stateExcludes],
+    den: prev ? prev.den : denRel,
+    ledgerSha256: sha256File(paths.ledgerFile),
+    includeSessions: prev ? prev.includeSessions : !!opts.includeSessions,
+    excluded: prev ? prev.excluded : [...sessionExcludes, ...stateExcludes],
   };
   writeFileSync(paths.manifest, JSON.stringify(manifest, null, 2) + "\n");
   return { ...manifest, paths };

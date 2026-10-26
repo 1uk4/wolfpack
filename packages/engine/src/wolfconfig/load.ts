@@ -120,6 +120,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       live: v.memory.live === true,
       librarian: v.memory.librarian === true,
       ...(v.memory.defaultDomain ? { defaultDomain: v.memory.defaultDomain } : {}),
+      ...(v.memory.sweepInterval ? { sweepInterval: v.memory.sweepInterval } : {}),
       consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
     },
     extensions: v.extensions,

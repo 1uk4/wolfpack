@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { loadModelTable, MODELS_FILE_ENV, normalizeSandbox, type ModelTable } from "@wolfpack/engine";
+import { defaultDomainProblem, loadModelTable, MODELS_FILE_ENV, normalizeSandbox, type ModelTable } from "@wolfpack/engine";
 
 export interface WolfConfig {
   id?: string;
@@ -29,6 +29,8 @@ export interface WolfConfig {
     };
     /** Librarian mode - enables KB inbox tools and sweep */
     librarian?: boolean;
+    /** Domain for observations the observer leaves untagged; one of `domains` (default: the first). */
+    defaultDomain?: string;
     /** Sweep interval (e.g., "15m", "1h") - auto-triggers sweep on timer */
     sweepInterval?: string;
   };
@@ -57,6 +59,12 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
   }
+  const rawDefault: unknown = config.memory?.defaultDomain;
+  if (rawDefault !== undefined && (typeof rawDefault !== "string" || !rawDefault)) {
+    throw new Error(`invalid wolf.yaml: memory.defaultDomain must be a non-empty string, got ${JSON.stringify(rawDefault)}`);
+  }
+  const badDefault = defaultDomainProblem(config.memory?.defaultDomain, config.domains ?? []);
+  if (badDefault) throw new Error(`invalid wolf.yaml: ${badDefault}`);
   // Throws on a malformed value: it must never silently run live.
   const sandbox = normalizeSandbox(config.sandbox as unknown, homeDir);
   if (sandbox) config.sandbox = sandbox;

@@ -13,22 +13,8 @@ import createTasksExtension, { type TasksConfig } from "./unified-tasks.js";
 
 // ─── Combined Config ───────────────────────────────────────────────────────
 
-export interface WolfpackMemoryConfig {
-  // Memory settings
-  enabled?: boolean;
-  /** `memory.live: true`: memory may write the live roots (see memoryGate). */
-  live?: boolean;
-  /** @internal test seam, see MemoryConfig.engine */
-  engine?: MemoryConfig["engine"];
-  minTextLength?: number;
-  consolidation?: {
-    trigger?: "threshold" | "timer" | "hybrid" | "manual";
-    threshold?: number;
-    interval?: string;
-  };
-  /** Librarian mode - enables KB sweep and inbox tools */
-  librarian?: boolean;
-  // Task settings
+/** The wolf.yaml `memory:` block as the loader hands it over: every MemoryConfig field, plus the tasks settings. */
+export interface WolfpackMemoryConfig extends MemoryConfig {
   tasks?: TasksConfig;
 }
 
@@ -39,16 +25,10 @@ export default function createWolfpackMemoryExtension(
   context: ExtensionContext
 ): ReturnType<typeof defineExtension> {
   // Build individual extensions
-  const memoryConfig: MemoryConfig = {
-    enabled: config.enabled,
-    live: config.live,
-    engine: config.engine,
-    minTextLength: config.minTextLength,
-    consolidation: config.consolidation,
-    librarian: config.librarian,
-  };
+  // Forward every MemoryConfig field: a hand-picked copy silently drops whatever gets added later.
+  const { tasks, ...memoryConfig } = config;
   
-  const tasksConfig: TasksConfig = config.tasks ?? {};
+  const tasksConfig: TasksConfig = tasks ?? {};
   
   const memoryExt = createMemoryExtension(memoryConfig, context);
   const tasksExt = createTasksExtension(tasksConfig, context);

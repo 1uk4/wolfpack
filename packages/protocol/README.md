@@ -43,6 +43,10 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 
 The new codes (`memory_unavailable`, `promote_unavailable`, `memory_busy`) are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running` (a 202), rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
 
+## Tool calls in history
+
+`ThreadMessage.tools?` (additive, optional, no version bump; old servers omit it, clients must tolerate absence) lists an assistant message's tool calls in call order: `{callId, name, args, result?, isError?, resultTruncated?, textOffset?}`. `text` is unchanged (text blocks only); `textOffset` is the length of `text` when the call happened, so a consumer can interleave tool rows with the merged rounds' text. The server caps `args` (~4 KB) and `result` (~4 KB, `resultTruncated: true` when cut). A pure tool round yields an assistant message with `text: ""`. Thinking is never in history.
+
 ## Layout
 
 `src/schemas.ts` holds all schemas and inferred types; `src/index.ts` re-exports them.

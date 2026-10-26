@@ -89,6 +89,10 @@ describe("resources", () => {
   });
   it("ThreadMessage", () => {
     expect(ThreadMessageSchema.parse(message)).toEqual(message);
+    const withTools = { ...message, tools: [{ callId: "c1", name: "bash", args: { command: "ls" }, result: "a", isError: false, textOffset: 0 }] };
+    expect(ThreadMessageSchema.parse(withTools)).toEqual(withTools);
+    expect(ThreadMessageSchema.parse({ ...message, tools: [{ callId: "c1", name: "bash", args: {} }] }).tools).toHaveLength(1);
+    expect(ThreadMessageSchema.safeParse({ ...message, tools: [{ name: "bash" }] }).success).toBe(false);
     expect(ThreadMessageSchema.safeParse({ ...message, role: "system" }).success).toBe(false);
     expect(ThreadMessageSchema.safeParse({ ...message, at: "yesterday" }).success).toBe(false);
   });

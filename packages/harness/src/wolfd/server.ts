@@ -57,7 +57,7 @@ import {
 import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import { prepareSocketPath } from "./socket.js";
-import { appendMessage, messageFromEntry, messagesFromEntries } from "./messages.js";
+import { applyEntry, messagesFromEntries } from "./messages.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -194,8 +194,7 @@ export class WolfServer {
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
       else if (ev.type === "message_end" && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
-        const m = messageFromEntry(ev.entry);
-        if (m) appendMessage(this.messages, m);
+        applyEntry(this.messages, ev.entry);
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -429,7 +428,7 @@ export class WolfServer {
   }
 
   private detail(): ThreadDetail {
-    return { ...this.summary, messages: this.messages.map((m) => ({ ...m })), busy: this.running !== null, lastEventId: this.seq };
+    return { ...this.summary, messages: this.messages.map((m) => ({ ...m, ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}) })), busy: this.running !== null, lastEventId: this.seq };
   }
 
   private async submit(input: string, whenBusy: "steer" | "followUp" | "reject"): Promise<SubmitAck> {

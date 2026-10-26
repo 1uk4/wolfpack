@@ -197,6 +197,16 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(t.lastEventId).toBe(events.at(-1)!.id);
       expect(t.messages.some((m) => m.role === "user" && m.text === "hello")).toBe(true);
       expect(t.messages.some((m) => m.role === "assistant")).toBe(true);
+      // `tools` is optional (old servers omit it) and, when present, well-formed and assistant-only.
+      for (const m of t.messages) {
+        if (m.tools === undefined) continue;
+        expect(m.role).toBe("assistant");
+        for (const c of m.tools) {
+          expect(typeof c.callId).toBe("string");
+          expect(typeof c.name).toBe("string");
+          if (c.textOffset !== undefined) expect(c.textOffset).toBeLessThanOrEqual(m.text.length);
+        }
+      }
     });
 
     it("stream with no cursor replays the most recent turn then ends", async () => {

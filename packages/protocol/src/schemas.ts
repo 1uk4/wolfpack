@@ -71,12 +71,31 @@ export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
 const IsoSchema = z.iso.datetime({ offset: true });
 
+/**
+ * One tool call of an assistant message (history only; live turns carry tool-start/tool-end). Additive and optional
+ * (no version bump). `args` and `result` are capped by the server (result ~4 KB, `resultTruncated` set when cut).
+ */
+export const ThreadToolCallSchema = z.object({
+  callId: z.string(),
+  name: z.string(),
+  args: z.unknown(),
+  /** Absent while the call has no result yet (running, or interrupted). */
+  result: z.string().optional(),
+  isError: z.boolean().optional(),
+  resultTruncated: z.boolean().optional(),
+  /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
+  textOffset: z.number().int().nonnegative().optional(),
+});
+export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
+
 export const ThreadMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),
   text: z.string(),
   /** ISO timestamp. */
   at: IsoSchema,
+  /** Assistant messages only: the tool calls of the (merged) rounds, in call order. Optional: old servers omit it. */
+  tools: z.array(ThreadToolCallSchema).optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 

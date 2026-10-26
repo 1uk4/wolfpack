@@ -117,7 +117,7 @@ describe("WolfServer", () => {
 
 describe("messagesFromEntries", () => {
   const entry = (id: number, kind: string, message: unknown): any => ({ id, kind, model: [message] });
-  it("keeps user + assistant text only, merges rounds, skips tool-only rounds", () => {
+  it("keeps user + assistant text, merges rounds, tool-only rounds carry tools only", () => {
     const msgs = messagesFromEntries([
       entry(1, "pi.user", { role: "user", content: "q", timestamp: 1000 }),
       entry(2, "pi.system", { role: "system", content: "" }),
@@ -128,7 +128,33 @@ describe("messagesFromEntries", () => {
     ]);
     expect(msgs).toEqual([
       { id: "entry-1", role: "user", text: "q", at: new Date(1000).toISOString() },
-      { id: "entry-5", role: "assistant", text: "a\n\nb", at: expect.any(String) },
+      {
+        id: "entry-3",
+        role: "assistant",
+        text: "a\n\nb",
+        at: expect.any(String),
+        tools: [{ callId: "c", name: "read", args: {}, textOffset: 0 }],
+      },
     ]);
+  });
+  it("pairs results, offsets calls into merged text, caps args and results", () => {
+    const big = "x".repeat(5000);
+    const msgs = messagesFromEntries([
+      entry(1, "pi.user", { role: "user", content: "q", timestamp: 1000 }),
+      entry(2, "pi.assistant", { role: "assistant", content: [{ type: "text", text: "hi" }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: big } }] }),
+      entry(3, "pi.tool_result", { role: "toolResult", toolCallId: "c1", isError: true, content: [{ type: "text", text: big }] }),
+      entry(4, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "a" } }] }),
+      entry(5, "pi.tool_result", { role: "toolResult", toolCallId: "c2", isError: false, content: [{ type: "text", text: "ok" }] }),
+      entry(6, "pi.assistant", { role: "assistant", content: [{ type: "text", text: "done" }] }),
+    ]);
+    expect(msgs).toHaveLength(2);
+    const a = msgs[1];
+    expect(a.text).toBe("hi\n\ndone");
+    expect(a.tools).toHaveLength(2);
+    expect(a.tools![0]).toMatchObject({ callId: "c1", name: "bash", textOffset: 2, isError: true, resultTruncated: true });
+    expect(a.tools![0].result).toHaveLength(4096);
+    expect(JSON.stringify(a.tools![0].args).length).toBeLessThan(1200);
+    expect(a.tools![1]).toMatchObject({ callId: "c2", result: "ok", isError: false, textOffset: 2 });
+    expect(a.tools![1].resultTruncated).toBeUndefined();
   });
 });

@@ -45,8 +45,8 @@ const history: ThreadMessage[] = [
 		at: base.at,
 		tools: [
 			{ callId: "c1", name: "bash", args: { command: "ls -la" }, result: LONG, isError: false, textOffset: 0 },
-			{ callId: "c2", name: "task_bind", args: { id: "work-1" }, result: "bound", isError: false, textOffset: 12 },
-			{ callId: "c3", name: "read", args: { path: "/nope" }, result: "ENOENT", isError: true, textOffset: 12 },
+			{ callId: "c2", name: "task_bind", args: { id: "work-1" }, result: "bound", isError: false, textOffset: 11 },
+			{ callId: "c3", name: "read", args: { path: "/nope" }, result: "ENOENT", isError: true, textOffset: 11 },
 		],
 	},
 ];
@@ -155,5 +155,31 @@ describe("tool rows", () => {
 		const run = renderToStaticMarkup(<ToolRow entry={{ callId: "c", name: "bash", summary: "sleep", status: "running" }} />);
 		assert.match(run, /data-testid="braille-spinner"/);
 		assert.match(run, />running</);
+	});
+});
+
+describe("ToolRow with an artifact renderer", () => {
+	it("registered tools (read) expand into the artifact card; others show text output", async () => {
+		const { artifactRenderers } = await import("../components/artifacts/index.ts");
+		const part = { type: "tool-read", toolCallId: "c", state: "output-available", input: { path: "a.md" }, output: "BODY" };
+		const entry = { callId: "c", name: "read", summary: "a.md", status: "done" as const, result: "BODY" };
+		const withCard = renderToStaticMarkup(<ToolRow entry={entry} artifact={{ Renderer: artifactRenderers.read!, part: part as never }} />);
+		assert.match(withCard, /data-testid="tool-row"/);
+		assert.match(withCard, /data-testid="tool-call-card"/);
+		assert.doesNotMatch(withCard, /data-testid="tool-row-output"/);
+		const plain = renderToStaticMarkup(<ToolRow entry={{ ...entry, name: "bash" }} />);
+		assert.doesNotMatch(plain, /tool-call-card/);
+		assert.match(plain, /data-testid="tool-row-output"/);
+		assert.match(plain, /select-text/);
+	});
+});
+
+describe("history seam handling", () => {
+	it("trims only the single seam newline pair", () => {
+		const native = threadMessagesToNative([
+			{ id: "a", role: "assistant", text: "x\n\n\ny", at: base.at, tools: [{ callId: "c", name: "r", args: {}, textOffset: 4 }] },
+		]);
+		const first = native[0] as { content: Array<{ type: string; text?: string }> };
+		assert.equal(first.content[0]!.text, "x\n");
 	});
 });

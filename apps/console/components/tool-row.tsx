@@ -4,7 +4,8 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import type { ToolEntry } from "@/src/core";
+import type { ComponentType } from "react";
+import type { ArtifactPartProps, ToolEntry } from "@/src/core";
 
 /**
  * One tool call as a compact row: name, one-line argument summary, status.
@@ -25,7 +26,14 @@ export function truncateResult(text: string): { shown: string; truncated: boolea
 
 const STATUS_LABEL = { running: "running", done: "done", error: "error", pending: "no result" } as const;
 
-export function ToolRow({ entry }: { entry: ToolEntry }) {
+export function ToolRow({
+	entry,
+	artifact,
+}: {
+	entry: ToolEntry;
+	/** A registered artifact renderer for this tool + its view part: it IS the expanded content (settled calls only). */
+	artifact?: { Renderer: ComponentType<ArtifactPartProps>; part: ArtifactPartProps["part"] };
+}) {
 	const [full, setFull] = useState(false);
 	const failed = entry.status === "error";
 	const result = entry.result ?? "";
@@ -53,14 +61,16 @@ export function ToolRow({ entry }: { entry: ToolEntry }) {
 				<ChevronRight className="size-3 shrink-0 opacity-50 transition-transform group-open:rotate-90" />
 			</summary>
 			<div className="mt-2 rounded-xl border bg-card p-3 text-xs">
-				{entry.status === "running" || entry.status === "pending" ? (
+				{artifact && (entry.status === "done" || entry.status === "error") ? (
+					<artifact.Renderer part={artifact.part} />
+				) : entry.status === "running" || entry.status === "pending" ? (
 					<div className="italic text-muted-foreground">{entry.status === "running" ? "running…" : "no result recorded"}</div>
 				) : (
 					<>
 						<div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">{failed ? "Error" : "Output"}</div>
 						<pre
 							data-testid="tool-row-output"
-							className={`max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed ${failed ? "text-red-500" : ""}`}
+							className={`select-text max-h-96 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed ${failed ? "text-red-500" : ""}`}
 						>
 							{full ? result : shown || "(empty)"}
 						</pre>

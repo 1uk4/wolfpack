@@ -22,8 +22,7 @@
  */
 
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
-import type { SnapshotEvent, ThreadEvent, ThreadMessage } from "@wolfpack/client";
-type ThreadToolCall = NonNullable<ThreadMessage["tools"]>[number];
+import type { SnapshotEvent, ThreadEvent, ThreadMessage, ThreadToolCall } from "@wolfpack/client";
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { LhMessage } from "./native-messages.ts";
 
@@ -54,8 +53,8 @@ function assistantShell(content: Block[], timestamp: number, stopReason: Assista
 	} as unknown as AssistantMessage;
 }
 
-/** Strip the blank-line seam the server joins merged rounds with. */
-const trimSeam = (t: string): string => t.replace(/^\n+|\n+$/g, "");
+/** Strip the single blank-line seam ("\n\n") the server joins merged rounds with, at either edge. */
+const trimSeam = (t: string): string => t.replace(/^\n\n/, "").replace(/\n\n$/, "");
 
 /**
  * History (ThreadMessage[]) → the native record the session model seeds from.

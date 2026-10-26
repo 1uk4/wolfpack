@@ -7,13 +7,14 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolRow } from "@/components/tool-row";
+import { artifactRenderers } from "@/components/artifacts";
 import { Separator } from "@/components/ui/separator";
 import { Composer } from "@/components/composer";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { renderItems, type LhMessage } from "@/src/core";
+import { renderItems, type ArtifactPartProps, type LhMessage } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -165,7 +166,16 @@ export function ThreadChat({
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":
-																return <ToolRow key={item.entry.callId || item.index} entry={item.entry} />;
+															{
+																const Renderer = artifactRenderers[item.entry.name];
+																return (
+																	<ToolRow
+																		key={item.entry.callId || item.index}
+																		entry={item.entry}
+																		artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined}
+																	/>
+																);
+															}
 														}
 													})}
 												</MessageContent>

@@ -24,6 +24,7 @@ import type {
 } from "../adapter.js";
 import { buildSystemWithSchema, extractJSON } from "./json-extract.js";
 import { createRequire } from "node:module";
+import { realpathSync } from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { effortFor } from "../models.js";
@@ -93,26 +94,27 @@ export type QueryFn = (params: { prompt: string; options?: any }) => AsyncIterab
 
 let cachedQuery: QueryFn | null = null;
 
-async function loadQuery(): Promise<QueryFn> {
+export async function loadQuery(): Promise<QueryFn> {
   if (cachedQuery) return cachedQuery;
-  // Indirect specifier so TS doesn't statically require the module at build time;
-  // it is resolved from node_modules at runtime — the caller's tree first, then
-  // the global install (VPS bundles ship without node_modules; the deployer
-  // installs the SDK globally, which import() alone wouldn't find).
-  const specifier = "@anthropic-ai/claude-agent-sdk";
+  // Indirect specifier so TS doesn't statically require the module at build time.
+  // Deployed extension bundles (<den>/extensions/<x>/index.js) have no
+  // node_modules above them, so plain import() fails; fall back to anchors we
+  // control: the harness' own location, NODE_PATH, cwd, and the global install.
+  const specifier = SDK_SPECIFIER;
   let mod: any;
   try {
     mod = await import(specifier);
   } catch (err) {
-    const global = globalSdkUrl(specifier);
+    const found = findSdkUrl(specifier);
     try {
-      if (!global) throw err;
-      mod = await import(global);
+      if (!found) throw err;
+      mod = await import(found);
     } catch {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `claude-agent-sdk provider selected but @anthropic-ai/claude-agent-sdk ` +
-          `could not be loaded (${msg}). Install it (npm i -g ${specifier}) or use transport: api.`
+        `claude-agent-sdk provider selected but ${specifier} ` +
+          `could not be loaded (${msg}). Tried: ${sdkAnchors().join(", ")}. ` +
+          `Install it (npm i -g ${specifier}) or use transport: api.`
       );
     }
   }
@@ -126,15 +128,41 @@ async function loadQuery(): Promise<QueryFn> {
   return cachedQuery;
 }
 
-/** file:// URL of a globally installed package (<node prefix>/lib/node_modules), if present. */
-function globalSdkUrl(specifier: string): string | undefined {
-  const globalRoot = path.join(path.dirname(process.execPath), "..", "lib", "node_modules");
-  try {
-    const resolved = createRequire(path.join(globalRoot, "noop.js")).resolve(specifier);
-    return pathToFileURL(resolved).href;
-  } catch {
-    return undefined;
+const SDK_SPECIFIER = "@anthropic-ai/claude-agent-sdk";
+
+/**
+ * Directories to resolve the SDK from, in order. The SDK can't be bundled (it
+ * spawns a platform-native `claude` binary shipped as optional deps), so it is
+ * resolved from the host: the entry script's tree (harness.cjs → agent/node_modules,
+ * or the repo's packages/harness/dist), NODE_PATH, cwd, then the global install.
+ */
+export function sdkAnchors(): string[] {
+  const out: string[] = [];
+  const add = (d: string | undefined) => { if (d && !out.includes(d)) out.push(d); };
+  const entry = process.argv[1];
+  if (entry) {
+    try { add(path.dirname(realpathSync(entry))); } catch { add(path.dirname(entry)); }
   }
+  for (const d of (process.env.NODE_PATH ?? "").split(path.delimiter)) {
+    // NODE_PATH entries are node_modules dirs; anchor one level up.
+    if (d) add(path.dirname(d));
+  }
+  add(process.cwd());
+  add(path.join(path.dirname(process.execPath), "..", "lib"));
+  return out;
+}
+
+/** file:// URL of the SDK resolved from the first anchor that has it. */
+export function findSdkUrl(specifier: string, anchors: string[] = sdkAnchors()): string | undefined {
+  for (const anchor of anchors) {
+    try {
+      const resolved = createRequire(path.join(anchor, "noop.js")).resolve(specifier);
+      return pathToFileURL(resolved).href;
+    } catch {
+      // try next anchor
+    }
+  }
+  return undefined;
 }
 
 export class ClaudeAgentSdkAdapter implements KnowledgeAdapter {

@@ -74,6 +74,8 @@ export {
 // Den (wolf-level memory)
 export {
   readDenTopics,
+  readArchivedDenTopics,
+  readResendTopics,
   readDenJourney,
   writeDenTopic,
   gateDenTopic,

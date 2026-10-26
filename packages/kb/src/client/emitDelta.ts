@@ -87,6 +87,8 @@ export interface EmitDeltaInput {
   groupDate?: string;
   /** Distill's hint: the existing entry this contribution is about. */
   target?: string;
+  /** Rebuild (resend-all / --emit-den): write even when the body was emitted before. */
+  force?: boolean;
 }
 
 /**
@@ -105,7 +107,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
   const hash = contentHash(input.body);
   const emitted = readEmittedMap(roots);
   const prevHash = emitted[input.denTopicId] ?? null;
-  if (prevHash === hash) return null; // unchanged re-promotion → no-op
+  if (prevHash === hash && !input.force) return null; // unchanged re-promotion → no-op
 
   const contribution: Contribution = {
     from: wolf,

@@ -343,7 +343,7 @@ export interface PromoteOptions {
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
   /** Called for a topic held back by distill: write it back as `promotable: false`. */
   onHold?: (topic: PromoteTopic, reason: string) => void;
-  /** Backfill / resend: skip the trivial-change skip and reuse stored outputs when the raw body is unchanged. */
+  /** Backfill / resend: skip the trivial-change skip, reuse stored outputs when the raw body is unchanged, and re-emit bodies already sent (no emitted.json dedup). */
   force?: boolean;
   /** Today (YYYY-MM-DD); tests pin it. */
   today?: string;
@@ -448,6 +448,7 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
           body: o.body,
           session: opts.session,
           ...(o.target ? { target: o.target } : {}),
+          ...(force ? { force: true } : {}),
         },
         (why) => {
           failed = true;

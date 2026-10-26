@@ -186,10 +186,20 @@ describe("promoteTopics", () => {
     const { call, engine } = engineOf();
     await promoteTopics([topic("t", "raw body")], opts(engine));
     rmSync(join(roots.opsRoot, "inbox"), { recursive: true });
-    rmSync(join(roots.denLocal, "emitted.json"));
+    // emitted.json still records the body: force must re-send it anyway.
     const r = await promoteTopics([topic("t", "raw body")], opts(engine, { force: true }));
     expect(r).toMatchObject({ distilled: 0, emitted: 1 });
+    expect(inbox()).toHaveLength(1);
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("without force an unchanged topic is still not re-sent", async () => {
+    const { engine } = engineOf();
+    await promoteTopics([topic("t", "raw body")], opts(engine));
+    rmSync(join(roots.opsRoot, "inbox"), { recursive: true });
+    const r = await promoteTopics([topic("t", "raw body")], opts(engine));
+    expect(r.emitted).toBe(0);
+    expect(inbox()).toHaveLength(0);
   });
 });
 

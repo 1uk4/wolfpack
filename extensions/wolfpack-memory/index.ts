@@ -64,7 +64,7 @@ import {
   renderPlanSummary,
   readPlan,
   writePlan,
-  readDenTopics,
+  readResendTopics,
   promoteTopics,
   discoverSources,
   gatePlan,
@@ -2835,10 +2835,17 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         return;
       }
 
-      // 1) Every den memory topic (the wolf's accumulated knowledge).
-      let denTopics: { id: string; summary: string; body: string; promotable?: boolean }[] = [];
+      // 1) Every den memory topic (the wolf's accumulated knowledge): the
+      //    archived ones Dewey absorbed (latest version per id, rejects too)
+      //    plus the pending ones.
+      let archivedCount = 0;
+      let pendingCount = 0;
+      let denTopics: { id: string; title: string; summary: string; body: string; promotable?: boolean }[] = [];
       try {
-        denTopics = readDenTopics(wolfDen);
+        const set = readResendTopics(wolfDen);
+        archivedCount = set.archived.length;
+        pendingCount = set.pending.length;
+        denTopics = [...set.archived, ...set.pending];
       } catch {
         denTopics = [];
       }
@@ -2871,7 +2878,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       const force = /\s(--force|--yes)\b/.test(` ${args ?? ""}`);
       const detail =
         `Re-emit ${wolfName}'s ENTIRE contribution set to the Librarian inbox:\n` +
-        `  \u2022 ${denTopics.length} den topic(s) \u2192 domain "${currentDomain}"\n` +
+        `  \u2022 ${denTopics.length} den topic(s) (${archivedCount} archived, ${pendingCount} pending) \u2192 domain "${currentDomain}"\n` +
         `  \u2022 ${crawlRuns.length} completed crawl(s), ${crawlTopicTotal} topics:\n` +
         crawlRuns
           .map((e) => `      - ${e.domain} \u00b7 ${e.topics} topics \u00b7 ${e.source}`)
@@ -2941,7 +2948,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       if (ctx.hasUI)
         ctx.ui.notify(
           `\ud83d\udc3a re-sent \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}:\n` +
-            `   ${denEmitted}/${denTopics.length} den topic(s)\n` +
+            `   ${denEmitted} contribution(s) from ${denTopics.length} den topic(s) (${archivedCount} archived, ${pendingCount} pending)\n` +
             `   ${crawlEmitted} crawl contribution(s) from ${crawlRunsOk}/${crawlRuns.length} run(s)\n` +
             `Dewey's sweep will rebuild the KB from these.`,
           crawlRunsOk < crawlRuns.length ? "warning" : "info"

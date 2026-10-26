@@ -20,7 +20,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { promoteTopics } from "./distill.js";
 import { consolidateSession } from "./consolidate.js";
 import { listSessionIds } from "./session/memory.js";
-import { getConsolidatedSessions, readDenTopics } from "./den.js";
+import { getConsolidatedSessions, readResendTopics } from "./den.js";
 import { resolve } from "node:path";
 
 async function main(): Promise<void> {
@@ -84,13 +84,16 @@ async function main(): Promise<void> {
 
   // Backfill: emit a contribution delta for EVERY existing den topic (not just
   // ones changed this session). Seeds the KB with a wolf's accumulated memory.
-  // Deterministic, no LLM. Idempotent (hash-named files overwrite).
+  // Includes archived topics; distill outputs are reused when a body is unchanged.
   if (flags["emit-den"]) {
     if (!kbRoots) {
       console.error("--emit-den requires KB_OPS (librarian-ops root)");
       process.exit(1);
     }
-    const topics = readDenTopics(resolvedDen);
+    // Archived topics (absorbed by Dewey; latest version per id, rejects too)
+    // first, then pending ones. force re-sends bodies emitted before.
+    const { archived, pending } = readResendTopics(resolvedDen);
+    const topics = [...archived, ...pending];
     const stats = await promoteTopics(
       topics
         .filter((t) => t.promotable) // the rest are held in the den as session logs
@@ -107,7 +110,7 @@ async function main(): Promise<void> {
     const emitted = stats.emitted;
     console.log(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
     console.log(
-      `emit-den: ${emitted}/${topics.length} deltas \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}`
+      `emit-den: ${emitted} deltas from ${topics.length} topics (${archived.length} archived, ${pending.length} pending) \u2192 ${kbRoots.opsRoot}/inbox/${wolfName}`
     );
     return;
   }

@@ -47,14 +47,57 @@ export function ensureDenDirs(denRoot: string): void {
  * Read all existing topic files from the den.
  */
 export function readDenTopics(denRoot: string): DenTopic[] {
-  const topicsDir = join(denRoot, "memory", "topics");
-  if (!existsSync(topicsDir)) return [];
+  return readTopicDir(join(denRoot, "memory", "topics"));
+}
 
-  const files = readdirSync(topicsDir).filter((f) => f.endsWith(".md"));
-  const topics: DenTopic[] = [];
+/** A den topic that reconcile moved to memory/archive/ once the KB absorbed it. */
+export interface ArchivedDenTopic extends DenTopic {
+  /** KB entry the receipt named; null for a reject. */
+  absorbedInto: string | null;
+  absorbedAt: string;
+}
+
+/**
+ * Read every archived den topic (memory/archive/). The id comes from the
+ * frontmatter, so a subject archived more than once (`<id>-<hash10>.md`) keeps
+ * its real id. One file per stint: the same id can appear several times.
+ */
+export function readArchivedDenTopics(denRoot: string): ArchivedDenTopic[] {
+  const dir = join(denRoot, "memory", "archive");
+  return readTopicDir(dir, (fields) => ({
+    absorbedInto: fields.absorbed_into == null || String(fields.absorbed_into) === "null" ? null : String(fields.absorbed_into),
+    absorbedAt: String(fields.absorbed_at ?? ""),
+  }));
+}
+
+/**
+ * The wolf's whole contribution set, for a rebuild of Dewey from scratch
+ * (/wolf:resend-all, --emit-den): one topic per id, the latest version only.
+ * A pending topic is newer than any archived stint of the same id; otherwise
+ * the stint with the latest absorbed_at wins. Rejected stints are included:
+ * a rebuild lets Dewey decide again. Archived topics come first, oldest
+ * absorbed first, then the pending ones.
+ */
+export function readResendTopics(denRoot: string): { archived: ArchivedDenTopic[]; pending: DenTopic[] } {
+  const pending = readDenTopics(denRoot);
+  const pendingIds = new Set(pending.map((t) => t.id));
+  const latest = new Map<string, ArchivedDenTopic>();
+  for (const t of readArchivedDenTopics(denRoot)) {
+    if (pendingIds.has(t.id)) continue;
+    const prev = latest.get(t.id);
+    if (!prev || t.absorbedAt > prev.absorbedAt) latest.set(t.id, t);
+  }
+  const archived = [...latest.values()].sort((a, b) => a.absorbedAt.localeCompare(b.absorbedAt) || a.id.localeCompare(b.id));
+  return { archived, pending };
+}
+
+function readTopicDir<X extends object = {}>(dir: string, extra?: (fields: Record<string, unknown>) => X): (DenTopic & X)[] {
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  const topics: (DenTopic & X)[] = [];
 
   for (const file of files) {
-    const filePath = join(topicsDir, file);
+    const filePath = join(dir, file);
     const raw = readFileSync(filePath, "utf-8");
     const { fields, body } = parseFrontmatter(raw);
 
@@ -68,6 +111,7 @@ export function readDenTopics(denRoot: string): DenTopic[] {
       filePath,
       promotable: String(fields.promotable) !== "false",
       promotableReason: fields.promotable_reason ? String(fields.promotable_reason) : undefined,
+      ...((extra?.(fields as Record<string, unknown>) ?? {}) as X),
     });
   }
 

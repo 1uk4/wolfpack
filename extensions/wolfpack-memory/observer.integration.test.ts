@@ -225,8 +225,9 @@ describe("full-transcript observer", () => {
     expect(readFileSync(join(topics, "caching.md"), "utf8")).toContain("Cache session lookups");
     expect(existsSync(join(dev, "den/memory/topics"))).toBe(false);
     expect(stub.steps).toContain("consolidate");
-    // the archived observations left the pool
+    // the archived observations left the pool (topics are written first, the pool is settled after: wait for it)
     const poolFile = join(dev, "den/.memory/pool/observations.jsonl");
+    await waitFor(() => !existsSync(poolFile) || readFileSync(poolFile, "utf8").trim() === "");
     expect(existsSync(poolFile) ? readFileSync(poolFile, "utf8").trim() : "").toBe("");
   });
 

@@ -371,7 +371,6 @@ export default function createMemoryExtension(
   let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
   const mem = memoryEmitter(wolfDen, wolfName, defaultDomain);
-  let closeHooked = false;
 
   /**
    * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
@@ -421,10 +420,6 @@ export default function createMemoryExtension(
       await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
 
-    if (!closeHooked) {
-      closeHooked = true;
-      ctx.conversation?.onEngineClose?.(() => unregisterMemoryActions(wolfDen, actions));
-    }
     startTimer(ctx);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
@@ -560,6 +555,7 @@ export default function createMemoryExtension(
   if (!kbRoots) console.log("[memory] promote disabled: no KB roots (KB_BASE/KB_OPS); interval ticks only consolidate into session topics");
   const actions: MemoryActions = {
     promoteEnabled: kbRoots !== null,
+    isBusy: () => promoting !== null,
     consolidate: () => consolidateToSessions({ minObservations: 1 }),
     promote() {
       if (promoting) return { status: "already_running", jobId: promoting };

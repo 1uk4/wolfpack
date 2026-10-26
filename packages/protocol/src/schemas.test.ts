@@ -245,3 +245,7 @@ describe("memory action responses", () => {
     expect(PROTOCOL_VERSION).toBe(1);
   });
 });
+
+it("memory_busy maps to 409", () => {
+  expect(ERROR_HTTP_STATUS.memory_busy).toBe(409);
+});

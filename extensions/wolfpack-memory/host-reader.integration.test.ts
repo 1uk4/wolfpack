@@ -38,9 +38,11 @@ it("a Harness opened the createWolfHarness way (reader attached) observes a turn
   harness.resume();
   await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
-  const wm = join(dir, ".memory", "watermarks", "1.json");
-  for (let i = 0; i < 330 && !existsSync(wm); i++) await new Promise((r) => setTimeout(r, 30));
-  expect(existsSync(wm)).toBe(true);
+  // The watermark file is first written as a SEED, before the observer has run: wait for the pool, which is written
+  // before the final watermark, not for the watermark.
+  const pool = join(dir, ".memory/pool/observations.jsonl");
+  for (let i = 0; i < 330 && !existsSync(pool); i++) await new Promise((r) => setTimeout(r, 30));
+  expect(existsSync(pool)).toBe(true);
   expect(prompts.join("\n")).toContain("HOSTUSER");
   expect(readFileSync(join(dir, ".memory/pool/observations.jsonl"), "utf8")).toContain("Cache lookups");
   detach();
@@ -77,8 +79,8 @@ it("(f) the createWolfHarness path tags per observation with domain context, and
   harness.resume();
   await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
-  const wm = join(dir, ".memory", "watermarks", "1.json");
-  for (let i = 0; i < 100 && !existsSync(wm); i++) await new Promise((r) => setTimeout(r, 30));
+  const pool = join(dir, ".memory/pool/observations.jsonl");
+  for (let i = 0; i < 330 && !existsSync(pool); i++) await new Promise((r) => setTimeout(r, 30));
   const obs = readFileSync(join(dir, ".memory/pool/observations.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
   expect(systems[0]).toContain("Domains this wolf subscribes to:");
   expect(systems[0]).toContain("billing: Invoices and payments");

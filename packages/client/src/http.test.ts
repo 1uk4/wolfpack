@@ -192,10 +192,10 @@ describe("memory actions", () => {
   });
 
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-  it("promote: 202 started, 409 already_running resolves (not an error), 409 envelope rejects", async () => {
+  it("promote: 202 started and already_running resolve, 409 envelope rejects", async () => {
     const replies = [
       json(202, { jobId: "j1", status: "started" }),
-      json(409, { jobId: "j1", status: "already_running" }),
+      json(202, { jobId: "j1", status: "already_running" }),
       json(409, { code: "promote_unavailable", message: "no kb roots", retryable: false }),
     ];
     const c = make({ fetch: (async () => replies.shift()!) as typeof fetch });
@@ -208,5 +208,13 @@ describe("memory actions", () => {
     const body = { observationsProcessed: 2, topicsCreated: 1, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, topicIds: ["a"] };
     const c = make({ fetch: (async () => json(200, body)) as typeof fetch });
     expect(await c.consolidateMemory("w")).toEqual(body);
+  });
+});
+
+describe("unknown error codes", () => {
+  it("keep the server's message and retryable flag as a generic engine_error", async () => {
+    const reply = () => new Response(JSON.stringify({ code: "from_the_future", message: "try again soon", retryable: true }), { status: 409, headers: { "Content-Type": "application/json" } });
+    const c = make({ fetch: (async () => reply()) as typeof fetch });
+    await expect(c.promoteMemory("w")).rejects.toMatchObject({ name: "ProtocolError", code: "engine_error", message: "try again soon", retryable: true });
   });
 });

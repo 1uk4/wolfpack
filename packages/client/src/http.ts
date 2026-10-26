@@ -1,6 +1,5 @@
 import {
   ErrorEnvelopeSchema,
-  PromoteResponseSchema,
   LAST_EVENT_ID_HEADER,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -141,23 +140,9 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("consolidateMemory", { name: wolf }, ROUTES.consolidateMemory.response.schema, undefined, wolf)) as ConsolidateResponse;
   }
 
-  /** Never waits for the job. 409 `already_running` is a normal answer (the body is a PromoteResponse), not an error. */
+  /** Never waits for the job. `already_running` (the running job's id) is a normal 202 answer, not an error. */
   async promoteMemory(wolf: string): Promise<PromoteResponse> {
-    const res = await this.fetchFn(this.base + buildPath("promoteMemory", { name: wolf }), {
-      method: "POST",
-      headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
-    });
-    if (res.ok) {
-      const parsed = PromoteResponseSchema.safeParse(await res.json().catch(() => undefined));
-      if (parsed.success) return parsed.data;
-      throw new ProtocolError("engine_error", "unexpected response shape", false);
-    }
-    if (res.status === 409) {
-      const body: unknown = await res.clone().json().catch(() => undefined);
-      const running = PromoteResponseSchema.safeParse(body);
-      if (running.success) return running.data;
-    }
-    throw await this.toError(res, wolf);
+    return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, undefined, wolf)) as PromoteResponse;
   }
 
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */
@@ -236,13 +221,21 @@ export class HttpConsoleClient implements ConsoleClient {
 
   /** Map by envelope code, never by HTTP status. */
   private async toError(res: Response, threadId?: string): Promise<Error> {
-    let env;
+    let raw: unknown;
     try {
-      env = ErrorEnvelopeSchema.safeParse(await res.json());
+      raw = await res.json();
     } catch {
-      env = undefined;
+      raw = undefined;
     }
-    if (!env?.success) return new ProtocolError("engine_error", `HTTP ${res.status} without error envelope`, res.status >= 500);
+    let env = ErrorEnvelopeSchema.safeParse(raw);
+    if (!env.success) {
+      // An envelope whose code this client does not know (additive growth): generic failure, server's words kept.
+      const l = raw as { code?: unknown; message?: unknown; retryable?: unknown } | null;
+      if (l && typeof l.code === "string" && typeof l.message === "string" && typeof l.retryable === "boolean") {
+        return new ProtocolError("engine_error", l.message, l.retryable);
+      }
+    }
+    if (!env.success) return new ProtocolError("engine_error", `HTTP ${res.status} without error envelope`, res.status >= 500);
     const { code, message, retryable } = env.data;
     if (code === "busy") return new BusyError(threadId ?? message);
     if (code === "not_found") return new NotFoundError(message);

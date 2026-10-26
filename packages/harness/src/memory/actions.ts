@@ -22,13 +22,15 @@ export interface MemoryActions {
   /** False when the wolf has no KB roots: promote() rejects, so interval ticks only consolidate. */
   promoteEnabled: boolean;
   /** Fold the whole observation pool into session topics (not the den). Serialized with promote and auto-consolidation. */
+  /** True while a promote job runs: a consolidate would queue behind it. */
+  isBusy(): boolean;
   consolidate(): Promise<ConsolidationResult>;
   /** Consolidate, then move session topics to the den and on to contribution files in the inbox. Runs in the background. */
   promote(): PromoteStart;
 }
 
-// On globalThis (as the event buses are): the memory extension and wolfd's server must see one registry even when this
-// module is loaded twice (source and dist copies).
+// On globalThis, keyed by Symbol.for (as the event buses are): the memory extension and wolfd's server must see one
+// registry even when this module is loaded twice (a source and a dist copy each get their own module scope).
 const REGISTRY = Symbol.for("wolfpack.memoryActions");
 function getRegistry(): Map<string, MemoryActions> {
   const g = globalThis as Record<symbol, unknown>;

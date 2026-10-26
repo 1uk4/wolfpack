@@ -13,7 +13,7 @@ import {
   type Extension as PiDurableExtension,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
-import { conversationReaderFor } from "../engine/conversation-reader.js";
+import { conversationReaderFor, onEngineCloseFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
   Tool,
@@ -145,6 +145,11 @@ export function adaptToDurable(
       })
     );
   }
+
+  // pi-durable has no extension lifecycle of its own: run `lifecycle.stop` when the engine closes (queued if the engine
+  // is not attached yet), so stop-time cleanup never depends on a conversation having run.
+  const stop = ext.lifecycle?.stop;
+  if (stop) onEngineCloseFor(wolfDen, () => void Promise.resolve(stop()).catch(() => {}));
 
   return piDefineExtension({
     name: ext.name,

@@ -4,13 +4,14 @@
  * `engine.call` seam; KB_BASE/KB_OPS and the sandbox root are temp dirs, and a "live" tree is hashed before/after.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/agent";
+import { memoryActionsFor } from "./memory-actions.js";
 import { ConsolidateResponseSchema, ErrorEnvelopeSchema, PROTOCOL_VERSION, type MemoryEvent } from "@wolfpack/protocol";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
@@ -157,8 +158,12 @@ describe("memory action routes", { timeout: 30_000 }, () => {
     expect(job).toMatchObject({ status: "started" });
     expect(job.jobId).toBeTruthy();
     const again = await post(t, "promote");
-    expect(again.status).toBe(409);
+    expect(again.status).toBe(202);
     expect(await again.json()).toEqual({ jobId: job.jobId, status: "already_running" });
+    // consolidate during a running promote: refused at once (not queued behind the gated job), retryable
+    const busy = await post(t, "consolidate");
+    expect(busy.status).toBe(409);
+    expect(ErrorEnvelopeSchema.parse(await busy.json())).toMatchObject({ code: "memory_busy", retryable: true });
     // via the SDK too: already_running resolves, it does not throw
     expect(await t.client.promoteMemory!("testwolf")).toEqual({ jobId: job.jobId, status: "already_running" });
 
@@ -175,6 +180,42 @@ describe("memory action routes", { timeout: 30_000 }, () => {
     expect(next.jobId).not.toBe(job.jobId);
 
     expect(hashTree(live)).toEqual(liveBefore);
+  });
+
+  it("consolidate failure answers a generic message, not the engine's error", async () => {
+    const t = await startWolf();
+    const events = collect(t);
+    await new Promise((r) => setTimeout(r, 100));
+    await t.submit("hello");
+    await waitFor(() => types(events).includes("observation_captured"));
+    // break the topics dir so consolidation throws with a path in its message
+    const sess = join(t.wolf.config.den, ".memory", "sessions");
+    rmSync(sess, { recursive: true, force: true });
+    writeFileSync(sess, "not a dir");
+    const res = await post(t, "consolidate");
+    if (res.status !== 200) {
+      const env = ErrorEnvelopeSchema.parse(await res.json());
+      expect(env).toMatchObject({ code: "engine_error", message: "consolidation failed" });
+    }
+  });
+
+  it("a wolf closed before any observation leaves no actions registered", async () => {
+    const t = await startWolf();
+    const den = t.wolf.config.den;
+    expect(memoryActionsFor(den)).toBeDefined();
+    await t.stop();
+    tw = undefined;
+    expect(memoryActionsFor(den)).toBeUndefined();
+  });
+
+  it("two copies of the actions module share one registry", async () => {
+    const copy = (await import("../../packages/harness/src/memory/actions.ts?copy")) as typeof import("../../packages/harness/src/memory/actions.js");
+    expect(copy.memoryActionsFor).not.toBe(memoryActionsFor);
+    const fake = { promoteEnabled: false, isBusy: () => false, consolidate: async () => ({}) as never, promote: () => ({ status: "already_running" as const, jobId: "x" }) };
+    copy.registerMemoryActions("/den/x", fake);
+    expect(memoryActionsFor("/den/x")).toBe(fake);
+    copy.unregisterMemoryActions("/den/x", fake);
+    expect(memoryActionsFor("/den/x")).toBeUndefined();
   });
 
   it("unknown wolf is not_found; the typed client consolidates", async () => {

@@ -35,12 +35,13 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 |---|---|---|
 | consolidate ok | 200 | `ConsolidateResponse` |
 | promote started | 202 | `{jobId, status:"started"}` |
-| promote while one runs | 409 | `{jobId, status:"already_running"}` (a `PromoteResponse`, not an envelope; nothing started) |
+| promote while one runs | 202 | `{jobId, status:"already_running"}` (the running job; nothing started) |
+| consolidate while a promote runs | 409 | envelope `memory_busy` (retryable; not queued) |
 | memory inert / not loaded | 409 | envelope `memory_unavailable` |
 | no KB roots (promote only) | 409 | envelope `promote_unavailable` |
 | unknown wolf | 404 | envelope `not_found` |
 
-Both new codes are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running`, rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
+The new codes (`memory_unavailable`, `promote_unavailable`, `memory_busy`) are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running` (a 202), rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
 
 ## Layout
 

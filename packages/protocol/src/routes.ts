@@ -73,7 +73,7 @@ export const ROUTES = {
   streamWolfEvents: { method: "GET", path: "/v1/wolves/:name/events", response: { kind: "sse", event: MemoryEventSchema }, status: [200], error: err },
   /**
    * Fold the observation pool into session topics; answers with the counts. 409 `memory_unavailable` when the wolf's
-   * memory is inert or not loaded.
+   * memory is inert or not loaded; 409 `memory_busy` (retryable) while a promote runs.
    */
   consolidateMemory: {
     method: "POST",
@@ -84,15 +84,15 @@ export const ROUTES = {
   },
   /**
    * Start promote as a background job: 202 `{jobId, status:"started"}` immediately; completion is reported as
-   * `promote_finished` / `promote_failed` MemoryEvents with that jobId. While one runs: 409 with the NON-envelope body
-   * `{jobId, status:"already_running"}` (a PromoteResponse, nothing started). Other failures are envelopes: 409
+   * `promote_finished` / `promote_failed` MemoryEvents with that jobId. While one runs: also 202, with
+   * `{jobId: <running job>, status:"already_running"}` (nothing started). Failures are envelopes: 409
    * `memory_unavailable` (memory inert / not loaded) and 409 `promote_unavailable` (no KB roots).
    */
   promoteMemory: {
     method: "POST",
     path: "/v1/wolves/:name/memory/promote",
     response: { kind: "json", schema: PromoteResponseSchema },
-    status: [202, 409],
+    status: [202],
     error: err,
   },
 } as const satisfies Record<string, RouteDef>;

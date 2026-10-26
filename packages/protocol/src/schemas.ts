@@ -23,6 +23,8 @@ export const ErrorCodeSchema = z.enum([
   "memory_unavailable",
   /** Promote needs KB roots and this wolf has none; consolidate still works. */
   "promote_unavailable",
+  /** A promote is running; consolidate would queue behind it, so it is refused. Retry later. */
+  "memory_busy",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -43,6 +45,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   invalid_request: 400,
   memory_unavailable: 409,
   promote_unavailable: 409,
+  memory_busy: 409,
 };
 
 // ------------------------------------------------------------ resources
@@ -311,7 +314,7 @@ export type ConsolidateResponse = z.infer<typeof ConsolidateResponseSchema>;
 /**
  * Result of `POST /v1/wolves/:name/memory/promote`. The job runs in the background; its outcome is reported as
  * `promote_finished` / `promote_failed` MemoryEvents carrying the same `jobId`. `already_running` (HTTP 409) names
- * the job in flight and starts nothing.
+ * the job in flight and starts nothing (HTTP 202 as well: every non-2xx is an ErrorEnvelope).
  */
 export const PromoteResponseSchema = z.object({
   jobId: z.string(),

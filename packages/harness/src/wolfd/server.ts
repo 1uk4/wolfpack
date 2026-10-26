@@ -351,8 +351,12 @@ export class WolfServer {
         return this.memoryStream(req, res);
       case "consolidateMemory": {
         this.checkWolf(params.name);
-        const r = await this.memoryActions().consolidate().catch((e: unknown) => {
-          throw new HttpError("engine_error", `consolidate failed: ${firstLine(e)}`);
+        const actions = this.memoryActions();
+        // Consolidate shares the promote queue: refuse now rather than hold the request behind a long job.
+        if (actions.isBusy()) throw new HttpError("memory_busy", "a promote is running; retry when it finishes");
+        const r = await actions.consolidate().catch((e: unknown) => {
+          console.error(`[wolfd] consolidate failed: ${firstLine(e)}`);
+          throw new HttpError("engine_error", "consolidation failed");
         });
         const body: ConsolidateResponse = {
           observationsProcessed: r.observationsProcessed,
@@ -375,7 +379,7 @@ export class WolfServer {
         // is not an unhandled rejection.
         if (start.status === "started") start.done.catch(() => {});
         const body: PromoteResponse = { jobId: start.jobId, status: start.status };
-        return this.json(res, start.status === "started" ? 202 : 409, body);
+        return this.json(res, 202, body);
       }
     }
   }
@@ -394,7 +398,7 @@ export class WolfServer {
 
   private sendError(res: ServerResponse, e: HttpError): void {
     res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
-    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" }));
+    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" }));
   }
 
   // ------------------------------------------------------------ state

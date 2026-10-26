@@ -88,10 +88,24 @@ export function createConversationReader(harness: Harness): ConversationReader {
 
 const readers = new Map<string, ConversationReader>();
 
+const pendingClosers = new Map<string, Array<() => void>>();
+
+/**
+ * Run `fn` when the engine on this den closes. Usable before the engine exists (extensions are built first): the hook
+ * is queued and handed to the reader when it is attached, so cleanup does not depend on a conversation ever running.
+ */
+export function onEngineCloseFor(den: string, fn: () => void): void {
+  const reader = readers.get(den);
+  if (reader) return reader.onClose(fn);
+  pendingClosers.set(den, [...(pendingClosers.get(den) ?? []), fn]);
+}
+
 /** One engine per den: registering a second reader for the same den replaces the first (and warns). */
 export function registerConversationReader(den: string, reader: ConversationReader): () => void {
   if (readers.has(den)) console.warn(`[engine] conversation reader for ${den} replaced: two engines open on one den`);
   readers.set(den, reader);
+  for (const fn of pendingClosers.get(den) ?? []) reader.onClose(fn);
+  pendingClosers.delete(den);
   return () => {
     if (readers.get(den) === reader) readers.delete(den);
   };

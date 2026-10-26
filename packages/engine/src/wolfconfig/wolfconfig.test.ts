@@ -21,6 +21,16 @@ function wolf(name: string, yaml: string): string {
 }
 
 describe("loadWolfConfig", () => {
+  it("warns when memory settings exist but the memory extension is not listed", () => {
+    const warn = (yaml: string) => loadWolfConfig(wolf("w", yaml), { home: "/h" }).warnings.filter((w) => w.includes("memory configured but not in extensions: memory is off"));
+    expect(warn("name: w\nmemory:\n  defaultDomain: x\ndomains: [x]\n")).toHaveLength(1);
+    expect(warn("name: w\nsandbox: { root: /tmp/dev }\n")).toHaveLength(1);
+    expect(warn("name: w\nmemory:\n  live: true\n")).toHaveLength(1);
+    expect(warn("name: w\nmemory:\n  live: true\nextensions: [memory]\n")).toHaveLength(0);
+    expect(warn("name: w\nmemory:\n  live: true\nextensions: [wolfpack-memory]\n")).toHaveLength(0);
+    expect(warn("name: w\n")).toHaveLength(0);
+  });
+
   it("v2 minimal: applies defaults", () => {
     const file = wolf("a", "name: a\n");
     const { config, warnings } = loadWolfConfig(file, { home: "/h" });

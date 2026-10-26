@@ -99,6 +99,11 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
   if (badDefault) throw new WolfConfigError(`invalid wolf.yaml: ${badDefault}`, abs);
   const dir = path.dirname(abs);
   const sandbox = normalizeSandbox(v.sandbox, dir, home);
+  // Memory settings without the extension that acts on them: nothing would ever say why memory does nothing.
+  const memoryConfigured = (doc as Record<string, unknown>).memory !== undefined || !!sandbox;
+  if (memoryConfigured && !v.extensions.some((n) => n === "memory" || n === "wolfpack-memory")) {
+    warnings.push(`${abs}: memory configured but not in extensions: memory is off (add \`memory\` to extensions)`);
+  }
   const config: WolfConfig = {
     identity: { id: v.id ?? v.name, name: v.name, domains: v.domains },
     capability: {

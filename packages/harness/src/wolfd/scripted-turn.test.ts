@@ -76,4 +76,13 @@ describe("scripted model turns", () => {
     await tw.submit("ping");
     expect(offered).toEqual(expect.arrayContaining(["bash", "read", "write", "edit", "task_bind"]));
   });
+
+  it("memory routes say the extension is not loaded (versus inert) when it is absent", async () => {
+    tw = await startTestWolf({ script: [] });
+    const res = await fetch(`${tw.url}/v1/wolves/testwolf/memory/consolidate`, { method: "POST", headers: { "X-Protocol-Version": "1" } });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string; message: string };
+    expect(body.code).toBe("memory_unavailable");
+    expect(body.message).toMatch(/memory is off: the memory extension is not loaded/);
+  });
 });

@@ -151,7 +151,7 @@ async function startConfigured(
     const conversation = await engine.conversations.root(desired);
     await reconcile(conversation, desired);
 
-    const server = new WolfServer({ name: config.identity.name, conversation, den: config.den, onError: (e) => log(`server error: ${String(e)}`) });
+    const server = new WolfServer({ name: config.identity.name, conversation, den: config.den, memoryExtension: memoryExtensionInstalled(extensions), onError: (e) => log(`server error: ${String(e)}`) });
     await server.attach();
     engine.resume();
     const url = opts.socket ? await server.listenSocket(opts.socket) : await server.listen(opts.port ?? config.serve.port ?? 0);
@@ -207,6 +207,11 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
   const broken = result.failed.filter((f) => !f.notFound);
   if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
   return result.extensions;
+}
+
+/** Is the memory extension among what was installed (configured, or injected by a test)? */
+function memoryExtensionInstalled(installed: readonly Extension[]): boolean {
+  return installed.some((e) => e.name === "wolfpack-memory");
 }
 
 /**

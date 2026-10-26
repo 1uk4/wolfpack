@@ -69,6 +69,8 @@ export interface WolfServerOptions {
   settleTimeoutMs?: number;
   /** The wolf's den: its MemoryEvent bus feeds `GET /v1/wolves/:name/events`. Omitted: that stream stays empty. */
   den?: string;
+  /** Whether the memory extension is installed on this wolf; picks the `memory_unavailable` message. Unset: generic. */
+  memoryExtension?: boolean;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -387,7 +389,15 @@ export class WolfServer {
   /** The memory extension's actions for this wolf; `memory_unavailable` when memory is inert or not loaded. */
   private memoryActions(): MemoryActions {
     const actions = this.opts.den ? memoryActionsFor(this.opts.den) : undefined;
-    if (!actions) throw new HttpError("memory_unavailable", "memory is inert or not loaded on this wolf");
+    if (!actions) {
+      const why =
+        this.opts.memoryExtension === false
+          ? "memory is off: the memory extension is not loaded (add `memory` to extensions in wolf.yaml)"
+          : this.opts.memoryExtension === true
+            ? "memory is inert: the extension is loaded but gated off (set `sandbox` or `memory.live` in wolf.yaml)"
+            : "memory is inert or not loaded on this wolf";
+      throw new HttpError("memory_unavailable", why);
+    }
     return actions;
   }
 

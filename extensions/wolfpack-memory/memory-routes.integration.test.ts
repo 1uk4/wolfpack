@@ -237,7 +237,7 @@ describe("memory action routes", { timeout: 30_000 }, () => {
       expect(res.status).toBe(409);
       const env = ErrorEnvelopeSchema.parse(await res.json());
       expect(env.code).toBe("memory_unavailable");
-      expect(env.message.length).toBeGreaterThan(0);
+      expect(env.message).toMatch(/inert/);
     }
     await expect(t.client.promoteMemory!("testwolf")).rejects.toMatchObject({ code: "memory_unavailable" });
   });

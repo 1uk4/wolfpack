@@ -49,6 +49,8 @@ export interface MemoryConfig {
   intervalMs?: number;
   /** @internal test seam: replaces the lazily-built model engine (the established `engine.call` stub). */
   engine?: Engine;
+  /** Longest a durable compaction waits for the pre-compaction capture (default 45000 ms); the capture then finishes in the background. */
+  compactFlushTimeoutMs?: number;
   /** Minimum text length to trigger observation (default: 100) */
   minTextLength?: number;
   /** Consolidation settings */
@@ -376,7 +378,7 @@ export default function createMemoryExtension(
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -401,7 +403,7 @@ export default function createMemoryExtension(
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
     const { chunks, next } = planned;
-    if (chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
+    if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
     const eng = getEngine();
     let at = watermark.lastEntryId;
@@ -425,6 +427,45 @@ export default function createMemoryExtension(
     }
     startTimer(ctx);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
+  }
+
+  /**
+   * Before a durable conversation compacts: observe everything since its watermark, whatever its size, so nothing the
+   * summary replaces goes uncaptured. Runs on the conversation's observer queue (after any in-flight observation).
+   * Compaction waits at most `compactFlushTimeoutMs` (or until aborted): past that it proceeds and the capture keeps
+   * running in the background. The messages are still in the log, and the watermark only advances per observed chunk.
+   */
+  async function flushBeforeCompact(ctx: HookContext, signal?: AbortSignal): Promise<void> {
+    const run = queueFlush(ctx);
+    const ms = config.compactFlushTimeoutMs ?? 45_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const why = await Promise.race([
+      run.then(() => "done" as const),
+      new Promise<"timeout">((r) => { timer = setTimeout(() => r("timeout"), ms); }),
+      new Promise<"aborted">((r) => {
+        if (signal?.aborted) return r("aborted");
+        onAbort = () => r("aborted");
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    if (why !== "done") console.warn(`[memory] pre-compaction capture ${why === "timeout" ? `still running after ${ms}ms` : "aborted"}: compacting anyway; it finishes in the background`);
+  }
+
+  function queueFlush(ctx: HookContext): Promise<void> {
+    const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
+    // The flush reads everything from the committed log; no response is being reported, hence the empty `message`.
+    // An empty content fingerprints as "" which newObserverChunks treats as already committed (nothing synthesized).
+    const run = prev.then(() => observeConversation({ content: [] } as unknown as AssistantMessage, ctx, { flush: true })).catch((err) => {
+      console.error("[memory] pre-compaction capture error:", err instanceof Error ? err.message : err);
+    });
+    observing.set(ctx.conversationId, run);
+    void run.finally(() => {
+      if (observing.get(ctx.conversationId) === run) observing.delete(ctx.conversationId);
+    });
+    return run;
   }
 
   // ─── Interval timer (trigger: timer | hybrid) ─────────────────────────────
@@ -1046,6 +1087,7 @@ export default function createMemoryExtension(
     ],
 
     hooks: {
+      beforeCompact: (compaction, ctx) => flushBeforeCompact(ctx, compaction.signal),
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).

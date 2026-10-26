@@ -9,6 +9,7 @@ import {
   section as piSection,
   hook,
   GenerationTask,
+  CompactionTask,
   type Extension as PiDurableExtension,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
@@ -21,6 +22,7 @@ import type {
   ToolResult,
   SectionContext,
   HookContext,
+  ConversationReads,
 } from "../extension-api.js";
 
 /**
@@ -55,6 +57,21 @@ export function adaptToDurable(
 ): PiDurableExtension {
   const { wolfDen, wolfName } = config;
 
+  /** The `{ conversation }` slice of a hook/tool/section context: present once the engine's reader is registered. */
+  const readsFor = (conversationId: number): { conversation?: ConversationReads } => {
+    const reader = conversationReaderFor(wolfDen);
+    if (!reader) return {};
+    return {
+      conversation: {
+        classify: () => reader.classify(conversationId),
+        classifyOther: (id: number) => reader.classify(id),
+        messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+        onEngineClose: (fn) => reader.onClose(fn),
+        hostConsolidationTimer: reader.hostConsolidationTimer === true,
+      },
+    };
+  };
+
   // Adapt tools
   const tools = (ext.tools ?? []).map((tool) =>
     piDefineTool({
@@ -63,22 +80,7 @@ export function adaptToDurable(
       parameters: tool.parameters,
       async execute(args, api) {
         const conversationId = Number(api.conversationId);
-        const reader = conversationReaderFor(wolfDen);
-        const context: ToolContext = {
-          cwd: wolfDen,
-          wolfDen,
-          wolfName,
-          conversationId,
-          ...(reader
-            ? {
-                conversation: {
-                  classify: () => reader.classify(conversationId),
-                  classifyOther: (id: number) => reader.classify(id),
-                  messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
-                },
-              }
-            : {}),
-        };
+        const context: ToolContext = { cwd: wolfDen, wolfDen, wolfName, conversationId, ...readsFor(conversationId) };
         return toDurableResult(await tool.execute(args, context));
       },
     })
@@ -89,50 +91,38 @@ export function adaptToDurable(
     piSection(sec.name, (input) => {
       // pi-durable renders sections per request with PromptInput.conversationId: the conversation being prompted.
       const conversationId = Number(input.conversationId);
-      const reader = conversationReaderFor(wolfDen);
-      const context: SectionContext = {
-        wolfDen,
-        wolfName,
-        conversationId,
-        ...(reader
-          ? {
-              conversation: {
-                classify: () => reader.classify(conversationId),
-                classifyOther: (id: number) => reader.classify(id),
-                messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
-              },
-            }
-          : {}),
-      };
+      const context: SectionContext = { wolfDen, wolfName, conversationId, ...readsFor(conversationId) };
       return sec.render(context);
     })
   );
 
   // Adapt hooks
   const hooks = [];
+  if (ext.hooks?.beforeCompact) {
+    const beforeCompact = ext.hooks.beforeCompact;
+    hooks.push(
+      hook(CompactionTask, {
+        beforeCompact: async (compaction, api, ctx) => {
+          const conversationId = Number(api.conversationId);
+          const context: HookContext = { wolfDen, wolfName, conversationId, ...readsFor(conversationId) };
+          try {
+            await beforeCompact({ reason: compaction.reason, signal: ctx.abortSignal }, context);
+          } catch (err) {
+            // Capturing is best effort: it must never block or fail a compaction.
+            console.error("[harness] beforeCompact hook failed:", err instanceof Error ? err.message : err);
+          }
+          return undefined;
+        },
+      })
+    );
+  }
   if (ext.hooks?.afterResponse) {
     const afterResponse = ext.hooks.afterResponse;
     hooks.push(
       hook(GenerationTask, {
         afterResponse: (message: PiAssistantMessage, api) => {
           const conversationId = Number(api.conversationId);
-          const reader = conversationReaderFor(wolfDen);
-          const context: HookContext = {
-            wolfDen,
-            wolfName,
-            conversationId,
-            ...(reader
-              ? {
-                  conversation: {
-                    classify: () => reader.classify(conversationId),
-                    classifyOther: (id) => reader.classify(id),
-                    messagesSince: (after) => reader.messagesSince(conversationId, after),
-                    onEngineClose: (fn) => reader.onClose(fn),
-                    hostConsolidationTimer: reader.hostConsolidationTimer === true,
-                  },
-                }
-              : {}),
-          };
+          const context: HookContext = { wolfDen, wolfName, conversationId, ...readsFor(conversationId) };
           // Convert pi-durable message to unified format
           const unifiedMessage = {
             content: message.content.map((block) => {

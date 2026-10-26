@@ -5,7 +5,7 @@
  * durable adapter hands the bound form to hooks as `HookContext.conversation`.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Conversation, Harness } from "@earendil-works/pi-durable";
+import { CompactionEntry, type Conversation, type Harness } from "@earendil-works/pi-durable";
 import type { ConversationClass, ConversationMessage } from "../extension-api.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -62,6 +62,8 @@ export function createConversationReader(harness: Harness): ConversationReader {
       for (const entry of page.items) {
         // entries() is fork-aware: skip what the parent appended and this conversation inherited.
         if (Number(entry.conversationId) !== id) continue;
+        // A compaction summary restates messages the observer already saw (or flushed just before it): not new talk.
+        if (CompactionEntry.is(entry)) continue;
         for (const message of entry.model ?? []) out.push({ entryId: Number(entry.id), message });
       }
       cursor = page.next;

@@ -46,14 +46,20 @@ const history: ThreadMessage[] = [
 	},
 ];
 
-/** The keys thread-chat.tsx gives the sibling rows of each assistant message. */
+/** The keys thread-chat.tsx gives the rows of each assistant message (a group's key, then its rows'). */
 function keysOf(model: SessionModel): string[][] {
 	return model
 		.getState()
 		.messages.filter((m) => m.role === "assistant")
 		.map((m) =>
-			renderItems(m.parts, false).map((i) =>
-				i.kind === "tool" ? `tool:${i.key}` : i.kind === "separator" ? `sep-${i.index}` : `${i.kind}:${i.part.id || i.index}`,
+			renderItems(m.parts, false).flatMap((i) =>
+				i.kind === "tool"
+					? [`tool:${i.key}`]
+					: i.kind === "group"
+						? [i.key, ...i.items.map((t) => `tool:${t.key}`)]
+						: i.kind === "separator"
+							? [`sep-${i.index}`]
+							: [`${i.kind}:${i.part.id || i.index}`],
 			),
 		);
 }
@@ -107,7 +113,7 @@ describe("tool row keys are unique", () => {
 describe("renderItems keys", () => {
 	it("legacy records reusing an id with different arguments still get unique keys", () => {
 		const part = (command: string) => ({ type: "tool-bash", toolCallId: "call_0", state: "output-available", input: { command }, output: "o" });
-		const keys = renderItems([{ type: "step-start" }, part("a"), part("b"), part("c")], false).map((i) => (i.kind === "tool" ? i.key : ""));
-		assert.equal(new Set(keys).size, 3);
+		const keys = renderItems([{ type: "step-start" }, part("a"), part("b"), part("c")], false).map((i) => (i.kind === "group" ? i.items.map((t) => t.key).join("|") : ""));
+		assert.equal(new Set(keys[0]!.split("|")).size, 3);
 	});
 });

@@ -138,28 +138,40 @@ describe("live tool results", () => {
 });
 
 describe("tool call dedup by callId", () => {
-  const call = (id: string) => ({ type: "toolCall", id, name: "bash", arguments: { command: "ls" } });
-  const assistant = (id: number, ...ids: string[]) => entry(id, "pi.assistant", { role: "assistant", content: ids.map(call) });
-  const result = (id: number, callId: string) =>
-    entry(id, "pi.tool_result", { role: "toolResult", toolCallId: callId, content: [{ type: "text", text: "out" }] });
+  const call = (id: string, command = "ls") => ({ type: "toolCall", id, name: "bash", arguments: { command } });
+  const assistant = (id: number, ts: number, ...calls: any[]) => entry(id, "pi.assistant", { role: "assistant", timestamp: ts, content: calls });
+  const result = (id: number, callId: string, text = "out") =>
+    entry(id, "pi.tool_result", { role: "toolResult", toolCallId: callId, content: [{ type: "text", text }] });
 
-  it("one tools entry per callId when the same round and result are delivered under different entry ids", () => {
+  it("one tools entry per callId when the SAME round is delivered again under a different entry id", () => {
     const list: any[] = [];
-    // message_end carries the round as entry 3; the same call arrives again as entry 9 (and its result twice).
-    for (const e of [assistant(3, "a", "b"), result(4, "a"), result(5, "b"), assistant(9, "a", "b"), result(10, "a"), result(11, "b")]) applyEntry(list, e);
+    for (const e of [assistant(3, 100, call("a"), call("b")), result(4, "a"), result(5, "b"), assistant(9, 100, call("a"), call("b")), result(10, "a"), result(11, "b")]) applyEntry(list, e);
     expect(list).toHaveLength(1);
     expect(list[0].tools.map((t: any) => t.callId)).toEqual(["a", "b"]);
     expect(list[0].tools.every((t: any) => t.result === "out")).toBe(true);
   });
 
-  it("a repeat round with a new call keeps only the new call; a repeat-only round makes no message", () => {
+  it("a replayed round with a new call in it keeps the new call", () => {
     const list: any[] = [];
-    applyEntry(list, assistant(1, "a"));
-    applyEntry(list, entry(2, "pi.user", { role: "user", content: "next" }));
-    applyEntry(list, assistant(3, "a"));
-    expect(list.map((m) => m.role)).toEqual(["assistant", "user"]);
-    applyEntry(list, assistant(4, "a", "c"));
-    expect(list.at(-1).tools.map((t: any) => t.callId)).toEqual(["c"]);
+    applyEntry(list, assistant(1, 100, call("a")));
+    applyEntry(list, assistant(4, 100, call("a"), call("c")));
+    expect(list[0].tools.map((t: any) => t.callId)).toEqual(["a", "c"]);
+  });
+
+  it("a reused id (DeepSeek call_0) keeps every call, each paired with its own result: across turns and rounds", () => {
+    const list: any[] = [];
+    for (const e of [
+      entry(1, "pi.user", { role: "user", content: "one", timestamp: 1 }),
+      assistant(2, 100, call("call_0", "git status")),
+      result(3, "call_0", "first"),
+      entry(4, "pi.user", { role: "user", content: "two", timestamp: 2 }),
+      assistant(5, 200, call("call_0", "git status")),
+      result(6, "call_0", "second"),
+      assistant(7, 300, call("call_0", "git status")),
+      result(8, "call_0", "third"),
+    ]) applyEntry(list, e);
+    const calls = list.flatMap((m) => m.tools ?? []);
+    expect(calls.map((t: any) => t.result)).toEqual(["first", "second", "third"]);
   });
 });
 

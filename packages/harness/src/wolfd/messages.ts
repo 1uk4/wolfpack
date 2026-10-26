@@ -93,6 +93,13 @@ function blocksOf(entry: Entry): Array<{ type: string; text?: string; id?: strin
   return Array.isArray(msg?.content) ? (msg!.content as never) : [];
 }
 
+/**
+ * Round identity of each folded call (the assistant entry's own timestamp). A call repeats only when the SAME round
+ * is delivered again under another entry id; providers that reuse ids across rounds (DeepSeek's per-response
+ * `call_0`) yield a different round (timestamp) each time and must keep every call.
+ */
+const callRound = new WeakMap<object, number>();
+
 /** Fold one engine entry into the list: user/assistant messages (rounds merged), tool results onto their call. */
 export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date = () => new Date()): void {
   if (entry.kind === "pi.assistant") {
@@ -100,10 +107,14 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     if (!msg) return;
     const blocks = blocksOf(entry);
     const roundText = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-    // A call already folded (the same round delivered under another entry id, or replayed over a rebase) is never
-    // added twice: callId is the identity, the entry id only dedups the entry.
-    const known = new Set(list.flatMap((m) => m.tools ?? []).map((t) => t.callId));
-    const calls = blocks.filter((b) => b.type === "toolCall" && b.id && !known.has(b.id));
+    // A call is skipped only as a REPLAY of its own round (same callId, same round timestamp), never because the
+    // id appeared in an earlier round or turn.
+    const round = typeof msg.timestamp === "number" ? msg.timestamp : undefined;
+    const isReplay = (id: string): boolean =>
+      round !== undefined && list.some((m) => m.tools?.some((t) => t.callId === id && callRound.get(t) === round));
+    const all = blocks.filter((b) => b.type === "toolCall" && b.id);
+    const calls = all.filter((b) => !isReplay(b.id!));
+    if (all.length > 0 && calls.length === 0) return; // the whole round is a replay
     if (roundText === "" && calls.length === 0) return;
     const last = list.at(-1);
     const target: ThreadMessage =
@@ -115,9 +126,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     let before = 0;
     for (const b of blocks) {
       if (b.type === "text") before += (b.text ?? "").length;
-      else if (b.type === "toolCall" && b.id && !known.has(b.id)) {
-        known.add(b.id);
-        (target.tools ??= []).push({ callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before });
+      else if (b.type === "toolCall" && b.id && !isReplay(b.id)) {
+        const call = { callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before };
+        if (round !== undefined) callRound.set(call, round);
+        (target.tools ??= []).push(call);
       }
     }
     if (roundText !== "") target.text = target.text === "" ? roundText : `${target.text}\n\n${roundText}`;
@@ -127,7 +139,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     const msg = entry.model?.[0] as { toolCallId?: string; isError?: boolean } | undefined;
     if (!msg?.toolCallId) return;
     for (let i = list.length - 1; i >= 0; i--) {
-      const call = list[i].tools?.find((c) => c.callId === msg.toolCallId);
+      // The most recent UNRESOLVED call with this id (reused ids pair each result to its own call); a result for an
+      // already-resolved call (a replay) lands on the most recent one.
+      const matches = (list[i].tools ?? []).filter((c) => c.callId === msg.toolCallId);
+      const call = matches.findLast((c) => c.result === undefined) ?? matches.at(-1);
       if (!call) continue;
       const text = blocksOf(entry).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
       call.result = sliceSafe(text, TOOL_CAP);

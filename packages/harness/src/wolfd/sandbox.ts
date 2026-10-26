@@ -5,6 +5,8 @@
 import { randomBytes } from "node:crypto";
 import {
   assertSandboxed,
+  assertSandboxedPaths,
+  SandboxError,
   requireSnapshotRoot,
   resolveSandbox,
   sandboxEnv,
@@ -29,18 +31,56 @@ const defaultStartWorkServer: StartWorkServer = async (o) => {
   return startLocalWorkServer(o);
 };
 
-export async function startSandbox(root: string, opts: { startWorkServer?: StartWorkServer } = {}): Promise<RunningSandbox> {
+/** One sandboxed wolf per process: its env patch is process-wide (see {@link patchProcessEnv}). */
+let active: string | undefined;
+
+/**
+ * Patch process.env with the sandbox env and return a restore function. This is a FALLBACK for code that only
+ * reads process.env; code that takes an env (extension context.env, startWolf's env) should use that instead.
+ * Throws if another sandbox patch is already active in this process.
+ */
+export function patchProcessEnv(patch: Record<string, string>): () => void {
+  const saved = Object.fromEntries(Object.keys(patch).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, patch);
+  return () => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
+}
+
+export async function startSandbox(
+  root: string,
+  opts: { startWorkServer?: StartWorkServer; librarian?: boolean } = {},
+): Promise<RunningSandbox> {
+  if (opts.librarian) throw new SandboxError("librarian mode mutates KB_BASE and is refused in a sandbox; remove memory.librarian");
+  if (active) throw new SandboxError(`a sandbox (${active}) is already running in this process; one sandboxed wolf per process`);
   requireSnapshotRoot(root);
   const pre = resolveSandbox(root);
-  assertSandboxed(root, pre);
+  assertSandboxedPaths(root, pre);
+  active = root;
   const token = randomBytes(24).toString("hex");
-  const server = await (opts.startWorkServer ?? defaultStartWorkServer)({ ledgerDir: pre.workLedgerDir, token });
+  let server: LocalWorkServerHandle;
   try {
-    const resolved = resolveSandbox(root, { workEndpoint: `${server.url}/work` });
-    assertSandboxed(root, { den: resolved.den, kbOps: resolved.kbOps, kbDenLocal: resolved.kbDenLocal, workEndpoint: resolved.workEndpoint });
-    return { resolved, env: sandboxEnv(resolved, token), close: () => server.close() };
+    server = await (opts.startWorkServer ?? defaultStartWorkServer)({ ledgerDir: pre.workLedgerDir, token });
   } catch (e) {
-    await server.close().catch(() => {});
+    active = undefined;
+    throw e;
+  }
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    active = undefined;
+    await server.close();
+  };
+  try {
+    const resolved = resolveSandbox(root, { workEndpoint: server.url });
+    assertSandboxed(root, { den: resolved.den, kbOps: resolved.kbOps, kbDenLocal: resolved.kbDenLocal, workEndpoint: resolved.workEndpoint });
+    return { resolved, env: sandboxEnv(resolved, token), close };
+  } catch (e) {
+    await close().catch(() => {});
     throw e;
   }
 }

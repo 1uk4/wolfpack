@@ -56,6 +56,7 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
   }
+  // Throws on a malformed value: it must never silently run live.
   const sandbox = normalizeSandbox(config.sandbox as unknown, homeDir);
   if (sandbox) config.sandbox = sandbox;
   else delete config.sandbox;

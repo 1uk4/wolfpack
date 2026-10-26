@@ -27,7 +27,7 @@ import {
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
-import { startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
+import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
 
 export interface StartWolfOptions {
@@ -82,12 +82,13 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   let sandbox: RunningSandbox | undefined;
   let config = loaded.config;
   if (config.sandbox) {
-    sandbox = await startSandbox(config.sandbox.root, { startWorkServer: opts.startWorkServer });
+    sandbox = await startSandbox(config.sandbox.root, { startWorkServer: opts.startWorkServer, librarian: config.memory.librarian });
     config = { ...config, den: sandbox.resolved.den };
     log(`sandbox: den=${config.den} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
   }
-  // The default env is the process's own, which in-process clients (WorkClient, KB_OPS readers) read directly:
-  // patch it in place (sandbox wins over the ambient, live values) and restore on close.
+  // Extensions get the sandbox env through ExtensionRuntime/context.env. Only when the caller uses the process's
+  // own env is process.env also patched, as a fallback for code that reads it directly (restored on close).
+  // One sandboxed wolf per process (startSandbox enforces it).
   const restoreEnv = sandbox && !opts.env ? patchProcessEnv(sandbox.env) : () => {};
   try {
     return await startConfigured(opts, config, sandbox ? { ...env, ...sandbox.env } : env, log, sandbox, restoreEnv);
@@ -106,7 +107,7 @@ async function startConfigured(
   sandbox: RunningSandbox | undefined,
   restoreEnv: () => void,
 ): Promise<RunningWolf> {
-  if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal } : {}) });
+  if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
 
   const { table } = loadModelTable({ env, wolfYaml: config.file });
   const model = resolveWolfModel(config, "main", table);
@@ -165,17 +166,6 @@ async function startConfigured(
     wolfModels.shutdown();
     throw e;
   }
-}
-
-function patchProcessEnv(patch: Record<string, string>): () => void {
-  const saved = Object.fromEntries(Object.keys(patch).map((k) => [k, process.env[k]]));
-  Object.assign(process.env, patch);
-  return () => {
-    for (const [k, v] of Object.entries(saved)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  };
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */

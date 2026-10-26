@@ -23,7 +23,7 @@ import { createFileToolsExtension } from "./extensions/file-tools.js";
 import { startLifecycles } from "./lifecycle.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
-import { startSandbox, type RunningSandbox } from "./wolfd/sandbox.js";
+import { patchProcessEnv, startSandbox, type RunningSandbox } from "./wolfd/sandbox.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 
@@ -110,9 +110,10 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Sandbox: serve the snapshot ledger locally and point den / KB_OPS / WORK_ENDPOINT at the dev root. From here
   // on process.env is the sandbox's; a root that is not a snapshot (or resolves outside itself) refuses to start.
   let sandbox: RunningSandbox | undefined;
+  let restoreEnv: () => void = () => {};
   if (config.sandbox) {
-    sandbox = await startSandbox(config.sandbox.root);
-    Object.assign(process.env, sandbox.env);
+    sandbox = await startSandbox(config.sandbox.root, { librarian: config.memory?.librarian === true });
+    restoreEnv = patchProcessEnv(sandbox.env);
     wolfDen = sandbox.resolved.den;
     mkdirSync(wolfDen, { recursive: true });
     console.log(`[harness] SANDBOX: den=${wolfDen} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
@@ -352,6 +353,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       if (telegram) await telegram.stop();
       await harness.close(context);
       await sandbox?.close();
+      restoreEnv();
     },
   };
 }

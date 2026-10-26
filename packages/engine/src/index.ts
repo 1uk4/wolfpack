@@ -26,6 +26,9 @@ export * from "./models.js";
 // wolf.yaml v2 — schema, loader, discovery, tier resolution
 export * from "./wolfconfig/index.js";
 
+// Sandbox — snapshot of live data into a dev root, and the redirect that points a wolf at it
+export * from "./sandbox/index.js";
+
 // Prompts — central registry of all system prompts
 export * from "./prompts.js";
 

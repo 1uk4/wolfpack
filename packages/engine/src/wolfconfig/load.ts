@@ -30,6 +30,15 @@ function expand(p: string, base: string, home: string): string {
   return path.resolve(base, p);
 }
 
+/** `sandbox: true` -> <dir>/sandbox; `{root}` -> that path; false/absent -> undefined. */
+export function normalizeSandbox(raw: unknown, dir: string, home: string = os.homedir()): { root: string } | undefined {
+  if (raw === true) return { root: path.join(dir, "sandbox") };
+  if (raw && typeof raw === "object" && typeof (raw as { root?: unknown }).root === "string") {
+    return { root: expand((raw as { root: string }).root, dir, home) };
+  }
+  return undefined;
+}
+
 /** Load and normalize one wolf.yaml. Throws WolfConfigError on unreadable/invalid files. */
 export function loadWolfConfig(file: string, opts: { home?: string } = {}): LoadedWolfConfig {
   const home = opts.home ?? os.homedir();
@@ -69,6 +78,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
 
   const v = parsed.data;
   const dir = path.dirname(abs);
+  const sandbox = normalizeSandbox(v.sandbox, dir, home);
   const config: WolfConfig = {
     identity: { id: v.id ?? v.name, name: v.name, domains: v.domains },
     capability: {
@@ -80,6 +90,8 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       socket: v.serve.socket ? expand(v.serve.socket, dir, home) : defaultSocketPath(v.name, home),
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
+    ...(sandbox ? { sandbox } : {}),
+    memory: { live: v.memory.live === true },
     den: path.join(dir, "den"),
     dir,
     file: abs,

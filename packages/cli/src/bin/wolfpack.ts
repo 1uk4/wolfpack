@@ -22,6 +22,7 @@ import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
 import { meshCmd } from "../commands/mesh.js";
 import { kbCmd } from "../commands/kb.js";
+import { sandboxCmd } from "../commands/sandbox.js";
 import { setupCmd } from "../commands/setup.js";
 
 const c = {
@@ -97,6 +98,11 @@ ${c.bold("DOMAIN (advanced)")}
   domain subscribe <wolf> <name>  Attach a domain to a wolf
   domain unsubscribe <wolf> <name>  Detach a domain from a wolf
   domain wolves <name>            Manage a domain's subscribers (picker)
+
+${c.bold("SANDBOX (advanced)")}
+  sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes) [--force] [--include-sessions]
+                                  Copy a host's work ledger, KB lanes and the wolf's den into a dev root;
+                                  run the wolf against it with \`sandbox: true\` in wolf.yaml
 
 ${c.bold("MESH (advanced)")}
   mesh                            Reconcile Syncthing fabric to match config
@@ -240,6 +246,10 @@ async function main(): Promise<void> {
           check: flags.check as boolean | undefined,
           yes: flags.yes as boolean | undefined,
         });
+        break;
+
+      case "sandbox":
+        await sandboxCmd(process.argv.slice(3));
         break;
 
       case "kb":

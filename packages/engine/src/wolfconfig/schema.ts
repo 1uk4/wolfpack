@@ -13,6 +13,10 @@
  *   serve:                  # all optional
  *     socket: ~/.wolfpack/run/1uk4.sock   # default shown
  *     port: 7421                          # optional TCP (127.0.0.1); unset = none
+ *   sandbox: true           # redirect den / KB_OPS / WORK_ENDPOINT at a snapshot dev root (default <dir>/sandbox)
+ *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
+ *   memory:
+ *     live: true            # durable memory may write the LIVE roots (nothing sets this until cutover)
  *
  * There is NO `runtime` field: durable is the engine. Unknown keys (runtime,
  * profile, role, extensions, transport, models, …) are accepted, ignored, and
@@ -43,6 +47,8 @@ export const WolfFileSchema = z.object({
     })
     .passthrough()
     .default({}),
+  sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
+  memory: z.object({ live: z.boolean().optional() }).passthrough().default({}),
 });
 
 /** Keys the v2 file schema knows; anything else is ignored with a warning. */
@@ -54,6 +60,8 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "tiers",
   "workspace",
   "serve",
+  "sandbox",
+  "memory",
 ];
 
 export interface TierOverrideConfig {
@@ -75,6 +83,12 @@ export interface WolfConfig {
     socket: string;
     /** Optional 127.0.0.1 TCP port; undefined = not listening on TCP. */
     port?: number;
+  };
+  /** Present when `sandbox` is on: the dev root everything outward is redirected into. Absolute path. */
+  sandbox?: { root: string };
+  memory: {
+    /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */
+    live: boolean;
   };
   /** Derived: <dir>/den. */
   den: string;

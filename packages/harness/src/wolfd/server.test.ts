@@ -1,7 +1,7 @@
 /** Serving behaviours beyond the contract: snapshots on engine resync, mid-run attach, message reconstruction. */
 import { afterEach, describe, expect, it } from "vitest";
 import { buildPath, parseThreadEvent, type ThreadEvent } from "@wolfpack/protocol";
-import { messagesFromEntries } from "./messages.js";
+import { applyEntry, messagesFromEntries } from "./messages.js";
 import { ScriptedEngine } from "./scripted-engine.js";
 import { WolfServer } from "./server.js";
 
@@ -134,6 +134,32 @@ describe("live tool results", () => {
     expect(a.text).toBe("done");
     expect(a.tools).toHaveLength(1);
     expect(a.tools[0]).toMatchObject({ name: "bash", args: { command: "ls" }, result: "out", isError: false });
+  });
+});
+
+describe("tool call dedup by callId", () => {
+  const call = (id: string) => ({ type: "toolCall", id, name: "bash", arguments: { command: "ls" } });
+  const assistant = (id: number, ...ids: string[]) => entry(id, "pi.assistant", { role: "assistant", content: ids.map(call) });
+  const result = (id: number, callId: string) =>
+    entry(id, "pi.tool_result", { role: "toolResult", toolCallId: callId, content: [{ type: "text", text: "out" }] });
+
+  it("one tools entry per callId when the same round and result are delivered under different entry ids", () => {
+    const list: any[] = [];
+    // message_end carries the round as entry 3; the same call arrives again as entry 9 (and its result twice).
+    for (const e of [assistant(3, "a", "b"), result(4, "a"), result(5, "b"), assistant(9, "a", "b"), result(10, "a"), result(11, "b")]) applyEntry(list, e);
+    expect(list).toHaveLength(1);
+    expect(list[0].tools.map((t: any) => t.callId)).toEqual(["a", "b"]);
+    expect(list[0].tools.every((t: any) => t.result === "out")).toBe(true);
+  });
+
+  it("a repeat round with a new call keeps only the new call; a repeat-only round makes no message", () => {
+    const list: any[] = [];
+    applyEntry(list, assistant(1, "a"));
+    applyEntry(list, entry(2, "pi.user", { role: "user", content: "next" }));
+    applyEntry(list, assistant(3, "a"));
+    expect(list.map((m) => m.role)).toEqual(["assistant", "user"]);
+    applyEntry(list, assistant(4, "a", "c"));
+    expect(list.at(-1).tools.map((t: any) => t.callId)).toEqual(["c"]);
   });
 });
 

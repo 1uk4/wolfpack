@@ -100,7 +100,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     if (!msg) return;
     const blocks = blocksOf(entry);
     const roundText = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-    const calls = blocks.filter((b) => b.type === "toolCall");
+    // A call already folded (the same round delivered under another entry id, or replayed over a rebase) is never
+    // added twice: callId is the identity, the entry id only dedups the entry.
+    const known = new Set(list.flatMap((m) => m.tools ?? []).map((t) => t.callId));
+    const calls = blocks.filter((b) => b.type === "toolCall" && b.id && !known.has(b.id));
     if (roundText === "" && calls.length === 0) return;
     const last = list.at(-1);
     const target: ThreadMessage =
@@ -112,7 +115,8 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     let before = 0;
     for (const b of blocks) {
       if (b.type === "text") before += (b.text ?? "").length;
-      else if (b.type === "toolCall" && b.id) {
+      else if (b.type === "toolCall" && b.id && !known.has(b.id)) {
+        known.add(b.id);
         (target.tools ??= []).push({ callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before });
       }
     }

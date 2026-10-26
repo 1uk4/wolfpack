@@ -48,6 +48,17 @@ import {
   UNBOUND_CONTEXT,
   BINDING_RULES,
 } from "@wolfpack/memory";
+import {
+  type BindingScope,
+  bindingFile,
+  findHolder,
+  heldMessage,
+  migrateLegacyBinding,
+  readBindingFile,
+  readConversationBinding,
+  resolveBindingRoot,
+  writeBindingFile,
+} from "./conversation-binding.js";
 import { WorkClient, shipAndRollup } from "./work-client.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
@@ -88,56 +99,53 @@ const SUBAGENT_NO_BIND = "Subagents don't bind: the orchestrator owns the bindin
 const heads = (reply: string, working: { id: string; title?: string }, bound: { id: string; title?: string } | null) =>
   isSubagent() ? reply : withHeadsUp(reply, working, bound);
 
-function bindingPath(wolfDen: string): string {
-  return join(wolfDen, "tasks", "active.json");
+/** Why a task conversation can't bind. */
+const TASK_CONV_NO_BIND = "Task conversations don't bind: the owning conversation holds the binding (you see it read-only).";
+
+/** This conversation's binding (through its lineage), read fresh every call. */
+async function readBinding(scope: BindingScope): Promise<ActiveBinding | null> {
+  if (isSubagent()) return null;
+  return readStored(scope);
 }
 
-async function readBinding(wolfDen: string): Promise<ActiveBinding | null> {
-  if (isSubagent()) return null;
-  const path = bindingPath(wolfDen);
-  if (!existsSync(path)) return null;
-  try {
-    const content = await readFile(path, "utf-8");
-    const parsed = JSON.parse(content);
-    if (!parsed || !parsed.taskId) return null;
-    return parsed as ActiveBinding;
-  } catch {
-    return null;
-  }
+async function readStored(scope: BindingScope): Promise<ActiveBinding | null> {
+  const { binding } = await readConversationBinding(scope);
+  return binding
+    ? { taskId: binding.workId, domain: binding.domain, boundAt: binding.boundAt, ...(binding.featureId ? { featureId: binding.featureId } : {}) }
+    : null;
+}
+
+/** The work item this conversation is bound to (memory tags observations with it). Null when unbound. */
+export async function readBoundTask(scope: BindingScope): Promise<{ taskId: string; featureId?: string } | null> {
+  const b = await readStored(scope); // unlike the tools, memory tagging ignores the pi-subagent env flag
+  return b ? { taskId: b.taskId, ...(b.featureId ? { featureId: b.featureId } : {}) } : null;
 }
 
 /**
- * The task this wolf is bound to, read synchronously (memory tags observations
- * with it). Null when nothing is bound.
+ * Bind this conversation's lineage. Returns an error text (read-only conversation, or the item is held by another
+ * lineage on this wolf), or null when written.
  */
-export function readBoundTask(wolfDen: string): { taskId: string; featureId?: string } | null {
-  try {
-    const parsed = JSON.parse(readFileSync(bindingPath(wolfDen), "utf-8")) as ActiveBinding | null;
-    return parsed?.taskId ? { taskId: parsed.taskId, ...(parsed.featureId ? { featureId: parsed.featureId } : {}) } : null;
-  } catch {
-    return null;
-  }
-}
-
-async function writeBinding(wolfDen: string, taskId: string, domain: string, featureId?: string): Promise<void> {
-  if (isSubagent()) return;
-  const path = bindingPath(wolfDen);
-  await mkdir(dirname(path), { recursive: true });
-  const binding: ActiveBinding = {
-    taskId,
+async function writeBinding(scope: BindingScope, taskId: string, domain: string, featureId?: string): Promise<string | null> {
+  if (isSubagent()) return SUBAGENT_NO_BIND;
+  const { root, readOnly } = await resolveBindingRoot(scope);
+  if (readOnly) return TASK_CONV_NO_BIND;
+  migrateLegacyBinding(scope.wolfDen);
+  const holder = findHolder(scope.wolfDen, taskId, root);
+  if (holder !== undefined) return `${taskId} is ${heldMessage(holder)}.`;
+  writeBindingFile(scope.wolfDen, root, {
+    workId: taskId,
     domain,
     boundAt: new Date().toISOString(),
     ...(featureId ? { featureId } : {}),
-  };
-  await writeFile(path, JSON.stringify(binding, null, 2));
+  });
+  return null;
 }
 
-async function clearBinding(wolfDen: string): Promise<void> {
+async function clearBinding(scope: BindingScope): Promise<void> {
   if (isSubagent()) return;
-  const path = bindingPath(wolfDen);
-  if (existsSync(path)) {
-    await writeFile(path, "null");
-  }
+  const { root, readOnly } = await resolveBindingRoot(scope);
+  if (readOnly) return;
+  if (existsSync(bindingFile(scope.wolfDen, root))) writeBindingFile(scope.wolfDen, root, null);
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -343,12 +351,12 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
       section("active_task", () => {
         if (isSubagent()) return "";
         try {
-          const bp = bindingPath(wolfDen);
-          if (!existsSync(bp)) {
-            return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
-          }
-
-          const binding = JSON.parse(require("fs").readFileSync(bp, "utf-8")) as ActiveBinding | null;
+          // Sections render as the root conversation (the adapter gives them no conversation id).
+          migrateLegacyBinding(wolfDen);
+          const stored = readBindingFile(wolfDen, 1);
+          const binding: ActiveBinding | null = stored
+            ? { taskId: stored.workId, domain: stored.domain, boundAt: stored.boundAt, ...(stored.featureId ? { featureId: stored.featureId } : {}) }
+            : null;
           if (!binding?.taskId) {
             return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
@@ -409,6 +417,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
         }),
         async execute(args: { id: string }, ctx: ToolContext): Promise<ToolResult> {
           if (isSubagent()) return { content: [{ type: "text", text: SUBAGENT_NO_BIND }], isError: true };
+          if ((await resolveBindingRoot(ctx)).readOnly) return { content: [{ type: "text", text: TASK_CONV_NO_BIND }], isError: true };
           const found = await findItem(args.id);
           if (!found) {
             return {
@@ -427,7 +436,8 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             };
           }
 
-          await writeBinding(ctx.wolfDen, item.id, domain, await recordFeatureId(client, item));
+          const refused = await writeBinding(ctx, item.id, domain, await recordFeatureId(client, item));
+          if (refused) return { content: [{ type: "text", text: refused }], isError: true };
           await writeCache(item);
           // A feature follows its tasks into build
           await syncFeatureStage(client, item).catch(() => {});
@@ -448,14 +458,15 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
         parameters: Type.Object({}),
         async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
           if (isSubagent()) return { content: [{ type: "text", text: SUBAGENT_NO_BIND }], isError: true };
-          const binding = await readBinding(ctx.wolfDen);
+          if ((await resolveBindingRoot(ctx)).readOnly) return { content: [{ type: "text", text: TASK_CONV_NO_BIND }], isError: true };
+          const binding = await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task currently bound." }],
             };
           }
 
-          await clearBinding(ctx.wolfDen);
+          await clearBinding(ctx);
           clearCache();
           return {
             content: [{ type: "text", text: `Unbound from ${binding.taskId}.` }],
@@ -469,7 +480,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
         description: "Get details about the currently bound task.",
         parameters: Type.Object({}),
         async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task currently bound." }],
@@ -515,7 +526,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           const targetDomains = args.domain ? [args.domain] : domains;
           const depth = args.depth ?? 1;
           const results: string[] = [];
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
 
           for (const domain of targetDomains) {
             if (!domains.includes(domain)) continue;
@@ -637,7 +648,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           // Default partOf to bound task's workspace (its feature) for tasks/issues/spikes.
           let partOf = args.partOf;
           if (!partOf && ["task", "issue", "spike"].includes(args.kind)) {
-            const binding = await readBinding(ctx.wolfDen);
+            const binding = await readBinding(ctx);
             if (binding) {
               const boundTask = await findItem(binding.taskId);
               if (boundTask?.item.partOf) {
@@ -682,10 +693,11 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             let reply = `Created: [${result.item.id}] ${result.item.title}\nKind: ${result.item.kind}\nStage: ${result.item.stage}`;
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
-              const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx.wolfDen)), bind: args.bind };
-              if (isSubagent()) return ""; // a subagent never binds
+              const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
+              if (isSubagent() || (await resolveBindingRoot(ctx)).readOnly) return ""; // a subagent / task conversation never binds
               if (!shouldBindOnCreate(bindInput)) return `\nNot bound: ${notBoundReason(bindInput)}.`;
-              await writeBinding(ctx.wolfDen, result.item.id, args.domain, await recordFeatureId(client, result.item));
+              const refused = await writeBinding(ctx, result.item.id, args.domain, await recordFeatureId(client, result.item));
+              if (refused) return `\nNot bound: ${refused}`;
               await writeCache(result.item);
               await syncFeatureStage(client, result.item).catch(() => {});
               return "\nBound to it.";
@@ -709,7 +721,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           id: Type.Optional(Type.String({ description: "Work item to note (default: the bound one)" })),
         }),
         async execute(args: { text: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
           const target = args.id ?? binding?.taskId;
           if (!target) {
             return {
@@ -742,7 +754,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           id: Type.Optional(Type.String({ description: "Work item to update (default: the bound one)" })),
         }),
         async execute(args: { body: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
           const target = args.id ?? binding?.taskId;
           if (!target) {
             return {
@@ -788,7 +800,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           id: Type.Optional(Type.String({ description: "Work item to move (default: the bound one)" })),
         }),
         async execute(args: { to: string; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          let binding = await readBinding(ctx.wolfDen);
+          let binding = await readBinding(ctx);
           const target = args.id ?? binding?.taskId;
           if (!target) {
             return {
@@ -802,10 +814,12 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
             if (moved.stage === "in_build" && !binding && !isSubagent() && ["task", "issue", "spike"].includes(moved.kind)) {
-              await writeBinding(ctx.wolfDen, moved.id, moved.domain as string, await recordFeatureId(client, moved));
-              await writeCache(moved);
-              binding = await readBinding(ctx.wolfDen);
-              reply += "\nNothing was bound, so it is bound now: what you learn goes to its Record.";
+              const refused = await writeBinding(ctx, moved.id, moved.domain as string, await recordFeatureId(client, moved));
+              if (!refused) {
+                await writeCache(moved);
+                binding = await readBinding(ctx);
+                reply += "\nNothing was bound, so it is bound now: what you learn goes to its Record.";
+              }
             }
             return {
               content: [{ type: "text", text: heads(reply, { id: target, title: moved.title }, boundRef(binding)) }],
@@ -829,7 +843,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           id: Type.Optional(Type.String({ description: "Work item to ship (default: the bound one)" })),
         }),
         async execute(args: { confirm?: boolean; bindNext?: boolean; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
           if (args.id && args.id !== binding?.taskId) {
             if (args.confirm ?? !autoShip) {
               return { content: [{ type: "text", text: `Confirmation required to ship ${args.id}. Call task_done again with confirm: false to ship.` }] };
@@ -892,24 +906,24 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                 result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
                 result.push(readyBoundReply(shippedItem));
               } else {
-                await clearBinding(ctx.wolfDen);
+                await clearBinding(ctx);
                 clearCache();
               }
             } else {
               const siblings = bindNext ? await getChildren(binding.domain, realFeature.id as string) : [];
               const next = siblings.find(s => s.id !== binding.taskId && !isComplete(s));
               if (next) {
-                await writeBinding(ctx.wolfDen, next.id, binding.domain, await recordFeatureId(client, next));
+                await writeBinding(ctx, next.id, binding.domain, await recordFeatureId(client, next));
                 await writeCache(next);
                 await syncFeatureStage(client, next).catch(() => {});
                 result.push(`Bound to next: [${next.id}] ${next.title}`);
               } else if (readyToGraduate(realFeature, all)) {
-                await writeBinding(ctx.wolfDen, realFeature.id as string, binding.domain, realFeature.id as string);
+                await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
                 await writeCache(realFeature);
                 result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
                 result.push(readyBoundReply(realFeature));
               } else {
-                await clearBinding(ctx.wolfDen);
+                await clearBinding(ctx);
                 clearCache();
                 result.push("No more tasks in this feature. Unbound.");
               }
@@ -955,7 +969,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
         ): Promise<ToolResult> {
           let targetId = args.id;
           if (!targetId) {
-            const binding = await readBinding(ctx.wolfDen);
+            const binding = await readBinding(ctx);
             if (!binding) {
               return {
                 content: [{ type: "text", text: "No active task and no id provided." }],
@@ -1015,7 +1029,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           let domain: string | undefined;
 
           if (!sourceId) {
-            const binding = await readBinding(ctx.wolfDen);
+            const binding = await readBinding(ctx);
             if (!binding) {
               return {
                 content: [{ type: "text", text: "No active task and no id provided." }],
@@ -1064,7 +1078,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           let domain: string | undefined;
 
           if (!sourceId) {
-            const binding = await readBinding(ctx.wolfDen);
+            const binding = await readBinding(ctx);
             if (!binding) {
               return {
                 content: [{ type: "text", text: "No active task and no id provided." }],
@@ -1107,7 +1121,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           to: Type.String({ description: "New parent ID, 'inbox', or 'none'" }),
         }),
         async execute(args: { to: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx.wolfDen);
+          const binding = await readBinding(ctx);
           if (!binding) {
             return {
               content: [{ type: "text", text: "No task bound. Use task_bind first." }],
@@ -1175,9 +1189,9 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship });
             await unlink(file).catch(() => { /* used once */ });
 
-            const binding = await readBinding(ctx.wolfDen);
+            const binding = await readBinding(ctx);
             if (binding && done.archived.includes(binding.taskId)) {
-              await clearBinding(ctx.wolfDen);
+              await clearBinding(ctx);
               clearCache();
             }
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];

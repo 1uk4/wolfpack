@@ -28,6 +28,8 @@ export interface ToolContext {
   wolfName: string;
   /** Conversation ID (1 = root, >1 = subagent) */
   conversationId: number;
+  /** Present under the durable runtime once the engine is open (same reader the hooks get). */
+  conversation?: ConversationReads;
 }
 
 export interface ToolResult {
@@ -87,6 +89,8 @@ export interface ConversationMessage {
 /** The hook's conversation, read from the durable store. */
 export interface ConversationReads {
   classify(): Promise<ConversationClass | undefined>;
+  /** Classify another conversation of this wolf (binding resolves a task through its owner). */
+  classifyOther?(conversationId: number): Promise<ConversationClass | undefined>;
   /** Own messages with entry id > `afterEntryId`, oldest first (a fork's inherited history is excluded). */
   messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
   /** Run `fn` once when the engine closes (to clear timers). */

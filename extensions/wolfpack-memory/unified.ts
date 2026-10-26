@@ -352,7 +352,7 @@ export default function createMemoryExtension(
   /**
    * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
-   * den topics; the binding read is unchanged (task 7 owns per-conversation binding).
+   * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
   async function observeConversation(message: AssistantMessage, ctx: HookContext): Promise<void> {
     const reads = ctx.conversation;
@@ -386,7 +386,7 @@ export default function createMemoryExtension(
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
-      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, readBoundTask(ctx.wolfDen));
+      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx)); // re-read every chunk, never cached;
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;
       at = last ? next.lastEntryId : chunkEntryId(chunk.id);

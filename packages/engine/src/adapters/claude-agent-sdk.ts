@@ -106,15 +106,24 @@ export async function loadQuery(): Promise<QueryFn> {
     mod = await import(specifier);
   } catch (err) {
     const found = findSdkUrl(specifier);
-    try {
-      if (!found) throw err;
-      mod = await import(found);
-    } catch {
+    if (!found) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
         `claude-agent-sdk provider selected but ${specifier} ` +
           `could not be loaded (${msg}). Tried: ${sdkAnchors().join(", ")}. ` +
           `Install it (npm i -g ${specifier}) or use transport: api.`
+      );
+    }
+    console.warn(`[claude-agent-sdk] plain import failed; loading SDK from ${found}`);
+    try {
+      mod = await import(found);
+    } catch (err2) {
+      const first = err instanceof Error ? err.message : String(err);
+      const second = err2 instanceof Error ? err2.message : String(err2);
+      throw new Error(
+        `claude-agent-sdk provider selected but ${specifier} ` +
+          `was found at ${found} and failed to load (${second}); ` +
+          `plain import had failed with (${first}).`
       );
     }
   }
@@ -130,25 +139,35 @@ export async function loadQuery(): Promise<QueryFn> {
 
 const SDK_SPECIFIER = "@anthropic-ai/claude-agent-sdk";
 
+/** Inputs for {@link sdkAnchors}; defaults read the live process. */
+export interface SdkAnchorSources {
+  argv1?: string;
+  nodePath?: string;
+  cwd?: string;
+  execPath?: string;
+}
+
 /**
- * Directories to resolve the SDK from, in order. The SDK can't be bundled (it
- * spawns a platform-native `claude` binary shipped as optional deps), so it is
- * resolved from the host: the entry script's tree (harness.cjs → agent/node_modules,
- * or the repo's packages/harness/dist), NODE_PATH, cwd, then the global install.
+ * Directories to resolve the SDK from, in order: the entry script's tree
+ * (harness.cjs → agent/node_modules; in dev only, the repo's packages/harness/dist),
+ * NODE_PATH parents, the pinned global install, and cwd LAST (arbitrary, so it
+ * must never beat the pinned global). The SDK can't be bundled (it spawns a
+ * platform-native `claude` binary shipped as optional deps), so it is resolved
+ * from the host.
  */
-export function sdkAnchors(): string[] {
+export function sdkAnchors(src: SdkAnchorSources = {}): string[] {
   const out: string[] = [];
   const add = (d: string | undefined) => { if (d && !out.includes(d)) out.push(d); };
-  const entry = process.argv[1];
+  const entry = "argv1" in src ? src.argv1 : process.argv[1];
   if (entry) {
     try { add(path.dirname(realpathSync(entry))); } catch { add(path.dirname(entry)); }
   }
-  for (const d of (process.env.NODE_PATH ?? "").split(path.delimiter)) {
+  for (const d of (src.nodePath ?? process.env.NODE_PATH ?? "").split(path.delimiter)) {
     // NODE_PATH entries are node_modules dirs; anchor one level up.
     if (d) add(path.dirname(d));
   }
-  add(process.cwd());
-  add(path.join(path.dirname(process.execPath), "..", "lib"));
+  add(path.join(path.dirname(src.execPath ?? process.execPath), "..", "lib"));
+  add(src.cwd ?? process.cwd());
   return out;
 }
 

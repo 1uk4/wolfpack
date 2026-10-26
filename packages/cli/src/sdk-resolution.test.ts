@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import { findSdkUrl, sdkAnchors } from "../../engine/src/adapters/claude-agent-sdk.js";
 
 /**
  * Deployed extension bundles (<den>/extensions/wolfpack-memory/index.js) have no
@@ -52,11 +53,47 @@ describe("engine claude-agent-sdk resolution from a deployed bundle", () => {
     expect(run(harnessDir)).toBe("stubQuery");
   });
 
-  it("otherwise fails with a clear error naming what it tried", () => {
+  it("findSdkUrl returns undefined when no anchor has the SDK (hermetic)", () => {
+    const empty = fs.mkdtempSync(path.join(tmp, "empty-"));
+    expect(findSdkUrl("@anthropic-ai/claude-agent-sdk", [empty])).toBeUndefined();
+  });
+
+  // Skipped (visibly) when this machine has a real global SDK, which resolves legitimately.
+  const hasGlobal = !!findSdkUrl("@anthropic-ai/claude-agent-sdk", [path.join(path.dirname(process.execPath), "..", "lib")]);
+  it.skipIf(hasGlobal)("the load error names what it tried", () => {
     const r = run(path.join(tmp, "bare/agent"));
-    // A real global install on the test machine is also a valid resolution.
-    if (!r.startsWith("ERR")) return;
     expect(r).toContain("could not be loaded");
     expect(r).toContain("Tried:");
+  });
+
+  it("anchor order: argv1 → NODE_PATH → global → cwd (global beats cwd)", () => {
+    const stub = (root: string, version: string) => {
+      const d = path.join(root, "node_modules/@anthropic-ai/claude-agent-sdk");
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, "package.json"), JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version, main: "index.js" }));
+      fs.writeFileSync(path.join(d, "index.js"), `exports.version = ${JSON.stringify(version)};`);
+    };
+    const harness = path.join(tmp, "order/harness");
+    const np = path.join(tmp, "order/np");
+    const prefix = path.join(tmp, "order/prefix"); // execPath = prefix/bin/node → lib = prefix/lib
+    const globalLib = path.join(prefix, "lib");
+    const cwd = path.join(tmp, "order/cwd");
+    for (const d of [harness, np, globalLib, cwd]) fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(harness, "harness.cjs"), "");
+    const src = { argv1: path.join(harness, "harness.cjs"), nodePath: path.join(np, "node_modules"), execPath: path.join(prefix, "bin/node"), cwd };
+    const anchors = sdkAnchors(src);
+    expect(anchors).toEqual([fs.realpathSync(harness), np, path.resolve(globalLib), cwd]);
+
+    const versionAt = (a: string[]) => {
+      const url = findSdkUrl("@anthropic-ai/claude-agent-sdk", a)!;
+      return JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(url).pathname), "package.json"), "utf8")).version;
+    };
+    stub(globalLib, "global");
+    stub(cwd, "cwd");
+    expect(versionAt(anchors)).toBe("global"); // not "cwd"
+    stub(np, "nodepath");
+    expect(versionAt(anchors)).toBe("nodepath");
+    stub(harness, "harness");
+    expect(versionAt(anchors)).toBe("harness");
   });
 });

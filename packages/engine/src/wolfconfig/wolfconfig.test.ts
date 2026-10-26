@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWolves, loadWolfConfig, WolfConfigError } from "./load.js";
-import { resolveWolfModel, TierResolutionError } from "./tiers.js";
+import { applyWolfTierOverrides, resolveWolfModel, TierResolutionError } from "./tiers.js";
 import { STARTER_PACK_MODELS, resolveModelTable, type ModelTable } from "../models.js";
 
 let tmp: string;
@@ -174,3 +174,25 @@ describe("resolveWolfModel", () => {
     expect(() => resolveWolfModel(cfg(), "ultra", apiTable)).toThrow(/Unknown tier/);
   });
 });
+
+describe("applyWolfTierOverrides", () => {
+  const table = (): ModelTable => resolveModelTable({ pack: STARTER_PACK_MODELS, wolf: undefined, location: "local" });
+  const cfg = (tiers?: object) => ({ capability: { tools: [], workspace: "/w", ...(tiers ? { tiers } : {}) } }) as never;
+
+  it("no overrides: the same table", () => {
+    const t = table();
+    expect(applyWolfTierOverrides(t, cfg())).toBe(t);
+  });
+
+  it("overrides model/thinking per tier, leaves the rest, does not mutate", () => {
+    const t = table();
+    const before = JSON.stringify(t);
+    const out = applyWolfTierOverrides(t, cfg({ fast: { model: "m-fast", thinking: "low" } }));
+    expect(out.tiers.fast.model).toBe("m-fast");
+    expect(out.tiers.fast.thinking).toBe("low");
+    expect(out.tiers.fast.piModel.endsWith("/m-fast")).toBe(true);
+    expect(out.tiers.smart).toEqual(t.tiers.smart);
+    expect(JSON.stringify(t)).toBe(before);
+  });
+});
+

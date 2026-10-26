@@ -29,12 +29,17 @@ import {
 import { consolidatePool } from "@wolfpack/harness/memory";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { assertSandboxed, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
 export interface MemoryConfig {
+  /** Explicit off switch. Memory is also off unless `sandbox` or `live` is set (see {@link memoryGate}). */
   enabled?: boolean;
+  /** `memory.live: true` in wolf.yaml: durable memory may write the LIVE den / KB_OPS / Work API. */
+  live?: boolean;
+  /** @internal test seam: replaces the lazily-built model engine (the established `engine.call` stub). */
+  engine?: Engine;
   /** Minimum text length to trigger observation (default: 100) */
   minTextLength?: number;
   /** Consolidation settings */
@@ -45,6 +50,38 @@ export interface MemoryConfig {
   };
   /** Librarian mode - enables KB inbox tools (read-only for now) */
   librarian?: boolean;
+}
+
+// ─── Gate ──────────────────────────────────────────────────────────────────
+
+export interface MemoryGate {
+  enabled: boolean;
+  /** One line saying why memory is off (or in which mode it runs). */
+  reason: string;
+}
+
+/**
+ * Fail-closed gate for durable memory. It starts only when the wolf is sandboxed (`sandbox:` in wolf.yaml,
+ * normalized to `{root}`) or has `memory.live: true`; nothing sets `live` until cutover. In a sandbox it also
+ * proves the den and env really point into the dev root, and throws if not (a misconfigured sandbox must not boot).
+ */
+export function memoryGate(config: MemoryConfig, context: ExtensionContext): MemoryGate {
+  const env = context.env ?? process.env;
+  const sandbox = (context.wolfConfig as { sandbox?: unknown }).sandbox;
+  if (sandbox) {
+    const root = typeof sandbox === "object" ? (sandbox as { root?: unknown }).root : undefined;
+    if (typeof root !== "string") throw new Error("sandbox: wolf.yaml sandbox has no resolved dev root; refusing to start memory");
+    assertSandboxed(root, {
+      den: context.wolfDen,
+      kbOps: env.KB_OPS,
+      kbDenLocal: env.KB_DEN_LOCAL ?? join(context.wolfDen, "kb"),
+      workEndpoint: env.WORK_ENDPOINT,
+    });
+    return { enabled: config.enabled !== false, reason: config.enabled === false ? "disabled by memory.enabled: false" : `sandbox (${root})` };
+  }
+  if (config.enabled === false) return { enabled: false, reason: "disabled by memory.enabled: false" };
+  if (config.live === true) return { enabled: true, reason: "live (memory.live: true)" };
+  return { enabled: false, reason: "durable memory is off: set `sandbox: true` or `memory.live: true` in wolf.yaml to start it" };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -129,6 +166,11 @@ export default function createMemoryExtension(
     consolidation,
   } = config;
 
+  // Fail closed before anything touches the den (reconcileDen below writes to it).
+  const gate = memoryGate(config, context);
+  console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
+  if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
+
   const consolidationThreshold = consolidation?.threshold ?? 15000;
   const consolidationTrigger = consolidation?.trigger ?? "threshold";
 
@@ -159,13 +201,13 @@ export default function createMemoryExtension(
   // Lazy-init engine
   let engine: Engine | null = null;
   function getEngine(): Engine {
-    if (!engine) engine = makeEngine();
+    if (!engine) engine = config.engine ?? makeEngine();
     return engine;
   }
 
   // KB roots from env
-  const kbBase = process.env.KB_BASE;
-  const kbOps = process.env.KB_OPS;
+  const kbBase = (context.env ?? process.env).KB_BASE;
+  const kbOps = (context.env ?? process.env).KB_OPS;
   const kbRoots: KbRoots | null = kbBase && kbOps ? {
     kbBase,
     opsRoot: kbOps,

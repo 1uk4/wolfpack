@@ -16,6 +16,10 @@ import createTasksExtension, { type TasksConfig } from "./unified-tasks.js";
 export interface WolfpackMemoryConfig {
   // Memory settings
   enabled?: boolean;
+  /** `memory.live: true`: memory may write the live roots (see memoryGate). */
+  live?: boolean;
+  /** @internal test seam, see MemoryConfig.engine */
+  engine?: MemoryConfig["engine"];
   minTextLength?: number;
   consolidation?: {
     trigger?: "threshold" | "timer" | "hybrid" | "manual";
@@ -37,6 +41,8 @@ export default function createWolfpackMemoryExtension(
   // Build individual extensions
   const memoryConfig: MemoryConfig = {
     enabled: config.enabled,
+    live: config.live,
+    engine: config.engine,
     minTextLength: config.minTextLength,
     consolidation: config.consolidation,
     librarian: config.librarian,

@@ -176,3 +176,31 @@ describe("console client factory env switch", () => {
 		assert.ok(createConsoleClient({ WOLFPACK_API_URL: "  " }) instanceof MockConsoleClient);
 	});
 });
+
+describe("thread API: snapshot frames", () => {
+	it("forwards a mid-turn snapshot as a `snapshot` frame, in order, and the adapter ends with the corrected text", async () => {
+		const { ThreadEventAdapter } = await import("../src/core/index.ts");
+		const env = { threadId: "1uk4/home", at: "2026-01-01T00:00:00.000Z", actor: { id: "w", kind: "wolf" } };
+		const snap = {
+			...env, id: 2, type: "snapshot", upToId: 2,
+			inFlight: { turnId: "t1", text: "HEAD-the full text" },
+			thread: { id: "1uk4/home", wolf: "1uk4", kind: "home", title: "home", busy: true, lastEventId: 2, messages: [] },
+		};
+		const client = {
+			listThreads: async () => [{ id: "1uk4/home" }],
+			async *watch(_id: string, opts: { onSnapshot?: (s: unknown) => void }) {
+				yield { ...env, id: 1, type: "turn-start", turnId: "t1" };
+				yield { ...env, id: 2, type: "text-delta", turnId: "t1", text: "stale partial" };
+				opts.onSnapshot?.(snap);
+				yield { ...env, id: 3, type: "turn-end", turnId: "t1", reason: "complete" };
+			},
+		} as unknown as import("@wolfpack/client").ConsoleClient;
+		const got = await frames(await createThreadApi(() => client).stream(ref, new Request("http://t/stream")));
+		const events = got.slice(0, -1).map((f) => JSON.parse(f.data));
+		assert.deepEqual(events.map((e) => e.type), ["turn-start", "text-delta", "snapshot", "turn-end"]);
+		const adapter = new ThreadEventAdapter();
+		const wire = events.flatMap((e) => adapter.apply(e));
+		const end = wire.find((w) => w.type === "message_end") as unknown as { message: { content: Array<{ text: string }> } };
+		assert.equal(end.message.content[0]?.text, "HEAD-the full text");
+	});
+});

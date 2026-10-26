@@ -290,3 +290,43 @@ describe("history + routing helpers", () => {
 		assert.equal(threadListItem("1uk4", { id: "1uk4/home", title: "Home" }).href, "/wolf/1uk4/thread/home");
 	});
 });
+
+describe("ThreadEventAdapter: snapshot frames", () => {
+	const at = "2026-01-01T00:00:00.000Z";
+	const env = { threadId: THREAD, at, actor: { id: "w", kind: "wolf" as const } };
+	const snapshot = (text: string, thinking?: string) =>
+		({
+			...env, id: 9, type: "snapshot", upToId: 9,
+			inFlight: { turnId: "t", text, ...(thinking ? { thinking } : {}) },
+			thread: { id: THREAD, wolf: "w", kind: "home", title: "t", busy: true, lastEventId: 9, messages: [] },
+		}) as never;
+
+	it("replaces the stale in-flight text with the snapshot's", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 1, type: "turn-start", turnId: "t" } as ThreadEvent);
+		a.apply({ ...env, id: 2, type: "text-delta", turnId: "t", text: "stale" } as ThreadEvent);
+		const u = a.apply(snapshot("HEAD-full text"));
+		assert.equal(u[0]!.type, "message_update");
+		assert.equal(blocks(u[0]!)[0]?.text, "HEAD-full text");
+		const out = a.apply({ ...env, id: 3, type: "turn-end", turnId: "t", reason: "complete" } as ThreadEvent);
+		assert.equal(blocks(out.find((e) => e.type === "message_end")!)[0]?.text, "HEAD-full text");
+	});
+
+	it("is relative to messages the turn already closed", () => {
+		const a = new ThreadEventAdapter();
+		a.apply({ ...env, id: 1, type: "turn-start", turnId: "t" } as ThreadEvent);
+		a.apply({ ...env, id: 2, type: "text-delta", turnId: "t", text: "step one. " } as ThreadEvent);
+		a.apply({ ...env, id: 3, type: "tool-start", turnId: "t", callId: "c", name: "x", args: {} } as ThreadEvent);
+		a.apply({ ...env, id: 4, type: "tool-end", turnId: "t", callId: "c", result: "r", isError: false } as ThreadEvent);
+		a.apply({ ...env, id: 5, type: "text-delta", turnId: "t", text: "bad" } as ThreadEvent);
+		const u = a.apply(snapshot("step one. step two"));
+		assert.equal(blocks(u[0]!)[0]?.text, "step two");
+	});
+
+	it("ignores a snapshot without an in-flight turn", () => {
+		const a = new ThreadEventAdapter();
+		const s = snapshot("x") as { inFlight?: unknown };
+		delete s.inFlight;
+		assert.deepEqual(a.apply(s as never), []);
+	});
+});

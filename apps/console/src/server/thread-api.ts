@@ -13,7 +13,7 @@
  * the client replays events with id > from, then follows live.
  */
 
-import { NotFoundError, type ConsoleClient, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { NotFoundError, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { getConsoleClient } from "./console-client.ts";
 
@@ -58,7 +58,7 @@ export function resumeCursor(req: Request): number | undefined {
 
 const encoder = new TextEncoder();
 
-export function sseFrame(ev: ThreadEvent): Uint8Array {
+export function sseFrame(ev: ThreadEvent | SnapshotEvent): Uint8Array {
 	return encoder.encode(`id: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
 }
 
@@ -117,19 +117,23 @@ export function createThreadApi(source: ClientSource) {
 
 		async stream(ref: ThreadRef, req: Request): Promise<Response> {
 			let iterator: AsyncIterator<ThreadEvent>;
+			// A snapshot (stale cursor, or a mid-turn correction after a diverged final) is forwarded as a
+			// `snapshot` frame the instant the client reports it; the adapter swaps its in-flight state for it.
+			let out: ReadableStreamDefaultController<Uint8Array> | undefined;
 			try {
 				const client = source();
 				const id = await resolve(client, ref);
 				iterator = client.watch(id, {
 					from: resumeCursor(req),
-					// A snapshot only fires on a stale cursor. The bridge's SSE contract has no snapshot
-					// frame yet (full snapshot UX is a later feature), so log and carry on with the events.
-					onSnapshot: (snap) => console.warn(`[thread-api] snapshot baseline for ${id} (stale cursor ${snap.id ?? "?"}); not forwarded`),
+					onSnapshot: (snap) => out?.enqueue(sseFrame(snap)),
 				})[Symbol.asyncIterator]();
 			} catch (err) {
 				return failure(err);
 			}
 			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					out = controller;
+				},
 				async pull(controller) {
 					try {
 						const next = await iterator.next();

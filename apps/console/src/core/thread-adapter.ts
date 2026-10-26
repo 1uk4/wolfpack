@@ -22,7 +22,7 @@
  */
 
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
-import type { ThreadEvent, ThreadMessage } from "@wolfpack/client";
+import type { SnapshotEvent, ThreadEvent, ThreadMessage } from "@wolfpack/client";
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { LhMessage } from "./native-messages.ts";
 
@@ -75,10 +75,15 @@ export class ThreadEventAdapter {
 	private callNames = new Map<string, string>();
 	private results: ToolResultMessage[] = [];
 	private lastError: string | undefined;
+	/** Text/thinking of this turn's already-closed messages (a snapshot's turn-wide partial is relative to it). */
+	private closedText = "";
+	private closedThinking = "";
 
-	apply(ev: ThreadEvent): WireEvent[] {
+	apply(ev: ThreadEvent | SnapshotEvent): WireEvent[] {
 		const at = Date.parse(ev.at) || 0;
 		switch (ev.type) {
+			case "snapshot":
+				return this.applySnapshot(ev, at);
 			case "turn-start":
 				this.reset();
 				return [{ type: "agent_start" }];
@@ -110,6 +115,26 @@ export class ThreadEventAdapter {
 		this.openCalls.clear();
 		this.results = [];
 		this.lastError = undefined;
+		this.closedText = "";
+		this.closedThinking = "";
+	}
+
+	/**
+	 * A server snapshot (a diverged retry corrected, or a stale-cursor baseline): the in-flight text it carries is
+	 * authoritative, so the open message's text/thinking are REPLACED by it (minus what earlier closed messages of
+	 * the turn already showed). Tool-call blocks are kept. History is not rewritten here: the settle refetch owns it.
+	 */
+	private applySnapshot(ev: SnapshotEvent, at: number): WireEvent[] {
+		const f = ev.inFlight;
+		if (!f) return [];
+		const rest = (full: string, closed: string) => (full.startsWith(closed) ? full.slice(closed.length) : full);
+		const text = rest(f.text, this.closedText);
+		const thinking = rest(f.thinking ?? "", this.closedThinking);
+		return this.grow(at, (blocks) => [
+			...(thinking ? [{ type: "thinking", thinking } as Block] : []),
+			...(text ? [{ type: "text", text } as Block] : []),
+			...blocks.filter((b) => b.type !== "text" && b.type !== "thinking"),
+		]);
 	}
 
 	/** Open-or-grow the in-flight message; emit its FULL partial. */
@@ -173,6 +198,10 @@ export class ThreadEventAdapter {
 
 	private close(stopReason: AssistantMessage["stopReason"], at: number): AssistantMessage | null {
 		if (this.blocks === null) return null;
+		for (const b of this.blocks) {
+			if (b.type === "text") this.closedText += (b as { text: string }).text;
+			else if (b.type === "thinking") this.closedThinking += (b as { thinking: string }).thinking;
+		}
 		const message = assistantShell(this.blocks, this.startedAt || at, stopReason);
 		if (stopReason === "error") message.errorMessage = this.lastError ?? "The turn failed.";
 		this.blocks = null;

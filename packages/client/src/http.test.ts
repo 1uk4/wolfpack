@@ -121,6 +121,30 @@ describe("HttpConsoleClient", () => {
     expect(seq).toBeGreaterThan(0);
   });
 
+  it("a mid-stream snapshot reaches onSnapshot in order and the stream continues after it", async () => {
+    const env = { threadId: "t", at: "2026-01-01T00:00:00Z", actor: { id: "w", kind: "wolf" } };
+    const frames = [
+      { id: 1, type: "turn-start", turnId: "a" },
+      { id: 2, type: "text-delta", turnId: "a", text: "stale" },
+      {
+        id: 2, type: "snapshot", upToId: 2, inFlight: { turnId: "a", text: "the full text" },
+        thread: { id: "t", wolf: "w", title: "t", kind: "home", busy: true, lastEventId: 2, updatedAt: env.at, messages: [{ id: "m", role: "assistant", text: "the full text", at: env.at }] },
+      },
+      { id: 3, type: "turn-end", turnId: "a", reason: "complete" },
+    ];
+    const body = frames.map((f) => `id: ${f.id}\ndata: ${JSON.stringify({ ...env, ...f })}\n\n`).join("") + "data: [DONE]\n\n";
+    const c = make({
+      fetch: async (input) =>
+        String(input).endsWith("/stream") ? new Response(body, { headers: { "Content-Type": "text/event-stream" } }) : fetch(input),
+    });
+    const order: string[] = [];
+    const snaps: SnapshotEvent[] = [];
+    for await (const e of c.watch("t", { onSnapshot: (s) => (order.push("snapshot"), snaps.push(s)) })) order.push(e.type);
+    expect(order).toEqual(["turn-start", "text-delta", "snapshot", "turn-end"]);
+    expect(snaps[0].inFlight?.text).toBe("the full text");
+    expect(snaps[0].thread.messages.at(-1)?.text).toBe("the full text");
+  });
+
   it("skips unknown event types and throws on invalid known events", async () => {
     const ev = (o: object) => JSON.stringify({ id: 1, threadId: "t", at: "2026-01-01T00:00:00Z", actor: { id: "w", kind: "wolf" }, ...o });
     const good = ev({ type: "turn-start", turnId: "a" });

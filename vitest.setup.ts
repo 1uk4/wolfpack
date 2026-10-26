@@ -1,0 +1,25 @@
+/**
+ * Env isolation: tests run from inside a sandboxed wolf's shell, which exports
+ * KB_*, WORK_*, WOLFPACK_*, PI_SUBAGENT_* etc. Several readers use `??` (so ""
+ * would count as "set" and resolve to cwd / an empty URL), hence these are
+ * DELETED, not blanked. Runs per test file before the file's imports, so
+ * module-level reads and later vi.stubEnv / direct assignment still work.
+ */
+const AMBIENT = [
+  "KB_BASE", "KB_OPS", "KB_DEN_LOCAL", "KB_MAX_MERGE_TARGET_CHARS",
+  "WORK_ENDPOINT", "WORK_TOKEN", "WORK_LEDGER_DIR",
+  "TRANSCRIBE_ENDPOINT", "TRANSCRIBE_TOKEN",
+  "WOLFPACK_MODELS_FILE", "WOLFPACK_DOMAIN", "WOLF_DOMAINS",
+  "WOLFPACK_EMBED_URL", "WOLFPACK_EMBED_MODEL",
+  "WOLFPACK_HOME_ROOT", "WOLFPACK_OPS_REF", "WOLFPACK_MEMORY_DEFAULT",
+  "WOLFPACK_MODEL", "WOLFPACK_MAIN_MODEL", "WOLFPACK_FAST_MODEL",
+  "WOLFPACK_CRAWL_HOME", "WOLFPACK_CRAWL_REQUIRE_SCRIBE", "WOLFPACK_CRAWL_CONCURRENCY",
+  "WOLFPACK_CRAWL_BODY_MAX_CHARS", "WOLFPACK_CRAWL_BODY_TARGET_CHARS",
+  "WOLFPACK_SUBAGENT_MUX", "WOLFPACK_VIZ_DIR",
+  "WOLFPACK_AGENT_PORT", "WOLFPACK_AGENT_DATA", "WOLFPACK_AGENT_API_KEY",
+  "PI_SUBAGENT_AGENT", "PI_SUBAGENT_NAME", "PI_SUBAGENT_ID", "PI_SUBAGENT_SESSION",
+  "PI_SUBAGENT_ALLOWED", "PI_SUBAGENT_AUTO_EXIT", "PI_SUBAGENT_ACTIVITY_FILE",
+  "PI_SUBAGENT_SHELL_READY_DELAY_MS", "PI_DENY_TOOLS",
+  "TMUX", "TMUX_PANE", "HERDR_ENV",
+];
+for (const k of AMBIENT) delete process.env[k];

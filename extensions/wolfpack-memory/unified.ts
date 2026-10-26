@@ -33,7 +33,7 @@ import {
 import { consolidatePool, durableSessionTopics, promoteSessionTopics, type ConsolidationResult } from "@wolfpack/harness/memory";
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
-import { homeThreadId, memoryEmitter } from "./memory-events.js";
+import { memoryEmitter } from "./memory-events.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
@@ -412,7 +412,7 @@ export default function createMemoryExtension(
       if (result.observations.length > 0) {
         const bound = await readBoundTask(ctx); // re-read every chunk, never cached
         await writeToPool(ctx.wolfDen, result.observations, bound, defaultDomain);
-        mem.observed(result.observations, bound, cls.kind === "root" ? homeThreadId(wolfName) : undefined);
+        mem.observed(result.observations, bound, ctx.conversationId);
       }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;

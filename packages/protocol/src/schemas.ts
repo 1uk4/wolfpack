@@ -224,6 +224,8 @@ export type MemoryTarget = z.infer<typeof MemoryTargetSchema>;
 const memoryBase = z.object({
   wolf: z.string(),
   threadId: z.string().optional(),
+  /** The durable conversation the event came out of (observations); absent for pool-level steps (consolidate, promote). */
+  conversationId: z.number().int().optional(),
   timestamp: IsoSchema,
   domain: z.string(),
   target: MemoryTargetSchema,

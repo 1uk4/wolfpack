@@ -11,20 +11,25 @@ export interface BoundWork {
   featureId?: string;
 }
 
-/** The home thread's id, `<wolf>/home`: what the observer's root conversation is on the wolf API. Forks have none. */
-export const homeThreadId = (wolfName: string) => `${wolfName}/home`;
+/** pi-durable's reserved root conversation (ROOT_CONVERSATION_ID): the one wolfd serves as the home thread (engine.conversations.root). */
+export const HOME_CONVERSATION_ID = 1;
+
+/** `<wolf>/home` for the conversation backing the home thread; every other conversation (second roots, forks) has no thread id. */
+export const threadIdFor = (wolfName: string, conversationId: number): string | undefined =>
+  conversationId === HOME_CONVERSATION_ID ? `${wolfName}/home` : undefined;
 
 export function memoryEmitter(wolfDen: string, wolfName: string, defaultDomain: string) {
   // Looked up per emit: a disposed bus (server closed) is recreated and shared again.
   const bus = { emit: (d: Parameters<ReturnType<typeof memoryEventsFor>["emit"]>[0]) => memoryEventsFor(wolfDen, wolfName).emit(d) };
   return {
     /** Observations appended to the pool. Summary: the first line of the first observation, capped at 120 chars. */
-    observed(observations: Array<{ content: string; domain?: string }>, bound: BoundWork | null, threadId?: string): void {
+    observed(observations: Array<{ content: string; domain?: string }>, bound: BoundWork | null, conversationId?: number): void {
       if (observations.length === 0) return;
       const target: MemoryTarget = bound ? { kind: "work", workId: bound.taskId, ...(bound.featureId ? { featureId: bound.featureId } : {}) } : { kind: "den" };
       bus.emit({
         type: "observation_captured",
-        ...(threadId ? { threadId } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(conversationId !== undefined && threadIdFor(wolfName, conversationId) ? { threadId: threadIdFor(wolfName, conversationId) } : {}),
         domain: observations[0].domain || defaultDomain,
         target,
         count: observations.length,

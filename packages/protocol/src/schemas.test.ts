@@ -192,8 +192,8 @@ describe("commands", () => {
 describe("MemoryEvent", () => {
   const base = { wolf: "w", timestamp: "2026-10-25T10:00:00.000Z", domain: "wolfpack" };
   const variants = [
-    { ...base, type: "observation_captured", threadId: "w/home", target: { kind: "den" }, count: 2, summary: "Cache lookups" },
-    { ...base, type: "observation_captured", target: { kind: "work", workId: "work-1", featureId: "work-f" }, count: 1, summary: "x" },
+    { ...base, type: "observation_captured", threadId: "w/home", conversationId: 1, target: { kind: "den" }, count: 2, summary: "Cache lookups" },
+    { ...base, type: "observation_captured", conversationId: 4, target: { kind: "work", workId: "work-1", featureId: "work-f" }, count: 1, summary: "x" },
     { ...base, type: "topic_consolidated", target: { kind: "session", topicId: "caching" }, topicId: "caching", observationCount: 3, change: "create" },
     { ...base, type: "contribution_emitted", target: { kind: "den", topicId: "caching" }, contributionId: "caching-abc", lane: "inbox/w" },
     { ...base, type: "promote_started", target: { kind: "den" }, jobId: "j1" },
@@ -204,6 +204,15 @@ describe("MemoryEvent", () => {
   it("parses every variant (threadId optional)", () => {
     for (const v of variants) expect(parseMemoryEvent(v)).toMatchObject({ kind: "event", event: { type: v.type } });
     expect(new Set(variants.map((v) => v.type))).toEqual(new Set(MemoryEventSchema.options.map((o) => o.shape.type.value)));
+  });
+
+  it("conversationId is an optional integer", () => {
+    const obs = variants[0];
+    expect(parseMemoryEvent(obs)).toMatchObject({ kind: "event", event: { conversationId: 1 } });
+    const { conversationId: _c, ...without } = obs;
+    expect(parseMemoryEvent(without)).toMatchObject({ kind: "event" });
+    expect(parseMemoryEvent({ ...obs, conversationId: 1.5 })).toMatchObject({ kind: "invalid" });
+    expect(parseMemoryEvent({ ...obs, conversationId: "1" })).toMatchObject({ kind: "invalid" });
   });
 
   it("promote_finished parses with and without the optional pending count", () => {

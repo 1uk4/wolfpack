@@ -241,14 +241,21 @@ describe("durable memory: sandbox acceptance", { timeout: 60_000 }, () => {
     await waitFor(() => events.some((e) => e.type === "observation_captured" && e.target.kind === "work"));
     const workEvent = events.find((e) => e.type === "observation_captured" && e.target.kind === "work")!;
     expect(workEvent).toMatchObject({ domain: "wolfpack", target: { kind: "work", workId: live.taskId, featureId: live.featureId } });
-    // /v1 only addresses the home thread today, so every root conversation reports it; forks carry no threadId
-    expect(workEvent.threadId).toBe("1uk4/home");
+    // only the conversation backing the home thread is "1uk4/home"; a second root has no threadId, just its conversationId
+    expect(workEvent.threadId).toBeUndefined();
+    expect(workEvent.conversationId).toBe(boundId);
+    expect(events[0].conversationId).toBe(1);
 
     // fork it and talk in the fork: same lineage, same Record
     const newest = (await bound.entries({ order: "descending" }, 1, undefined, ctx)).items[0];
     const fork = await bound.fork(newest.id, { ownership: { kind: "ownerless" }, agent }, ctx);
     await runOn(fork, "talk in the fork");
     await observed(t, Number(fork.id));
+    await waitFor(() => events.some((e) => e.conversationId === Number(fork.id)));
+    const forkEvent = events.find((e) => e.conversationId === Number(fork.id))!;
+    expect(forkEvent).toMatchObject({ type: "observation_captured", target: { kind: "work", workId: live.taskId } });
+    expect(forkEvent.threadId).toBeUndefined();
+    expect(Number(fork.id)).not.toBe(boundId);
 
     // a subagent (task-owned) conversation talks too and contributes nothing
     const taskId = await h.commit((tx) => tx.createTask(Park, {}, { ownership: { kind: "conversation" }, conversationId: boundId as never }), ctx);

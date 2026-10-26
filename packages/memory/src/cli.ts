@@ -17,10 +17,10 @@
  */
 import { createEngine, engineSteps, loadModelTable, type ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { promoteTopics } from "./distill.js";
 import { consolidateSession } from "./consolidate.js";
 import { listSessionIds } from "./session/memory.js";
-import { getConsolidatedSessions, readResendTopics } from "./den.js";
+import { getConsolidatedSessions } from "./den.js";
+import { readResendSet, resendDenTopics } from "./resend.js";
 import { resolve } from "node:path";
 
 async function main(): Promise<void> {
@@ -91,22 +91,16 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Archived topics (absorbed by Dewey; latest version per id, rejects too)
-    // first, then pending ones. force re-sends bodies emitted before.
-    const { archived, pending } = readResendTopics(resolvedDen);
-    const topics = [...archived, ...pending];
-    const stats = await promoteTopics(
-      topics
-        .filter((t) => t.promotable) // the rest are held in the den as session logs
-        .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const })),
-      {
-        engine,
-        roots: kbRoots,
-        wolf: wolfName,
-        defaultDomain,
-        force: true,
-        onProgress: (m) => console.log(m),
-      }
-    );
+    // first, then pending ones. Forced: bodies emitted before are re-sent.
+    const set = readResendSet(resolvedDen);
+    const { archived, pending, topics } = set;
+    const stats = await resendDenTopics(set, {
+      engine,
+      roots: kbRoots,
+      wolf: wolfName,
+      defaultDomain,
+      onProgress: (m) => console.log(m),
+    });
     const emitted = stats.emitted;
     console.log(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
     console.log(

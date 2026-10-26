@@ -10,7 +10,7 @@
  *       JOURNEY.md       # Running history across all sessions
  *     sessions.json      # Tracks which sessions have been consolidated
  */
-import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter, atomicWrite } from "@wolfpack/engine";
 import { assessTopic } from "@wolfpack/kb/client";
@@ -47,35 +47,54 @@ export function ensureDenDirs(denRoot: string): void {
  * Read all existing topic files from the den.
  */
 export function readDenTopics(denRoot: string): DenTopic[] {
-  return readTopicDir(join(denRoot, "memory", "topics"));
+  return readTopicFiles(join(denRoot, "memory", "topics")).map((f) => f.topic);
 }
 
 /** A den topic that reconcile moved to memory/archive/ once the KB absorbed it. */
 export interface ArchivedDenTopic extends DenTopic {
   /** KB entry the receipt named; null for a reject. */
   absorbedInto: string | null;
+  /** "" when the file has no absorbed_at: such a stint counts as the oldest. */
   absorbedAt: string;
+  /** File mtime: breaks absorbed_at ties between stints of the same id. */
+  mtimeMs: number;
 }
+
+/** Reconcile names a repeat stint `<id>-<hash10>.md`. */
+const STINT_SUFFIX = /-[0-9a-f]{10}$/;
 
 /**
  * Read every archived den topic (memory/archive/). The id comes from the
  * frontmatter, so a subject archived more than once (`<id>-<hash10>.md`) keeps
- * its real id. One file per stint: the same id can appear several times.
+ * its real id; without one, the filename minus a trailing -<hash10> is used.
+ * One file per stint: the same id can appear several times.
  */
 export function readArchivedDenTopics(denRoot: string): ArchivedDenTopic[] {
   const dir = join(denRoot, "memory", "archive");
-  return readTopicDir(dir, (fields) => ({
+  return readTopicFiles(dir, (stem) => stem.replace(STINT_SUFFIX, "")).map(({ topic, fields, mtimeMs }) => ({
+    ...topic,
     absorbedInto: fields.absorbed_into == null || String(fields.absorbed_into) === "null" ? null : String(fields.absorbed_into),
-    absorbedAt: String(fields.absorbed_at ?? ""),
+    absorbedAt: fields.absorbed_at == null ? "" : String(fields.absorbed_at),
+    mtimeMs,
   }));
+}
+
+/**
+ * Order of two stints of the same id: later absorbed_at is newer (a missing
+ * absorbed_at is oldest); on a tie the newer file mtime wins (reconcile writes
+ * each stint when it archives it), then the larger path, so the pick is
+ * deterministic.
+ */
+function compareStints(a: ArchivedDenTopic, b: ArchivedDenTopic): number {
+  return a.absorbedAt.localeCompare(b.absorbedAt) || a.mtimeMs - b.mtimeMs || a.filePath.localeCompare(b.filePath);
 }
 
 /**
  * The wolf's whole contribution set, for a rebuild of Dewey from scratch
  * (/wolf:resend-all, --emit-den): one topic per id, the latest version only.
  * A pending topic is newer than any archived stint of the same id; otherwise
- * the stint with the latest absorbed_at wins. Rejected stints are included:
- * a rebuild lets Dewey decide again. Archived topics come first, oldest
+ * the newest stint wins (compareStints). Rejected stints are included: a
+ * rebuild lets Dewey decide again. Archived topics come first, oldest
  * absorbed first, then the pending ones.
  */
 export function readResendTopics(denRoot: string): { archived: ArchivedDenTopic[]; pending: DenTopic[] } {
@@ -85,24 +104,27 @@ export function readResendTopics(denRoot: string): { archived: ArchivedDenTopic[
   for (const t of readArchivedDenTopics(denRoot)) {
     if (pendingIds.has(t.id)) continue;
     const prev = latest.get(t.id);
-    if (!prev || t.absorbedAt > prev.absorbedAt) latest.set(t.id, t);
+    if (!prev || compareStints(t, prev) > 0) latest.set(t.id, t);
   }
   const archived = [...latest.values()].sort((a, b) => a.absorbedAt.localeCompare(b.absorbedAt) || a.id.localeCompare(b.id));
   return { archived, pending };
 }
 
-function readTopicDir<X extends object = {}>(dir: string, extra?: (fields: Record<string, unknown>) => X): (DenTopic & X)[] {
+interface TopicFile {
+  topic: DenTopic;
+  fields: Record<string, unknown>;
+  mtimeMs: number;
+}
+
+/** Parse every topic file in `dir`; `idFromStem` maps a filename stem to the id when the frontmatter has none. */
+function readTopicFiles(dir: string, idFromStem: (stem: string) => string = (stem) => stem): TopicFile[] {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
-  const topics: (DenTopic & X)[] = [];
-
-  for (const file of files) {
+  return files.map((file) => {
     const filePath = join(dir, file);
-    const raw = readFileSync(filePath, "utf-8");
-    const { fields, body } = parseFrontmatter(raw);
-
-    topics.push({
-      id: String(fields.id ?? file.replace(/\.md$/, "")),
+    const { fields, body } = parseFrontmatter(readFileSync(filePath, "utf-8"));
+    const topic: DenTopic = {
+      id: String(fields.id ?? idFromStem(file.replace(/\.md$/, ""))),
       title: String(fields.title ?? "Untitled"),
       summary: String(fields.summary ?? ""),
       updated: String(fields.updated ?? ""),
@@ -111,11 +133,9 @@ function readTopicDir<X extends object = {}>(dir: string, extra?: (fields: Recor
       filePath,
       promotable: String(fields.promotable) !== "false",
       promotableReason: fields.promotable_reason ? String(fields.promotable_reason) : undefined,
-      ...((extra?.(fields as Record<string, unknown>) ?? {}) as X),
-    });
-  }
-
-  return topics;
+    };
+    return { topic, fields, mtimeMs: statSync(filePath).mtimeMs };
+  });
 }
 
 /**

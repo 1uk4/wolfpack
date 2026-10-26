@@ -64,8 +64,9 @@ import {
   renderPlanSummary,
   readPlan,
   writePlan,
-  readResendTopics,
-  promoteTopics,
+  readResendSet,
+  resendDenTopics,
+  type ResendSet,
   discoverSources,
   gatePlan,
   DEFAULT_CRAWL_CONCURRENCY,
@@ -2838,17 +2839,15 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // 1) Every den memory topic (the wolf's accumulated knowledge): the
       //    archived ones Dewey absorbed (latest version per id, rejects too)
       //    plus the pending ones.
-      let archivedCount = 0;
-      let pendingCount = 0;
-      let denTopics: { id: string; title: string; summary: string; body: string; promotable?: boolean }[] = [];
+      let resendSet: ResendSet = { archived: [], pending: [], topics: [] };
       try {
-        const set = readResendTopics(wolfDen);
-        archivedCount = set.archived.length;
-        pendingCount = set.pending.length;
-        denTopics = [...set.archived, ...set.pending];
+        resendSet = readResendSet(wolfDen);
       } catch {
-        denTopics = [];
+        /* unreadable den: nothing to re-send from it */
       }
+      const denTopics = resendSet.topics;
+      const archivedCount = resendSet.archived.length;
+      const pendingCount = resendSet.pending.length;
 
       // 2) Every COMPLETED crawl run (has history.json → re-emittable), deduped
       //    by (domain, source) keeping the newest — a crawl run twice re-sends
@@ -2878,7 +2877,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       const force = /\s(--force|--yes)\b/.test(` ${args ?? ""}`);
       const detail =
         `Re-emit ${wolfName}'s ENTIRE contribution set to the Librarian inbox:\n` +
-        `  \u2022 ${denTopics.length} den topic(s) (${archivedCount} archived, ${pendingCount} pending) \u2192 domain "${currentDomain}"\n` +
+        `  \u2022 ${denTopics.length} den topic(s) (${archivedCount} archived, ${pendingCount} pending) ` +
+        `(unchanged bodies reuse stored distill output) \u2192 domain "${currentDomain}"\n` +
         `  \u2022 ${crawlRuns.length} completed crawl(s), ${crawlTopicTotal} topics:\n` +
         crawlRuns
           .map((e) => `      - ${e.domain} \u00b7 ${e.topics} topics \u00b7 ${e.source}`)
@@ -2908,25 +2908,19 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       let denEmitted = 0;
       try {
         if (!engine) throw new Error("model engine not ready");
-        const stats = await promoteTopics(
-          denTopics
-            .filter((t) => t.promotable !== false) // held in the den as a session log
-            .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const })),
-          {
-            engine,
-            roots: kbRoots,
-            wolf: wolfName,
-            defaultDomain: currentDomain,
-            force: true,
-            onProgress: (m) => ctx.ui?.notify?.(`\ud83d\udc3a ${m.trim()}`, "info"),
-          }
-        );
+        const stats = await resendDenTopics(resendSet, {
+          engine,
+          roots: kbRoots,
+          wolf: wolfName,
+          defaultDomain: currentDomain,
+          onProgress: (m) => ctx.ui?.notify?.(`\ud83d\udc3a ${m.trim()}`, "info"),
+        });
         denEmitted = stats.emitted;
       } catch (e) {
         ctx.ui?.notify?.(`\ud83d\udc3a den topics failed: ${String(e)}`, "warning");
       }
 
-      // Emit crawl runs.
+      // Emit crawl runs. Not forced: crawl contributions stay emitted.json-deduped on resend.
       let crawlEmitted = 0;
       let crawlRunsOk = 0;
       for (const e of crawlRuns) {

@@ -76,6 +76,7 @@ export {
   readDenTopics,
   readArchivedDenTopics,
   readResendTopics,
+  type ArchivedDenTopic,
   readDenJourney,
   writeDenTopic,
   gateDenTopic,
@@ -177,3 +178,6 @@ export {
   type ConsolidateWorkOptions,
 } from "./work-record.js";
 export { scanSecrets, type SecretScan } from "./work/secrets.js";
+
+// Resend (Dewey rebuild from scratch)
+export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";

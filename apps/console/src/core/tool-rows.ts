@@ -189,7 +189,7 @@ function groupRuns(items: RenderItem[]): RenderItem[] {
  * paragraph is clipped at the edge instead of wrapping.
  */
 export const PROSE_BLOCK_CLASS =
-	"min-w-0 max-w-full break-words [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_code]:[overflow-wrap:normal]";
+	"min-w-0 max-w-full break-words [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_pre_code]:[overflow-wrap:normal]";
 export const ASSISTANT_CONTENT_CLASS = "w-full min-w-0 max-w-full";
 
 /**

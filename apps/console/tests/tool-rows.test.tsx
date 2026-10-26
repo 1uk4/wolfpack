@@ -318,7 +318,9 @@ describe("prose wrapping", () => {
 		assert.match(PROSE_BLOCK_CLASS, /break-words/);
 		// anywhere would squash table min-content; pre/table/code keep normal wrapping
 		assert.doesNotMatch(PROSE_BLOCK_CLASS, /anywhere/);
-		for (const el of ["pre", "table", "code"]) assert.match(PROSE_BLOCK_CLASS, new RegExp(`\\[&_${el}\\]:\\[overflow-wrap:normal\\]`));
+		// inline code must keep wrapping: only code inside a pre is exempt
+		assert.doesNotMatch(PROSE_BLOCK_CLASS, /\[&_code\]/);
+		for (const el of ["pre", "table", "pre_code"]) assert.match(PROSE_BLOCK_CLASS, new RegExp(`\\[&_${el}\\]:\\[overflow-wrap:normal\\]`));
 		assert.doesNotMatch(`${PROSE_BLOCK_CLASS} ${ASSISTANT_CONTENT_CLASS}`, /nowrap|truncate/);
 		const row = renderToStaticMarkup(<ToolRow entry={{ callId: "c", name: "bash", summary: "x", status: "done" }} />);
 		const root = row.match(/<details[^>]*>/)![0];

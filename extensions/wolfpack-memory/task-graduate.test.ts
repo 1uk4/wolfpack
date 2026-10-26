@@ -126,12 +126,13 @@ describe("durable task_graduate: preview, then confirm", () => {
     const { f, t } = ready();
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(join(den, "tasks"), { recursive: true });
-    await writeFile(join(den, "tasks", "active.json"), JSON.stringify({ taskId: f.id, domain: "wolfpack", boundAt: "now", featureId: f.id }));
+    await mkdir(join(den, "factory", "conversations", "1"), { recursive: true });
+    await writeFile(join(den, "factory", "conversations", "1", "active-task.json"), JSON.stringify({ workId: f.id, domain: "wolfpack", boundAt: "now", featureId: f.id }));
     const token = /confirm "([a-f0-9]+)"/.exec((await run({ id: f.id })).content[0].text as string)![1];
     // previewing alone leaves the binding
-    expect(JSON.parse(readFileSync(join(den, "tasks", "active.json"), "utf8")).taskId).toBe(f.id);
+    expect(JSON.parse(readFileSync(join(den, "factory", "conversations", "1", "active-task.json"), "utf8")).workId).toBe(f.id);
     await run({ id: f.id, confirm: token });
-    expect(JSON.parse(readFileSync(join(den, "tasks", "active.json"), "utf8"))).toBeNull();
+    expect(JSON.parse(readFileSync(join(den, "factory", "conversations", "1", "active-task.json"), "utf8"))).toBeNull();
     void t;
   });
 

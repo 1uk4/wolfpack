@@ -28,6 +28,8 @@ export interface ToolContext {
   wolfName: string;
   /** Conversation ID (1 = root, >1 = subagent) */
   conversationId: number;
+  /** Present under the durable runtime once the engine is open (same reader the hooks get). */
+  conversation?: ConversationReads;
 }
 
 export interface ToolResult {
@@ -48,13 +50,16 @@ export interface Section {
   /** Section identifier (used in system prompt) */
   name: string;
   /** Render function - return undefined to omit section */
-  render: (context: SectionContext) => string | undefined;
+  render: (context: SectionContext) => string | undefined | Promise<string | undefined>;
 }
 
 export interface SectionContext {
   wolfDen: string;
   wolfName: string;
+  /** The conversation the prompt is being prepared for (pi-durable PromptInput.conversationId). */
   conversationId: number;
+  /** Present under the durable runtime once the engine is open. */
+  conversation?: ConversationReads;
 }
 
 // ─── Hook Types ────────────────────────────────────────────────────────────
@@ -87,6 +92,8 @@ export interface ConversationMessage {
 /** The hook's conversation, read from the durable store. */
 export interface ConversationReads {
   classify(): Promise<ConversationClass | undefined>;
+  /** Classify another conversation of this wolf (binding resolves a task through its owner). */
+  classifyOther?(conversationId: number): Promise<ConversationClass | undefined>;
   /** Own messages with entry id > `afterEntryId`, oldest first (a fork's inherited history is excluded). */
   messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
   /** Run `fn` once when the engine closes (to clear timers). */
@@ -274,7 +281,7 @@ export function defineTool(tool: Tool): Tool {
  */
 export function section(
   name: string,
-  render: (context: SectionContext) => string | undefined
+  render: (context: SectionContext) => string | undefined | Promise<string | undefined>
 ): Section {
   return { name, render };
 }

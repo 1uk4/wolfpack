@@ -62,11 +62,22 @@ export function adaptToDurable(
       description: tool.description,
       parameters: tool.parameters,
       async execute(args, api) {
+        const conversationId = Number(api.conversationId);
+        const reader = conversationReaderFor(wolfDen);
         const context: ToolContext = {
           cwd: wolfDen,
           wolfDen,
           wolfName,
-          conversationId: Number(api.conversationId),
+          conversationId,
+          ...(reader
+            ? {
+                conversation: {
+                  classify: () => reader.classify(conversationId),
+                  classifyOther: (id: number) => reader.classify(id),
+                  messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+                },
+              }
+            : {}),
         };
         return toDurableResult(await tool.execute(args, context));
       },
@@ -75,11 +86,23 @@ export function adaptToDurable(
 
   // Adapt sections
   const sections = (ext.sections ?? []).map((sec) =>
-    piSection(sec.name, () => {
+    piSection(sec.name, (input) => {
+      // pi-durable renders sections per request with PromptInput.conversationId: the conversation being prompted.
+      const conversationId = Number(input.conversationId);
+      const reader = conversationReaderFor(wolfDen);
       const context: SectionContext = {
         wolfDen,
         wolfName,
-        conversationId: 1, // Sections are always root context
+        conversationId,
+        ...(reader
+          ? {
+              conversation: {
+                classify: () => reader.classify(conversationId),
+                classifyOther: (id: number) => reader.classify(id),
+                messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+              },
+            }
+          : {}),
       };
       return sec.render(context);
     })
@@ -102,6 +125,7 @@ export function adaptToDurable(
               ? {
                   conversation: {
                     classify: () => reader.classify(conversationId),
+                    classifyOther: (id) => reader.classify(id),
                     messagesSince: (after) => reader.messagesSince(conversationId, after),
                     onEngineClose: (fn) => reader.onClose(fn),
                     hostConsolidationTimer: reader.hostConsolidationTimer === true,

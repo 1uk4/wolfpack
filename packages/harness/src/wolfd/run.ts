@@ -220,7 +220,7 @@ function memoryExtensionInstalled(installed: readonly Extension[]): boolean {
  * wolfd selects by name, so it must name the extension tools too or the model is never offered them.
  */
 export function withExtensionTools(configured: readonly string[], registered: readonly string[]): string[] {
-  return [...new Set([...configured, ...registered])];
+  return [...new Set([...configured, ...registered])].sort();
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */

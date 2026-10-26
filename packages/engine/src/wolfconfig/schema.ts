@@ -6,7 +6,7 @@
  *   id: ddkyhT              # optional, defaults to name
  *   name: 1uk4              # required
  *   domains: [personal]     # default []
- *   tools: [coding]         # capability: tool registry names (default ["coding"])
+ *   tools: [coding]         # capability: built-in tool registry names (default ["coding"]); does NOT limit tools from `extensions`
  *   tiers:                  # capability: per-tier overrides on the models file
  *     fast: { model: claude-sonnet-5-5, thinking: low }
  *   workspace: ~/Code/x     # capability: home-thread cwd (default: the wolf's dir)

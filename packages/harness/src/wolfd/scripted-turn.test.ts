@@ -75,6 +75,7 @@ describe("scripted model turns", () => {
     });
     await tw.submit("ping");
     expect(offered).toEqual(expect.arrayContaining(["bash", "read", "write", "edit", "task_bind"]));
+    expect(new Set(offered).size).toBe(offered.length);
   });
 
   it("memory routes say the extension is not loaded (versus inert) when it is absent", async () => {

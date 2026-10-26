@@ -86,11 +86,23 @@ export function adaptToDurable(
 
   // Adapt sections
   const sections = (ext.sections ?? []).map((sec) =>
-    piSection(sec.name, () => {
+    piSection(sec.name, (input) => {
+      // pi-durable renders sections per request with PromptInput.conversationId: the conversation being prompted.
+      const conversationId = Number(input.conversationId);
+      const reader = conversationReaderFor(wolfDen);
       const context: SectionContext = {
         wolfDen,
         wolfName,
-        conversationId: 1, // Sections are always root context
+        conversationId,
+        ...(reader
+          ? {
+              conversation: {
+                classify: () => reader.classify(conversationId),
+                classifyOther: (id: number) => reader.classify(id),
+                messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+              },
+            }
+          : {}),
       };
       return sec.render(context);
     })

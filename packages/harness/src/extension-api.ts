@@ -50,13 +50,16 @@ export interface Section {
   /** Section identifier (used in system prompt) */
   name: string;
   /** Render function - return undefined to omit section */
-  render: (context: SectionContext) => string | undefined;
+  render: (context: SectionContext) => string | undefined | Promise<string | undefined>;
 }
 
 export interface SectionContext {
   wolfDen: string;
   wolfName: string;
+  /** The conversation the prompt is being prepared for (pi-durable PromptInput.conversationId). */
   conversationId: number;
+  /** Present under the durable runtime once the engine is open. */
+  conversation?: ConversationReads;
 }
 
 // ─── Hook Types ────────────────────────────────────────────────────────────
@@ -278,7 +281,7 @@ export function defineTool(tool: Tool): Tool {
  */
 export function section(
   name: string,
-  render: (context: SectionContext) => string | undefined
+  render: (context: SectionContext) => string | undefined | Promise<string | undefined>
 ): Section {
   return { name, render };
 }

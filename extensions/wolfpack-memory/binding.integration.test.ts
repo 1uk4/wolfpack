@@ -255,4 +255,48 @@ describe("per-conversation binding", () => {
     expect(readBindingFile(s.den, 1)).toBeNull();
     expect((await tool(s, 1, "task_current")).text).not.toContain(s.taskB);
   });
+
+  it("each conversation's active_task section shows its own lineage binding; task_done reports a refused rebind", async () => {
+    const s = await setup(1);
+    const { den } = s;
+    const reader = conversationReaderFor(den)!;
+    const h = tw!.wolf.engine.harness;
+    const root = (await h.conversation(1 as never, ctx))!;
+    const agent = { model: { provider: tw!.scripted.provider, modelId: tw!.scripted.modelId }, tools: [] as never[] };
+    await tw!.submit(say("MARK_SEED"));
+    const newest = (await root.entries({ order: "descending" }, 1, undefined, ctx)).items[0];
+    const fork = Number((await root.fork(newest.id, { ownership: { kind: "ownerless" }, agent }, ctx)).id);
+    const root2 = Number((await h.createConversation({ ownership: { kind: "ownerless" }, agent }, ctx)).id);
+    const root3 = Number((await h.createConversation({ ownership: { kind: "ownerless" }, agent }, ctx)).id);
+    const taskId = await h.commit((tx) => tx.createTask(Park, {}, { ownership: { kind: "conversation" }, conversationId: root2 as never }), ctx);
+    const sub = Number((await h.createConversation({ ownership: { kind: "task", taskId }, agent }, ctx)).id);
+
+    await tool(s, 1, "task_bind", { id: s.taskA });
+    await tool(s, root2, "task_bind", { id: s.taskB });
+    // Render exactly as the adapter does: sections get the prompted conversation's id and reader.
+    const section = (cid: number) => s.tasks.sections!.find((x) => x.name === "active_task")!.render({
+      wolfDen: den, wolfName: "testwolf", conversationId: cid, conversation: toolCtx(s, cid).conversation,
+    }) as Promise<string>;
+    // The item a section presents as active: the "← active" line, or "Bound to X (loading...)" when the per-wolf
+    // cache holds another conversation's item.
+    const activeOf = async (cid: number) => {
+      const t = await section(cid);
+      return t.match(/\[(work-[^\]]+)\][^\n]*← active/)?.[1] ?? t.match(/Bound to (\S+) \(loading/)?.[1] ?? (t.includes("No work item bound") ? "none" : t);
+    };
+    expect(await activeOf(1)).toBe(s.taskA);
+    expect(await activeOf(fork)).toBe(s.taskA); // fork: lineage binding
+    expect(await activeOf(root2)).toBe(s.taskB);
+    expect(await activeOf(sub)).toBe(s.taskB); // task conversation: its owner's (root2) lineage
+    expect(await activeOf(root3)).toBe("none");
+    expect(reader).toBeDefined();
+
+    // task_done: the next sibling is held by another root -> refusal surfaced, no stale binding.
+    await tool(s, root3, "task_bind", { id: s.taskA }).then((r) => expect(r.text).toContain("bound in thread 1"));
+    const done = await tool(s, root2, "task_done", { confirm: false, bindNext: true });
+    expect(done.text).not.toContain("Bound to next");
+    // taskB is root2's item; its only open sibling taskA is held by thread 1
+    expect(done.text).toMatch(/Not bound to next .*bound in thread 1/);
+    expect(readBindingFile(den, root2)).toBeNull();
+    expect(readBindingFile(den, 1)!.workId).toBe(s.taskA);
+  });
 });

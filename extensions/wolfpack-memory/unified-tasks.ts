@@ -129,7 +129,7 @@ async function writeBinding(scope: BindingScope, taskId: string, domain: string,
   if (isSubagent()) return SUBAGENT_NO_BIND;
   const { root, readOnly } = await resolveBindingRoot(scope);
   if (readOnly) return TASK_CONV_NO_BIND;
-  migrateLegacyBinding(scope.wolfDen);
+  migrateLegacyBinding(scope.wolfDen, root);
   const holder = findHolder(scope.wolfDen, taskId, root);
   if (holder !== undefined) return `${taskId} is ${heldMessage(holder)}.`;
   writeBindingFile(scope.wolfDen, root, {
@@ -141,12 +141,16 @@ async function writeBinding(scope: BindingScope, taskId: string, domain: string,
   return null;
 }
 
-async function clearBinding(scope: BindingScope): Promise<void> {
-  if (isSubagent()) return;
+/** Clears the lineage binding. Returns false when it could not (task conversation or subagent: read-only). */
+async function clearBinding(scope: BindingScope): Promise<boolean> {
+  if (isSubagent()) return false;
   const { root, readOnly } = await resolveBindingRoot(scope);
-  if (readOnly) return;
+  if (readOnly) return false;
   if (existsSync(bindingFile(scope.wolfDen, root))) writeBindingFile(scope.wolfDen, root, null);
+  return true;
 }
+
+const STAYS_BOUND = "It stays bound in the owner thread: task conversations don't unbind.";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -348,12 +352,11 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context
-      section("active_task", () => {
+      section("active_task", async (sc) => {
         if (isSubagent()) return "";
         try {
-          // Sections render as the root conversation (the adapter gives them no conversation id).
-          migrateLegacyBinding(wolfDen);
-          const stored = readBindingFile(wolfDen, 1);
+          // Per conversation: a fork shows its lineage's binding, a task conversation its owner's (read-only).
+          const { binding: stored } = await readConversationBinding({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation });
           const binding: ActiveBinding | null = stored
             ? { taskId: stored.workId, domain: stored.domain, boundAt: stored.boundAt, ...(stored.featureId ? { featureId: stored.featureId } : {}) }
             : null;
@@ -361,8 +364,9 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
 
+          // The cache is one file per wolf: use it only when it is for THIS conversation's item.
           const cached = readCache();
-          if (!cached) {
+          if (!cached || cached.task.id !== binding.taskId) {
             return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
           }
 
@@ -694,7 +698,8 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             // One at a time, reading the binding file inside: parallel creates see each other's binding.
             reply += await bindSerial(async () => {
               const bindInput = { kind: args.kind, assignee: input.assignee, wolf: ctx.wolfName, bound: !!(await readBinding(ctx)), bind: args.bind };
-              if (isSubagent() || (await resolveBindingRoot(ctx)).readOnly) return ""; // a subagent / task conversation never binds
+              if (isSubagent()) return ""; // a subagent never binds
+              if ((await resolveBindingRoot(ctx)).readOnly) return `\nNot bound: ${TASK_CONV_NO_BIND}`;
               if (!shouldBindOnCreate(bindInput)) return `\nNot bound: ${notBoundReason(bindInput)}.`;
               const refused = await writeBinding(ctx, result.item.id, args.domain, await recordFeatureId(client, result.item));
               if (refused) return `\nNot bound: ${refused}`;
@@ -819,6 +824,8 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                 await writeCache(moved);
                 binding = await readBinding(ctx);
                 reply += "\nNothing was bound, so it is bound now: what you learn goes to its Record.";
+              } else {
+                reply += `\nNot bound: ${refused}`;
               }
             }
             return {
@@ -906,26 +913,41 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                 result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
                 result.push(readyBoundReply(shippedItem));
               } else {
-                await clearBinding(ctx);
-                clearCache();
+                if (await clearBinding(ctx)) clearCache();
+                else result.push(STAYS_BOUND);
               }
             } else {
               const siblings = bindNext ? await getChildren(binding.domain, realFeature.id as string) : [];
               const next = siblings.find(s => s.id !== binding.taskId && !isComplete(s));
               if (next) {
-                await writeBinding(ctx, next.id, binding.domain, await recordFeatureId(client, next));
-                await writeCache(next);
-                await syncFeatureStage(client, next).catch(() => {});
-                result.push(`Bound to next: [${next.id}] ${next.title}`);
+                const refused = await writeBinding(ctx, next.id, binding.domain, await recordFeatureId(client, next));
+                if (refused) {
+                  // Nothing was written: don't leave the binding on the finished item.
+                  if (await clearBinding(ctx)) {
+                    clearCache();
+                    result.push(`Not bound to next [${next.id}]: ${refused} Unbound.`);
+                  } else result.push(`Not bound to next [${next.id}]: ${refused} ${STAYS_BOUND}`);
+                } else {
+                  await writeCache(next);
+                  await syncFeatureStage(client, next).catch(() => {});
+                  result.push(`Bound to next: [${next.id}] ${next.title}`);
+                }
               } else if (readyToGraduate(realFeature, all)) {
-                await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
-                await writeCache(realFeature);
-                result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
-                result.push(readyBoundReply(realFeature));
-              } else {
-                await clearBinding(ctx);
+                const refused = await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
+                if (refused) {
+                  if (await clearBinding(ctx)) clearCache();
+                  result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                } else {
+                  await writeCache(realFeature);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                  result.push(readyBoundReply(realFeature));
+                }
+              } else if (await clearBinding(ctx)) {
                 clearCache();
                 result.push("No more tasks in this feature. Unbound.");
+              } else {
+                result.push(`No more tasks in this feature. ${STAYS_BOUND}`);
               }
             }
 
@@ -1190,11 +1212,11 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             await unlink(file).catch(() => { /* used once */ });
 
             const binding = await readBinding(ctx);
-            if (binding && done.archived.includes(binding.taskId)) {
-              await clearBinding(ctx);
-              clearCache();
-            }
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
+            if (binding && done.archived.includes(binding.taskId)) {
+              if (await clearBinding(ctx)) clearCache();
+              else result.push(STAYS_BOUND);
+            }
             try {
               const all = await client.query({ domain: preview.domain });
               const item = all.find((i) => i.id === args.id);

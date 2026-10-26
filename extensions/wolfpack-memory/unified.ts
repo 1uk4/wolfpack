@@ -386,7 +386,7 @@ export default function createMemoryExtension(
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
-      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx)); // re-read every chunk, never cached;
+      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx)); // re-read every chunk, never cached
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;
       at = last ? next.lastEntryId : chunkEntryId(chunk.id);

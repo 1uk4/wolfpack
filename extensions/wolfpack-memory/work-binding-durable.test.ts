@@ -42,7 +42,7 @@ const readBoundTask = (d: string) => readBound({ wolfDen: d, conversationId: 1 }
 const tool = (name: string) => ext.tools!.find((t) => t.name === name)!;
 const run = async (name: string, args: Record<string, unknown> = {}) =>
   (await tool(name).execute(args, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 })).content[0].text;
-const sectionText = (name: string) => ext.sections!.find((s) => s.name === name)!.render({} as any) as string;
+const sectionText = (name: string) => ext.sections!.find((s) => s.name === name)!.render({ wolfDen: den, wolfName: "1uk4", conversationId: 1 } as any) as Promise<string>;
 
 beforeEach(() => {
   den = mkdtempSync(join(tmpdir(), "bind-d-"));
@@ -63,8 +63,8 @@ afterEach(() => {
 describe("durable task tools: binding", () => {
   it("has bind, unbind and current; the section says where learning goes while unbound", async () => {
     for (const t of ["task_bind", "task_unbind", "task_current"]) expect(tool(t)).toBeDefined();
-    expect(sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
-    expect(sectionText("task_tools")).not.toContain("workItem");
+    expect(await sectionText("active_task")).toContain("No work item bound: what you learn now goes to den topics, not to a work item. Bind the item you're working on (task_bind).");
+    expect(await sectionText("task_tools")).not.toContain("workItem");
   });
 
   it("task_create binds a new task when nothing is bound (feature = a real parent), and not twice", async () => {
@@ -132,10 +132,10 @@ describe("durable task tools: subagent sessions (PI_SUBAGENT_AGENT)", () => {
     const sub = createTasksExtension({}, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {} });
     const call = async (name: string, args: Record<string, unknown> = {}) =>
       sub.tools!.find((t) => t.name === name)!.execute(args, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
-    const section = (name: string) => sub.sections!.find((s) => s.name === name)!.render({} as any) as string;
+    const section = (name: string) => sub.sections!.find((s) => s.name === name)!.render({ wolfDen: den, wolfName: "1uk4", conversationId: 1 } as any) as Promise<string>;
 
-    expect(section("active_task")).toBe("");
-    expect(section("task_tools")).not.toContain("Work item binding");
+    expect(await section("active_task")).toBe("");
+    expect(await section("task_tools")).not.toContain("Work item binding");
     for (const [tool, args] of [["task_bind", { id: mine.id }], ["task_unbind", {}]] as const) {
       const r = await call(tool, args);
       expect(r.isError, tool).toBe(true);
@@ -166,8 +166,8 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(last.split("\n").at(-1)).toBe("Bound to F (all tasks done — ready to graduate)");
     expect(last).toContain("Tell the user");
     expect(await readBoundTask(den)).toEqual({ taskId: f.id, featureId: f.id });
-    expect(sectionText("active_task")).toContain(readyLine);
-    expect(sectionText("active_task")).toContain("**Feature:** [");
+    expect(await sectionText("active_task")).toContain(readyLine);
+    expect(await sectionText("active_task")).toContain("**Feature:** [");
     // task_done does not ship the feature
     const again = await tool("task_done").execute({ confirm: false }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
     expect(again.isError).toBe(true);
@@ -186,7 +186,7 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(r.split("\n").at(-1)).toBe("Bound to Stray (shipped — ready to graduate)");
     expect(r).not.toContain("Bound to next");
     expect(await readBoundTask(den)).toEqual({ taskId: s.id });
-    expect(sectionText("active_task")).toContain("Bound to Stray — shipped, ready to graduate (press g / task_graduate)");
+    expect(await sectionText("active_task")).toContain("Bound to Stray — shipped, ready to graduate (press g / task_graduate)");
   });
 });
 

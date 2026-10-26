@@ -6,7 +6,7 @@
  * binding. A task-owned conversation (subagent) resolves through its owner's lineage and is read-only: it sees the
  * binding but never writes it. Always read from disk, never cached.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConversationClass, ConversationReads } from "@wolfpack/harness/extension";
 
@@ -57,15 +57,23 @@ export function readBindingFile(den: string, cid: number): StoredBinding | null 
 
 /** The binding for this conversation (through its lineage), read fresh. Null when unbound. */
 export async function readConversationBinding(scope: BindingScope): Promise<{ binding: StoredBinding | null; root: number; readOnly: boolean }> {
-  migrateLegacyBinding(scope.wolfDen);
   const { root, readOnly } = await resolveBindingRoot(scope);
+  migrateLegacyBinding(scope.wolfDen, root);
   return { binding: readBindingFile(scope.wolfDen, root), root, readOnly };
 }
 
 export function writeBindingFile(den: string, cid: number, b: StoredBinding | null): void {
   const file = bindingFile(den, cid);
   mkdirSync(join(conversationsDir(den), String(cid)), { recursive: true });
-  writeFileSync(file, b ? JSON.stringify(b, null, 2) : "null");
+  // Temp file + rename: a concurrent reader sees the old or the new binding, never a half-written one.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, b ? JSON.stringify(b, null, 2) : "null");
+    renameSync(tmp, file);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* already gone */ }
+    throw err;
+  }
 }
 
 /** Another lineage root on this wolf that holds `workId`, or undefined. */
@@ -80,19 +88,22 @@ export function findHolder(den: string, workId: string, exceptRoot: number): num
   return undefined;
 }
 
-export const heldMessage = (holder: number) => `bound in thread ${holder}`;
+export const heldMessage = (holder: number) => `bound in thread ${holder} (release it there with task_unbind)`;
 
 /**
  * The durable runtime used to keep one per-wolf `<den>/tasks/active.json` ({taskId,...}). Migrate it once to the root
- * conversation (cid 1) in the new shape, then rename it to `active.json.migrated` (kept, never re-read).
+ * lineage root of the first conversation that looks (`root`) in the new shape, then rename it to
+ * `active.json.migrated` (kept, never re-read). If that root already has a binding the legacy one is dropped, logged.
  */
-export function migrateLegacyBinding(den: string): void {
+export function migrateLegacyBinding(den: string, root: number): void {
   const legacy = join(den, "tasks", "active.json");
   if (!existsSync(legacy)) return;
   try {
     const old = JSON.parse(readFileSync(legacy, "utf-8")) as { taskId?: string; domain?: string; boundAt?: string; featureId?: string } | null;
-    if (old?.taskId && !readBindingFile(den, 1)) {
-      writeBindingFile(den, 1, {
+    if (old?.taskId && readBindingFile(den, root)) {
+      console.warn(`[memory] legacy binding ${old.taskId} dropped: conversation ${root} already has a binding (kept in ${legacy}.migrated)`);
+    } else if (old?.taskId) {
+      writeBindingFile(den, root, {
         workId: old.taskId,
         domain: old.domain ?? "",
         boundAt: old.boundAt ?? new Date().toISOString(),

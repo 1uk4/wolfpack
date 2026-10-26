@@ -29,7 +29,11 @@ export interface SnapshotOptions {
   devRoot: string;
   /** Replace a previous snapshot (only dirs that carry a snapshot manifest are ever replaced). */
   force?: boolean;
-  /** Include session.sqlite (+ wal/shm, backups). Off: a live sqlite copy is inconsistent and large. */
+  /**
+   * Include session.sqlite (+ wal/shm, backups) TOGETHER with the conversation-keyed den state that refers to its
+   * conversation ids (bindings, pool, watermarks). Off (default): a live sqlite copy is inconsistent and large, and
+   * that state is meaningless without it, so it is dropped too (see DEN_STATE_EXCLUDES).
+   */
   includeSessions?: boolean;
   /** ssh identity file for remote parts. */
   sshIdentity?: string;
@@ -42,6 +46,8 @@ export interface SnapshotManifest {
   source: SnapshotSource;
   counts: { ledgerEvents: number; workItems: number; opsFiles: number; denFiles: number };
   includeSessions: boolean;
+  /** Den paths (relative to the den root; trailing * = prefix) left out of this snapshot. */
+  excluded: string[];
 }
 
 /** `host:/path` or `user@host:/path`; anything starting with / . ~ is a local path. */
@@ -51,6 +57,13 @@ export function isRemoteSpec(spec: string): boolean {
 }
 
 const SESSION_EXCLUDES = ["session.sqlite*", "session-backups", "backups"];
+
+/**
+ * Den state keyed by conversation ids or fed from the live observation pool. Conversation ids are meaningless once
+ * session.sqlite is gone (the sandbox's fresh conversation 1 would inherit a live work binding and pool), so these are
+ * dropped with it. `.memory/sessions/` (per-wolf session topics) is NOT conversation-keyed and stays.
+ */
+export const DEN_STATE_EXCLUDES = ["factory/conversations", "tasks/active.json*", ".memory/pool", ".memory/watermarks"];
 
 function walkFiles(dir: string): string[] {
   const out: string[] = [];
@@ -65,6 +78,12 @@ function walkFiles(dir: string): string[] {
 
 function matchesExclude(name: string, patterns: string[]): boolean {
   return patterns.some((p) => (p.endsWith("*") ? name.startsWith(p.slice(0, -1)) : name === p));
+}
+
+/** Den filter: session stores match on the top-level name; state paths match the whole relative path (dirs prune their subtree). */
+function denExcluded(rel: string, sessionExcludes: string[], stateExcludes: string[]): boolean {
+  const posix = rel.split(sep).join("/");
+  return matchesExclude(posix.split("/")[0], sessionExcludes) || matchesExclude(posix, stateExcludes);
 }
 
 /** Copy a tree, never following symlinks out of it (links are skipped). `filter` sees paths relative to src. */
@@ -101,6 +120,8 @@ export function rsyncArgv(spec: string, dest: string, rules: string[], identity?
 export const RSYNC_RULES = {
   ledger: ["--include=/ledger/", "--include=/ledger/work-events.jsonl", "--exclude=*"],
   workMd: ["--include=/domains/", "--include=/domains/*/", "--include=/domains/*/work/", "--include=/domains/*/work/*.md", "--exclude=*"],
+  /** Anchored to the den root, so a same-named path deeper in the tree is untouched. */
+  denState: DEN_STATE_EXCLUDES.map((e) => `--exclude=/${e}`),
   ops: ["--include=/inbox/", "--include=/inbox/**", "--include=/receipts/", "--include=/receipts/**", "--include=/parked/", "--include=/parked/**", "--exclude=*"],
 } as const;
 
@@ -156,7 +177,8 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
   }
   mkdirSync(devRoot, { recursive: true });
 
-  const denExcludes = opts.includeSessions ? [] : SESSION_EXCLUDES;
+  const sessionExcludes = opts.includeSessions ? [] : SESSION_EXCLUDES;
+  const stateExcludes = opts.includeSessions ? [] : DEN_STATE_EXCLUDES;
   const ledgerRel = (rel: string, _isDir?: boolean) => rel === "ledger" || rel === join("ledger", "work-events.jsonl");
   const isWorkMd = (rel: string, isDir: boolean) => {
     const parts = rel.split(sep);
@@ -183,9 +205,9 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
     copyLocal(source.opsDir, paths.kbOps, opsLane);
   }
   if (isRemoteSpec(source.denDir)) {
-    copyRemote(source.denDir, paths.den, denExcludes.map((e) => `--exclude=${e}`), opts.sshIdentity);
+    copyRemote(source.denDir, paths.den, [...stateExcludes.map((e) => `--exclude=/${e}`), ...sessionExcludes.map((e) => `--exclude=${e}`)], opts.sshIdentity);
   } else {
-    copyLocal(source.denDir, paths.den, (rel) => !matchesExclude(rel.split(sep)[0], denExcludes));
+    copyLocal(source.denDir, paths.den, (rel) => !denExcluded(rel, sessionExcludes, stateExcludes));
   }
   // A torn line is never valid JSON; an empty ledger must still exist so the work server starts clean.
   mkdirSync(join(devRoot, "ledger"), { recursive: true });
@@ -207,6 +229,7 @@ export function takeSnapshot(opts: SnapshotOptions): SnapshotManifest & { paths:
       denFiles: walkFiles(paths.den).length,
     },
     includeSessions: !!opts.includeSessions,
+    excluded: [...sessionExcludes, ...stateExcludes],
   };
   writeFileSync(paths.manifest, JSON.stringify(manifest, null, 2) + "\n");
   return { ...manifest, paths };

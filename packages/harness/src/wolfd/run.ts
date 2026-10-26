@@ -16,7 +16,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
-import { assertSandboxed, loadModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
+import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
   openWolfEngine,
   resolveToolNames,
@@ -112,14 +112,16 @@ async function startConfigured(
 ): Promise<RunningWolf> {
   if (config.sandbox) assertSandboxed(config.sandbox.root, { den: config.den, ...(sandbox ? { kbOps: sandbox.resolved.kbOps, kbDenLocal: sandbox.resolved.kbDenLocal, workEndpoint: sandbox.resolved.workEndpoint } : {}) });
 
-  const { table } = loadModelTable({ env, wolfYaml: config.file });
+  const { table: fileTable } = loadModelTable({ env, wolfYaml: config.file });
+  // The wolf's table: models file + wolf.yaml `tiers:`. Handed to extensions so memory's engine steps use the same models.
+  const table = applyWolfTierOverrides(fileTable, config);
   const model = resolveWolfModel(config, "main", table);
   const { extensions: toolExtensions, tools } = resolveToolNames(config.capability.tools);
   const extra = typeof opts.extraExtensions === "function" ? opts.extraExtensions({ config, den: config.den, env, ...(sandbox ? { sandbox } : {}) }) : (opts.extraExtensions ?? []);
   // The wolf's configured extensions, through the same loader createWolfHarness uses. This runs AFTER the sandbox
   // redirect (config.den and env are the sandbox's) and the assertSandboxed gate above, so the extensions' own
   // fail-closed gates (memoryGate) see the effective den/env.
-  const loaded = await loadConfiguredExtensions(config, env, extra, log);
+  const loaded = await loadConfiguredExtensions(config, env, table, extra, log);
   const extensions = [...toolExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
@@ -181,10 +183,13 @@ async function startConfigured(
  * memory extension never get a second observer, consolidation timer or set of routes.
  * wolfd has no host timer, so the memory extension's own consolidation timer is the one timer; the engine attaches the
  * one conversation reader.
+ * Nothing is started here: the memory factory only builds closures (its timer starts lazily on the first observation
+ * and stops with the engine), so a later extension failing leaves nothing running to tear down; startWolf's catch
+ * restores the env and closes the sandbox.
  * A missing extension is a warning (as in createWolfHarness); one that is present but fails to build (a gate refusing
  * a misconfigured sandbox, a broken bundle) refuses to start the wolf rather than booting quietly without it.
  */
-async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, extra: readonly Extension[], log: (line: string) => void): Promise<Extension[]> {
+async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, modelTable: ModelTable, extra: readonly Extension[], log: (line: string) => void): Promise<Extension[]> {
   const names = withoutProvided(config.extensions, extra);
   if (names.length === 0) return [];
   const blocks: Record<string, unknown> = { ...config.extensionConfig };
@@ -196,9 +201,10 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
     runtime: "pi-durable",
     wolfConfig: { name: config.identity.name, domains: config.identity.domains, ...blocks, ...(config.sandbox ? { sandbox: config.sandbox } : {}) },
     env,
+    modelTable,
   });
   reportLoad(result, { info: log, warn: (l) => log(`warning: ${l}`) });
-  const broken = result.failed.filter((f) => !f.error.startsWith("Not found:"));
+  const broken = result.failed.filter((f) => !f.notFound);
   if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
   return result.extensions;
 }

@@ -321,7 +321,7 @@ export default function createTasksExtension(
   }
   function graduationEngine(): Engine {
     if (config.engine) return config.engine();
-    const t = loadModelTable().table;
+    const t = context.modelTable ?? loadModelTable({ env }).table;
     const apiKey = t.tiers.smart.provider === "anthropic" ? env.ANTHROPIC_API_KEY : undefined;
     return createEngine({
       provider: t.tiers.smart.provider,

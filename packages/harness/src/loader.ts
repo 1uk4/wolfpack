@@ -38,6 +38,8 @@ export interface LoaderConfig {
   wolfConfig: Record<string, unknown>;
   /** Effective env handed to extension factories (sandbox redirect applied). Default: process.env. */
   env?: NodeJS.ProcessEnv;
+  /** The wolf's resolved model table (see ExtensionContext.modelTable). */
+  modelTable?: ExtensionContext["modelTable"];
   /** Shared telegram state (if telegram is enabled) */
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
@@ -66,7 +68,7 @@ export interface LoadResult {
   /** Successfully loaded extensions (adapted to runtime) */
   extensions: PiDurableExtension[];
   /** Extensions that failed to load */
-  failed: Array<{ name: string; error: string }>;
+  failed: Array<{ name: string; error: string; /** The extension is simply not installed (no bundle at the expected path), as opposed to broken. */ notFound?: true }>;
   /** Extensions that don't support the runtime */
   unsupported: string[];
   /** Lifecycle hooks of loaded extensions, in load order */
@@ -110,6 +112,7 @@ export async function loadExtensions(
     domains,
     wolfConfig,
     ...(config.env ? { env: config.env } : {}),
+    ...(config.modelTable ? { modelTable: config.modelTable } : {}),
     telegram: config.telegram,
     sweep: config.sweep,
   };
@@ -119,7 +122,7 @@ export async function loadExtensions(
     const extPath = join(wolfDen, "extensions", name, "index.js");
 
     if (!existsSync(extPath)) {
-      result.failed.push({ name, error: `Not found: ${extPath}` });
+      result.failed.push({ name, error: `Not found: ${extPath}`, notFound: true });
       continue;
     }
 

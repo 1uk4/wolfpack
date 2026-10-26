@@ -1,13 +1,16 @@
 /**
- * Pi-durable consolidation — pools observations directly to den topics.
+ * Pi-durable consolidation. Two modes:
  *
- * Mirrors Pi-CLI's consolidateSession but skips the session topics step:
+ * Session mode (`sessionTopics` set; what the memory extension uses, pi parity):
  *   1. Read observations from .memory/pool/observations.jsonl
- *   2. Archive den topics the KB has absorbed, then read the rest for context
- *   3. LLM consolidation (same prompt/schema as Pi-CLI)
- *   4. Write topics directly to $WOLF_DEN/memory/topics/
- *   5. Emit deltas to KB inbox (same as Pi-CLI promote)
- *   6. Archive processed observations
+ *   2. Work-tagged observations feed their item's Record (those that fall back, or are untagged, continue)
+ *   3. LLM consolidation (pi's session prompt) into session topics under .memory/sessions/<id>/
+ *   4. Archive the processed observations. No den write and no claims: promoteSessionTopics later moves session
+ *      topics to the den and emits distilled contributions to the KB inbox.
+ *
+ * Legacy mode (no `sessionTopics`): pool straight to the den, then deltas to the KB inbox:
+ *   1. Read the pool; 2. archive absorbed den topics (reconcileDen) and read the rest for context;
+ *   3. LLM consolidation; 4. write $WOLF_DEN/memory/topics/; 5. emit deltas to the KB inbox; 6. archive observations.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -28,6 +31,14 @@ import {
   readDenTopics,
   gateDenTopic,
   buildDomainContext,
+  consolidateSession,
+  readTopics,
+  readJourney,
+  writeTopic,
+  renderIndex,
+  SESSION_CONSOLIDATION_USER_PROMPT,
+  fillPromptTemplate,
+  type ConsolidateResult,
   reconcileDen,
   promoteTopics,
   consolidateWorkRecords,
@@ -35,7 +46,7 @@ import {
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
 } from "@wolfpack/memory";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 
 /** Observation stored in pool JSONL */
 export interface PoolObservation {
@@ -49,7 +60,30 @@ export interface PoolObservation {
   feature?: string;
 }
 
+/**
+ * Where a durable wolf keeps its session topics: pi's layout (`<root>/<sessionId>/<topic>.md` + INDEX.md), under the
+ * wolf's den. One session per wolf, not per run or per conversation: the observation pool is per wolf and survives
+ * restarts, so the topics folded out of it must too (a per-run id would strand unpromoted topics at every restart,
+ * and promote is an idempotent upsert, so a long-lived session is exactly what pi's own long sessions are).
+ */
+export interface SessionTopicsLocation {
+  /** The directory holding session dirs (consolidateSession's `memoryRoot`). */
+  memoryRoot: string;
+  sessionId: string;
+}
+
+export const DURABLE_SESSION_ID = "durable";
+
+export function durableSessionTopics(wolfDen: string): SessionTopicsLocation {
+  return { memoryRoot: join(wolfDen, ".memory", "sessions"), sessionId: DURABLE_SESSION_ID };
+}
+
 export interface ConsolidationConfig {
+  /**
+   * Fold the pool into session topics (pi's /wolf:consolidate) instead of straight into the den; a later
+   * promoteSessionTopics moves them to the den and the KB inbox. Omitted: the legacy pool → den path.
+   */
+  sessionTopics?: SessionTopicsLocation;
   wolfDen: string;
   wolfName: string;
   /** The wolf's resolved model table (default: loadModelTable(), i.e. the
@@ -248,6 +282,20 @@ export async function consolidatePool(
     return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending };
   }
 
+  if (config.sessionTopics) {
+    const folded = await consolidateToSessionTopics({ ...config, sessionTopics: config.sessionTopics }, engine, denObs, domainCtx);
+    await settlePool(wolfDen, [...handled, ...denObs]);
+    return {
+      observationsProcessed: handled.length + denObs.length,
+      topicsCreated: folded.created,
+      topicsMerged: folded.merged,
+      topicsSkipped: folded.skipped,
+      claimsSubmitted: 0,
+      recordsWritten,
+      observationsPending: pending,
+    };
+  }
+
   // Ensure den structure exists
   ensureDenDirs(wolfDen);
 
@@ -427,4 +475,92 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
 function defaultWorkStore(): WorkRecordStore | undefined {
   const store = new HttpWorkRecordStore();
   return store.configured ? store : undefined;
+}
+
+/** Pi's session consolidation (orchestrator.consolidatePool) over durable pool observations. */
+async function consolidateToSessionTopics(
+  config: ConsolidationConfig & { sessionTopics: SessionTopicsLocation },
+  engine: Engine,
+  observations: PoolObservation[],
+  domainCtx: string,
+): Promise<{ created: number; merged: number; skipped: number }> {
+  const { onProgress } = config;
+  const root = join(config.sessionTopics.memoryRoot, config.sessionTopics.sessionId);
+  const obsLines = observations
+    .map((o) => `${o.timestamp}${o.domain ? ` [${o.domain}]` : ""}  ${o.content}`)
+    .join("\n");
+  const existing = readTopics(root);
+  const journey = readJourney(root);
+  const existingSection =
+    existing.length > 0
+      ? existing.map((t) => `### ${t.id} — ${t.title}\nSummary: ${t.summary}\n\n${t.body}`).join("\n\n---\n\n")
+      : "(empty — no session memory yet)";
+  const prompt = fillPromptTemplate(SESSION_CONSOLIDATION_USER_PROMPT, {
+    obsLines,
+    existingSection,
+    journeyBlock: journey ? `===== CURRENT JOURNEY =====\n${journey}\n===== END JOURNEY =====\n` : "",
+  });
+  let system = CONSOLIDATE_SYSTEM;
+  if (domainCtx) {
+    system += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainCtx}`;
+  }
+
+  onProgress?.("Running LLM consolidation into session topics...");
+  const result = await engine.call("consolidate", ConsolidationResultSchema, { system, prompt });
+
+  const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+  // As pi: a dropped topic domain falls back to the batch's domain when the batch has exactly one.
+  const batchDomains = new Set(observations.map((o) => o.domain).filter(Boolean));
+  const soleDomain = batchDomains.size === 1 ? [...batchDomains][0] : undefined;
+
+  let created = 0;
+  let merged = 0;
+  let skipped = 0;
+  for (const action of result.actions) {
+    if (action.action === "skip" || !action.result) {
+      skipped++;
+      continue;
+    }
+    const r = action.result;
+    if (!isSafeSegment(r.id)) {
+      skipped++;
+      onProgress?.(`  skipped topic with unsafe id ${JSON.stringify(r.id)}`);
+      continue;
+    }
+    const isUpdate = existing.some((t) => t.id === r.id);
+    writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
+    onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
+    if (isUpdate) merged++;
+    else created++;
+  }
+  renderIndex(root);
+  onProgress?.(`Done: ${created} session topic(s) created, ${merged} updated, ${skipped} skipped`);
+  return { created, merged, skipped };
+}
+
+export interface PromoteSessionConfig {
+  wolfDen: string;
+  wolfName: string;
+  engine: Engine;
+  kbRoots?: KbRoots;
+  defaultDomain?: string;
+  onProgress?: (msg: string) => void;
+}
+
+/**
+ * Pi's promote: session topics → den topics → distilled contributions in the KB inbox. consolidateSession runs
+ * reconcileDen first (when kbRoots is set), so absorbed topics leave the den before the promote reads it.
+ */
+export function promoteSessionTopics(config: PromoteSessionConfig): Promise<ConsolidateResult> {
+  const loc = durableSessionTopics(config.wolfDen);
+  return consolidateSession({
+    engine: config.engine,
+    den: { denRoot: config.wolfDen, wolfName: config.wolfName },
+    memoryRoot: loc.memoryRoot,
+    sessionId: loc.sessionId,
+    kbRoots: config.kbRoots,
+    defaultDomain: config.defaultDomain,
+    skipClaims: false,
+    onProgress: config.onProgress,
+  });
 }

@@ -24,6 +24,7 @@ import { createFileToolsExtension } from "./extensions/file-tools.js";
 import { startLifecycles } from "./lifecycle.js";
 import { createTelegramClient, createTelegramSharedState, type TelegramClient, type TelegramSharedState } from "./telegram/index.js";
 import { consolidatePool, getPoolStats } from "./memory/consolidation.js";
+import { memoryActionsFor } from "./memory/actions.js";
 import { patchProcessEnv, startSandbox, type RunningSandbox } from "./wolfd/sandbox.js";
 import { initSweepManager, type SweepManager } from "./sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -273,7 +274,30 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         const stats = await getPoolStats(wolfDen);
         if (stats.count === 0) return;
         
-        console.log(`[memory] Timer-triggered consolidation (${stats.count} observations)`);
+        // Tick = consolidate + promote, through the memory extension's actions (shared queue, single-promote guard).
+        const actions = memoryActionsFor(wolfDen);
+        if (actions && !actions.promoteEnabled) {
+          console.log(`[memory] Timer-triggered consolidation (${stats.count} observations; session topics only, promote disabled)`);
+          await actions.consolidate();
+          return;
+        }
+        if (actions) {
+          console.log(`[memory] Timer-triggered consolidate + promote (${stats.count} observations)`);
+          const job = actions.promote();
+          if (job.status === "already_running") {
+            console.log(`[memory] Promote ${job.jobId} already running, skipping tick`);
+            return;
+          }
+          const out = await job.done;
+          const p = out.promoted;
+          console.log(`[memory] Promoted: ${p.topicsCreated} created, ${p.topicsMerged} updated, ${p.claimsSubmitted} emitted`);
+          if (telegram && (p.topicsCreated > 0 || p.topicsMerged > 0 || p.claimsSubmitted > 0)) {
+            telegram.notify(`🧠 Auto-promoted: ${out.consolidated} observations consolidated, ${p.topicsCreated} den topics created, ${p.topicsMerged} updated, ${p.claimsSubmitted} emitted to KB`);
+          }
+          return;
+        }
+
+        console.warn("[memory] No memory actions registered for this den; falling back to legacy pool→den consolidation");
         const result = await consolidatePool({
           wolfDen,
           wolfName: config.name,

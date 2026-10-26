@@ -53,6 +53,9 @@ function stubEngine(opts: { failClassifyCall?: number } = {}) {
           actions: [{ sessionTopicId: "x", action: "create", reasoning: "new", result: { id: "caching", title: "Caching", summary: "Session lookups are cached", body: "Cache session lookups for five minutes." } }],
         });
       }
+      if (step === "distill") {
+        return schema.parse({ contributions: [{ slug: "main", title: "Caching", summary: "Session lookups are cached", body: "## Details\nCache session lookups." }] });
+      }
       throw new Error(`unexpected step ${step}`);
     },
   } as unknown as Engine;
@@ -206,7 +209,7 @@ describe("full-transcript observer", () => {
     expect(await reader.classify(Number(subFork.id))).toMatchObject({ kind: "task", taskId: Number(taskId) });
   });
 
-  it("(e) the pool crossing memory.consolidation.threshold consolidates into dev den topics", async () => {
+  it("(e) the pool crossing memory.consolidation.threshold consolidates into session topics (not the den)", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startObserverWolf({
@@ -217,9 +220,10 @@ describe("full-transcript observer", () => {
     });
     expect(tw.wolf.config.memory.consolidation).toMatchObject({ threshold: 20, poolTarget: 1, trigger: "hybrid", interval: "4h" });
     await tw.submit(say("USER_ONE"));
-    const topics = join(dev, "den/memory/topics");
+    const topics = join(dev, "den/.memory/sessions/durable");
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(readFileSync(join(topics, "caching.md"), "utf8")).toContain("Cache session lookups");
+    expect(existsSync(join(dev, "den/memory/topics"))).toBe(false);
     expect(stub.steps).toContain("consolidate");
     // the archived observations left the pool
     const poolFile = join(dev, "den/.memory/pool/observations.jsonl");
@@ -293,7 +297,7 @@ describe("full-transcript observer", () => {
     expect(count(stub.text(), "A_TWO")).toBe(1);
   });
 
-  it("(i) trigger hybrid: the interval timer drains the whole pool (ignoring poolTarget), and stops on close", async () => {
+  it("(i) trigger hybrid: the interval tick consolidates + promotes the whole pool (ignoring poolTarget), and stops on close", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startTestWolf({
@@ -304,7 +308,7 @@ describe("full-transcript observer", () => {
           adaptToDurable(
             createMemoryExtension(
               { ...config.memory, engine: stub.engine, intervalMs: 100 },
-              { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env },
+              { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: tmp("kb") } },
             ),
             { wolfDen: den, wolfName: "testwolf" },
           ),
@@ -315,6 +319,7 @@ describe("full-transcript observer", () => {
     const topics = join(dev, "den/memory/topics");
     await waitFor(() => existsSync(topics) && readdirSync(topics).some((f) => f.endsWith(".md")));
     expect(stub.steps.filter((x) => x === "consolidate")).toHaveLength(1); // below threshold: only the timer ran
+    expect(readdirSync(join(dev, "ops/inbox/testwolf")).length).toBeGreaterThan(0);
     await tw.stop();
     tw = undefined;
     const n = stub.steps.length;

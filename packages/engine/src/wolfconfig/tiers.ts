@@ -74,3 +74,30 @@ export function resolveWolfModel(
     overridden: override?.model !== undefined,
   };
 }
+
+/**
+ * The model table as THIS wolf sees it: wolf.yaml `tiers:` overrides applied to every tier the table has, with the
+ * same precedence as resolveWolfModel (override > models file). Engine steps (memory classify/consolidate/distill/...)
+ * read their model from `table.tiers[STEP_TIERS[step]]`, so applying the overrides here makes them honour wolf.yaml.
+ * Pure: returns a new table.
+ */
+export function applyWolfTierOverrides(table: ModelTable, config: Pick<WolfConfig, "capability">): ModelTable {
+  const overrides = config.capability.tiers;
+  if (!overrides) return table;
+  const tiers = { ...table.tiers };
+  for (const name of Object.keys(tiers) as Tier[]) {
+    const o = overrides[name];
+    const t = tiers[name];
+    if (!o || !t) continue;
+    const model = o.model ?? t.model;
+    const thinking = isThinkingLevel(o.thinking) ? o.thinking : t.thinking;
+    const slash = t.piModel.indexOf("/");
+    tiers[name] = {
+      ...t,
+      model,
+      piModel: o.model && slash >= 0 ? `${t.piModel.slice(0, slash)}/${model}` : t.piModel,
+      ...(thinking ? { thinking } : {}),
+    };
+  }
+  return { ...table, tiers };
+}

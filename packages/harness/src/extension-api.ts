@@ -10,6 +10,7 @@
  * - Consistent tooling and bundling
  */
 import { Type } from "@earendil-works/pi-ai";
+import type { ModelTable } from "@wolfpack/engine";
 
 // Re-export Type for extension authors
 export { Type };
@@ -206,6 +207,11 @@ export interface ExtensionContext {
   wolfConfig: Record<string, unknown>;
   /** Effective env (sandbox redirect applied). Default: process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * The wolf's resolved model table (models file + wolf.yaml `tiers:` overrides). Hosts that resolve one (wolfd) hand it
+   * over so engine steps use the same models as the wolf; absent, extensions load the table from env as before.
+   */
+  modelTable?: ModelTable;
   /** Shared telegram state (if telegram is enabled) */
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */

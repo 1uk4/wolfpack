@@ -21,6 +21,7 @@ import { HttpConsoleClient } from "@wolfpack/client";
 import { ConsolidateResponseSchema, MemoryEventSchema, PROTOCOL_VERSION, type MemoryEvent } from "@wolfpack/protocol";
 import { defineExtension } from "@wolfpack/harness/extension";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
+import { memoryEventsFor } from "../../packages/harness/src/memory/events.js";
 import { createScriptedModel, fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startWolf, type RunningWolf } from "../../packages/harness/src/wolfd/run.js";
 
@@ -70,7 +71,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
   fakeUrl = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
 });
-afterAll(() => new Promise<void>((r) => fake.close(() => r())));
+afterAll(() => new Promise<void>((r) => { fake.closeAllConnections(); fake.close(() => r()); }));
 
 let wolf: RunningWolf | undefined;
 afterEach(async () => {
@@ -131,11 +132,11 @@ function wolfYaml(root: string, extra: string): string {
 }
 
 /** models.json: main on the scripted provider, smart/fast on the real anthropic adapter (answered by the fake). */
-function writeModels(root: string, scriptedTier: { model: string; provider: string }): string {
+function writeModels(root: string, scriptedTier: { model: string; provider: string }, real = "claude-haiku-5-5"): string {
   const tier = (model: string, provider: string) => ({ model, modelSource: "default", provider, piModel: `${provider}/${model}` });
   const file = join(root, "models.json");
-  const real = tier("claude-haiku-5-5", "anthropic");
-  writeFileSync(file, JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier(scriptedTier.model, scriptedTier.provider), smart: real, fast: real }, steps: {}, warnings: [] }));
+  const realTier = tier(real, "anthropic");
+  writeFileSync(file, JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier(scriptedTier.model, scriptedTier.provider), smart: realTier, fast: realTier }, steps: {}, warnings: [] }));
   return file;
 }
 
@@ -166,7 +167,7 @@ describe("wolfd loads configured extensions", { timeout: 60_000 }, () => {
     (async () => {
       for await (const e of client.watchMemory!("boot", { signal: ctl.signal })) events.push(MemoryEventSchema.parse(e));
     })().catch(() => {});
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => memoryEventsFor(den, "boot").listenerCount() > 0); // subscribed: the server registered our listener
 
     await client.submit("boot/home", say("MARK_WOLFD user words"), { whenBusy: "reject" });
     for await (const _ of client.watch("boot/home")) void _;
@@ -219,5 +220,47 @@ describe("wolfd loads configured extensions", { timeout: 60_000 }, () => {
     const logs: string[] = [];
     wolf = await startWolf({ configPath: join(root, "wolf.yaml"), env: { WOLFPACK_MODELS_FILE: models }, home: root, models: scripted.models, log: (l) => logs.push(l) });
     expect(logs.join("\n")).toMatch(/warning: Extension wolfpack-memory: Not found/);
+  });
+
+  it("wolf.yaml tiers: override the models the memory engine steps use (classify=fast, consolidate=smart)", async () => {
+    vi.stubEnv("PI_SUBAGENT_AGENT", "");
+    vi.stubEnv("ANTHROPIC_BASE_URL", fakeUrl);
+    const { dev, kb } = await sandboxRoot();
+    const root = tmp("wolf");
+    const scripted = createScriptedModel([fauxAssistantMessage(say("MARK_WOLFD"))]);
+    const models = writeModels(root, { model: scripted.modelId, provider: scripted.provider }); // file: haiku on smart and fast
+    writeFileSync(join(root, "wolf.yaml"), wolfYaml(root, `tiers:\n  fast: { model: claude-fast-override }\n  smart: { model: claude-smart-override }\nsandbox:\n  root: ${dev}\nmemory:\n  consolidation:\n    trigger: manual\n    threshold: 20\n    poolTarget: 1\n`));
+    wolf = await startWolf({ configPath: join(root, "wolf.yaml"), env: { WOLFPACK_MODELS_FILE: models, ANTHROPIC_API_KEY: "test-key", KB_BASE: kb }, home: root, models: scripted.models });
+    const client = new HttpConsoleClient({ baseUrl: wolf.url });
+    await client.submit("boot/home", say("MARK_WOLFD user words"), { whenBusy: "reject" });
+    for await (const _ of client.watch("boot/home")) void _;
+    await waitFor(() => existsSync(join(wolf!.config.den, ".memory", "pool", "observations.jsonl")));
+    expect(requests.find((r) => r.system.includes('"observations"'))!.model).toBe("claude-fast-override"); // classify -> fast
+    expect((await post(wolf.url, "consolidate")).status).toBe(200);
+    expect(requests.find((r) => r.system.includes('"actions"'))!.model).toBe("claude-smart-override"); // consolidate -> smart
+  });
+
+  it("a present extension whose factory throws aborts startWolf; env restored, sandbox and work server closed", async () => {
+    const { dev } = await sandboxRoot();
+    const root = tmp("wolf");
+    const scripted = createScriptedModel([]);
+    const models = writeModels(root, { model: scripted.modelId, provider: scripted.provider });
+    mkdirSync(join(dev, "den", "extensions", "wolfpack-memory"), { recursive: true });
+    writeFileSync(join(dev, "den", "extensions", "wolfpack-memory", "index.js"), `module.exports = { default: () => { throw new Error("gate refused: boom"); } };`);
+    writeFileSync(join(root, "wolf.yaml"), wolfYaml(root, `sandbox:\n  root: ${dev}\n`));
+    vi.stubEnv("WOLFPACK_MODELS_FILE", models); // no opts.env: startWolf patches process.env and must restore it
+    const denBefore = process.env.WOLF_DEN;
+    const workBefore = process.env.WORK_ENDPOINT;
+    let closed = 0;
+    const startWorkServer = async (o: { ledgerDir: string; token: string }) => {
+      const real = await startLocalWorkServer(o);
+      return { ...real, close: async () => { closed++; await real.close(); } };
+    };
+    await expect(startWolf({ configPath: join(root, "wolf.yaml"), home: root, models: scripted.models, startWorkServer })).rejects.toThrow(/wolfpack-memory: gate refused: boom/);
+    expect(closed).toBe(1);
+    expect(process.env.WOLF_DEN).toBe(denBefore);
+    expect(process.env.WORK_ENDPOINT).toBe(workBefore);
+    // the one-sandbox-per-process slot is free again
+    wolf = await startWolf({ configPath: join(root, "wolf.yaml"), home: root, models: scripted.models, extraExtensions: [adaptToDurable(defineExtension({ name: "wolfpack-memory", runtimes: ["pi-durable"] }), { wolfDen: "-", wolfName: "boot" })], startWorkServer });
   });
 });

@@ -310,12 +310,16 @@ export default function createMemoryExtension(
   const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;
   const consolidationTrigger = consolidation?.trigger ?? "hybrid";
 
+  // Which tier each memory step uses (fixed map, STEP_TIERS in @wolfpack/engine; wolf.yaml `tiers:` overrides apply):
+  //   fast : classify (observer), contradict, classifyToSection, matchSubject, confirmSubject, sectionSummary, labelSection
+  //   smart: consolidate, distill, workRecord (Record rewrite), produce
+  // The table is context.modelTable when the host resolved one (wolfd: models file + tiers overrides), else loaded from env.
   // Models come from the wolf's resolved table (the harness points
   // WOLFPACK_MODELS_FILE at the shipped models.json before loading us).
   // Loaded lazily so a broken table surfaces as a tool error, not a crash.
   let table: ModelTable | null = null;
   function getTable(): ModelTable {
-    if (!table) table = loadModelTable({ env: context.env ?? process.env }).table;
+    if (!table) table = context.modelTable ?? loadModelTable({ env: context.env ?? process.env }).table;
     return table;
   }
   function apiKeyFor(t: ModelTable): string | undefined {

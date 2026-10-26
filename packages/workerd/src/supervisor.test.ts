@@ -23,7 +23,9 @@ describe("backoffDelay", () => {
   });
 });
 
-describe("Supervisor (fake wolf)", () => {
+// Each case spawns real node children (fake wolf, orphans) and polls for sockets: under full-suite CPU load
+// that startup alone can approach the 5s default, which is shorter than the helpers' own 5-8s waits.
+describe("Supervisor (fake wolf)", { timeout: 20_000 }, () => {
   it("boots each wolf, exposes urls, logs to <den>/logs/wolfd.log, stops cleanly", async () => {
     const m = makeWolves("alpha", "beta");
     root = m.root;
@@ -100,7 +102,9 @@ describe("Supervisor (fake wolf)", () => {
   });
 });
 
-describe("Supervisor (socket transport, fake wolf)", () => {
+// Each case spawns real node children (fake wolf, orphans) and polls for sockets: under full-suite CPU load
+// that startup alone can approach the 5s default, which is shorter than the helpers' own 5-8s waits.
+describe("Supervisor (socket transport, fake wolf)", { timeout: 20_000 }, () => {
   let orphan: ChildProcess | undefined;
   let proxy: WorkerdServer | undefined;
   afterEach(async () => {

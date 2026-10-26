@@ -38,6 +38,7 @@ function stubEngine(): { engine: Engine; calls: string[] } {
     call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
       calls.push(step);
       if (step === "classify") return schema.parse({ observations: [{ timestamp: "2026-10-25 10:00", content: "Cache session lookups for five minutes" }] });
+      if (step === "workRecord") return schema.parse({ decisions: [{ decision: "Cache five minutes", why: "hot path" }], changes: [], findings: [], problems: [] });
       throw new Error(`unexpected step ${step}`);
     },
   } as unknown as Engine;
@@ -181,7 +182,7 @@ describe("sandbox over a snapshot", () => {
     const ctx = (env: NodeJS.ProcessEnv, den = join(dev, "den")) => ({
       wolfDen: den, wolfName: "testwolf", domains: [], wolfConfig: { sandbox: { root: dev } }, env,
     });
-    const goodEnv = { KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1/work" };
+    const goodEnv = { KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1" };
     expect(() => createMemoryExtension({}, ctx(goodEnv))).not.toThrow();
     expect(() => createMemoryExtension({}, ctx({ ...goodEnv, KB_OPS: join(live.root, "ops") }))).toThrow(/kbOps .* outside the dev root/);
     expect(() => createMemoryExtension({}, ctx({ ...goodEnv, KB_OPS: undefined }))).toThrow(/not set/);
@@ -192,13 +193,57 @@ describe("sandbox over a snapshot", () => {
 });
 
 describe("sandbox: KB_BASE and task tools", () => {
+  it("a Record write goes to the snapshot ledger via context.env, never the ambient WORK_ENDPOINT", async () => {
+    const live = await liveFixture();
+    const before = hashTree(live.root);
+    const dev = join(tmp("dev"), "snap");
+    takeSnapshot({ source: live.source, devRoot: dev });
+    const { engine } = stubEngine();
+    const ambient = { e: process.env.WORK_ENDPOINT, t: process.env.WORK_TOKEN };
+    process.env.WORK_ENDPOINT = "http://127.0.0.1:9"; // a "live" endpoint that must never be used
+    process.env.WORK_TOKEN = "live-token";
+    try {
+      let mem: ReturnType<typeof createMemoryExtension> | undefined;
+      tw = await startTestWolf({
+        script: [fauxAssistantMessage("ok")],
+        yaml: `sandbox:\n  root: ${dev}\n`,
+        hooks: {
+          extensions: ({ config, den, env }) => {
+            mem = createMemoryExtension({ engine }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env });
+            return [];
+          },
+        },
+      });
+      const sb = tw.wolf.sandbox!;
+      // Process env now carries the sandbox patch; make the ambient one wrong again to prove context.env is used.
+      process.env.WORK_ENDPOINT = "http://127.0.0.1:9";
+      const created = await (await fetch(`${sb.resolved.workEndpoint}/work`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": sb.env.WORK_TOKEN },
+        body: JSON.stringify({ kind: "feature", domain: "wolfpack", title: "rec feature", assignee: "owner" }),
+      })).json() as { id: string };
+      const pool = join(tw.wolf.config.den, ".memory", "pool");
+      mkdirSync(pool, { recursive: true });
+      writeFileSync(join(pool, "observations.jsonl"), JSON.stringify({ timestamp: "2026-10-25 10:00", content: "Cache session lookups", work: created.id, recordedAt: "2026-10-25T10:00:00Z" }) + "\n");
+      const tool = mem!.tools!.find((t) => t.name === "memory_consolidate")!;
+      const res = await tool.execute({}, { cwd: dev, wolfDen: tw.wolf.config.den, wolfName: "testwolf", conversationId: 1 });
+      expect(res.isError).toBeFalsy();
+      const body = await (await fetch(`${sb.resolved.workEndpoint}/work/${created.id}`, { headers: { "X-API-Key": sb.env.WORK_TOKEN } })).json() as { body?: string; item?: { body?: string } };
+      expect(JSON.stringify(body)).toContain("Cache five minutes");
+      expect(hashTree(live.root)).toEqual(before);
+    } finally {
+      if (ambient.e === undefined) delete process.env.WORK_ENDPOINT; else process.env.WORK_ENDPOINT = ambient.e;
+      if (ambient.t === undefined) delete process.env.WORK_TOKEN; else process.env.WORK_TOKEN = ambient.t;
+    }
+  });
+
   it("refuses librarian mode in a sandbox (startWolf and the memory gate)", async () => {
     const live = await liveFixture();
     const dev = join(tmp("dev"), "snap");
     takeSnapshot({ source: live.source, devRoot: dev });
     const { engine } = stubEngine();
     await expect(startMemoryWolf({ engine, yaml: `sandbox:\n  root: ${dev}\nmemory:\n  librarian: true\n` })).rejects.toThrow(/librarian/);
-    const env = { KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1/work" };
+    const env = { KB_OPS: join(dev, "ops"), WORK_ENDPOINT: "http://127.0.0.1:1" };
     expect(() =>
       createMemoryExtension({ librarian: true }, { wolfDen: join(dev, "den"), wolfName: "t", domains: [], wolfConfig: { sandbox: { root: dev } }, env }),
     ).toThrow(/librarian/);

@@ -135,7 +135,9 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   const consolidationConfig = config.memory?.consolidation;
   const consolidationTrigger = consolidationConfig?.trigger ?? "threshold";
   
-  // KB roots (requires KB_OPS)
+  // KB roots (requires KB_OPS). In a sandbox KB_BASE stays the ambient (live) path and is READ-ONLY here: its
+  // consumers are domain context / prompt rendering (reads), reconcileDen and promoteTopics (write only opsRoot and
+  // denLocal, both redirected). The only kbBase writer is the librarian sweep, which startSandbox refuses.
   const kbOps = process.env.KB_OPS;
   const kbBase = process.env.KB_BASE;
   const kbRoots: KbRoots | undefined = kbOps
@@ -153,6 +155,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   const isLibrarian = config.memory?.librarian === true;
   let sweepManager: SweepManager | undefined;
   
+  if (sandbox && isLibrarian) throw new Error("sandbox: librarian mode is refused (it mutates KB_BASE)");
   if (isLibrarian && kbRoots) {
     sweepManager = initSweepManager({
       kbBase: kbRoots.kbBase,

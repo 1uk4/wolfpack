@@ -37,7 +37,7 @@ let active: string | undefined;
 /**
  * Patch process.env with the sandbox env and return a restore function. This is a FALLBACK for code that only
  * reads process.env; code that takes an env (extension context.env, startWolf's env) should use that instead.
- * Throws if another sandbox patch is already active in this process.
+ * It does not guard against a second patch: the one-sandbox-per-process rule is enforced by {@link startSandbox}.
  */
 export function patchProcessEnv(patch: Record<string, string>): () => void {
   const saved = Object.fromEntries(Object.keys(patch).map((k) => [k, process.env[k]]));

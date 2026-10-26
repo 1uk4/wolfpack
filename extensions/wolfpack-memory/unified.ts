@@ -27,6 +27,7 @@ import {
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
+import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { assertSandboxed, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
@@ -209,6 +210,12 @@ export default function createMemoryExtension(
     return engine;
   }
 
+  // Record store from context.env when given (sandbox): never falls back to process.env.WORK_ENDPOINT.
+  function recordStore(): HttpWorkRecordStore | undefined {
+    if (!context.env) return undefined; // consolidatePool then reads the process env, as before
+    return new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "");
+  }
+
   // KB roots from env
   const kbBase = (context.env ?? process.env).KB_BASE;
   const kbOps = (context.env ?? process.env).KB_OPS;
@@ -254,6 +261,8 @@ export default function createMemoryExtension(
               table: getTable(),
               apiKey: apiKeyFor(getTable()),
               kbRoots: kbRoots ?? undefined,
+              workStore: recordStore(),
+              ...(config.engine ? { engine: config.engine } : {}),
               defaultDomain: domains[0] ?? "wolfpack",
               domains,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
@@ -754,6 +763,8 @@ export default function createMemoryExtension(
                       table: getTable(),
                       apiKey: apiKeyFor(getTable()),
                       kbRoots: kbRoots ?? undefined,
+              workStore: recordStore(),
+              ...(config.engine ? { engine: config.engine } : {}),
                       defaultDomain: domains[0] ?? "wolfpack",
               domains,
                       onProgress: (msg) => console.log(`[memory] ${msg}`),

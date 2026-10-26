@@ -417,6 +417,11 @@ export default function createMemoryExtension(
       void (async () => {
         try {
           if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
+          if (!actions.promoteEnabled) {
+            console.log("[memory] Timer-triggered consolidation (session topics only)");
+            await actions.consolidate();
+            return;
+          }
           console.log("[memory] Timer-triggered consolidate + promote");
           const job = actions.promote();
           if (job.status === "started") await job.done;
@@ -486,7 +491,9 @@ export default function createMemoryExtension(
   // ─── Actions (consolidate / promote) ──────────────────────────────────────
   let promoting: string | null = null;
   let jobSeq = 0;
+  if (!kbRoots) console.log("[memory] promote disabled: no KB roots (KB_BASE/KB_OPS); interval ticks only consolidate into session topics");
   const actions: MemoryActions = {
+    promoteEnabled: kbRoots !== null,
     consolidate: () => consolidateToSessions({ minObservations: 1 }),
     promote() {
       if (promoting) return { status: "already_running", jobId: promoting };

@@ -276,6 +276,11 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         
         // Tick = consolidate + promote, through the memory extension's actions (shared queue, single-promote guard).
         const actions = memoryActionsFor(wolfDen);
+        if (actions && !actions.promoteEnabled) {
+          console.log(`[memory] Timer-triggered consolidation (${stats.count} observations; session topics only, promote disabled)`);
+          await actions.consolidate();
+          return;
+        }
         if (actions) {
           console.log(`[memory] Timer-triggered consolidate + promote (${stats.count} observations)`);
           const job = actions.promote();

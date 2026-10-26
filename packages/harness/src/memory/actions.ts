@@ -19,6 +19,8 @@ export type PromoteStart =
   | { status: "already_running"; jobId: string };
 
 export interface MemoryActions {
+  /** False when the wolf has no KB roots: promote() rejects, so interval ticks only consolidate. */
+  promoteEnabled: boolean;
   /** Fold the whole observation pool into session topics (not the den). Serialized with promote and auto-consolidation. */
   consolidate(): Promise<ConsolidationResult>;
   /** Consolidate, then move session topics to the den and on to contribution files in the inbox. Runs in the background. */

@@ -269,8 +269,31 @@ describe("host interval timer (createWolfHarness path)", () => {
     const job = memoryActionsFor(d2)!.promote();
     if (job.status !== "started") throw new Error("not started");
     await expect(job.done).rejects.toThrow(/KB roots/);
+    expect(memoryActionsFor(d2)!.promoteEnabled).toBe(false);
     expect(existsSync(join(d2, ".memory/sessions"))).toBe(false);
     expect(poolEmpty(d2)).toBe(false);
     memoryActionsFor(d2); // (registry entry is released by lifecycle stop)
+  });
+
+  it("without KB roots the interval tick only consolidates into session topics, quietly", async () => {
+    const stub = stubEngine();
+    const d = tmp("nokb-tick");
+    seedPool(d);
+    const sm = createScriptedModel([fauxAssistantMessage("HOSTREPLY we decided to cache the session lookups for five minutes because of the hot path.")]);
+    const registry = createRegistry();
+    registry.install(adaptToDurable(createMemoryExtension({ live: true, engine: stub.engine, intervalMs: 50 }, { wolfDen: d, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} }), { wolfDen: d, wolfName: "w" }));
+    const harness = await Harness.open(await openNodeSqliteStorage(join(d, "session.sqlite")), { models: sm.models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? d }) }, ctx);
+    const detach = attachConversationReader(harness, d);
+    const root = await harness.root(ctx, { agent: { model: { provider: sm.provider, modelId: sm.modelId } } });
+    harness.resume();
+    await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
+    await root.waitForIdle(ctx);
+    const session = join(d, ".memory/sessions/durable/caching.md");
+    for (let i = 0; i < 100 && !existsSync(session); i++) await new Promise((r) => setTimeout(r, 30));
+    expect(existsSync(session)).toBe(true);
+    expect(existsSync(join(d, "memory/topics"))).toBe(false);
+    expect(stub.steps).not.toContain("distill");
+    detach();
+    await harness.close(ctx);
   });
 });

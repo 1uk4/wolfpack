@@ -25,6 +25,13 @@ export function defaultDomainProblem(defaultDomain: string | undefined, domains:
   return `memory.defaultDomain "${defaultDomain}" is not one of the subscribed domains (${domains.join(", ") || "none"})`;
 }
 
+/** The domain for untagged observations: `defaultDomain` once validated against `domains`, else the first (else "wolfpack"). Throws when invalid. */
+export function resolveDefaultDomain(defaultDomain: string | undefined, domains: readonly string[]): string {
+  const problem = defaultDomainProblem(defaultDomain, domains);
+  if (problem) throw new Error(problem);
+  return defaultDomain ?? domains[0] ?? "wolfpack";
+}
+
 /** Default socket: ~/.wolfpack/run/<name>.sock */
 export function defaultSocketPath(name: string, home: string = os.homedir()): string {
   return path.join(home, ".wolfpack", "run", `${name}.sock`);

@@ -35,7 +35,7 @@ import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, typ
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
-import { assertSandboxed, defaultDomainProblem, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
+import { assertSandboxed, resolveDefaultDomain, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -291,11 +291,17 @@ export default function createMemoryExtension(
   console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
   if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
 
-  const defaultDomain = config.defaultDomain ?? domains[0] ?? "wolfpack";
-  const badDefault = defaultDomainProblem(config.defaultDomain, domains);
-  if (badDefault) throw new Error(badDefault);
+  const defaultDomain = resolveDefaultDomain(config.defaultDomain, domains);
   // Per-observation classification, as pi: built once, only when there is a choice to make.
-  const domainContext = domains.length > 1 ? buildDomainContext(domains, (context.env ?? process.env).KB_BASE) : "";
+  const domainKbBase = (context.env ?? process.env).KB_BASE;
+  const domainContext = domains.length > 1 ? buildDomainContext(domains, domainKbBase) : "";
+  if (domains.length > 1) {
+    console.log(
+      domainKbBase
+        ? `[memory] domain context built for ${domains.length} domains (KB_BASE ${domainKbBase})`
+        : `[memory] warning: ${domains.length} domains but no KB_BASE; the observer classifies without domain descriptions`,
+    );
+  }
 
   const consolidationThreshold = consolidation?.threshold ?? DEFAULT_CONSOLIDATE_AT;
   const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;

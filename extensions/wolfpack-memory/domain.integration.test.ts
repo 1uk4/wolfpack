@@ -16,6 +16,8 @@ import { conversationReaderFor } from "../../packages/harness/src/engine/convers
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { parkExtension, startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension from "./unified.js";
+import createDurableMemory from "./durable.js";
+import { consolidatePool } from "../../packages/harness/src/memory/consolidation.js";
 import { writeBindingFile } from "./conversation-binding.js";
 
 const dirs: string[] = [];
@@ -70,7 +72,7 @@ async function devRoot(): Promise<string> {
   return dev;
 }
 
-async function startDomainWolf(opts: { domains: string[]; memoryYaml?: string; engine: Engine; kb: string; replies: string[]; beforeTurn?: (den: string) => void }) {
+async function startDomainWolf(opts: { domains: string[]; memoryYaml?: string; engine: Engine; kb: string; replies: string[]; beforeTurn?: (den: string) => void; viaDurableFactory?: Record<string, unknown> }) {
   const dev = await devRoot();
   const domainsYaml = `domains: [${opts.domains.join(", ")}]\n`;
   tw = await startTestWolf({
@@ -80,8 +82,9 @@ async function startDomainWolf(opts: { domains: string[]; memoryYaml?: string; e
       extensions: ({ config, den, env }) => [
         parkExtension,
         adaptToDurable(
-          createMemoryExtension(
-            { ...config.memory, engine: opts.engine },
+          (opts.viaDurableFactory ? createDurableMemory : createMemoryExtension)(
+            // viaDurableFactory: the raw wolf.yaml `memory:` block, as loader.ts hands it to the factory
+            { ...(opts.viaDurableFactory ?? config.memory), engine: opts.engine },
             { wolfDen: den, wolfName: "testwolf", domains: config.identity.domains, wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: opts.kb } },
           ),
           { wolfDen: den, wolfName: "testwolf" },
@@ -176,5 +179,48 @@ describe("per-observation domain classification (durable)", () => {
     expect(obs.every((o) => o.work === "work-x-1")).toBe(true);
     expect(obs.some((o) => o.domain === "billing")).toBe(true); // classified, not the binding's devtools
     expect(obs.every((o) => o.domain)).toBe(true);
+  });
+
+  it("(g) through the durable.ts factory (the loader's path) wolf.yaml defaultDomain stamps untagged observations; an invalid one is rejected", async () => {
+    const stub = stubEngine();
+    const t = await startDomainWolf({
+      domains: ["billing", "devtools"], engine: stub.engine, kb: kbFixture(), replies: [say("plain reply")],
+      viaDurableFactory: { live: true, defaultDomain: "devtools", consolidation: { poolTarget: 123 } },
+    });
+    await t.submit(say("plain user"));
+    await observedAll(t);
+    expect(pool(t.wolf.config.den).every((o) => o.domain === "devtools")).toBe(true);
+    await t.stop();
+
+    await expect(startDomainWolf({
+      domains: ["billing", "devtools"], engine: stubEngine().engine, kb: kbFixture(), replies: [],
+      viaDurableFactory: { live: true, defaultDomain: "nope" },
+    })).rejects.toThrow(/defaultDomain "nope"/);
+  });
+
+  it("(h) an unknown model-returned domain stays in the pool and is mapped to the default at consolidation, as pi", async () => {
+    const stub = stubEngine();
+    const t = await startDomainWolf({ domains: ["billing", "devtools"], engine: stub.engine, kb: kbFixture(), replies: [say("DOM_mystery reply")] });
+    await t.submit(say("DOM_mystery user"));
+    await observedAll(t);
+    const den = t.wolf.config.den;
+    expect(pool(den).some((o) => o.domain === "mystery")).toBe(true);
+
+    const ops = tmp("ops");
+    const consEngine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, a: { prompt: string }) =>
+        step === "distill"
+          ? schema.parse({ contributions: [{ slug: "main", title: "Topic", summary: "s", body: "## Details\nbody" }] })
+          : schema.parse({ actions: [{ sessionTopicId: "t", action: "create", reasoning: "r", result: { id: "t", title: "T", summary: "s", body: "b", domain: "mystery" } }] }),
+    } as unknown as Engine;
+    await consolidatePool({
+      wolfDen: den, wolfName: "testwolf", engine: consEngine, defaultDomain: "billing", domains: ["billing", "devtools"], minObservations: 1,
+      kbRoots: { kbBase: kbFixture(), opsRoot: ops, denLocal: join(den, "kb") },
+    });
+    const inbox = join(ops, "inbox", "testwolf");
+    const { readdirSync } = await import("node:fs");
+    const hints = readdirSync(inbox).map((f) => /domain_hint: (\S+)/.exec(readFileSync(join(inbox, f), "utf8"))?.[1]);
+    expect(hints.length).toBeGreaterThan(0);
+    expect(hints.every((h) => h === "billing")).toBe(true);
   });
 });

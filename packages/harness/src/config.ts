@@ -59,6 +59,10 @@ export async function loadWolfConfig(): Promise<WolfConfig> {
   if (!config.name) {
     throw new Error("wolf.yaml must specify 'name'");
   }
+  const rawDefault: unknown = config.memory?.defaultDomain;
+  if (rawDefault !== undefined && (typeof rawDefault !== "string" || !rawDefault)) {
+    throw new Error(`invalid wolf.yaml: memory.defaultDomain must be a non-empty string, got ${JSON.stringify(rawDefault)}`);
+  }
   const badDefault = defaultDomainProblem(config.memory?.defaultDomain, config.domains ?? []);
   if (badDefault) throw new Error(`invalid wolf.yaml: ${badDefault}`);
   // Throws on a malformed value: it must never silently run live.

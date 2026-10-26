@@ -19,6 +19,7 @@ describe("localSnapshotSource (--from layouts)", () => {
 
   it("falls back to the work server's layout <from>/work/base", () => {
     fs.mkdirSync(path.join(tmp, "work/base/domains/wolfpack/work"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "work/base/domains/wolfpack/work/work-wolfpack-a.md"), "# a\n");
     const s = localSnapshotSource(tmp);
     expect(s.workBaseDir).toBe(path.join(tmp, "work/base"));
     expect(s.workDir).toBe(path.join(tmp, "work"));

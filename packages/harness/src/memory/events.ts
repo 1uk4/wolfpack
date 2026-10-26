@@ -17,7 +17,10 @@ export interface MemoryEventBus {
   subscribe(listener: MemoryEventListener): () => void;
 }
 
-const buses = new Map<string, MemoryEventBus & { wolf: string }>();
+// On globalThis: the memory extension and wolfd's server must share one bus per den even when the module is loaded
+// twice (source and dist copies, as in the sandbox tests).
+const REGISTRY = Symbol.for("wolfpack.memoryEventBuses");
+const buses: Map<string, MemoryEventBus & { wolf: string }> = ((globalThis as Record<symbol, unknown>)[REGISTRY] ??= new Map()) as Map<string, MemoryEventBus & { wolf: string }>;
 
 /** The bus of this den (created on first use). `wolf` names the emitting wolf; the first caller's name wins. */
 export function memoryEventsFor(wolfDen: string, wolf?: string): MemoryEventBus {

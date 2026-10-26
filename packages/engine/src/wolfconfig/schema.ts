@@ -16,6 +16,7 @@
  *   sandbox: true           # redirect den / KB_OPS / WORK_ENDPOINT at a snapshot dev root (default <dir>/sandbox)
  *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
  *   memory:
+ *     defaultDomain: personal  # domain for untagged observations (one of domains; default: first)
  *     live: true            # durable memory may write the LIVE roots (nothing sets this until cutover)
  *     consolidation:        # all optional; defaults shown (pi's thresholds)
  *       threshold: 20000    # pool tokens that trigger consolidation
@@ -60,6 +61,7 @@ export const WolfFileSchema = z.object({
     .object({
       live: z.boolean().optional(),
       librarian: z.boolean().optional(),
+      defaultDomain: z.string().min(1).optional(),
       consolidation: z
         .object({
           threshold: z.number().int().positive().optional(),
@@ -114,6 +116,8 @@ export interface WolfConfig {
     live: boolean;
     /** Librarian mode (mutates KB_BASE); refused in a sandbox. */
     librarian: boolean;
+    /** Domain stamped on observations the observer leaves untagged. One of `identity.domains`; default: the first. */
+    defaultDomain?: string;
     /** Pool thresholds and trigger, defaults applied. */
     consolidation: {
       /** Pool tokens at which consolidation runs. */

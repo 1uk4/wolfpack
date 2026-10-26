@@ -349,6 +349,7 @@ export default function createMemoryExtension(
   const observing = new Map<number, Promise<void>>();
   let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
+  let closeHooked = false;
 
   /**
    * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
@@ -394,6 +395,10 @@ export default function createMemoryExtension(
       await writeWatermark(ctx.wolfDen, ctx.conversationId, last ? next : { lastEntryId: at });
     }
 
+    if (!closeHooked) {
+      closeHooked = true;
+      ctx.conversation?.onEngineClose?.(() => unregisterMemoryActions(wolfDen, actions));
+    }
     startTimer(ctx);
     if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") void maybeConsolidate(ctx);
   }
@@ -412,8 +417,9 @@ export default function createMemoryExtension(
       void (async () => {
         try {
           if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
-          console.log("[memory] Timer-triggered consolidation");
-          await runConsolidation({ drain: true });
+          console.log("[memory] Timer-triggered consolidate + promote");
+          const job = actions.promote();
+          if (job.status === "started") await job.done;
         } catch (err) {
           console.error("[memory] timer error:", err instanceof Error ? err.message : err);
         }
@@ -440,26 +446,25 @@ export default function createMemoryExtension(
     return run;
   }
 
-  /** Pool → session topics (pi's consolidation). poolTarget undefined: the whole pool. */
-  function consolidateToSessions(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
-    return serialized(() =>
-      consolidatePool({
-        wolfDen,
-        wolfName,
-        table: getTable(),
-        apiKey: apiKeyFor(getTable()),
-        kbRoots: kbRoots ?? undefined,
-        workStore: recordStore(),
-        ...(config.engine ? { engine: config.engine } : {}),
-        defaultDomain: domains[0] ?? "wolfpack",
-        domains,
-        sessionTopics: durableSessionTopics(wolfDen),
-        ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
-        minObservations: opts.minObservations,
-        onProgress: (msg) => console.log(`[memory] ${msg}`),
-      }),
-    );
+  /** Pool → session topics (pi's consolidation), unserialized: callers hold the queue. poolTarget undefined: the whole pool. */
+  function consolidateInner(opts: { poolTarget?: number; minObservations: number }): Promise<ConsolidationResult> {
+    return consolidatePool({
+      wolfDen,
+      wolfName,
+      table: getTable(),
+      apiKey: apiKeyFor(getTable()),
+      kbRoots: kbRoots ?? undefined,
+      workStore: recordStore(),
+      ...(config.engine ? { engine: config.engine } : {}),
+      defaultDomain: domains[0] ?? "wolfpack",
+      domains,
+      sessionTopics: durableSessionTopics(wolfDen),
+      ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
+      minObservations: opts.minObservations,
+      onProgress: (msg) => console.log(`[memory] ${msg}`),
+    });
   }
+  const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number }) => serialized(() => consolidateInner(opts));
 
   /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
   function runConsolidation(opts: { drain?: boolean } = {}): Promise<void> {
@@ -489,18 +494,21 @@ export default function createMemoryExtension(
       promoting = jobId;
       const done = (async (): Promise<PromoteOutcome> => {
         try {
-          // reconcileDen runs again inside promoteSessionTopics (pi: promote start); consolidate first, like /wolf:promote.
-          const consolidated = (await consolidateToSessions({ minObservations: 1 })).observationsProcessed;
-          const promoted = await serialized(() =>
-            promoteSessionTopics({
+          if (!kbRoots) throw new Error("promote needs KB_BASE and KB_OPS (no KB roots configured); nothing was changed");
+          // One queue slot: nothing interleaves between consolidate and promote. reconcileDen runs at promote start
+          // inside promoteSessionTopics, as in pi.
+          const { consolidated, promoted } = await serialized(async () => {
+            const c = (await consolidateInner({ minObservations: 1 })).observationsProcessed;
+            const p = await promoteSessionTopics({
               wolfDen,
               wolfName,
               engine: getEngine(),
-              kbRoots: kbRoots ?? undefined,
+              kbRoots,
               defaultDomain: domains[0] ?? "wolfpack",
               onProgress: (msg) => console.log(`[memory] ${msg}`),
-            }),
-          );
+            });
+            return { consolidated: c, promoted: p };
+          });
           return { consolidated, promoted };
         } finally {
           promoting = null;
@@ -521,7 +529,7 @@ export default function createMemoryExtension(
     tools: [
       defineTool({
         name: "memory_consolidate",
-        description: "Consolidate observation pool into persistent memory topics. Use when you have important context to preserve, or when the pool is getting large.",
+        description: "Consolidate the observation pool into session topics (promote publishes them to the den and KB). Use when you have important context to preserve, or when the pool is getting large.",
         parameters: Type.Object({
           reason: Type.Optional(Type.String({ description: "Why you're consolidating (for logging)" })),
         }),

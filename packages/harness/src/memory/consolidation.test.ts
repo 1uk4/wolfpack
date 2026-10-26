@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { writeDenTopic } from "@wolfpack/memory";
-import { consolidatePool } from "./consolidation.js";
+import { consolidatePool, durableSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
 let root: string;
@@ -160,5 +160,37 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(m.writes.map((w) => w.id).sort()).toEqual(["work-f1", "work-t9"]);
     expect(m.prompts.record.find((p) => p.includes("observation 1"))).toContain("observation 2");
     expect(poolLines()).toEqual([]);
+  });
+
+  describe("session mode (sessionTopics)", () => {
+    const sessions = () => join(den, ".memory", "sessions", "durable");
+    const sessionEngine = (prompts: string[]) =>
+      ({
+        call: async (step: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => {
+          if (step === "workRecord") return schema.parse({ decisions: [], changes: ["Added the thing"], findings: [], problems: [] });
+          prompts.push(p.prompt);
+          return schema.parse({ actions: [{ sessionTopicId: "x", action: "create", reasoning: "r", result: { id: "t", title: "T", summary: "s", body: "b" } }] });
+        },
+      }) as unknown as Engine;
+
+    it("a tagged observation written to the Record creates no session topics", async () => {
+      poolWith([o(1, { work: "work-t1" })]);
+      const m = mocks();
+      const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: m.engine, workStore: m.workStore, sessionTopics: durableSessionTopics(den), minObservations: 1 });
+      expect(r.recordsWritten).toBe(1);
+      expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
+      expect(existsSync(join(den, ".memory", "sessions", "durable"))).toBe(false);
+      expect(poolLines()).toEqual([]);
+    });
+
+    it("a tagged observation whose item is gone falls back to session topics, as in pi", async () => {
+      poolWith([o(0, { work: "gone" })]);
+      const m = mocks();
+      const prompts: string[] = [];
+      await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), workStore: m.workStore, sessionTopics: durableSessionTopics(den), minObservations: 1 });
+      expect(prompts[0]).toContain("observation 0");
+      expect(readdirSync(sessions())).toContain("t.md");
+      expect(existsSync(join(den, "memory", "topics"))).toBe(false);
+    });
   });
 });

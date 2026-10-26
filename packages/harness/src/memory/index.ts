@@ -12,3 +12,11 @@ export {
 
 // Re-export shared prompt context from @wolfpack/memory
 export { renderDenContext, renderKbAccess } from "@wolfpack/memory";
+export {
+  memoryActionsFor,
+  registerMemoryActions,
+  unregisterMemoryActions,
+  type MemoryActions,
+  type PromoteOutcome,
+  type PromoteStart,
+} from "./actions.js";

@@ -1,13 +1,16 @@
 /**
- * Pi-durable consolidation — pools observations directly to den topics.
+ * Pi-durable consolidation. Two modes:
  *
- * Mirrors Pi-CLI's consolidateSession but skips the session topics step:
+ * Session mode (`sessionTopics` set; what the memory extension uses, pi parity):
  *   1. Read observations from .memory/pool/observations.jsonl
- *   2. Archive den topics the KB has absorbed, then read the rest for context
- *   3. LLM consolidation (same prompt/schema as Pi-CLI)
- *   4. Write topics directly to $WOLF_DEN/memory/topics/
- *   5. Emit deltas to KB inbox (same as Pi-CLI promote)
- *   6. Archive processed observations
+ *   2. Work-tagged observations feed their item's Record (those that fall back, or are untagged, continue)
+ *   3. LLM consolidation (pi's session prompt) into session topics under .memory/sessions/<id>/
+ *   4. Archive the processed observations. No den write and no claims: promoteSessionTopics later moves session
+ *      topics to the den and emits distilled contributions to the KB inbox.
+ *
+ * Legacy mode (no `sessionTopics`): pool straight to the den, then deltas to the KB inbox:
+ *   1. Read the pool; 2. archive absorbed den topics (reconcileDen) and read the rest for context;
+ *   3. LLM consolidation; 4. write $WOLF_DEN/memory/topics/; 5. emit deltas to the KB inbox; 6. archive observations.
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -43,7 +46,7 @@ import {
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
 } from "@wolfpack/memory";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 
 /** Observation stored in pool JSONL */
 export interface PoolObservation {
@@ -474,8 +477,6 @@ function defaultWorkStore(): WorkRecordStore | undefined {
   return store.configured ? store : undefined;
 }
 
-const SAFE_TOPIC_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
 /** Pi's session consolidation (orchestrator.consolidatePool) over durable pool observations. */
 async function consolidateToSessionTopics(
   config: ConsolidationConfig & { sessionTopics: SessionTopicsLocation },
@@ -521,7 +522,7 @@ async function consolidateToSessionTopics(
       continue;
     }
     const r = action.result;
-    if (!SAFE_TOPIC_ID.test(r.id)) {
+    if (!isSafeSegment(r.id)) {
       skipped++;
       onProgress?.(`  skipped topic with unsafe id ${JSON.stringify(r.id)}`);
       continue;

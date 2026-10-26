@@ -220,3 +220,57 @@ describe("session-topic layer (createWolfHarness-style Harness.open)", () => {
     await harness.close(ctx);
   });
 });
+
+describe("host interval timer (createWolfHarness path)", () => {
+  it("a tick consolidates + promotes (den topics + inbox files); threshold consolidation yields session topics only; one timer", async () => {
+    const dir = tmp("host-timer");
+    const ops = tmp("ops-timer");
+    const stub = stubEngine();
+    const sm = createScriptedModel([fauxAssistantMessage("HOSTREPLY we decided to cache the session lookups for five minutes because of the hot path.")]);
+    const registry = createRegistry();
+    // threshold 1: the first observation triggers threshold consolidation (session topics only)
+    registry.install(adaptToDurable(createMemoryExtension({ live: true, engine: stub.engine, consolidation: { trigger: "hybrid", threshold: 1, poolTarget: 0 }, intervalMs: 50 }, { wolfDen: dir, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: { KB_BASE: join(ops, "kb"), KB_OPS: ops } }), { wolfDen: dir, wolfName: "w" }));
+    const harness = await Harness.open(await openNodeSqliteStorage(join(dir, "session.sqlite")), { models: sm.models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? dir }) }, ctx);
+    const detach = attachConversationReader(harness, dir, { hostConsolidationTimer: true });
+    const root = await harness.root(ctx, { agent: { model: { provider: sm.provider, modelId: sm.modelId } } });
+    harness.resume();
+    await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
+    await root.waitForIdle(ctx);
+    const session = join(dir, ".memory/sessions/durable/caching.md");
+    for (let i = 0; i < 100 && !existsSync(session); i++) await new Promise((r) => setTimeout(r, 30));
+    expect(existsSync(session)).toBe(true);
+    // threshold path: session topics only, no den, no inbox; the extension started no timer of its own
+    expect(existsSync(join(dir, "memory/topics"))).toBe(false);
+    expect(existsSync(join(ops, "inbox"))).toBe(false);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(join(dir, "memory/topics"))).toBe(false);
+
+    // The host's tick (createWolfHarness): promote through the registered actions
+    const job = memoryActionsFor(dir)!.promote();
+    if (job.status !== "started") throw new Error("not started");
+    await job.done;
+    expect(existsSync(join(dir, "memory/topics/caching.md"))).toBe(true);
+    expect(readdirSync(join(ops, "inbox/w")).length).toBeGreaterThan(0);
+    detach();
+    await harness.close(ctx);
+    // closed: the actions no longer leak
+    expect(memoryActionsFor(dir)).toBeUndefined();
+  });
+
+  it("promote without KB roots rejects with a clear message and changes nothing", async () => {
+    const stub = stubEngine();
+    const { den } = await startWolf(stub.engine);
+    seedPool(den);
+    // a wolf with no KB_BASE/KB_OPS: build the extension directly
+    const d2 = tmp("nokb");
+    seedPool(d2);
+    const ext = createMemoryExtension({ live: true, engine: stub.engine }, { wolfDen: d2, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} });
+    expect(ext).toBeDefined();
+    const job = memoryActionsFor(d2)!.promote();
+    if (job.status !== "started") throw new Error("not started");
+    await expect(job.done).rejects.toThrow(/KB roots/);
+    expect(existsSync(join(d2, ".memory/sessions"))).toBe(false);
+    expect(poolEmpty(d2)).toBe(false);
+    memoryActionsFor(d2); // (registry entry is released by lifecycle stop)
+  });
+});

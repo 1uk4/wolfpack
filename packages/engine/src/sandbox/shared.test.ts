@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   assertLibrarianSandboxed, assertReadOnlyRsyncArgv, assertSandboxed, acquireWorkWriterLock, dryRunRemote, parseSha256sum,
   readWorkServerRunFile, remotePlan, remoteSha256Argv, resolveSandbox, rsyncArgv, sandboxEnv, sandboxPaths, SandboxError, splitRemote,
-  takeSnapshot, wolfDenDir, RSYNC_RULES, type Runner, type SnapshotSource,
+  seedLibrarianState, takeSnapshot, wolfDenDir, RSYNC_RULES, type Runner, type SnapshotSource,
 } from "./index.js";
 
 const dirs: string[] = [];
@@ -96,6 +96,8 @@ describe("KB copy in the snapshot", () => {
     expect(() => takeSnapshot({ source, devRoot: join(synced, "inside"), forbiddenRoots: [synced] })).toThrow(/protected\/synced/);
     expect(() => takeSnapshot({ source, devRoot: synced, forbiddenRoots: [join(synced, "sub")] })).toThrow(/protected\/synced/);
     expect(existsSync(join(synced, "inside"))).toBe(false);
+    // an empty entry (Syncthing's default folder has path="") must not match everything
+    expect(() => takeSnapshot({ source, devRoot: join(tmp("ok"), "box"), forbiddenRoots: [""] })).not.toThrow();
   });
 });
 
@@ -382,5 +384,29 @@ describe("refresh and re-snapshot never delete", () => {
   it("workOnly needs an existing snapshot", () => {
     const { source } = fixture();
     expect(() => takeSnapshot({ source, devRoot: join(tmp("dev"), "none"), workOnly: true })).toThrow(/not a snapshot/);
+  });
+});
+
+describe("seedLibrarianState", () => {
+  it("copies the KB ledger/vectors/sections/bookkeeping (no backups) from a librarian den, read-only, never overwriting", () => {
+    const src = tmp("dewey-den");
+    put(join(src, "kb/ledger/events.jsonl"), '{"e":1}\n');
+    put(join(src, "kb/ledger/events.jsonl.bak-2026"), "backup");
+    put(join(src, "kb/vectors/cache.jsonl"), "v\n");
+    put(join(src, "kb/sections/s.json"), "{}");
+    put(join(src, "kb/emitted.json"), "{}");
+    put(join(src, "kb/pass1-backup-x/old.md"), "old");
+    put(join(src, "session.sqlite"), "SQLITE");
+    const before = hashTree(src);
+    const dest = join(tmp("dest"), "dens/dewey-dev");
+    expect(seedLibrarianState(src, dest)).toBe(4);
+    expect(readFileSync(join(dest, "kb/ledger/events.jsonl"), "utf8")).toBe('{"e":1}\n');
+    expect(existsSync(join(dest, "kb/vectors/cache.jsonl"))).toBe(true);
+    expect(existsSync(join(dest, "kb/ledger/events.jsonl.bak-2026"))).toBe(false);
+    expect(existsSync(join(dest, "kb/pass1-backup-x"))).toBe(false);
+    expect(existsSync(join(dest, "session.sqlite"))).toBe(false);
+    expect(hashTree(src)).toBe(before);
+    expect(() => seedLibrarianState(src, dest)).toThrow(/already has a KB ledger/);
+    expect(() => seedLibrarianState(tmp("empty"), join(tmp("d2"), "x"))).toThrow(/no ledger/);
   });
 });

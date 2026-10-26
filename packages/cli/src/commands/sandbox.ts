@@ -2,7 +2,10 @@
  * wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | <mixed>)
  *                           [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2]
  * wolfpack sandbox install-extensions <dev-root> [--extensions k1,k2] [--den-extensions <dir>] [--wolf <name>]
- * wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>]
+ * wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>] [--librarian-state <den>]
+ *
+ * add-wolf --librarian-state <den> seeds the new wolf's <den>/kb (KB ledger, vectors, sections; no backups) from a real
+ * librarian's den (read-only source, e.g. the Syncthing mirror ~/wolves/sfo-01/dewey/den), for a sandbox librarian.
  *
  * MIXED sources (the production-like dev sandbox): local den + local KB copy + the work ledger from a host.
  *   --den <dir>                local den to copy (read-only source)
@@ -37,7 +40,7 @@ import { parseArgs } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { dryRunRemote, loadWolfConfig, remotePlan, takeSnapshot, wolfDenDir, type SnapshotSource } from "@wolfpack/engine";
+import { assertNotProtected, dryRunRemote, loadWolfConfig, remotePlan, seedLibrarianState, takeSnapshot, wolfDenDir, type SnapshotSource } from "@wolfpack/engine";
 import { installDevExtensions } from "../bundle.js";
 import { getExtension } from "../extensions.js";
 import { loadConfig, getHost, type CliConfig } from "../config.js";
@@ -47,7 +50,7 @@ import { c } from "../render.js";
 const USAGE =
   "Usage: wolfpack sandbox snapshot <wolf> --dev-root <dir> (--from <dir> | --host <h> --wolf-id <id> --yes | --den <dir> [--kb-base <dir>] [--ops <dir> [--ops-lane a,b]] (--ledger-from-host <h> --yes | --work-from <dir>) [--shared] [--refresh-work] [--dry-run] [--print-plan]) [--force] [--include-sessions] [--no-install-extensions] [--extensions k1,k2] [--wolf-yaml <file>]\n" +
   "       wolfpack sandbox install-extensions <dev-root> [--extensions k1,k2] [--den-extensions <dir>] [--wolf <name>]\n" +
-  "       wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>]";
+  "       wolfpack sandbox add-wolf <dev-root> <wolf> [--extensions k1,k2] [--den-extensions <dir>] [--librarian-state <den>]";
 
 const DEFAULT_EXTENSION_KEYS = ["memory"];
 
@@ -89,7 +92,7 @@ export function resolveExtensionKeys(explicit: string | undefined, wolfYaml: str
 /** Folder paths Syncthing syncs, from its config.xml. ONLY the `path` attributes of <folder> elements are read. */
 export function syncthingFolderPaths(configXml: string): string[] {
   const out: string[] = [];
-  for (const m of configXml.matchAll(/<folder\b[^>]*?\spath="([^"]*)"/g)) out.push(m[1].replace(/^~(?=\/|$)/, os.homedir()));
+  for (const m of configXml.matchAll(/<folder\b[^>]*?\spath="([^"]*)"/g)) if (m[1]) out.push(m[1].replace(/^~(?=\/|$)/, os.homedir()));
   return out;
 }
 
@@ -160,6 +163,7 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
       "refresh-work": { type: "boolean" },
       "dry-run": { type: "boolean" },
       "print-plan": { type: "boolean" },
+      "librarian-state": { type: "string" },
     },
     allowNegative: true,
   });
@@ -190,6 +194,10 @@ export async function sandboxCmd(argv: string[]): Promise<void> {
     try {
       const den = wolfDenDir(devRoot, name);
       fs.mkdirSync(den, { recursive: true });
+      if (values["librarian-state"]) {
+        assertNotProtected(devRoot, protectedRoots(loadConfig()));
+        console.log(`  librarian state: ${seedLibrarianState(path.resolve(values["librarian-state"]), den)} files copied into ${path.join(den, "kb")}`);
+      }
       const { keys } = resolveExtensionKeys(values.extensions, values["wolf-yaml"] ? path.resolve(values["wolf-yaml"]) : undefined);
       await install(devRoot, keys, values["den-extensions"] ? path.resolve(values["den-extensions"]) : undefined, name);
       console.log(`  ${name}: den ${den}`);

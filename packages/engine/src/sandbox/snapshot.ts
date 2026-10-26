@@ -11,7 +11,7 @@ import {
   cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realPathLoose } from "./resolve.js";
 import { sandboxPaths, SNAPSHOT_MANIFEST, wolfDenDir, type SandboxPaths } from "./layout.js";
 import { readWorkServerRunFile } from "./work-writer.js";
@@ -288,6 +288,38 @@ export function dryRunRemote(source: SnapshotSource, identity?: string, runner: 
   }
 }
 
+/** The librarian's den-local state worth carrying to a sandbox librarian: the KB ledger, vectors, sections and bookkeeping (no backups). */
+const LIBRARIAN_STATE = ["ledger/events.jsonl", "vectors", "sections", "emitted.json", "sweep-attempts.json"];
+
+/**
+ * Seed a sandbox librarian's den-local KB state (`<den>/kb`) from a real librarian's den (read-only source), so a sweep
+ * on the KB copy finds the ledger that describes it instead of a KB with no history. Never overwrites: refuses when the
+ * destination already has a ledger. Returns the files copied.
+ */
+export function seedLibrarianState(srcDen: string, destDen: string): number {
+  const src = join(srcDen, "kb");
+  const dest = join(destDen, "kb");
+  if (!existsSync(join(src, "ledger", "events.jsonl"))) throw new Error(`seed: ${src} has no ledger/events.jsonl (not a librarian den?)`);
+  if (existsSync(join(dest, "ledger", "events.jsonl"))) throw new Error(`seed: ${dest} already has a KB ledger; refusing to overwrite`);
+  const overlap = (a: string, b: string) => insideOrEqual(realPathLoose(a), realPathLoose(b)) || insideOrEqual(realPathLoose(b), realPathLoose(a));
+  if (overlap(src, dest)) throw new Error("seed: source and destination overlap");
+  let n = 0;
+  for (const rel of LIBRARIAN_STATE) {
+    const from = join(src, rel);
+    if (!existsSync(from)) continue;
+    const st = lstatSync(from);
+    if (st.isDirectory()) {
+      copyLocal(from, join(dest, rel), () => true);
+      n += walkFiles(join(dest, rel)).length;
+    } else if (st.isFile()) {
+      mkdirSync(dirname(join(dest, rel)), { recursive: true });
+      cpSync(from, join(dest, rel), { dereference: false });
+      n++;
+    }
+  }
+  return n;
+}
+
 function insideOrEqual(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
@@ -303,7 +335,14 @@ function assertDisjoint(devRoot: string, source: SnapshotSource, forbidden: stri
       throw new Error(`snapshot: dev root ${devRoot} overlaps source ${label} ${spec}`);
     }
   }
+  assertNotProtected(devRoot, forbidden);
+}
+
+/** Throw when `devRoot` is inside, equal to, or contains any `forbidden` path (empty entries are ignored). */
+export function assertNotProtected(devRoot: string, forbidden: string[]): void {
+  const root = realPathLoose(devRoot);
   for (const f of forbidden) {
+    if (!f) continue;
     const real = realPathLoose(f);
     if (insideOrEqual(real, root) || insideOrEqual(root, real)) {
       throw new Error(`snapshot: dev root ${devRoot} overlaps protected/synced path ${f}`);

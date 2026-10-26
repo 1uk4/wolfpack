@@ -138,7 +138,7 @@ describe("mixed sources (production-like dev sandbox)", () => {
   };
 
   it("syncthingFolderPaths reads only <folder path=...> and protectedRoots adds the live KB, lanes, local and host mirrors", () => {
-    const xml = '<configuration><folder id="a" label="x" path="/Users/u/wolves/knowledge/base/domains/wolfpack" type="sendreceive"><device id="SECRET-DEVICE-ID"/></folder><folder id="b" path="~/wolves/librarian/inbox/1uk4"></folder><device id="D" name="n"><address>dynamic</address></device></configuration>';
+    const xml = '<configuration><folder id="a" label="x" path="/Users/u/wolves/knowledge/base/domains/wolfpack" type="sendreceive"><device id="SECRET-DEVICE-ID"/></folder><folder id="b" path="~/wolves/librarian/inbox/1uk4"></folder><folder id="default" label="Default Folder" path=""></folder><device id="D" name="n"><address>dynamic</address></device></configuration>';
     expect(syncthingFolderPaths(xml)).toEqual(["/Users/u/wolves/knowledge/base/domains/wolfpack", path.join(os.homedir(), "wolves/librarian/inbox/1uk4")]);
     const cfg = path.join(tmp, "config.xml");
     fs.writeFileSync(cfg, xml);

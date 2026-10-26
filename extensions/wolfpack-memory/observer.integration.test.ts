@@ -293,12 +293,12 @@ describe("full-transcript observer", () => {
     expect(count(stub.text(), "A_TWO")).toBe(1);
   });
 
-  it("(i) trigger hybrid: the interval timer consolidates the pool down to poolTarget, and stops on close", async () => {
+  it("(i) trigger hybrid: the interval timer drains the whole pool (ignoring poolTarget), and stops on close", async () => {
     const dev = await devRoot();
     const stub = stubEngine();
     tw = await startTestWolf({
       script: [reply("A_ONE")],
-      yaml: `sandbox:\n  root: ${dev}\nmemory:\n  consolidation:\n    threshold: 999999\n    poolTarget: 0\n`,
+      yaml: `sandbox:\n  root: ${dev}\nmemory:\n  consolidation:\n    threshold: 999999\n    poolTarget: 100000\n`,
       hooks: {
         extensions: ({ config, den, env }) => [
           adaptToDurable(

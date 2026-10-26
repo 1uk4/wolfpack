@@ -19,6 +19,8 @@ export interface ConversationReader {
    * first. A fork's inherited history is excluded, so a fork reads only what happened after the fork point.
    */
   messagesSince(conversationId: number, afterEntryId?: number): Promise<ConversationMessage[]>;
+  /** The host owns the interval consolidation timer (createWolfHarness); extensions must not start another. */
+  hostConsolidationTimer?: boolean;
   /** Run `fn` when the engine closes. */
   onClose(fn: () => void): void;
   /** Called by the engine on close. */
@@ -90,6 +92,21 @@ export function registerConversationReader(den: string, reader: ConversationRead
   readers.set(den, reader);
   return () => {
     if (readers.get(den) === reader) readers.delete(den);
+  };
+}
+
+/**
+ * Create + register the reader for an opened Harness. BOTH hosts (openWolfEngine, createWolfHarness) must call this so
+ * hooks always get `HookContext.conversation`; the returned detach clears closers and unregisters.
+ * `hostConsolidationTimer`: the host runs its own interval consolidation, so the extension must not start one.
+ */
+export function attachConversationReader(harness: Harness, den: string, opts: { hostConsolidationTimer?: boolean } = {}): () => void {
+  const reader = createConversationReader(harness);
+  reader.hostConsolidationTimer = opts.hostConsolidationTimer === true;
+  const unregister = registerConversationReader(den, reader);
+  return () => {
+    reader.close();
+    unregister();
   };
 }
 

@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createConversationReader, registerConversationReader } from "./conversation-reader.js";
+import { attachConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
 import type { EngineEvent, EngineSnapshot } from "./events.js";
 import { engineVersion } from "./version.js";
@@ -131,8 +131,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     ctx,
   );
 
-  const reader = createConversationReader(harness);
-  const unregisterReader = registerConversationReader(dirname(storagePath), reader);
+  const detachReader = attachConversationReader(harness, dirname(storagePath));
 
   const toolsByName = (names: readonly string[]) => {
     const all = registry.snapshot().tools();
@@ -223,8 +222,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     harness,
     resume: () => harness.resume(),
     close: async () => {
-      reader.close();
-      unregisterReader();
+      detachReader();
       await harness.close(ctx);
     },
   };

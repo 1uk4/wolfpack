@@ -91,6 +91,8 @@ export interface ConversationReads {
   messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
   /** Run `fn` once when the engine closes (to clear timers). */
   onEngineClose?(fn: () => void): void;
+  /** The host runs its own interval consolidation timer: don't start another. */
+  hostConsolidationTimer?: boolean;
 }
 
 export interface HookContext {

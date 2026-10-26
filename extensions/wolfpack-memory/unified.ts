@@ -149,7 +149,8 @@ export function seedWatermark(committed: ConversationMessage[]): Watermark {
   for (let i = committed.length - 1; i >= 0; i--) {
     if (committed[i].message.role === "user") return { lastEntryId: committed[i].entryId - 1 };
   }
-  return { lastEntryId: committed.length ? committed[committed.length - 1].entryId : 0 };
+  // No user message among the conversation's own entries (a fork continuing mid-turn): they are all new.
+  return { lastEntryId: 0 };
 }
 
 /** Chunk id -> the entry watermark it covers. A `:current` chunk (the hook's uncommitted copy) covers its prefix. */
@@ -345,6 +346,7 @@ export default function createMemoryExtension(
 
   // ─── Observer ──────────────────────────────────────────────────────────────
   const observing = new Map<number, Promise<void>>();
+  let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
 
   /**
@@ -354,7 +356,13 @@ export default function createMemoryExtension(
    */
   async function observeConversation(message: AssistantMessage, ctx: HookContext): Promise<void> {
     const reads = ctx.conversation;
-    if (!reads) return;
+    if (!reads) {
+      if (!warnedNoReads) {
+        warnedNoReads = true;
+        console.warn("[memory] observer inactive: hook has no conversation reader (host did not attachConversationReader)");
+      }
+      return;
+    }
     const cls = await reads.classify();
     if (!cls || cls.kind === "task") return;
 
@@ -397,13 +405,17 @@ export default function createMemoryExtension(
   };
   /** Started on the first observation (durable has no extension start hook); cleared when the engine closes. */
   function startTimer(ctx: HookContext): void {
-    if (timer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
+    if (timer || ctx.conversation?.hostConsolidationTimer || (consolidationTrigger !== "timer" && consolidationTrigger !== "hybrid")) return;
     const ms = config.intervalMs ?? parseInterval(consolidation?.interval ?? "4h");
     timer = setInterval(() => {
       void (async () => {
-        if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
-        console.log("[memory] Timer-triggered consolidation");
-        await runConsolidation();
+        try {
+          if (consolidating || (await getPoolStats(wolfDen)).count === 0) return;
+          console.log("[memory] Timer-triggered consolidation");
+          await runConsolidation({ drain: true });
+        } catch (err) {
+          console.error("[memory] timer error:", err instanceof Error ? err.message : err);
+        }
       })();
     }, ms);
     timer.unref?.();
@@ -419,8 +431,8 @@ export default function createMemoryExtension(
     });
   }
 
-  /** Consolidate the pool down to poolTarget. Never overlaps itself. */
-  function runConsolidation(): Promise<void> {
+  /** Consolidate the pool down to poolTarget (drain: the whole pool, as the timer does). Never overlaps itself. */
+  function runConsolidation(opts: { drain?: boolean } = {}): Promise<void> {
     if (consolidating) return consolidating;
     consolidating = (async () => {
       try {
@@ -434,7 +446,7 @@ export default function createMemoryExtension(
           ...(config.engine ? { engine: config.engine } : {}),
           defaultDomain: domains[0] ?? "wolfpack",
           domains,
-          poolTarget,
+          ...(opts.drain ? {} : { poolTarget }),
           minObservations: 1, // the trigger already decided; the manual-use size floor doesn't apply
           onProgress: (msg) => console.log(`[memory] ${msg}`),
         });

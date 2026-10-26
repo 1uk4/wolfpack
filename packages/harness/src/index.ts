@@ -15,6 +15,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { ModelTable } from "@wolfpack/engine";
 import { backupSessionStore } from "./engine/backup.js";
+import { attachConversationReader } from "./engine/conversation-reader.js";
 import { engineVersion } from "./engine/version.js";
 import { loadWolfConfig, loadWolfModels, type WolfConfig } from "./config.js";
 import { loadExtensions as loadUnifiedExtensions } from "./loader.js";
@@ -228,6 +229,8 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     },
     context
   );
+  // Hooks (the memory observer) read conversation records/history through this; the host owns the interval timer.
+  const detachReader = attachConversationReader(harness, wolfDen, { hostConsolidationTimer: true });
 
   // Root conversation with wolf identity. Table IDs carry no provider prefix;
   // the api transport means pi-ai's anthropic provider.
@@ -354,6 +357,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       if (consolidationTimer) clearInterval(consolidationTimer);
       if (sweepTimer) clearInterval(sweepTimer);
       if (telegram) await telegram.stop();
+      detachReader();
       await harness.close(context);
       await sandbox?.close();
       restoreEnv();

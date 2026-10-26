@@ -44,5 +44,7 @@ describe("seedWatermark", () => {
     const hist = [m(2, "user", "old"), m(3, "assistant", "old reply"), m(10, "user", "now"), m(11, "assistant", "calling")];
     expect(seedWatermark(hist)).toEqual({ lastEntryId: 9 });
     expect(seedWatermark([])).toEqual({ lastEntryId: 0 });
+    // a fork whose own entries have no user message keeps its first assistant entry
+    expect(seedWatermark([m(20, "assistant", "continuing"), m(21, "toolResult", "ok")])).toEqual({ lastEntryId: 0 });
   });
 });

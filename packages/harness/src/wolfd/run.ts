@@ -144,7 +144,7 @@ async function startConfigured(
     const desired: ConfigureOptions = {
       model: { provider: model.provider, modelId: model.modelId },
       ...(model.thinking ? { thinkingLevel: model.thinking as ThinkingLevel } : {}),
-      tools,
+      tools: withExtensionTools(tools, engine.toolNames()),
       cwd,
       instructions: context.instructions,
     };
@@ -207,6 +207,15 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
   const broken = result.failed.filter((f) => !f.notFound);
   if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
   return result.extensions;
+}
+
+/**
+ * The conversation's active tool list: the wolf.yaml `tools:` names plus every tool the loaded extensions register
+ * (task_bind, memory tools, ...). createWolfHarness passes no selection, so pi-durable offers it the whole registry;
+ * wolfd selects by name, so it must name the extension tools too or the model is never offered them.
+ */
+export function withExtensionTools(configured: readonly string[], registered: readonly string[]): string[] {
+  return [...new Set([...configured, ...registered])];
 }
 
 /** `root(init)` only applies at creation; on later starts configure when stored state differs from desired. */

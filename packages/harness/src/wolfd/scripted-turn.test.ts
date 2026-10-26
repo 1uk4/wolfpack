@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -45,5 +46,34 @@ describe("scripted model turns", () => {
     const detail = await tw.client.getThread(tw.home);
     expect(detail.messages.at(-1)).toMatchObject({ role: "assistant", text: "writing\n\ndone" });
     expect(readFileSync(join(tw.wolf.config.capability.workspace, "out.txt"), "utf8")).toBe("hello");
+  });
+
+  it("offers the model every loaded extension's tools, not just the coding tools (the provider-bound tool list)", async () => {
+    let offered: string[] = [];
+    const ext = defineExtension({
+      name: "test-ext",
+      tools: [
+        defineTool({
+          name: "task_bind",
+          description: "bind",
+          parameters: { type: "object" as const, properties: {}, required: [] },
+          async execute() {
+            return { content: [{ type: "text" as const, text: "ok" }] };
+          },
+        }),
+      ],
+    });
+    tw = await startTestWolf({
+      script: [
+        (context) => {
+          // Tool declarations travel on the transcript's system messages (`toolsAdded`).
+          offered = context.messages.flatMap((m) => ((m as { toolsAdded?: { name: string }[] }).toolsAdded ?? []).map((t) => t.name));
+          return fauxAssistantMessage("pong");
+        },
+      ],
+      hooks: { extensions: [ext] },
+    });
+    await tw.submit("ping");
+    expect(offered).toEqual(expect.arrayContaining(["bash", "read", "write", "edit", "task_bind"]));
   });
 });

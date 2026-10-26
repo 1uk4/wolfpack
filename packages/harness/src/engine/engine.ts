@@ -105,6 +105,8 @@ export interface WolfEngine {
    * conversations (nothing in the serving path does yet). Don't use it elsewhere.
    */
   readonly harness: Harness;
+  /** Names of every tool the installed extensions register (what a conversation with no `tools` selection is offered). */
+  toolNames(): string[];
   /** Continue interrupted work. Call on every start. */
   resume(): void;
   close(): Promise<void>;
@@ -220,6 +222,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
       },
     },
     harness,
+    toolNames: () => registry.snapshot().tools().map((t) => t.tool.name),
     resume: () => harness.resume(),
     close: async () => {
       detachReader();

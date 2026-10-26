@@ -24,7 +24,8 @@ export interface WolfConfig {
     consolidation?: {
       trigger?: "timer" | "threshold" | "hybrid" | "manual";  // default: hybrid
       interval?: string;         // e.g. "24h" - pi-durable only
-      threshold?: number;        // tokens (default: 15000)
+      threshold?: number;        // pool tokens that trigger consolidation (default: 20000)
+      poolTarget?: number;       // pool tokens left after a consolidation (default: 10000)
     };
     /** Librarian mode - enables KB inbox tools and sweep */
     librarian?: boolean;

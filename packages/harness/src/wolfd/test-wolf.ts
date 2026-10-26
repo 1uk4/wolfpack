@@ -5,7 +5,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineExtension, GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, defineTask, GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { HttpConsoleClient, type ThreadEvent } from "@wolfpack/client";
 import { createScriptedModel, type FauxResponseStep, type ScriptedModel } from "./scripted-model.js";
@@ -107,3 +107,16 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
     },
   };
 }
+
+/** A task that sleeps forever: a live owner for a task-owned (subagent-style) conversation. */
+export const Park = defineTask<Record<string, never>, { phase: "park" }, null>({
+  name: "test.park",
+  version: 1,
+  initial: () => ({ phase: "park" }),
+  phases: {
+    park: async (_task, runtime, c) => runtime.sleepUntil(runtime.now() + 1e12, { phase: "park" }, c),
+  },
+  abort: async (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
+});
+export const parkExtension = defineExtension({ name: "test-park", tasks: [Park] });
+

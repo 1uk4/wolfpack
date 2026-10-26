@@ -67,10 +67,36 @@ export interface AssistantMessage {
   >;
 }
 
+/**
+ * What kind of conversation a hook fired in, from its pi-durable ConversationRecord:
+ * - root: no parent, not task-owned;
+ * - fork: a user fork (`parent` link), with the root of its lineage;
+ * - task: task-owned (`owner` link: a subagent). Never captures, never binds.
+ */
+export type ConversationClass =
+  | { kind: "root" }
+  | { kind: "fork"; parentConversationId: number; /** Inclusive parent entry the fork inherits through. */ forkedAt: number; lineageRoot: number }
+  | { kind: "task"; taskId: number; ownerConversationId: number };
+
+/** One model message a conversation appended (pi-ai Message: user / assistant / toolResult), with its entry id. */
+export interface ConversationMessage {
+  entryId: number;
+  message: { role: string; content?: unknown };
+}
+
+/** The hook's conversation, read from the durable store. */
+export interface ConversationReads {
+  classify(): Promise<ConversationClass | undefined>;
+  /** Own messages with entry id > `afterEntryId`, oldest first (a fork's inherited history is excluded). */
+  messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
+}
+
 export interface HookContext {
   wolfDen: string;
   wolfName: string;
   conversationId: number;
+  /** Present under the durable runtime once the engine is open. */
+  conversation?: ConversationReads;
 }
 
 export interface Hooks {

@@ -22,7 +22,7 @@ export type {
 } from "./runtime.js";
 
 // What the observer reads of a session branch (and what it must skip)
-export { serializeBranchEntries } from "./serialize-branch.js";
+export { serializeBranchEntries, chunkSerialized } from "./serialize-branch.js";
 
 // Orchestrator — the main API
 export {

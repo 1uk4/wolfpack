@@ -32,10 +32,13 @@ export function serializeBranchEntries(entries: any[]): Array<{ id: string; text
         for (const block of msg.content) {
           if (block.type === "tool_use") {
             text += `\n[Tool call: ${block.name}(${JSON.stringify(block.input).slice(0, 500)})]`;
+          } else if (block.type === "toolCall") {
+            // pi-ai / pi-durable shape: { type: "toolCall", name, arguments }
+            text += `\n[Tool call: ${block.name}(${JSON.stringify(block.arguments ?? {}).slice(0, 500)})]`;
           }
         }
       }
-    } else if (role === "tool") {
+    } else if (role === "tool" || role === "toolResult") {
       // Tool result message
       const content = typeof msg.content === "string"
         ? msg.content.slice(0, 2000)
@@ -50,5 +53,31 @@ export function serializeBranchEntries(entries: any[]): Array<{ id: string; text
     }
   }
 
+  return chunks;
+}
+
+/**
+ * Group serialized entries into chunks of at most `tokenLimit` tokens (an oversized entry gets a chunk of its own).
+ * A chunk's `id` is its last entry's id, the watermark a caller records once the chunk is observed.
+ */
+export function chunkSerialized(
+  serialized: Array<{ id: string; text: string; tokens: number }>,
+  tokenLimit = 5000,
+): Array<{ id: string; text: string; tokenCount: number }> {
+  const chunks: Array<{ id: string; text: string; tokenCount: number }> = [];
+  let text = "";
+  let tokens = 0;
+  let lastId = "";
+  for (const entry of serialized) {
+    if (tokens + entry.tokens > tokenLimit && text.length > 0) {
+      chunks.push({ id: lastId, text, tokenCount: tokens });
+      text = "";
+      tokens = 0;
+    }
+    text += (text ? "\n\n" : "") + entry.text;
+    tokens += entry.tokens;
+    lastId = entry.id;
+  }
+  if (text.length > 0) chunks.push({ id: lastId, text, tokenCount: tokens });
   return chunks;
 }

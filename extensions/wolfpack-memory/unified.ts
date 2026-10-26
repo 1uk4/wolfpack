@@ -4,7 +4,7 @@
  * Supports both pi and pi-durable runtimes through the unified extension API.
  * Core logic lives in @wolfpack/memory package.
  */
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
 import { join } from "node:path";
@@ -18,12 +18,15 @@ import {
   type ToolResult,
   type HookContext,
   type AssistantMessage,
+  type ConversationMessage,
 } from "@wolfpack/harness/extension";
 import {
   observe,
   renderDenContext,
   renderKbAccess,
   reconcileDen,
+  serializeBranchEntries,
+  chunkSerialized,
   type RawObservation,
 } from "@wolfpack/memory";
 import { consolidatePool } from "@wolfpack/harness/memory";
@@ -46,7 +49,10 @@ export interface MemoryConfig {
   /** Consolidation settings */
   consolidation?: {
     trigger?: "threshold" | "timer" | "hybrid" | "manual";
+    /** Pool tokens at which consolidation runs (default 20000, pi's value). */
     threshold?: number;
+    /** Pool tokens left in the pool by a consolidation (default 10000, pi's value). */
+    poolTarget?: number;
     interval?: string;
   };
   /** Librarian mode - enables KB inbox tools (read-only for now) */
@@ -91,18 +97,86 @@ export function memoryGate(config: MemoryConfig, context: ExtensionContext): Mem
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-function formatMessage(message: AssistantMessage): string {
-  const parts: string[] = [];
-  for (const block of message.content) {
-    if (block.type === "text") {
-      parts.push(`[assistant] ${block.text}`);
-    } else if (block.type === "toolCall") {
-      parts.push(`[tool_call] ${block.name}(${JSON.stringify(block.arguments).slice(0, 200)})`);
-    } else if (block.type === "thinking") {
-      parts.push(`[thinking] ${block.thinking.slice(0, 500)}`);
-    }
+/** How long the observer waits for the reported response to be committed before using the hook's copy. */
+const COMMIT_WAIT_MS = 50;
+const COMMIT_WAIT_ATTEMPTS = 20;
+
+/** Pi's defaults (extensions/wolfpack-memory/index.ts CONSOLIDATE_AT / POOL_TARGET). */
+export const DEFAULT_CONSOLIDATE_AT = 20000;
+export const DEFAULT_POOL_TARGET = 10000;
+
+// ─── Watermarks ────────────────────────────────────────────────────────────
+
+/**
+ * Per-conversation observer position, `<den>/.memory/watermarks/<conversationId>.json`.
+ *
+ * `lastEntryId` is the newest committed entry already observed. afterResponse fires before the response it reports is
+ * committed, so the observer also reads that response from the hook itself; `tail` fingerprints it, and when the entry
+ * shows up in a later read it is skipped instead of observed twice.
+ */
+export interface Watermark {
+  lastEntryId: number;
+  tail?: string;
+}
+
+const watermarkFile = (den: string, conversationId: number) => join(den, ".memory", "watermarks", `${conversationId}.json`);
+
+export async function readWatermark(den: string, conversationId: number): Promise<Watermark> {
+  try {
+    const w = JSON.parse(await readFile(watermarkFile(den, conversationId), "utf-8")) as Watermark;
+    if (typeof w.lastEntryId === "number") return w;
+  } catch { /* none yet */ }
+  return { lastEntryId: 0 };
+}
+
+async function writeWatermark(den: string, conversationId: number, w: Watermark): Promise<void> {
+  const file = watermarkFile(den, conversationId);
+  await mkdir(join(den, ".memory", "watermarks"), { recursive: true });
+  await writeFile(`${file}.tmp`, JSON.stringify(w));
+  await rename(`${file}.tmp`, file);
+}
+
+type Block = { type?: string; text?: string; name?: string; arguments?: unknown };
+
+/** Identity of an assistant response across its two forms (hook message, committed entry). Thinking is ignored. */
+function fingerprint(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return (content as Block[])
+    .map((b) => (b.type === "text" ? `t:${b.text}` : b.type === "toolCall" ? `c:${b.name}:${JSON.stringify(b.arguments ?? {})}` : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * The text the observer reads for one afterResponse: the conversation's own messages past the watermark, via pi's
+ * chunk serializer (user / assistant / tool results).
+ *
+ * afterResponse fires before the response it reports is committed, so right then `committed` may not hold it yet.
+ * Returns undefined while it is missing and `settled` is false (the caller retries). Once settled, a response that
+ * still isn't committed is observed from the hook's own copy and fingerprinted in `tail`, so that when it is committed
+ * later it is skipped instead of observed twice.
+ */
+export function newObserverChunks(
+  committed: ConversationMessage[],
+  current: AssistantMessage,
+  watermark: Watermark,
+  settled: boolean,
+): { chunks: Array<{ id: string; text: string; tokenCount: number }>; next: Watermark } | undefined {
+  let rest = committed;
+  if (watermark.tail) {
+    // The response observed last time as the hook's copy has been committed since; skip that copy.
+    const i = rest.findIndex((m) => m.message.role === "assistant");
+    if (i >= 0 && fingerprint(rest[i].message.content) === watermark.tail) rest = [...rest.slice(0, i), ...rest.slice(i + 1)];
   }
-  return parts.join("\n");
+  const lastEntryId = committed.length ? committed[committed.length - 1].entryId : watermark.lastEntryId;
+  const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.map((m) => ({ type: "message", id: String(m.entryId), message: m.message }));
+
+  const fp = fingerprint(current.content);
+  const isCommitted = fp === "" || rest.some((m) => m.message.role === "assistant" && fingerprint(m.message.content) === fp);
+  if (isCommitted) return { chunks: chunkSerialized(serializeBranchEntries(entries)), next: { lastEntryId } };
+  if (!settled) return undefined;
+  entries.push({ type: "message", id: `${lastEntryId}:current`, message: { role: "assistant", content: current.content } });
+  return { chunks: chunkSerialized(serializeBranchEntries(entries)), next: { lastEntryId, tail: fp } };
 }
 
 /**
@@ -176,8 +250,9 @@ export default function createMemoryExtension(
   console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
   if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
 
-  const consolidationThreshold = consolidation?.threshold ?? 15000;
-  const consolidationTrigger = consolidation?.trigger ?? "threshold";
+  const consolidationThreshold = consolidation?.threshold ?? DEFAULT_CONSOLIDATE_AT;
+  const poolTarget = consolidation?.poolTarget ?? DEFAULT_POOL_TARGET;
+  const consolidationTrigger = consolidation?.trigger ?? "hybrid";
 
   // Models come from the wolf's resolved table (the harness points
   // WOLFPACK_MODELS_FILE at the shipped models.json before loading us).
@@ -234,6 +309,72 @@ export default function createMemoryExtension(
   try {
     reconcileDen(wolfDen, kbRoots ?? undefined, wolfName);
   } catch { /* never block startup */ }
+
+  // ─── Observer ──────────────────────────────────────────────────────────────
+  const observing = new Map<number, Promise<void>>();
+  let consolidating: Promise<void> | null = null;
+
+  /**
+   * Observe what a conversation said since its watermark. Any conversation that is not task-owned captures (root or
+   * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
+   * den topics; the binding read is unchanged (task 7 owns per-conversation binding).
+   */
+  async function observeConversation(message: AssistantMessage, ctx: HookContext): Promise<void> {
+    const reads = ctx.conversation;
+    if (!reads) return;
+    const cls = await reads.classify();
+    if (!cls || cls.kind === "task") return;
+
+    const watermark = await readWatermark(ctx.wolfDen, ctx.conversationId);
+    let planned: ReturnType<typeof newObserverChunks>;
+    for (let attempt = 0; !planned; attempt++) {
+      const committed = await reads.messagesSince(watermark.lastEntryId);
+      planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAIT_ATTEMPTS);
+      if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAIT_MS));
+    }
+    const { chunks, next } = planned;
+    if (chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
+
+    const eng = getEngine();
+    for (const chunk of chunks) {
+      const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
+      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, readBoundTask(ctx.wolfDen));
+    }
+    await writeWatermark(ctx.wolfDen, ctx.conversationId, next);
+
+    if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") await maybeConsolidate(ctx);
+  }
+
+  async function maybeConsolidate(ctx: HookContext): Promise<void> {
+    if (consolidating) return consolidating;
+    const stats = await getPoolStats(ctx.wolfDen);
+    if (stats.tokens < consolidationThreshold) return;
+    console.log(`[memory] Threshold reached (${stats.tokens} >= ${consolidationThreshold}), consolidating...`);
+    consolidating = (async () => {
+      try {
+        const consResult = await consolidatePool({
+          wolfDen: ctx.wolfDen,
+          wolfName: ctx.wolfName,
+          table: getTable(),
+          apiKey: apiKeyFor(getTable()),
+          kbRoots: kbRoots ?? undefined,
+          workStore: recordStore(),
+          ...(config.engine ? { engine: config.engine } : {}),
+          defaultDomain: domains[0] ?? "wolfpack",
+          domains,
+          poolTarget,
+          minObservations: 1, // the threshold already decided; the manual-use size floor doesn't apply
+          onProgress: (msg) => console.log(`[memory] ${msg}`),
+        });
+        console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);
+      } catch (consErr) {
+        console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
+      } finally {
+        consolidating = null;
+      }
+    })();
+    return consolidating;
+  }
 
   return defineExtension({
     name: "wolfpack-memory",
@@ -732,54 +873,16 @@ export default function createMemoryExtension(
 
     hooks: {
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
-        // Only observe root conversation — subagents are ephemeral
-        if (ctx.conversationId !== 1) return;
-
-        // Fire-and-forget: don't await
-        (async () => {
-          try {
-            const text = formatMessage(message);
-            if (text.length < minTextLength) return;
-
-            const eng = getEngine();
-            const result = await observe({
-              engine: eng,
-              chunkText: text,
-              mode: "conversation",
-            });
-
-            if (result.observations.length > 0) {
-              await writeToPool(ctx.wolfDen, result.observations, readBoundTask(ctx.wolfDen));
-
-              // Auto-consolidation if threshold trigger
-              if (consolidationTrigger === "threshold" || consolidationTrigger === "hybrid") {
-                const stats = await getPoolStats(ctx.wolfDen);
-                if (stats.tokens >= consolidationThreshold) {
-                  console.log(`[memory] Threshold reached (${stats.tokens} >= ${consolidationThreshold}), consolidating...`);
-                  try {
-                    const consResult = await consolidatePool({
-                      wolfDen: ctx.wolfDen,
-                      wolfName: ctx.wolfName,
-                      table: getTable(),
-                      apiKey: apiKeyFor(getTable()),
-                      kbRoots: kbRoots ?? undefined,
-              workStore: recordStore(),
-              ...(config.engine ? { engine: config.engine } : {}),
-                      defaultDomain: domains[0] ?? "wolfpack",
-              domains,
-                      onProgress: (msg) => console.log(`[memory] ${msg}`),
-                    });
-                    console.log(`[memory] Auto-consolidated: ${consResult.topicsCreated} created, ${consResult.topicsMerged} updated, ${consResult.claimsSubmitted} emitted`);
-                  } catch (consErr) {
-                    console.error("[memory] Auto-consolidation failed:", consErr instanceof Error ? consErr.message : consErr);
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.error("[memory] observation error:", err instanceof Error ? err.message : err);
-          }
-        })();
+        // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
+        // tool round fires twice and the second must see the first's watermark).
+        const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
+        const run = prev.then(() => observeConversation(message, ctx)).catch((err) => {
+          console.error("[memory] observation error:", err instanceof Error ? err.message : err);
+        });
+        observing.set(ctx.conversationId, run);
+        void run.finally(() => {
+          if (observing.get(ctx.conversationId) === run) observing.delete(ctx.conversationId);
+        });
       },
     },
   });

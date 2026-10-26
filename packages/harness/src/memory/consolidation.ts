@@ -65,6 +65,11 @@ export interface ConsolidationConfig {
   domains?: string[];
   /** Skip emitting to KB (default: false) */
   skipClaims?: boolean;
+  /**
+   * Pool tokens to leave behind: consolidate only the oldest observations above this target and keep the newest
+   * ones in the pool (pi's POOL_TARGET). Omitted: consolidate the whole pool.
+   */
+  poolTarget?: number;
   /** Minimum observations to consolidate (default: 5) */
   minObservations?: number;
   /** Minimum tokens to consolidate (default: 1000) */
@@ -117,6 +122,19 @@ export async function getPoolStats(wolfDen: string): Promise<{ count: number; to
     0
   );
   return { count: observations.length, tokens };
+}
+
+/** The oldest observations (pool order is append order) beyond the newest `target` tokens. */
+function overflowAbove(pool: PoolObservation[], target: number): PoolObservation[] {
+  let kept = 0;
+  let firstKept = pool.length;
+  for (let i = pool.length - 1; i >= 0; i--) {
+    const t = Math.ceil(pool[i].content.length / 4);
+    if (kept + t > target) break;
+    kept += t;
+    firstKept = i;
+  }
+  return pool.slice(0, firstKept);
 }
 
 const poolKey = (o: PoolObservation) => `${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`;
@@ -175,7 +193,7 @@ export async function consolidatePool(
 
   // Read pool
   const pool = await readPool(wolfDen);
-  const observations = pool;
+  const observations = config.poolTarget === undefined ? pool : overflowAbove(pool, config.poolTarget);
   if (observations.length === 0) {
     onProgress?.("No observations to consolidate");
     return { observationsProcessed: 0, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0 };

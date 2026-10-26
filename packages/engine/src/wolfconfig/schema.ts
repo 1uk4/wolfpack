@@ -17,6 +17,11 @@
  *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
  *   memory:
  *     live: true            # durable memory may write the LIVE roots (nothing sets this until cutover)
+ *     consolidation:        # all optional; defaults shown (pi's thresholds)
+ *       threshold: 20000    # pool tokens that trigger consolidation
+ *       poolTarget: 10000   # pool tokens left in the pool after one
+ *       trigger: hybrid     # threshold | timer | hybrid | manual
+ *       interval: 4h        # timer / hybrid cadence
  *
  * There is NO `runtime` field: durable is the engine. Unknown keys (runtime,
  * profile, role, extensions, transport, models, …) are accepted, ignored, and
@@ -25,6 +30,9 @@
 import { z } from "zod";
 
 export const DEFAULT_TOOLS = ["coding"] as const;
+
+/** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
+export const DEFAULT_CONSOLIDATION = { threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" } as const;
 
 const TierOverride = z
   .object({ model: z.string().min(1).optional(), thinking: z.string().min(1).optional() })
@@ -48,7 +56,22 @@ export const WolfFileSchema = z.object({
     .passthrough()
     .default({}),
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
-  memory: z.object({ live: z.boolean().optional(), librarian: z.boolean().optional() }).passthrough().default({}),
+  memory: z
+    .object({
+      live: z.boolean().optional(),
+      librarian: z.boolean().optional(),
+      consolidation: z
+        .object({
+          threshold: z.number().int().positive().optional(),
+          poolTarget: z.number().int().nonnegative().optional(),
+          trigger: z.enum(["threshold", "timer", "hybrid", "manual"]).optional(),
+          interval: z.string().regex(/^\d+(s|m|h|d)$/, 'expected a duration like "30m", "4h", "1d"').optional(),
+        })
+        .passthrough()
+        .default({}),
+    })
+    .passthrough()
+    .default({}),
 });
 
 /** Keys the v2 file schema knows; anything else is ignored with a warning. */
@@ -91,6 +114,15 @@ export interface WolfConfig {
     live: boolean;
     /** Librarian mode (mutates KB_BASE); refused in a sandbox. */
     librarian: boolean;
+    /** Pool thresholds and trigger, defaults applied. */
+    consolidation: {
+      /** Pool tokens at which consolidation runs. */
+      threshold: number;
+      /** Pool tokens left behind by a consolidation (the newest observations). */
+      poolTarget: number;
+      trigger: "threshold" | "timer" | "hybrid" | "manual";
+      interval: string;
+    };
   };
   /** Derived: <dir>/den. */
   den: string;

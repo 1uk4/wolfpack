@@ -33,6 +33,14 @@ describe("loadWolfConfig", () => {
     expect(config.serve.port).toBeUndefined();
   });
 
+  it("memory.consolidation: pi's thresholds by default, overridable per key", () => {
+    const d = loadWolfConfig(wolf("c1", "name: c1\n"), { home: "/h" }).config.memory.consolidation;
+    expect(d).toEqual({ threshold: 20000, poolTarget: 10000, trigger: "hybrid", interval: "4h" });
+    const o = loadWolfConfig(wolf("c2", "name: c2\nmemory:\n  consolidation:\n    threshold: 500\n    trigger: manual\n"), { home: "/h" }).config.memory.consolidation;
+    expect(o).toEqual({ threshold: 500, poolTarget: 10000, trigger: "manual", interval: "4h" });
+    expect(() => loadWolfConfig(wolf("c3", "name: c3\nmemory:\n  consolidation:\n    interval: soon\n"), { home: "/h" })).toThrow(WolfConfigError);
+  });
+
   it("v2 full", () => {
     const file = wolf(
       "b",

@@ -12,6 +12,7 @@ import {
   type Extension as PiDurableExtension,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
+import { conversationReaderFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
   Tool,
@@ -91,10 +92,20 @@ export function adaptToDurable(
     hooks.push(
       hook(GenerationTask, {
         afterResponse: (message: PiAssistantMessage, api) => {
+          const conversationId = Number(api.conversationId);
+          const reader = conversationReaderFor(wolfDen);
           const context: HookContext = {
             wolfDen,
             wolfName,
-            conversationId: Number(api.conversationId),
+            conversationId,
+            ...(reader
+              ? {
+                  conversation: {
+                    classify: () => reader.classify(conversationId),
+                    messagesSince: (after) => reader.messagesSince(conversationId, after),
+                  },
+                }
+              : {}),
           };
           // Convert pi-durable message to unified format
           const unifiedMessage = {

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { KNOWN_TOP_LEVEL_KEYS, WolfFileSchema, type WolfConfig } from "./schema.js";
+import { DEFAULT_CONSOLIDATION, KNOWN_TOP_LEVEL_KEYS, WolfFileSchema, type WolfConfig } from "./schema.js";
 
 export class WolfConfigError extends Error {
   constructor(
@@ -96,12 +96,21 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
     ...(sandbox ? { sandbox } : {}),
-    memory: { live: v.memory.live === true, librarian: v.memory.librarian === true },
+    memory: {
+      live: v.memory.live === true,
+      librarian: v.memory.librarian === true,
+      consolidation: { ...DEFAULT_CONSOLIDATION, ...definedOnly(v.memory.consolidation) } as WolfConfig["memory"]["consolidation"],
+    },
     den: path.join(dir, "den"),
     dir,
     file: abs,
   };
   return { config, warnings };
+}
+
+/** Drop undefined keys so an omitted yaml field never overrides a default. */
+function definedOnly<T extends object>(o: T): Partial<T> {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
 export interface DiscoveredWolves {

@@ -3,6 +3,7 @@
  * layer composes this with `mapEngineEvents` + `stampEvent`. Nothing outside src/engine/ should import pi-durable
  * going forward (existing harness internals migrate later).
  */
+import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -18,6 +19,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createConversationReader, registerConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
 import type { EngineEvent, EngineSnapshot } from "./events.js";
 import { engineVersion } from "./version.js";
@@ -98,6 +100,11 @@ export interface WolfEngine {
     get(id: string): Promise<EngineConversation | undefined>;
     create(init?: ConfigureOptions): Promise<EngineConversation>;
   };
+  /**
+   * @internal test seam: the opened pi-durable Harness, for tests that must create forks and task-owned
+   * conversations (nothing in the serving path does yet). Don't use it elsewhere.
+   */
+  readonly harness: Harness;
   /** Continue interrupted work. Call on every start. */
   resume(): void;
   close(): Promise<void>;
@@ -123,6 +130,8 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     },
     ctx,
   );
+
+  const unregisterReader = registerConversationReader(dirname(storagePath), createConversationReader(harness));
 
   const toolsByName = (names: readonly string[]) => {
     const all = registry.snapshot().tools();
@@ -210,8 +219,12 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
         return wrap(await harness.createConversation({ ownership: { kind: "ownerless" }, agent: agentChange(init) }, ctx));
       },
     },
+    harness,
     resume: () => harness.resume(),
-    close: () => harness.close(ctx),
+    close: async () => {
+      unregisterReader();
+      await harness.close(ctx);
+    },
   };
 }
 

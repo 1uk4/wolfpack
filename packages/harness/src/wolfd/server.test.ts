@@ -91,6 +91,17 @@ describe("WolfServer", () => {
     expect(text).toBe("abandoned partial"); // live deltas are not retracted; the snapshot is the reset
   });
 
+  it("a restreamed head and an unstreamed tail both reach a live subscriber", async () => {
+    const engine = new ScriptedEngine({ delayMs: 20, script: [{ kind: "text", text: "MIDDLE-" }] });
+    engine.restreamNext("HEAD-", "TAIL");
+    const { url } = await boot(engine);
+    await post(url, SUBMIT, { input: "hi", whenBusy: "reject" });
+    const events = await readEvents(url, STREAM);
+    const text = events.filter((e) => e.type === "text-delta").map((e: any) => e.text).join("");
+    expect(text).toBe("HEAD-MIDDLE-TAIL");
+    expect(events.some((e) => e.type === "snapshot")).toBe(false);
+  });
+
   it("attaching mid-run presents the in-flight turn", async () => {
     const engine = new ScriptedEngine({ delayMs: 30 });
     await engine.submit({ input: "early", whenBusy: "reject" });

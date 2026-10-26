@@ -157,3 +157,55 @@ describe("snapshots", () => {
     expect(map(delta("orphan"))).toEqual([]);
   });
 });
+
+describe("restreamed blocks (text_start / block / message)", () => {
+  const upd = (...changes: object[]) => ev({ type: "message_update", changes });
+  const textOf = (out: any[]) => out.filter((e) => e.type === "text-delta").map((e) => e.text).join("");
+
+  it("text_start head + delta + block replace + final: nothing is lost, no resync", () => {
+    const out = map(
+      start(), asstStart([]),
+      upd({ type: "text_start", contentIndex: 0, block: { type: "text", text: "HEAD-" } }),
+      upd({ type: "text_delta", contentIndex: 0, delta: "MIDDLE-" }),
+      upd({ type: "block", contentIndex: 0, block: { type: "text", text: "HEAD-MIDDLE-MORE-" } }),
+      asstEnd([{ type: "text", text: "HEAD-MIDDLE-MORE-TAIL" }]), end(), sub(1, "done"),
+    );
+    expect(out.some((e) => e.type === "resync")).toBe(false);
+    expect(textOf(out)).toBe("HEAD-MIDDLE-MORE-TAIL");
+  });
+
+  it("a block replace that does not extend what streamed yields a correction carrying the block text", () => {
+    const out = map(
+      start(), asstStart([]),
+      upd({ type: "text_delta", contentIndex: 0, delta: "old" }),
+      upd({ type: "block", contentIndex: 0, block: { type: "text", text: "new text" } }),
+      asstEnd([{ type: "text", text: "new text!" }]), end(), sub(1, "done"),
+    );
+    const r = out.filter((e) => e.type === "resync") as any[];
+    expect(r).toHaveLength(1);
+    expect(r[0].correction).toMatchObject({ text: "new text", staleText: "old" });
+    expect(textOf(out.slice(out.indexOf(r[0]) + 1))).toBe("!");
+  });
+
+  it("a whole `message` change reseeds from its blocks", () => {
+    const out = map(
+      start(), asstStart([]),
+      upd({ type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "hm" }, { type: "text", text: "HEAD-" }] } }),
+      upd({ type: "text_delta", contentIndex: 1, delta: "x" }),
+      asstEnd([{ type: "thinking", thinking: "hm" }, { type: "text", text: "HEAD-x-TAIL" }]), end(), sub(1, "done"),
+    );
+    expect(out.some((e) => e.type === "resync")).toBe(false);
+    expect(textOf(out)).toBe("HEAD-x-TAIL");
+    expect(out.filter((e) => e.type === "thinking-delta").map((e: any) => e.text).join("")).toBe("hm");
+  });
+
+  it("a thinking_start head is emitted", () => {
+    const out = map(
+      start(), asstStart([]),
+      upd({ type: "thinking_start", contentIndex: 0, block: { type: "thinking", thinking: "head " } }),
+      upd({ type: "thinking_delta", contentIndex: 0, delta: "rest" }),
+      asstEnd([{ type: "thinking", thinking: "head rest" }]), end(), sub(1, "done"),
+    );
+    expect(out.filter((e) => e.type === "thinking-delta").map((e: any) => e.text).join("")).toBe("head rest");
+  });
+});

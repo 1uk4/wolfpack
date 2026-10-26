@@ -34,7 +34,7 @@ interface Run {
   wake?: () => void;
   done: Promise<void>;
   /** Text of the assistant round in flight. */
-  round?: { text: string };
+  round?: { text: string; tail?: string };
 }
 
 const ev = (e: unknown) => e as EngineEvent;
@@ -49,6 +49,7 @@ export class ScriptedEngine implements EngineConversation {
   private run: Run | null = null;
   private followUps: string[] = [];
   private finalOverride: string | undefined;
+  private restream: { head: string; tail: string } | undefined;
   private readonly watchers = new Set<(batch: readonly EngineEvent[]) => void>();
 
   constructor(opts: ScriptedEngineOptions = {}) {
@@ -87,6 +88,14 @@ export class ScriptedEngine implements EngineConversation {
   /** The next closed assistant round carries `text` as its final content, whatever streamed (a diverged provider retry). */
   divergeNextFinal(text: string): void {
     this.finalOverride = text;
+  }
+
+  /**
+   * The next assistant round opens with a `text_start` block already holding `head` (a restream, as pi-claude-bridge
+   * produces) and its final content carries an extra `tail` the stream never showed.
+   */
+  restreamNext(head: string, tail = ""): void {
+    this.restream = { head, tail };
   }
 
   /** Push a mid-stream engine snapshot (what the engine does after an overflow); the mapper turns it into a resync. */
@@ -200,7 +209,7 @@ export class ScriptedEngine implements EngineConversation {
       const round = run.round;
       if (!round) return;
       run.round = undefined;
-      const finalText = this.finalOverride ?? round.text;
+      const finalText = this.finalOverride ?? round.text + (round.tail ?? "");
       this.finalOverride = undefined;
       const content = [...(finalText ? [{ type: "text", text: finalText }] : []), ...extra];
       const message = { role: "assistant", content, stopReason };
@@ -210,6 +219,15 @@ export class ScriptedEngine implements EngineConversation {
       if (run.round) return;
       run.round = { text: "" };
       this.emit([ev({ type: "message_start", message: { role: "assistant", content: [] } })]);
+      const restream = this.restream;
+      if (restream) {
+        this.restream = undefined;
+        run.round.text = restream.head;
+        run.round.tail = restream.tail;
+        this.emit([
+          ev({ type: "message_update", usage: {}, changes: [{ type: "text_start", contentIndex: 0, block: { type: "text", text: restream.head } }] }),
+        ]);
+      }
     };
 
     for (const step of this.script) {

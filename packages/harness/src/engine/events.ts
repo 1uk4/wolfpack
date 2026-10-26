@@ -16,6 +16,9 @@
  *   set/append/trimStart ops; details-only updates are dropped), tool-end carries the result text + isError from the
  *   result entry (absent entry = faulted tool = isError). Nested tool calls (parentToolCallId) are not surfaced.
  * - An assistant message that ends with stopReason "error" yields an `error` event before turn-end(error).
+ * - message_update changes of every kind (text_start/thinking_start/block/message as well as the deltas) update a
+ *   per-block map; the aggregate is diffed against what has streamed: a suffix becomes a delta, anything else a
+ *   correction (resync). A restreamed head therefore reaches the view instead of being dropped.
  * - If the final text/thinking at message_end is NOT an extension of what streamed (a provider retry diverged), no tail
  *   is emitted; a `{type:"resync", correction}` is surfaced instead. An empty final side is never treated as divergence.
  * - A mid-stream engine `snapshot` is surfaced as `{type:"resync"}`: the serving layer owns protocol snapshots.
@@ -83,6 +86,8 @@ interface MapperState {
   hint: Reason;
   text: string;
   thinking: string;
+  /** The in-flight assistant message's text/thinking blocks by content index (tool-call blocks are not tracked). */
+  blocks: Map<string, { kind: "text" | "thinking"; index: number; text: string }>;
   tools: Map<string, string>;
 }
 
@@ -119,11 +124,60 @@ function resultText(message: unknown): string {
     .join("");
 }
 
+const debugStream = () => process.env.WOLFPACK_DEBUG_STREAM === "1";
+
 const turnIdFor = (input: number | undefined) => `turn-${input ?? "unknown"}`;
 
 /** Seed from an attach snapshot so a mid-run joiner's deltas map to the right turn. */
 export function createEventMapper(seed?: EngineSnapshot): EventMapper {
-  const s: MapperState = { hint: "complete", text: "", thinking: "", tools: new Map() };
+  const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map() };
+
+  /** Re-seed the block map from a (partial) message's content. */
+  const seedBlocks = (message: unknown) => {
+    s.blocks = new Map();
+    const content = (message as { content?: unknown })?.content;
+    if (!Array.isArray(content)) {
+      const { text } = blocksOf(message);
+      if (text) s.blocks.set("text:0", { kind: "text", index: 0, text });
+      return;
+    }
+    content.forEach((_, i) => setBlock(i, content[i]));
+  };
+
+  const aggregate = (kind: "text" | "thinking") =>
+    [...s.blocks.values()]
+      .filter((b) => b.kind === kind)
+      .sort((a, b) => a.index - b.index)
+      .map((b) => b.text)
+      .join("");
+
+  const setBlock = (index: number, block: unknown) => {
+    const b = block as { type?: string; text?: string; thinking?: string } | undefined;
+    s.blocks.delete(`text:${index}`);
+    s.blocks.delete(`thinking:${index}`);
+    if (b?.type === "text") s.blocks.set(`text:${index}`, { kind: "text", index, text: b.text ?? "" });
+    else if (b?.type === "thinking") s.blocks.set(`thinking:${index}`, { kind: "thinking", index, text: b.thinking ?? "" });
+  };
+
+  /** Emit the difference between what has streamed and the block map: a suffix delta, or a correction. */
+  const syncStreamed = (out: MappedEvent[]) => {
+    if (!s.turnId) return;
+    const text = aggregate("text");
+    const thinking = aggregate("thinking");
+    const textOk = text.startsWith(s.text);
+    const thinkingOk = thinking.startsWith(s.thinking);
+    if (textOk && thinkingOk) {
+      if (thinking.length > s.thinking.length) out.push({ type: "thinking-delta", turnId: s.turnId, text: thinking.slice(s.thinking.length) });
+      if (text.length > s.text.length) out.push({ type: "text-delta", turnId: s.turnId, text: text.slice(s.text.length) });
+    } else {
+      out.push({
+        type: "resync",
+        correction: { turnId: s.turnId, text, thinking, staleText: s.text, staleThinking: s.thinking },
+      });
+    }
+    s.text = text;
+    s.thinking = thinking;
+  };
 
   const seedFrom = (snap: EngineSnapshot) => {
     s.turnId = snap.run ? turnIdFor(Number(snap.run.inputs[0])) : undefined;
@@ -132,6 +186,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     const partial = blocksOf(snap.generation?.message);
     s.text = partial.text;
     s.thinking = partial.thinking;
+    seedBlocks(snap.generation?.message);
     s.tools = new Map(snap.tools.filter((t) => t.status !== "done").map((t) => [t.callId, t.output ?? ""]));
   };
   if (seed) seedFrom(seed);
@@ -202,20 +257,36 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
         if (partial.text) out.push({ type: "text-delta", turnId: s.turnId, text: partial.text });
         s.text = partial.text;
         s.thinking = partial.thinking;
+        seedBlocks(m);
         return;
       }
 
       case "message_update": {
         if (!s.turnId) return;
+        if (debugStream()) console.debug(`[wolfd stream] message_update changes=[${e.changes.map((c) => c.type).join(",")}]`);
         for (const c of e.changes) {
-          if (c.type === "text_delta" && c.delta) {
-            s.text += c.delta;
-            out.push({ type: "text-delta", turnId: s.turnId, text: c.delta });
-          } else if (c.type === "thinking_delta" && c.delta) {
-            s.thinking += c.delta;
-            out.push({ type: "thinking-delta", turnId: s.turnId, text: c.delta });
+          switch (c.type) {
+            case "text_start":
+            case "thinking_start":
+            case "block":
+              setBlock(c.contentIndex, c.block);
+              break;
+            case "text_delta":
+            case "thinking_delta": {
+              const kind = c.type === "text_delta" ? "text" : "thinking";
+              const b = s.blocks.get(`${kind}:${c.contentIndex}`);
+              if (b) b.text += c.delta;
+              else s.blocks.set(`${kind}:${c.contentIndex}`, { kind, index: c.contentIndex, text: c.delta });
+              break;
+            }
+            case "message":
+              seedBlocks(c.message);
+              break;
+            default:
+              break; // toolcall_start / toolcall_delta: tool calls surface via tool_execution_*
           }
         }
+        syncStreamed(out);
         return;
       }
 
@@ -225,6 +296,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
         reconcile(out, blocksOf(msg));
         s.text = "";
         s.thinking = "";
+        s.blocks = new Map();
         if (msg?.stopReason === "aborted") s.hint = "aborted";
         else if (msg?.stopReason === "error") {
           s.hint = "error";

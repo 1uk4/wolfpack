@@ -170,7 +170,7 @@ export function ThreadChat({
 																const Renderer = artifactRenderers[item.entry.name];
 																return (
 																	<ToolRow
-																		key={item.entry.callId || item.index}
+																		key={item.key}
 																		entry={item.entry}
 																		artifact={Renderer ? { Renderer, part: item.part as ArtifactPartProps["part"] } : undefined}
 																	/>

@@ -129,6 +129,24 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		return undefined;
 	};
 
+	// A call that reaches the projection twice (the same record read twice, or a
+	// live replay on top of a record that already holds it) renders ONCE. Only
+	// an identical repeat (same id, name, arguments) is folded: legacy records
+	// reuse ids with different arguments and keep each call.
+	const seenCalls = new Map<string, { part: LhViewPart; signature: string }[]>();
+	const foldRepeat = (block: { id: string; name: string; arguments?: unknown }, part: LhViewPart): boolean => {
+		const signature = `${block.name}\u0000${JSON.stringify(block.arguments ?? null)}`;
+		const seen = seenCalls.get(block.id) ?? [];
+		const prior = seen.find((s) => s.signature === signature);
+		if (prior) {
+			// A repeat that is streaming right now outranks a settled-looking pending copy.
+			if (part.state === "input-streaming" && prior.part.state === "input-available") prior.part.state = "input-streaming";
+			return true;
+		}
+		seenCalls.set(block.id, [...seen, { part, signature }]);
+		return false;
+	};
+
 	// The active compaction (owner round 14): the fold emits the CUT
 	// DIVIDER — the longer, at-the-seam marker — immediately BEFORE the
 	// first kept message, so the transcript shows exactly where history
@@ -201,7 +219,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
 				} else if (block.type === "toolCall") {
 					const part = toolPartOf(block, live, streamingMessage);
-					rest.push(part);
+					if (!foldRepeat(block, part)) rest.push(part);
 				}
 			}
 			const parts: LhViewPart[] = [...reasoning, ...rest];

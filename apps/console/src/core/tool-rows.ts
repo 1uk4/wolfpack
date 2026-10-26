@@ -83,7 +83,7 @@ export function isEmptyThinking(part: LhViewPart): boolean {
 export type RenderItem =
 	| { kind: "text"; part: LhViewPart; index: number }
 	| { kind: "reasoning"; part: LhViewPart; index: number }
-	| { kind: "tool"; entry: ToolEntry; part: LhViewPart; index: number }
+	| { kind: "tool"; entry: ToolEntry; part: LhViewPart; index: number; key: string }
 	| { kind: "separator"; index: number };
 
 /**
@@ -98,6 +98,7 @@ export function renderItems(parts: readonly LhViewPart[], streaming: boolean): R
 	const items: RenderItem[] = [];
 	let lastKind: RenderItem["kind"] | null = null;
 	let pendingStep = false;
+	const keyCounts = new Map<string, number>();
 	parts.forEach((part, index) => {
 		if (part.type === "step-start") {
 			pendingStep = true;
@@ -108,7 +109,14 @@ export function renderItems(parts: readonly LhViewPart[], streaming: boolean): R
 		else if (part.type === "reasoning") {
 			const placeholder = streaming && index === parts.length - 1;
 			if (!isEmptyThinking(part) || placeholder) item = { kind: "reasoning", part, index };
-		} else if (isToolPart(part)) item = { kind: "tool", entry: toolEntryOf(part), part, index };
+		} else if (isToolPart(part)) {
+			const entry = toolEntryOf(part);
+			// React key: the callId, made unique when a record repeats one.
+			const base = entry.callId || `tool-${index}`;
+			const seen = keyCounts.get(base) ?? 0;
+			keyCounts.set(base, seen + 1);
+			item = { kind: "tool", entry, part, index, key: seen === 0 ? base : `${base}#${seen}` };
+		}
 		if (!item) return;
 		if (pendingStep && lastKind === "text" && item.kind === "text") items.push({ kind: "separator", index });
 		pendingStep = false;

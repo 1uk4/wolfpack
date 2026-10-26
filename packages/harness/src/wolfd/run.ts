@@ -40,9 +40,9 @@ export interface StartWolfOptions {
   /** Upper bound of the AGENTS.md/CLAUDE.md walk. Default: os.homedir(). */
   home?: string;
   log?: (line: string) => void;
-  /** Test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
+  /** @internal test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
   models?: Models;
-  /** Test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks). */
+  /** @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks). */
   extraExtensions?: readonly Extension[];
 }
 
@@ -72,9 +72,9 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   if (opts.socket) await prepareSocketPath(opts.socket);
 
   mkdirSync(config.den, { recursive: true });
-  const wolfModels = buildWolfModels(model, { cwd, env });
+  const wolfModels = opts.models ? { models: opts.models, shutdown: () => {} } : buildWolfModels(model, { cwd, env });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
-    ...((opts.models ?? wolfModels.models) ? { models: (opts.models ?? wolfModels.models)! } : {}),
+    ...(wolfModels.models ? { models: wolfModels.models } : {}),
     extensions,
     cwd,
     backup: true,

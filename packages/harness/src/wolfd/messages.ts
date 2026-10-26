@@ -1,14 +1,15 @@
 /**
  * ThreadMessage reconstruction from engine entries.
  *
- * Fidelity limits (text-only protocol messages):
+ * Fidelity limits (text + capped tool calls; no thinking):
  * - Only `pi.user` and `pi.assistant` entries become messages; system and bookkeeping entries are dropped.
  * - Text is the concatenation of text blocks; thinking is dropped. Tool calls ride `tools` (capped args/result, paired
  *   with their `pi.tool_result` entry by callId, `textOffset` = text length at the call). An assistant entry with no
  *   text and no tool calls yields no message; a pure tool round yields one with `text: ""`.
  * - Consecutive assistant messages (the rounds of one turn, split by tool calls) are merged into ONE message, text
  *   joined by a blank line, so the thread shows one assistant message per turn; a steer's user message splits them.
- * - Ids are `entry-<engine entry id>` (of the first merged entry) (NOT the submit ack's messageId, which is the engine submission id).
+ * - Ids are `entry-<engine entry id>` (of the first merged entry; a turn that starts with a tool-only round uses that
+ *   entry's id, since such rounds now yield a message) (NOT the submit ack's messageId, which is the engine submission id).
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
@@ -38,16 +39,53 @@ export function messageFromEntry(entry: Entry, now: () => Date = () => new Date(
 const TOOL_CAP = 4096;
 const ARG_STRING_CAP = 1024;
 
+/** Cut at `n` UTF-16 units without splitting a surrogate pair. */
+function sliceSafe(s: string, n: number): string {
+  if (s.length <= n) return s;
+  let end = n;
+  const c = s.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--;
+  return s.slice(0, end);
+}
+
+/**
+ * Cap tool args but keep them an OBJECT: every string value (nested included) is cut to ARG_STRING_CAP; if the JSON
+ * is still over TOOL_CAP, the largest string values are shortened first until it fits. Any cut sets `_truncated: true`
+ * at the top level.
+ */
 function capArgs(args: unknown): unknown {
+  let cut = false;
   const cap = (v: unknown): unknown => {
-    if (typeof v === "string") return v.length > ARG_STRING_CAP ? `${v.slice(0, ARG_STRING_CAP)}…` : v;
+    if (typeof v === "string") {
+      if (v.length <= ARG_STRING_CAP) return v;
+      cut = true;
+      return `${sliceSafe(v, ARG_STRING_CAP)}…`;
+    }
     if (Array.isArray(v)) return v.map(cap);
     if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, cap(x)]));
     return v;
   };
   const capped = cap(args);
-  const json = JSON.stringify(capped) ?? "";
-  return json.length > TOOL_CAP ? `${json.slice(0, TOOL_CAP)}…` : capped;
+  if (!capped || typeof capped !== "object" || Array.isArray(capped)) return capped;
+  const obj = capped as Record<string, unknown>;
+  const size = () => (JSON.stringify(obj) ?? "").length;
+  // Shorten the largest string values (top-level and nested) until the total fits.
+  const strings: Array<{ holder: Record<string, unknown> | unknown[]; key: string | number }> = [];
+  const collect = (h: Record<string, unknown> | unknown[]) => {
+    for (const [k, x] of Object.entries(h)) {
+      if (typeof x === "string") strings.push({ holder: h, key: Array.isArray(h) ? Number(k) : k });
+      else if (x && typeof x === "object") collect(x as Record<string, unknown>);
+    }
+  };
+  collect(obj);
+  while (size() > TOOL_CAP) {
+    const get = (r: (typeof strings)[number]) => (r.holder as never)[r.key] as string;
+    const big = strings.reduce((m, r) => (get(r).length > get(m).length ? r : m), strings[0]!);
+    if (!big || get(big).length <= 16) break;
+    (big.holder as Record<string | number, unknown>)[big.key] = `${sliceSafe(get(big), Math.max(16, Math.floor(get(big).length / 2)))}…`;
+    cut = true;
+  }
+  return cut ? { ...obj, _truncated: true } : obj;
 }
 
 function blocksOf(entry: Entry): Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }> {
@@ -88,7 +126,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const call = list[i].tools?.find((c) => c.callId === msg.toolCallId);
       if (!call) continue;
       const text = blocksOf(entry).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-      call.result = text.length > TOOL_CAP ? text.slice(0, TOOL_CAP) : text;
+      call.result = sliceSafe(text, TOOL_CAP);
       if (text.length > TOOL_CAP) call.resultTruncated = true;
       call.isError = msg.isError === true;
       return;

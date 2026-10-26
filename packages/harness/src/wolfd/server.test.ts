@@ -115,7 +115,49 @@ describe("WolfServer", () => {
   });
 });
 
+const entry = (id: number, kind: string, message: unknown): any => ({ id, kind, model: [message] });
+
+describe("live tool results", () => {
+  it("attaches results through the live event path (tool_execution_end), not a snapshot", async () => {
+    const engine = new ScriptedEngine({
+      delayMs: 1,
+      script: [
+        { kind: "tool", name: "bash", args: { command: "ls" }, updates: [], result: "out" },
+        { kind: "text", text: "done" },
+      ],
+    });
+    const { url } = await boot(engine);
+    await post(url, SUBMIT, { input: "go", whenBusy: "reject" });
+    await readEvents(url, STREAM);
+    const t: any = await (await fetch(`${url}${THREAD}`)).json();
+    const a = t.messages.find((m: any) => m.role === "assistant");
+    expect(a.text).toBe("done");
+    expect(a.tools).toHaveLength(1);
+    expect(a.tools[0]).toMatchObject({ name: "bash", args: { command: "ls" }, result: "out", isError: false });
+  });
+});
+
 describe("messagesFromEntries", () => {
+  it("keeps oversized args an object, truncating largest-first, surrogate-safe", () => {
+    const huge = "😀".repeat(3000);
+    const msgs = messagesFromEntries([
+      entry(1, "pi.assistant", {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c", name: "write", arguments: { path: "a.ts", content: huge, nested: { x: huge }, n: 1 } }],
+      }),
+    ]);
+    const args: any = msgs[0].tools![0].args;
+    expect(typeof args).toBe("object");
+    expect(args._truncated).toBe(true);
+    expect(args.path).toBe("a.ts");
+    expect(args.n).toBe(1);
+    expect(JSON.stringify(args).length).toBeLessThanOrEqual(4200);
+    expect(args.content).not.toMatch(/[\ud800-\udbff]…$/);
+  });
+  it("small args carry no _truncated", () => {
+    const msgs = messagesFromEntries([entry(1, "pi.assistant", { role: "assistant", content: [{ type: "toolCall", id: "c", name: "r", arguments: { path: "a" } }] })]);
+    expect(msgs[0].tools![0].args).toEqual({ path: "a" });
+  });
   const entry = (id: number, kind: string, message: unknown): any => ({ id, kind, model: [message] });
   it("keeps user + assistant text, merges rounds, tool-only rounds carry tools only", () => {
     const msgs = messagesFromEntries([

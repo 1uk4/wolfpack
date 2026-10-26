@@ -9,6 +9,7 @@ export type {
   SubmitAck,
   ThreadDetail,
   ThreadMessage,
+  ThreadToolCall,
   ThreadSummary,
   WhenBusy,
   WolfSummary,

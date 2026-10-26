@@ -192,7 +192,7 @@ export class WolfServer {
   private applyBatch(batch: readonly EngineEvent[]): void {
     for (const ev of batch) {
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
-      else if (ev.type === "message_end" && !this.seenEntries.has(ev.entry.id)) {
+      else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
         applyEntry(this.messages, ev.entry);
       }

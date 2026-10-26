@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MemoryEventSchema, type MemoryEvent } from "@wolfpack/protocol";
-import { memoryEventsFor, oneLine } from "@wolfpack/harness/memory";
+import { disposeMemoryEvents, memoryEventsFor, oneLine } from "@wolfpack/harness/memory";
 import { memoryEmitter } from "./memory-events.js";
 
 describe("memoryEmitter", () => {
@@ -9,7 +9,7 @@ describe("memoryEmitter", () => {
     const mem = memoryEmitter(den, "w", "wolfpack");
     mem.promoteFailed("j0", new Error("early")); // no subscriber: must not throw
     const got: MemoryEvent[] = [];
-    const off = memoryEventsFor(den).subscribe((e) => got.push(e));
+    const off = memoryEventsFor(den, "w").subscribe((e) => got.push(e));
     mem.promoteStarted("j1");
     mem.promoteFailed("j1", new Error(`first line\nsecret second line ${"x".repeat(300)}`));
     off();
@@ -17,6 +17,22 @@ describe("memoryEmitter", () => {
     expect(got.map((e) => e.type)).toEqual(["promote_started", "promote_failed"]);
     expect(got[1]).toMatchObject({ wolf: "w", jobId: "j1", message: "first line" });
     for (const e of got) expect(MemoryEventSchema.safeParse(e).success).toBe(true);
+  });
+
+  it("redacts obvious secrets in the summary", () => {
+    expect(oneLine("use key sk-abcdefghijklmnopqrstuvwxyz123456 now")).not.toContain("sk-abcdef");
+    expect(oneLine("AKIAABCDEFGHIJKLMNOP leaked")).toContain("[REDACTED");
+  });
+
+  it("disposeMemoryEvents keeps a bus with listeners and drops an idle one", () => {
+    const den = "/tmp/mev-dispose-den";
+    const bus = memoryEventsFor(den, "w");
+    const off = bus.subscribe(() => {});
+    disposeMemoryEvents(den);
+    expect(memoryEventsFor(den, "other")).toBe(bus);
+    off();
+    disposeMemoryEvents(den);
+    expect(memoryEventsFor(den, "other")).not.toBe(bus);
   });
 
   it("oneLine takes the first non-empty line and caps it", () => {

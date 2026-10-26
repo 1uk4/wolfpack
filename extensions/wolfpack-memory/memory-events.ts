@@ -3,7 +3,7 @@
  * and puts them on the den's bus (packages/harness/src/memory/events.ts). unified.ts only calls these at the points
  * where the work already happens.
  */
-import { memoryEventsFor, oneLine, type ConsolidatedTopic, type PromoteOutcome } from "@wolfpack/harness/memory";
+import { disposeMemoryEvents, memoryEventsFor, oneLine, type ConsolidatedTopic, type PromoteOutcome } from "@wolfpack/harness/memory";
 import type { MemoryTarget } from "@wolfpack/protocol";
 
 export interface BoundWork {
@@ -15,7 +15,8 @@ export interface BoundWork {
 export const homeThreadId = (wolfName: string) => `${wolfName}/home`;
 
 export function memoryEmitter(wolfDen: string, wolfName: string, defaultDomain: string) {
-  const bus = memoryEventsFor(wolfDen, wolfName);
+  // Looked up per emit: a disposed bus (server closed) is recreated and shared again.
+  const bus = { emit: (d: Parameters<ReturnType<typeof memoryEventsFor>["emit"]>[0]) => memoryEventsFor(wolfDen, wolfName).emit(d) };
   return {
     /** Observations appended to the pool. Summary: the first line of the first observation, capped at 120 chars. */
     observed(observations: Array<{ content: string; domain?: string }>, bound: BoundWork | null, threadId?: string): void {
@@ -29,6 +30,10 @@ export function memoryEmitter(wolfDen: string, wolfName: string, defaultDomain: 
         count: observations.length,
         summary: oneLine(observations[0].content),
       });
+    },
+    /** Release the den's bus at shutdown (kept if a subscriber is still attached). */
+    dispose(): void {
+      disposeMemoryEvents(wolfDen);
     },
     topic(t: ConsolidatedTopic): void {
       bus.emit({
@@ -60,6 +65,7 @@ export function memoryEmitter(wolfDen: string, wolfName: string, defaultDomain: 
         jobId,
         consolidated: out.consolidated,
         contributions: out.promoted.claimsSubmitted,
+        ...(out.promoted.distillPending ? { pending: out.promoted.distillPending } : {}),
       });
     },
     promoteFailed(jobId: string, err: unknown): void {

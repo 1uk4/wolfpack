@@ -245,6 +245,8 @@ export const PromoteFinishedEventSchema = memoryBase.extend({
   jobId: z.string(),
   consolidated: z.number().int().nonnegative(),
   contributions: z.number().int().nonnegative(),
+  /** Topics whose distill failed and stay pending for the next promote (absent = 0). */
+  pending: z.number().int().positive().optional(),
 });
 export const PromoteFailedEventSchema = memoryBase.extend({
   type: z.literal("promote_failed"),

@@ -69,6 +69,8 @@ export interface ConsolidateResult {
   claimsSubmitted: number;
   /** Topics held in the den (log-like, `promotable: false`) and not emitted. */
   topicsHeld: number;
+  /** Topics whose distill/emit failed and stay pending for the next promote. */
+  distillPending?: number;
   /** Re-promotes skipped because the change since the last emitted version is trivial. */
   trivialSkipped: number;
   /** Per-topic outcomes for the topics that were written (create/merge). */
@@ -211,6 +213,7 @@ export async function consolidateSession(
   // topics cost no LLM call; a failed distill leaves the topic pending.
   let claimsSubmitted = 0;
   let trivialSkipped = 0;
+  let distillPending = 0;
 
   if (!skipClaims && kbRoots && updatedTopics.length > 0) {
     const stats = await promoteTopics(updatedTopics, {
@@ -228,6 +231,7 @@ export async function consolidateSession(
     });
     claimsSubmitted = stats.emitted;
     trivialSkipped = stats.trivialSkipped;
+    distillPending = stats.pending;
     held += stats.held;
     onProgress?.(`  distill: ${stats.distilled} distilled, ${stats.split} split, ${stats.held} held, ${stats.pending} pending`);
   }
@@ -261,6 +265,7 @@ export async function consolidateSession(
     claimsSubmitted,
     topicsHeld: held,
     trivialSkipped,
+    ...(distillPending ? { distillPending } : {}),
     details: updatedTopics.map((t) => ({ title: t.title, change: t.change })),
   };
 }

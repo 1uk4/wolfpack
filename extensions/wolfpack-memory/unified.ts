@@ -563,7 +563,7 @@ export default function createMemoryExtension(
     name: "wolfpack-memory",
     runtimes: ["pi", "pi-durable"],
 
-    lifecycle: { stop: () => { stopTimer(); unregisterMemoryActions(wolfDen, actions); } },
+    lifecycle: { stop: () => { stopTimer(); unregisterMemoryActions(wolfDen, actions); mem.dispose(); } },
 
     tools: [
       defineTool({

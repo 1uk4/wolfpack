@@ -52,7 +52,7 @@ import {
   type ResyncDraft,
   type ThreadEventDraft,
 } from "../engine/index.js";
-import { memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
+import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import { prepareSocketPath } from "./socket.js";
 import { appendMessage, messageFromEntry, messagesFromEntries } from "./messages.js";
 
@@ -80,6 +80,9 @@ const OPERATOR: Actor = { id: "operator", kind: "operator" };
 const SYSTEM: Actor = { id: "wolfd", kind: "system" };
 
 type Sub = (ev: ThreadEvent) => void;
+
+const MEMORY_KEEPALIVE_MS = 20_000;
+const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
 export class WolfServer {
   private readonly conv: EngineConversation;
@@ -167,6 +170,7 @@ export class WolfServer {
     if (this.socketPath) rmSync(this.socketPath, { force: true });
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
+    if (this.opts.den) disposeMemoryEvents(this.opts.den);
   }
 
   // ------------------------------------------------------------- pump
@@ -420,9 +424,18 @@ export class WolfServer {
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
     });
-    const unsubscribe = this.memoryBus?.subscribe((ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
+    const unsubscribe = this.memoryBus?.subscribe((ev) => {
+      // A client that stopped reading must not grow our memory: drop it.
+      if (res.writableLength > MEMORY_STREAM_MAX_BUFFER) return void res.destroy();
+      res.write(`data: ${JSON.stringify(ev)}\n\n`);
+    });
     res.write(": connected\n\n"); // flushes headers; once the client has them it is subscribed
-    const gone = () => unsubscribe?.();
+    const ka = setInterval(() => res.write(": ka\n\n"), MEMORY_KEEPALIVE_MS);
+    ka.unref();
+    const gone = () => {
+      clearInterval(ka);
+      unsubscribe?.();
+    };
     req.on("close", gone);
     res.on("close", gone);
   }

@@ -204,6 +204,12 @@ describe("MemoryEvent", () => {
     expect(new Set(variants.map((v) => v.type))).toEqual(new Set(MemoryEventSchema.options.map((o) => o.shape.type.value)));
   });
 
+  it("promote_finished parses with and without the optional pending count", () => {
+    const fin = variants.find((v) => v.type === "promote_finished")!;
+    expect(parseMemoryEvent(fin)).toMatchObject({ kind: "event" });
+    expect(parseMemoryEvent({ ...fin, pending: 2 })).toMatchObject({ kind: "event", event: { pending: 2 } });
+  });
+
   it("ignores unknown types and flags a known type with a bad payload", () => {
     expect(parseMemoryEvent({ ...base, type: "sweep_finished", target: { kind: "den" } })).toMatchObject({ kind: "unknown" });
     expect(parseMemoryEvent({ ...base, type: "promote_started", target: { kind: "den" } })).toMatchObject({ kind: "invalid" });

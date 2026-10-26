@@ -174,3 +174,4 @@ export {
   type WorkRecordOutcome,
   type ConsolidateWorkOptions,
 } from "./work-record.js";
+export { scanSecrets, type SecretScan } from "./work/secrets.js";

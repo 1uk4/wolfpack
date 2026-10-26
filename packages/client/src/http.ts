@@ -145,8 +145,8 @@ export class HttpConsoleClient implements ConsoleClient {
       try {
         const res = await this.request("streamWolfEvents", { name: wolf }, { headers: { Accept: "text/event-stream" }, signal: ctl.signal }, wolf);
         if (!res.body) throw new TypeError("stream response has no body");
-        failures = 0;
         for await (const frame of sseFrames(res.body)) {
+          failures = 0; // only a received frame proves the connection worked
           let json: unknown;
           try {
             json = JSON.parse(frame.data);

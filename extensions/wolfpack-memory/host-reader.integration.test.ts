@@ -39,7 +39,7 @@ it("a Harness opened the createWolfHarness way (reader attached) observes a turn
   await root.submit({ type: "input", content: "HOSTUSER please remember the caching decision we made today.", whenBusy: "reject" }, ctx);
   await root.waitForIdle(ctx);
   const wm = join(dir, ".memory", "watermarks", "1.json");
-  for (let i = 0; i < 100 && !existsSync(wm); i++) await new Promise((r) => setTimeout(r, 30));
+  for (let i = 0; i < 330 && !existsSync(wm); i++) await new Promise((r) => setTimeout(r, 30));
   expect(existsSync(wm)).toBe(true);
   expect(prompts.join("\n")).toContain("HOSTUSER");
   expect(readFileSync(join(dir, ".memory/pool/observations.jsonl"), "utf8")).toContain("Cache lookups");

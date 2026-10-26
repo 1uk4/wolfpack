@@ -4,6 +4,7 @@
  * subscribes and fans them out on `GET /v1/wolves/:name/events`. Keyed by den like the actions registry, but
  * get-or-create: createWolfHarness (no HTTP /v1) gets a bus too, and emitting with no subscriber is a no-op.
  */
+import { scanSecrets } from "@wolfpack/memory";
 import type { MemoryEvent } from "@wolfpack/protocol";
 
 /** An event as emitters write it: the bus stamps `wolf` and `timestamp`. */
@@ -17,18 +18,24 @@ export interface MemoryEventBus {
   subscribe(listener: MemoryEventListener): () => void;
 }
 
-// On globalThis: the memory extension and wolfd's server must share one bus per den even when the module is loaded
+// Registry on globalThis (precedent: the memory actions registry in ./actions.ts, also keyed by den): the memory extension and wolfd's server must share one bus per den even when the module is loaded
 // twice (source and dist copies, as in the sandbox tests).
 const REGISTRY = Symbol.for("wolfpack.memoryEventBuses");
-const buses: Map<string, MemoryEventBus & { wolf: string }> = ((globalThis as Record<symbol, unknown>)[REGISTRY] ??= new Map()) as Map<string, MemoryEventBus & { wolf: string }>;
+type Bus = MemoryEventBus & { wolf: string; listenerCount(): number };
+function getRegistry(): Map<string, Bus> {
+  const g = globalThis as Record<symbol, unknown>;
+  return (g[REGISTRY] ??= new Map<string, Bus>()) as Map<string, Bus>;
+}
 
-/** The bus of this den (created on first use). `wolf` names the emitting wolf; the first caller's name wins. */
-export function memoryEventsFor(wolfDen: string, wolf?: string): MemoryEventBus {
+/** The bus of this den (created on first use). `wolf` is required so no event goes out unnamed; the first caller's name wins. */
+export function memoryEventsFor(wolfDen: string, wolf: string): MemoryEventBus & { listenerCount(): number } {
+  const buses = getRegistry();
   let bus = buses.get(wolfDen);
   if (!bus) {
     const listeners = new Set<MemoryEventListener>();
-    const created: MemoryEventBus & { wolf: string } = {
-      wolf: wolf ?? "",
+    const created: Bus = {
+      wolf,
+      listenerCount: () => listeners.size,
       emit(draft) {
         if (listeners.size === 0) return;
         const event = { ...draft, wolf: created.wolf, timestamp: new Date().toISOString() } as MemoryEvent;
@@ -47,14 +54,19 @@ export function memoryEventsFor(wolfDen: string, wolf?: string): MemoryEventBus 
     };
     buses.set(wolfDen, created);
     bus = created;
-  } else if (wolf && !bus.wolf) {
-    bus.wolf = wolf;
   }
   return bus;
 }
 
-/** One line, capped: the only free text a MemoryEvent may carry. */
+/** Drop the den's bus when nobody listens (server close, extension shutdown). A live subscriber keeps it. */
+export function disposeMemoryEvents(wolfDen: string): void {
+  const buses = getRegistry();
+  if (buses.get(wolfDen)?.listenerCount() === 0) buses.delete(wolfDen);
+}
+
+/** One line, secrets redacted, capped: the only free text a MemoryEvent may carry. */
 export function oneLine(text: string, max = 120): string {
-  const line = (text.split("\n").find((l) => l.trim() !== "") ?? "").replace(/\s+/g, " ").trim();
+  const first = text.split("\n").find((l) => l.trim() !== "") ?? "";
+  const line = scanSecrets(first).text.replace(/\s+/g, " ").trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }

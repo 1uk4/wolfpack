@@ -25,7 +25,7 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 
 ## Memory events (wolf stream)
 
-`MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId`, `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata only (ids, counts, a one-line summary), never observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`. Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
+`MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId`, `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata plus a redacted one-line summary; never full observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`. Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
 
 ## Layout
 

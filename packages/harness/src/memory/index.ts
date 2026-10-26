@@ -22,6 +22,7 @@ export {
   type PromoteStart,
 } from "./actions.js";
 export {
+  disposeMemoryEvents,
   memoryEventsFor,
   oneLine,
   type MemoryEventBus,

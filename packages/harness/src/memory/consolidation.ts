@@ -78,6 +78,15 @@ export function durableSessionTopics(wolfDen: string): SessionTopicsLocation {
   return { memoryRoot: join(wolfDen, ".memory", "sessions"), sessionId: DURABLE_SESSION_ID };
 }
 
+/** Event callbacks are observers: they never break consolidation. */
+function safely(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface ConsolidatedTopic {
   id: string;
   domain?: string;
@@ -409,7 +418,8 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       ...gate,
     });
 
-    config.onTopic?.({ id: action.result.id, domain: domainOf(action.result.domain), change, scope: "den", observationCount: denObs.length });
+    const res = action.result;
+    safely(() => config.onTopic?.({ id: res.id, domain: domainOf(res.domain), change, scope: "den", observationCount: denObs.length }));
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
     if (action.result.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${action.result.body.length}): ${action.result.id} — should be split by subject`);
     if (isUpdate) merged++;
@@ -541,7 +551,7 @@ async function consolidateToSessionTopics(
     }
     const isUpdate = existing.some((t) => t.id === r.id);
     writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
-    config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length });
+    safely(() => config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length }));
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
     if (isUpdate) merged++;
     else created++;

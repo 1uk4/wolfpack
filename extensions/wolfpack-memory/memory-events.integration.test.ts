@@ -15,6 +15,7 @@ import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import { writeBindingFile } from "./conversation-binding.js";
+import { memoryEventsFor } from "@wolfpack/harness/memory";
 import { memoryActionsFor } from "./memory-actions.js";
 import createMemoryExtension from "./unified.js";
 
@@ -37,7 +38,7 @@ const REPLY = "We decided to cache the session lookups for five minutes because 
 /** A single long observation line: well past the 120-char summary cap. */
 const OBS = `Sessions are cached for five minutes. ${"The profile endpoint is the hot path in the load test, so lookups hit the cache first. ".repeat(4)}END_OF_OBSERVATION`;
 
-function stubEngine(): Engine {
+function stubEngine(opts: { failDistill?: boolean } = {}): Engine {
   return {
     call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
       if (step === "classify") return schema.parse({ observations: [{ timestamp: "2026-10-25 10:00", content: OBS }] });
@@ -46,6 +47,7 @@ function stubEngine(): Engine {
           actions: [{ sessionTopicId: "x", action: "create", reasoning: "new", result: { id: "caching", title: "Caching", summary: "Session lookups are cached", body: "Cache session lookups for five minutes." } }],
         });
       }
+      if (step === "distill" && opts.failDistill) throw new Error("distill down");
       if (step === "distill") return schema.parse({ contributions: [{ slug: "main", title: "Caching", summary: "Session lookups are cached", body: "## Details\nCache session lookups." }] });
       throw new Error(`unexpected step ${step}`);
     },
@@ -64,7 +66,7 @@ async function devRoot(): Promise<string> {
   return dev;
 }
 
-async function startWolf(memoryYaml: string) {
+async function startWolf(memoryYaml: string, opts: { failDistill?: boolean } = {}) {
   const dev = await devRoot();
   const kbBase = tmp("kb"); // KB_BASE + the sandbox's KB_OPS make promote enabled
   tw = await startTestWolf({
@@ -73,7 +75,7 @@ async function startWolf(memoryYaml: string) {
     hooks: {
       extensions: ({ config, den, env }) => [
         adaptToDurable(
-          createMemoryExtension({ ...config.memory, engine: stubEngine() }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: kbBase } }),
+          createMemoryExtension({ ...config.memory, engine: stubEngine(opts) }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env: { ...env, KB_BASE: kbBase } }),
           { wolfDen: den, wolfName: "testwolf" },
         ),
       ],
@@ -160,5 +162,30 @@ describe("MemoryEvents on the wolf stream", { timeout: 30_000 }, () => {
     await start.done;
     await waitFor(() => types(events).includes("promote_finished"));
     expect(types(events).filter((x) => x.startsWith("promote_"))).toEqual(["promote_started", "promote_finished"]);
+  });
+
+  it("a partial distill failure gives promote_finished with pending > 0 (not promote_failed)", async () => {
+    const t = await startWolf("memory:\n  consolidation:\n    threshold: 20\n    poolTarget: 1\n", { failDistill: true });
+    const { events } = collect(t);
+    await new Promise((r) => setTimeout(r, 100));
+    await t.submit("hello");
+    await waitFor(() => types(events).includes("topic_consolidated"));
+    const start = memoryActionsFor(t.wolf.config.den)!.promote();
+    if (start.status !== "started") throw new Error("not started");
+    await start.done;
+    await waitFor(() => types(events).includes("promote_finished"));
+    expect(types(events)).not.toContain("promote_failed");
+    expect(types(events)).not.toContain("contribution_emitted");
+    expect(events.find((e) => e.type === "promote_finished")).toMatchObject({ pending: 1, contributions: 0 });
+  });
+
+  it("disconnecting a client returns the bus listener count to 0", async () => {
+    const t = await startWolf("");
+    const bus = memoryEventsFor(t.wolf.config.den, "testwolf");
+    expect(bus.listenerCount()).toBe(0);
+    const { ctl } = collect(t);
+    await waitFor(() => bus.listenerCount() === 1);
+    ctl.abort();
+    await waitFor(() => bus.listenerCount() === 0);
   });
 });

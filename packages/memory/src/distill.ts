@@ -456,7 +456,11 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
       );
       if (emitted) {
         stats.emitted++;
-        opts.onEmit?.({ id: `${emitted.denTopicId}-${hashTag(emitted.contentHash)}`, denTopicId: emitted.denTopicId, domain: emitted.domainHint });
+        try {
+          opts.onEmit?.({ id: `${emitted.denTopicId}-${hashTag(emitted.contentHash)}`, denTopicId: emitted.denTopicId, domain: emitted.domainHint });
+        } catch {
+          /* observers never break the promote */
+        }
         onProgress?.(`  emitted: ${o.title} → ${domain}${o.id !== topic.id ? ` (${o.id})` : ""}`);
       }
     }

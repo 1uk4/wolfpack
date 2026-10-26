@@ -3,6 +3,7 @@ import {
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
   ErrorEnvelopeSchema,
+  MemoryEventSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
   ThreadDetailSchema,
@@ -63,6 +64,11 @@ export const ROUTES = {
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },
   /** SSE: `id: <eventId>` + `data: <ThreadEvent json>`; ends with `data: [DONE]` at the first turn-end. */
   streamThread: { method: "GET", path: "/v1/threads/:id/stream", response: { kind: "sse", event: ThreadEventSchema }, status: [200], error: err },
+  /**
+   * SSE: wolf-scoped MemoryEvents, `data: <MemoryEvent json>` frames. Live only (no replay, no `id:`, no Last-Event-ID);
+   * unlike a thread stream it never ends with `[DONE]`, it stays open until the client disconnects.
+   */
+  streamWolfEvents: { method: "GET", path: "/v1/wolves/:name/events", response: { kind: "sse", event: MemoryEventSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

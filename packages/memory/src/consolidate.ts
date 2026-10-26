@@ -56,6 +56,8 @@ export interface ConsolidateOptions {
   /** Optional progress sink — called with human-readable status lines as the
    *  pipeline advances, so a UI can show what is actually being processed. */
   onProgress?: (msg: string) => void;
+  /** Called per contribution written to the KB inbox (metadata only). */
+  onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
 }
 
 export interface ConsolidateResult {
@@ -218,6 +220,7 @@ export async function consolidateSession(
       defaultDomain,
       session: sessionId,
       onProgress,
+      onEmit: options.onEmit,
       onHold: (t, reason) => {
         const full = updatedTopics.find((x) => x.id === t.id);
         if (full) writeDenTopic(den.denRoot, { ...full, updated: now, promotable: false, promotableReason: reason });

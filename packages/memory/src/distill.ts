@@ -25,6 +25,7 @@ import { isTrivialChange, isTrivialRepromote, nearestEntries, tryEmitDelta } fro
 import {
   contentHash,
   describeFindings,
+  hashTag,
   hardFindings,
   lintKnowledge,
   safeSegment,
@@ -338,6 +339,8 @@ export interface PromoteOptions {
   defaultDomain: string;
   session?: string;
   onProgress?: (msg: string) => void;
+  /** Called per contribution written to the inbox (id = the inbox file stem). Metadata only. */
+  onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
   /** Called for a topic held back by distill: write it back as `promotable: false`. */
   onHold?: (topic: PromoteTopic, reason: string) => void;
   /** Backfill / resend: skip the trivial-change skip and reuse stored outputs when the raw body is unchanged. */
@@ -453,6 +456,7 @@ export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions
       );
       if (emitted) {
         stats.emitted++;
+        opts.onEmit?.({ id: `${emitted.denTopicId}-${hashTag(emitted.contentHash)}`, denTopicId: emitted.denTopicId, domain: emitted.domainHint });
         onProgress?.(`  emitted: ${o.title} → ${domain}${o.id !== topic.id ? ` (${o.id})` : ""}`);
       }
     }

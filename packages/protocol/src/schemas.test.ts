@@ -7,6 +7,8 @@ import {
   ERROR_HTTP_STATUS,
   ErrorCodeSchema,
   ErrorEnvelopeSchema,
+  MemoryEventSchema,
+  parseMemoryEvent,
   EventEnvelopeSchema,
   PROTOCOL_VERSION,
   ProtocolVersionSchema,
@@ -182,5 +184,34 @@ describe("commands", () => {
     expect(CreateThreadRequestSchema.parse({ wolf: "1uk4", kind: "home" })).toEqual({ wolf: "1uk4", kind: "home" });
     expect(CreateThreadRequestSchema.safeParse({ wolf: "1uk4", kind: "feature" }).success).toBe(false);
     expect(CreateThreadResponseSchema.parse(summary)).toEqual(summary);
+  });
+});
+
+describe("MemoryEvent", () => {
+  const base = { wolf: "w", timestamp: "2026-10-25T10:00:00.000Z", domain: "wolfpack" };
+  const variants = [
+    { ...base, type: "observation_captured", threadId: "w/home", target: { kind: "den" }, count: 2, summary: "Cache lookups" },
+    { ...base, type: "observation_captured", target: { kind: "work", workId: "work-1", featureId: "work-f" }, count: 1, summary: "x" },
+    { ...base, type: "topic_consolidated", target: { kind: "session", topicId: "caching" }, topicId: "caching", observationCount: 3, change: "create" },
+    { ...base, type: "contribution_emitted", target: { kind: "den", topicId: "caching" }, contributionId: "caching-abc", lane: "inbox/w" },
+    { ...base, type: "promote_started", target: { kind: "den" }, jobId: "j1" },
+    { ...base, type: "promote_finished", target: { kind: "den" }, jobId: "j1", consolidated: 3, contributions: 1 },
+    { ...base, type: "promote_failed", target: { kind: "den" }, jobId: "j1", message: "boom" },
+  ];
+
+  it("parses every variant (threadId optional)", () => {
+    for (const v of variants) expect(parseMemoryEvent(v)).toMatchObject({ kind: "event", event: { type: v.type } });
+    expect(new Set(variants.map((v) => v.type))).toEqual(new Set(MemoryEventSchema.options.map((o) => o.shape.type.value)));
+  });
+
+  it("ignores unknown types and flags a known type with a bad payload", () => {
+    expect(parseMemoryEvent({ ...base, type: "sweep_finished", target: { kind: "den" } })).toMatchObject({ kind: "unknown" });
+    expect(parseMemoryEvent({ ...base, type: "promote_started", target: { kind: "den" } })).toMatchObject({ kind: "invalid" });
+    expect(parseMemoryEvent("nope")).toMatchObject({ kind: "invalid" });
+  });
+
+  it("is not a ThreadEvent and needs no protocol bump", () => {
+    expect(PROTOCOL_VERSION).toBe(1);
+    expect(parseThreadEvent(variants[0])).toMatchObject({ kind: "invalid" });
   });
 });

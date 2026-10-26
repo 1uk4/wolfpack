@@ -193,6 +193,95 @@ export function parseThreadEvent(input: unknown): ParsedThreadEvent {
   return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
 }
 
+// ------------------------------------------------------- memory events
+
+/**
+ * What a memory event is about: a den topic, a session topic (consolidated, not yet promoted), or a work item
+ * (+ feature) whose Record the observations feed. `topicId` is absent while it is not known yet (an observation
+ * only lands in a pool).
+ */
+export const MemoryTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("den"), topicId: z.string().optional() }),
+  z.object({ kind: z.literal("session"), topicId: z.string().optional() }),
+  z.object({ kind: z.literal("work"), workId: z.string(), featureId: z.string().optional() }),
+]);
+export type MemoryTarget = z.infer<typeof MemoryTargetSchema>;
+
+/**
+ * Fields every MemoryEvent carries. Wolf-scoped, so it is NOT a ThreadEvent (no per-thread `id`); `threadId` is
+ * present only when the event came out of a conversation. Payloads are metadata only: ids, counts and a one-line
+ * summary, never the observation text itself.
+ */
+const memoryBase = z.object({
+  wolf: z.string(),
+  threadId: z.string().optional(),
+  timestamp: IsoSchema,
+  domain: z.string(),
+  target: MemoryTargetSchema,
+});
+
+export const ObservationCapturedEventSchema = memoryBase.extend({
+  type: z.literal("observation_captured"),
+  count: z.number().int().nonnegative(),
+  /** One line (first line of the first observation, capped at 120 chars). */
+  summary: z.string(),
+});
+export const TopicConsolidatedEventSchema = memoryBase.extend({
+  type: z.literal("topic_consolidated"),
+  topicId: z.string(),
+  /** Observations in the consolidation batch this topic came out of. */
+  observationCount: z.number().int().nonnegative(),
+  change: z.enum(["create", "merge"]),
+});
+export const ContributionEmittedEventSchema = memoryBase.extend({
+  type: z.literal("contribution_emitted"),
+  contributionId: z.string(),
+  /** The KB inbox lane the contribution was written to, e.g. `inbox/<wolf>`. */
+  lane: z.string(),
+});
+export const PromoteStartedEventSchema = memoryBase.extend({ type: z.literal("promote_started"), jobId: z.string() });
+export const PromoteFinishedEventSchema = memoryBase.extend({
+  type: z.literal("promote_finished"),
+  jobId: z.string(),
+  consolidated: z.number().int().nonnegative(),
+  contributions: z.number().int().nonnegative(),
+});
+export const PromoteFailedEventSchema = memoryBase.extend({
+  type: z.literal("promote_failed"),
+  jobId: z.string(),
+  /** One line, capped. */
+  message: z.string(),
+});
+
+export const MemoryEventSchema = z.discriminatedUnion("type", [
+  ObservationCapturedEventSchema,
+  TopicConsolidatedEventSchema,
+  ContributionEmittedEventSchema,
+  PromoteStartedEventSchema,
+  PromoteFinishedEventSchema,
+  PromoteFailedEventSchema,
+]);
+export type MemoryEvent = z.infer<typeof MemoryEventSchema>;
+export type MemoryEventType = MemoryEvent["type"];
+
+/** A MemoryEvent of a type this version does not know (envelope fields valid). Ignore it. */
+export type ParsedMemoryEvent =
+  | { kind: "event"; event: MemoryEvent }
+  | { kind: "unknown"; raw: unknown }
+  | { kind: "invalid"; error: z.ZodError };
+
+const MEMORY_TYPES: ReadonlySet<string> = new Set(MemoryEventSchema.options.map((o) => o.shape.type.value));
+const MemoryEnvelopeSchema = z.object({ type: z.string() });
+
+/** Same ignore-unknown contract as parseThreadEvent: unknown `type` -> `unknown`; known type, bad payload -> `invalid`. */
+export function parseMemoryEvent(input: unknown): ParsedMemoryEvent {
+  const env = MemoryEnvelopeSchema.safeParse(input);
+  if (!env.success) return { kind: "invalid", error: env.error };
+  if (!MEMORY_TYPES.has(env.data.type)) return { kind: "unknown", raw: input };
+  const ev = MemoryEventSchema.safeParse(input);
+  return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
+}
+
 // ------------------------------------------------------------- commands
 
 export const WhenBusySchema = z.enum(["steer", "followUp", "reject"]);

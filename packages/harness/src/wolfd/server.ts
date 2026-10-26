@@ -52,6 +52,7 @@ import {
   type ResyncDraft,
   type ThreadEventDraft,
 } from "../engine/index.js";
+import { memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import { prepareSocketPath } from "./socket.js";
 import { appendMessage, messageFromEntry, messagesFromEntries } from "./messages.js";
 
@@ -63,6 +64,8 @@ export interface WolfServerOptions {
   conversation: EngineConversation;
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
+  /** The wolf's den: its MemoryEvent bus feeds `GET /v1/wolves/:name/events`. Omitted: that stream stays empty. */
+  den?: string;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -98,6 +101,7 @@ export class WolfServer {
   private readonly subs = new Set<Sub>();
   private readonly waiters = new Set<() => void>();
   private homeCreated = false;
+  private readonly memoryBus?: MemoryEventBus;
 
   private watch?: EngineWatch;
   private mapper?: EventMapper;
@@ -109,6 +113,7 @@ export class WolfServer {
     this.name = opts.name;
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
+    if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
     this.summary = { id: `${this.name}/home`, wolf: this.name, kind: "home", title: "Home" };
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
@@ -334,6 +339,9 @@ export class WolfServer {
       case "streamThread":
         this.checkThread(params.id);
         return this.stream(req, res, url);
+      case "streamWolfEvents":
+        this.checkWolf(params.name);
+        return this.memoryStream(req, res);
     }
   }
 
@@ -403,6 +411,20 @@ export class WolfServer {
       thread: this.detail(),
       ...(inFlight ? { inFlight } : {}),
     };
+  }
+
+  /** Live MemoryEvents of this wolf: no replay, no ids, no [DONE]; open until the client goes (or the server closes). */
+  private memoryStream(req: IncomingMessage, res: ServerResponse): void {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    const unsubscribe = this.memoryBus?.subscribe((ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
+    res.write(": connected\n\n"); // flushes headers; once the client has them it is subscribed
+    const gone = () => unsubscribe?.();
+    req.on("close", gone);
+    res.on("close", gone);
   }
 
   private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {

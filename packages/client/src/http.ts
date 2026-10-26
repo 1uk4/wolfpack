@@ -6,6 +6,7 @@ import {
   ROUTES,
   SSE_DONE,
   buildPath,
+  parseMemoryEvent,
   parseThreadEvent,
   type RouteName,
 } from "@wolfpack/protocol";
@@ -15,6 +16,7 @@ import {
   ProtocolError,
   type Actor,
   type ConsoleClient,
+  type MemoryEvent,
   type SubmitAck,
   type SubmitOptions,
   type ThreadDetail,
@@ -127,6 +129,46 @@ export class HttpConsoleClient implements ConsoleClient {
         }
         await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
       } finally {
+        ctl.abort();
+      }
+    }
+  }
+
+  /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */
+  async *watchMemory(wolf: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<MemoryEvent> {
+    const { signal } = opts;
+    let failures = 0;
+    while (!signal?.aborted) {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener("abort", stop);
+      try {
+        const res = await this.request("streamWolfEvents", { name: wolf }, { headers: { Accept: "text/event-stream" }, signal: ctl.signal }, wolf);
+        if (!res.body) throw new TypeError("stream response has no body");
+        failures = 0;
+        for await (const frame of sseFrames(res.body)) {
+          let json: unknown;
+          try {
+            json = JSON.parse(frame.data);
+          } catch {
+            throw new ProtocolError("invalid_request", "stream frame is not JSON", false);
+          }
+          const parsed = parseMemoryEvent(json);
+          if (parsed.kind === "unknown") continue;
+          if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
+          yield parsed.event;
+        }
+        // Clean EOF: the server went away; reconnect.
+        throw new TypeError("stream ended");
+      } catch (e) {
+        if (signal?.aborted) return;
+        if (e instanceof ProtocolError || e instanceof BusyError || e instanceof NotFoundError) throw e;
+        if (++failures > this.maxRetries) {
+          throw new ProtocolError("engine_error", `stream lost: ${e instanceof Error ? e.message : String(e)}`, true);
+        }
+        await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
+      } finally {
+        signal?.removeEventListener("abort", stop);
         ctl.abort();
       }
     }

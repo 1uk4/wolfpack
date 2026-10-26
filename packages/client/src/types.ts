@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, ErrorCode, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
+import type { Actor, ErrorCode, MemoryEvent, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -29,6 +29,8 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 /** A snapshot baseline frame (see {@link WatchOptions.onSnapshot}). */
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
+
+export type { MemoryEvent, MemoryEventType, MemoryTarget } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
 export type ThreadKind = ThreadSummary["kind"];
@@ -63,6 +65,11 @@ export interface ConsoleClient {
   abort(threadId: string): Promise<void>;
   /** Replays from `from`, then continues live until turn-end (inclusive). */
   watch(threadId: string, opts?: WatchOptions): AsyncIterable<ThreadEvent>;
+  /**
+   * Live MemoryEvents of a wolf (its event stream); unknown event types are skipped. Never ends on its own: stop with
+   * `signal`. Optional: not every client (e.g. the mock) has a wolf stream.
+   */
+  watchMemory?(wolf: string, opts?: { signal?: AbortSignal }): AsyncIterable<MemoryEvent>;
 }
 
 export class BusyError extends Error {

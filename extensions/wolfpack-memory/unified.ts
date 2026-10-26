@@ -32,6 +32,7 @@ import {
 import { consolidatePool, durableSessionTopics, promoteSessionTopics, type ConsolidationResult } from "@wolfpack/harness/memory";
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
+import { homeThreadId, memoryEmitter } from "./memory-events.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { assertSandboxed, createEngine, engineSteps, loadModelTable, type Engine, type EngineConfig, type ModelTable } from "@wolfpack/engine";
@@ -349,6 +350,7 @@ export default function createMemoryExtension(
   const observing = new Map<number, Promise<void>>();
   let warnedNoReads = false;
   let consolidating: Promise<void> | null = null;
+  const mem = memoryEmitter(wolfDen, wolfName, domains[0] ?? "wolfpack");
   let closeHooked = false;
 
   /**
@@ -388,7 +390,11 @@ export default function createMemoryExtension(
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const result = await observe({ engine: eng, chunkText: chunk.text, mode: "conversation" });
-      if (result.observations.length > 0) await writeToPool(ctx.wolfDen, result.observations, await readBoundTask(ctx)); // re-read every chunk, never cached
+      if (result.observations.length > 0) {
+        const bound = await readBoundTask(ctx); // re-read every chunk, never cached
+        await writeToPool(ctx.wolfDen, result.observations, bound);
+        mem.observed(result.observations, bound, cls.kind === "root" ? homeThreadId(wolfName) : undefined);
+      }
       // Persist per chunk: a failure in a later chunk retries from here, not from the start.
       const last = i === chunks.length - 1;
       at = last ? next.lastEntryId : chunkEntryId(chunk.id);
@@ -467,6 +473,7 @@ export default function createMemoryExtension(
       ...(opts.poolTarget !== undefined ? { poolTarget: opts.poolTarget } : {}),
       minObservations: opts.minObservations,
       onProgress: (msg) => console.log(`[memory] ${msg}`),
+      onTopic: mem.topic,
     });
   }
   const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number }) => serialized(() => consolidateInner(opts));
@@ -499,6 +506,7 @@ export default function createMemoryExtension(
       if (promoting) return { status: "already_running", jobId: promoting };
       const jobId = `promote-${Date.now().toString(36)}-${++jobSeq}`;
       promoting = jobId;
+      mem.promoteStarted(jobId);
       const done = (async (): Promise<PromoteOutcome> => {
         try {
           if (!kbRoots) throw new Error("promote needs KB_BASE and KB_OPS (no KB roots configured); nothing was changed");
@@ -513,10 +521,16 @@ export default function createMemoryExtension(
               kbRoots,
               defaultDomain: domains[0] ?? "wolfpack",
               onProgress: (msg) => console.log(`[memory] ${msg}`),
+              onEmit: mem.contribution,
             });
             return { consolidated: c, promoted: p };
           });
-          return { consolidated, promoted };
+          const outcome = { consolidated, promoted };
+          mem.promoteFinished(jobId, outcome);
+          return outcome;
+        } catch (err) {
+          mem.promoteFailed(jobId, err);
+          throw err;
         } finally {
           promoting = null;
         }

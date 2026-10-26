@@ -142,7 +142,7 @@ async function startConfigured(
     const conversation = await engine.conversations.root(desired);
     await reconcile(conversation, desired);
 
-    const server = new WolfServer({ name: config.identity.name, conversation, onError: (e) => log(`server error: ${String(e)}`) });
+    const server = new WolfServer({ name: config.identity.name, conversation, den: config.den, onError: (e) => log(`server error: ${String(e)}`) });
     await server.attach();
     engine.resume();
     const url = opts.socket ? await server.listenSocket(opts.socket) : await server.listen(opts.port ?? config.serve.port ?? 0);

@@ -4,6 +4,7 @@ export {
   promoteSessionTopics,
   durableSessionTopics,
   DURABLE_SESSION_ID,
+  type ConsolidatedTopic,
   type ConsolidationConfig,
   type ConsolidationResult,
   type PromoteSessionConfig,
@@ -20,3 +21,10 @@ export {
   type PromoteOutcome,
   type PromoteStart,
 } from "./actions.js";
+export {
+  memoryEventsFor,
+  oneLine,
+  type MemoryEventBus,
+  type MemoryEventDraft,
+  type MemoryEventListener,
+} from "./events.js";

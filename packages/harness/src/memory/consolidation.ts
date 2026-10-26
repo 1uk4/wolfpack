@@ -78,6 +78,15 @@ export function durableSessionTopics(wolfDen: string): SessionTopicsLocation {
   return { memoryRoot: join(wolfDen, ".memory", "sessions"), sessionId: DURABLE_SESSION_ID };
 }
 
+export interface ConsolidatedTopic {
+  id: string;
+  domain?: string;
+  change: "create" | "merge";
+  scope: "session" | "den";
+  /** Observations in the batch this topic was folded from. */
+  observationCount: number;
+}
+
 export interface ConsolidationConfig {
   /**
    * Fold the pool into session topics (pi's /wolf:consolidate) instead of straight into the den; a later
@@ -110,6 +119,8 @@ export interface ConsolidationConfig {
   minTokens?: number;
   /** Optional progress callback */
   onProgress?: (msg: string) => void;
+  /** Called per topic written (session topics or, on the legacy path, den topics). Metadata only. */
+  onTopic?: (t: ConsolidatedTopic) => void;
   /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
@@ -398,6 +409,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       ...gate,
     });
 
+    config.onTopic?.({ id: action.result.id, domain: domainOf(action.result.domain), change, scope: "den", observationCount: denObs.length });
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
     if (action.result.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${action.result.body.length}): ${action.result.id} — should be split by subject`);
     if (isUpdate) merged++;
@@ -529,6 +541,7 @@ async function consolidateToSessionTopics(
     }
     const isUpdate = existing.some((t) => t.id === r.id);
     writeTopic(root, { id: r.id, title: r.title, summary: r.summary, updated: now, body: r.body, domain: r.domain || soleDomain });
+    config.onTopic?.({ id: r.id, domain: r.domain || soleDomain, change: isUpdate ? "merge" : "create", scope: "session", observationCount: observations.length });
     onProgress?.(`  ${isUpdate ? "updated" : "created"} session topic: ${r.title}`);
     if (isUpdate) merged++;
     else created++;
@@ -545,6 +558,8 @@ export interface PromoteSessionConfig {
   kbRoots?: KbRoots;
   defaultDomain?: string;
   onProgress?: (msg: string) => void;
+  /** Called per contribution written to the KB inbox (metadata only). */
+  onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
 }
 
 /**
@@ -562,5 +577,6 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     defaultDomain: config.defaultDomain,
     skipClaims: false,
     onProgress: config.onProgress,
+    onEmit: config.onEmit,
   });
 }

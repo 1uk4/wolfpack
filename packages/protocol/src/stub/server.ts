@@ -186,6 +186,13 @@ export class StubServer {
       }
       case "streamThread":
         return this.stream(this.thread(params.id), req, res, url);
+      case "streamWolfEvents": {
+        this.wolf(params.name);
+        // The stub emits no memory events: an open, empty stream.
+        res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive" });
+        res.write(": connected\n\n");
+        return;
+      }
     }
   }
 

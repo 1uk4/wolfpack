@@ -127,6 +127,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 	const finished = total === 0 || done === total;
 	const count = total === 0 ? "all skipped" : `${done}/${total}`;
 	const pct = total === 0 ? 0 : (done / total) * 100;
+	const showBar = done > 0; // nothing done yet: no empty bar (and no gap); the doing subtitle carries the activity
 	const doing = data.items.find((i) => i.state === "doing");
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key !== "Escape" || !open || sessionFindHasForegroundLayer(document)) return;
@@ -148,7 +149,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 						aria-controls={open ? panelId : undefined}
 						onClick={() => set(!open)}
 						data-testid="pinned-checklist-button"
-						className="flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+						className={`flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 ${showBar ? "" : "pb-2"} text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring`}
 					>
 						<span className="flex min-w-0 items-center gap-2">
 							<span className="min-w-0 flex-1 truncate font-medium" data-testid="pinned-checklist-summary">
@@ -175,6 +176,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 					>
 						<span aria-hidden>×</span>
 					</button>
+					{showBar && (
 					<div className="px-3 pb-2 pt-1.5">
 						<div
 							{...(total > 0
@@ -188,6 +190,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 							{doing && <div aria-hidden className="absolute inset-y-0 right-0 animate-pulse bg-primary/30 motion-reduce:animate-none" style={{ left: `${pct}%` }} />}
 						</div>
 					</div>
+					)}
 					{open && (
 						<div id={panelId} role="region" aria-label={data.title ?? "Checklist"} data-testid="pinned-checklist-panel" className="min-h-0 overflow-y-auto overscroll-contain border-t p-3">
 							<ChecklistItems items={data.items} />

@@ -20,6 +20,7 @@ import {
   type MemoryStatus,
   type MemoryTopic,
   type WorkRecordResponse,
+  type KbPipelineResponse,
   type PromoteResponse,
   type MemoryEvent,
   type SubmitAck,
@@ -160,6 +161,11 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */
+  async getKbPipeline(wolf: string): Promise<KbPipelineResponse> {
+    return (await this.json("kbPipeline", { name: wolf }, ROUTES.kbPipeline.response.schema, undefined, wolf)) as KbPipelineResponse;
   }
 
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */

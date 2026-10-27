@@ -15,6 +15,7 @@ import {
   ThreadSummarySchema,
   WolfSummarySchema,
   WorkRecordResponseSchema,
+  KbPipelineResponseSchema,
 } from "./schemas.js";
 
 /** Request header carrying the client's protocol version (single integer). */
@@ -116,6 +117,11 @@ export const ROUTES = {
    * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.
    */
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
+   * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).
+   */
+  kbPipeline: { method: "GET", path: "/v1/wolves/:name/kb/pipeline", response: { kind: "json", schema: KbPipelineResponseSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

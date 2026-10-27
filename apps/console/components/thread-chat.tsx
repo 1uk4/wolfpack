@@ -493,9 +493,6 @@ export function ThreadChat({
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
-										<div className="px-3 pt-2" data-testid="dictation-slot">
-											<DictationBar dictation={dictation} />
-										</div>
 										<Composer
 											busy={busy}
 											value={text}
@@ -515,6 +512,10 @@ export function ThreadChat({
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
+										{/* Dictation sits under the message field (owner, 2026-10-27). */}
+										<div className="px-3 pb-2" data-testid="dictation-slot">
+											<DictationBar dictation={dictation} />
+										</div>
 									</div>
 								</div>
 							</div>

@@ -75,6 +75,14 @@ const optionalCard = (extra: Partial<Card> = {}): Card => ({
 	],
 	...extra,
 });
+async function mount2(c: Card, answer: CardAnswers) {
+	const host = document.createElement("div");
+	document.body.appendChild(host);
+	root = createRoot(host);
+	await act(async () => {
+		root!.render(<AskCard callId="c1" card={c} answer={answer} pending={false} submitting={false} onAnswer={() => {}} />);
+	});
+}
 const submitBtn = () => q('[data-testid="card-submit"]');
 
 describe("optional fields", () => {
@@ -85,6 +93,18 @@ describe("optional fields", () => {
 		assert.match(q('[data-testid="card-optional"]')!.textContent!, /\(optional\)/);
 		await click(submitBtn()!);
 		assert.deepEqual(sent, [{ t: { value: "" }, s: { value: "" }, m: { value: [] } }]);
+	});
+
+	it("closed card: a skipped optional shows muted \"Skipped\", never empty quotes; answered ones show their answer", async () => {
+		await mount2(optionalCard(), { t: { value: "" }, s: { value: "" }, m: { value: [] } });
+		const skipped = [...document.querySelectorAll('[data-testid="card-skipped"]')].map((e) => e.closest("[data-field]")!.getAttribute("data-field"));
+		assert.deepEqual(skipped, ["t", "s", "m", "c"], "confirm omitted counts too");
+		assert.ok(!document.body.textContent!.includes("“”"));
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount2(optionalCard(), { t: { value: "hi" }, s: { value: "b" }, m: { value: ["a"] }, c: { value: false } });
+		assert.equal(document.querySelectorAll('[data-testid="card-skipped"]').length, 0);
+		assert.match(q('[data-testid="card-answer-text"]')!.textContent!, /hi/);
 	});
 
 	it("a required field renders no (optional) and still blocks; min/max apply once an optional multi is touched", async () => {

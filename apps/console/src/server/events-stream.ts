@@ -61,6 +61,9 @@ export function eventsResponse(): Response {
 				const { type, ...payload } = event;
 				frame(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
 			});
+			// Flush the headers now so EventSource.onopen fires immediately,
+			// not at the first ping 25s later.
+			frame(": connected\n\n");
 			heartbeat = setInterval(() => frame(": ping\n\n"), 25_000);
 
 			teardown = stop;

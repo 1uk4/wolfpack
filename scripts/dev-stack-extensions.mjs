@@ -126,10 +126,13 @@ export function runPlans(plans, { cli, exec, log, warn }) {
 		else if (p.action === "warn") warn(`dev-stack: warning: ${p.wolf}: installed extensions are ${p.state} vs source (non-sandbox den, not touched)`);
 		else {
 			// Shared root: this wolf's den under dens/. Single-wolf root: no --wolf (it must never grow a dens/).
-			const args = [cli, "sandbox", "install-extensions", p.sandboxRoot, ...(p.shared ? ["--wolf", p.wolf] : []), "--extensions", p.keys.join(",")];
+			// Only keys we recognise: an unknown one (warned above) could make the CLI reject the whole list.
+			const keys = p.keys.filter((k) => !p.unknown?.includes(k));
+			if (!keys.length) continue;
+			const args = [cli, "sandbox", "install-extensions", p.sandboxRoot, ...(p.shared ? ["--wolf", p.wolf] : []), "--extensions", keys.join(",")];
 			try {
 				exec(process.execPath, args);
-				log(`dev-stack: extensions ${p.wolf}: installed (${p.keys.join(", ")}; was ${p.state})`);
+				log(`dev-stack: extensions ${p.wolf}: installed (${keys.join(", ")}; was ${p.state})`);
 			} catch (err) {
 				warn(`dev-stack: warning: ${p.wolf}: extension install failed (${err instanceof Error ? err.message.split("\n")[0] : err})`);
 			}

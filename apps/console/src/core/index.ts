@@ -70,3 +70,4 @@ export * from "./kb.ts";
 export * from "./pipeline-model.ts";
 export * from "./entry-view.ts";
 export * from "./work-view.ts";
+export * from "./memory-panel-model.ts";

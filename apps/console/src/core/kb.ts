@@ -70,26 +70,3 @@ export const entryHref = (id: string): string => `/kb/entry/${encodeURIComponent
 export const workHref = (id: string): string => `/kb/work/${encodeURIComponent(id)}`;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
-
-/**
- * STUB: the graph node a memory event is about — `ent:<id>` (KB entry),
- * `work:<id>` (work item), `den:<wolf>:<topic>` (den topic) — or null when
- * it maps to no node. Handles the shipped variants via `target`; for future
- * variants it reads loose `entryId` / `workId` fields. Refine when the
- * activity task (E) lands.
- */
-export function nodeIdOfEvent(e: MemoryEventFrame): string | null {
-	const o = e as Record<string, unknown>;
-	const entry = str(o.entryId);
-	if (entry) return `ent:${entry}`;
-	const target = o.target as { kind?: string; topicId?: string; workId?: string } | undefined;
-	if (target?.kind === "work" && target.workId) return `work:${target.workId}`;
-	const work = str(o.workId);
-	if (work) return `work:${work}`;
-	if (target?.kind === "den") {
-		const topic = str(o.topicId) ?? target.topicId;
-		const wolf = str(o.wolf);
-		if (topic && wolf) return `den:${wolf}:${topic}`;
-	}
-	return null;
-}

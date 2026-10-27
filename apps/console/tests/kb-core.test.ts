@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PIPELINE_HREF, entryHref, findLibrarian, nodeIdOfEvent, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
+import { PIPELINE_HREF, entryHref, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
 
 const base = { wolf: "1uk4", timestamp: "2026-10-26T00:00:00.000Z", domain: "d" };
 
@@ -41,12 +41,3 @@ describe("hrefs", () => {
 	});
 });
 
-describe("nodeIdOfEvent", () => {
-	it("maps den, work, and loose entry/work ids; null otherwise", () => {
-		assert.equal(nodeIdOfEvent({ ...base, type: "topic_consolidated", target: { kind: "den" }, topicId: "t1" }), "den:1uk4:t1");
-		assert.equal(nodeIdOfEvent({ ...base, type: "observation_captured", target: { kind: "work", workId: "w9" } }), "work:w9");
-		assert.equal(nodeIdOfEvent({ ...base, type: "record_written", target: { kind: "session" }, entryId: "e5" }), "ent:e5");
-		assert.equal(nodeIdOfEvent({ ...base, type: "observation_captured", target: { kind: "den" } }), null);
-		assert.equal(nodeIdOfEvent({ ...base, type: "sweep_started" }), null);
-	});
-});

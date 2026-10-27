@@ -248,6 +248,7 @@ export const LABELS_FADE_RATIO = 0.5;
 const GLOW_SCALE = 1.7; // halo outer radius = node radius x this (proportional, like blurring a copy of the disc)
 const GLOW_ALPHA = 0.3; // halo opacity at the disc edge, fading outward
 const PULSE_MS = 2000; // default activity-pulse length
+const PULSE_REDUCED_MS = 800; // static-halo length under reduced motion
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
 const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~250ms per notch)
 
@@ -618,9 +619,10 @@ export class GraphCanvasRenderer {
 	private hoverFrom = 0;
 	private hoverTarget = 0;
 	private hoverStart = 0;
-	/** Live-activity pulses: node id → expiry timestamp + length. Drawn with
-	 *  the hover halo look, fading out; the loop runs only while any exist. */
-	private pulses = new Map<string, { start: number; ms: number }>();
+	/** Live-activity pulses: node id → start time, length, and whether
+	 *  reduced motion was on when it began (static halo, short fixed time,
+	 *  no rAF loop). Animated ones keep the loop running until they expire. */
+	private pulses = new Map<string, { start: number; ms: number; reduce: boolean }>();
 	// Smooth wheel zoom: wheel events accumulate a target scale (cursor-
 	// anchored); each tick eases the camera toward it instead of jumping.
 	private zoomTarget: { k: number; x: number; y: number } | null = null;
@@ -785,19 +787,22 @@ export class GraphCanvasRenderer {
 	}
 
 	/** Flash the halo on these nodes for `ms`, fading out. Ids not in the
-	 *  graph are ignored. Under prefers-reduced-motion the halo is shown
-	 *  static for the duration instead of fading. Returns how many landed. */
+	 *  graph are ignored. Under prefers-reduced-motion the halo is static
+	 *  for a short fixed time (PULSE_REDUCED_MS) instead of fading. Returns how many landed. */
 	pulse(ids: readonly string[], ms = PULSE_MS): number {
 		const now = performance.now();
+		const reduce = prefersReducedMotion();
+		const len = reduce ? PULSE_REDUCED_MS : ms;
 		let n = 0;
 		for (const id of ids) {
 			if (!this.nodeById.has(id)) continue;
-			this.pulses.set(id, { start: now, ms });
+			this.pulses.set(id, { start: now, ms: len, reduce });
 			n++;
 		}
 		if (n > 0) {
-			this.animating = true;
 			this.markDirty();
+			// Reduced motion draws once now and once at expiry; no loop.
+			if (reduce) setTimeout(() => this.markDirty(), len + 16);
 		}
 		return n;
 	}
@@ -1125,14 +1130,16 @@ export class GraphCanvasRenderer {
 			// Clamp the dt: a long idle gap must not teleport the ease forward.
 			const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
 			this.lastTickAt = now;
-			const hoverAnim = this.advanceHover() || this.pulses.size > 0;
+			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
 			this.draw();
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
-			this.animating = hoverAnim || zoomAnim || simAnim;
+			let pulseAnim = false;
+			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
+			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -1739,8 +1746,8 @@ export class GraphCanvasRenderer {
 		// with age (static while reduced motion is on). Expired ones drop.
 		if (this.pulses.size > 0) {
 			const now = performance.now();
-			const reduce = prefersReducedMotion();
 			for (const [id, p] of this.pulses) {
+				const reduce = p.reduce;
 				const age = (now - p.start) / p.ms;
 				if (age >= 1) {
 					this.pulses.delete(id);

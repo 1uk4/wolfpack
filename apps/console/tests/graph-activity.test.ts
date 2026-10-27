@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { activityWolves, createPulseBatcher, pulseTargets } from "../src/core/graph-activity.ts";
+import { activityWolves, createDebounce, createPendingPulses, createPulseBatcher, eventNodeIds, pulseTargets } from "../src/core/graph-activity.ts";
 import type { MemoryEventFrame } from "../src/core/kb.ts";
 
 const ids = ["work:w1", "den:ada:t1", "ent:e1", "den:bob:t2"];
@@ -69,5 +69,53 @@ describe("activityWolves", () => {
 		];
 		assert.deepEqual(activityWolves("lib", w), ["lib", "ada", "bob"]);
 		assert.deepEqual(activityWolves("lib", w, 2), ["lib", "ada"]);
+		const many = Array.from({ length: 9 }, (_, i) => ({ name: `w${i}`, status: "online" }));
+		assert.deepEqual(activityWolves("lib", many), ["lib", "w0", "w1", "w2", "w3"]);
+	});
+});
+
+describe("eventNodeIds", () => {
+	it("names nodes the graph may not have yet", () => {
+		assert.deepEqual(eventNodeIds(ev({ type: "sweep_item", from: "bob", denTopicId: "t9", outcome: "create", entryId: "new" })), ["ent:new", "den:bob:t9"]);
+		assert.deepEqual(eventNodeIds(ev({ type: "mystery" })), []);
+	});
+});
+
+describe("createPendingPulses", () => {
+	const g = (...i: string[]) => ({ nodes: i.map((id) => ({ id })) }) as never;
+	it("hands out ids once the graph has them, then forgets them", () => {
+		const p = createPendingPulses(1000);
+		p.add(["ent:new", "ent:other"], 0);
+		assert.deepEqual(p.take(g("ent:x"), 10), []);
+		assert.deepEqual(p.take(g("ent:new"), 20), ["ent:new"]);
+		assert.deepEqual(p.take(g("ent:new"), 30), []);
+		assert.equal(p.size(), 1);
+	});
+	it("expires after the TTL", () => {
+		const p = createPendingPulses(1000);
+		p.add(["ent:new"], 0);
+		assert.deepEqual(p.take(g("ent:new"), 1000), []);
+		assert.equal(p.size(), 0);
+	});
+	it("is bounded, dropping the oldest", () => {
+		const p = createPendingPulses(1000, 2);
+		p.add(["a", "b", "c"], 0);
+		assert.deepEqual(p.take(g("a", "b", "c"), 1), ["b", "c"]);
+	});
+});
+
+describe("createDebounce", () => {
+	it("restarts on each call and fires once", () => {
+		let fn: (() => void) | null = null;
+		let cleared = 0;
+		let fired = 0;
+		const d = createDebounce(() => fired++, 100, { set: (f) => ((fn = f), 1), clear: () => cleared++ });
+		d.call();
+		d.call();
+		assert.equal(cleared, 1);
+		fn!();
+		assert.equal(fired, 1);
+		d.cancel();
+		assert.equal(cleared, 1);
 	});
 });

@@ -20,7 +20,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { WaypointsIcon } from "lucide-react";
 import {
 	activityWolves,
+	createDebounce,
+	createPendingPulses,
 	createPulseBatcher,
+	eventNodeIds,
 	focusStep,
 	parseFocusParam,
 	pulseTargets,
@@ -68,24 +71,34 @@ function WolfTap({ wolf, onEvent, onResync }: { wolf: string; onEvent: (e: Memor
 	return null;
 }
 
-/** Librarian + online wolves to watch for activity (capped). */
-function useActivityWolves(librarian: string | null): string[] {
+const WOLF_REFRESH_MS = 30_000;
+
+/** Librarian + online wolves to watch for activity (capped); re-read every
+ *  30s and on `refresh()` so wolves coming and going are (un)watched. */
+function useActivityWolves(librarian: string | null): { wolves: string[]; refresh: () => void } {
 	const [wolves, setWolves] = useState<string[]>([]);
+	const [tick, setTick] = useState(0);
+	const refresh = useCallback(() => setTick((t) => t + 1), []);
 	useEffect(() => {
 		if (!librarian) {
 			setWolves([]);
 			return;
 		}
 		let cancelled = false;
-		void fetchWolves().then((res) => {
-			if (cancelled) return;
-			setWolves(activityWolves(librarian, res.ok ? res.data.wolves : []));
-		});
+		const load = () =>
+			void fetchWolves().then((res) => {
+				if (cancelled) return;
+				const next = activityWolves(librarian, res.ok ? res.data.wolves : []);
+				setWolves((prev) => (prev.join("\0") === next.join("\0") ? prev : next));
+			});
+		load();
+		const id = setInterval(load, WOLF_REFRESH_MS);
 		return () => {
 			cancelled = true;
+			clearInterval(id);
 		};
-	}, [librarian]);
-	return wolves.length > 0 || !librarian ? wolves : [librarian];
+	}, [librarian, tick]);
+	return { wolves: wolves.length > 0 || !librarian ? wolves : [librarian], refresh };
 }
 
 function GraphHomeInner() {
@@ -108,37 +121,45 @@ function GraphHomeInner() {
 
 	// Live activity: pulse the nodes events name; refetch when the librarian
 	// finishes a sweep (positions survive: the view keeps what it has).
-	const activity = useActivityWolves(librarian);
+	const { wolves: activity, refresh: refreshWolves } = useActivityWolves(librarian);
 	const graphRef = useRef<KbGraph | null>(null);
 	graphRef.current = kb.graph;
 	const refetchRef = useRef(kb.refetch);
 	refetchRef.current = kb.refetch;
-	const batcher = useMemo(
-		() => createPulseBatcher((ids) => controllerRef.current?.renderer()?.pulse(ids)),
-		[],
-	);
-	const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const scheduleRefetch = useCallback(() => {
-		if (refetchTimer.current) clearTimeout(refetchTimer.current);
-		refetchTimer.current = setTimeout(() => {
-			refetchTimer.current = null;
-			refetchRef.current();
-		}, REFETCH_DEBOUNCE_MS);
-	}, []);
+	const batcher = useMemo(() => createPulseBatcher((ids) => controllerRef.current?.renderer()?.pulse(ids)), []);
+	const pending = useMemo(() => createPendingPulses(), []);
+	const refetchDebounce = useMemo(() => createDebounce(() => refetchRef.current(), REFETCH_DEBOUNCE_MS), []);
 	useEffect(
 		() => () => {
 			batcher.cancel();
-			if (refetchTimer.current) clearTimeout(refetchTimer.current);
+			refetchDebounce.cancel();
 		},
-		[batcher],
+		[batcher, refetchDebounce],
 	);
+	// A new graph arrived (after the sweep refetch): light up nodes that
+	// events named before they existed.
+	useEffect(() => {
+		if (!kb.graph) return;
+		const ids = pending.take(kb.graph, Date.now());
+		if (ids.length > 0) batcher.add(ids);
+	}, [kb.graph, pending, batcher]);
 	const onEvent = useCallback(
 		(e: MemoryEventFrame) => {
-			batcher.add(pulseTargets(e, graphRef.current));
-			if (e.type === "sweep_finished" && e.wolf === librarian) scheduleRefetch();
+			const g = graphRef.current;
+			batcher.add(pulseTargets(e, g));
+			if (e.type === "sweep_item" || e.type === "topic_archived") {
+				const have = new Set(g?.nodes.map((n) => n.id));
+				const missing = eventNodeIds(e).filter((id) => !have.has(id));
+				if (missing.length > 0) pending.add(missing, Date.now());
+			}
+			if (e.type === "sweep_finished" && e.wolf === librarian) refetchDebounce.call();
 		},
-		[batcher, scheduleRefetch, librarian],
+		[batcher, pending, refetchDebounce, librarian],
 	);
+	const onResync = useCallback(() => {
+		refreshWolves();
+		refetchDebounce.call();
+	}, [refreshWolves, refetchDebounce]);
 
 	// The focus flow (focusStep): wait until the graph for the CURRENT query
 	// has arrived, then focus, or widen the view once, or give up.
@@ -202,7 +223,7 @@ function GraphHomeInner() {
 		<div className="relative h-full w-full">
 			{body}
 			{activity.map((w) => (
-				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={w === librarian ? scheduleRefetch : undefined} />
+				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />
 			))}
 			{kb.status === "error" && graph !== null && (
 				<div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">

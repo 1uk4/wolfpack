@@ -33,7 +33,7 @@ function scripted(mainDir: () => string, gate?: Promise<void>) {
   const childResults: string[] = [];
   const childSystems: string[] = [];
   const childBriefs: string[] = [];
-  const step: FauxResponseStep = async (ctx) => {
+  const step: FauxResponseStep = async (ctx, options) => {
     const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
     const child = system.includes("You are the sub-agent");
     const user = ctx.messages.find((m) => m.role === "user");
@@ -84,7 +84,8 @@ function scripted(mainDir: () => string, gate?: Promise<void>) {
     } else if (brief.includes("MODE_HOLDSNEAK")) {
       if (n === 0) return call("bash", { command: `${viaVar(main)}; cd "$M" && git commit -q --allow-empty -m sneaky` });
       if (n === 1) {
-        await gate;
+        // (an abort, e.g. the wolf stopping, ends the wait: a held turn must not outlive its wolf)
+        await Promise.race([gate, new Promise<void>((r) => options?.signal?.addEventListener("abort", () => r()))]);
         return fauxAssistantMessage("late done");
       }
     } else if (brief.includes("MODE_BREAKMAIN")) {

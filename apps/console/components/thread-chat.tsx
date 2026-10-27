@@ -8,7 +8,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
-import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/pinned-checklist";
+import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -282,7 +282,8 @@ export function ThreadChat({
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
 	);
-	const pinned = useMemo(() => activeChecklist(messages), [messages]);
+	const active = useMemo(() => activeChecklist(messages), [messages]);
+	const pinned = useChecklistDismissed(threadId, active?.objectId) ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 

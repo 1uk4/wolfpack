@@ -35,17 +35,18 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { discoverAgents, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
-import { WriterGuard, abandonChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
+import { WriterGuard, abandonChild, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
+import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
 import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord, type Delivery } from "./subagent-store.js";
 import type { ThreadRuntime, WolfEventDraft } from "./thread.js";
 import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js";
 
 /** The tools every spawn tool set shares; a child never gets them. */
-export const SPAWN_TOOLS = ["subagent", "subagent_message", "subagents_list", "subagent_stop"] as const;
+export const SPAWN_TOOLS = ["subagent", "subagent_message", "subagents_list", "subagent_stop", "subagent_merge"] as const;
 /** What a child always gets: the way to ask its parent a question. */
 const CHILD_ALWAYS_TOOLS = ["ask_user_question"];
 /** A profile without `tools:` gets the coding tools. */
@@ -440,12 +441,13 @@ export class SubagentManager {
     }
   }
 
-  /** `subagent_stop`: cancel a child's turn. */
-  async stopByName(callerConversationId: string, name: string): Promise<ToolOutcome> {
+  /** `subagent_stop`: cancel a child's turn; with `abandon`, also discard its worktree and branch. */
+  async stopByName(callerConversationId: string, name: string, abandon = false): Promise<ToolOutcome> {
     const parent = this.port.threadOfConversation(callerConversationId);
     const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
     if (!rec) return fail(`No subagent named "${name}" in this thread.`);
-    return this.stop(rec.id, "parent");
+    const stopped = await this.stop(rec.id, "parent");
+    return abandon ? this.abandon(rec, stopped.text) : stopped;
   }
 
   /** Token use of one model response of a conversation (every child's afterResponse reports here). */
@@ -474,6 +476,7 @@ export class SubagentManager {
   private async send(rec: ChildRecord, text: string, from: "parent" | "owner", whenBusy: WhenBusy, refs: Parameters<ThreadRuntime["submit"]>[2] = []): Promise<SubmitAck> {
     const thread = this.port.thread(rec.id);
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
+    if (rec.isolation === "worktree" && !rec.workspace) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: its worktree was merged or abandoned. Spawn a new sub-agent.`);
     const live = thread.isRunning;
     if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
     if (rec.state === "queued") {
@@ -617,10 +620,13 @@ export class SubagentManager {
     if (this.parentWatch.has(parentId)) return;
     const parent = this.port.thread(parentId);
     if (!parent) return;
+    const ships = new ShipEvents();
     this.parentWatch.set(
       parentId,
       parent.observe((ev) => {
         if (ev.type === "turn-start") this.flush(parentId);
+        const shipped = ships.see(ev);
+        if (shipped) void this.mergeShipped(parentId, shipped).catch((e) => this.port.onError(e));
       }),
     );
   }
@@ -689,6 +695,8 @@ export class SubagentManager {
     const summary = thread.lastAssistantText() || "(no output)";
     this.ledger(rec, "child", "parent", "result", summary);
     this.settle(rec, "done", `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
+    const resolved = rec.resolves ? this.records.find((r) => r.id === rec.resolves) : undefined;
+    if (resolved) void this.mergeRec(resolved).catch((e) => this.port.onError(e));
   }
 
   private finishStopped(rec: ChildRecord, by: "parent" | "owner"): void {
@@ -752,6 +760,115 @@ export class SubagentManager {
       if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") await this.stop(rec.id, "parent");
       await this.releaseOwnerOf(rec);
       this.guard.releaseAll(rec.id);
+    }
+  }
+
+  // ------------------------------------------------------- merge on ship (ticket 8)
+
+  /**
+   * Hook point: wolfd watches its feature/home threads' events (see ShipEvents) for a task_done result that says
+   * `Shipped: <id>`, so the memory extension needs no change. Every worktree child serving that task is merged.
+   */
+  private async mergeShipped(parentId: string, taskId: string): Promise<void> {
+    for (const rec of this.records.filter((r) => r.parentThreadId === parentId && r.taskId === taskId && r.workspace)) await this.mergeRec(rec);
+  }
+
+  /** The feature workspace a child merges into, or undefined for a home child (no feature branch). */
+  private featureWsOf(rec: ChildRecord): Workspace | undefined {
+    if (rec.workspace?.branch.startsWith("feat/home--")) return undefined;
+    return loadThreads(this.port.den, (e) => this.port.onError(e)).find((t) => t.id === rec.parentThreadId)?.workspace;
+  }
+
+  /** Tell the parent something about a child (exactly once, in order, like a result). */
+  private tell(rec: ChildRecord, text: string): void {
+    rec.outbox.push({ n: ++this.deliverySeq, id: `${rec.id.split("/").pop()}.${randomUUID().slice(0, 8)}`, text });
+    this.persist();
+    this.flush(rec.parentThreadId);
+  }
+
+  private readonly merging = new Set<string>();
+
+  /** Merge a child's branch into its feature branch and clean up; conflicts, a dirty tree and home children are reported to the parent. */
+  private async mergeRec(rec: ChildRecord, notify = true): Promise<string> {
+    const ws = rec.workspace;
+    if (!ws) return `"${rec.name}" has no worktree to merge.`;
+    if (this.merging.has(rec.id)) return `A merge of "${rec.name}" is already running.`;
+    this.merging.add(rec.id);
+    try {
+      const say = (text: string): string => (notify && this.tell(rec, text), text);
+      const feature = this.featureWsOf(rec);
+      if (!feature) return say(homeText(rec, ws));
+      if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") return say(`Not merged: sub-agent "${rec.name}" is still ${rec.state}. Let it finish (or stop it), then call subagent_merge({ name: "${rec.name}", action: "retry" }).`);
+      let n = 0;
+      try {
+        n = Number(await gitOk(feature.path, ["rev-list", "--count", `${feature.branch}..${ws.branch}`]));
+        const res = await mergeChild(ws, feature);
+        if (!res.ok) {
+          this.ledger(rec, "system", "parent", "error", `merge conflict: ${res.files.join(", ")}`);
+          return say(conflictText(rec, ws, feature, res.files));
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.ledger(rec, "system", "parent", "error", `merge refused: ${msg}`);
+        return say(dirtyText(rec, ws, msg));
+      }
+      delete rec.workspace;
+      this.guard.releaseAll(rec.id);
+      this.persist();
+      this.ledger(rec, "system", "parent", "result", `merged ${ws.branch} into ${feature.branch}`);
+      return say(mergedText(ws, feature, n));
+    } finally {
+      this.merging.delete(rec.id);
+    }
+  }
+
+  /** Discard a child's worktree and branch (the child must not be active). */
+  private async abandon(rec: ChildRecord, prefix = ""): Promise<ToolOutcome> {
+    const lead = prefix ? `${prefix} ` : "";
+    if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") return fail(`${lead}"${rec.name}" is still ${rec.state}: stop it first.`);
+    const ws = rec.workspace;
+    if (!ws) return fail(`${lead}"${rec.name}" has no worktree to abandon.`);
+    try {
+      await abandonChild(ws);
+    } catch (e) {
+      return fail(`${lead}Could not abandon ${ws.branch}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    delete rec.workspace;
+    this.guard.releaseAll(rec.id);
+    this.persist();
+    this.ledger(rec, "parent", "child", "stop", `abandoned ${ws.branch}`);
+    return { text: `${lead}Abandoned ${ws.branch}: its worktree and branch are removed.` };
+  }
+
+  /** `subagent_merge`: act on a child's branch: retry the merge, hand a conflict to a worker, give the owner the manual steps, or abandon it. */
+  async mergeByName(callerConversationId: string, name: string, action: string): Promise<ToolOutcome> {
+    const parent = this.port.threadOfConversation(callerConversationId);
+    const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
+    if (!parent || !rec) return fail(`No subagent named "${name}" in this thread.`);
+    if (!rec.workspace) return fail(`"${rec.name}" has no worktree: it was merged or abandoned, or it ran in a shared checkout.`);
+    const feature = this.featureWsOf(rec);
+    switch (action) {
+      case "retry": {
+        return { text: await this.mergeRec(rec, false) };
+      }
+      case "abandon":
+        return this.abandon(rec);
+      case "manual":
+        return feature ? { text: manualText(rec.workspace, feature) } : fail(`"${rec.name}" is a home child; ${homeText(rec, rec.workspace)}`);
+      case "resolve": {
+        if (!feature) return fail(`"${rec.name}" is a home child with no feature branch to rebase onto.`);
+        const workerName = `${rec.name}-resolve`;
+        const out = await this.spawn(callerConversationId, { agent: "worker", task: conflictBrief(rec.workspace, feature), name: workerName, cwd: rec.workspace.path, isolation: "none" });
+        if (out.isError) return out;
+        const worker = this.records.filter((r) => r.parentThreadId === parent.summary.id && r.agent === "worker" && r.cwd === rec.workspace!.path && !r.resolves).at(-1);
+        if (worker) {
+          worker.resolves = rec.id;
+          this.persist();
+        }
+        return { text: `A worker is resolving the conflict in ${rec.workspace.path}; when it finishes, ${rec.workspace.branch} is merged again and you are told the outcome.` };
+      }
+      default:
+        return fail(`action must be "retry", "resolve", "manual" or "abandon", got ${JSON.stringify(action)}`);
     }
   }
 

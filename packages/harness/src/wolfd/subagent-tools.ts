@@ -92,8 +92,29 @@ export function createSubagentExtension(bridge: SubagentBridge, config: { wolfDe
     defineTool({
       name: "subagent_stop",
       description: "Cancel a running or waiting sub-agent by name. It stops (state stopped) and keeps its history; message it later to resume it.",
-      parameters: Type.Object({ name: Type.String({ description: "Exact name of the subagent to stop." }) }),
-      execute: async (args, ctx) => out(await bridge.require().stopByName(String(ctx.conversationId), (args as { name: string }).name)),
+      parameters: Type.Object({
+        name: Type.String({ description: "Exact name of the subagent to stop." }),
+        abandon: Type.Optional(Type.Boolean({ description: "Also discard the sub-agent's worktree and branch (unmerged work is lost; it can no longer be resumed)." })),
+      }),
+      execute: async (args, ctx) => {
+        const a = args as { name: string; abandon?: boolean };
+        return out(await bridge.require().stopByName(String(ctx.conversationId), a.name, a.abandon === true));
+      },
+    }),
+    defineTool({
+      name: "subagent_merge",
+      description:
+        "Act on a worktree sub-agent's branch after its task shipped (the merge into the feature branch runs by itself on ship). " +
+        'action "retry": merge now (after committing or stashing a dirty tree, or fixing a conflict by hand). "resolve": a worker subagent rebases the branch onto the feature branch and resolves the conflict, then it is merged again. ' +
+        '"manual": the steps for the owner to resolve it by hand (the worktree and branch stay). "abandon": discard the worktree and branch.',
+      parameters: Type.Object({
+        name: Type.String({ description: "Exact name of the subagent whose branch it is." }),
+        action: Type.String({ description: "retry | resolve | manual | abandon" }),
+      }),
+      execute: async (args, ctx) => {
+        const a = args as { name: string; action: string };
+        return out(await bridge.require().mergeByName(String(ctx.conversationId), a.name, a.action));
+      },
     }),
   ];
   const toolsExt = adaptToDurable(defineExtension({ name: "wolfd-subagents", tools }), config);

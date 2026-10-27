@@ -65,6 +65,7 @@ describe("startWolf", () => {
       "show_decision",
       "show_graph",
       "subagent",
+      "subagent_merge",
       "subagent_message",
       "subagent_stop",
       "subagents_list",

@@ -319,9 +319,21 @@ describe("checklist card", () => {
 		assert.match(html1, /vitest/);
 		assert.doesNotMatch(html1, /updated/);
 		const html2 = renderToStaticMarkup(<ChecklistCard objectId="cl" type="checklist" rev={3} data={c2} />);
-		assert.match(html2, /1\/3/);
+		assert.match(html2, /1\/2 done · 1 skipped/);
+		assert.match(html2, /aria-valuetext="1 of 2 done"/);
+		assert.match(html2, /\(skipped\)/);
 		assert.match(html2, /updated 2 times/);
 		assert.equal(renderToStaticMarkup(<ChecklistCard objectId="x" type="checklist" rev={1} data={{ items: [] }} />), "");
+	});
+
+	it("fully resolved reaches 100%; all skipped says so without dividing by zero", () => {
+		const mk = (states: string[]) => ({ items: states.map((state, i) => ({ id: `i${i}`, label: "x", state })) });
+		const done = renderToStaticMarkup(<ChecklistCard objectId="c" type="checklist" rev={1} data={mk(["done", "done", "skipped"])} />);
+		assert.match(done, /2\/2 done · 1 skipped/);
+		assert.match(done, /width:100%/);
+		const none = renderToStaticMarkup(<ChecklistCard objectId="c" type="checklist" rev={1} data={mk(["skipped", "skipped"])} />);
+		assert.match(none, /all skipped/);
+		assert.doesNotMatch(none, /NaN|Infinity/);
 	});
 
 	const upsert = (rev: number, data: unknown, id = "cl") => ev({ type: "object-upsert", objectId: id, objectType: "checklist", rev, data, textOffset: 0 });
@@ -338,7 +350,7 @@ describe("checklist card", () => {
 		await mount(threadMessagesToNative(h));
 		assert.equal(clCards().length, 1);
 		assert.deepEqual(states(clCards()[0]!), ["done", "doing", "skipped"]);
-		assert.match(clCards()[0]!.textContent ?? "", /1\/3/);
+		assert.match(clCards()[0]!.textContent ?? "", /1\/2 done · 1 skipped/);
 		assert.match(clCards()[0]!.querySelector('[data-testid="object-updated"]')?.textContent ?? "", /updated 1 time/);
 	});
 

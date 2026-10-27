@@ -1,10 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { XIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { OverlayShell } from "@/components/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
@@ -40,39 +38,41 @@ export const messageHint = (state: SubagentState | undefined): { mode: "steer" |
 		? { mode: "steer", text: "The subagent is running: your message steers it." }
 		: { mode: "resume", text: "The subagent is not running: your message resumes it." };
 
-function Header({ summary, now, onStop }: { summary: ThreadSummary | null; now: number; onStop: () => void }) {
-	if (!summary) return <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">Loading…</div>;
-	const state = summary.state;
-	const stoppable = state === "running" || state === "queued";
-	const started = summary.startedAt ? Date.parse(summary.startedAt) : undefined;
-	const ended = summary.finishedAt ? Date.parse(summary.finishedAt) : now;
+function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSummary | null; now: number; titleId: string; close: ReactNode; onStop?: () => void }) {
+	const state = summary?.state;
+	const stoppable = (state === "running" || state === "queued") && onStop !== undefined;
+	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
+	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
 	return (
-		<div className="flex flex-col gap-1 border-b border-border px-3 py-2" data-testid="subagent-header">
-			<div className="flex items-center justify-between gap-2">
-				<div className="min-w-0 truncate font-medium" data-testid="subagent-title">
-					{summary.title}
+		<div className="mb-3 flex flex-col gap-1" data-testid="subagent-header">
+			<div className="flex items-center gap-3">
+				<div id={titleId} className="min-w-0 truncate font-sans text-sm font-medium" data-testid="subagent-title">
+					{summary ? summary.title : "Subagent"}
 				</div>
 				{stoppable && (
 					<button type="button" data-testid="subagent-stop" className="rounded border border-border px-2 py-0.5 text-xs hover:bg-accent" onClick={onStop}>
 						Stop
 					</button>
 				)}
+				{close}
 			</div>
-			<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
-				{summary.agent && <span data-testid="subagent-agent">{summary.agent}</span>}
-				{state && (
-					<span data-testid="subagent-state" data-state={state} className={`rounded-full border border-border px-1.5 ${STATE_CLASS[state]}`}>
-						{state === "queued" && summary.queuePosition ? `queued #${summary.queuePosition}` : state}
-					</span>
-				)}
-				{started !== undefined && <span data-testid="subagent-elapsed">{formatElapsed(ended - started)}</span>}
-				{summary.tokens !== undefined && <span data-testid="subagent-tokens">{formatTokens(summary.tokens)} tokens</span>}
-				{summary.taskId && (
-					<a data-testid="subagent-task" href={workHref(summary.taskId)} className="underline underline-offset-2">
-						{summary.taskId}
-					</a>
-				)}
-			</div>
+			{summary && (
+				<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
+					{summary.agent && <span data-testid="subagent-agent">{summary.agent}</span>}
+					{state && (
+						<span data-testid="subagent-state" data-state={state} className={`rounded-full border border-border px-1.5 ${STATE_CLASS[state]}`}>
+							{state === "queued" && summary.queuePosition ? `queued #${summary.queuePosition}` : state}
+						</span>
+					)}
+					{started !== undefined && <span data-testid="subagent-elapsed">{formatElapsed(ended - started)}</span>}
+					{summary.tokens !== undefined && <span data-testid="subagent-tokens">{formatTokens(summary.tokens)} tokens</span>}
+					{summary.taskId && (
+						<a data-testid="subagent-task" href={workHref(summary.taskId)} className="underline underline-offset-2">
+							{summary.taskId}
+						</a>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -154,7 +154,7 @@ interface Loaded {
 	messages: LhMessage[];
 }
 
-function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }: { wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void; onStop: () => void }) {
+function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
 	const { messages, status, error, clearError, resumeStream } = useChatSession({
 		chatId: childThreadId,
@@ -210,11 +210,8 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }:
 			sending.current = false;
 		}
 	};
-	const now = useNow(state === "running");
-
 	return (
 		<>
-			<Header summary={summary} now={now} onStop={onStop} />
 			<Ledger entries={entries} />
 			<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
 				<Transcript messages={messages} streaming={status === "streaming"} />
@@ -276,7 +273,7 @@ function useNow(active: boolean): number {
  * ledger of hand-offs, the child's transcript (read-only, live via the thread stream) and a message field that
  * steers a running child or resumes a finished one.
  */
-function SubagentView({ wolf, childThreadId }: { wolf: string; childThreadId: string }) {
+function SubagentView({ wolf, childThreadId, titleId, close }: { wolf: string; childThreadId: string; titleId: string; close: ReactNode }) {
 	const slug = threadSlug(wolf, childThreadId);
 	const base = threadBase(wolf, slug);
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -366,35 +363,38 @@ function SubagentView({ wolf, childThreadId }: { wolf: string; childThreadId: st
 			.finally(() => void refresh());
 	}, [base, refresh]);
 
+	const now = useNow(loaded?.summary.state === "running");
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
+			{/* One Header for every state, so the close button keeps its place (and focus) through loading. */}
+			<Header summary={loaded?.summary ?? null} now={now} titleId={titleId} close={close} onStop={loaded ? stop : undefined} />
 			{(note ?? stopNote) && (
-				<div className="border-b border-border px-3 py-1 text-xs text-destructive" data-testid="subagent-note">
+				<div className="mb-2 text-xs text-destructive" data-testid="subagent-note">
 					{note ?? stopNote}
 				</div>
 			)}
 			{failed ? (
-				<div className="p-3 text-xs text-muted-foreground" data-testid="subagent-failed">
+				<div className="text-xs text-muted-foreground" data-testid="subagent-failed">
 					{failed}
 				</div>
 			) : !loaded ? (
-				<Header summary={null} now={0} onStop={stop} />
+				<div className="text-xs text-muted-foreground">Loading…</div>
 			) : (
-				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} onStop={stop} />
+				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} />
 			)}
 		</div>
 	);
 }
 
 interface SubagentOpener {
-	/** Open the subagent modal over the current page (the child's thread id, "wolf/slug"). */
-	openSubagent: (childThreadId: string) => void;
+	/** Open the subagent modal over the current page: the child's thread id ("wolf/slug") and the wolf that owns it. */
+	openSubagent: (childThreadId: string, wolf?: string) => void;
 	closeSubagent: () => void;
 }
 const OpenerContext = createContext<SubagentOpener | null>(null);
 let warned = false;
 
-/** `openSubagent(childThreadId)` from anywhere under <SubagentModalProvider>; outside one it does nothing. */
+/** `openSubagent(childThreadId, wolf)` from anywhere under <SubagentModalProvider>; outside one it does nothing. */
 export function useSubagentModal(): SubagentOpener {
 	const o = useContext(OpenerContext);
 	if (!o && !warned && process.env.NODE_ENV !== "production") {
@@ -404,64 +404,31 @@ export function useSubagentModal(): SubagentOpener {
 	return o ?? { openSubagent: () => {}, closeSubagent: () => {} };
 }
 
-/** The wolf a child thread id belongs to ("wolf/slug"). */
+/** The wolf a child thread id is prefixed with ("wolf/slug"): the fallback when the caller does not know it. */
 export const wolfOfThread = (threadId: string): string => threadId.split("/")[0] ?? "";
 
-/** The modal: header, ledger, transcript and the steer/resume field. Esc, the close button and a click outside close it. */
+/** The modal: the task graph's full-screen overlay holding the header (title, Stop, close), ledger, transcript and the steer/resume field. */
 export function SubagentModal({ wolf, childThreadId, onClose }: { wolf: string; childThreadId: string; onClose: () => void }) {
-	const closeRef = useRef<HTMLButtonElement>(null);
-	const dialogRef = useRef<HTMLDivElement>(null);
-	const backdrop = useBackdropDismiss(onClose);
-	useEffect(() => {
-		closeRef.current?.focus();
-	}, []);
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape") return;
-			// THE ONE-ESC LAW: claim it here, the window chain must not also act.
-			e.preventDefault();
-			e.stopPropagation();
-			onClose();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose]);
+	const titleId = useId();
 	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-			data-testid="subagent-modal-backdrop"
-			{...backdrop}
-		>
-			<div
-				ref={dialogRef}
-				role="dialog"
-				aria-modal="true"
-				aria-label="Subagent"
-				data-testid="subagent-modal"
-				className="relative flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background text-sm shadow-lg"
-			>
-				<Button ref={closeRef} size="icon-xs" variant="ghost" className="absolute right-2 top-2 z-10" aria-label="Close" data-testid="subagent-modal-close" onClick={onClose}>
-					<XIcon />
-				</Button>
-				<SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} />
-			</div>
-		</div>
+		<OverlayShell labelledBy={titleId} testId="subagent-modal" closeTestId="subagent-modal-close" onClose={onClose}>
+			{(close) => <SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} titleId={titleId} close={close} />}
+		</OverlayShell>
 	);
 }
-
 /**
  * App-level opener: any component calls `useSubagentModal().openSubagent(childThreadId)` and the modal opens over the
  * current page, whichever page that is. One modal at a time; opening another child replaces it.
  */
 export function SubagentModalProvider({ children }: { children: ReactNode }) {
-	const [open, setOpen] = useState<string | null>(null);
-	const openSubagent = useCallback((id: string) => setOpen(id), []);
+	const [open, setOpen] = useState<{ id: string; wolf: string } | null>(null);
+	const openSubagent = useCallback((id: string, wolf?: string) => setOpen({ id, wolf: wolf || wolfOfThread(id) }), []);
 	const closeSubagent = useCallback(() => setOpen(null), []);
 	const value = useMemo(() => ({ openSubagent, closeSubagent }), [openSubagent, closeSubagent]);
 	return (
 		<OpenerContext.Provider value={value}>
 			{children}
-			{open && typeof document !== "undefined" && createPortal(<SubagentModal wolf={wolfOfThread(open)} childThreadId={open} onClose={closeSubagent} />, document.body)}
+			{open && typeof document !== "undefined" && createPortal(<SubagentModal wolf={open.wolf} childThreadId={open.id} onClose={closeSubagent} />, document.body)}
 		</OpenerContext.Provider>
 	);
 }

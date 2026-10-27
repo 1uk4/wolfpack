@@ -124,7 +124,7 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 	const { openSubagent } = useSubagentModal();
 	const [expanded, setExpanded] = useState(false);
 	const now = useNow(items, nowProp);
-	const open = useCallback((c: ChildThread) => openSubagent(c.id), [openSubagent]);
+	const open = useCallback((c: ChildThread) => openSubagent(c.id, wolf), [openSubagent, wolf]);
 	const [stopError, setStopError] = useState<string | null>(null);
 	// A state change (the stop took, or the child moved on) makes the error stale.
 	const states = items.map((c) => `${c.id}:${c.state}`).join();

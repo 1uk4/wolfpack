@@ -379,7 +379,7 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 	);
 }
 
-function SessionsSidebar() {
+export function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<SessionItem[] | null>(null);
 	const [query, setQuery] = useState("");
@@ -387,7 +387,7 @@ function SessionsSidebar() {
 	const router = useRouter();
 	const { openSubagent } = useSubagentModal();
 	/** A subagent opens its modal over this page; anything else navigates. */
-	const openItem = (c: SessionItem) => (isChildThread(c) ? openSubagent(c.id) : router.push(itemHref(c)));
+	const openItem = (c: SessionItem) => (isChildThread(c) ? openSubagent(c.id, c.meta) : router.push(itemHref(c)));
 	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
@@ -860,7 +860,7 @@ function SessionsSidebar() {
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
 					{/* The wolf's subagents (wolfd): running, queued and done, with the task each serves. */}
-					<SubagentJobs rows={chats ?? []} onOpen={(c) => openSubagent(c.id)} />
+					<SubagentJobs rows={chats ?? []} onOpen={(c) => openSubagent(c.id, c.meta)} />
 					{/* The legacy session-job feed: only drawn while a non-wolfd job runs. */}
 					<ActivitySection hideWhenEmpty />
 

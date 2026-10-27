@@ -33,7 +33,8 @@ const { SubagentModalProvider } = await import("../components/subagent-modal.tsx
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
 const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SubagentJobs } = await import("../components/subagent-jobs.tsx");
-const { SessionRow } = await import("../components/sidebar.tsx");
+const { SessionRow, SessionsSidebar } = await import("../components/sidebar.tsx");
+const { SidebarProvider } = await import("../components/sidebar.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const core = await import("../src/core/index.ts");
@@ -439,5 +440,89 @@ describe("sidebarGroups is defensive", () => {
 		const rows = [{ id: "a" }, { id: "b", parentThreadId: "a" }, { id: "c", parentThreadId: "b" }, { id: "d", parentThreadId: "gone" }];
 		assert.deepEqual(core.sidebarGroups(rows, rows, false, new Set()).map((g) => g.top.id), ["a", "c", "d"]);
 		assert.doesNotThrow(() => core.sidebarGroups(rows, [{ id: "zzz", parentThreadId: "nope" }], true, new Set()));
+	});
+});
+
+describe("subagent openers: the modal opens over the page, with the wolf the caller knows, no navigation", () => {
+	const wire = (n: number) => ({ ...child(n), status: "busy" });
+	async function mountSidebar(pushed: string[], urls: string[]) {
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const u = new URL(String(input), "http://t");
+			urls.push(u.pathname);
+			if (u.pathname === "/api/wolves") return Response.json({ wolves: [{ name: "1uk4" }] });
+			if (u.pathname === "/api/wolves/1uk4/threads") return Response.json({ threads: [{ id: PARENT, title: "Home" }, wire(1)] });
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={{ push: (h: string) => void pushed.push(h), prefetch() {} } as never}>
+					<ServerEventsProvider connect={eventsSource}>
+						<SubagentModalProvider>
+							<SidebarProvider>
+								<SessionsSidebar />
+							</SidebarProvider>
+						</SubagentModalProvider>
+					</ServerEventsProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		await settle(60);
+	}
+	(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
+	const rowButton = (title: string) => qa("button").find((b) => b.textContent?.includes(title))!;
+
+	it("the job panel's onOpen opens the modal with the row's wolf", async () => {
+		const urls: string[] = [];
+		globalThis.fetch = (async (input: RequestInfo | URL) => (urls.push(new URL(String(input), "http://t").pathname), new Response("{}", { status: 404 }))) as typeof fetch;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const { useSubagentModal } = await import("../components/subagent-modal.tsx");
+		function Jobs() {
+			const { openSubagent } = useSubagentModal();
+			return <SubagentJobs rows={[child(1, { meta: "1uk4" } as never)] as never[]} onOpen={(j) => openSubagent((j as { id: string }).id, (j as { meta?: string }).meta)} now={NOW} />;
+		}
+		await act(async () => root!.render(<AppRouterContext.Provider value={{ push() {}, prefetch() {} } as never}><ServerEventsProvider connect={eventsSource}><SubagentModalProvider><Jobs /></SubagentModalProvider></ServerEventsProvider></AppRouterContext.Provider>));
+		await click(qa('[data-testid="subagent-job"] button')[0]!);
+		await settle();
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
+		assert.ok(urls.some((u) => u.startsWith("/api/wolves/1uk4/threads/sub-1")));
+	});
+
+	it("a sidebar child row click opens the modal and does not navigate", async () => {
+		const pushed: string[] = [];
+		const urls: string[] = [];
+		await mountSidebar(pushed, urls);
+		await click(rowButton("Task 1"));
+		await settle();
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
+		assert.deepEqual(pushed, []);
+		assert.ok(urls.some((u) => u.startsWith("/api/wolves/1uk4/threads/sub-1")));
+	});
+
+	it("a normal sidebar row still navigates", async () => {
+		const pushed: string[] = [];
+		await mountSidebar(pushed, []);
+		await click(rowButton("Home"));
+		assert.equal(pushed.length, 1);
+		assert.equal(q('[data-testid="subagent-modal"]'), null);
+	});
+
+	it("Enter on the search walk opens a subagent row in the modal and does not navigate", async () => {
+		const pushed: string[] = [];
+		await mountSidebar(pushed, []);
+		const input = q('[data-testid="session-search"]')!;
+		const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
+		const press = (k: string) =>
+			act(async () => void (input as unknown as Record<string, { onKeyDown: (e: unknown) => void }>)[key]!.onKeyDown({ key: k, preventDefault() {}, currentTarget: { blur() {} } }));
+		await press("ArrowDown"); // Home
+		await press("ArrowDown"); // the subagent under it
+		await press("Enter");
+		await settle();
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
+		assert.deepEqual(pushed, []);
 	});
 });

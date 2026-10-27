@@ -22,6 +22,13 @@ Object.assign(globalThis, {
 	getComputedStyle: () => ({ animationName: "none" }),
 });
 
+// linkedom has no focus model: track it (the overlay's trap and restore read document.activeElement).
+let focused: Element | null = null;
+(dom.window.Element.prototype as unknown as { focus: () => void }).focus = function (this: Element) {
+	focused = this;
+};
+Object.defineProperty(dom.document, "activeElement", { get: () => focused ?? dom.document.body, configurable: true });
+
 type ConsoleClient = import("@wolfpack/client").ConsoleClient;
 type ThreadSummary = import("@wolfpack/client").ThreadSummary;
 type LedgerEntry = import("@wolfpack/client").LedgerEntry;
@@ -299,27 +306,114 @@ describe("subagent modal", () => {
 		assert.equal(threadGets, 0);
 	});
 
-	it("closes with Esc, the close button and an outside click, and stays open for clicks inside", async () => {
+	const key = (k: string, extra: Record<string, unknown> = {}) =>
+		act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: k }, extra)));
+
+	it("closes with Esc and the close button; is a labelled aria-modal dialog", async () => {
 		const f = fake({});
 		await mount(f);
 		closed.length = 0;
-		assert.ok(q('[data-testid="subagent-modal"]'));
-		await act(async () => void q('[data-testid="subagent-modal"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
-		assert.equal(closed.length, 0);
-		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
+		const dlg = q('[data-testid="subagent-modal"]')!;
+		assert.equal(dlg.getAttribute("aria-modal"), "true");
+		assert.equal(document.getElementById(dlg.getAttribute("aria-labelledby")!)!.textContent, "Audit the routes");
+		await key("Escape");
 		assert.equal(closed.length, 1);
 		await act(async () => void q('[data-testid="subagent-modal-close"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		assert.equal(closed.length, 2);
-		const bd = q('[data-testid="subagent-modal-backdrop"]')!;
-		const key = Object.keys(bd).find((k) => k.startsWith("__reactProps$"))!;
-		const props = (bd as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]!;
-		const ev = { isPrimary: true, button: 0, pointerId: 1, target: bd, currentTarget: bd };
-		await act(async () => {
-			props.onPointerDownCapture!(ev);
-			props.onPointerUpCapture!(ev);
-			props.onClickCapture!(ev);
+	});
+
+	it("the header row is title, then Stop, then close", async () => {
+		await mount(fake({}));
+		const row = q('[data-testid="subagent-title"]')!.parentElement!;
+		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-stop", "subagent-modal-close"]);
+	});
+
+	it("Tab wraps within the dialog, focus starts on close", async () => {
+		await mount(fake({}));
+		const dlg = q('[data-testid="subagent-modal"]')!;
+		const close = q('[data-testid="subagent-modal-close"]')!;
+		assert.equal(document.activeElement === close, true);
+		const focusables = [...dlg.querySelectorAll<HTMLElement>('button, a[href], textarea, input, select, summary, [tabindex="0"]')].filter((el) => {
+			const d = el.closest("details"); // the closed message field is not reachable, only its summary
+			return !d || d.open || (el.tagName === "SUMMARY" && el.parentElement === d);
 		});
-		assert.equal(closed.length, 3);
+		const last = focusables[focusables.length - 1]!;
+		last.focus();
+		let prevented = false;
+		await key("Tab", { preventDefault: () => (prevented = true) });
+		assert.equal(prevented, true);
+		assert.equal(document.activeElement === focusables[0], true);
+		prevented = false;
+		await key("Tab", { shiftKey: true, preventDefault: () => (prevented = true) });
+		assert.equal(prevented, true);
+		assert.equal(document.activeElement === last, true);
+	});
+
+	it("locks the page's scroll while open and restores it, and returns focus to the opener, on close", async () => {
+		const f = fake({});
+		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
+		const opener = document.createElement("button");
+		document.body.appendChild(opener);
+		opener.focus();
+		document.body.style.overflow = "auto";
+		let open: (id: string, wolf?: string) => void = () => {};
+		function Opener() {
+			open = useSubagentModal().openSubagent;
+			return null;
+		}
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<ServerEventsProvider connect={inert}>
+					<SubagentModalProvider>
+						<Opener />
+					</SubagentModalProvider>
+				</ServerEventsProvider>,
+			);
+		});
+		await act(async () => open(CHILD, "w"));
+		assert.equal(document.body.style.overflow, "hidden");
+		assert.equal(document.activeElement !== opener, true);
+		await key("Escape");
+		assert.equal(q('[data-testid="subagent-modal"]'), null);
+		assert.equal(document.body.style.overflow, "auto");
+		assert.equal(document.activeElement === opener, true);
+		document.body.style.overflow = "";
+	});
+
+	it("uses the wolf it is given; falls back to the id prefix only without one", async () => {
+		const f = fake({});
+		const urls: string[] = [];
+		const tf = threadFetch(f.client);
+		(globalThis as Record<string, unknown>).fetch = ((i: RequestInfo | URL, init?: RequestInit) => (urls.push(String(i)), tf(i, init))) as typeof fetch;
+		let open: (id: string, wolf?: string) => void = () => {};
+		function Opener() {
+			open = useSubagentModal().openSubagent;
+			return null;
+		}
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<ServerEventsProvider connect={inert}>
+					<SubagentModalProvider>
+						<Opener />
+					</SubagentModalProvider>
+				</ServerEventsProvider>,
+			);
+		});
+		await act(async () => open("pfx/sub-9", "given"));
+		await settle();
+		assert.ok(urls.some((u) => u.includes("/api/wolves/given/threads/")), urls.join());
+		assert.ok(!urls.some((u) => u.includes("/api/wolves/pfx/")));
+		await key("Escape");
+		urls.length = 0;
+		await act(async () => open("pfx/sub-9"));
+		await settle();
+		assert.ok(urls.some((u) => u.includes("/api/wolves/pfx/threads/sub-9")), urls.join());
 	});
 
 	it("the provider opens the modal from anywhere over the current page and closes it", async () => {

@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
-import { CheckIcon, MaximizeIcon, XIcon } from "lucide-react";
+import { CheckIcon, MaximizeIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { OverlayShell } from "@/components/overlay-shell";
 import { layoutTaskGraph, type TaskGraphModel, type TaskNode, type TaskStatus } from "@/src/core";
 
 type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;
@@ -247,41 +248,6 @@ export function TaskGraphCompact({ model, onSelect }: { model: GraphModel; onSel
 
 /** Full-screen view with pan/zoom + Controls. Esc closes (one Esc, one action). */
 export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphModel; onClose: () => void; onSelect: (id: string) => void }) {
-	const dialogRef = useRef<HTMLDivElement>(null);
-	const closeRef = useRef<HTMLButtonElement>(null);
-	useEffect(() => {
-		closeRef.current?.focus();
-	}, []);
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				// THE ONE-ESC LAW: claim at the document level, the window chain must not also act.
-				e.preventDefault();
-				e.stopPropagation();
-				onClose();
-			} else if (e.key === "Tab") {
-				// trap: cycle within the dialog's focusables
-				const els = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button, [tabindex="0"]') ?? []);
-				if (els.length === 0) return;
-				const first = els[0]!;
-				const last = els[els.length - 1]!;
-				const active = document.activeElement;
-				if (!dialogRef.current?.contains(active)) {
-					e.preventDefault();
-					first.focus();
-				} else if (e.shiftKey && active === first) {
-					e.preventDefault();
-					last.focus();
-				} else if (!e.shiftKey && active === last) {
-					e.preventDefault();
-					first.focus();
-				}
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose]);
-
 	const viewportRef = useRef<HTMLDivElement>(null);
 	const [width, setWidth] = useState(1000);
 	useEffect(() => {
@@ -295,30 +261,28 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 	const { nodes, edges } = useFlow(model, NODE_W_OVERLAY, width - 48, onSelect);
 
 	return (
-		<div
-			ref={dialogRef}
-			className="fixed inset-0 z-50 flex flex-col bg-background p-4"
-			role="dialog"
-			aria-modal="true"
-			aria-label={`Task graph: ${model.featureTitle}`}
-			data-testid="task-graph-overlay"
+		<OverlayShell
+			label={`Task graph: ${model.featureTitle}`}
+			testId="task-graph-overlay"
+			closeTestId="task-graph-close"
+			onClose={onClose}
+			header={(close) => (
+				<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+					<span className="font-sans text-sm font-medium">{model.featureTitle}</span>
+					<span className="text-xs text-muted-foreground">{model.label}</span>
+					<ul className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground" aria-label="Legend">
+						{LEGEND.map((s) => (
+							<li key={s} className="flex items-center gap-1">
+								{s === "shipped" ? <CheckIcon className="size-3" aria-hidden /> : <span className={`size-2 rounded-full ${DOT[s]}`} aria-hidden />}
+								{STATUS_LABEL[s]}
+							</li>
+						))}
+						{model.boundId ? <li className="flex items-center gap-1"><span className="size-2 rounded-full ring-2 ring-yellow-400/80" aria-hidden />Current</li> : null}
+					</ul>
+					{close}
+				</div>
+			)}
 		>
-			<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-				<span className="font-sans text-sm font-medium">{model.featureTitle}</span>
-				<span className="text-xs text-muted-foreground">{model.label}</span>
-				<ul className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground" aria-label="Legend">
-					{LEGEND.map((s) => (
-						<li key={s} className="flex items-center gap-1">
-							{s === "shipped" ? <CheckIcon className="size-3" aria-hidden /> : <span className={`size-2 rounded-full ${DOT[s]}`} aria-hidden />}
-							{STATUS_LABEL[s]}
-						</li>
-					))}
-					{model.boundId ? <li className="flex items-center gap-1"><span className="size-2 rounded-full ring-2 ring-yellow-400/80" aria-hidden />Current</li> : null}
-				</ul>
-				<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close" data-testid="task-graph-close" onClick={onClose}>
-					<XIcon />
-				</Button>
-			</div>
 			<div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden rounded-xl border bg-background">
 				<ReactFlow
 					nodes={nodes}
@@ -339,6 +303,6 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 					<Controls showInteractive={false} position="bottom-right" />
 				</ReactFlow>
 			</div>
-		</div>
+		</OverlayShell>
 	);
 }

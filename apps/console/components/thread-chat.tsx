@@ -206,20 +206,34 @@ function ThreadChatInner({
 			if (ev.type === "card-settled" && (ev.outcome === "answered" || ev.closed === "skipped")) void refreshCards();
 		};
 	});
-	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
+	// The open thread follows the wolf's activity. A turn this console did not start (a steer delivered by wolfd, a
+	// harness revision) announces itself only as a busy status: attach to its stream. A turn we are already running
+	// (our own submit/answer) owns the view; a busy that lands mid-stream may be a back-to-back next turn, so it is
+	// remembered and attached when the current stream settles.
+	const busyMissed = useRef(false);
 	useOptionalServerEvent("needs-you-changed", (p) => {
-		if (p.wolf !== wolf || status === "submitted" || status === "streaming") return;
+		if (p.wolf !== wolf) return;
 		if (p.threadId !== undefined && p.threadId !== threadId) return; // another thread of the wolf
-		if (p.kind === "status" && p.status === "busy") return; // a turn started: the stream owns the view
-		void refreshCards();
+		const running = status === "submitted" || status === "streaming";
+		if (p.kind === "status" && p.status === "busy") {
+			if (!running) resumeStream();
+			else if (status === "streaming") busyMissed.current = true;
+			return;
+		}
+		if (running) return;
+		void refreshCards(); // idle: a held answer given from the sidebar, a card answered elsewhere
 	});
 	const prevStatus = useRef(status);
 	useEffect(() => {
 		const was = prevStatus.current;
 		prevStatus.current = status;
 		const wasRunning = was === "submitted" || was === "streaming";
-		if (wasRunning && status === "ready") void refreshCards();
-	}, [status, refreshCards]);
+		if (wasRunning && status === "ready") {
+			void refreshCards();
+			if (busyMissed.current) resumeStream();
+		}
+		if (status === "ready" || status === "error") busyMissed.current = false;
+	}, [status, refreshCards, resumeStream]);
 	const answerInFlight = useRef(false);
 	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
 	const resolveCard = useCallback(

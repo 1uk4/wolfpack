@@ -429,6 +429,37 @@ describe("wolf activity", () => {
   });
 });
 
+describe("a steer-triggered turn is as visible as a submitted one", () => {
+  it("emits the busy/idle thread-status and the same stream frames a console subscriber follows", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    const seen: WolfEvent[] = [];
+    const stop = new AbortController();
+    void (async () => {
+      for await (const ev of tw!.client.watchActivity!("testwolf", { signal: stop.signal })) seen.push(ev);
+    })().catch(() => {});
+    const status = () => seen.filter((e) => e.type === "thread-status" && e.threadId === tw!.home).map((e) => (e as Extract<WolfEvent, { type: "thread-status" }>).status);
+    await say(tw, "spawn: SLOW work");
+    await vi.waitFor(() => expect(status().at(-1)).toBe("idle"), { timeout: 4000 });
+    const before = status().filter((s) => s === "busy").length;
+
+    // the child finishes later: its result arrives as a steer that starts a new parent turn (nobody submitted it)
+    open();
+    await vi.waitFor(() => expect(status().filter((s) => s === "busy")).toHaveLength(before + 1), { timeout: 4000 });
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    await vi.waitFor(() => expect(status().at(-1)).toBe("idle"));
+    stop.abort();
+
+    // a console attaching on that busy reads the turn from its first event to its end
+    const events = [];
+    for await (const ev of tw.client.watch(tw.home)) events.push(ev);
+    expect(events[0]?.type).toBe("turn-start");
+    expect(events.at(-1)?.type).toBe("turn-end");
+    expect(events.filter((e) => e.type === "text-delta").map((e) => (e as { text: string }).text).join("")).toBe("parent saw the result");
+  });
+});
+
 // ------------------------------------------------------------------ robustness
 
 type Mgr = {

@@ -92,10 +92,15 @@ describe("client-side precheck", () => {
 
 describe("history: path stripping and thumbnails", () => {
 	it("strips only the attachment path lines; the model-facing text is untouched", () => {
-		assert.equal(A.stripAttachmentLines(`what is this?\n\n${PATH_LINE}`), "what is this?");
-		assert.equal(A.stripAttachmentLines(PATH_LINE), "");
-		assert.equal(A.stripAttachmentLines(`a\n${PATH_LINE}\n${PATH_LINE}`), "a");
-		assert.equal(A.stripAttachmentLines("see [Attached image: x] inline"), "see [Attached image: x] inline");
+		const mine = [{ id: ID }];
+		const other = "[Attached image: /tmp/99999999-2222-4333-8444-555555555555.png]";
+		assert.equal(A.stripAttachmentLines(`what is this?\n\n${PATH_LINE}`, mine), "what is this?");
+		assert.equal(A.stripAttachmentLines(PATH_LINE, mine), "");
+		assert.equal(A.stripAttachmentLines(`a\n${PATH_LINE}\n${PATH_LINE}`, mine), "a");
+		assert.equal(A.stripAttachmentLines("see [Attached image: x] inline", mine), "see [Attached image: x] inline");
+		// Only lines naming the message's own resolved attachments go; the path may be from another den (moved).
+		assert.equal(A.stripAttachmentLines(`a\n${other}\n[Attached image: C:\\old\\${ID}.png]`, mine), `a\n${other}`);
+		assert.equal(A.stripAttachmentLines(PATH_LINE, []), PATH_LINE);
 		const h = history(`hi\n\n${PATH_LINE}`);
 		A.withHistoryAttachments(threadMessagesToNative(h), h);
 		assert.equal(h[0]!.text, `hi\n\n${PATH_LINE}`);
@@ -270,7 +275,7 @@ describe("attachment GET relay", () => {
 		assert.equal(res.status, 200);
 		assert.equal(res.headers.get("content-type"), "image/png");
 		assert.equal(res.headers.get("x-content-type-options"), "nosniff");
-		assert.match(res.headers.get("content-security-policy") ?? "", /sandbox/);
+		assert.equal(res.headers.get("content-security-policy"), "default-src 'none'; style-src 'unsafe-inline'; sandbox");
 		assert.deepEqual(new Uint8Array(await res.arrayBuffer()), PNG);
 	});
 

@@ -19,6 +19,7 @@ import {
 	needsContinuation,
 	newAnswerResult,
 	newUserMessage,
+	type UiAttachment,
 	projectView,
 	type ChatInput,
 	type LhMarkerMessage,
@@ -90,7 +91,7 @@ export interface SessionModelDeps {
 }
 
 /** One attachment on a text input: the wire ref is the id; the rest feeds the optimistic bubble. */
-export type ChatAttachment = NonNullable<Extract<ChatInput, { type: "text" }>["attachments"]>[number];
+export type ChatAttachment = UiAttachment;
 
 /** A local optimistic id (never a server stamp — absorption and the
  *  settle swap both key on this prefix). */
@@ -594,8 +595,7 @@ export class SessionModel {
 		if (input.type === "text") {
 			// Attachments ride the optimistic message so its bubble shows the thumbnails at once (the record's
 			// copy carries the same list; adoption matches on content only).
-			const atts = input.attachments?.length ? { attachments: input.attachments } : {};
-			optimistic.push({ ...newUserMessage(input.text), id: localId(), ...atts } as LhMessage);
+			optimistic.push({ ...newUserMessage(input.text, input.attachments), id: localId() });
 		}
 		else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
@@ -698,7 +698,7 @@ export class SessionModel {
 	 *  so echo it as a normal user message (local id; adoptRecord drops it
 	 *  once the record carries the server copy) and submit whenBusy "steer". */
 	private async steerViaSubmit(t: string, attachments?: ChatAttachment[]): Promise<void> {
-		const echo = { ...newUserMessage(t), id: localId(), ...(attachments?.length ? { attachments } : {}) } as LhMessage;
+		const echo: LhMessage = { ...newUserMessage(t, attachments), id: localId() };
 		const dropEcho = () =>
 			this.mutate(() => {
 				this.tail = this.tail.filter((m) => m !== echo);

@@ -8,6 +8,7 @@
  * message: the send carries only `{id}` refs. Images only for now.
  */
 
+import type { UiAttachment } from "@/src/core/native-messages";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {
@@ -23,12 +24,7 @@ export interface PendingAttachment {
 }
 
 /** What the UI knows about an attachment (a subset of the protocol's Attachment; refs on the wire carry only the id). */
-export interface AttachmentInfo {
-	id: string;
-	name?: string;
-	mimeType?: string;
-	size?: number;
-}
+export type AttachmentInfo = UiAttachment;
 
 /** The client-side precheck (same limits as the wolf): the chip's error text, or undefined when the file may upload. */
 export function precheckFile(file: { type: string; size: number }): string | undefined {
@@ -116,16 +112,20 @@ export const canSendWith = (text: string, list: readonly PendingAttachment[]): b
 export const readyInfos = (list: readonly PendingAttachment[]): AttachmentInfo[] =>
 	list.flatMap((a) => (a.status === "ready" && a.id ? [{ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size }] : []));
 
-const PATH_LINE = /^\[Attached image: .+\]$/;
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * The text to DISPLAY for a user message that has attachments: the wolf appends `[Attached image: <path>]` lines for
- * the model (and its tools); the bubble shows thumbnails instead. The model-facing text is untouched.
+ * the model (and its tools); the bubble shows thumbnails instead. Only the lines naming one of the message's resolved
+ * attachments are removed (a line the user typed that names nothing real stays). The model-facing text is untouched.
  */
-export function stripAttachmentLines(text: string): string {
+export function stripAttachmentLines(text: string, attachments: readonly { id: string }[]): string {
+	if (attachments.length === 0) return text;
+	const ids = attachments.map((a) => escapeRe(a.id)).join("|");
+	const line = new RegExp(`^\\[Attached image: .*[\\\\/](?:${ids})\\.[a-z]+\\]$`);
 	return text
 		.split("\n")
-		.filter((l) => !PATH_LINE.test(l))
+		.filter((l) => !line.test(l))
 		.join("\n")
 		.replace(/\n+$/, "");
 }
@@ -147,6 +147,6 @@ export function withHistoryAttachments<T extends { id?: string; role?: string }>
 	if (byId.size === 0) return [...native];
 	return native.map((n) => {
 		const h = n.role === "user" && n.id ? byId.get(n.id) : undefined;
-		return h ? { ...n, content: stripAttachmentLines(h.text), attachments: h.attachments } : n;
+		return h ? { ...n, content: stripAttachmentLines(h.text, h.attachments!), attachments: h.attachments } : n;
 	});
 }

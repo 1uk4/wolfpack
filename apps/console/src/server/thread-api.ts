@@ -192,7 +192,7 @@ export function createThreadApi(source: ClientSource) {
 						"Content-Type": mime,
 						"Content-Length": String(bytes.byteLength),
 						"X-Content-Type-Options": "nosniff",
-						"Content-Security-Policy": "default-src 'none'; sandbox",
+						"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
 						"Cache-Control": "private, max-age=31536000, immutable",
 					},
 				});

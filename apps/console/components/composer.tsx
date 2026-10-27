@@ -64,7 +64,7 @@ export function Composer({
 	inputRef,
 	onEscape,
 	placeholder = "Ask, answer, or steer…",
-	onPasteImages,
+	onFiles,
 	onPickFiles,
 	chips,
 }: {
@@ -85,7 +85,7 @@ export function Composer({
 	 *  active sessions read "Ask, answer, or steer…". */
 	placeholder?: string;
 	/** Images pasted into the textarea (the paste is swallowed only when it held images). */
-	onPasteImages?: (files: File[]) => void;
+	onFiles?: (files: File[]) => void;
 	/** Files chosen with the picker button (absent: no button). */
 	onPickFiles?: (files: File[]) => void;
 	/** Pending attachment chips, rendered above the row. */
@@ -137,11 +137,11 @@ export function Composer({
 					value={value}
 					onChange={(e) => onChange(e.target.value)}
 					onPaste={(e) => {
-						if (!onPasteImages) return;
+						if (!onFiles) return;
 						const files = pastedImages(e.clipboardData);
 						if (files.length === 0) return;
 						e.preventDefault();
-						onPasteImages(files);
+						onFiles(files);
 					}}
 					onKeyDown={(e) => {
 						// Esc ends dictation before anything else Esc might someday mean

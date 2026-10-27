@@ -17,7 +17,7 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem, ATTACHMENTS_PART } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -132,7 +132,7 @@ export function ThreadChat({
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
-	const onPasteImages = useCallback(
+	const onFiles = useCallback(
 		(files: File[]) => {
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
@@ -186,7 +186,7 @@ export function ThreadChat({
 				if (!dragHasFiles(e.dataTransfer)) return;
 				e.preventDefault();
 				setDragging(false);
-				onPasteImages(droppedFiles(e.dataTransfer));
+				onFiles(droppedFiles(e.dataTransfer));
 			}}
 		>
 			<div className="flex min-w-0 flex-1 flex-col">
@@ -216,7 +216,7 @@ export function ThreadChat({
 														.join("\n")}
 												</div>
 												<AttachmentThumbs
-													items={(m.parts.find((p) => p.type === "data-attachments")?.data as AttachmentInfo[] | undefined) ?? []}
+													items={(m.parts.find((p) => p.type === ATTACHMENTS_PART)?.data as AttachmentInfo[] | undefined) ?? []}
 													urlFor={transport.attachmentUrl}
 												/>
 											</div>
@@ -304,8 +304,8 @@ export function ThreadChat({
 											onSend={onSend}
 											onStop={onStop}
 											canSend={canSendWith(text, attachments)}
-											onPasteImages={onPasteImages}
-											onPickFiles={onPasteImages}
+											onFiles={onFiles}
+											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
 											autoFocus

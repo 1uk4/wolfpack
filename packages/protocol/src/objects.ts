@@ -130,7 +130,7 @@ export function graphProblem(nodes: ReadonlyArray<{ id: string }>, edges: Readon
   if (seen === ids.size) return undefined;
   const stuck = [...ids].filter((id) => indeg.get(id)! > 0);
   const shown = stuck.slice(0, 8).join(", ") + (stuck.length > 8 ? ", …" : "");
-  return `edges form a cycle (edges mean depends-on, so the graph must be acyclic); nodes involved or blocked by it: ${shown}`;
+  return `edges form a cycle (edges mean depends-on, so the graph must be acyclic); nodes on or behind the cycle: ${shown}`;
 }
 
 /** `data` of a graph, or undefined when it does not fit (also dangling edges, self-loops, cycles, duplicate ids). */

@@ -24,6 +24,10 @@ const { KeyboardShortcuts } = await import("../components/keyboard-shortcuts.tsx
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
+const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+// ThreadChat slots the MemoryPanel, which subscribes to memory events: an inert source keeps EventSource out of linkedom.
+const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
+globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
 
 let root: Root | null = null;
 const assistant = (id: string, thinking: string, text: string) =>
@@ -47,8 +51,10 @@ async function mount() {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
 			<SettingsDialogProvider>
+			<MemoryEventsProvider connect={inertSource}>
 				<ThreadChat wolf="w" slug="s" threadId="t1" title="T" initialMessages={[assistant("a1", "first", "x"), assistant("a2", "second", "y")]} />
 				<KeyboardShortcuts />
+			</MemoryEventsProvider>
 			</SettingsDialogProvider>
 			</AppRouterContext.Provider>,
 		);

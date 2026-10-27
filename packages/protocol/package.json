@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
+    "./attachments": "./dist/attachments.js",
     "./stub": "./dist/stub/index.js",
     "./contract": "./dist/contract/index.js"
   },

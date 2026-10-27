@@ -192,6 +192,7 @@ export class StubServer {
         const mime = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
         if (!mime) throw new HttpError("invalid_request", "missing Content-Type: send the image's mime type");
         if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) throw new HttpError("invalid_request", `unsupported attachment type ${mime}: images only`);
+        // The stub checks the size after buffering the whole body (wolfd bounds the read).
         const bytes = await readBytes(req);
         if (bytes.length === 0) throw new HttpError("invalid_request", "attachment is empty");
         if (bytes.length > ATTACHMENT_MAX_BYTES) throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`);

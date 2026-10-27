@@ -50,14 +50,14 @@ export function storeAttachment(den: string, threadId: string, bytes: Uint8Array
 }
 
 /** Resolve a ref to its stored file. Throws AttachmentError for a malformed or unknown id. */
-export function loadAttachment(den: string, threadId: string, ref: AttachmentRef): { path: string; mimeType: string; bytes: Buffer } {
-  if (!ID_RE.test(ref.id)) throw new AttachmentError(`unknown attachment ${ref.id}`);
+export function loadAttachment(den: string, threadId: string, id: string): { path: string; mimeType: string; bytes: Buffer } {
+  if (!ID_RE.test(id)) throw new AttachmentError(`unknown attachment ${id}`);
   const dir = threadDir(den, threadId);
   for (const ext of Object.keys(MIME_BY_EXT)) {
-    const path = join(dir, `${ref.id}.${ext}`);
+    const path = join(dir, `${id}.${ext}`);
     if (existsSync(path)) return { path, mimeType: MIME_BY_EXT[ext], bytes: readFileSync(path) };
   }
-  throw new AttachmentError(`unknown attachment ${ref.id}`);
+  throw new AttachmentError(`unknown attachment ${id}`);
 }
 
 /** Cleanup hook for thread deletion (wolfd has none yet): drops the thread's whole attachments directory. */
@@ -67,7 +67,7 @@ export function removeThreadAttachments(den: string, threadId: string): void {
 
 /** Build the engine input: the text plus a path note per attachment, and one image part each. */
 export function inlineAttachments(den: string, threadId: string, text: string, refs: readonly AttachmentRef[]) {
-  const files = [...new Set(refs.map((r) => r.id))].map((id) => ({ id })).map((r) => loadAttachment(den, threadId, r));
+  const files = [...new Set(refs.map((r) => r.id))].map((id) => loadAttachment(den, threadId, id));
   const note = files.map((f) => `[Attached image: ${f.path}]`).join("\n");
   return [
     { type: "text" as const, text: text.trim() ? `${text}\n\n${note}` : note },

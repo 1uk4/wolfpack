@@ -5,7 +5,7 @@
  * message: the send carries only `{id}` refs. Images only for now.
  */
 
-import { ATTACHMENT_NAME_HEADER } from "@wolfpack/client";
+import { ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {
 	/** Local key (stable across the upload). */

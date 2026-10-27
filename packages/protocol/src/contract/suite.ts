@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACHMENT_NAME_HEADER,
   ERROR_HTTP_STATUS,
   ErrorEnvelopeSchema,
   PROTOCOL_VERSION,
@@ -183,7 +184,7 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       const upload = (id: string, type: string | undefined, body: Uint8Array | string, name?: string) =>
         call(buildPath("uploadAttachment", { id }), {
           method: "POST",
-          headers: { ...(type ? { "Content-Type": type } : {}), ...(name ? { "X-Attachment-Name": encodeURIComponent(name) } : {}) },
+          headers: { ...(type ? { "Content-Type": type } : {}), ...(name ? { [ATTACHMENT_NAME_HEADER]: encodeURIComponent(name) } : {}) },
           body: body as BodyInit,
         });
       const send = (refs: unknown, input = "look") => post(buildPath("submit", { id: threadId }), { input, whenBusy: "reject", attachments: refs });

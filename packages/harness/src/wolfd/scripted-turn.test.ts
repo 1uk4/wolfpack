@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { DEFAULT_STRUCTURED_OUTPUT_GUIDANCE } from "./context.js";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
@@ -90,10 +91,12 @@ describe("scripted model turns", () => {
       tw = undefined;
       return ctx;
     };
-    expect(await seen()).toContain("# Structured output");
+    // ctx is JSON-stringified, so compare against the escaped default text.
+    const defaultText = JSON.stringify(DEFAULT_STRUCTURED_OUTPUT_GUIDANCE).slice(1, -1);
+    expect(await seen()).toContain(defaultText);
     const custom = await seen("prompts:\n  structuredOutput: CUSTOM-GUIDE\n");
     expect(custom).toContain("CUSTOM-GUIDE");
-    expect(custom).not.toContain("show_checklist: a linear");
+    expect(custom).not.toContain(defaultText);
     expect(await seen("prompts:\n  structuredOutput: false\n")).not.toContain("# Structured output");
   });
 

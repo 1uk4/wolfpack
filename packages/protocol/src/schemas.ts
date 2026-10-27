@@ -95,7 +95,7 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
-import { parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+import { CHECKLIST_STATES, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
 export * from "./objects.js";
 
 /**
@@ -134,12 +134,32 @@ export const ShowDecisionParamsSchema = DecisionDataSchema.extend({
 }).refine((d) => parseObjectData("decision", d) !== undefined, { message: "chosen must be the id of one of the options" });
 export type ShowDecisionParams = z.infer<typeof ShowDecisionParamsSchema>;
 
+export const ChecklistItemSchema = z.object({
+  id: z.string().min(1).describe("Short stable id of the item"),
+  label: z.string().min(1).describe("The step, in a few words"),
+  state: z.enum(CHECKLIST_STATES).describe("todo | doing | done | skipped"),
+  note: z.string().optional().describe("Optional one-line note"),
+});
+
+/** `data` of a `checklist` object. Progress (done/total) is derived on render, not sent. */
+export const ChecklistDataSchema = z.object({
+  title: z.string().optional().describe("What the checklist is for"),
+  items: z.array(ChecklistItemSchema).min(1).describe("The items, in order"),
+});
+
+/** Parameters of the `show_checklist` tool: the checklist plus the wolf-chosen id (reuse it to revise). */
+export const ShowChecklistParamsSchema = ChecklistDataSchema.extend({
+  objectId: z.string().min(1).describe("Stable id for this checklist; call again with the same id to revise it (resend the whole checklist)"),
+}).refine((d) => parseObjectData("checklist", d) !== undefined, { message: "item ids must be unique" });
+export type ShowChecklistParams = z.infer<typeof ShowChecklistParamsSchema>;
+
 /**
  * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
  * registration hands the model). A new object type adds one entry here and one in objects.ts.
  */
 export const OBJECT_TOOL_PARAMS = {
   show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
+  show_checklist: { type: "checklist", schema: ShowChecklistParamsSchema },
 } as const satisfies Record<ObjectToolName, { type: KnownObjectType; schema: z.ZodType }>;
 
 /** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */

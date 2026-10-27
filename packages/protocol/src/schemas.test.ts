@@ -24,6 +24,8 @@ import {
   ThreadObjectSchema,
   ThreadSummarySchema,
   ShowDecisionParamsSchema,
+  ShowChecklistParamsSchema,
+  checklistProgress,
   parseObjectData,
   OBJECT_TYPES,
   OBJECT_TOOL_TYPES,
@@ -341,5 +343,55 @@ describe("structured objects", () => {
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1" }).success).toBe(true);
     expect(ShowDecisionParamsSchema.safeParse(decision).success).toBe(false);
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1", chosen: "zzz" }).success).toBe(false);
+  });
+
+  describe("checklist", () => {
+    const checklist = { title: "Ship", items: [{ id: "a", label: "A", state: "done" }, { id: "b", label: "B", state: "doing", note: "n" }, { id: "c", label: "C", state: "skipped" }] };
+
+    it("parseObjectData accepts valid items and rejects empty, duplicate ids and unknown states", () => {
+      expect(parseObjectData("checklist", checklist)).toEqual(checklist);
+      expect(parseObjectData("checklist", { items: [] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [checklist.items[0], { ...checklist.items[1], id: "a" }] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [{ id: "a", label: "A", state: "finished" }] })).toBeUndefined();
+    });
+
+    it("ShowChecklistParamsSchema requires objectId, min 1 item and unique ids", () => {
+      expect(ShowChecklistParamsSchema.safeParse({ ...checklist, objectId: "o" }).success).toBe(true);
+      expect(ShowChecklistParamsSchema.safeParse(checklist).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [checklist.items[0], checklist.items[0]] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [{ id: "a", label: "A", state: "nope" }] }).success).toBe(false);
+    });
+
+    it("all done plus skipped reaches 100%; all skipped has total 0", () => {
+      const p = (states: string[]) => checklistProgress(parseObjectData("checklist", { items: states.map((state, i) => ({ id: `i${i}`, label: "x", state })) })!);
+      expect(p(["done", "done", "skipped"])).toEqual({ done: 2, total: 2, skipped: 1 });
+      expect(p(["skipped", "skipped"])).toEqual({ done: 0, total: 0, skipped: 2 });
+    });
+
+    it("ShowChecklistParamsSchema and parseObjectData agree on a table of cases", () => {
+      const it1 = { id: "a", label: "A", state: "todo" };
+      const cases: unknown[] = [
+        { items: [it1] },
+        { items: [] },
+        { items: [{ ...it1, id: "" }] },
+        { items: [{ ...it1, label: "" }] },
+        { items: [{ ...it1, extra: 1 }] },
+        { items: [{ ...it1, note: 5 }] },
+        { items: [it1, it1] },
+        { items: [{ ...it1, state: "bad" }] },
+        { title: 3, items: [it1] },
+        { items: [{ ...it1, note: "n" }], title: "t" },
+      ];
+      for (const c of cases) {
+        // Duplicate ids are enforced by the tool-params refine, so compare against the schema the tool really uses.
+        const z = ShowChecklistParamsSchema.safeParse({ ...(c as object), objectId: "o" }).success;
+        expect([JSON.stringify(c), parseObjectData("checklist", c) !== undefined]).toEqual([JSON.stringify(c), z]);
+      }
+    });
+
+    it("progress is derived: done over total", () => {
+      expect(checklistProgress(parseObjectData("checklist", checklist)!)).toEqual({ done: 1, total: 2, skipped: 1 });
+    });
   });
 });

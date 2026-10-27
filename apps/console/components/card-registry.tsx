@@ -3,6 +3,7 @@ import type { ArtifactPartProps, QuestionAnswerData } from "@/src/core";
 import { AnsweredCard } from "@/components/answered-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 import { DecisionCard } from "@/components/decision-card";
+import { ChecklistCard } from "@/components/checklist-card";
 
 /**
  * Card registry — the extension point for transcript cards.
@@ -126,3 +127,4 @@ for (const name of ["read", "ls", "find", "grep"]) {
 // Structured objects, keyed by object type (src/core/objects.ts folds the
 // object-upsert / history objects into one part per object).
 registerCard("object", "decision", { Renderer: DecisionCard });
+registerCard("object", "checklist", { Renderer: ChecklistCard });

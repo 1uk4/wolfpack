@@ -1,5 +1,5 @@
 /**
- * Structured-object tools (`show_decision` now; checklist and graph add an entry to the protocol's OBJECT_TOOL_PARAMS).
+ * Structured-object tools (`show_decision`, `show_checklist`; graph adds an entry to the protocol's OBJECT_TOOL_PARAMS).
  *
  * The tool itself is stateless: it validates the protocol schema and acks. The thread layer derives the object from
  * the call's arguments (events.ts live as `object-upsert`, messages.ts for history/snapshot), rev = successful
@@ -15,6 +15,10 @@ const DESCRIPTIONS: Record<ObjectToolName, string> = {
     "Show the user a decision card: the options you weighed, which you chose and why. Use it when you settle a real choice " +
     "(approach, design, trade-off), not for trivia. Calling it again with the same objectId revises the card in place; " +
     "each revision must resend the full decision, not a diff.",
+  show_checklist:
+    "Show the user a live checklist of the steps of a multi-step task, each todo, doing, done or skipped. Call it when you start, " +
+    "then again with the same objectId as items change state; each call revises the card in place and must resend the full " +
+    "checklist (every item, unique ids), not a diff.",
 };
 
 const NAMES = Object.keys(OBJECT_TOOL_PARAMS) as ObjectToolName[];

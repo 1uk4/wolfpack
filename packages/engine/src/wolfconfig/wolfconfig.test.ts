@@ -28,6 +28,9 @@ describe("loadWolfConfig", () => {
     const off = load("name: p\nprompts:\n  structuredOutput: false\n");
     expect(off.config.prompts.structuredOutput).toBe(false);
     expect(off.warnings.filter((w) => w.includes("prompts"))).toEqual([]);
+    // unknown nested prompts keys are ignored, not an error
+    const extra = load("name: p\nprompts:\n  other: x\n  structuredOutput: custom\n");
+    expect(extra.config.prompts).toEqual({ structuredOutput: "custom" });
   });
 
   it("warns when memory settings exist but the memory extension is not listed", () => {

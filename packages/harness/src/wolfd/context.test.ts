@@ -77,6 +77,9 @@ describe("composeProjectContext", () => {
       expect(ins).toContain("# Structured output\n\nOnly use show_graph.");
       expect(ins).not.toContain("show_checklist");
     });
+    it("an empty or whitespace string removes the section, like false", () => {
+      for (const v of ["", "  \n "]) expect(composeProjectContext({ ...base(), structuredOutput: v }).instructions).not.toContain("Structured output");
+    });
     it("false removes the section", () => {
       const ins = composeProjectContext({ ...base(), structuredOutput: false }).instructions;
       expect(ins).not.toContain("Structured output");

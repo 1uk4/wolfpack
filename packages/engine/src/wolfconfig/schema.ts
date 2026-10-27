@@ -34,6 +34,9 @@
  */
 import { z } from "zod";
 
+/** An editable prompt section: text replaces the default, `false` (or empty text) removes it. */
+export type PromptSection = string | false;
+
 export const DEFAULT_TOOLS = ["coding"] as const;
 
 /** Pi's consolidation defaults (extensions/wolfpack-memory/index.ts), plus the existing trigger and interval. */
@@ -123,7 +126,7 @@ export interface WolfConfig {
   /** Editable prompt sections; unset = the harness default. */
   prompts: {
     /** Replaces the default structured-output guidance; `false` removes the section. */
-    structuredOutput?: string | false;
+    structuredOutput?: PromptSection;
   };
   memory: {
     /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */

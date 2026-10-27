@@ -17,6 +17,8 @@ import {
   type Actor,
   type ConsoleClient,
   type ConsolidateResponse,
+  type KbEntryDetail,
+  type KbGraph,
   type MemoryStatus,
   type MemoryTopic,
   type WorkRecordResponse,
@@ -160,6 +162,18 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; wikilinks?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {
+    const q = new URLSearchParams();
+    if (opts.domain) q.set("domain", opts.domain);
+    for (const k of ["archivedWork", "wikilinks", "denTopics"] as const) if (opts[k] !== undefined) q.set(k, String(opts[k]));
+    const query = q.size ? `?${q}` : "";
+    return (await this.json("getKbGraph", { name: wolf }, ROUTES.getKbGraph.response.schema, undefined, wolf, query)) as KbGraph;
+  }
+
+  async getKbEntry(wolf: string, id: string): Promise<KbEntryDetail> {
+    return (await this.json("getKbEntry", { name: wolf, id }, ROUTES.getKbEntry.response.schema, undefined, wolf)) as KbEntryDetail;
   }
 
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */

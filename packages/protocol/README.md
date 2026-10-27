@@ -56,6 +56,17 @@ Additive and read-only, served by any wolf for its own den (a wolf never serves 
 
 `WolfSummary.librarian?: boolean` marks the wolf that serves the KB (`memory.librarian` in wolf.yaml); absent when unknown (offline wolf, older server). Client: `getMemoryStatus(wolf, {thread?})`, `getMemoryTopic(wolf, id, {scope?})`, `getWorkRecord(wolf, id)` (optional on `ConsoleClient`).
 
+## KB resources
+
+Additive and read-only, served by the librarian wolf only (`WolfSummary.librarian`); any other wolf, or a librarian without KB roots, answers 409 `kb_unavailable`.
+
+| Route | Response | Notes |
+| --- | --- | --- |
+| `GET /v1/wolves/:name/kb/graph[?domain=&archivedWork=&wikilinks=&denTopics=]` | `KbGraph` | `nodes` (domain/section/entry/work/den-topic; ids `dom:`/`sec:`/`ent:`/`work:`/`den:<wolf>:<topic>`, `depth` 0-4), `edges` (`hierarchy` parent→child, `partOf` child→parent, `dependsOn`, `related` with `relation`, `wikilink`), the applied `layers` and `domain`, all `domains` (`name`, `label`, optional `color`), `generated`. No positions. Flags are `true`\|`false` (default false; else 400); unknown `domain` is 404. `denTopics` adds the serving wolf's own den topics only |
+| `GET /v1/wolves/:name/kb/entries/:id` | `KbEntryDetail` | `frontmatter`, `body`, `wikilinks` (`target`, `exists`), `backlinks` (`id`, `title`, `via` wikilink\|related, `relation`). 400 malformed id, 404 unknown |
+
+Client: `getKbGraph(wolf, {domain?, archivedWork?, wikilinks?, denTopics?})`, `getKbEntry(wolf, id)` (optional on `ConsoleClient`).
+
 ## Tool calls in history
 
 `ThreadMessage.tools?` (additive, optional, no version bump; old servers omit it, clients must tolerate absence) lists an assistant message's tool calls in call order: `{callId, name, args, result?, isError?, resultTruncated?, textOffset?}`. `text` is unchanged (text blocks only); `textOffset` is the length of `text` when the call happened, so a consumer can interleave tool rows with the merged rounds' text. `args` stays an OBJECT: each string value (nested included) is cut to 1 KB, then the largest strings are shortened until the JSON fits ~4 KB, and any cut sets `_truncated: true` at the top level of `args` (consumers must not assume truncated args are complete). `result` is capped at ~4 KB (`resultTruncated: true` when cut). A pure tool round yields an assistant message with `text: ""`. Thinking is never in history. Id note: because a tool-only round now yields a message, a turn that starts with a tool-only round gets that entry's id (`entry-<id>`) instead of the id of its first text round; consumers must reseed from `getThread` rather than cache ids across the upgrade.

@@ -4,6 +4,8 @@ import {
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
   ErrorEnvelopeSchema,
+  KbEntryDetailSchema,
+  KbGraphSchema,
   MemoryEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
@@ -116,6 +118,14 @@ export const ROUTES = {
    * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.
    */
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * The KB graph, served by the librarian wolf only (409 `kb_unavailable` elsewhere). Query: `domain` (one domain; unknown = 404 `not_found`),
+   * and the layer flags `archivedWork`, `wikilinks`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).
+   * `denTopics` adds the serving wolf's own den topics only.
+   */
+  getKbGraph: { method: "GET", path: "/v1/wolves/:name/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
+  /** One KB entry (frontmatter, body, wikilinks, backlinks). Librarian only. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
+  getKbEntry: { method: "GET", path: "/v1/wolves/:name/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

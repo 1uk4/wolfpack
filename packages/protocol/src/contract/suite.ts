@@ -370,6 +370,21 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
     });
 
+    it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
+      for (const path of [buildPath("getKbGraph", { name: "no-such-wolf" }), buildPath("getKbEntry", { name: "no-such-wolf", id: "kb-x-1234567" })]) {
+        await expectError(await call(path), "not_found");
+      }
+      const g = await call(buildPath("getKbGraph", { name: wolf }));
+      if (g.status === 200) ROUTES.getKbGraph.response.schema.parse(await g.json());
+      else {
+        expect(g.status).toBe(409);
+        expect(ErrorEnvelopeSchema.parse(await g.json()).code).toBe("kb_unavailable");
+      }
+      const e = await call(buildPath("getKbEntry", { name: wolf, id: "no-such-entry" }));
+      expect(e.status).toBeGreaterThanOrEqual(400);
+      expect(["not_found", "kb_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await e.json()).code);
+    });
+
     it("protocol version: matching or absent is accepted, mismatch is 426 version_mismatch", async () => {
       const ok = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) } });
       expect(ok.status).toBe(200);

@@ -8,7 +8,7 @@
  * message: the send carries only `{id}` refs. Images only for now.
  */
 
-import type { UiAttachment } from "@/src/core/native-messages";
+import type { UiAttachment } from "@/src/core";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_NAME_HEADER } from "@wolfpack/protocol/attachments";
 
 export interface PendingAttachment {

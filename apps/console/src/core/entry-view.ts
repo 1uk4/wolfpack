@@ -63,9 +63,9 @@ export function rewriteWikilinks(body: string, wikilinks: readonly { target: str
 	for (const line of body.split("\n")) {
 		const m = /^\s*(`{3,}|~{3,})/.exec(line);
 		if (fence) {
-			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+			if (m?.[1] && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
 			out.push(line);
-		} else if (m) {
+		} else if (m?.[1]) {
 			fence = m[1];
 			out.push(line);
 		} else {

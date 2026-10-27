@@ -10,10 +10,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/agent";
+import { HttpConsoleClient } from "@wolfpack/client";
+import { startWolf } from "../../packages/harness/src/wolfd/run.js";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { ENGINE_CONTEXT as ctx } from "../../packages/harness/src/engine/index.js";
 import { conversationReaderFor } from "../../packages/harness/src/engine/conversation-reader.js";
-import { fauxAssistantMessage, fauxText, fauxToolCall, type FauxResponseStep } from "../../packages/harness/src/wolfd/scripted-model.js";
+import { createScriptedModel, fauxAssistantMessage, fauxText, fauxToolCall, type FauxResponseStep } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { Park, parkExtension, startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension from "./unified.js";
 import createCrawlExtension from "./unified-crawl.js";
@@ -152,5 +154,65 @@ describe("durable observer pauses during crawl planning", () => {
     expect(all).toContain("USER_AFTER");
     expect(all).toContain("A_AFTER");
     for (const planning of ["PLAN_CHATTER", "PLAN_DONE_CHATTER", "PLANSRC", "Plan drafted"]) expect(all).not.toContain(planning);
+  });
+});
+
+describe("planning survives a restart", () => {
+  it("a second wolfd on the same den mid-planning keeps skipping the interview turns, then resumes after cancel", async () => {
+    const dev = await devRoot();
+    const root = tmp("restart");
+    const src = tmp("PLANSRC");
+    writeFileSync(join(src, "note.md"), "# n\n");
+    mkdirSync(join(root, "work"));
+
+    /** One wolfd generation on the shared root + sandbox den; `script` answers its model requests. */
+    async function generation(script: FauxResponseStep[], engine: Engine) {
+      const scripted = createScriptedModel(script);
+      const tier = { model: scripted.modelId, modelSource: "default", provider: scripted.provider, piModel: `${scripted.provider}/${scripted.modelId}` };
+      writeFileSync(join(root, "models.json"), JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }));
+      writeFileSync(join(root, "wolf.yaml"), `name: testwolf\nworkspace: ${join(root, "work")}\nsandbox:\n  root: ${dev}\n`);
+      const wolf = await startWolf({
+        configPath: join(root, "wolf.yaml"),
+        env: { WOLFPACK_MODELS_FILE: join(root, "models.json") },
+        home: root,
+        models: scripted.models,
+        extraExtensions: ({ config, den, env }) => [
+          adaptToDurable(createMemoryExtension({ ...config.memory, engine }, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env }), { wolfDen: den, wolfName: "testwolf" }),
+          adaptToDurable(createCrawlExtension({}, { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: {}, env, capabilities: { askCards: true } }), { wolfDen: den, wolfName: "testwolf" }),
+        ],
+      });
+      const client = new HttpConsoleClient({ baseUrl: wolf.url });
+      const submit = async (text: string) => {
+        await client.submit("testwolf/home", text, { whenBusy: "reject" });
+        for await (const _ of client.watch("testwolf/home")) void _;
+      };
+      return { wolf, submit };
+    }
+
+    const first = stubEngine();
+    const g1 = await generation(
+      [fauxAssistantMessage([fauxToolCall("crawl_start", { path: src, draft: true })], { stopReason: "toolUse" }), reply("PLAN_CHATTER_1")],
+      first.engine,
+    );
+    await g1.submit(say("USER_CRAWL"));
+    await g1.wolf.close(); // restart mid-planning (no cancel, no finalize)
+
+    const second = stubEngine();
+    const g2 = await generation(
+      [reply("CHATTER_2"), fauxAssistantMessage([fauxToolCall("crawl_cancel", {})], { stopReason: "toolUse" }), reply("CANCELLED"), reply("A_AFTER")],
+      second.engine,
+    );
+    try {
+      await g2.submit(say("USER_RESTART"));
+      await g2.submit(say("USER_CANCEL"));
+      await g2.submit(say("USER_AFTER"));
+      await waitFor(() => second.text().includes("A_AFTER"));
+      await quiet();
+      const all = first.text() + second.text();
+      for (const planning of ["USER_CRAWL", "PLAN_CHATTER_1", "USER_RESTART", "CHATTER_2", "USER_CANCEL", "CANCELLED", "PLANSRC"]) expect(all).not.toContain(planning);
+      expect(second.text()).toContain("USER_AFTER");
+    } finally {
+      await g2.wolf.close();
+    }
   });
 });

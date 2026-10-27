@@ -75,6 +75,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
               const { plan, planPath } = draft({ path: args.path, domain: args.domain, strategy: args.strategy, depth: args.depth });
               return text(`Plan drafted: ${planPath} (status: draft, ${plan.batches.length} batch(es))\n\n${core.summarize(plan)}`);
             } catch (e) {
+              crawlMode.end(ctx.wolfDen, ctx.conversationId); // a failed draft must not leave observation paused
               return fail(e, "crawl plan failed: ");
             }
           }
@@ -99,6 +100,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
             const { plan, planPath } = draft(args);
             return text(`Plan written: ${planPath} (status: draft)\n\n${core.summarize(plan)}`, { details: { planPath, batches: plan.batches.length } });
           } catch (e) {
+            crawlMode.end(ctx.wolfDen, ctx.conversationId);
             return fail(e, "crawl plan failed: ");
           }
         },
@@ -155,7 +157,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         parameters: Type.Object({}),
         async execute(_args: unknown, ctx: ToolContext) {
           crawlMode.end(ctx.wolfDen, ctx.conversationId);
-          return text("Crawl planning cancelled; memory observation resumes.");
+          return text("Crawl planning cancelled; memory observation resumes. Any drafted plan stays on disk.");
         },
       }),
     ],

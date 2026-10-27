@@ -34,7 +34,7 @@ import { consolidatePool, durableSessionTopics, promoteSessionTopics, type Conso
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
-import { crawlMode } from "./crawl-mode.js";
+import { crawlMode, noteToolCalls } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
@@ -394,7 +394,7 @@ export default function createMemoryExtension(
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean; epoch?: number } = {}): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -428,9 +428,9 @@ export default function createMemoryExtension(
       planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
-    // Planning may have begun (or begun and ended) while we waited for the response to commit: the crawl tool runs
-    // right after it. The first observation after planning re-seeds, so dropping this one loses nothing real.
-    if (crawlMode.active(ctx.wolfDen, ctx.conversationId) || (opts.epoch !== undefined && opts.epoch !== crawlMode.epoch(ctx.wolfDen, ctx.conversationId))) return;
+    // Planning may have begun (or begun and ended) while we waited for the response to commit. Whatever is pending
+    // (planning, or its re-seed) means the chunks may hold planning turns; the re-seed happens on the next run.
+    if (crawlMode.pending(ctx.wolfDen, ctx.conversationId)) return;
     const { chunks, next } = planned;
     if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
@@ -1120,10 +1120,11 @@ export default function createMemoryExtension(
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).
+        // Note the response's crawl tool calls NOW, before they run and before anything can classify this response.
+        noteToolCalls(ctx.wolfDen, ctx.conversationId, message.content.flatMap((b) => (b.type === "toolCall" ? [b.name] : [])));
         const planning = crawlMode.active(ctx.wolfDen, ctx.conversationId);
-        const epoch = crawlMode.epoch(ctx.wolfDen, ctx.conversationId);
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
-        const run = prev.then(() => observeConversation(message, ctx, { planning, epoch })).catch((err) => {
+        const run = prev.then(() => observeConversation(message, ctx, { planning })).catch((err) => {
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

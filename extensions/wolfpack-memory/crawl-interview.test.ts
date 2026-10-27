@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import createCrawlExtension from "./unified-crawl.js";
 import { buildCrawlDirective, canInterview } from "./crawl-interview.js";
 
@@ -27,10 +29,12 @@ describe("crawl interview capability gating", () => {
 });
 
 describe("crawl_start by capability", () => {
-  const ctx = (capabilities?: { askCards?: boolean }) => ({ wolfDen: "/nonexistent-den", wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {}, ...(capabilities ? { capabilities } : {}) });
+  const den = mkdtempSync(join(tmpdir(), "crawl-iv-")); // crawl_start records its planning marker in the den
+  afterAll(() => rmSync(den, { recursive: true, force: true }));
+  const ctx = (capabilities?: { askCards?: boolean }) => ({ wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {}, ...(capabilities ? { capabilities } : {}) });
   const start = (c: ReturnType<typeof ctx>, args: object) => {
     const tool = createCrawlExtension({}, c).tools!.find((t) => t.name === "crawl_start")!;
-    return tool.execute(args, { wolfDen: "/nonexistent-den", conversationId: 1 } as never) as Promise<{ content: { text: string }[]; isError?: boolean }>;
+    return tool.execute(args, { wolfDen: den, conversationId: 1 } as never) as Promise<{ content: { text: string }[]; isError?: boolean }>;
   };
 
   it("with askCards it returns the cards questionnaire", async () => {
@@ -63,7 +67,8 @@ describe("crawl directive", () => {
     expect(d).not.toContain("`questions`");
   });
 
-  // The pi/TUI directive on master, captured before the refactor: /wolf:crawl must keep sending exactly this.
+  // The pi/TUI directive as master's own template produced it (the pre-refactor block of index.ts, evaluated with the
+  // same inputs, 6e5cc1f): /wolf:crawl must keep sending exactly this.
   const golden = JSON.parse(readFileSync(new URL("./fixtures/crawl-tui-directive.golden.json", import.meta.url), "utf8")) as { withSrc: string; noSrc: string };
 
   it("pi/TUI directive is byte-for-byte what master sent (with a source, with pre-filled hints)", () => {

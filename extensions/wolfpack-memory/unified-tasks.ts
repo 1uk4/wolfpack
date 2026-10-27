@@ -227,18 +227,24 @@ export default function createTasksExtension(
     return (await ctx.conversation.classify())?.kind !== "task";
   }
 
+  /** First line of a successful ship result; the spent-yes check reads it back. */
+  const shippedLine = (id: string) => `Shipped: ${id}`;
+
   /** The card's one field label is the exact key: it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
     confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
   const firstLine = (m: { message: { content?: unknown } }): string => {
     const c = m.message.content;
-    const text = typeof c === "string" ? c : Array.isArray(c) ? String((c.find((x: { type?: string }) => x?.type === "text") as { text?: string } | undefined)?.text ?? "") : "";
+    const block = Array.isArray(c) ? (c as { type?: string; text?: string }[]).find((x) => x?.type === "text" && typeof x.text === "string") : undefined;
+    const text = typeof c === "string" ? c : (block?.text ?? "");
     return text.split("\n")[0];
   };
 
   /** Raised in this round, before the card reaches the transcript (parallel calls of one round): conversation:item -> label. */
-  const raisedThisRound = new Map<string, string>();
+  const raisedThisRound = new Map<string, { label: string; at: number }>();
+  /** Parallel calls of one round land within milliseconds; an older entry whose card never reached the transcript is stale. */
+  const ROUND_MS = 30_000;
 
   /** The newest ship card for `id` at this title, from the structured transcript. */
   const shipCardFor = (ctx: ToolContext, id: string, title: string) => ctx.conversation!.latestCard!("task_done", (c) => c.fields.length === 1 && c.fields[0].label === shipLabel(title, id));
@@ -258,17 +264,19 @@ export default function createTasksExtension(
     const title = await titleOf();
     const found = await shipCardFor(ctx, id, title);
     const round = `${ctx.conversationId}:${id}`;
-    if (found) raisedThisRound.delete(round); // the transcript has it now
+    const marker = raisedThisRound.get(round);
+    // The transcript has the card now (any status), or the marker aged out without one: drop it.
+    if (found || (marker && Date.now() - marker.at > ROUND_MS)) raisedThisRound.delete(round);
     if (found?.status === "answered" && args.confirm === false) {
       const yes = (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
       // A yes is spent once a ship of this id followed it.
-      const spent = found.laterResults.some((m) => firstLine(m) === `Shipped: ${id}`);
+      const spent = found.laterResults.some((m) => firstLine(m) === shippedLine(id));
       if (yes && !spent) return undefined;
     }
-    if (found?.status === "pending" || (!found && raisedThisRound.get(round) === shipLabel(title, id))) {
+    if (found?.status === "pending" || (!found && raisedThisRound.get(round)?.label === shipLabel(title, id))) {
       return { content: [{ type: "text", text: `The user was already asked whether to ship ${id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
     }
-    raisedThisRound.set(round, shipLabel(title, id));
+    raisedThisRound.set(round, { label: shipLabel(title, id), at: Date.now() });
     return {
       content: [{ type: "text", text: `Asked the user to confirm shipping ${id}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.` }],
       card: shipCard(title, id),
@@ -928,7 +936,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             try {
               const shippedOther = await ship(args.id);
               return {
-                content: [{ type: "text", text: heads(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
+                content: [{ type: "text", text: heads(shippedLine(args.id!), { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
               };
             } catch (err) {
               return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
@@ -959,7 +967,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             await ship(binding.taskId);
             
             const found = await findItem(binding.taskId);
-            const result: string[] = [`Shipped: ${binding.taskId}`];
+            const result: string[] = [shippedLine(binding.taskId)];
 
             // Find next sibling if requested; with none left, stay on the finished
             // feature (or on the finished loose task) until it is graduated.

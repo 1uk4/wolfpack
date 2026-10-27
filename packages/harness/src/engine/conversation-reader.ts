@@ -6,7 +6,7 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { CompactionEntry, type Conversation, type Harness } from "@earendil-works/pi-durable";
-import type { CardAnswers } from "@wolfpack/protocol";
+import type { Card, CardAnswers } from "@wolfpack/protocol";
 import type { CardLookup, ConversationClass, ConversationMessage } from "../extension-api.js";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData } from "./cards.js";
 
@@ -27,7 +27,7 @@ export interface ConversationReader {
    * The newest card raised by `tool` for which `matches(card)` holds, read from the structured entries (the card in the
    * tool result's details, the answer entry keyed by its call id) and scanned newest-first, so it stops at the hit.
    */
-  latestCard(conversationId: number, tool: string, matches: (card: import("@wolfpack/protocol").Card) => boolean): Promise<CardLookup | undefined>;
+  latestCard(conversationId: number, tool: string, matches: (card: Card) => boolean): Promise<CardLookup | undefined>;
   /** The host owns the interval consolidation timer (createWolfHarness); extensions must not start another. */
   hostConsolidationTimer?: boolean;
   /** Run `fn` when the engine closes. */
@@ -80,7 +80,7 @@ export function createConversationReader(harness: Harness): ConversationReader {
     return out;
   }
 
-  async function latestCard(id: number, tool: string, matches: (card: import("@wolfpack/protocol").Card) => boolean): Promise<CardLookup | undefined> {
+  async function latestCard(id: number, tool: string, matches: (card: Card) => boolean): Promise<CardLookup | undefined> {
     const conv: Conversation | undefined = await harness.conversation(id as never, ctx);
     if (!conv) return undefined;
     // Newest first: what is seen before the card is what happened after it.

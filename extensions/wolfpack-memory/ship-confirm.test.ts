@@ -2,7 +2,7 @@
  * task_done's ship gate over /v1: a real wolfd turn (pi-durable, scripted model) with the durable task tools against a
  * sandboxed in-memory Work server (a local http server: nothing touches the live ledger).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { CardAnswers } from "@wolfpack/protocol";
@@ -263,6 +263,28 @@ describe("structured yes detection", () => {
   });
 });
 
+describe("title edited after the ask", () => {
+  it("a yes for the old title does not ship; the task is re-asked", async () => {
+    const t = add({ kind: "task", title: "Old title" });
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { id: t.id })),
+      () => {
+        items.get(t.id)!.title = "New title";
+        return toolUse(fauxToolCall("task_done", { id: t.id, confirm: false }));
+      },
+      fauxAssistantMessage("unreachable"),
+    ]);
+    await tw.submit("go");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    await answer(tw, p.callId, true);
+    await drain(tw);
+    expect(items.get(t.id)!.stage).toBe("approved");
+    const d = await tw.client.getThread(tw.home);
+    expect(d.pendingCards).toHaveLength(1);
+    expect(d.pendingCards![0].card.fields[0].label).toBe(`Ship "New title" (${t.id})?`);
+  });
+});
+
 describe("guard registration", () => {
   it("task_done beside another tool in one round: the round ends, needs-you", async () => {
     const t = add({ kind: "task", title: "Mixed" });
@@ -284,6 +306,22 @@ describe("who can be asked (stubbed conversation)", () => {
     conversation: { classify: async () => (kind === "task" ? { kind: "task", taskId: 1, ownerConversationId: 2 } : { kind: "root" }), messagesSince: async () => [], latestCard: async () => undefined },
   });
 
+  it("a stale in-round marker (card never reached the transcript) does not stall task_done", async () => {
+    const t = add({ kind: "task", title: "Stale" });
+    const ext = mk({ askCards: true });
+    const ctx = ctxOf("root") as never;
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      expect((await tool(ext).execute({ id: t.id }, ctx)).card).toBeDefined();
+      const dup = await tool(ext).execute({ id: t.id }, ctx); // same round: pointed at the pending card
+      expect(dup.card).toBeUndefined();
+      expect(dup.endTurn).toBe(true);
+      vi.setSystemTime(Date.now() + 60_000);
+      expect((await tool(ext).execute({ id: t.id }, ctx)).card).toBeDefined(); // aged out: a real card again
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("card-capable root conversation, confirm policy: asks", async () => {
     const t = add({ kind: "task", title: "Q" });
     const r = await tool(mk({ askCards: true })).execute({ id: t.id }, ctxOf("root") as never);

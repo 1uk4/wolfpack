@@ -25,6 +25,7 @@ import { attachConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
 import type { EngineEvent, EngineSnapshot } from "./events.js";
 import { engineVersion } from "./version.js";
+import { SubagentOwner, subagentOwnerExtension } from "./owner.js";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -107,6 +108,11 @@ export interface WolfEngine {
     root(init?: ConfigureOptions): Promise<EngineConversation>;
     get(id: string): Promise<EngineConversation | undefined>;
     create(init?: ConfigureOptions): Promise<EngineConversation>;
+    /**
+     * A conversation owned by a parked task of `ownerId` (a subagent's): memory treats it as task-owned. The task is
+     * a background task of the owner, so aborting the owner's turn does not touch it. Returns the owning task's id.
+     */
+    createOwned(ownerId: string, init?: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
   };
   /**
    * @internal test seam: the opened pi-durable Harness, for tests that must create forks and task-owned
@@ -127,6 +133,7 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
   const models = opts.models ?? defaultModels();
   const registry = createRegistry();
   for (const ext of opts.extensions ?? []) registry.install(ext);
+  registry.install(subagentOwnerExtension);
 
   const storage = await openNodeSqliteStorage(storagePath);
   const defaultCwd = opts.cwd ?? process.cwd();
@@ -227,6 +234,14 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
       },
       async create(init) {
         return wrap(await harness.createConversation({ ownership: { kind: "ownerless" }, agent: agentChange(init) }, ctx));
+      },
+      async createOwned(ownerId, init) {
+        const taskId = await harness.commit(
+          (tx) => tx.createTask(SubagentOwner, {}, { ownership: { kind: "conversation" }, conversationId: Number(ownerId) as never, background: true }),
+          ctx,
+        );
+        const conv = await harness.createConversation({ ownership: { kind: "task", taskId }, agent: agentChange(init) }, ctx);
+        return { conversation: wrap(conv), taskId: String(taskId) };
       },
     },
     harness,

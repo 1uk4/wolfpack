@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { BellIcon, BellOffIcon } from "lucide-react";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { browserNotifyState, deliverNotification, setBrowserNotify, type BrowserNotifyState } from "@/components/needs-you-notify";
-import { INITIAL_NOTIFY_STATE, mergeReport, planNotifications, type NeedsYouItem, type NotifyState } from "@/src/core";
+import { INITIAL_NOTIFY_STATE, itemKey, mergeReport, planNotifications, type NeedsYouItem, type NotifyState } from "@/src/core";
 
 /** The browser opt-in for OS notifications (always visible in the sidebar footer; absent in Electron, which has its own). */
 export function NotifyToggleView({ state, onToggle }: { state: BrowserNotifyState; onToggle(): void }) {
@@ -78,8 +78,15 @@ export function NeedsYouNotifier(): null {
 							const responded = body.responded ?? [];
 							const next = mergeReport(itemsRef.current, responded, body.items, target === "" ? body.wolves : undefined);
 							itemsRef.current = next;
-							const plan = planNotifications(notifyState.current, next, { focused: document.hasFocus(), responded });
+							const prior = notifyState.current;
+							const plan = planNotifications(prior, next, { focused: document.hasFocus(), responded });
 							notifyState.current = plan.state;
+							if (plan.notifications.length === 0 && next.length > 0) {
+								const focused = document.hasFocus();
+								const fresh = next.filter((i) => !prior.seen.has(itemKey(i))).length;
+								const why = fresh === 0 ? "all already seen" : focused ? "window focused" : "first report only primes";
+								console.debug(`needs-you: no notification (${next.length} item(s): ${why})`);
+							}
 							for (const n of plan.notifications) deliverNotification(n, (href) => router.push(href));
 						} catch {
 							/* a transient failure keeps the last list; the next poke refetches */

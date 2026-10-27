@@ -29,25 +29,37 @@ function isMainFrameSender(event, win) {
 	return Boolean(win && !win.isDestroyed() && event && event.senderFrame && event.senderFrame === win.webContents.mainFrame);
 }
 
-function createNeedsYouNotifier({ Notification, appOrigin }) {
+function createNeedsYouNotifier({ Notification, appOrigin, log = () => {} }) {
 	const notified = new Set();
 	return function handle(event, win, n) {
-		if (!isMainFrameSender(event, win) || win.isFocused()) return false;
-		if (!n || typeof n.key !== "string" || typeof n.title !== "string" || typeof n.body !== "string") return false;
+		const key = n && typeof n.key === "string" ? n.key.slice(0, 80).replace(/\s+/g, " ") : "?";
+		log(`notify: received key=${key}`);
+		const reject = (why) => {
+			log(`notify: rejected key=${key} (${why})`);
+			return false;
+		};
+		if (!isMainFrameSender(event, win)) return reject("not main frame");
+		if (win.isFocused()) return reject("window focused");
+		if (!n || typeof n.key !== "string" || typeof n.title !== "string" || typeof n.body !== "string") return reject("malformed payload");
 		const href = safeNotifyHref(n.href, appOrigin);
-		if (href === null) return false;
-		if (!Notification.isSupported() || notified.has(n.key)) return false;
+		if (href === null) return reject("bad href");
+		if (!Notification.isSupported()) return reject("notifications unsupported");
+		if (notified.has(n.key)) return reject("duplicate");
 		notified.add(n.key);
 		if (notified.size > NOTIFIED_MAX) notified.delete(notified.values().next().value);
 		const note = new Notification({ title: n.title.slice(0, 120), body: n.body.slice(0, 300) });
 		note.on("click", () => {
+			log(`notify: clicked key=${key}`);
 			if (win.isDestroyed()) return;
 			if (win.isMinimized()) win.restore();
 			win.show();
 			win.focus();
 			win.webContents.send("lh:navigate", href);
 		});
+		// Electron reports an OS-level refusal (e.g. no Notification Center permission) here, when it reports it at all.
+		note.on("failed", (_e, error) => log(`notify: failed key=${key} (${error})`));
 		note.show();
+		log(`notify: shown key=${key}`);
 		return true;
 	};
 }

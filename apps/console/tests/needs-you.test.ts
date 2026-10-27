@@ -359,7 +359,7 @@ describe("electron notify guards", () => {
 	const { safeNotifyHref, isMainFrameSender, createNeedsYouNotifier } = createRequire(import.meta.url)("../../desktop/electron/notify.cjs") as {
 		safeNotifyHref(h: unknown, o: string): string | null;
 		isMainFrameSender(e: unknown, w: unknown): boolean;
-		createNeedsYouNotifier(o: { Notification: unknown; appOrigin: string }): (e: unknown, w: unknown, n: unknown) => boolean;
+		createNeedsYouNotifier(o: { Notification: unknown; appOrigin: string; log?: (l: string) => void }): (e: unknown, w: unknown, n: unknown) => boolean;
 	};
 	const ORIGIN = "http://127.0.0.1:3000";
 
@@ -378,8 +378,8 @@ describe("electron notify guards", () => {
 		class Notification {
 			static isSupported = () => true;
 			constructor(public opts: { title: string; body: string }) {}
-			on(_e: string, cb: () => void) {
-				clicks.push(cb);
+			on(e: string, cb: () => void) {
+				if (e === "click") clicks.push(cb);
 			}
 			show() {
 				shown.push(this.opts);
@@ -421,5 +421,33 @@ describe("electron notify guards", () => {
 		assert.deepEqual(f.sent, ["/wolf/1uk4/thread/home"]);
 		const focused = fakes(true);
 		assert.equal(createNeedsYouNotifier({ Notification: focused.Notification, appOrigin: ORIGIN })({ senderFrame: focused.mainFrame }, focused.win, note), false);
+	});
+
+	it("logs every decision: received, rejected with the reason, shown, clicked", () => {
+		const f = fakes();
+		const lines: string[] = [];
+		const notify = createNeedsYouNotifier({ Notification: f.Notification, appOrigin: ORIGIN, log: (l) => lines.push(l) });
+		const ev = { senderFrame: f.mainFrame };
+		notify({ senderFrame: {} }, f.win, note);
+		notify(ev, f.win, { ...note, key: "bad", href: "//evil.com" });
+		notify(ev, f.win, note);
+		notify(ev, f.win, note);
+		f.clicks[0]!();
+		const focused = fakes(true);
+		const notifyFocused = createNeedsYouNotifier({ Notification: focused.Notification, appOrigin: ORIGIN, log: (l) => lines.push(l) });
+		notifyFocused({ senderFrame: focused.mainFrame }, focused.win, note);
+		assert.deepEqual(lines, [
+			"notify: received key=k1",
+			"notify: rejected key=k1 (not main frame)",
+			"notify: received key=bad",
+			"notify: rejected key=bad (bad href)",
+			"notify: received key=k1",
+			"notify: shown key=k1",
+			"notify: received key=k1",
+			"notify: rejected key=k1 (duplicate)",
+			"notify: clicked key=k1",
+			"notify: received key=k1",
+			"notify: rejected key=k1 (window focused)",
+		]);
 	});
 });

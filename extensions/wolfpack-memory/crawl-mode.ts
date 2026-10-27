@@ -13,31 +13,63 @@
  * (A failed finalize gate keeps planning: the user is expected to fix the plan and finalize again, or cancel.)
  * A user message that is not a card answer does NOT end planning; the idle timeout is the backstop.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const IDLE_MS = 30 * 60_000;
+const STALE_MARKER_MS = 24 * 60 * 60_000;
 
 let now = (): number => Date.now();
 let idleMs = IDLE_MS;
 
 type State = "planning" | "reseed";
-const file = (den: string, conv: number) => join(den, ".memory", "crawl-planning", `${conv}.json`);
+type Marker = { state: State; at: number };
 
-function read(den: string, conv: number): { state: State; at: number } | undefined {
+/**
+ * In-process fallback for a conversation whose marker file cannot be written (read-only den): authoritative while it
+ * exists, so a write failure fails CLOSED (we keep skipping rather than leak interview turns).
+ */
+const mem = new Map<string, Marker>();
+const memKey = (den: string, conv: number) => `${den}\0${conv}`;
+
+const file = (den: string, conv: number) => {
+  if (!Number.isInteger(conv)) throw new Error(`crawl-mode: bad conversation id ${String(conv)}`);
+  return join(den, ".memory", "crawl-planning", `${conv}.json`);
+};
+
+/** Never throws. An unreadable existing marker counts as planning (fail closed). */
+function read(den: string, conv: number): Marker | undefined {
   try {
-    const v = JSON.parse(readFileSync(file(den, conv), "utf8")) as { state?: State; at?: number };
-    if (v.state === "planning" || v.state === "reseed") return { state: v.state, at: typeof v.at === "number" ? v.at : 0 };
+    const m = mem.get(memKey(den, conv));
+    if (m) return m;
+    const f = file(den, conv);
+    if (!existsSync(f)) return undefined; // the hot path: one stat when nothing is planning
+    try {
+      const v = JSON.parse(readFileSync(f, "utf8")) as { state?: State; at?: number };
+      if (v.state === "planning" || v.state === "reseed") return { state: v.state, at: typeof v.at === "number" ? v.at : 0 };
+    } catch {
+      /* falls through */
+    }
+    return { state: "planning", at: now() }; // present but unreadable / corrupt
   } catch {
-    // none (or unreadable: treated as none)
+    return undefined;
   }
-  return undefined;
 }
 
+/** Never throws: a failed write is logged and kept in the in-process map instead. */
 function write(den: string, conv: number, state: State): void {
-  const f = file(den, conv);
-  mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify({ state, at: now() }));
+  const marker = { state, at: now() };
+  try {
+    const f = file(den, conv);
+    mkdirSync(dirname(f), { recursive: true });
+    const tmp = `${f}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(marker));
+    renameSync(tmp, f);
+    mem.delete(memKey(den, conv));
+  } catch (e) {
+    console.error(`[memory] crawl planning marker not writable (${e instanceof Error ? e.message : e}); tracking it in memory`);
+    mem.set(memKey(den, conv), marker);
+  }
 }
 
 /** The current state; an idle planning window is closed here (becomes `reseed`). */
@@ -50,6 +82,23 @@ function status(den: string, conv: number): State | undefined {
   return s?.state;
 }
 
+/** Delete markers older than a day (an abandoned conversation never consumes its re-seed). Best effort. */
+export function sweepStaleMarkers(den: string): void {
+  try {
+    const dir = join(den, ".memory", "crawl-planning");
+    for (const f of readdirSync(dir)) {
+      const p = join(dir, f);
+      try {
+        if (Date.now() - statSync(p).mtimeMs > STALE_MARKER_MS) rmSync(p, { force: true });
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    /* no dir */
+  }
+}
+
 export const crawlMode = {
   /** Start (or refresh) planning. */
   begin: (den: string, conv: number): void => write(den, conv, "planning"),
@@ -57,6 +106,8 @@ export const crawlMode = {
   end(den: string, conv: number): void {
     if (status(den, conv) === "planning") write(den, conv, "reseed");
   },
+  /** Current state; one stat when nothing is planning. Never throws. */
+  status,
   /** Reset the idle clock of a planning conversation (a crawl_* / ask_user_question call happened). */
   touch(den: string, conv: number): void {
     if (status(den, conv) === "planning") write(den, conv, "planning");
@@ -67,7 +118,12 @@ export const crawlMode = {
   /** True once after planning ended (consumes the marker). */
   takeReseed(den: string, conv: number): boolean {
     if (status(den, conv) !== "reseed") return false;
-    rmSync(file(den, conv), { force: true });
+    mem.delete(memKey(den, conv));
+    try {
+      rmSync(file(den, conv), { force: true });
+    } catch {
+      /* the marker stays; the next run re-seeds again, which is harmless */
+    }
     return true;
   },
   /** @internal test seam: clock and idle window. */

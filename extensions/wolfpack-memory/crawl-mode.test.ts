@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import createCrawlExtension from "./unified-crawl.js";
 import createMemoryExtension from "./unified.js";
-import { crawlMode, IDLE_MS, noteToolCalls } from "./crawl-mode.js";
+import { crawlMode, IDLE_MS, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 
 const dirs: string[] = [];
 const tmp = () => {
@@ -119,5 +119,66 @@ describe("pre-tool-call race", () => {
     expect(crawlMode.active(den, 7)).toBe(true); // set by the time the hook returned
     await new Promise((r) => setTimeout(r, 50));
     expect(classified).toBe(0);
+  });
+});
+
+describe("unwritable den / hygiene", () => {
+  it("a read-only den never throws and fails closed through the in-process fallback", () => {
+    const den = tmp();
+    mkdirSync(join(den, ".memory"));
+    chmodSync(join(den, ".memory"), 0o500);
+    try {
+      expect(() => crawlMode.begin(den, 3)).not.toThrow();
+      expect(crawlMode.active(den, 3)).toBe(true);
+      expect(() => crawlMode.end(den, 3)).not.toThrow();
+      expect(crawlMode.pending(den, 3)).toBe(true);
+      expect(crawlMode.takeReseed(den, 3)).toBe(true);
+      expect(crawlMode.pending(den, 3)).toBe(false);
+    } finally {
+      chmodSync(join(den, ".memory"), 0o700);
+    }
+  });
+
+  it("a read-only den: the observer does not classify interview turns", async () => {
+    const den = tmp();
+    mkdirSync(join(den, ".memory"));
+    chmodSync(join(den, ".memory"), 0o500);
+    try {
+      let classified = 0;
+      const ext = createMemoryExtension(
+        { live: true, engine: { call: async () => { classified++; return { observations: [] }; } } as never },
+        { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env: {} },
+      );
+      const reads = { classify: async () => ({ kind: "home" }), messagesSince: async () => [] };
+      const msg = (extra: object[]) => ({ content: [{ type: "text" as const, text: "x".repeat(300) }, ...extra] });
+      ext.hooks!.afterResponse!(msg([{ type: "toolCall", name: "crawl_start", arguments: {} }]) as never, { wolfDen: den, wolfName: "w", conversationId: 9, conversation: reads } as never);
+      ext.hooks!.afterResponse!(msg([]) as never, { wolfDen: den, wolfName: "w", conversationId: 9, conversation: reads } as never);
+      await new Promise((r) => setTimeout(r, 80));
+      expect(classified).toBe(0);
+    } finally {
+      chmodSync(join(den, ".memory"), 0o700);
+    }
+  });
+
+  it("a corrupt marker counts as planning; a non-integer conversation id never throws", () => {
+    const den = tmp();
+    mkdirSync(join(den, ".memory", "crawl-planning"), { recursive: true });
+    writeFileSync(join(den, ".memory", "crawl-planning", "4.json"), "{not json");
+    expect(crawlMode.active(den, 4)).toBe(true);
+    expect(() => crawlMode.active(den, Number.NaN)).not.toThrow();
+    expect(crawlMode.active(den, Number.NaN)).toBe(false);
+  });
+
+  it("writes are atomic (no temp files left) and a sweep removes markers older than a day", () => {
+    const den = tmp();
+    crawlMode.begin(den, 5);
+    crawlMode.begin(den, 6);
+    const dir = join(den, ".memory", "crawl-planning");
+    expect(readdirSync(dir).sort()).toEqual(["5.json", "6.json"]);
+    const old = new Date(Date.now() - 2 * 86_400_000);
+    utimesSync(join(dir, "5.json"), old, old);
+    sweepStaleMarkers(den);
+    expect(existsSync(join(dir, "5.json"))).toBe(false);
+    expect(existsSync(join(dir, "6.json"))).toBe(true);
   });
 });

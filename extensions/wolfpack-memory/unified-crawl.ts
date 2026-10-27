@@ -40,6 +40,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
   };
   const core = createCrawlCore({ crawlHome, defaultDomain, declaredDomains });
   const docs = crawlPlanTools(Type as never, { scope: true });
+  // The afterResponse hook already began planning when it saw the call; this repeats it for direct callers (tests, hosts
+  // that run the tool without that hook) and refreshes the idle clock.
   const begin = (ctx: ToolContext) => crawlMode.begin(ctx.wolfDen, ctx.conversationId);
 
   const draft = (o: DraftOptions) => {

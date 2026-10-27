@@ -2,7 +2,7 @@ import { deflateSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { DEFAULT_IMAGE_LIMITS, type ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { lazyImageProcessor } from "./tools.js";
+import { headerSize, lazyImageProcessor } from "./tools.js";
 
 const crc = (b: Buffer) => {
   let c = ~0;
@@ -97,5 +97,68 @@ describe("lazyImageProcessor", () => {
       await p.prepare(solidPng(8, 8), "image/png", DEFAULT_IMAGE_LIMITS);
       expect(load).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("fallback messages and structural failures", () => {
+  const quiet = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("garbage that is not an image is 'unsupported or unreadable', not 'too large'", async () => {
+    quiet();
+    const p = lazyImageProcessor(async () => { throw new Error("boom"); });
+    await expect(p.prepare(Buffer.from("not an image at all, just text bytes"), "image/png", DEFAULT_IMAGE_LIMITS)).rejects.toThrow(/unsupported or unreadable image, and the image processor is unavailable/);
+  });
+
+  it("a structural failure is warned about once and remembered: the loader is not called again", async () => {
+    const spy = quiet();
+    const load = vi.fn(async () => { throw new TypeError("Cannot read properties of undefined (reading 'endsWith')"); });
+    const p = lazyImageProcessor(load);
+    for (let i = 0; i < 3; i++) await p.prepare(solidPng(8, 8), "image/png", DEFAULT_IMAGE_LIMITS);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(1);
+    await expect(p.prepare(solidPng(2880, 1800), "image/png", DEFAULT_IMAGE_LIMITS)).rejects.toThrow(/too large to process here/);
+  });
+
+  it("a transient failure keeps retrying", async () => {
+    quiet();
+    const load = vi.fn(async () => { throw new Error("EAGAIN try again"); });
+    const p = lazyImageProcessor(load);
+    await p.prepare(solidPng(8, 8), "image/png", DEFAULT_IMAGE_LIMITS);
+    await p.prepare(solidPng(8, 8), "image/png", DEFAULT_IMAGE_LIMITS);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("headerSize", () => {
+  const webp = (kind: string, len = 40) => {
+    const b = Buffer.alloc(len);
+    b.write("RIFF", 0); b.write("WEBP", 8); b.write(kind, 12);
+    return b;
+  };
+  it("reads PNG and rejects a wrong signature or truncation", () => {
+    const png = solidPng(30, 20);
+    expect(headerSize(png, "image/png")).toEqual({ width: 30, height: 20 });
+    expect(headerSize(Buffer.concat([Buffer.from("XXXX"), png.subarray(4)]), "image/png")).toBeUndefined();
+    expect(headerSize(png.subarray(0, 20), "image/png")).toBeUndefined();
+  });
+  it("GIF needs its magic", () => {
+    const gif = Buffer.alloc(16);
+    gif.write("GIF89a", 0); gif.writeUInt16LE(5, 6); gif.writeUInt16LE(7, 8);
+    expect(headerSize(gif, "image/gif")).toEqual({ width: 5, height: 7 });
+    gif.write("JUNK89", 0);
+    expect(headerSize(gif, "image/gif")).toBeUndefined();
+  });
+  it("WebP VP8X needs RIFF/WEBP and at least 30 bytes", () => {
+    const x = webp("VP8X");
+    x[24] = 99; x[27] = 49; // width 100, height 50
+    expect(headerSize(x, "image/webp")).toEqual({ width: 100, height: 50 });
+    expect(headerSize(x.subarray(0, 29), "image/webp")).toBeUndefined();
+    x.write("RIFX", 0);
+    expect(headerSize(x, "image/webp")).toBeUndefined();
+    expect(headerSize(Buffer.alloc(64, 7), "image/webp")).toBeUndefined();
+  });
+  it("JPEG without SOI or with a garbage segment is undefined", () => {
+    expect(headerSize(Buffer.alloc(32, 1), "image/jpeg")).toBeUndefined();
+    expect(headerSize(Buffer.from([0xff, 0xd8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/jpeg")).toBeUndefined();
   });
 });

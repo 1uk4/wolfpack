@@ -118,7 +118,7 @@ export const MultiFieldSchema = cardFieldBase.extend({
   allowOther: z.boolean().optional(),
   /** Option values to pre-select. */
   default: z.array(z.string()).optional(),
-  /** Bounds on the number of picked entries (options and custom ones together). */
+  /** Bounds on the number of picked entries (options and custom ones together). A required multi needs at least one pick regardless; optional: true allows blank. */
   min: z.number().int().min(0).optional(),
   max: z.number().int().min(1).optional(),
 });

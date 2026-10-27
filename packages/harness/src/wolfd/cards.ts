@@ -170,6 +170,7 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
     case "free-text":
       if (typeof a.value !== "string") return `field "${id}" is free text: the answer must be a string`;
       if ("other" in a && a.other) return `field "${id}" is free text: "other" does not apply`;
+      if (!f.optional && a.value.trim() === "") return `field "${id}" is required: the answer cannot be blank`;
       return undefined;
     case "single": {
       if (typeof a.value !== "string") return `field "${id}": the answer must be a string`;

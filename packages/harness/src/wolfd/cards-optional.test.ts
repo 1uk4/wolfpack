@@ -80,3 +80,12 @@ describe("single answer format and required multi", () => {
     expect(validateAnswers(m(true), { m: { value: [] } })).toBeUndefined();
   });
 });
+
+describe("required free-text", () => {
+  it("rejects blank/whitespace unless optional", () => {
+    const ft = (optional: boolean) => CardSchema.parse({ tool: "t", fields: [{ id: "f", kind: "free-text", label: "F?", ...(optional ? { optional } : {}) }] });
+    expect(validateAnswers(ft(false), { f: { value: "  " } })).toMatch(/cannot be blank/);
+    expect(validateAnswers(ft(false), { f: { value: "x" } })).toBeUndefined();
+    expect(validateAnswers(ft(true), { f: { value: "" } })).toBeUndefined();
+  });
+});

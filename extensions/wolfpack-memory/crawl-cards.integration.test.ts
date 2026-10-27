@@ -40,9 +40,12 @@ const lastUser = (c: Ctx): string => {
 };
 /** The answer to field `label` in the submission text ("- Label: value"). */
 /** The answer text for a question; a single-choice answer renders `Label (value)` / `other: "text"`, unwrapped to the value. */
+const SINGLE_LABELS = ["Target KB domain", "Grouping strategy", "Folder depth", "Scope", "Resume the outstanding crawl?"];
 const answerTo = (submission: string, label: string): string | undefined => {
   const raw = new RegExp(`^- ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "m").exec(submission)?.[1];
-  return raw?.replace(/^other: "(.*)"$/, "$1").replace(/^.* \((.*)\)$/, "$1");
+  // unwrap only for single-choice fields (their option values carry no parens); free-text like "foo (bar)" stays as typed
+  if (!SINGLE_LABELS.includes(label)) return raw;
+  return raw?.replace(/^other: "(.*)"$/, "$1").replace(/^.* \(([^()]*)\)$/, "$1");
 };
 const lastToolResult = (c: Ctx): string => JSON.stringify(c.messages.filter((m) => m.role === "toolResult").at(-1)?.content);
 

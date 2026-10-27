@@ -127,7 +127,7 @@ works. The model sees only visible fields' answers; the stored answer holds only
 ## Required means non-blank
 
 A required field must be non-blank, whatever its kind: free-text/single non-empty, confirm answered, and a `multi` needs
-at least one pick (`min` applies on top; `min: 0` on a required multi counts as 1). An optional field may be blank.
+at least one pick (`min` applies on top; `min: 0` on a required multi counts as 1). An optional field may be blank. The server enforces this for free-text too: an older client sending a blank required free-text now gets a 400.
 
 ## Optional fields
 

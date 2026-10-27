@@ -419,7 +419,8 @@ function MultiView({
 		...field.options.map((o) => ({ ...o, custom: false })),
 		...custom.filter((c) => picked.includes(c)).map((c) => ({ label: c, value: c, description: undefined, custom: true })),
 	];
-	const hint = field.min !== undefined || field.max !== undefined ? `Pick ${field.min !== undefined && field.max !== undefined ? `${field.min}–${field.max}` : field.min !== undefined ? `at least ${field.min}` : `up to ${field.max}`}` : null;
+	const min = Math.max(field.min ?? 0, field.optional ? 0 : 1);
+	const hint = min > 0 || field.max !== undefined ? `Pick ${min > 0 && field.max !== undefined ? `${min}–${field.max}` : min > 0 ? `at least ${min}` : `up to ${field.max}`}` : null;
 	return (
 		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
 			{rows.map((o) => {
@@ -464,7 +465,7 @@ function MultiView({
 				</div>
 			)}
 			{!readOnly && hint && (
-				<div data-testid="card-multi-hint" className={cn("text-xs text-muted-foreground", !multiInBounds(field, picked.length) && "text-destructive")}>
+				<div data-testid="card-multi-hint" className={cn("text-xs text-muted-foreground", picked.length > 0 && !multiInBounds(field, picked.length) && "text-destructive")}>
 					{hint}
 				</div>
 			)}

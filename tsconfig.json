@@ -24,6 +24,7 @@
     { "path": "packages/harness" },
     { "path": "packages/workerd" },
     { "path": "packages/agent" },
-    { "path": "packages/cli" }
+    { "path": "packages/cli" },
+    { "path": "packages/workspaces" }
   ]
 }

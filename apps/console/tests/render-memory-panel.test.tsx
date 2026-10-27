@@ -32,18 +32,17 @@ describe("MemoryPanel SSR", () => {
 	const kid = (id: string, stage: string, dependsOn: string[] = []) => ({ id, title: `Task ${id}`, kind: "task", stage, dependsOn });
 	const feat = { id: "F", kind: "feature", title: "Feat", stage: "in_build", plan: "", record: "", children: [kid("a", "shipped"), kid("b", "in_build", ["a"]), kid("c", "idea", ["b"])] };
 	const graphOf = (boundId: string) => buildTaskGraph({ id: boundId, kind: "task", title: "", stage: "", plan: "", record: "", partOf: "F" }, feat as never);
-	const r = (view: "graph" | "item" | "feed", b: unknown, o: { otherState?: "loading" | "error"; shown?: unknown; unread?: number; graph?: ReturnType<typeof buildTaskGraph>; viewingOther?: boolean } = {}) =>
+	const r = (view: "graph" | "item" | "feed", b: unknown, o: { otherState?: "loading" | "error"; shown?: unknown; graph?: ReturnType<typeof buildTaskGraph>; viewingOther?: boolean } = {}) =>
 		renderToStaticMarkup(
-			<StatusSection view={view} bound={b as never} graph={o.graph ?? graphOf("b")} shown={("shown" in o ? o.shown : shown) as never} viewingOther={o.viewingOther} otherState={o.otherState} feed={feed} unread={o.unread ?? 0} onGraph={() => {}} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />,
+			<StatusSection view={view} bound={b as never} graph={o.graph ?? graphOf("b")} shown={("shown" in o ? o.shown : shown) as never} viewingOther={o.viewingOther} otherState={o.otherState} feed={feed} onGraph={() => {}} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />,
 		);
 
 	it("graph view: Feature label, feature link with progress, and the graph SVG", () => {
-		const html = r("graph", bound, { unread: 3 });
+		const html = r("graph", bound);
 		assert.match(html, /data-testid="memory-graph"/);
 		assert.match(html, /memory-graph-label/);
 		assert.doesNotMatch(html, /memory-back-graph/);
-		assert.match(html, /Live observations »/);
-		assert.match(html, /memory-unread/);
+		assert.doesNotMatch(html, /Live observations|memory-view-toggle/);
 		assert.match(html, /href="\/kb\/work\/F"[^>]*>Feat</);
 		assert.match(html, /1\/3 shipped/);
 		assert.match(html, /data-testid="task-graph-svg"/);
@@ -101,15 +100,17 @@ describe("MemoryPanel SSR", () => {
 		assert.equal(isActivateKey(" "), true);
 		assert.equal(isActivateKey("a"), false);
 	});
-	it("feed view: feed shown with a back toggle", () => {
+	it("feed view: feed shown with a back button", () => {
 		const html = r("feed", bound);
 		assert.match(html, /Observations \(live\)/);
-		assert.match(html, /« Status/);
+		assert.match(html, /memory-feed-back/);
+		assert.match(html, /‹ back/);
+		assert.doesNotMatch(html, /« Status|memory-view-toggle/);
 		assert.match(html, /saw it/);
 	});
 	it("unbound: feed shown, no toggle or back button", () => {
 		const html = r("graph", null);
 		assert.match(html, /saw it/);
-		assert.doesNotMatch(html, /memory-view-toggle|memory-back-graph/);
+		assert.doesNotMatch(html, /memory-feed-back|memory-back-graph/);
 	});
 });

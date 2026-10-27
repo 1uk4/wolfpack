@@ -74,7 +74,10 @@ export interface PoolSummary {
 	fill: number;
 	/** Where poolTarget sits on the same 0..1 scale. */
 	targetMark: number;
-	label: string;
+	/** "1,332 / 20,000 tokens" */
+	tokensText: string;
+	/** "22 observations" */
+	observationsText: string;
 	trigger: MemoryPoolStatus["trigger"];
 }
 
@@ -90,7 +93,8 @@ export function poolSummary(pool: MemoryPoolStatus | null): PoolSummary | null {
 		fill: ratio(pool.tokens),
 		targetMark: ratio(pool.poolTarget),
 		trigger: pool.trigger,
-		label: `${pool.count} ${pool.count === 1 ? "observation" : "observations"} · ${pool.tokens.toLocaleString("en-US")} / ${at.toLocaleString("en-US")} tokens`,
+		tokensText: `${pool.tokens.toLocaleString("en-US")} / ${at.toLocaleString("en-US")} tokens`,
+		observationsText: `${pool.count} ${pool.count === 1 ? "observation" : "observations"}`,
 	};
 }
 

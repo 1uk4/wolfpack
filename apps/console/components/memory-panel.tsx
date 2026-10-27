@@ -342,7 +342,19 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 							<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
 							<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
 						</div>
-						<p className="mt-1 text-xs text-muted-foreground">{pool.label}</p>
+						<p className="mt-1 text-xs text-muted-foreground" data-testid="memory-pool-line">
+							{pool.tokensText} ·{" "}
+							<button
+								type="button"
+								className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+								aria-pressed={view === "feed"}
+								data-testid="memory-observations"
+								onClick={() => chooseView(view === "feed" ? lastView.current : "feed")}
+							>
+								{pool.observationsText}
+								{view !== "feed" && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
+							</button>
+						</p>
 						{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 						{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 						{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
@@ -365,7 +377,6 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 						void refreshSelected(selectedRef.current);
 					}}
 					feed={feed}
-					unread={unread}
 					onGraph={() => {
 						setSelectedId(null);
 						chooseView("graph");
@@ -387,7 +398,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 const MD = "text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold";
 
 /** The Status section: the feature graph, the item viewer or the live observation feed, one at a time; no bound item → feed only. */
-export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, feed, unread, onGraph, onToggleFeed, onSelect, onBack }: {
+export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, feed, onGraph, onToggleFeed, onSelect, onBack }: {
 	view: PanelView;
 	bound: MemoryStatus["bound"] | null;
 	graph: TaskGraphModel;
@@ -399,7 +410,6 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	otherState?: "loading" | "error";
 	onRetry?: () => void;
 	feed: FeedItem[];
-	unread: number;
 	/** Back to the feature graph (persisted as the graph view). */
 	onGraph: () => void;
 	onToggleFeed: () => void;
@@ -429,11 +439,16 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 						</button>
 					)
 				)}
-				{bound ? (
-					<Button size="xs" variant="ghost" data-testid="memory-view-toggle" onClick={onToggleFeed}>
-						{showFeed ? "« Status" : "Live observations »"}
-						{!showFeed && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
-					</Button>
+				{showFeed && bound ? (
+					<button
+						type="button"
+						className="rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+						aria-label="Back to previous view"
+						data-testid="memory-feed-back"
+						onClick={onToggleFeed}
+					>
+						‹ back
+					</button>
 				) : null}
 			</div>
 			{showFeed ? (

@@ -55,7 +55,9 @@ describe("memory panel model", () => {
 		const p = poolSummary({ count: 2, tokens: 3000, consolidateAtTokens: 2000, poolTarget: 500, trigger: "hybrid" });
 		assert.equal(p?.fill, 1);
 		assert.equal(p?.targetMark, 0.25);
-		assert.match(p?.label ?? "", /2 observations/);
+		assert.equal(p?.observationsText, "2 observations");
+		assert.equal(p?.tokensText, "3,000 / 2,000 tokens");
+		assert.equal(poolSummary({ count: 1, tokens: 1, consolidateAtTokens: 2, poolTarget: 0, trigger: "manual" })?.observationsText, "1 observation");
 		assert.equal(poolSummary(null), null);
 		assert.equal(poolSummary({ count: 0, tokens: 5, consolidateAtTokens: 0, poolTarget: 0, trigger: "manual" })?.fill, 0);
 	});

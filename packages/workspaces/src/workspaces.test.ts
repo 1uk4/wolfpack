@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  abandonChild, createChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, makeTempRepo,
+  abandonChild, assertSlug, createChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, makeTempRepo,
   mergeChild, repoOf, resolveWorkspacesRoot, WriterGuard, type RepoInfo, type TempRepo,
 } from "./index.js";
 
@@ -171,6 +171,10 @@ describe("isolation defaults", () => {
     expect(isWriter(undefined)).toBe(true);
     expect(isWriter([])).toBe(false);
   });
+  it("is always none outside git, even when the profile says worktree", () => {
+    expect(defaultIsolation({ tools: ["edit"], isolation: "worktree" }, false)).toBe("none");
+    expect(defaultIsolation({ isolation: "worktree" }, false)).toBe("none");
+  });
   it("defaults by writer and git, explicit wins", () => {
     expect(defaultIsolation({ tools: ["edit"] }, true)).toBe("worktree");
     expect(defaultIsolation({}, true)).toBe("worktree");
@@ -178,5 +182,97 @@ describe("isolation defaults", () => {
     expect(defaultIsolation({ tools: ["read"] }, true)).toBe("none");
     expect(defaultIsolation({ tools: ["read"], isolation: "worktree" }, true)).toBe("worktree");
     expect(defaultIsolation({ tools: ["edit"], isolation: "none" }, true)).toBe("none");
+  });
+});
+
+describe("slugs and path collisions", () => {
+  it("rejects unsafe slugs", () => {
+    for (const bad of ["", "a/b", "..", "a..b", "a--b", "x.lock", "X.LOCK", "-a", ".a", "a b", "a;rm"]) {
+      expect(() => assertSlug(bad), bad).toThrow(/invalid/);
+    }
+    for (const ok of ["a", "f1", "My_feat.2", "a-b"]) expect(() => assertSlug(ok)).not.toThrow();
+  });
+  it("rejects bad slugs in ensure/create", async () => {
+    const { repo, feat } = await setup();
+    await expect(ensureFeatureWorkspace({ root: t.root, repo, featureSlug: "a/b", baseDir: t.dir })).rejects.toThrow(/invalid/);
+    await expect(createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c--d" })).rejects.toThrow(/invalid/);
+  });
+  it("refuses a path already used by another branch", async () => {
+    const repo = (await repoOf(t.dir)) as RepoInfo;
+    t.git(["worktree", "add", "-b", "other", join(t.root, "demo", "feat-f1")]);
+    await expect(ensureFeatureWorkspace({ root: t.root, repo, featureSlug: "f1", baseDir: t.dir })).rejects.toThrow(/already taken/);
+  });
+});
+
+describe("mergeChild robustness", () => {
+  it("merges a child with no commits", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    expect(await mergeChild(child, feat)).toEqual({ ok: true });
+    expect(existsSync(child.path)).toBe(false);
+  });
+  it("retries the rebase once when the fast-forward fails", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("c.txt", "c", "child", child.path);
+    let calls = 0;
+    const r = await mergeChild(child, feat, {
+      beforeFastForward: async (n) => { calls++; if (n === 0) t.commitFile("late.txt", "l", "late", feat.path); },
+    });
+    expect(r).toEqual({ ok: true });
+    expect(calls).toBe(2);
+    expect(t.git(["log", "--format=%s", "-3"], feat.path).split("\n")).toEqual(["child", "late", "initial"]);
+  });
+  it("reports when the fast-forward keeps failing", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.commitFile("c.txt", "c", "child", child.path);
+    await expect(mergeChild(child, feat, {
+      beforeFastForward: async (n) => { t.commitFile(`late${n}.txt`, "l", "late", feat.path); },
+    })).rejects.toThrow(/after a retry/);
+    expect(existsSync(child.path)).toBe(true);
+  });
+  it("serialises two concurrent merges into one feature", async () => {
+    const { feat } = await setup();
+    const a = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "a" });
+    const b = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "b" });
+    t.commitFile("a.txt", "a", "A", a.path);
+    t.commitFile("b.txt", "b", "B", b.path);
+    const [ra, rb] = await Promise.all([mergeChild(a, feat), mergeChild(b, feat)]);
+    expect([ra, rb]).toEqual([{ ok: true }, { ok: true }]);
+    expect(t.git(["log", "--format=%s", "-3"], feat.path).split("\n").sort()).toEqual(["A", "B", "initial"]);
+    expect(t.git(["status", "--porcelain"], feat.path)).toBe("");
+  });
+  it("refuses a detached or wrong branch", async () => {
+    const { feat } = await setup();
+    const child = await createChildWorkspace({ root: t.root, featureWs: feat, featureSlug: "f1", childSlug: "c1" });
+    t.git(["checkout", "-q", "--detach"], child.path);
+    await expect(mergeChild(child, feat)).rejects.toThrow(/detached HEAD/);
+    t.git(["checkout", "-q", "-b", "stray"], child.path);
+    await expect(mergeChild(child, feat)).rejects.toThrow(/stray checked out/);
+    t.git(["checkout", "-q", child.branch], child.path);
+    await expect(mergeChild(child, { ...feat, branch: "feat/other" })).rejects.toThrow(/expected feat\/other/);
+  });
+});
+
+describe("worktrees", () => {
+  it("recreates a pruned (directory deleted) worktree", async () => {
+    const { repo, feat } = await setup();
+    const { rmSync } = await import("node:fs");
+    rmSync(feat.path, { recursive: true });
+    const again = await ensureFeatureWorkspace({ root: t.root, repo, featureSlug: "f1", baseDir: t.dir });
+    expect(existsSync(join(again.path, "README.md"))).toBe(true);
+  });
+  it("returns realpath-normalised paths", async () => {
+    const { feat } = await setup();
+    const { realpathSync } = await import("node:fs");
+    expect(feat.path).toBe(realpathSync.native(feat.path));
+  });
+  it("guard releaseAll frees every dir for an owner", () => {
+    const g = new WriterGuard();
+    mkdirSync(join(t.base, "other"));
+    g.acquire(t.dir, "a"); g.acquire(join(t.base, "other"), "a"); g.acquire(t.base, "b");
+    expect(g.releaseAll("a")).toBe(2);
+    expect(g.holder(t.base)).toBe("b");
   });
 });

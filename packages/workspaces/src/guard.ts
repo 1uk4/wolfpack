@@ -5,13 +5,16 @@ export type AcquireResult = { ok: true } | { ok: false; owner: string };
 
 function key(dir: string): string {
   try {
-    return realpathSync(dir);
+    return realpathSync.native(dir);
   } catch {
     return resolve(dir);
   }
 }
 
-/** In-memory registry of active writers, keyed by the realpath of the git working dir. */
+/**
+ * In-memory registry of active writers, keyed by the realpath of the git working dir.
+ * Callers pass the git toplevel of the checkout (what `repoOf(cwd).toplevel` returns), not an arbitrary subdirectory.
+ */
 export class WriterGuard {
   private readonly holders = new Map<string, string>();
 
@@ -30,6 +33,13 @@ export class WriterGuard {
     if (this.holders.get(k) !== ownerId) return false;
     this.holders.delete(k);
     return true;
+  }
+
+  /** Release every dir held by ownerId (e.g. when a child ends). Returns how many were released. */
+  releaseAll(ownerId: string): number {
+    let n = 0;
+    for (const [k, o] of this.holders) if (o === ownerId) { this.holders.delete(k); n++; }
+    return n;
   }
 
   holder(dir: string): string | undefined {

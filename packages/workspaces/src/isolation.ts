@@ -14,5 +14,6 @@ export function isWriter(tools: readonly string[] | undefined): boolean {
 }
 
 export function defaultIsolation(profile: IsolationProfile, cwdIsGit: boolean): Isolation {
-  return profile.isolation ?? (isWriter(profile.tools) && cwdIsGit ? "worktree" : "none");
+  if (!cwdIsGit) return "none"; // no git commands outside a repo, whatever the profile says
+  return profile.isolation ?? (isWriter(profile.tools) ? "worktree" : "none");
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState, type InputHTMLAttributes, type Ref } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Button } from "@/components/ui/button";
+import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, draftAnswers, draftComplete, foldPendingOther, initialDraft, multiInBounds, type CardDraft } from "@/src/core";
@@ -16,11 +17,47 @@ import type { InteractionCardProps } from "@/components/card-registry";
  */
 export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitting, onAnswer }: InteractionCardProps) {
 	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card, heldAnswer));
-	const set = (fieldId: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [fieldId]: a }));
+	// Ref mirrors of the draft and the typed Other text: a dictation flush (or a submit resuming after finishDictation)
+	// must read the tail, which has not rendered yet.
+	const draftRef = useRef(draft);
+	const set = (fieldId: string, a: CardFieldAnswer) => {
+		draftRef.current = { ...draftRef.current, [fieldId]: a };
+		setDraft(draftRef.current);
+	};
 	const answered = answer !== undefined;
 	const closed = answered || dismissed === true;
 	// Text typed into a multi "Other…" box but not yet added still counts on Submit (folded in, never lost).
 	const [typed, setTyped] = useState<Record<string, string>>({});
+	const typedRef = useRef(typed);
+	const setTypedText = (fieldId: string, text: string) => {
+		typedRef.current = { ...typedRef.current, [fieldId]: text };
+		setTyped(typedRef.current);
+	};
+	const liveRef = useRef(false);
+	liveRef.current = pending && !closed;
+	const { claimed, dictationProps } = useCardDictation(card, draftRef, set, typedRef, setTypedText, pending && !closed);
+	// Submit finishes a live dictation first, then reads the mirrors. `finishing` blocks re-entry (and disables Submit)
+	// while the finish is pending; afterwards the card is re-checked (liveRef) so one answered/skipped meanwhile is not answered again.
+	const [finishing, setFinishing] = useState(false);
+	const finishingRef = useRef(false);
+	// Recomputed from the mirrors at call time (after a dictation finish the render state is stale): an invalid or
+	// incomplete result aborts the submit and leaves the typed text with its inline error.
+	const answerNow = () => {
+		const f = foldPendingOther(card, draftRef.current, typedRef.current);
+		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) return;
+		onAnswer(draftAnswers(card, f.draft));
+	};
+	const submit = () => {
+		if (finishingRef.current) return;
+		if (!isDictationActive()) return answerNow();
+		finishingRef.current = true;
+		setFinishing(true);
+		void finishDictation().then(() => {
+			finishingRef.current = false;
+			setFinishing(false);
+			if (liveRef.current) answerNow();
+		});
+	};
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
 
@@ -29,6 +66,8 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 			className="rounded-xl border bg-card p-4 text-card-foreground"
 			data-testid={dismissed ? "dismissed-card" : answered ? "answered-card" : "pending-card"}
 			data-card-tool={card.tool}
+			data-dictation-claimed={claimed || undefined}
+			{...dictationProps.root}
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{card.title ?? "Question"}
@@ -44,19 +83,81 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 					readOnly={closed || !pending || submitting}
 					onChange={(a) => set(f.id, a)}
 					typed={typed[f.id] ?? ""}
-					onType={(text) => setTyped((t) => ({ ...t, [f.id]: text }))}
+					onType={(text) => setTypedText(f.id, text)}
+					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
 				/>
 			))}
 			{!closed && (
 				<div className="mt-3 flex justify-end">
-					<Button type="button" size="sm" disabled={!canSubmit} onClick={() => onAnswer(draftAnswers(card, folded.draft))} data-testid="card-submit">
+					<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
 						{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
 					</Button>
 				</div>
 			)}
 		</div>
 	);
+}
+
+/** Props spread onto a text input that is a dictation target. */
+type FieldDictation = { onFocus: () => void; onKeyDown: (e: React.KeyboardEvent) => void };
+
+/** Esc in a card field cancels a live dictation (the hook listens for this event; the Esc is claimed). */
+function stopDictationOnEscape(e: React.KeyboardEvent) {
+	if (e.key !== "Escape" || !isDictationActive()) return;
+	e.preventDefault();
+	e.stopPropagation();
+	window.dispatchEvent(new CustomEvent("lh:kbd-cancel-dictation"));
+}
+
+/**
+ * Card-field dictation, kept in one place: the text field focused last (free-text, single Other, multi Other) claims
+ * dictated speech (like the question dock's fields); focus landing on a text input outside the card (the composer)
+ * hands it back. Text inputs spread `dictationProps.field(id)`; the card root spreads `dictationProps.root`. Option
+ * buttons and Submit do NOT release the claim (only focus on a text input outside the card does): after picking an
+ * option the last text field still takes dictation, as in the question dock. Multi Other dictates into the pending
+ * `typed` text (folded on Submit); confirm has no text field.
+ */
+function useCardDictation(
+	card: InteractionCardProps["card"],
+	draftRef: { current: CardDraft },
+	set: (fieldId: string, a: CardFieldAnswer) => void,
+	typedRef: { current: Record<string, string> },
+	setTypedText: (fieldId: string, text: string) => void,
+	live: boolean,
+) {
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [dictField, setDictField] = useState<string | null>(null);
+	useEffect(() => {
+		if (dictField === null) return;
+		const onFocusIn = (e: FocusEvent) => {
+			const el = e.target as HTMLElement | null;
+			if (el && !rootRef.current?.contains(el) && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) setDictField(null);
+		};
+		document.addEventListener("focusin", onFocusIn);
+		return () => document.removeEventListener("focusin", onFocusIn);
+	}, [dictField]);
+	const append = useCallback(
+		(t: string) => {
+			const f = card.fields.find((x) => x.id === dictField);
+			if (!f) return;
+			const cur = draftRef.current[f.id];
+			if (f.kind === "free-text") set(f.id, { value: joinDictation(typeof cur?.value === "string" ? cur.value : "", t) });
+			else if (f.kind === "single") set(f.id, { value: joinDictation(otherText(cur) ?? "", t), other: true });
+			else if (f.kind === "multi") setTypedText(f.id, joinDictation(typedRef.current[f.id] ?? "", t));
+		},
+		// Deps are ref-backed: draftRef/typedRef are stable and `set`/`setTypedText` only write refs + state.
+		[card, dictField],
+	);
+	const claimed = live && dictField !== null;
+	useDictationTarget(append, claimed);
+	return {
+		claimed,
+		dictationProps: {
+			root: { ref: rootRef },
+			field: (id: string): FieldDictation => ({ onFocus: () => setDictField(id), onKeyDown: stopDictationOnEscape }),
+		},
+	};
 }
 
 function FieldView({
@@ -67,6 +168,7 @@ function FieldView({
 	typed,
 	onType,
 	pendingError,
+	dictation,
 }: {
 	field: CardField;
 	value: CardFieldAnswer | undefined;
@@ -75,6 +177,7 @@ function FieldView({
 	typed: string;
 	onType: (text: string) => void;
 	pendingError?: string;
+	dictation: FieldDictation;
 }) {
 	const labelId = `card-field-${useId()}`;
 	return (
@@ -90,7 +193,7 @@ function FieldView({
 			{field.kind === "confirm" ? (
 				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} />
 			) : field.kind === "multi" ? (
-				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} />
+				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} dictation={dictation} />
 			) : field.kind === "free-text" ? (
 				readOnly ? (
 					<div className="lh-prose whitespace-pre-wrap" data-testid="card-answer-text">
@@ -104,6 +207,7 @@ function FieldView({
 						value={typeof value?.value === "string" ? value.value : ""}
 						onChange={(text) => onChange({ value: text })}
 						placeholder="Your answer…"
+						{...dictation}
 					/>
 				)
 			) : (
@@ -145,6 +249,7 @@ function FieldView({
 								placeholder="Other…"
 								value={otherText(value) ?? ""}
 								onChange={(text) => onChange({ value: text, other: true })}
+								{...dictation}
 							/>
 						))}
 				</div>
@@ -165,6 +270,7 @@ function MultiView({
 	typed,
 	onType,
 	error,
+	dictation,
 }: {
 	field: Extract<CardField, { kind: "multi" }>;
 	value: CardFieldAnswer | undefined;
@@ -174,6 +280,7 @@ function MultiView({
 	typed: string;
 	onType: (text: string) => void;
 	error?: string;
+	dictation: FieldDictation;
 }) {
 	const picked = Array.isArray(value?.value) ? value.value : [];
 	const custom = value && "other" in value && Array.isArray(value.other) ? value.other : [];
@@ -221,7 +328,7 @@ function MultiView({
 			})}
 			{field.allowOther === true && !readOnly && (
 				<div className="flex gap-2">
-					<CardTextInput testId="card-other" className="flex-1 px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} />
+					<CardTextInput testId="card-other" className="flex-1 px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} {...dictation} />
 					<Button type="button" size="sm" variant="outline" data-testid="card-other-add" disabled={typed.trim() === "" || error !== undefined} onClick={addCustom}>
 						Add
 					</Button>

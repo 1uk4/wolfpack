@@ -67,6 +67,7 @@ export function Composer({
 	onFiles,
 	onPickFiles,
 	chips,
+	enterSends,
 }: {
 	busy: boolean;
 	value: string;
@@ -90,9 +91,12 @@ export function Composer({
 	onPickFiles?: (files: File[]) => void;
 	/** Pending attachment chips, rendered above the row. */
 	chips?: React.ReactNode;
+	/** Keyboard Enter sends even when the button state says Stop (a live dictation while a turn runs: Enter
+	 *  finishes it and steers the spoken text; the button stays Stop). Absent: Enter follows the button. */
+	enterSends?: boolean;
 }) {
-	const act = () => {
-		const action = enterAction({ busy, canSend });
+	const act = (viaEnter = false) => {
+		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
 		if (action === "stop") onStop();
 		else if (action === "send") onSend();
 	};
@@ -159,7 +163,7 @@ export function Composer({
 						// across every input in the app (thinking field, answers).
 						if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
 							e.preventDefault();
-							act();
+							act(true);
 						}
 					}}
 					placeholder={placeholder}

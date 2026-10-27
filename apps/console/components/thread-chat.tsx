@@ -11,6 +11,7 @@ import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
+import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
@@ -182,8 +183,11 @@ export function ThreadChat({
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (wasRunning && status === "ready") void refreshCards();
 	}, [status, refreshCards]);
+	const answerInFlight = useRef(false);
 	const onAnswer = useCallback(
 		async (callId: string, answers: CardAnswers) => {
+			if (answerInFlight.current) return; // double click / Enter: one POST
+			answerInFlight.current = true;
 			setAnswering(callId);
 			setCardError(null);
 			try {
@@ -212,6 +216,7 @@ export function ThreadChat({
 			} catch (err) {
 				setCardError(err instanceof Error ? err.message : "Could not send the answer.");
 			} finally {
+				answerInFlight.current = false;
 				setAnswering(null);
 			}
 		},
@@ -220,6 +225,15 @@ export function ThreadChat({
 	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void onAnswer(callId, answers) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
+	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after
+	// `await dictation.finish()` cannot observe in time (same law as chat.tsx).
+	const textRef = useRef("");
+	const applyText = useCallback((v: string) => {
+		textRef.current = v;
+		setText(v);
+	}, []);
+	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
+	const dictation = useDictation({ append: (t) => applyText(joinDictation(textRef.current, t)) });
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
 	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
 	const setRowOpen = useCallback(
@@ -259,17 +273,42 @@ export function ThreadChat({
 	const [dragging, setDragging] = useState(false);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
 
-	const onSend = useCallback(() => {
-		const t = text.trim();
+	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
+	const dictationWasActive = useRef(false);
+	useEffect(() => {
+		if (dictation.active) dictationWasActive.current = true;
+		else if (dictationWasActive.current) {
+			dictationWasActive.current = false;
+			if (!document.querySelector("[data-dictation-claimed]")) inputRef.current?.focus();
+		}
+	}, [dictation.active]);
+
+	const doSend = useCallback(() => {
+		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
 		const refs = readyInfos(attachments);
-		setText("");
+		applyText("");
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
 		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
 		// whenBusy "steer"); Stop is the abort.
 		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
-	}, [text, busy, send, steer, attachments]);
+	}, [busy, send, steer, attachments, applyText]);
+	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
+	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
+	// does nothing (composer untouched) when the finish left no text and no ready attachment.
+	const doSendRef = useRef(doSend);
+	doSendRef.current = doSend;
+	const sendInFlight = useRef(false);
+	const onSend = useCallback(() => {
+		if (sendInFlight.current) return;
+		if (!dictation.active) return doSend();
+		sendInFlight.current = true;
+		void dictation.finish().then(() => {
+			sendInFlight.current = false;
+			doSendRef.current();
+		});
+	}, [dictation, doSend]);
 
 	const onStop = useCallback(() => {
 		void fetch(transport.abortUrl!, { method: "POST" }).catch(() => {
@@ -427,13 +466,21 @@ export function ThreadChat({
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
+										<div className="px-3 pt-2" data-testid="dictation-slot">
+											<DictationBar dictation={dictation} />
+										</div>
 										<Composer
 											busy={busy}
 											value={text}
-											onChange={setText}
+											onChange={applyText}
 											onSend={onSend}
 											onStop={onStop}
-											canSend={canSendWith(text, attachments)}
+											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
+											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
+											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
+											onEscape={dictation.active ? dictation.cancel : undefined}
+											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
+											enterSends={dictation.active}
 											onFiles={onFiles}
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}

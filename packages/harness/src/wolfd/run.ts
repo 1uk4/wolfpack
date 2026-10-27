@@ -72,6 +72,8 @@ export interface RunningWolf {
   engine: WolfEngine;
   server: WolfServer;
   conversation: EngineConversation;
+  /** The KB roots the server was given (KB_BASE + KB_OPS of the effective env); unset when the wolf has none. */
+  kbRoots?: KbRoots;
   /** Set when wolf.yaml has `sandbox`: the redirect in force and the local Work server behind WORK_ENDPOINT. */
   sandbox?: RunningSandbox;
   close(): Promise<void>;
@@ -126,6 +128,7 @@ async function startConfigured(
   // fail-closed gates (memoryGate) see the effective den/env.
   // A librarian wolf's sweep (kb_sweep_* tools + the timer below), built from the same KB roots the memory extension
   // uses: KB_BASE/KB_OPS from the effective env (a sandbox KB copy), den-local state under the wolf's den.
+  const kbRoots = kbRootsFor(config, env);
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log) : undefined;
   const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
   const extensions = [...toolExtensions, ...loaded, ...extra];
@@ -157,7 +160,21 @@ async function startConfigured(
     const conversation = await engine.conversations.root(desired);
     await reconcile(conversation, desired);
 
-    const server = new WolfServer({ name: config.identity.name, conversation, den: config.den, memoryExtension: memoryExtensionInstalled(extensions), onError: (e) => log(`server error: ${String(e)}`) });
+    const server = new WolfServer({
+      name: config.identity.name,
+      conversation,
+      den: config.den,
+      memoryExtension: memoryExtensionInstalled(extensions),
+      librarian: config.memory.librarian,
+      ...(kbRoots ? { kbRoots } : {}),
+      memoryConfig: {
+        sandbox: !!config.sandbox,
+        disabled: config.extensionConfig.memory?.enabled === false,
+        consolidation: { threshold: config.memory.consolidation.threshold, poolTarget: config.memory.consolidation.poolTarget, trigger: config.memory.consolidation.trigger },
+      },
+      work: { endpoint: env.WORK_ENDPOINT, token: env.WORK_TOKEN },
+      onError: (e) => log(`server error: ${String(e)}`),
+    });
     await server.attach();
     engine.resume();
     const url = opts.socket ? await server.listenSocket(opts.socket) : await server.listen(opts.port ?? config.serve.port ?? 0);
@@ -169,6 +186,7 @@ async function startConfigured(
       engine,
       server,
       conversation,
+      ...(kbRoots ? { kbRoots } : {}),
       ...(sandbox ? { sandbox } : {}),
       close: async () => {
         if (sweepTimer) clearInterval(sweepTimer);
@@ -217,6 +235,12 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
   const broken = result.failed.filter((f) => !f.notFound);
   if (broken.length > 0) throw new Error(`extension ${broken.map((f) => `${f.name}: ${f.error}`).join("; ")}`);
   return result.extensions;
+}
+
+/** The KB roots the memory extension promotes into (and the KB routes read): KB_BASE + KB_OPS from the effective env. */
+function kbRootsFor(config: WolfConfig, env: NodeJS.ProcessEnv): KbRoots | undefined {
+  if (!env.KB_BASE || !env.KB_OPS) return undefined;
+  return { kbBase: env.KB_BASE, opsRoot: env.KB_OPS, denLocal: env.KB_DEN_LOCAL ?? join(config.den, "kb") };
 }
 
 function librarianSweepFor(config: WolfConfig, env: NodeJS.ProcessEnv, table: ModelTable, log: (line: string) => void): SweepManager {

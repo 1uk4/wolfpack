@@ -16,6 +16,8 @@ export interface MemoryEventBus {
   emit(draft: MemoryEventDraft): void;
   /** Returns the unsubscribe function. */
   subscribe(listener: MemoryEventListener): () => void;
+  /** The last promote_finished / promote_failed emitted on this bus, kept even with no subscriber (undefined: none since start). */
+  lastPromoteEvent(): MemoryEvent | undefined;
 }
 
 // Registry on globalThis (precedent: the memory actions registry in ./actions.ts, also keyed by den): the memory extension and wolfd's server must share one bus per den even when the module is loaded
@@ -33,12 +35,16 @@ export function memoryEventsFor(wolfDen: string, wolf: string): MemoryEventBus &
   let bus = buses.get(wolfDen);
   if (!bus) {
     const listeners = new Set<MemoryEventListener>();
+    let lastPromote: MemoryEvent | undefined;
     const created: Bus = {
       wolf,
       listenerCount: () => listeners.size,
+      lastPromoteEvent: () => lastPromote,
       emit(draft) {
-        if (listeners.size === 0) return;
+        const keep = draft.type === "promote_finished" || draft.type === "promote_failed";
+        if (listeners.size === 0 && !keep) return;
         const event = { ...draft, wolf: created.wolf, timestamp: new Date().toISOString() } as MemoryEvent;
+        if (keep) lastPromote = event;
         for (const l of [...listeners]) {
           try {
             l(event);

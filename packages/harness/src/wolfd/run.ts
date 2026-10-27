@@ -4,7 +4,7 @@
  * Sequence: load wolf.yaml -> sandbox redirect -> resolve the main-tier model (WOLFPACK_MODELS_FILE / models.json beside the wolf /
  * pack config; subscription transport builds the claude-bridge provider) -> wolf.yaml `extensions` via the harness loader
  * (same as createWolfHarness, on the redirected den/env) -> open the engine store at `<den>/session.sqlite` (backup on) ->
- * root conversation (= the home thread) -> bring its agent state in line with config + project context ->
+ * root conversation (= the home thread; feature threads are further ownerless conversations) -> bring its agent state in line with config + project context ->
  * attach the server's watcher -> engine.resume() -> listen.
  *
  * Listener precedence here (library): socket option > port option > serve.port > ephemeral TCP. (The wolfd bin
@@ -178,6 +178,15 @@ async function startConfigured(
     const server = new WolfServer({
       name: config.identity.name,
       conversation,
+      // Feature threads: fresh ownerless conversations configured like home (reconciled again when reopened).
+      conversations: {
+        create: () => engine.conversations.create(desired),
+        get: async (id) => {
+          const conv = await engine.conversations.get(id);
+          if (conv) await reconcile(conv, desired);
+          return conv;
+        },
+      },
       den: config.den,
       memoryExtension: memoryExtensionInstalled(extensions),
       librarian: config.memory.librarian,

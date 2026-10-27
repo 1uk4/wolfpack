@@ -1,22 +1,15 @@
 /**
- * WolfServer: serves the /v1 protocol for ONE wolf over ONE engine conversation (its home thread) on 127.0.0.1.
+ * WolfServer: serves the /v1 protocol for ONE wolf on 127.0.0.1, over many engine conversations: its home thread plus
+ * feature threads. Each thread is a ThreadRuntime (thread.ts) holding its own running slot, buffers, subscribers, card
+ * tracker and watch; routes look the thread up.
  * Mirrors the StubServer's semantics (packages/protocol/src/stub/server.ts); the contract suite is the definition
  * of correct.
  *
  * Architecture:
- * - One watcher per process. `attach()` opens `conversation.watch()` once and pumps every engine batch through
- *   `createEventMapper` (seeded with the attach snapshot). Mapped drafts are stamped here with per-thread monotonic ids
- *   (the engine has none) and fan out to (a) the per-turn replay buffer (cleared at turn-start) and (b) every live SSE
- *   subscriber. The same pump keeps the message list (`messages.ts`) and the `running` flag current.
- * - HTTP handlers never talk to the engine for reads; getThread/streams/status come from the pump's state.
- *   Handlers talk to it for submit/abort only. Because events arrive asynchronously, a `started` submit waits (bounded)
- *   until the pump has seen the turn-start, and abort waits until the pump has seen the turn end, so the stream the
- *   client opens next is never empty/[DONE] by accident.
- * - Mapper "resync" (engine overflow) re-bases state from the engine snapshot and sends subscribers a protocol
- *   snapshot frame.
- * - Resuming mid-run after a crash: an attach snapshot with a run in flight is presented as a synthesized turn-start
- *   (plus a text-delta carrying the partial text) so a console reattaching sees a coherent turn.
- * Limits: one wolf, home thread only; a queued follow-up cannot be dropped by abort (the engine owns the queue).
+ * - One watcher per thread (see thread.ts for the pump). The wolf-wide activity stream (thread-status, card events
+ *   of every thread) has its own id space and bounded replay buffer here.
+ * - Feature threads are persisted in `<den>/wolfd/threads.json` and re-attached at startup.
+ * Limits: a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
@@ -30,41 +23,18 @@ import {
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
-  SSE_DONE,
   SubmitBodySchema,
   matchRoute,
-  type Actor,
-  type AttachmentRef,
-  type CardAnswers,
-  type CardClosed,
   type ConsolidateResponse,
-  type ThreadStatus,
-  type ErrorCode,
-  type InFlightPartial,
   type KbPipelineResponse,
   type LastPromote,
   type PromoteResponse,
-  type SubmitAck,
-  type ThreadDetail,
-  type ThreadEvent,
   type WolfEvent,
-  type ThreadMessage,
   type ThreadSummary,
   type WolfSummary,
 } from "@wolfpack/protocol";
 import {
-  EngineBusyError,
-  createEventMapper,
-  stampEvent,
   type EngineConversation,
-  type SubmitOptions,
-  type EngineEvent,
-  type EngineSnapshot,
-  type EngineWatch,
-  type EventMapper,
-  type MappedEvent,
-  type ResyncDraft,
-  type ThreadEventDraft,
 } from "../engine/index.js";
 import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
@@ -73,9 +43,10 @@ import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/grap
 import { readDenTopics } from "@wolfpack/memory";
 import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
-import { applyEntry, messagesFromEntries } from "./messages.js";
-import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
-import { CardTracker, answerText, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
+import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
+import { HttpError } from "./http-error.js";
+import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
+import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, saveThread } from "./threads.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -83,6 +54,8 @@ export interface WolfServerOptions {
   host?: string;
   /** The home conversation. */
   conversation: EngineConversation;
+  /** Creates and reopens the conversations behind feature threads. Unset: this wolf refuses to host feature threads. */
+  conversations?: ThreadConversations;
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
   /** The wolf's den: its MemoryEvent bus feeds `GET /v1/wolves/:name/events`. Omitted: that stream stays empty. */
@@ -104,42 +77,28 @@ export interface WolfServerOptions {
   onError?: (error: unknown) => void;
 }
 
-class HttpError extends Error {
-  /** `drain`: bytes of the request body already consumed; the server discards the rest (bounded) so the client can read this error. */
-  constructor(readonly code: ErrorCode, message: string, readonly drain?: number) {
-    super(message);
-  }
+/** How feature threads get their engine conversations (new ones, and the persisted ones again after a restart). */
+export interface ThreadConversations {
+  create(): Promise<EngineConversation>;
+  get(id: string): Promise<EngineConversation | undefined>;
 }
-
-const OPERATOR: Actor = { id: "operator", kind: "operator" };
-const SYSTEM: Actor = { id: "wolfd", kind: "system" };
-
-type Sub = (ev: ThreadEvent) => void;
 
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
 export class WolfServer {
-  private readonly conv: EngineConversation;
   private readonly name: string;
   private readonly host: string;
   private readonly settleMs: number;
-  private readonly summary: ThreadSummary;
-  private readonly cards: CardTracker;
   private readonly http: Server;
   private baseUrl = "";
   private socketPath: string | undefined;
 
-  // pump-owned thread state
-  private seq = 0;
-  private buffer: ThreadEvent[] = [];
-  private running: { turnId: string } | null = null;
-  private turnStarts = 0;
-  private messages: ThreadMessage[] = [];
-  private seenEntries = new Set<EngineSnapshot["entries"][number]["id"]>();
-  private readonly subs = new Set<Sub>();
-  private readonly waiters = new Set<() => void>();
+  /** Every thread this wolf serves, home first. */
+  private readonly threads = new Map<string, ThreadRuntime>();
+  private readonly homeId: string;
+  private readonly opening = new Map<string, Promise<{ summary: ThreadSummary; created: boolean }>>();
   private homeCreated = false;
   private readonly memoryBus?: MemoryEventBus;
   // wolf-scoped activity stream (thread-status, card events): own id space, bounded replay buffer
@@ -147,29 +106,17 @@ export class WolfServer {
   private wolfSeq = 1;
   /** Per-process epoch in the SSE id (`<boot>:<seq>`): a cursor from another process is stale, whatever its number. */
   private readonly boot = randomUUID().slice(0, 8);
-  /** Answers being submitted: the thread reads busy from the claim until the next turn starts (never idle in between). */
-  private answering = 0;
-  /** > 0 while a batch is being applied: thread-status is announced when it ends. */
-  private holdStatus = 0;
   private wolfBuffer: WolfEvent[] = [];
   private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
-  private lastStatus: ThreadStatus = "idle";
-  /** Cards announced as pending (card-pending sent, card-settled not yet): the diff base for card events. */
-  private readonly announced = new Set<string>();
-
-  private watch?: EngineWatch;
-  private mapper?: EventMapper;
-  private pump?: Promise<void>;
   private closing = false;
 
   constructor(private readonly opts: WolfServerOptions) {
-    this.conv = opts.conversation;
     this.name = opts.name;
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
-    this.summary = { id: `${this.name}/home`, wolf: this.name, kind: "home", title: "Home" };
-    this.cards = new CardTracker(this.summary.id);
+    this.homeId = `${this.name}/home`;
+    this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home" }, opts.conversation);
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         if (!res.headersSent) {
@@ -186,17 +133,26 @@ export class WolfServer {
     return this.baseUrl;
   }
 
-  /** Attach the single watcher and start pumping. Call before listen(). */
+  private get home(): ThreadRuntime {
+    return this.threads.get(this.homeId)!;
+  }
+
+  /** Attach every thread's watcher (home, then the persisted feature threads) and start pumping. Call before listen(). */
   async attach(): Promise<void> {
-    const w = await this.conv.watch();
-    this.watch = w;
-    this.rebase(w.snapshot, true);
-    this.attached = true;
-    this.lastStatus = this.status();
+    await this.home.attach();
     // A store with history already has its home thread: createThread then answers 200, not 201.
-    this.homeCreated = w.snapshot.entries.length > 0;
-    this.mapper = createEventMapper(w.snapshot);
-    this.pump = this.runPump(w);
+    this.homeCreated = this.home.hadHistory;
+    const { den, conversations } = this.opts;
+    if (!den || !conversations) return;
+    for (const saved of loadThreads(den)) {
+      const conv = await conversations.get(saved.conversationId);
+      if (!conv) {
+        this.opts.onError?.(new Error(`thread ${saved.id}: conversation ${saved.conversationId} is gone`));
+        continue;
+      }
+      const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId };
+      await this.makeThread(summary, conv).attach();
+    }
   }
 
   async listen(port = 0): Promise<string> {
@@ -225,107 +181,11 @@ export class WolfServer {
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
     if (this.socketPath) rmSync(this.socketPath, { force: true });
-    await this.watch?.stop().catch(() => {});
-    await this.pump?.catch(() => {});
+    for (const t of this.threads.values()) await t.close();
     if (this.opts.den) disposeMemoryEvents(this.opts.den);
   }
 
-  // ------------------------------------------------------------- pump
-
-  private async runPump(w: EngineWatch): Promise<void> {
-    try {
-      for await (const batch of w.batches) this.applyBatch(batch);
-      this.applyMapped(this.mapper!.flush());
-    } catch (e) {
-      if (!this.closing) this.opts.onError?.(e);
-    }
-  }
-
-  private applyBatch(batch: readonly EngineEvent[]): void {
-    // Status is announced once, after the whole batch is mapped: a dismissal and the turn-start it precedes must not
-    // surface as needs-you -> idle -> busy.
-    this.holdStatus++;
-    try {
-      this.applyBatchInner(batch);
-    } finally {
-      this.holdStatus--;
-      this.syncStatus();
-    }
-  }
-
-  private applyBatchInner(batch: readonly EngineEvent[]): void {
-    for (const ev of batch) {
-      if (ev.type === "snapshot") this.resetMessages(ev.entries);
-      else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
-        this.seenEntries.add(ev.entry.id);
-        applyEntry(this.messages, ev.entry);
-        // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
-        const closed = this.cards.apply(ev.entry);
-        this.syncCards(closed);
-        if ([...closed.values()].some((c) => c !== "answered")) this.notify();
-      }
-    }
-    this.applyMapped(this.mapper!.push(batch));
-  }
-
-  /** Re-base thread state on an engine snapshot. `initial`: synthesize the in-flight turn into the buffer. */
-  private rebase(snap: EngineSnapshot, initial: boolean): void {
-    this.resetMessages(snap.entries);
-    if (!snap.run) {
-      this.running = null;
-      return;
-    }
-    const turnId = `turn-${Number(snap.run.inputs[0])}`;
-    if (initial) {
-      this.emit({ type: "turn-start", turnId });
-      const partial = textOf(snap.generation?.message);
-      if (partial) this.emit({ type: "text-delta", turnId, text: partial });
-    } else {
-      this.running = { turnId };
-    }
-  }
-
-  private resetMessages(entries: EngineSnapshot["entries"]): void {
-    this.messages = messagesFromEntries(entries);
-    this.seenEntries = new Set(entries.map((e) => e.id));
-    this.cards.reset(entries);
-    // The first baseline (attach) announces nothing: a connection's baseline carries the pending cards.
-    if (this.attached) this.syncCards();
-    else for (const p of this.cards.raisedCards()) this.announced.add(p.callId);
-  }
-
-  private attached = false;
-
-  /**
-   * Announce card changes as thread events (so an open thread shows the card without waiting for the turn to settle)
-   * and wolf events (so the needs-you list sees every thread). Diffs the tracker against what was announced, so each
-   * raise and each settle is announced exactly once whichever path (pump entry, answer ack) sees it first.
-   */
-  private syncCards(closedBy: ReadonlyMap<string, CardClosed> = new Map()): void {
-    const live = new Map(this.cards.raisedCards().map((p) => [p.callId, p]));
-    for (const callId of [...this.announced]) {
-      if (live.has(callId)) continue;
-      this.announced.delete(callId);
-      const closed = closedBy.get(callId) ?? "answered";
-      const outcome = closed === "answered" ? "answered" : "dismissed";
-      this.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
-      this.emit({ type: "card-settled", callId, outcome, closed });
-    }
-    for (const [callId, card] of live) {
-      if (this.announced.has(callId)) continue;
-      this.announced.add(callId);
-      this.emitWolf({ type: "card-pending", card });
-      this.emit({ type: "card-pending", card });
-    }
-  }
-
-  /** A held answer changed: the card is still pending, with the new answer. */
-  private announceHeld(callId: string): void {
-    const card = this.cards.get(callId);
-    if (!card) return;
-    this.emit({ type: "card-pending", card });
-    this.emitWolf({ type: "card-pending", card });
-  }
+  // ------------------------------------------------------------ threads
 
   private emitWolf(draft: WolfEventDraft): void {
     const full = { ...draft, id: ++this.wolfSeq, wolf: this.name, at: new Date().toISOString() } as WolfEvent;
@@ -334,89 +194,44 @@ export class WolfServer {
     for (const s of [...this.wolfSubs]) s(full);
   }
 
-  /** Thread status is derived; announce it whenever the derivation changes. */
-  private syncStatus(): void {
-    if (this.holdStatus > 0) return;
-    const status = this.status();
-    if (status === this.lastStatus) return;
-    this.lastStatus = status;
-    this.emitWolf({ type: "thread-status", threadId: this.summary.id, status });
-  }
-
-  private applyMapped(events: MappedEvent[]): void {
-    for (const ev of events) {
-      if (ev.type === "resync") {
-        if (ev.snapshot) this.rebase(ev.snapshot, false);
-        if (ev.correction) this.correctBuffer(ev.correction);
-        const snap = this.snapshotEvent();
-        for (const s of [...this.subs]) s(snap);
-        this.notify();
-      } else this.emit(ev);
-    }
-  }
-
-  /**
-   * A diverged retry: the buffered deltas of the current message are stale. Rewrite them in place (ids stay, so
-   * replay keeps working): the earliest stale delta carries the authoritative text, the rest are blanked.
-   */
-  private correctBuffer(c: NonNullable<ResyncDraft["correction"]>): void {
-    const fix = (type: "text-delta" | "thinking-delta", stale: string, final: string) => {
-      if (final === stale) return;
-      const hit: ThreadEvent[] = [];
-      let n = 0;
-      for (let i = this.buffer.length - 1; i >= 0 && n < stale.length; i--) {
-        const e = this.buffer[i];
-        if (e.type === type && e.turnId === c.turnId) {
-          hit.push(e);
-          n += e.text.length;
-        }
-      }
-      // Earliest stale delta carries the authoritative text (empty when the side shrank to nothing), the rest are blanked.
-      hit.forEach((e, i) => {
-        (e as { text: string }).text = i === hit.length - 1 ? final : "";
-      });
-      // Nothing stale was buffered for this side: the authoritative text has to be emitted as a new delta.
-      if (hit.length === 0 && final !== "") this.emit({ type, turnId: c.turnId, text: final });
-    };
-    fix("text-delta", c.staleText, c.text);
-    fix("thinking-delta", c.staleThinking, c.thinking);
-  }
-
-  private emit(draft: ThreadEventDraft): void {
-    if (draft.type === "turn-start") {
-      this.buffer = [];
-      this.running = { turnId: draft.turnId };
-      this.turnStarts++;
-    }
-    const actor: Actor = draft.type === "turn-start" ? OPERATOR : draft.type === "error" ? SYSTEM : { id: this.name, kind: "wolf" };
-    const full = stampEvent(draft, { threadId: this.summary.id, id: ++this.seq, actor });
-    this.buffer.push(full);
-    if (draft.type === "turn-end") this.running = null;
-    for (const s of [...this.subs]) s(full);
-    this.notify();
-  }
-
-  private notify(): void {
-    this.syncStatus();
-    for (const w of [...this.waiters]) w();
-  }
-
-  /** Resolves when `pred` holds (checked after every pump event) or after the settle timeout. */
-  private waitFor(pred: () => boolean): Promise<void> {
-    if (pred()) return Promise.resolve();
-    return new Promise((resolve) => {
-      const done = () => {
-        if (!pred()) return;
-        clearTimeout(timer);
-        this.waiters.delete(done);
-        resolve();
-      };
-      const timer = setTimeout(() => {
-        this.waiters.delete(done);
-        resolve();
-      }, this.settleMs);
-      this.waiters.add(done);
+  private makeThread(summary: ThreadSummary, conv: EngineConversation): ThreadRuntime {
+    const t = new ThreadRuntime(summary, conv, {
+      name: this.name,
+      den: this.opts.den,
+      settleMs: this.settleMs,
+      closing: () => this.closing,
+      emitWolf: (d) => this.emitWolf(d),
+      onError: (e) => this.opts.onError?.(e),
     });
+    this.threads.set(summary.id, t);
+    return t;
+  }
+
+  /** Open (or return) the feature thread for a work item: an ownerless conversation bound to the feature. */
+  private openFeatureThread(workItemId: string): Promise<{ summary: ThreadSummary; created: boolean }> {
+    const pending = this.opening.get(workItemId);
+    if (pending) return pending;
+    const p = (async () => {
+      const id = featureThreadId(this.name, workItemId);
+      const have = this.threads.get(id);
+      if (have) return { summary: have.threadSummary(), created: false };
+      const host = this.opts.conversations;
+      if (!host || !this.opts.den) throw new HttpError("invalid_request", "this wolf cannot host feature threads");
+      if (!isWorkId(workItemId)) throw new HttpError("invalid_request", "malformed work item id");
+      const info = await featureInfo(workItemId, this.opts.work ?? {});
+      const holder = findBindingHolder(this.opts.den, workItemId);
+      if (holder !== undefined) throw new HttpError("invalid_request", `${workItemId} is already bound in conversation ${holder}; release it there first`);
+      const conv = await host.create();
+      bindFeature(this.opts.den, conv.id, { workId: workItemId, domain: info.domain });
+      const summary: ThreadSummary = { id, wolf: this.name, kind: "feature", title: info.title, boundWorkItem: workItemId };
+      saveThread(this.opts.den, { id, conversationId: conv.id, kind: "feature", workItemId, title: info.title });
+      const t = this.makeThread(summary, conv);
+      await t.attach();
+      this.emitWolf({ type: "thread-status", threadId: id, status: t.status() });
+      return { summary: t.threadSummary(), created: true };
+    })().finally(() => this.opening.delete(workItemId));
+    this.opening.set(workItemId, p);
+    return p;
   }
 
   // ------------------------------------------------------------- http
@@ -442,39 +257,42 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: [this.threadSummary()] });
+        return this.json(res, 200, { threads: [...this.threads.values()].map((t) => t.threadSummary()) });
       case "listCards":
         this.checkWolf(params.name);
-        return this.json(res, 200, { cards: this.cards.pending() });
+        return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
       case "answerCard": {
-        this.checkThread(params.id);
+        const t = this.checkThread(params.id);
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
-        return this.json(res, 200, await this.answerCard(params.callId, body.data.answers));
+        return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
       }
       case "skipCard": {
-        this.checkThread(params.id);
-        return this.json(res, 200, await this.skipCard(params.callId));
+        const t = this.checkThread(params.id);
+        return this.json(res, 200, await t.skipCard(params.callId));
       }
       case "createThread": {
         this.checkWolf(params.name);
         const body = CreateThreadBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", 'body must be {kind:"home"}');
+        if (!body.success) throw new HttpError("invalid_request", 'body must be {kind:"home"} or {kind:"feature", workItemId}');
+        if (body.data.kind === "feature") {
+          const r = await this.openFeatureThread(body.data.workItemId);
+          return this.json(res, r.created ? 201 : 200, r.summary);
+        }
         // The home thread is the engine root conversation: it always exists once the process is up.
         const status = this.homeCreated ? 200 : 201;
         this.homeCreated = true;
-        return this.json(res, status, this.threadSummary());
+        return this.json(res, status, this.home.threadSummary());
       }
       case "getThread":
-        this.checkThread(params.id);
-        return this.json(res, 200, this.detail());
+        return this.json(res, 200, this.checkThread(params.id).detail());
       case "submit": {
-        this.checkThread(params.id);
+        const t = this.checkThread(params.id);
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
-        return this.json(res, 200, await this.submit(body.data.input, body.data.whenBusy, refs));
+        return this.json(res, 200, await t.submit(body.data.input, body.data.whenBusy, refs));
       }
       case "uploadAttachment": {
         try {
@@ -508,7 +326,7 @@ export class WolfServer {
         if (!this.opts.den) throw new HttpError("not_found", `unknown attachment ${params.attachmentId}`);
         let file;
         try {
-          file = loadAttachment(this.opts.den, this.summary.id, params.attachmentId);
+          file = loadAttachment(this.opts.den, params.id, params.attachmentId);
         } catch (e) {
           // loadAttachment only accepts a UUID that names a file in this thread's directory: no traversal.
           if (e instanceof AttachmentError) throw new HttpError("not_found", e.message);
@@ -525,15 +343,11 @@ export class WolfServer {
         return;
       }
       case "abort": {
-        this.checkThread(params.id);
-        const was = this.running !== null;
-        await this.conv.abort();
-        if (was) await this.waitFor(() => this.running === null);
+        await this.checkThread(params.id).abort();
         return this.json(res, 200, { ok: true });
       }
       case "streamThread":
-        this.checkThread(params.id);
-        return this.stream(req, res, url);
+        return this.checkThread(params.id).stream(req, res, url);
       case "streamWolfActivity":
         this.checkWolf(params.name);
         return this.activityStream(req, res, url);
@@ -564,9 +378,9 @@ export class WolfServer {
       case "getMemoryStatus": {
         this.checkWolf(params.name);
         const thread = url.searchParams.get("thread");
-        if (thread !== null) this.checkThread(thread);
-        // wolfd serves one conversation (the home thread = the engine root), so every thread resolves to its binding.
-        const bound = this.opts.den ? await readBound(this.opts.den, this.conv.id, this.opts.work ?? {}) : null;
+        // The binding is per conversation: the asked thread's, else home's.
+        const t = thread !== null ? this.checkThread(thread) : this.home;
+        const bound = this.opts.den ? await readBound(this.opts.den, t.conv.id, this.opts.work ?? {}) : null;
         return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound));
       }
       case "getMemoryTopic": {
@@ -695,166 +509,17 @@ export class WolfServer {
   // ------------------------------------------------------------ state
 
   private wolfSummary(): WolfSummary {
-    return { id: this.name, name: this.name, host: this.host, status: this.running ? "busy" : "online", librarian: this.opts.librarian === true };
+    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true };
   }
 
   private checkWolf(name: string): void {
     if (name !== this.name) throw new HttpError("not_found", `wolf ${name}`);
   }
 
-  private checkThread(id: string): void {
-    if (id !== this.summary.id) throw new HttpError("not_found", `thread ${id}`);
-  }
-
-  private status(): ThreadStatus {
-    // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
-    // list/baseline agree because both read pending().
-    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
-  }
-
-  private threadSummary(): ThreadSummary {
-    return { ...this.summary, status: this.status() };
-  }
-
-  private detail(): ThreadDetail {
-    const den = this.opts.den;
-    const attachmentsOf = (m: ThreadMessage) => {
-      const list = den && m.role === "user" ? attachmentsInText(den, this.summary.id, m.text) : [];
-      return list.length ? { attachments: list } : {};
-    };
-    const messages = this.messages.map((m) => ({
-      ...m,
-      // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
-      ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
-      ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
-      ...attachmentsOf(m),
-    }));
-    const pendingCards = this.cards.pending();
-    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
-  }
-
-  private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
-    const before = this.turnStarts;
-    // The model is told which pending cards this message replaces (the history strips the note again).
-    // (Only when idle: a steer/followUp during a run finds nothing pending, the run's first message superseded them.)
-    if (!this.running) text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + text;
-    let input: SubmitOptions["input"] = text;
-    if (refs.length > 0) {
-      if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
-      try {
-        input = inlineAttachments(this.opts.den, this.summary.id, text, refs);
-      } catch (e) {
-        if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
-        throw e;
-      }
-    }
-    let r;
-    try {
-      r = await this.conv.submit({ input, whenBusy });
-    } catch (e) {
-      if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
-      throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
-    }
-    if (refs.length > 0 && this.opts.den) {
-      try {
-        recordSubmission(this.opts.den, this.summary.id, r.messageId, refs);
-      } catch {
-        /* the sidecar is best-effort: history falls back to the text lines */
-      }
-    }
-    if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
-    return { messageId: r.messageId, disposition: r.disposition };
-  }
-
-  /**
-   * Answer a pending card. The answer is a submission placed as a card-answer entry: the next turn starts with it as
-   * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
-   * the answer is held and the ack is `queued`.
-   */
-  private async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
-    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
-    const pending = this.cards.get(callId);
-    if (!pending) throw new HttpError("not_found", `card ${callId}`);
-    const bad = validateAnswers(pending.card, rawAnswers);
-    if (bad) throw new HttpError("invalid_request", bad);
-    const answers = dropHiddenAnswers(pending.card, rawAnswers);
-    // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
-    return this.resolveCard(callId, this.cards.answer(callId, answers));
-  }
-
-  /** Skip a pending card: the agent is told, and a skip counts as the card's resolution among its siblings. */
-  private async skipCard(callId: string): Promise<SubmitAck> {
-    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
-    const pending = this.cards.get(callId);
-    if (!pending) throw new HttpError("not_found", `card ${callId}`);
-    // A repeated skip of an already held-skipped card changes nothing: no second announcement.
-    if (pending.heldSkip) return { messageId: `card-${callId}`, disposition: "queued" };
-    return this.resolveCard(callId, this.cards.skip(callId));
-  }
-
-  /** After an answer or skip was recorded: hold it while siblings wait, else submit the whole turn's resolutions. */
-  private async resolveCard(callId: string, ready: ReturnType<CardTracker["answer"]>): Promise<SubmitAck> {
-    if (!ready) {
-      this.announceHeld(callId);
-      this.notify();
-      return { messageId: `card-${callId}`, disposition: "queued" };
-    }
-    const ids = ready.map((r) => r.callId);
-    const before = this.turnStarts;
-    this.answering++;
-    this.syncStatus();
-    try {
-      return await this.submitAnswers(ready, ids, before);
-    } finally {
-      this.answering--;
-      this.syncStatus();
-    }
-  }
-
-  private async submitAnswers(ready: ReturnType<CardTracker["answer"]> & object, ids: string[], before: number): Promise<SubmitAck> {
-    let r;
-    try {
-      r = await this.conv.submit({
-        input: answerText(ready),
-        whenBusy: "reject",
-        cardAnswers: { cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })) },
-      });
-    } catch (e) {
-      this.cards.release(ids);
-      if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
-      throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
-    }
-    this.cards.settle(ids);
-    this.syncCards(new Map(ready.map((c): [string, CardClosed] => [c.callId, c.skipped ? "skipped" : "answered"])));
-    if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
-    return { messageId: r.messageId, disposition: r.disposition };
-  }
-
-  // ----------------------------------------------------------- stream
-
-  private inFlight(): InFlightPartial | undefined {
-    if (!this.running) return undefined;
-    let text = "";
-    let thinking = "";
-    for (const e of this.buffer) {
-      if (e.type === "text-delta") text += e.text;
-      else if (e.type === "thinking-delta") thinking += e.text;
-    }
-    return { turnId: this.running.turnId, text, ...(thinking ? { thinking } : {}) };
-  }
-
-  private snapshotEvent(): ThreadEvent {
-    const inFlight = this.inFlight();
-    return {
-      type: "snapshot",
-      id: Math.max(this.seq, 1),
-      threadId: this.summary.id,
-      at: new Date().toISOString(),
-      actor: SYSTEM,
-      upToId: this.seq,
-      thread: this.detail(),
-      ...(inFlight ? { inFlight } : {}),
-    };
+  private checkThread(id: string): ThreadRuntime {
+    const t = this.threads.get(id);
+    if (!t) throw new HttpError("not_found", `thread ${id}`);
+    return t;
   }
 
   /** Live MemoryEvents of this wolf: no replay, no ids, no [DONE]; open until the client goes (or the server closes). */
@@ -908,8 +573,8 @@ export class WolfServer {
       const id = this.wolfSeq;
       const at = new Date().toISOString();
       return [
-        { type: "thread-status", id, wolf: this.name, at, threadId: this.summary.id, status: this.status() },
-        ...this.cards.pending().map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
+        ...[...this.threads.values()].map((t): WolfEvent => ({ type: "thread-status", id, wolf: this.name, at, threadId: t.summary.id, status: t.status() })),
+        ...[...this.threads.values()].flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
       ];
     };
     const firstId = this.wolfBuffer[0]?.id;
@@ -935,78 +600,10 @@ export class WolfServer {
     req.on("close", gone);
     res.on("close", gone);
   }
-
-  private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
-    const from = resumeCursor(req, url);
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    });
-    const frame = (ev: ThreadEvent) => res.write(`id: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
-    const done = () => {
-      res.write(`data: ${SSE_DONE}\n\n`);
-      res.end();
-    };
-
-    let replay: ThreadEvent[];
-    let snapshot: ThreadEvent | undefined;
-    const firstId = this.buffer[0]?.id;
-    if (from === undefined) {
-      replay = [...this.buffer];
-    } else {
-      // The buffer covers ids [firstId, seq]. Resuming at firstId-1 or later is gap-free.
-      const stale = from > this.seq || (firstId === undefined ? from < this.seq : from < firstId - 1);
-      if (stale) {
-        replay = [];
-        snapshot = this.snapshotEvent();
-      } else {
-        replay = this.buffer.filter((e) => e.id > from);
-      }
-    }
-
-    if (snapshot) frame(snapshot);
-    for (const ev of replay) {
-      frame(ev);
-      if (ev.type === "turn-end") return done();
-    }
-    if (!this.running) return done();
-
-    const sub: Sub = (ev) => {
-      frame(ev);
-      if (ev.type === "turn-end") {
-        this.subs.delete(sub);
-        done();
-      }
-    };
-    this.subs.add(sub);
-    res.on("close", () => this.subs.delete(sub));
-  }
 }
-
-/** `Last-Event-ID` header, else `?from=`; anything non-numeric is no cursor. */
-function resumeCursor(req: IncomingMessage, url: URL): number | undefined {
-  const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
-  const rawStr = Array.isArray(raw) ? raw[0] : raw;
-  const n = rawStr == null || rawStr.trim() === "" ? NaN : Number(rawStr);
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
-}
-
-type WolfEventDraft = WolfEvent extends infer E ? (E extends unknown ? Omit<E, "id" | "wolf" | "at"> : never) : never;
 
 function firstLine(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 200);
-}
-
-function textOf(message: unknown): string {
-  const content = (message as { content?: unknown } | undefined)?.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return (content as Array<{ type: string; text?: string }>)
-    .filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("");
 }
 
 const DRAIN_MAX_BYTES = 4 * ATTACHMENT_MAX_BYTES;

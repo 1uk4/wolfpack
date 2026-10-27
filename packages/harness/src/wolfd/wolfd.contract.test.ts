@@ -8,7 +8,13 @@ import { ScriptedEngine } from "./scripted-engine.js";
 import { WolfServer } from "./server.js";
 
 const den = mkdtempSync(join(tmpdir(), "wolfd-contract-"));
-const server = new WolfServer({ name: "scripted", den, conversation: new ScriptedEngine({ delayMs: 15 }) });
+let made = 0;
+const server = new WolfServer({
+  name: "scripted",
+  den,
+  conversation: new ScriptedEngine({ delayMs: 15 }),
+  conversations: { create: async () => new ScriptedEngine({ delayMs: 15, id: `scripted-feature-${++made}` }), get: async () => undefined },
+});
 let url = "";
 beforeAll(async () => {
   await server.attach();

@@ -110,7 +110,7 @@ type WorkFetch = { kind: "ok"; item: ApiWorkItem; body: string } | { kind: "not_
 const WORK_TIMEOUT_MS = 3000;
 
 /** GET <endpoint>/work/:id (the same call the memory extension's Work clients make). */
-async function fetchWorkItem(id: string, work: { endpoint?: string; token?: string }): Promise<WorkFetch> {
+export async function fetchWorkItem(id: string, work: { endpoint?: string; token?: string }): Promise<WorkFetch> {
   const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
   if (!endpoint || !work.token) return { kind: "unconfigured" };
   try {

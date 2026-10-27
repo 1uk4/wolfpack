@@ -114,7 +114,8 @@ async function bootServer(): Promise<any> {
   const server = new WolfServer({ name: "w", conversation: new ScriptedEngine() });
   servers.push(server);
   await server.attach();
-  return server;
+  // The home thread's runtime holds the pump state this test drives directly.
+  return (server as any).home;
 }
 
 const reviewerCase = (): Case => ({

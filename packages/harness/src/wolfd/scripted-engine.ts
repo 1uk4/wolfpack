@@ -26,6 +26,8 @@ export interface ScriptedEngineOptions {
   script?: ScriptStep[];
   /** Delay between scripted events in ms. Default 10. */
   delayMs?: number;
+  /** Conversation id. Default "scripted". */
+  id?: string;
 }
 
 interface Run {
@@ -40,7 +42,7 @@ interface Run {
 const ev = (e: unknown) => e as EngineEvent;
 
 export class ScriptedEngine implements EngineConversation {
-  readonly id = "scripted";
+  readonly id: string;
   readonly configured: ConfigureOptions[] = [];
   private readonly script: ScriptStep[];
   private readonly delayMs: number;
@@ -55,6 +57,7 @@ export class ScriptedEngine implements EngineConversation {
   constructor(opts: ScriptedEngineOptions = {}) {
     this.script = opts.script ?? DEFAULT_FIXTURE.script;
     this.delayMs = opts.delayMs ?? 10;
+    this.id = opts.id ?? "scripted";
   }
 
   async configure(opts: ConfigureOptions): Promise<void> {

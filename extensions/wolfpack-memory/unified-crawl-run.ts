@@ -18,6 +18,7 @@
  * progress is pulled with crawl_status (the in-flight state is a per-process registry; after a restart the run's state on
  * disk — which batches landed — is what crawl_status and crawl_run's resume step read).
  */
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolResult } from "@wolfpack/harness/extension";
@@ -57,8 +58,11 @@ const fail = (t: string): ToolResult => text(t, { isError: true });
 
 type RunState = "running" | "done" | "failed" | "gate-failed" | "cancelled";
 interface ActiveRun {
+  /** Unique from the moment the slot is reserved; the real run dir replaces it once the engine reports it. */
   runDir: string;
   planFile: string;
+  source: string;
+  domain: string;
   state: RunState;
   progress: RunProgress;
   controller: AbortController;
@@ -68,13 +72,8 @@ interface ActiveRun {
   failures?: string[];
   finishedAt?: number;
 }
-/** Runs started by this process, per den. In flight or finished; gone after a restart (the run dir on disk remains). */
-const registry = new Map<string, Map<string, ActiveRun>>();
-const runsOf = (den: string): Map<string, ActiveRun> => {
-  let m = registry.get(den);
-  if (!m) registry.set(den, (m = new Map()));
-  return m;
-};
+/** Finished runs kept for crawl_status; older ones are pruned (the run dir on disk is the record). */
+const KEEP_FINISHED = 5;
 
 export interface CrawlRunToolsInput {
   core: CrawlCore;
@@ -89,8 +88,20 @@ export interface CrawlRunToolsInput {
   onRunStart?: (ctx: ToolContext) => void;
 }
 
-export function createCrawlRunTools(i: CrawlRunToolsInput) {
+export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<typeof defineTool>[]; stop: () => void } {
   const { core, context, env, crawlHome, askCards } = i;
+  /** Runs started by THIS extension instance (the per-process registry); gone after a restart. */
+  const live = new Set<ActiveRun>();
+  let slots = 0;
+  const prune = () => {
+    const done = [...live].filter((r) => r.state !== "running").sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
+    for (const r of done.slice(0, Math.max(0, done.length - KEEP_FINISHED))) live.delete(r);
+  };
+  /** Teardown: abort what is in flight and forget everything. */
+  const stop = () => {
+    for (const r of live) if (r.state === "running") r.controller.abort();
+    live.clear();
+  };
   const bases = [crawlHome];
   const opsRoot = env.KB_OPS || undefined;
   const lane = (wolf: string) => ({ opsRoot, wolf });
@@ -210,11 +221,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
       const gate = core.validate(planPath);
       if (!gate.ok) return fail(`The plan is not ready to run (gate fails):\n  ${gate.failures.join("\n  ")}\nFinalize it with crawl_finalize first.`);
 
-      const live = runsOf(ctx.wolfDen);
-      const active = [...live.values()].find((r) => r.state === "running" && samePlan(r.planFile, plan));
-      if (active) return text(`A run of this plan is already in progress: ${active.runDir}. Use crawl_status to follow it.`);
-
-      const running = new Set([...live.values()].filter((r) => r.state === "running").map((r) => r.runDir));
+      const running = new Set([...live].filter((r) => r.state === "running").map((r) => r.runDir));
       const outstanding = findIncompleteRuns(plan, bases).filter((r) => !running.has(r.runDir));
 
       const concurrencyGiven = args.concurrency !== undefined && parseConcurrency(args.concurrency) !== undefined;
@@ -233,11 +240,30 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
         if (!resumeRun) return fail(`resume must be "fresh" or one of the outstanding runs:\n${outstanding.map((r) => `  ${r.runDir}`).join("\n") || "  (none)"}`);
       }
       const concurrency = parseConcurrency(args.concurrency) ?? envConcurrency();
+      // Nothing was asked (no cards here) yet unfinished runs exist: say that this started fresh, and why.
+      const startedFreshNote =
+        !resumeRun && args.resume === undefined && outstanding.length > 0
+          ? `\nNote: ${outstanding.length} unfinished run(s) of this plan exist (e.g. ${outstanding[0].runDir}), but this host cannot ask the user, so this started a FRESH run. To resume one instead, stop it with crawl_stop and call crawl_run with resume set to that run directory.`
+          : "";
 
-      i.onRunStart?.(ctx);
+      // From here to the reservation there is no await: two overlapping calls cannot both start a run of this plan.
+      const clash = [...live].find((r) => r.state === "running" && r.source === plan.source && r.domain === plan.domain);
+      if (clash) return text(`A run of this plan is already in progress: ${clash.runDir}. Use crawl_status to follow it.`);
       const progress = newRunProgress();
       const controller = new AbortController();
-      let runDir = resumeRun?.runDir ?? "";
+      const run: ActiveRun = {
+        runDir: resumeRun?.runDir ?? `pending-${++slots}`,
+        planFile: planPath,
+        source: plan.source,
+        domain: plan.domain,
+        state: "running",
+        progress,
+        controller,
+        concurrency,
+        resumed: !!resumeRun,
+      };
+      live.add(run);
+      i.onRunStart?.(ctx);
       let pending: Promise<RunCrawlResult>;
       try {
         pending = runner.run(resumeRun ? join(resumeRun.runDir, "plan.yaml") : planPath, {
@@ -246,18 +272,17 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
           sinkBase: crawlHome,
           signal: controller.signal,
           ...(resumeRun ? { only: resumeRun.missing, runDir: resumeRun.runDir } : {}),
-          ...(env.KB_BASE ? { kbBase: env.KB_BASE } : {}),
+          // Always explicit: a wolf without a KB must not fall back to the daemon's own KB_BASE.
+          kbBase: env.KB_BASE ?? "",
           onSink: (d) => {
-            runDir = d;
+            run.runDir = d;
           },
           onProgress: (p) => applyProgress(progress, p),
         });
       } catch (e) {
+        live.delete(run);
         return fail(`crawl run failed to start: ${e instanceof Error ? e.message : String(e)}`);
       }
-      if (!runDir) runDir = join(crawlHome, "run-unknown");
-      const run: ActiveRun = { runDir, planFile: planPath, state: "running", progress, controller, concurrency, resumed: !!resumeRun };
-      live.set(runDir, run);
       pending.then(
         (res) => {
           run.finishedAt = Date.now();
@@ -268,19 +293,21 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
             run.state = "gate-failed";
             run.failures = res.failures ?? [];
           }
+          prune();
         },
         (e) => {
           run.finishedAt = Date.now();
           run.state = "failed";
           run.error = e instanceof Error ? e.message : String(e);
+          prune();
         },
       );
       return text(
-        `Crawl ${resumeRun ? "resumed" : "started"} in the background → ${runDir}\n` +
+        `Crawl ${resumeRun ? "resumed" : "started"} in the background → ${run.runDir.startsWith("pending-") ? crawlHome : run.runDir}\n` +
           `  ${resumeRun ? `${resumeRun.missing.length} remaining batch(es)` : `${plan.batches.length} batch(es)`}, up to ${concurrency} at once.\n` +
           `It will take a while: tell the user it is running and do not wait for it. Follow progress with crawl_status, stop it with crawl_stop; ` +
-          `when it completes, crawl_release hands the result to the librarian (after the user confirms).`,
-        { details: { runDir, concurrency, resumed: !!resumeRun } },
+          `when it completes, crawl_release hands the result to the librarian (after the user confirms).${startedFreshNote}`,
+        { details: { runDir: run.runDir, concurrency, resumed: !!resumeRun } },
       );
     },
   });
@@ -305,11 +332,11 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
 
   const statusTool = defineTool({
     name: "crawl_status",
-    description: "Progress of the crawl run(s) started here (batches finished, failures, tokens) and the state of crawls on disk. Pass runDir for one run.",
+    description: "Progress of the crawl run(s) started by THIS process since it started (batches finished, failures, tokens; only the last few finished runs are kept) and the state of crawls on disk. After a restart only the disk state remains. Pass runDir for one run.",
     parameters: Type.Object({ runDir: Type.Optional(Type.String({ description: "A run directory (defaults to every run in flight and the recent crawls on disk)" })) }),
     async execute(args: { runDir?: string }, ctx: ToolContext) {
-      const live = [...runsOf(ctx.wolfDen).values()];
-      const pick = args.runDir ? live.filter((r) => r.runDir === args.runDir) : live;
+      const all = [...live];
+      const pick = args.runDir ? all.filter((r) => r.runDir === args.runDir) : all;
       const out: string[] = [];
       for (const r of pick) out.push(`${stateLine(r)}\n${renderProgress(r.progress)}`);
       const disk = listCrawls(bases, lane(ctx.wolfName)).filter((e) => !args.runDir || e.dir === args.runDir);
@@ -324,10 +351,10 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
 
   const stopTool = defineTool({
     name: "crawl_stop",
-    description: "Stop a running crawl: in-flight batches finish, nothing new starts; finished batches are kept and crawl_run can resume it.",
+    description: "Stop a crawl run started by THIS process (it cannot see runs from before a restart): in-flight batches finish, nothing new starts; finished batches are kept and crawl_run can resume it.",
     parameters: Type.Object({ runDir: Type.Optional(Type.String({ description: "The run to stop (defaults to the only one running)" })) }),
     async execute(args: { runDir?: string }, ctx: ToolContext) {
-      const running = [...runsOf(ctx.wolfDen).values()].filter((r) => r.state === "running" && (!args.runDir || r.runDir === args.runDir));
+      const running = [...live].filter((r) => r.state === "running" && (!args.runDir || r.runDir === args.runDir));
       if (running.length === 0) return fail("No crawl run is in progress here.");
       if (running.length > 1) return fail(`Several runs are in progress; pass runDir:\n${running.map((r) => `  ${r.runDir}`).join("\n")}`);
       running[0].controller.abort();
@@ -337,7 +364,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
 
   // ── crawl_release ────────────────────────────────────────────────────────
 
-  const releaseLabel = (runDir: string) => `Release crawl ${basename(runDir)} to the librarian?`;
+  /** The card label binds a yes to the numbers the user saw: a changed dry run (different digest) needs a fresh yes. */
+  const releaseLabel = (runDir: string, digest: string) => `Release crawl ${basename(runDir)} to the librarian? (${digest})`;
   /** First line of a successful release result (the spent-yes check reads it back; the colon ends the run name). */
 const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
   const firstLine = (m: { message: { content?: unknown } }): string => {
@@ -350,13 +378,13 @@ const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
     name: "crawl_release",
     description:
       "Review a finished crawl and release it to the librarian (a SHARED, one-way handoff into the KB inbox). Without `runDir` it asks which crawl when several qualify. " +
-      "It then shows what would be released and asks the user to confirm on a card (ends your turn); call it again after they say yes and it releases. Never pass `confirm` unless the user has confirmed in chat.",
+      "It then shows what would be released and asks the user to confirm on a card (ends your turn); call it again after they say yes and it releases. " +
+      "Where the user cannot be asked on a card it only shows the preview and never releases.",
     parameters: Type.Object({
       runDir: Type.Optional(Type.String({ description: "The crawl run directory (from crawl_status)" })),
-      confirm: Type.Optional(Type.Boolean({ description: "Only for hosts without cards: true once the user confirmed in chat." })),
     }),
     raisesCard: true,
-    async execute(args: { runDir?: string; confirm?: boolean }, ctx: ToolContext) {
+    async execute(args: { runDir?: string }, ctx: ToolContext) {
       const asks = await canAsk(ctx);
       let runDir = args.runDir;
       if (!runDir) {
@@ -415,31 +443,33 @@ const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
       if (!opsRoot) return text(`${review}\n\nThe KB is not configured here (no KB_OPS), so this cannot be released.`, { isError: true });
       if (journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
-      // The gate: a structured yes on this crawl's own confirm card (not model text), spent once a release followed it.
-      let go = false;
-      if (asks) {
-        const found = await ctx.conversation!.latestCard!("crawl_release", (c) => c.fields.length === 1 && c.fields[0].label === releaseLabel(dir));
-        if (found?.status === "pending") return waiting("release confirmation");
-        const yes = found?.status === "answered" && (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
-        const spent = found?.laterResults.some((m) => firstLine(m).startsWith(releasedLine(dir))) ?? false;
-        go = yes && !spent;
-        if (!go) {
-          const card = confirmCard({
-            tool: "crawl_release",
-            title: "Release to the librarian?",
-            question: releaseLabel(dir),
-            description:
-              `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → inbox lane "${ctx.wolfName}" → Dewey` +
-              `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
-              `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
-            confirmLabel: "Release",
-            rejectLabel: "Not now",
-          });
-          return text(`${review}\n\nConfirmation sent to the user as a card. Your turn ends here; if they say yes, call crawl_release again with the same runDir.`, { card });
-        }
-      } else {
-        go = args.confirm === true;
-        if (!go) return text(`${review}\n\n${toEmit} would be released (${unchanged} unchanged) — a SHARED, one-way handoff to the librarian. Ask the user to confirm, then call crawl_release again with confirm: true.`);
+      // No card, no release: without a user who can confirm in the console (a task-owned conversation, or a host without
+      // cards) this only previews. There is deliberately no model-supplied way around that.
+      if (!asks) {
+        return text(`${review}\n\n${toEmit} would be released (${unchanged} unchanged). NOT released: a release is a SHARED, one-way handoff to the librarian and needs the user's confirmation in the console, which is not available here. Ask the user to run crawl_release from a console conversation.`);
+      }
+
+      // The gate: a structured yes on this crawl's own confirm card (not model text), bound to this dry run's numbers
+      // by the digest in the label, and spent once a release followed it.
+      const digest = createHash("sha1").update(items.map((c) => `${c.denTopicId}:${c.status}:${c.bodyChars}`).join("|")).digest("hex").slice(0, 8);
+      const label = releaseLabel(dir, digest);
+      const found = await ctx.conversation!.latestCard!("crawl_release", (c) => c.fields.length === 1 && c.fields[0].label === label);
+      if (found?.status === "pending") return waiting("release confirmation");
+      const yes = found?.status === "answered" && (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
+      const spent = found?.laterResults.some((m) => firstLine(m).startsWith(releasedLine(dir))) ?? false;
+      if (!(yes && !spent)) {
+        const card = confirmCard({
+          tool: "crawl_release",
+          title: "Release to the librarian?",
+          question: label,
+          description:
+            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → inbox lane "${ctx.wolfName}" → Dewey` +
+            `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
+            `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
+          confirmLabel: "Release",
+          rejectLabel: "Not now",
+        });
+        return text(`${review}\n\nConfirmation sent to the user as a card. Your turn ends here; if they say yes, call crawl_release again with the same runDir.`, { card });
       }
 
       try {
@@ -456,15 +486,5 @@ const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
     },
   });
 
-  return [runTool, statusTool, stopTool, releaseTool];
-}
-
-/** Is the plan at `planFile` the same crawl (source + domain) as `plan`? */
-function samePlan(planFile: string, plan: { source: string; domain: string }): boolean {
-  try {
-    const p = readPlan(planFile);
-    return p.source === plan.source && p.domain === plan.domain;
-  } catch {
-    return false;
-  }
+  return { tools: [runTool, statusTool, stopTool, releaseTool], stop };
 }

@@ -53,7 +53,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
     return core.draft(o);
   };
 
-  const runTools = createCrawlRunTools({
+  const run = createCrawlRunTools({
     core,
     context,
     env,
@@ -179,7 +179,9 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
         },
       }),
 
-      ...runTools,
+      ...run.tools,
     ],
+    // Shutdown: abort in-flight crawl runs and forget them.
+    lifecycle: { stop: () => run.stop() },
   });
 }

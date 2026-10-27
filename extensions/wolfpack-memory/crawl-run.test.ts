@@ -5,7 +5,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { CardSchema } from "@wolfpack/protocol";
 import { validateAnswers } from "../../packages/harness/src/wolfd/cards.js";
@@ -102,7 +102,7 @@ function setup(opts: { cards?: boolean; opsRoot?: string | null } = {}) {
     await call("crawl_finalize", { planPath });
     return planPath;
   };
-  return { den, crawlHome, ops, calls, gates, behavior, call, cardLog, conv, plan, src, setConv: (n: number) => (convId = n) };
+  return { den, crawlHome, ops, calls, gates, behavior, ext, call, cardLog, conv, plan, src, setConv: (n: number) => (convId = n) };
 }
 
 /** An unfinished run of the plan: extraction began (observations.jsonl) and one of two batches is missing. */
@@ -117,9 +117,10 @@ function seedOutstanding(crawlHome: string, planPath: string, name: string, done
 
 beforeEach(() => {
   // a developer's KB env must not leak in
-  process.env.KB_BASE = "";
-  process.env.KB_OPS = "";
+  vi.stubEnv("KB_BASE", "");
+  vi.stubEnv("KB_OPS", "");
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe("crawl_run wizard card", () => {
   it("no outstanding run: one concurrency question (a plain card, no steps), skipped when given", async () => {
@@ -143,7 +144,7 @@ describe("crawl_run wizard card", () => {
     expect(t.calls.run[0].opts.concurrency).toBe(7);
   });
 
-  it("one outstanding run: a stepped card (resume/fresh/cancel, then concurrency); cancel hides the concurrency step", async () => {
+  it("one outstanding run: a stepped card (resume/fresh/cancel, then concurrency); cancel hides the concurrency step (its answer is dropped)", async () => {
     const t = setup();
     const planPath = await t.plan();
     const dir = seedOutstanding(t.crawlHome, planPath, "run-old");
@@ -157,7 +158,7 @@ describe("crawl_run wizard card", () => {
     expect(card.fields[1].showIf).toEqual({ field: "resume", oneOf: [dir, "fresh"] });
     // cancel: concurrency is neither required nor accepted
     expect(validateAnswers(card, { resume: { value: "cancel" } })).toBeUndefined();
-    expect(validateAnswers(card, { resume: { value: "cancel" }, concurrency: { value: "8" } })).toMatch(/not shown/);
+    expect(validateAnswers(card, { resume: { value: "cancel" }, concurrency: { value: "8" } })).toBeUndefined(); // tolerated; wolfd drops it
     expect(validateAnswers(card, { resume: { value: "fresh" } })).toMatch(/missing answer for field "concurrency"/);
     expect(validateAnswers(card, { resume: { value: dir }, concurrency: { value: "12" } })).toBeUndefined();
   });
@@ -302,14 +303,14 @@ describe("crawl_release", () => {
     const planPath = await t.plan();
     const dir = complete(t.crawlHome, planPath, "run-a");
     const first = await t.call("crawl_release", { runDir: dir });
-    expect(first.card?.fields[0]).toMatchObject({ kind: "confirm", label: `Release crawl run-a to the librarian?`, confirmLabel: "Release" });
+    expect(first.card?.fields[0]).toMatchObject({ kind: "confirm", label: expect.stringMatching(/^Release crawl run-a to the librarian\? \([0-9a-f]{8}\)$/), confirmLabel: "Release" });
     expect(first.card!.fields[0].description).toContain("**2** contribution(s)");
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
     // waiting for the answer: nothing happens, no second card
     const waiting = await t.call("crawl_release", { runDir: dir });
     expect(waiting.card).toBeUndefined();
     expect(waiting.endTurn).toBe(true);
-    // the model cannot self-confirm with an argument
+    // there is no model-supplied way to confirm: an extra argument changes nothing
     const sneaky = await t.call("crawl_release", { runDir: dir, confirm: true });
     expect(sneaky.card).toBeUndefined();
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
@@ -337,14 +338,79 @@ describe("crawl_release", () => {
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(1);
   });
 
-  it("without cards it needs the user's chat confirmation as confirm: true", async () => {
+  it("without cards, or in a task-owned conversation, it NEVER emits: preview only, confirm is ignored", async () => {
     const t = setup({ cards: false });
     const planPath = await t.plan();
     const dir = complete(t.crawlHome, planPath, "run-a");
-    const preview = await t.call("crawl_release", { runDir: dir });
-    expect(preview.card).toBeUndefined();
-    expect(preview.content[0].text).toContain("Ask the user to confirm");
+    for (const args of [{ runDir: dir }, { runDir: dir, confirm: true }]) {
+      const r = await t.call("crawl_release", args);
+      expect(r.card).toBeUndefined();
+      expect(r.content[0].text).toContain("NOT released");
+    }
+    // a task-owned conversation on a card-capable host
+    const t2 = setup();
+    const p2 = await t2.plan();
+    const d2 = complete(t2.crawlHome, p2, "run-b");
+    const sub = fakeConversation([], "task");
+    for (const args of [{ runDir: d2 }, { runDir: d2, confirm: true }]) {
+      const r = await t2.call("crawl_release", args, sub);
+      expect(r.card).toBeUndefined();
+      expect(r.content[0].text).toContain("NOT released");
+    }
     expect(t.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
-    expect((await t.call("crawl_release", { runDir: dir, confirm: true })).content[0].text).toContain("Released crawl run-a");
+    expect(t2.calls.emit.filter((e) => !e.dryRun)).toHaveLength(0);
+    expect(existsSync(join(dir, "emitted.json"))).toBe(false);
+  });
+});
+
+describe("teardown and start races", () => {
+  it("two overlapping crawl_run calls on one plan start exactly one run; no run is keyed 'run-unknown'", async () => {
+    const t = setup();
+    const planPath = await t.plan();
+    const [a, b] = await Promise.all([t.call("crawl_run", { planPath, concurrency: 5 }), t.call("crawl_run", { planPath, concurrency: 5 })]);
+    expect(t.calls.run).toHaveLength(1);
+    expect([a, b].filter((r) => r.content[0].text.includes("already in progress"))).toHaveLength(1);
+    expect(JSON.stringify([a, b])).not.toContain("run-unknown");
+  });
+
+  it("lifecycle.stop aborts in-flight runs and clears the registry", async () => {
+    const t = setup();
+    const planPath = await t.plan();
+    await t.call("crawl_run", { planPath, concurrency: 5 });
+    expect(t.ext.lifecycle?.stop).toBeTypeOf("function");
+    await t.ext.lifecycle!.stop!();
+    expect(t.calls.run[0].opts.signal?.aborted).toBe(true);
+    expect((await t.call("crawl_stop")).isError).toBe(true); // nothing registered any more
+    expect((await t.call("crawl_status")).content[0].text).not.toContain("RUNNING");
+    // the slot is free again
+    expect((await t.call("crawl_run", { planPath, concurrency: 5 })).content[0].text).toContain("started");
+  });
+
+  it("finished runs are pruned beyond the last few", async () => {
+    const t = setup();
+    const planPath = await t.plan();
+    for (let n = 0; n < 8; n++) {
+      await t.call("crawl_run", { planPath, concurrency: 5 });
+      t.gates.at(-1)!.release({ ok: true, dir: join(t.crawlHome, `run-${n + 1}`) });
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const text = (await t.call("crawl_status")).content[0].text;
+    expect(text.match(/COMPLETE/g)).toHaveLength(5);
+  });
+
+  it("without cards and with outstanding runs, the result says it started fresh and why", async () => {
+    const t = setup({ cards: false });
+    const planPath = await t.plan();
+    seedOutstanding(t.crawlHome, planPath, "run-old");
+    const r = await t.call("crawl_run", { planPath });
+    expect(r.content[0].text).toContain("started a FRESH run");
+  });
+
+  it("the run gets an explicit kbBase even when the wolf has none (never the daemon's env)", async () => {
+    vi.stubEnv("KB_BASE", "/daemon/kb");
+    const t = setup();
+    const planPath = await t.plan();
+    await t.call("crawl_run", { planPath, concurrency: 5 });
+    expect(t.calls.run[0].opts.kbBase).toBe("");
   });
 });

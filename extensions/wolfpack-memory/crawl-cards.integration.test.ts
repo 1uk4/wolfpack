@@ -199,7 +199,7 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect((await client.getThread(home)).status).toBe("idle");
   });
 
-  it("stepped crawl card: by-pattern skips the dependent depth field (not required, and rejected if sent)", async () => {
+  it("stepped crawl card: by-pattern skips the dependent depth field (not required, and dropped if sent)", async () => {
     const src = makeSource();
     let planArgs: unknown;
     const { client, home, drain } = await boot([
@@ -215,8 +215,8 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     await drain();
     const [p] = (await client.getThread(home)).pendingCards!;
     const base = { domain: { value: "wolfpack" }, strategy: { value: "by-pattern" }, scope: { value: "whole" } };
-    await expect(client.answerCard!(home, p.callId, { ...base, depth: { value: "2" } })).rejects.toMatchObject({ code: "invalid_request" });
-    await client.answerCard!(home, p.callId, base); // no depth answer: the field is hidden, so it is not required
+    // an older console that renders every field also sends depth: wolfd drops the hidden answer instead of rejecting
+    await client.answerCard!(home, p.callId, { ...base, depth: { value: "2" } });
     await drain();
     expect(planArgs).toEqual({ path: src, domain: "wolfpack", strategy: "by-pattern" });
     expect((await client.getThread(home)).messages.flatMap((m) => m.tools ?? []).find((t) => t.name === "ask_user_question")?.answer).toEqual(base);

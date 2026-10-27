@@ -125,8 +125,8 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     expect((p1.card.fields[0] as { options: { value: string }[] }).options.map((o) => o.value)).toEqual([state.seeded, "fresh", "cancel"]);
 
     await expect(b.client.answerCard!(b.home, p1.callId, { resume: { value: "fresh" } })).rejects.toMatchObject({ code: "invalid_request" }); // concurrency required
-    await expect(b.client.answerCard!(b.home, p1.callId, { resume: { value: "cancel" }, concurrency: { value: "8" } })).rejects.toMatchObject({ code: "invalid_request" }); // hidden
-    await b.client.answerCard!(b.home, p1.callId, { resume: { value: "cancel" } });
+    // an older console sends the hidden concurrency answer too: it is dropped, not an error
+    await b.client.answerCard!(b.home, p1.callId, { resume: { value: "cancel" }, concurrency: { value: "8" } });
     await b.drain();
     expect(reply).toContain("- Resume the outstanding crawl?: cancel");
     expect(reply).not.toContain("How many batches");

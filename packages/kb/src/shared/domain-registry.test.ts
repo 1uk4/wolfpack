@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatDomainChoices, listSubscribedDomains } from "./domain-registry.js";
+import { formatDomainChoices, listSubscribedDomains, readDomainRegistry } from "./domain-registry.js";
 
 function kb(): string {
   const base = mkdtempSync(join(tmpdir(), "kb-dom-"));
@@ -28,5 +28,15 @@ describe("listSubscribedDomains", () => {
   });
   it("formats choices", () => {
     expect(formatDomainChoices([{ name: "a" }, { name: "b" }])).toBe("a | b");
+  });
+});
+
+describe("readDomainRegistry color", () => {
+  it("passes an optional color through, only when set", () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-dom-"));
+    writeFileSync(join(base, "domains.yaml"), "domains:\n  a:\n    label: A\n    color: '#123456'\n  b:\n    label: B\n");
+    const r = readDomainRegistry(base);
+    expect(r.a.color).toBe("#123456");
+    expect("color" in r.b).toBe(false);
   });
 });

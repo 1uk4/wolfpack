@@ -36,6 +36,7 @@ import {
   type Actor,
   type AttachmentRef,
   type CardAnswers,
+  type CardClosed,
   type ConsolidateResponse,
   type ThreadStatus,
   type ErrorCode,
@@ -74,7 +75,7 @@ import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemo
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
-import { CardTracker, answerText, dropHiddenAnswers, validateAnswers } from "./cards.js";
+import { CardTracker, answerText, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -258,10 +259,10 @@ export class WolfServer {
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
         applyEntry(this.messages, ev.entry);
-        // A dismissal (plain submit superseding cards) changes thread status: wake waiters.
-        const dismissed = this.cards.apply(ev.entry);
-        this.syncCards(dismissed);
-        if (dismissed.length > 0) this.notify();
+        // A dismissal (a skip, or a plain submit superseding cards) changes thread status: wake waiters.
+        const closed = this.cards.apply(ev.entry);
+        this.syncCards(closed);
+        if ([...closed.values()].some((c) => c !== "answered")) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -300,14 +301,15 @@ export class WolfServer {
    * and wolf events (so the needs-you list sees every thread). Diffs the tracker against what was announced, so each
    * raise and each settle is announced exactly once whichever path (pump entry, answer ack) sees it first.
    */
-  private syncCards(dismissed: readonly string[] = []): void {
+  private syncCards(closedBy: ReadonlyMap<string, CardClosed> = new Map()): void {
     const live = new Map(this.cards.raisedCards().map((p) => [p.callId, p]));
     for (const callId of [...this.announced]) {
       if (live.has(callId)) continue;
       this.announced.delete(callId);
-      const outcome = dismissed.includes(callId) ? "dismissed" : "answered";
-      this.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome });
-      this.emit({ type: "card-settled", callId, outcome });
+      const closed = closedBy.get(callId) ?? "answered";
+      const outcome = closed === "answered" ? "answered" : "dismissed";
+      this.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
+      this.emit({ type: "card-settled", callId, outcome, closed });
     }
     for (const [callId, card] of live) {
       if (this.announced.has(callId)) continue;
@@ -449,6 +451,10 @@ export class WolfServer {
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
         return this.json(res, 200, await this.answerCard(params.callId, body.data.answers));
+      }
+      case "skipCard": {
+        this.checkThread(params.id);
+        return this.json(res, 200, await this.skipCard(params.callId));
       }
       case "createThread": {
         this.checkWolf(params.name);
@@ -729,6 +735,8 @@ export class WolfServer {
 
   private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
     const before = this.turnStarts;
+    // The model is told which pending cards this message replaces (the history strips the note again).
+    text = supersededNotes(this.cards.pending()) + text;
     let input: SubmitOptions["input"] = text;
     if (refs.length > 0) {
       if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
@@ -770,7 +778,18 @@ export class WolfServer {
     if (bad) throw new HttpError("invalid_request", bad);
     const answers = dropHiddenAnswers(pending.card, rawAnswers);
     // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
-    const ready = this.cards.answer(callId, answers);
+    return this.resolveCard(callId, this.cards.answer(callId, answers));
+  }
+
+  /** Skip a pending card: the agent is told, and a skip counts as the card's resolution among its siblings. */
+  private async skipCard(callId: string): Promise<SubmitAck> {
+    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+    if (!this.cards.get(callId)) throw new HttpError("not_found", `card ${callId}`);
+    return this.resolveCard(callId, this.cards.skip(callId));
+  }
+
+  /** After an answer or skip was recorded: hold it while siblings wait, else submit the whole turn's resolutions. */
+  private async resolveCard(callId: string, ready: ReturnType<CardTracker["answer"]>): Promise<SubmitAck> {
     if (!ready) {
       this.announceHeld(callId);
       this.notify();
@@ -794,7 +813,7 @@ export class WolfServer {
       r = await this.conv.submit({
         input: answerText(ready),
         whenBusy: "reject",
-        cardAnswers: { cards: ready.map(({ callId: id, answers: a }) => ({ callId: id, answers: a })) },
+        cardAnswers: { cards: ready.map(({ callId: id, answers: a, skipped }) => ({ callId: id, answers: a, ...(skipped ? { skipped } : {}) })) },
       });
     } catch (e) {
       this.cards.release(ids);
@@ -802,7 +821,7 @@ export class WolfServer {
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
     this.cards.settle(ids);
-    this.syncCards();
+    this.syncCards(new Map(ready.map((c): [string, CardClosed] => [c.callId, c.skipped ? "skipped" : "answered"])));
     if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
     return { messageId: r.messageId, disposition: r.disposition };
   }

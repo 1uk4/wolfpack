@@ -245,6 +245,29 @@ describe("structured yes detection", () => {
     expect(d.pendingCards).toHaveLength(1);
   });
 
+  it("a skipped card is a no: nothing ships, the model is told it was skipped, and confirm:false cannot ship", async () => {
+    const t = add({ kind: "task", title: "Skip me" });
+    let seen = "";
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { id: t.id })),
+      (context) => {
+        seen = lastUserText(context as never);
+        return toolUse(fauxToolCall("task_done", { id: t.id, confirm: false })); // tries to ship anyway
+      },
+      fauxAssistantMessage("ok, not shipping"),
+    ]);
+    await tw.submit("finish");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect((await tw.client.skipCard!(tw.home, p.callId)).disposition).toBe("started");
+    await drain(tw);
+    expect(seen).toBe(`The user skipped your task_done question (call ${p.callId}).`);
+    expect(items.get(t.id)!.stage).toBe("approved");
+    const d = await tw.client.getThread(tw.home);
+    expect(d.messages.flatMap((m) => m.tools ?? []).find((c) => c.callId === p.callId)).toMatchObject({ closed: "skipped" });
+    expect(d.pendingCards).toHaveLength(1); // a fresh question, not a ship
+    expect(d.pendingCards![0].callId).not.toBe(p.callId);
+  });
+
   it("a dismissed card (plain submit supersedes it) is not a yes", async () => {
     const t = add({ kind: "task", title: "Dismissed" });
     tw = await wolf([

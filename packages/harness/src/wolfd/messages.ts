@@ -19,9 +19,11 @@
  */
 import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
-import { answerValue } from "./cards.js";
+import { answerValue, stripSupersededNotes } from "./cards.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
+
+const SKIPPED_RESULT = "(skipped by the user)";
 
 export function messageFromEntry(entry: Entry, now: () => Date = () => new Date()): ThreadMessage | undefined {
   if (entry.kind !== USER_ENTRY_KIND && entry.kind !== "pi.assistant") return undefined;
@@ -37,6 +39,7 @@ export function messageFromEntry(entry: Entry, now: () => Date = () => new Date(
       .join("");
   }
   if (role === "assistant" && text === "") return undefined;
+  if (role === "user") text = stripSupersededNotes(text);
   const at = typeof msg.timestamp === "number" ? new Date(msg.timestamp) : now();
   return { id: `entry-${entry.id}`, role, text, at: at.toISOString() };
 }
@@ -177,11 +180,20 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
   }
   if (entry.kind === CARD_ANSWER_KIND) {
     // A card answer is not a chat message: it resolves the call that raised the card (the answer is that call's result).
-    for (const { callId, answers } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+    for (const { callId, answers, skipped } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
       for (let i = list.length - 1; i >= 0; i--) {
         const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
         if (!call) continue;
+        if (skipped) {
+          // `dismissed` stays true for clients that predate `closed`.
+          call.dismissed = true;
+          call.closed = "skipped";
+          call.result = SKIPPED_RESULT;
+          call.isError = false;
+          break;
+        }
         call.answer = answers;
+        call.closed = "answered";
         call.result = call.card ? visibleFields(call.card, answers).map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
         call.isError = false;
         break;
@@ -195,7 +207,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     if (m.role === "user") {
       // Only messages after the previous user message can hold cards still waiting (earlier ones were dismissed then).
       for (let i = list.length - 1; i >= 0 && list[i].role !== "user"; i--) {
-        for (const call of list[i].tools ?? []) if (call.card && !call.answer) call.dismissed = true;
+        for (const call of list[i].tools ?? []) if (call.card && !call.answer && !call.closed) Object.assign(call, { dismissed: true, closed: "superseded" });
       }
     }
     list.push(m);

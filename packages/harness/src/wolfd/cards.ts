@@ -10,7 +10,7 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import { visibleFields, type Card, type CardAnswers, type CardFieldAnswer, type CardOption, type PendingCard } from "@wolfpack/protocol";
+import { visibleFields, type Card, type CardAnswers, type CardClosed, type CardFieldAnswer, type CardOption, type PendingCard } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -19,12 +19,17 @@ export interface ReadyAnswer {
   callId: string;
   card: Card;
   answers: CardAnswers;
+  /** The operator skipped this card: `answers` is empty and the model is told it was skipped. */
+  skipped?: true;
 }
+
+/** A sibling's recorded resolution while the others still wait: answers, or an explicit skip. */
+type Held = { answers: CardAnswers } | { skipped: true };
 
 export class CardTracker {
   /** Raised, unanswered cards in raise order. */
   private readonly raised = new Map<string, { card: Card; raisedAt: string }>();
-  private readonly held = new Map<string, CardAnswers>();
+  private readonly held = new Map<string, Held>();
   /** Calls whose answer is being submitted: no longer answerable. */
   private readonly claimed = new Set<string>();
 
@@ -37,19 +42,26 @@ export class CardTracker {
     for (const e of entries) this.apply(e);
   }
 
-  /** Fold one engine entry. Returns the calls a plain user message dismissed (empty otherwise). */
-  apply(entry: Entry): string[] {
+  /** Fold one engine entry. Returns how each card it closed was closed (empty when none). */
+  apply(entry: Entry): Map<string, CardClosed> {
+    const closed = new Map<string, CardClosed>();
     if (entry.kind === CARD_ANSWER_KIND) {
-      for (const c of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) this.drop(c.callId);
-      return [];
+      for (const c of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+        if (this.raised.has(c.callId)) closed.set(c.callId, c.skipped ? "skipped" : "answered");
+        this.drop(c.callId);
+      }
+      return closed;
     }
     // NOTE: any future system writer of `pi.user` entries (reminders, injected context) would dismiss pending cards.
-    if (entry.kind === USER_ENTRY_KIND) return this.dismissAll();
-    if (!entry.kind.startsWith("pi.tool")) return [];
+    if (entry.kind === USER_ENTRY_KIND) {
+      for (const id of this.dismissAll()) closed.set(id, "superseded");
+      return closed;
+    }
+    if (!entry.kind.startsWith("pi.tool")) return closed;
     const msg = entry.model?.[0] as { toolCallId?: string; timestamp?: number } | undefined;
     const card = cardOfToolMessage(msg);
     if (msg?.toolCallId && card) this.raised.set(msg.toolCallId, { card, raisedAt: new Date(msg.timestamp ?? Date.now()).toISOString() });
-    return [];
+    return closed;
   }
 
   private drop(callId: string): void {
@@ -73,8 +85,15 @@ export class CardTracker {
   /** Every raised, not yet settled card, claimed ones included (an answer being submitted is still not settled). */
   raisedCards(): PendingCard[] {
     return [...this.raised].map(([callId, r]) => {
-      const heldAnswer = this.held.get(callId);
-      return { callId, threadId: this.threadId, card: r.card, raisedAt: r.raisedAt, ...(heldAnswer ? { heldAnswer } : {}) };
+      const held = this.held.get(callId);
+      return {
+        callId,
+        threadId: this.threadId,
+        card: r.card,
+        raisedAt: r.raisedAt,
+        ...(held && "answers" in held ? { heldAnswer: held.answers } : {}),
+        ...(held && "skipped" in held ? { heldSkip: true as const } : {}),
+      };
     });
   }
 
@@ -88,10 +107,22 @@ export class CardTracker {
    * answers for the same call cannot both complete.
    */
   answer(callId: string, answers: CardAnswers): ReadyAnswer[] | undefined {
-    this.held.set(callId, answers);
+    return this.resolve(callId, { answers });
+  }
+
+  /** Record a skip for the card: it counts as that card's resolution (same completion rule as `answer`). */
+  skip(callId: string): ReadyAnswer[] | undefined {
+    return this.resolve(callId, { skipped: true });
+  }
+
+  private resolve(callId: string, resolution: Held): ReadyAnswer[] | undefined {
+    this.held.set(callId, resolution);
     const open = [...this.raised].filter(([id]) => !this.claimed.has(id));
     if (open.some(([id]) => !this.held.has(id))) return undefined;
-    const ready = open.map(([id, r]) => ({ callId: id, card: r.card, answers: this.held.get(id)! }));
+    const ready = open.map(([id, r]): ReadyAnswer => {
+      const h = this.held.get(id)!;
+      return "answers" in h ? { callId: id, card: r.card, answers: h.answers } : { callId: id, card: r.card, answers: {}, skipped: true };
+    });
     for (const r of ready) this.claimed.add(r.callId);
     return ready;
   }
@@ -154,14 +185,33 @@ export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | 
   return a.value;
 }
 
-/** The model-facing user message for an answer submission: every card's questions with their answers, in raise order. */
+/** The model-facing user message for an answer submission: every card's questions with their answers (or skip), in raise order. */
 export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
-  for (const { callId, card, answers } of cards) {
+  for (const { callId, card, answers, skipped } of cards) {
+    if (skipped) {
+      lines.push(`The user skipped your ${card.tool} question (call ${callId}).`);
+      continue;
+    }
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
     for (const f of visibleFields(card, answers)) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * A note per pending card a plain message replaced, for the head of that message. Marked so the history strips it
+ * again (`stripSupersededNotes`): the operator sees only what they typed.
+ */
+export function supersededNotes(pending: readonly PendingCard[]): string {
+  return pending.map((p) => `(Your pending ${p.card.tool} question (call ${p.callId}) was superseded by this message.)\n`).join("") + (pending.length ? "\n" : "");
+}
+
+const SUPERSEDED_NOTE = /^(?:\(Your pending [^\n]*? question \(call [^\n]*?\) was superseded by this message\.\)\n)+\n/;
+
+/** The user's message without the superseded notes `supersededNotes` put at its head. */
+export function stripSupersededNotes(text: string): string {
+  return text.replace(SUPERSEDED_NOTE, "");
 }
 
 function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | undefined {

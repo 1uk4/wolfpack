@@ -110,6 +110,20 @@ export const ROUTES = {
     status: [200],
     error: err,
   },
+  /**
+   * Skip a pending card (`:callId` = the tool call that raised it) without answering. No body. The card closes as
+   * `skipped` (`ThreadToolCall.closed`, `dismissed: true` for older clients), the agent is told, and the ack is as for
+   * `answerCard` (the next turn's SubmitAck, or `queued` while a sibling card still waits: a skip counts as that
+   * card's resolution). Same errors as `answerCard`: 404 `not_found` for an unknown, superseded, skipped or answered
+   * card, 409 `busy` while a turn is running.
+   */
+  skipCard: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/skip",
+    response: { kind: "json", schema: SubmitAckSchema },
+    status: [200],
+    error: err,
+  },
   /** Cards waiting for the operator across this wolf's threads (the needs-you list). */
   listCards: { method: "GET", path: "/v1/wolves/:name/cards", response: { kind: "json", schema: ListCardsResponseSchema }, status: [200], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },

@@ -87,6 +87,8 @@ export interface ConsoleClient {
    * Rejects NotFoundError for an unknown / already-answered card, BusyError while a turn runs. Optional: the mock has no cards.
    */
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
+  /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
+  skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
   /** Cards waiting for the operator on this wolf (the needs-you list). Optional like answerCard. */
   listCards?(wolf: string): Promise<PendingCard[]>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */

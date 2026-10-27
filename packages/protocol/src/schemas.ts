@@ -267,6 +267,13 @@ export type CardFieldAnswer = z.infer<typeof CardFieldAnswerSchema>;
 export const CardAnswersSchema = z.record(z.string(), CardFieldAnswerSchema);
 export type CardAnswers = z.infer<typeof CardAnswersSchema>;
 
+/**
+ * How a card closed: `answered` (the operator submitted answers), `skipped` (the operator dismissed it explicitly; the
+ * agent was told), `superseded` (a plain chat message replaced it; the agent was told).
+ */
+export const CardClosedSchema = z.enum(["answered", "skipped", "superseded"]);
+export type CardClosed = z.infer<typeof CardClosedSchema>;
+
 /** A card waiting for the operator. `callId` is the tool call that raised it and identifies it in the answer command. */
 export const PendingCardSchema = z.object({
   callId: z.string(),
@@ -277,6 +284,8 @@ export const PendingCardSchema = z.object({
    * still pending: it can be answered again to change it until the last sibling is answered.
    */
   heldAnswer: CardAnswersSchema.optional(),
+  /** The operator skipped this card while sibling cards still wait (held, changeable like a held answer). */
+  heldSkip: z.boolean().optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
 });
@@ -328,8 +337,13 @@ export const ThreadToolCallSchema = z.object({
   card: CardSchema.optional(),
   /** The operator's answer to that card (absent while it is pending). The `result` then carries the answer text. */
   answer: CardAnswersSchema.optional(),
-  /** The card was superseded by a plain submit before it was answered: shown as skipped, no longer answerable. */
+  /**
+   * The card closed without an answer (skipped by the operator, or superseded by a plain submit): no longer answerable.
+   * Kept `true` for both so older clients still show it closed; `closed` tells the two apart.
+   */
   dismissed: z.boolean().optional(),
+  /** Additive: how the card closed. Absent while pending (and on servers that predate it: read `answer` / `dismissed`). */
+  closed: CardClosedSchema.optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -576,7 +590,8 @@ export const CardPendingEventSchema = base.extend({ type: z.literal("card-pendin
 /** How a pending card left the pending list: answered (the answer was submitted) or dismissed (a plain submit superseded it). */
 export const CardOutcomeSchema = z.enum(["answered", "dismissed"]);
 export type CardOutcome = z.infer<typeof CardOutcomeSchema>;
-export const CardSettledEventSchema = base.extend({ type: z.literal("card-settled"), callId: z.string(), outcome: CardOutcomeSchema });
+/** `closed` is additive and finer than `outcome` (a skip and a supersede are both `dismissed`, so older clients keep working). */
+export const CardSettledEventSchema = base.extend({ type: z.literal("card-settled"), callId: z.string(), outcome: CardOutcomeSchema, closed: CardClosedSchema.optional() });
 
 export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnStartEventSchema,
@@ -632,7 +647,7 @@ const wolfBase = z.object({ id: EventIdSchema, wolf: z.string(), at: IsoSchema }
 export const WolfThreadStatusEventSchema = wolfBase.extend({ type: z.literal("thread-status"), threadId: z.string(), status: ThreadStatusSchema });
 /** A card was raised (or its held answer changed). Same payload as the thread event. */
 export const WolfCardPendingEventSchema = wolfBase.extend({ type: z.literal("card-pending"), card: PendingCardSchema });
-export const WolfCardSettledEventSchema = wolfBase.extend({ type: z.literal("card-settled"), threadId: z.string(), callId: z.string(), outcome: CardOutcomeSchema });
+export const WolfCardSettledEventSchema = wolfBase.extend({ type: z.literal("card-settled"), threadId: z.string(), callId: z.string(), outcome: CardOutcomeSchema, closed: CardClosedSchema.optional() });
 /** The server cannot replay from the client's cursor: refetch threads and cards. */
 export const WolfResyncEventSchema = wolfBase.extend({ type: z.literal("resync") });
 
@@ -1037,6 +1052,14 @@ export const AnswerCardRequestSchema = z.object({
   answers: CardAnswersSchema,
 });
 export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
+
+/**
+ * Skip a pending card without answering it. The agent is told ("The user skipped your <tool> question (call X)") and,
+ * like an answer, the next turn starts once every sibling card of the turn is answered or skipped. Wire: the thread id
+ * and `callId` ride the path; there is no body.
+ */
+export const SkipCardRequestSchema = z.object({ threadId: z.string(), callId: z.string() });
+export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });

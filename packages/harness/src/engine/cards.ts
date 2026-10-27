@@ -30,7 +30,8 @@ export const CARD_ANSWER_KIND = "wolfpack.card-answer";
 export const USER_ENTRY_KIND = "pi.user";
 
 export interface CardAnswerData {
-  cards: { callId: string; answers: CardAnswers }[];
+  /** `skipped`: the operator skipped the card instead of answering (`answers` is then empty). Additive: absent on older entries. */
+  cards: { callId: string; answers: CardAnswers; skipped?: true }[];
 }
 
 /** What a tool returns to raise a card: model-facing placeholder text, the card in details, and terminate. */

@@ -144,3 +144,22 @@ wolfd accepts all of these for an optional visible field (a missing answer too, 
 answer normally. The model-facing answer text reads `- <label>: (skipped)` for a skipped optional field. A required
 field is unchanged (missing/blank single, multi below `min`, or missing confirm is still rejected). A field hidden by
 `showIf` is never required, optional or not. `ask_user_question` takes `optional` per question (and on a single `question`).
+
+## Skipping and superseding a card
+
+A card closes one of three ways, reported as `closed: "answered" | "skipped" | "superseded"` (additive, optional):
+
+- **answered** — the operator submitted answers (`POST .../cards/:callId/answer`).
+- **skipped** — the operator dismissed it explicitly: `POST /v1/threads/:id/cards/:callId/skip` (`skipCard`, no body; ack is the
+  `answerCard` ack). A skip is that card's resolution: with sibling cards of one turn the skip is held (`PendingCard.heldSkip`,
+  replaceable by an answer) until every sibling is answered or skipped, then ONE turn starts. The model reads
+  `The user skipped your <tool> question (call <id>).` (among the answered cards' text, in raise order). Tool gates read it as
+  "no": `CardLookup.status` is `"skipped"` and carries no answers, so `task_done` / `crawl_release` never treat it as a yes.
+- **superseded** — a plain chat message replaced the pending card. The model reads a note at the head of that message:
+  `(Your pending <tool> question (call <id>) was superseded by this message.)` per card, then a blank line. The thread history
+  strips the note again, so the operator's message shows as typed.
+
+Where it appears: `ThreadToolCall.closed` (history; absent while pending), `card-settled.closed` (thread and wolf events).
+Older clients keep working: `ThreadToolCall.dismissed: true` is still set for BOTH skipped and superseded, and `card-settled.outcome`
+stays `"answered" | "dismissed"` (`dismissed` for both). A skipped call's `result` is `(skipped by the user)` and has no `answer`.
+Skipping a card that is unknown, already closed, or held by a running turn is 404 `not_found` / 409 `busy`, as for answering.

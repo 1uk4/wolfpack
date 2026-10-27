@@ -127,8 +127,20 @@ export const CardSchema = z
     message: "a multi field's default must be a subset of its option values",
     path: ["fields"],
   })
-  .refine((c) => c.fields.every((f) => f.kind !== "multi" || ((f.min ?? 0) <= (f.max ?? Infinity) && (f.default === undefined || (f.default.length >= (f.min ?? 0) && f.default.length <= (f.max ?? Infinity))))), {
-    message: "a multi field needs min <= max, and its default must respect both",
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || new Set(f.default ?? []).size === (f.default ?? []).length), {
+    message: "a multi field's default must not repeat a value",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.min ?? 0) <= (f.max ?? Infinity)), {
+    message: "a multi field's min must not exceed its max",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.allowOther === true || (f.min ?? 0) <= f.options.length), {
+    message: "a multi field's min exceeds its number of options (and allowOther is not set), so it can never be satisfied",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.default === undefined || (f.default.length >= (f.min ?? 0) && f.default.length <= (f.max ?? Infinity))), {
+    message: "a multi field's default must respect its min and max",
     path: ["fields"],
   });
 export type Card = z.infer<typeof CardSchema>;

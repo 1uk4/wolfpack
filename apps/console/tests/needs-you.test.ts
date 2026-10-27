@@ -88,6 +88,27 @@ describe("needs-you list", () => {
 	});
 });
 
+describe("skipping a card", () => {
+	it("clears the needs-you row dot and the list, and tells the bridge closed:skipped", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const events: unknown[] = [];
+		const ac = new AbortController();
+		void (async () => {
+			for await (const ev of client.watchActivity!("1uk4", { signal: ac.signal })) events.push(ev);
+		})();
+		await new Promise((r) => setTimeout(r, 20));
+		client.raiseCard(HOME, ask("Q"), "c1");
+		assert.equal(threadListItem("1uk4", (await client.listThreads("1uk4"))[0]!).needsYou, true);
+		assert.equal((await createThreadApi(() => client).skipCard({ wolf: "1uk4", slug: "home" }, "c1")).status, 200);
+		assert.equal(threadListItem("1uk4", (await client.listThreads("1uk4"))[0]!).needsYou, false);
+		assert.deepEqual(buildNeedsYou((await collectNeedsYou(client)).reports), []);
+		await new Promise((r) => setTimeout(r, 20));
+		ac.abort();
+		assert.ok(events.some((e) => (e as { type?: string; closed?: string }).type === "card-settled" && (e as { closed?: string }).closed === "skipped"));
+		assert.equal((await createThreadApi(() => client).skipCard({ wolf: "1uk4", slug: "home" }, "c1")).status, 404);
+	});
+});
+
 describe("activity bridge", () => {
 	it("pokes the bus for a wolf's card and status changes, once per wolf", async () => {
 		const client = new MockConsoleClient({ delayMs: 0 });
@@ -182,6 +203,17 @@ describe("live card events in a thread (foldCardEvent)", () => {
 		assert.equal(dismissed.pending.length, 0);
 		assert.equal(dismissed.calls.c1?.dismissed, true);
 		assert.equal(foldCardEvent(c, { type: "card-settled", callId: "c1", outcome: "answered" }).pending.length, 0);
+		assert.equal(dismissed.calls.c1?.closed, "superseded", "a bare dismissal reads as superseded");
+	});
+
+	it("a skip settles the card as skipped; a held skip replaces a held answer", () => {
+		let c = foldCardEvent(NO_CARDS, { type: "card-pending", card: { ...pending, heldAnswer: { answer: { value: "x" } } } });
+		c = foldCardEvent(c, { type: "card-pending", card: { ...pending, heldSkip: true } });
+		assert.equal(c.calls.c1?.heldSkip, true);
+		assert.equal(c.calls.c1?.heldAnswer, undefined);
+		const skipped = foldCardEvent(c, { type: "card-settled", callId: "c1", outcome: "dismissed", closed: "skipped" });
+		assert.equal(skipped.pending.length, 0);
+		assert.equal(skipped.calls.c1?.closed, "skipped");
 	});
 });
 

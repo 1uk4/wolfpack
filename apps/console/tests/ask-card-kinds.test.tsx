@@ -62,11 +62,12 @@ const qa = (sel: string) => [...document.querySelectorAll(sel)] as HTMLElement[]
 const checked = () => qa('[data-testid="card-option"]').map((o) => o.getAttribute("aria-pressed"));
 const submit = () => q('[data-testid="card-submit"]')!;
 
-afterEach(async () => {
+async function unmountRoot() {
 	await act(async () => root?.unmount());
 	root = null;
 	document.body.innerHTML = "";
-});
+}
+afterEach(unmountRoot);
 
 describe("AskCard multi", () => {
 	it("renders checkboxes; toggling picks, Submit sends the list in click order", async () => {
@@ -172,11 +173,40 @@ describe("AskCard multi", () => {
 		assert.ok(rows.every((r) => r.hasAttribute("disabled")));
 	});
 
-	it("skipped (dismissed) shows no controls", async () => {
+	it("a bare dismissed (older server) reads as Superseded with no controls", async () => {
 		await mount(multi(), { dismissed: true, pending: false });
-		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
+		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /Superseded/);
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.ok(qa('[data-testid="card-option"]').every((r) => r.hasAttribute("disabled")));
+	});
+});
+
+describe("AskCard skip and closed badges", () => {
+	it("Skip sits next to Submit, calls onSkip without answering, and is disabled when not pending", async () => {
+		let skips = 0;
+		await mount(multi(), { onSkip: () => void skips++ });
+		await click(q('[data-testid="card-skip"]')!);
+		assert.equal(skips, 1);
+		assert.deepEqual(sent, []);
+		assert.ok(q('[data-testid="card-submit"]'));
+		await unmountRoot();
+		await mount(multi(), { onSkip: () => void skips++, pending: false });
+		assert.ok(q('[data-testid="card-skip"]')!.hasAttribute("disabled"));
+	});
+
+	it("each closed state has its own badge, styling and test hook", async () => {
+		const seen: Record<string, string | null> = {};
+		const cases: [string, CardAnswers | undefined][] = [["answered", { m: { value: ["a"] } }], ["skipped", undefined], ["superseded", undefined]];
+		for (const [closed, answer] of cases) {
+			await mount(multi(), { closed: closed as "answered", dismissed: closed !== "answered", answer, pending: false });
+			const badge = q('[data-testid="card-closed-badge"]')!;
+			assert.equal(badge.getAttribute("data-closed"), closed);
+			assert.equal(badge.textContent, ({ answered: "Answered", skipped: "Skipped", superseded: "Superseded" } as Record<string, string>)[closed]);
+			assert.equal(q('[data-testid="card-skip"]'), null);
+			seen[closed] = badge.getAttribute("class");
+			await unmountRoot();
+		}
+		assert.equal(new Set(Object.values(seen)).size, 3, "three distinct badge styles");
 	});
 });
 

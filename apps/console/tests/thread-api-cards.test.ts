@@ -19,3 +19,11 @@ describe("thread API: answerCard", () => {
 		assert.equal((await api.answerCard(ref, "c1", post({ answers: { answer: { value: "x" } } }))).status, 404);
 	});
 });
+
+describe("thread API: skipCard", () => {
+	const api = createThreadApi(() => new MockConsoleClient({ delayMs: 0 }));
+
+	it("404 for an unknown card", async () => {
+		assert.equal((await api.skipCard(ref, "c1")).status, 404);
+	});
+});

@@ -30,7 +30,7 @@ import {
   buildDomainContext,
   type RawObservation,
 } from "@wolfpack/memory";
-import { consolidatePool, durableSessionTopics, promoteSessionTopics, type ConsolidationResult } from "@wolfpack/harness/memory";
+import { consolidatePool, durableSessionTopics, promoteSessionTopics, stripSupersededNotes, type ConsolidationResult } from "@wolfpack/harness/memory";
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
@@ -211,6 +211,18 @@ const CRAWL_CHATTER = new Set(["crawl_run", "crawl_status", "crawl_stop", "crawl
 /** The message without crawl run/status/stop/release calls and results; undefined when nothing is left of it. */
 function withoutCrawlChatter(m: ConversationMessage["message"]): ConversationMessage["message"] | undefined {
   const msg = m as { role: string; toolName?: string; content?: unknown };
+  // A user message that superseded pending cards carries wolfd's note at its head: memory records what the user said.
+  if (msg.role === "user" && typeof msg.content === "string") {
+    const text = stripSupersededNotes(msg.content);
+    if (text !== msg.content) return { ...m, content: text } as ConversationMessage["message"];
+  } else if (msg.role === "user" && Array.isArray(msg.content)) {
+    const blocks = msg.content as { type?: string; text?: string }[];
+    const first = blocks.findIndex((b) => b.type === "text" && typeof b.text === "string");
+    if (first >= 0) {
+      const text = stripSupersededNotes(blocks[first].text!);
+      if (text !== blocks[first].text) return { ...m, content: blocks.map((b, i) => (i === first ? { ...b, text } : b)) } as ConversationMessage["message"];
+    }
+  }
   if (msg.role === "user" && typeof msg.content === "string" && /^The user answered your (crawl_run|crawl_release) question/.test(msg.content)) return undefined;
   if (msg.role === "toolResult" && msg.toolName && CRAWL_CHATTER.has(msg.toolName)) return undefined;
   if (msg.role === "assistant" && Array.isArray(msg.content)) {

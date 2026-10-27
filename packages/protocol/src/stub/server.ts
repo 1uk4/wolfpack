@@ -227,6 +227,9 @@ export class StubServer {
         // The stub's scripted turns raise no cards: every card id is unknown.
         throw new HttpError("not_found", `card ${params.callId}`);
       }
+      case "skipCard":
+        this.thread(params.id);
+        throw new HttpError("not_found", `card ${params.callId}`);
       case "abort": {
         const t = this.thread(params.id);
         t.followUps = [];

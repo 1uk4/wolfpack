@@ -20,7 +20,7 @@ describe("CardTracker", () => {
     const t = new CardTracker("w/home");
     t.reset([toolEntry(1, "a", card("A")), toolEntry(2, "b", card("B"))]);
     t.answer("a", { answer: { value: "x" } });
-    expect(t.apply(userEntry(3))).toEqual(["a", "b"]);
+    expect([...t.apply(userEntry(3))]).toEqual([["a", "superseded"], ["b", "superseded"]]);
     expect(t.pending()).toEqual([]);
     expect(t.get("a")).toBeUndefined();
   });

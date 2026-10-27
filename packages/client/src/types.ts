@@ -35,7 +35,7 @@ export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
 export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
-export type { Card, CardAnswers, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
+export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
 export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 
@@ -87,6 +87,8 @@ export interface ConsoleClient {
    * Rejects NotFoundError for an unknown / already-answered card, BusyError while a turn runs. Optional: the mock has no cards.
    */
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
+  /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
+  skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
   /** Cards waiting for the operator on this wolf (the needs-you list). Optional like answerCard. */
   listCards?(wolf: string): Promise<PendingCard[]>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */

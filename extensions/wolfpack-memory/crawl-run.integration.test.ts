@@ -133,6 +133,28 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     expect((await b.client.getThread(b.home)).status).toBe("idle");
   });
 
+  it("skipping the wizard card starts nothing and tells the model; the card reads closed:skipped", async () => {
+    const state = { root: undefined as string | undefined, planPath: "", seeded: "" };
+    let reply = "";
+    const b = await boot([
+      ...(prefix(makeSource(), state) as never[]),
+      (c: unknown) => {
+        reply = lastUser(c as never);
+        return fauxAssistantMessage("not running it");
+      },
+    ]);
+    state.root = b.root;
+    await b.client.submit(b.home, "run the crawl", { whenBusy: "reject" });
+    await b.drain();
+    const [p1] = (await b.client.getThread(b.home)).pendingCards!;
+    expect((await b.client.skipCard!(b.home, p1.callId)).disposition).toBe("started");
+    await b.drain();
+    expect(reply).toBe(`The user skipped your crawl_run question (call ${p1.callId}).`);
+    const d = await b.client.getThread(b.home);
+    expect(d.status).toBe("idle");
+    expect(d.messages.flatMap((m) => m.tools ?? []).find((t) => t.callId === p1.callId)).toMatchObject({ closed: "skipped", dismissed: true });
+  });
+
   it("fresh + 8 reach crawl_run (answers are held to one submission); the real engine refuses the scripted provider without any LLM call", async () => {
     const state = { root: undefined as string | undefined, planPath: "", seeded: "" };
     let reply = "";

@@ -433,6 +433,9 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await answer("nope/nope", { answers: {} }), "not_found");
       await expectError(await answer(threadId, { nope: 1 }), "invalid_request");
       await expectError(await answer(threadId, { answers: { a: { value: "x" } } }), "not_found");
+      const skip = (id: string) => post(buildPath("skipCard", { id, callId: "call-x" }), {});
+      await expectError(await skip("nope/nope"), "not_found");
+      await expectError(await skip(threadId), "not_found");
     });
 
     it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {

@@ -29,3 +29,5 @@ export {
   type MemoryEventDraft,
   type MemoryEventListener,
 } from "./events.js";
+
+export { stripSupersededNotes, supersededNotes, type SupersededCard } from "../superseded-note.js";

@@ -19,6 +19,11 @@ export function cardAnswerUrl(wolf: string, slug: string, callId: string): strin
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;
 }
 
+/** Where a pending card's skip is POSTed. */
+export function cardSkipUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/skip`;
+}
+
 /**
  * `onCardEvent` hears the thread's live card events (card-pending / card-settled): the cards are not part of the
  * message stream, so the chat folds them itself (see foldCardEvent).

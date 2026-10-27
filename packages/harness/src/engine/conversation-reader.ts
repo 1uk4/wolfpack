@@ -85,6 +85,7 @@ export function createConversationReader(harness: Harness): ConversationReader {
     if (!conv) return undefined;
     // Newest first: what is seen before the card is what happened after it.
     const answers = new Map<string, CardAnswers>();
+    const skipped = new Set<string>();
     const later: ConversationMessage[] = [];
     let userSince = false;
     let cursor: Awaited<ReturnType<Conversation["entries"]>>["next"];
@@ -94,7 +95,10 @@ export function createConversationReader(harness: Harness): ConversationReader {
         if (Number(entry.conversationId) !== id) continue;
         const kind = (entry as { kind?: string }).kind;
         if (kind === CARD_ANSWER_KIND) {
-          for (const c of ((entry as { data?: unknown }).data as CardAnswerData | undefined)?.cards ?? []) answers.set(c.callId, c.answers);
+          for (const c of ((entry as { data?: unknown }).data as CardAnswerData | undefined)?.cards ?? []) {
+            if (c.skipped) skipped.add(c.callId);
+            else answers.set(c.callId, c.answers);
+          }
           continue;
         }
         if (kind === USER_ENTRY_KIND) {
@@ -110,7 +114,7 @@ export function createConversationReader(harness: Harness): ConversationReader {
             continue;
           }
           const answered = answers.get(m.toolCallId);
-          return { callId: m.toolCallId, card, status: answered ? "answered" : userSince ? "dismissed" : "pending", ...(answered ? { answers: answered } : {}), laterResults: later };
+          return { callId: m.toolCallId, card, status: answered ? "answered" : skipped.has(m.toolCallId) ? "skipped" : userSince ? "dismissed" : "pending", ...(answered ? { answers: answered } : {}), laterResults: later };
         }
       }
       if (!page.next) break;

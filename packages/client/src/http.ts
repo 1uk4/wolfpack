@@ -122,6 +122,10 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
   }
 
+  async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
+    return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
+  }
+
   async listCards(wolf: string): Promise<PendingCard[]> {
     const r = await this.json("listCards", { name: wolf }, ROUTES.listCards.response.schema, undefined, wolf);
     return (r as { cards: PendingCard[] }).cards;

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
+import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -15,7 +15,7 @@ import type { InteractionCardProps } from "@/components/card-registry";
  * card, "Question" kicker, markdown question, option rows with an Other entry. Pending it is a form; answered it is the
  * static record. Defaults only pre-select; nothing submits until the operator presses Submit.
  */
-export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitting, onAnswer }: InteractionCardProps) {
+export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswer, heldSkip, pending, submitting, onAnswer, onSkip }: InteractionCardProps) {
 	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card, heldAnswer));
 	const [stepIdx, setStepIdx] = useState(0);
 	const rootRef = useRef<HTMLDivElement | null>(null);
@@ -33,7 +33,8 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 		setDraft(rest);
 	};
 	const answered = answer !== undefined;
-	const closed = answered || dismissed === true;
+	const closedKind = closedOf({ answer, dismissed, closed: closedProp });
+	const closed = closedKind !== undefined;
 	// Text typed into a multi "Other…" box but not yet added still counts on Submit (folded in, never lost).
 	const [typed, setTyped] = useState<Record<string, string>>({});
 	const typedRef = useRef(typed);
@@ -98,8 +99,9 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 
 	return (
 		<div
-			className="rounded-xl border bg-card p-4 text-card-foreground"
-			data-testid={dismissed ? "dismissed-card" : answered ? "answered-card" : "pending-card"}
+			className={cn("rounded-xl border bg-card p-4 text-card-foreground", closedKind && CLOSED_STYLE[closedKind].card)}
+			data-testid={closedKind === "skipped" || closedKind === "superseded" ? "dismissed-card" : answered ? "answered-card" : "pending-card"}
+			data-closed={closedKind}
 			data-card-tool={card.tool}
 			data-dictation-claimed={claimed || undefined}
 			{...dictationProps.root}
@@ -118,9 +120,14 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{card.title ?? "Question"}
-				{dismissed && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">skipped</span>}
+				{closedKind && (
+					<span data-testid="card-closed-badge" data-closed={closedKind} className={cn("ml-2 rounded px-1.5 py-0.5 font-semibold", CLOSED_STYLE[closedKind].badge)}>
+						{CLOSED_STYLE[closedKind].label}
+					</span>
+				)}
 				{!closed && !pending && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">waiting</span>}
-				{!closed && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
+				{!closed && heldSkip && <span data-testid="card-held-skip" className="ml-2 rounded bg-muted px-1.5 py-0.5">skip saved · waiting for the other questions</span>}
+				{!closed && !heldSkip && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
 			{stepped && steps.length > 1 && (
 				<div className="mb-2 text-xs text-muted-foreground" data-testid="card-step-indicator" aria-live="polite">
@@ -144,6 +151,11 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 			))}
 			{!closed && (
 				<div className="mt-3 flex justify-end gap-2">
+					{onSkip && (
+						<Button type="button" size="sm" variant="ghost" disabled={!pending || submitting} onClick={onSkip} data-testid="card-skip">
+							{heldAnswer && !heldSkip ? "Skip (discard saved answer)" : "Skip question"}
+						</Button>
+					)}
 					{stepped && step > 0 && (
 						<Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => goTo(step - 1)} data-testid="card-back">
 							Back
@@ -163,6 +175,13 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 		</div>
 	);
 }
+
+/** How each way of closing looks: a badge (label + colour) and a card accent, so a closed card is never just dimmed. */
+const CLOSED_STYLE = {
+	answered: { label: "Answered", badge: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", card: "border-l-4 border-l-emerald-500/60" },
+	skipped: { label: "Skipped", badge: "bg-amber-500/15 text-amber-700 dark:text-amber-400", card: "border-l-4 border-l-amber-500/60" },
+	superseded: { label: "Superseded", badge: "bg-slate-500/15 text-slate-700 dark:text-slate-300", card: "border-l-4 border-l-slate-400/60 border-dashed" },
+} as const;
 
 /** Ids of the fields currently shown: the visible ones, on the current step when the card is stepped. */
 function shownIds(card: InteractionCardProps["card"], draft: CardDraft, stepIdx: number): string[] {

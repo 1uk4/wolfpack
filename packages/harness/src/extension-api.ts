@@ -107,7 +107,8 @@ export interface ConversationMessage {
 export interface CardLookup {
   callId: string;
   card: Card;
-  status: "pending" | "answered" | "dismissed";
+  /** `dismissed`: superseded by a plain message; `skipped`: the operator skipped it (never a yes: `answers` is absent). */
+  status: "pending" | "answered" | "skipped" | "dismissed";
   answers?: CardAnswers;
   laterResults: ConversationMessage[];
 }

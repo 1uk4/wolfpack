@@ -17,7 +17,7 @@ import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { cardAnswerUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import {
@@ -26,6 +26,8 @@ import {
 	activeChecklist,
 	PROSE_BLOCK_CLASS,
 	foldCardEvent,
+	withHeldSkip,
+	withSkip,
 	parseThreadCards,
 	renderItems,
 	runOpen,
@@ -88,6 +90,7 @@ interface CardContext {
 	cards: ThreadCards;
 	answering: string | null;
 	onAnswer: (callId: string, answers: CardAnswers) => void;
+	onSkip: (callId: string) => void;
 }
 
 /** A tool call that raised an interaction card renders as that card (its renderer comes from the card registry). */
@@ -102,10 +105,13 @@ function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
 			card={call.card}
 			answer={call.answer}
 			dismissed={call.dismissed}
+			closed={call.closed}
 			heldAnswer={call.heldAnswer}
+			heldSkip={call.heldSkip}
 			pending={ctx.cards.pending.some((p) => p.callId === callId)}
 			submitting={ctx.answering === callId}
 			onAnswer={(answers) => ctx.onAnswer(callId, answers)}
+			onSkip={() => ctx.onSkip(callId)}
 		/>
 	);
 }
@@ -195,7 +201,8 @@ export function ThreadChat({
 		cardEventRef.current = (ev) => {
 			cardEpoch.current++;
 			setCards((c) => foldCardEvent(c, ev));
-			if (ev.type === "card-settled" && ev.outcome === "answered") void refreshCards();
+			// Answered or skipped: the record carries the result text.
+			if (ev.type === "card-settled" && (ev.outcome === "answered" || ev.closed === "skipped")) void refreshCards();
 		};
 	});
 	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
@@ -213,21 +220,22 @@ export function ThreadChat({
 		if (wasRunning && status === "ready") void refreshCards();
 	}, [status, refreshCards]);
 	const answerInFlight = useRef(false);
-	const onAnswer = useCallback(
-		async (callId: string, answers: CardAnswers) => {
+	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
+	const resolveCard = useCallback(
+		async (callId: string, answers?: CardAnswers) => {
 			if (answerInFlight.current) return; // double click / Enter: one POST
 			answerInFlight.current = true;
 			setAnswering(callId);
 			setCardError(null);
 			try {
-				const res = await fetch(cardAnswerUrl(wolf, slug, callId), {
+				const res = await fetch(answers ? cardAnswerUrl(wolf, slug, callId) : cardSkipUrl(wolf, slug, callId), {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ answers }),
+					body: answers ? JSON.stringify({ answers }) : undefined,
 				});
 				if (!res.ok) {
 					const body = (await res.json().catch(() => null)) as { error?: string } | null;
-					setCardError(body?.error ?? `Could not send the answer (${res.status}).`);
+					setCardError(body?.error ?? `Could not send the ${answers ? "answer" : "skip"} (${res.status}).`);
 					// 404: the card is gone (superseded or answered elsewhere): show the thread as it is now.
 					if (res.status === 404) void refreshCards();
 					return;
@@ -236,14 +244,14 @@ export function ThreadChat({
 				// Queued = sibling cards still wait: the wolf holds the answer and the card stays changeable.
 				// Otherwise the answer starts the next turn: attach to it.
 				if (ack.disposition === "queued") {
-					setCards((c) => withHeld(c, callId, answers));
+					setCards((c) => (answers ? withHeld(c, callId, answers) : withHeldSkip(c, callId)));
 					void refreshCards();
 				} else {
-					setCards((c) => withAnswer(c, callId, answers));
+					setCards((c) => (answers ? withAnswer(c, callId, answers) : withSkip(c, callId)));
 					resumeStream();
 				}
 			} catch (err) {
-				setCardError(err instanceof Error ? err.message : "Could not send the answer.");
+				setCardError(err instanceof Error ? err.message : `Could not send the ${answers ? "answer" : "skip"}.`);
 			} finally {
 				answerInFlight.current = false;
 				setAnswering(null);
@@ -251,7 +259,7 @@ export function ThreadChat({
 		},
 		[wolf, slug, resumeStream, refreshCards],
 	);
-	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void onAnswer(callId, answers) };
+	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after

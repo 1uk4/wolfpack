@@ -137,3 +137,10 @@ describe("wikilinkTargets", () => {
     expect(wikilinkTargets("a [[x|the x]] b [[y#h]] [[x]]\n```\n[[z]]\n```\n[[]]")).toEqual(["x", "y"]);
   });
 });
+
+describe("empty wikilink targets", () => {
+  it("brokenLinks flags them, wikilinkTargets skips them", () => {
+    expect(brokenLinks("a [[]] b [[ ]]", new Set())).toEqual([""]);
+    expect(wikilinkTargets("a [[]] b [[ ]]")).toEqual([]);
+  });
+});

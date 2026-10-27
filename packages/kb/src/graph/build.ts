@@ -44,6 +44,10 @@ export class UnknownDomainError extends Error {
   }
 }
 
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+const COLOR = /^(#[0-9a-f]{3}|#[0-9a-f]{6}|#[0-9a-f]{8}|(rgb|hsl)a?\([0-9.,%\s/-]+\)|[a-z]+)$/i;
+
 const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Domain folders present under `<kbBase>/domains/`, sorted. */
@@ -64,7 +68,7 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
   const domains: KbGraphDomain[] = [...new Set([...present, ...Object.keys(registry).filter((n) => isSafeSegment(n))])].sort().map((name) => ({
     name,
     label: registry[name]?.label ?? name.charAt(0).toUpperCase() + name.slice(1),
-    ...(registry[name]?.color ? { color: registry[name].color } : {}),
+    ...(registry[name]?.color && COLOR.test(registry[name].color!) ? { color: registry[name].color } : {}),
   }));
   if (opts.domain !== undefined && !present.includes(opts.domain)) throw new UnknownDomainError(opts.domain);
   const layers: KbGraphLayers = { archivedWork: opts.archivedWork === true, wikilinks: opts.wikilinks === true, denTopics: opts.denTopics === true };
@@ -111,10 +115,12 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
     const walk = (list: DigestSection[], parent: string) => {
       for (const s of list) {
         const sid = `sec:${s.sectionId}`;
+        if (nodes.has(sid)) continue; // id already taken (another domain, or repeated): keep the first
         addNode({ id: sid, kind: "section", label: cap(s.title, 60), domain, sectionId: s.sectionId, ...(s.summary ? { summary: s.summary } : {}), ...(s.currency ? { currency: s.currency } : {}) });
         hierarchy(parent, sid);
         for (const eid of s.entryIds) {
           if (!entryById.has(eid)) continue; // stale digest: the entry is gone
+          if (!placed.has(eid) && nodes.has(`ent:${eid}`)) continue; // owned by another domain: keep the first
           if (!placed.has(eid)) {
             placed.add(eid);
             addEntry(eid, s.sectionId);
@@ -126,7 +132,7 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
     };
     walk(sections, domNode);
     for (const e of entries) {
-      if (placed.has(e.id)) continue;
+      if (placed.has(e.id) || nodes.has(`ent:${e.id}`)) continue;
       placed.add(e.id);
       addEntry(e.id);
       hierarchy(domNode, `ent:${e.id}`);
@@ -138,8 +144,19 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
       .map((w) => ({ ...w, id: str(w.meta.id) ?? w.file.replace(/\.md$/, "") }))
       .filter((w) => layers.archivedWork || w.meta.stage !== "archived");
     const ids = new Set(live.map((w) => w.id));
+    const parentOf = new Map(live.map((w) => [w.id, str(w.meta.partOf)]));
+    const inCycle = (start: string) => {
+      const walked = new Set<string>();
+      for (let c = parentOf.get(start); c !== undefined && ids.has(c); c = parentOf.get(c)) {
+        if (c === start) return true;
+        if (walked.has(c)) return false;
+        walked.add(c);
+      }
+      return false;
+    };
     for (const w of live) {
-      const partOf = str(w.meta.partOf);
+      if (nodes.has(`work:${w.id}`)) continue; // owned by another domain: keep the first
+      const partOf = inCycle(w.id) ? undefined : str(w.meta.partOf);
       addNode({
         id: `work:${w.id}`,
         kind: "work",
@@ -163,7 +180,7 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
   if (layers.denTopics && opts.den) {
     const { wolf, topics } = opts.den;
     const denId = (t: string) => `den:${wolf}:${t}`;
-    for (const t of [...topics].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const t of [...topics].sort((a, b) => cmp(a.id, b.id))) {
       addNode({ id: denId(t.id), kind: "den-topic", label: cap(t.title || t.id, 60), wolf, ...(t.summary ? { summary: t.summary } : {}), ...(t.updated ? { updated: t.updated } : {}), promotable: t.promotable });
     }
     for (const t of topics) {
@@ -192,10 +209,10 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
       seen.add(key);
       return true;
     })
-    .sort((a, b) => a.source.localeCompare(b.source) || a.target.localeCompare(b.target) || a.kind.localeCompare(b.kind) || (a.relation ?? "").localeCompare(b.relation ?? ""));
+    .sort((a, b) => cmp(a.source, b.source) || cmp(a.target, b.target) || cmp(a.kind, b.kind) || cmp(a.relation ?? "", b.relation ?? ""));
 
   return {
-    nodes: [...nodes.values()].sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id)),
+    nodes: [...nodes.values()].sort((a, b) => a.depth - b.depth || cmp(a.id, b.id)),
     edges: clean,
     layers,
     domain: opts.domain ?? null,

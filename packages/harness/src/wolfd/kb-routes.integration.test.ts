@@ -99,6 +99,17 @@ describe("kb routes", { timeout: 30_000 }, () => {
     expect(g2.nodes.filter((n) => n.kind === "den-topic")).toEqual([]);
   });
 
+  it("denTopics on a wolf with no den reports the layer off, without error", async () => {
+    const kb = makeFixtureKb();
+    dirs.push(kb);
+    const server = new WolfServer({ name: "dewey", conversation: new ScriptedEngine(), librarian: true, kbRoots: { kbBase: kb, opsRoot: kb, denLocal: kb } });
+    servers.push(server);
+    await server.attach();
+    const g = KbGraphSchema.parse(await (await get(await server.listen(), "/v1/wolves/dewey/kb/graph?denTopics=true")).json());
+    expect(g.layers.denTopics).toBe(false);
+    expect(g.nodes.some((n) => n.kind === "den-topic")).toBe(false);
+  });
+
   it("entry route: detail with backlinks; unknown 404; malformed 400", async () => {
     const kb = makeFixtureKb();
     dirs.push(kb);

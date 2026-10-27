@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildKbGraph, UnknownDomainError } from "./build.js";
@@ -117,5 +118,59 @@ describe("readKbEntry", () => {
   });
   it("is null for unknown ids and for traversal", () => {
     for (const id of ["nope", "..", "../domains.yaml", "alpha/entries/kb-alpha-AAA1111", "", "a\0b", "bad"]) expect(readKbEntry(roots, id)).toBeNull();
+  });
+});
+
+const put = (file: string, text: string) => {
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, text);
+};
+
+describe("id consistency and edge cases", () => {
+  it("readKbEntry resolves a frontmatter id that differs from the filename, as the graph emits it", () => {
+    const kb = makeFixtureKb();
+    put(join(kb, "domains/alpha/entries/renamed-file.md"), "---\nid: kb-alpha-ZZZ9999\ntitle: Renamed\n---\nHello [[kb-alpha-AAA1111]]\n");
+    const g = buildKbGraph({ kbBase: kb });
+    expect(g.nodes.map((n) => n.id)).toContain("ent:kb-alpha-ZZZ9999");
+    expect(readKbEntry({ kbBase: kb }, "kb-alpha-ZZZ9999")).toMatchObject({ title: "Renamed", domain: "alpha" });
+    expect(readKbEntry({ kbBase: kb }, "renamed-file")).toBeNull();
+    expect(readKbEntry({ kbBase: kb }, "kb-alpha-AAA1111")!.backlinks).toContainEqual({ id: "kb-alpha-ZZZ9999", title: "Renamed", via: "wikilink" });
+  });
+  it("wikilinks to a non-work file in work/ do not exist, and backlinks are deduped", () => {
+    const kb = makeFixtureKb();
+    put(join(kb, "domains/alpha/entries/kb-alpha-AAA1111.md"), "---\nid: kb-alpha-AAA1111\ntitle: First\n---\n[[notes]] [[kb-alpha-BBB2222]]\n");
+    expect(readKbEntry({ kbBase: kb }, "kb-alpha-AAA1111")!.wikilinks).toEqual([{ target: "notes", exists: false }, { target: "kb-alpha-BBB2222", exists: true }]);
+    put(join(kb, "domains/alpha/entries/kb-alpha-BBB2222.md"), "---\nid: kb-alpha-BBB2222\ntitle: Second\n---\n[[kb-alpha-AAA1111]] [[kb-alpha-AAA1111|again]]\n");
+    expect(readKbEntry({ kbBase: kb }, "kb-alpha-AAA1111")!.backlinks.filter((b) => b.via === "wikilink")).toHaveLength(1);
+  });
+  it("an entry or section id claimed by two domains keeps the first and takes no edges from the second", () => {
+    const kb = makeFixtureKb();
+    put(join(kb, "domains/beta/entries/kb-alpha-AAA1111.md"), "---\nid: kb-alpha-AAA1111\ntitle: Dup\nrelations:\n  - kind: refines\n    target: kb-beta-DDD4444\n---\nx\n");
+    put(join(kb, "domains/beta/_digest.json"), JSON.stringify({ sections: [{ sectionId: "sec-alpha-top", title: "Dup", entryIds: ["kb-alpha-AAA1111"], children: [] }] }));
+    const g = buildKbGraph({ kbBase: kb });
+    expect(g.nodes.find((n) => n.id === "ent:kb-alpha-AAA1111")).toMatchObject({ domain: "alpha", label: "First" });
+    expect(g.nodes.find((n) => n.id === "sec:sec-alpha-top")!.domain).toBe("alpha");
+    expect(g.edges.some((e) => e.source === "dom:beta" && e.target === "sec:sec-alpha-top")).toBe(false);
+    expect(g.edges.some((e) => e.target === "ent:kb-alpha-AAA1111" && e.source.startsWith("dom:beta"))).toBe(false);
+    expect(g.edges.some((e) => e.source === "ent:kb-alpha-AAA1111" && e.target === "ent:kb-beta-DDD4444")).toBe(false);
+  });
+  it("work items in a partOf cycle attach to their domain", () => {
+    const kb = makeFixtureKb();
+    const w = (id: string, p: string) => put(join(kb, `domains/alpha/work/${id}.md`), `---\nid: ${id}\nnodeType: work\nstage: plan\npartOf: ${p}\n---\n`);
+    w("work-alpha-CYC1111", "work-alpha-CYC2222");
+    w("work-alpha-CYC2222", "work-alpha-CYC1111");
+    const g = buildKbGraph({ kbBase: kb });
+    expect(g.edges).toContainEqual({ source: "dom:alpha", target: "work:work-alpha-CYC1111", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "dom:alpha", target: "work:work-alpha-CYC2222", kind: "hierarchy" });
+    expect(g.edges.filter((e) => e.kind === "partOf" && e.source.includes("CYC"))).toEqual([]);
+  });
+  it("domains.yaml colours are validated", () => {
+    const kb = makeFixtureKb();
+    const colors = ["#abc", "#aabbcc", "#aabbccdd", "rgb(1, 2, 3)", "hsl(10 20% 30%)", "tomato", "url(x)", "#ggg", "red;x"];
+    put(join(kb, "domains.yaml"), "domains:\n" + colors.map((c, i) => `  d${i}:\n    label: D\n    color: '${c}'\n`).join(""));
+    for (let i = 0; i < colors.length; i++) mkdirSync(join(kb, `domains/d${i}`), { recursive: true });
+    const got = Object.fromEntries(buildKbGraph({ kbBase: kb }).domains.filter((d) => d.name.startsWith("d")).map((d) => [d.name, d.color]));
+    expect(Object.values(got).slice(0, 6)).toEqual(colors.slice(0, 6));
+    expect([got.d6, got.d7, got.d8]).toEqual([undefined, undefined, undefined]);
   });
 });

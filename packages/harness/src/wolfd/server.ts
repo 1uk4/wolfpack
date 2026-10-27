@@ -428,8 +428,8 @@ export class WolfServer {
           throw new HttpError("invalid_request", `${k} must be true or false`);
         };
         const domain = url.searchParams.get("domain") ?? undefined;
-        const denTopics = flag("denTopics");
-        // The den layer is this wolf's own den only, never another wolf's.
+        // The den layer is this wolf's own den only, never another wolf's; with no den it reports itself off.
+        const denTopics = flag("denTopics") && this.opts.den !== undefined;
         const den = denTopics && this.opts.den ? { wolf: this.name, topics: readDenTopics(this.opts.den) } : undefined;
         try {
           return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), wikilinks: flag("wikilinks"), denTopics, den }));

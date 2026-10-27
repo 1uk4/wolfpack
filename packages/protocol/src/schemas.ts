@@ -69,12 +69,29 @@ export const CardOptionSchema = z.object({
 });
 export type CardOption = z.infer<typeof CardOptionSchema>;
 
+/**
+ * A field shown only while an earlier field's answer matches: `equals` compares a single/free-text value or a confirm
+ * boolean; `oneOf` matches any of several single values. Exactly one of the two. A hidden field is neither shown nor
+ * required, and any answer it carries is rejected.
+ */
+export const FieldShowIfSchema = z
+  .object({
+    /** Id of the controlling field; it must be declared earlier in the card. */
+    field: z.string().min(1),
+    equals: z.union([z.string(), z.boolean()]).optional(),
+    oneOf: z.array(z.string()).min(1).optional(),
+  })
+  .refine((s) => (s.equals === undefined) !== (s.oneOf === undefined), { message: "showIf needs exactly one of equals / oneOf" });
+export type FieldShowIf = z.infer<typeof FieldShowIfSchema>;
+
 const cardFieldBase = z.object({
   /** Unique within the card; keys the answer. */
   id: z.string().min(1),
   label: z.string(),
   /** Extra context shown under the label. */
   description: z.string().optional(),
+  /** Conditional visibility (stepped/dependent cards); absent = always shown. */
+  showIf: FieldShowIfSchema.optional(),
 });
 export const FreeTextFieldSchema = cardFieldBase.extend({
   kind: z.literal("free-text"),
@@ -111,14 +128,46 @@ export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema
 export type CardField = z.infer<typeof CardFieldSchema>;
 export type CardFieldKind = CardField["kind"];
 
+export const CardStepSchema = z.object({
+  title: z.string().optional(),
+  /** Field ids shown on this step, in order. */
+  fields: z.array(z.string().min(1)).min(1),
+});
+export type CardStep = z.infer<typeof CardStepSchema>;
+
 export const CardSchema = z
   .object({
     /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
     tool: z.string(),
     title: z.string().optional(),
     fields: z.array(CardFieldSchema).min(1),
+    /**
+     * Optional stepped presentation: the fields grouped into ordered steps (every field in exactly one step; a step
+     * whose fields are all hidden by `showIf` is skipped). The answer is still ONE submission for the whole card.
+     * Absent = a single-page form.
+     */
+    steps: z.array(CardStepSchema).min(1).optional(),
   })
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
+  .refine(
+    (c) => {
+      const seen = new Set<string>();
+      return c.fields.every((f) => {
+        const ok = f.showIf === undefined || (seen.has(f.showIf.field) && f.showIf.field !== f.id);
+        seen.add(f.id);
+        return ok;
+      });
+    },
+    { message: "a field's showIf must reference a field declared before it", path: ["fields"] },
+  )
+  .refine(
+    (c) => {
+      if (!c.steps) return true;
+      const ids = c.steps.flatMap((s) => s.fields);
+      return ids.length === c.fields.length && new Set(ids).size === ids.length && ids.every((i) => c.fields.some((f) => f.id === i));
+    },
+    { message: "steps must list every field exactly once", path: ["steps"] },
+  )
   .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
     message: "a single field's default must be one of its option values",
     path: ["fields"],
@@ -144,6 +193,31 @@ export const CardSchema = z
     path: ["fields"],
   });
 export type Card = z.infer<typeof CardSchema>;
+
+/** Whether the answers so far satisfy a field's `showIf` (always true without one). */
+export function fieldVisible(field: CardField, answers: Readonly<Record<string, { value: unknown } | undefined>>): boolean {
+  const s = field.showIf;
+  if (!s) return true;
+  const v = answers[s.field]?.value;
+  if (s.equals !== undefined) return v === s.equals;
+  return typeof v === "string" && (s.oneOf ?? []).includes(v);
+}
+
+/**
+ * The fields in play for these answers: a field is hidden when its `showIf` fails OR its controlling field is itself
+ * hidden (so a chain collapses with its root).
+ */
+export function visibleFields(card: Card, answers: Readonly<Record<string, { value: unknown } | undefined>>): CardField[] {
+  const shown = new Set<string>();
+  const out: CardField[] = [];
+  for (const f of card.fields) {
+    if (f.showIf && !shown.has(f.showIf.field)) continue;
+    if (!fieldVisible(f, answers)) continue;
+    shown.add(f.id);
+    out.push(f);
+  }
+  return out;
+}
 
 /**
  * One answered field; the `value` type follows the field kind.

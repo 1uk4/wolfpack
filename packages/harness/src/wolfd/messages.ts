@@ -17,7 +17,7 @@
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
-import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
+import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 import { answerValue } from "./cards.js";
 
@@ -178,7 +178,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
         if (!call) continue;
         call.answer = answers;
-        call.result = call.card ? call.card.fields.map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
+        call.result = call.card ? visibleFields(call.card, answers).map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
         call.isError = false;
         break;
       }

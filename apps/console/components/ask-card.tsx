@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, draftAnswers, draftComplete, foldPendingOther, initialDraft, multiInBounds, type CardDraft } from "@/src/core";
+import { addCustomEntry, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -60,6 +60,15 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	};
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
+	// Stepped card: one step at a time with Back/Next; the answers stay in the draft until the single Submit on the last step.
+	// The step list follows the draft (a dependent step appears/vanishes with its controlling answer); `step` is clamped.
+	const stepped = card.steps !== undefined && !closed;
+	const steps = visibleSteps(card, folded.draft);
+	const [stepIdx, setStepIdx] = useState(0);
+	const step = Math.min(stepIdx, steps.length - 1);
+	const lastStep = step >= steps.length - 1;
+	const stepOk = Object.keys(folded.errors).length === 0 && fieldsComplete(steps[step]?.fields ?? [], folded.draft);
+	const shownFields = closed ? visibleFields(card, answered ? answer : draft) : stepped ? (steps[step]?.fields ?? []) : visibleFields(card, folded.draft);
 
 	return (
 		<div
@@ -75,7 +84,13 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 				{!closed && !pending && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">waiting</span>}
 				{!closed && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
-			{card.fields.map((f) => (
+			{stepped && steps.length > 1 && (
+				<div className="mb-2 text-xs text-muted-foreground" data-testid="card-step-indicator">
+					Step {step + 1} of {steps.length}
+					{steps[step]?.title ? ` · ${steps[step]?.title}` : ""}
+				</div>
+			)}
+			{shownFields.map((f) => (
 				<FieldView
 					key={f.id}
 					field={f}
@@ -89,10 +104,21 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 				/>
 			))}
 			{!closed && (
-				<div className="mt-3 flex justify-end">
-					<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
-						{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
-					</Button>
+				<div className="mt-3 flex justify-end gap-2">
+					{stepped && step > 0 && (
+						<Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => setStepIdx(step - 1)} data-testid="card-back">
+							Back
+						</Button>
+					)}
+					{stepped && !lastStep ? (
+						<Button type="button" size="sm" disabled={!pending || submitting || !stepOk} onClick={() => setStepIdx(step + 1)} data-testid="card-next">
+							Next
+						</Button>
+					) : (
+						<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
+							{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
+						</Button>
+					)}
 				</div>
 			)}
 		</div>

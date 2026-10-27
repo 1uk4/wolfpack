@@ -10,7 +10,7 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import type { Card, CardAnswers, CardFieldAnswer, CardOption, PendingCard } from "@wolfpack/protocol";
+import { visibleFields, type Card, type CardAnswers, type CardFieldAnswer, type CardOption, type PendingCard } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -144,7 +144,7 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
   for (const { callId, card, answers } of cards) {
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
-    for (const f of card.fields) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
+    for (const f of visibleFields(card, answers)) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
   }
   return lines.join("\n");
 }
@@ -189,12 +189,15 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
 
 /** Check answers against the card; returns the problem, or undefined when valid. */
 export function validateAnswers(card: Card, answers: CardAnswers): string | undefined {
-  for (const f of card.fields) {
+  const shown = visibleFields(card, answers);
+  for (const f of shown) {
     const a = answers[f.id];
     if (!a) return `missing answer for field "${f.id}"`;
     const problem = validateField(f, a);
     if (problem) return problem;
   }
   const extra = Object.keys(answers).find((k) => !card.fields.some((f) => f.id === k));
-  return extra ? `unknown field "${extra}"` : undefined;
+  if (extra) return `unknown field "${extra}"`;
+  const hidden = Object.keys(answers).find((k) => !shown.some((f) => f.id === k));
+  return hidden ? `field "${hidden}" is not shown for these answers (its showIf does not hold)` : undefined;
 }

@@ -22,6 +22,8 @@ import {
   openWolfEngine,
   createCardGuardExtension,
   resolveToolNames,
+  READONLY_TOOL_NAMES,
+  ReadOnlyTools,
   type ConfigureOptions,
   type EngineConversation,
   type ThinkingLevel,
@@ -153,7 +155,10 @@ async function startConfigured(
   // a child's conversation is configured with an explicit tool list that leaves them out.
   const subagentBridge = new SubagentBridge();
   const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name });
-  const extensions = [...toolExtensions, objectsExtension, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
+  // ls/grep/find/guarded_bash are always installed so subagent profiles can list them; the home and feature threads
+  // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
+  const readonlyOptIn = config.capability.tools.includes("readonly");
+  const extensions = [...(readonlyOptIn ? [] : [ReadOnlyTools]), ...toolExtensions, objectsExtension, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   // `prompts?.` is defensive: a stale engine dist predates the field and would crash wolfd boot.
   const contextFor = (at: string) => composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd: at, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
@@ -177,7 +182,7 @@ async function startConfigured(
     const desired: ConfigureOptions = {
       model: { provider: model.provider, modelId: model.modelId },
       ...(model.thinking ? { thinkingLevel: model.thinking as ThinkingLevel } : {}),
-      tools: withExtensionTools(tools, engine.toolNames()),
+      tools: withExtensionTools(tools, engine.toolNames()).filter((t) => readonlyOptIn || !(READONLY_TOOL_NAMES as readonly string[]).includes(t)),
       cwd,
       instructions: context.instructions,
     };

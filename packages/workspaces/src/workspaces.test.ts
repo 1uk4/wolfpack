@@ -167,6 +167,7 @@ describe("WriterGuard", () => {
 describe("isolation defaults", () => {
   it("detects writers", () => {
     expect(isWriter(["read", "grep"])).toBe(false);
+    expect(isWriter(["read", "grep", "find", "ls", "guarded_bash"])).toBe(false);
     expect(isWriter(["read", "bash"])).toBe(true);
     expect(isWriter(["Edit"])).toBe(true);
     expect(isWriter(["write"])).toBe(true);

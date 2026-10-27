@@ -2,6 +2,7 @@
 import { createCodingTools, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import type { Extension } from "@earendil-works/pi-durable";
+import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
 interface RegistryEntry {
   extension: Extension<never>;
@@ -115,6 +116,7 @@ const CodingTools = createCodingTools({ images: lazyImageProcessor() });
 
 const REGISTRY: Record<string, RegistryEntry> = {
   coding: { extension: CodingTools as unknown as Extension<never>, tools: ["read", "write", "edit", "bash"] },
+  readonly: { extension: ReadOnlyTools as unknown as Extension<never>, tools: READONLY_TOOL_NAMES },
 };
 
 export const TOOL_REGISTRY_NAMES: readonly string[] = Object.keys(REGISTRY);

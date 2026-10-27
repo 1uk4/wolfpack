@@ -67,3 +67,4 @@ export * from "./session-markdown.ts";
 export * from "./thread-adapter.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
+export * from "./memory-panel-model.ts";

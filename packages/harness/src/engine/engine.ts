@@ -113,6 +113,8 @@ export interface WolfEngine {
      * a background task of the owner, so aborting the owner's turn does not touch it. Returns the owning task's id.
      */
     createOwned(ownerId: string, init?: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
+    /** Terminate a subagent's owner task (it is abort-marked and ends `aborted`); the owned conversation's work is aborted with it. */
+    releaseOwner(taskId: string): Promise<void>;
   };
   /**
    * @internal test seam: the opened pi-durable Harness, for tests that must create forks and task-owned
@@ -240,8 +242,17 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
           (tx) => tx.createTask(SubagentOwner, {}, { ownership: { kind: "conversation" }, conversationId: Number(ownerId) as never, background: true }),
           ctx,
         );
-        const conv = await harness.createConversation({ ownership: { kind: "task", taskId }, agent: agentChange(init) }, ctx);
+        let conv: Conversation;
+        try {
+          conv = await harness.createConversation({ ownership: { kind: "task", taskId }, agent: agentChange(init) }, ctx);
+        } catch (e) {
+          await harness.abortTask(taskId, ctx).catch(() => {});
+          throw e;
+        }
         return { conversation: wrap(conv), taskId: String(taskId) };
+      },
+      async releaseOwner(taskId) {
+        await harness.abortTask(Number(taskId) as never, ctx);
       },
     },
     harness,

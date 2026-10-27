@@ -2,7 +2,7 @@
  * Subagents on a real wolf (startTestWolf: real sqlite + pi-durable, one scripted model answering every conversation):
  * spawn -> child thread -> result steer to the parent, resume, depth 1, questions to the parent, stop, restart.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +44,7 @@ function scriptedAgents(opts: { gate?: Promise<void> } = {}): { step: FauxRespon
       if (msg) return tool("subagent_message", { name: msg[1], message: msg[2] });
       const stop = /^stop\[(\w+)\]$/.exec(lastText);
       if (stop) return tool("subagent_stop", { name: stop[1] });
+      if (lastText === "card") return tool("ask_user_question", { question: "Proceed?" });
       if (lastText === "list") return tool("subagents_list", {});
       if (lastText === "try-nested") return tool("subagent", { agent: "tester", task: "nested" });
       if (/Sub-agent "\w+" asks/.test(lastText)) return tool("subagent_message", { name: "tester", message: "use main" });
@@ -67,6 +68,7 @@ function scriptedAgents(opts: { gate?: Promise<void> } = {}): { step: FauxRespon
 
 const many = (step: FauxResponseStep): FauxResponseStep[] => Array.from({ length: 40 }, () => step);
 
+const profile = (tools: string) => `---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: ${tools}\n---\n\nYou are a test agent. Do what the brief says.\n`;
 const PROFILE = "---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: read, grep\n---\n\nYou are a test agent. Do what the brief says.\n";
 
 async function boot(agents: { step: FauxResponseStep }, root?: string): Promise<TestWolf> {
@@ -424,5 +426,302 @@ describe("wolf activity", () => {
     const updates = seen.filter((e): e is Extract<WolfEvent, { type: "thread-updated" }> => e.type === "thread-updated").map((e) => e.thread);
     expect(updates[0]).toMatchObject({ kind: "subagent", state: "running", parentThreadId: tw.home });
     expect(updates.at(-1)).toMatchObject({ state: "done" });
+  });
+});
+
+// ------------------------------------------------------------------ robustness
+
+type Mgr = {
+  spawn(c: string, p: unknown): Promise<{ text: string; isError?: boolean }>;
+  persist(): void;
+  opts: { retryBaseMs?: number; createOwned: (...a: never[]) => Promise<never>; releaseOwner: (id: string) => Promise<void> };
+  port: { thread(id: string): { submit: (...a: never[]) => Promise<unknown> } | undefined };
+  releaseParent(id: string): Promise<void>;
+};
+const mgr = (w: TestWolf) => (w.wolf.server as unknown as { subagents: Mgr }).subagents;
+const wolfdFile = (w: TestWolf, f: string) => join(w.wolf.config.den, "wolfd", f);
+type Reg = { children: Array<Record<string, unknown> & { id: string; outbox: Array<{ n: number; id: string; text: string }> }> };
+const readReg = (w: TestWolf): Reg => JSON.parse(readFileSync(wolfdFile(w, "subagents.json"), "utf8"));
+const newRoot = () => {
+  const root = mkdtempSync(join(tmpdir(), "subagents-robust-"));
+  roots.push(root);
+  return root;
+};
+const aside = (w: TestWolf, dir: string, prefix: string) => readdirSync(join(w.wolf.config.den, "wolfd", dir)).filter((f) => f.includes(prefix));
+
+/** Boot, spawn one finished child, stop. Returns its thread id. */
+async function finishedChild(root: string, text = "spawn: first"): Promise<{ child: string; marker: string }> {
+  tw = await boot(scriptedAgents(), root);
+  await say(tw, text);
+  await parentSaw(tw, 'Sub-agent "tester" completed');
+  const [c] = await kids(tw);
+  const marker = /\[delivery ([^\]]+)\]/.exec((await texts(tw, tw.home)).join("\n"))![1];
+  await tw.stop();
+  tw = undefined;
+  return { child: c.id, marker };
+}
+
+describe("persistence robustness", () => {
+  it("a corrupt subagents.json is moved aside and the wolf boots without children", async () => {
+    const root = newRoot();
+    await finishedChild(root);
+    const den = join(root, "den");
+    void den;
+    tw = await boot(scriptedAgents(), root);
+    await tw.stop();
+    tw = undefined;
+    // corrupt it (the first boot above re-saved nothing, so write over the real file)
+    const probe = await boot(scriptedAgents(), root);
+    writeFileSync(wolfdFile(probe, "subagents.json"), "{ not json");
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    expect(await kids(tw)).toEqual([]);
+    expect(aside(tw, ".", "subagents.json.corrupt")).toHaveLength(1);
+  });
+
+  it("bad child records are skipped, good ones survive, missing fields default", async () => {
+    const root = newRoot();
+    const { child } = await finishedChild(root);
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    const good = { ...reg.children[0] } as Record<string, unknown>;
+    delete good.outbox;
+    delete good.tokens;
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify({ children: [good, { id: "x" }, null, { ...good, id: "y/1", state: "levitating" }] }));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    const list = await kids(tw);
+    expect(list.map((c) => c.id)).toEqual([child]);
+    expect(list[0].tokens).toBe(0);
+  });
+
+  it("a corrupt ledger is moved aside; the route answers an empty ledger", async () => {
+    const root = newRoot();
+    const { child } = await finishedChild(root);
+    tw = await boot(scriptedAgents(), root);
+    const f = join(tw.wolf.config.den, "wolfd", "ledgers", `${child.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`);
+    const lines = readFileSync(f, "utf8").split("\n").filter(Boolean);
+    writeFileSync(f, `${lines[0]}\nGARBAGE\n${lines[1]}\n`);
+    expect(await tw.client.getLedger!(child)).toEqual([]);
+    expect(aside(tw, "ledgers", ".corrupt-")).toHaveLength(1);
+    // a torn last line (a crash mid-append) just loses that line
+    writeFileSync(f, `${lines[0]}\n{"id":2,"at":`);
+    expect((await tw.client.getLedger!(child)).map((e) => e.kind)).toEqual(["brief"]);
+  });
+});
+
+describe("delivery", () => {
+  it("restart with a non-empty outbox: an entry the parent already holds is only removed; a new one arrives once", async () => {
+    const root = newRoot();
+    const { child, marker } = await finishedChild(root);
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    // crash between the steer and the outbox removal: the entry is still there, and marked sending
+    reg.children[0].outbox = [
+      { n: 50, id: marker, text: "duplicate of the delivered result", sending: true } as never,
+      { n: 51, id: "fresh.51", text: 'Sub-agent "tester" completed (0s).\n\nsecond result' },
+    ];
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    await parentSaw(tw, "Sub-agent", 2);
+    const all = (await texts(tw, tw.home)).join("\n");
+    expect(all).not.toContain("duplicate of the delivered result");
+    expect(all.split(`[delivery ${marker}]`)).toHaveLength(2);
+    expect(all.split("[delivery fresh.51]")).toHaveLength(2);
+    expect(readReg(tw).children.find((c) => c.id === child)!.outbox).toEqual([]);
+  });
+
+  it("finishing is one write: a done child always has its delivery queued (held parent)", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    const snaps: Array<{ state: string; outbox: number }> = [];
+    const m = mgr(tw);
+    const persist = m.persist.bind(m);
+    m.persist = () => {
+      persist();
+      for (const c of readReg(tw!).children) snaps.push({ state: String(c.state), outbox: c.outbox.length });
+    };
+    await say(tw, "spawn: SLOW work");
+    await say(tw, "card"); // the parent is idle with an open card: nothing is delivered
+    open();
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    expect(snaps.some((x) => x.state === "done")).toBe(true);
+    for (const x of snaps.filter((y) => y.state === "done")) expect(x.outbox).toBe(1);
+    expect(readReg(tw).children[0].outbox).toHaveLength(1);
+  });
+
+  it("a result for an idle parent with an open card is held, then flushed when its next turn starts", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    await say(tw, "spawn: SLOW work");
+    await say(tw, "card");
+    const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
+    open();
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
+    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    expect(readReg(tw).children[0].outbox).toEqual([]);
+  });
+
+  it("a delivery that fails is retried with backoff and arrives once", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    mgr(tw).opts.retryBaseMs = 20;
+    await say(tw, "spawn: SLOW work");
+    const parent = mgr(tw).port.thread(tw.home)!;
+    const real = parent.submit.bind(parent);
+    let failures = 0;
+    parent.submit = async (...a: never[]) => {
+      if (failures < 2) {
+        failures++;
+        throw new Error("transient");
+      }
+      return real(...a);
+    };
+    open();
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    expect(failures).toBe(2);
+    expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);
+  });
+
+  it("entries for a parent that is gone are dropped, with a ledger note", async () => {
+    const root = newRoot();
+    const { child } = await finishedChild(root);
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    reg.children[0].parentThreadId = "testwolf/ghost";
+    reg.children[0].outbox = [{ n: 9, id: "x.9", text: "lost" }];
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    await vi.waitFor(() => expect(readReg(tw!).children[0].outbox).toEqual([]));
+    expect((await tw.client.getLedger!(child)).some((e) => e.kind === "error" && e.text.includes("undeliverable"))).toBe(true);
+  });
+});
+
+describe("resume crash window", () => {
+  it("a resume whose submit never landed does not redeliver the previous answer", async () => {
+    const root = newRoot();
+    const { child } = await finishedChild(root);
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    const count = (await probe.client.getThread(child)).messages.length;
+    reg.children[0].resuming = { at: count }; // persisted, then the process died before the submit
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    await new Promise((r) => setTimeout(r, 300));
+    const [c] = await kids(tw);
+    expect(c.state).toBe("done");
+    expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);
+    expect(readReg(tw).children[0].resuming).toBeUndefined();
+  });
+
+  it("a resume that landed and finished before the crash delivers its (new) answer", async () => {
+    const root = newRoot();
+    const { child } = await finishedChild(root);
+    // run the resume for real, then pretend the process died before the result was recorded
+    tw = await boot(scriptedAgents(), root);
+    await say(tw, "message[tester]: again");
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+    const messages = (await tw.client.getThread(child)).messages.length;
+    await tw.stop();
+    tw = undefined;
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    reg.children[0].resuming = { at: messages - 2 };
+    reg.children[0].state = "running";
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    await parentSaw(tw, 'Sub-agent "tester" completed', 3);
+  });
+});
+
+describe("owner task lifecycle", () => {
+  it("lives while the child is active, ends when it is done, and a resume still works", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    await say(tw, "spawn: SLOW work");
+    await vi.waitFor(() => expect(readReg(tw!).children).toHaveLength(1));
+    expect(readReg(tw).children[0].ownerTaskId).not.toBe("");
+    open();
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    await vi.waitFor(() => expect(readReg(tw!).children[0].ownerTaskId).toBe(""));
+    await say(tw, "message[tester]: more");
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+  });
+
+  it("a stop ends the owner task; releasing a parent stops its children and ends their owners", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    await say(tw, "spawn: SLOW work");
+    await vi.waitFor(() => expect(readReg(tw!).children).toHaveLength(1));
+    await mgr(tw).releaseParent(tw.home);
+    expect((await kids(tw))[0].state).toBe("stopped");
+    expect(readReg(tw).children[0].ownerTaskId).toBe("");
+    open();
+  });
+
+  it("a spawn that cannot start is undone: no record, no thread, owner ended", async () => {
+    tw = await boot(scriptedAgents());
+    const m = mgr(tw);
+    const released: string[] = [];
+    const realCreate = m.opts.createOwned;
+    const realRelease = m.opts.releaseOwner;
+    m.opts.releaseOwner = async (id) => {
+      released.push(id);
+      return realRelease(id);
+    };
+    m.opts.createOwned = (async (...a: never[]) => {
+      const o = (await realCreate(...a)) as unknown as { conversation: { submit: unknown } };
+      o.conversation.submit = async () => {
+        throw new Error("no capacity");
+      };
+      return o as never;
+    }) as never;
+    await say(tw, "spawn: doomed");
+    const results = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.tools ?? []).map((t) => t.result);
+    expect(results.join("\n")).toContain("could not start");
+    expect(await kids(tw)).toEqual([]);
+    expect((await tw.client.listThreads("testwolf")).map((t) => t.kind)).toEqual(["home"]);
+    expect(released).toHaveLength(1);
+    expect(existsSync(wolfdFile(tw, "subagents.json")) ? readReg(tw).children : []).toEqual([]);
+  });
+});
+
+describe("isolation of the tool set", () => {
+  it("a parent's abort leaves its children running", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }));
+    await say(tw, "spawn: SLOW work");
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("running"));
+    await tw.client.abort(tw.home);
+    await new Promise((r) => setTimeout(r, 200));
+    const [c] = await kids(tw);
+    expect(c.state).toBe("running");
+    expect((await tw.client.getThread(c.id)).busy).toBe(true);
+    open();
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+  });
+
+  it("a profile that lists the spawn tools does not hand them to its child", async () => {
+    const agents = scriptedAgents();
+    tw = await boot(agents);
+    writeFileSync(join(tw.root, "agent", "agents", "tester.md"), profile("read, subagent, subagent_message, subagents_list, subagent_stop, grep"));
+    await say(tw, "spawn: plain");
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    const childCall = agents.calls.find((c) => c.child)!;
+    for (const t of ["subagent_message", "subagents_list", "subagent_stop", '"subagent"']) expect(childCall.request).not.toContain(t);
   });
 });

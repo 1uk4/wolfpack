@@ -21,7 +21,7 @@ import { readBindingFile } from "@wolfpack/memory";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { HttpError } from "./http-error.js";
-import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord } from "./subagent-store.js";
+import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord, type Delivery } from "./subagent-store.js";
 import type { ThreadRuntime, WolfEventDraft } from "./thread.js";
 
 /** The tools every spawn tool set shares; a child never gets them. */
@@ -38,12 +38,16 @@ export interface SubagentOptions {
   workspace: string;
   /** An existing conversation as it is stored (no reconciling with the home configuration: a child keeps its own). */
   getConversation(id: string): Promise<EngineConversation | undefined>;
+  /** Terminate a child's owner task (the parked task its conversation hangs under). */
+  releaseOwner(taskId: string): Promise<void>;
   /** A conversation owned by a parked task of `ownerId`. */
   createOwned(ownerId: string, init: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
   /** A tier resolved through the wolf's model table. Throws for a tier it cannot resolve. */
   resolveTier(tier: string): { provider: string; modelId: string; thinking?: string };
   /** Names of every tool the engine can offer a conversation. */
   registeredTools(): string[];
+  /** First delay (ms) before a failed delivery to a parent is tried again; doubles up to 30s. Default 500. */
+  retryBaseMs?: number;
 }
 
 /** What the manager needs from the server around it. */
@@ -54,6 +58,8 @@ export interface SubagentPort {
   threadOfConversation(conversationId: string): ThreadRuntime | undefined;
   /** Register a thread for an existing or new child conversation and attach it. */
   attachChild(summary: ThreadSummary, conv: EngineConversation): Promise<ThreadRuntime>;
+  /** Unregister (and close) a child's thread. */
+  detachChild(id: string): Promise<void>;
   emitWolf(draft: WolfEventDraft): void;
   onError(error: unknown): void;
   settleMs: number;
@@ -105,6 +111,8 @@ export class SubagentManager {
   private readonly ledgerSeq = new Map<string, number>();
   private deliverySeq = 0;
   private closed = false;
+  private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly retryDelay = new Map<string, number>();
 
   constructor(
     private readonly port: SubagentPort,
@@ -118,6 +126,8 @@ export class SubagentManager {
     this.closed = true;
     for (const off of this.unobserve.values()) off();
     for (const off of this.parentWatch.values()) off();
+    for (const t of this.retryTimers.values()) clearTimeout(t);
+    this.retryTimers.clear();
     this.unobserve.clear();
     this.parentWatch.clear();
   }
@@ -129,7 +139,7 @@ export class SubagentManager {
   }
 
   ledgerOf(childThreadId: string): LedgerEntry[] | undefined {
-    return this.records.some((r) => r.id === childThreadId) ? readLedger(this.port.den, childThreadId) : undefined;
+    return this.records.some((r) => r.id === childThreadId) ? readLedger(this.port.den, childThreadId, (e) => this.port.onError(e)) : undefined;
   }
 
   isChild(threadId: string): boolean {
@@ -230,6 +240,7 @@ export class SubagentManager {
     try {
       owned = await this.opts.createOwned(parent.conv.id, init);
     } catch (e) {
+      // (createOwned has already terminated the owner task if only the conversation failed)
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -257,19 +268,17 @@ export class SubagentManager {
     try {
       await this.attach(rec, owned.conversation);
     } catch (e) {
-      this.records = this.records.filter((r) => r !== rec);
-      this.persist();
+      await this.discard(rec);
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
-    this.ledger(rec, "parent", "child", "brief", params.task);
-    this.announce(rec);
     try {
       await owned.conversation.submit({ input: params.task, whenBusy: "reject" });
     } catch (e) {
-      this.setState(rec, "failed");
-      this.ledger(rec, "system", "parent", "error", `could not start: ${e instanceof Error ? e.message : String(e)}`);
-      return fail(`Sub-agent "${name}" was created but could not start: ${e instanceof Error ? e.message : String(e)}`);
+      await this.discard(rec);
+      return fail(`Sub-agent "${name}" could not start: ${e instanceof Error ? e.message : String(e)}`);
     }
+    this.ledger(rec, "parent", "child", "brief", params.task);
+    this.announce(rec);
 
     const notes = [
       missing.length ? `Notice: this runtime has no ${missing.join(", ")} tool${missing.length > 1 ? "s" : ""}; the sub-agent runs without ${missing.length > 1 ? "them" : "it"}.` : "",
@@ -345,27 +354,28 @@ export class SubagentManager {
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
     const live = thread.isRunning;
     if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
-    const before = { state: rec.state, finishedAt: rec.finishedAt, runStartedAt: rec.runStartedAt, step: rec.step };
     if (!live) {
-      // Resumed: running at once (the turn-start event may lag the submit), the new run's clock starts now.
-      rec.state = "running";
-      delete rec.finishedAt;
-      delete rec.step;
-      rec.runStartedAt = new Date().toISOString();
+      // Not `running` until the submit has landed; `resuming` (persisted first) lets recover() tell whether it did.
+      rec.resuming = { at: thread.messageCount() };
       this.persist();
-      this.announce(rec);
     }
     try {
       const ack = await thread.submit(text, whenBusy, refs);
+      if (!live) {
+        // The new run's clock starts now. (The turn-start event may already have set running.)
+        rec.runStartedAt = new Date().toISOString();
+        delete rec.finishedAt;
+        delete rec.step;
+        rec.state = "running";
+        this.persist();
+        this.announce(rec);
+      }
       this.ledger(rec, from, "child", live ? "steer" : "resume", text);
       return ack;
     } catch (e) {
       if (!live) {
-        Object.assign(rec, before);
-        if (before.finishedAt === undefined) delete rec.finishedAt;
-        if (before.step === undefined) delete rec.step;
+        delete rec.resuming;
         this.persist();
-        this.announce(rec);
       }
       throw e;
     }
@@ -400,7 +410,21 @@ export class SubagentManager {
           continue;
         }
         const thread = await this.attach(rec, conv);
-        if (rec.state === "running" || rec.state === "queued") {
+        if (rec.ownerTaskId && (rec.state === "done" || rec.state === "failed" || rec.state === "stopped") && !rec.resuming) void this.releaseOwnerOf(rec);
+        if (rec.resuming) {
+          // A resume was submitted: did it land before the crash?
+          const landed = thread.messageCount() > rec.resuming.at;
+          if (!landed) {
+            delete rec.resuming; // no: the previous answer was already handled, nothing to redo
+            this.persist();
+          } else if (thread.isRunning) {
+            rec.state = "running";
+            delete rec.finishedAt;
+            this.persist();
+          } else {
+            this.finishTurn(rec, thread, "complete"); // landed and finished: this is a NEW answer
+          }
+        } else if (rec.state === "running" || rec.state === "queued") {
           if (!thread.hadHistory) {
             // Crashed between creating the conversation and submitting the brief.
             await conv.submit({ input: rec.brief, whenBusy: "reject" });
@@ -470,10 +494,10 @@ export class SubagentManager {
     if (reason === "error") {
       const message = this.lastError.get(rec.id) ?? "the turn failed";
       this.lastError.delete(rec.id);
-      this.setState(rec, "failed");
       this.ledger(rec, "child", "parent", "error", message);
-      this.enqueue(
+      this.settle(
         rec,
+        "failed",
         `Sub-agent "${name}" failed after ${elapsed} (provider/agent error — auto-retry exhausted).\n\nError: ${message}\n\n` +
           `The subagent did not produce a result. You can retry by spawning a new subagent or resume the session with subagent_message.${followUp}`,
       );
@@ -485,35 +509,70 @@ export class SubagentManager {
         .flatMap((p) => p.card.fields.map((f) => f.label))
         .filter(Boolean)
         .join("\n");
-      rec.step = undefined;
-      this.setState(rec, "waiting");
       this.ledger(rec, "child", "parent", "question", question);
-      this.enqueue(
+      this.settle(
         rec,
+        "waiting",
         `Sub-agent "${name}" asks (${elapsed}):\n\n${question}\n\nReply with subagent_message({ name: "${name}", message: "…" }) — the same name works whether it is still running or has since exited. It stays open until you reply.`,
       );
       return;
     }
     const summary = thread.lastAssistantText() || "(no output)";
-    this.setState(rec, "done");
     this.ledger(rec, "child", "parent", "result", summary);
-    this.enqueue(rec, `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
+    this.settle(rec, "done", `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
   }
 
   private finishStopped(rec: ChildRecord, by: "parent" | "owner"): void {
     delete rec.stopping;
-    this.setState(rec, "stopped");
     this.ledger(rec, by, "child", "stop", by === "owner" ? "stopped by the operator" : "stopped by the parent");
     // The parent that stopped it knows; one stopped from the console has to be told.
-    if (by === "owner") this.enqueue(rec, `Sub-agent "${rec.name}" was stopped by the operator.\n\nFollow up with subagent_message({ name: "${rec.name}", message: "…" }) to resume it.`);
+    this.settle(rec, "stopped", by === "owner" ? `Sub-agent "${rec.name}" was stopped by the operator.\n\nFollow up with subagent_message({ name: "${rec.name}", message: "…" }) to resume it.` : undefined);
   }
 
   // ------------------------------------------------------------ delivery
 
-  private enqueue(rec: ChildRecord, text: string): void {
-    rec.outbox.push({ n: ++this.deliverySeq, text });
-    this.persist();
-    this.flush(rec.parentThreadId);
+  /**
+   * A turn is over: set the state and queue the message for the parent in ONE persist, so a crash can never leave a
+   * finished child with nothing to deliver (or a delivery for a child still marked running).
+   */
+  private settle(rec: ChildRecord, state: SubagentState, text?: string): void {
+    delete rec.resuming;
+    delete rec.step;
+    if (text !== undefined) {
+      const n = ++this.deliverySeq;
+      // The id must be unique across restarts (the counter restarts from the outbox): the parent-side check is by id.
+      rec.outbox.push({ n, id: `${rec.id.split("/").pop()}.${randomUUID().slice(0, 8)}`, text });
+    }
+    this.setState(rec, state);
+    if (state === "done" || state === "failed" || state === "stopped") void this.releaseOwnerOf(rec);
+    if (text !== undefined) this.flush(rec.parentThreadId);
+  }
+
+  /**
+   * Owner-task lifecycle. The parked owner task exists so the store knows the conversation is a child (memory quiet, no
+   * binding). It lives while the child is active (queued, running, waiting), and ends when the child reaches done, failed
+   * or stopped: a conversation whose owner task is terminal still runs turns (a resume works), and keeps its ownership
+   * record, so nothing is lost, while parked tasks stay bounded by the number of ACTIVE children. A spawn that never got
+   * going releases it too (discard), and so does releaseParent.
+   */
+  private async releaseOwnerOf(rec: ChildRecord): Promise<void> {
+    const taskId = rec.ownerTaskId;
+    if (!taskId) return;
+    try {
+      await this.opts.releaseOwner(taskId);
+      rec.ownerTaskId = "";
+      this.persist();
+    } catch (e) {
+      this.port.onError(e);
+    }
+  }
+
+  /** A parent thread is going away: stop its active children and end all their owner tasks. */
+  async releaseParent(parentThreadId: string): Promise<void> {
+    for (const rec of this.records.filter((r) => r.parentThreadId === parentThreadId)) {
+      if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") await this.stop(rec.id, "parent");
+      await this.releaseOwnerOf(rec);
+    }
   }
 
   /** Deliver everything waiting for `parentId`, oldest first, one at a time. */
@@ -529,21 +588,69 @@ export class SubagentManager {
   private async drain(parentId: string): Promise<void> {
     for (;;) {
       if (this.closed) return;
-      const parent = this.port.thread(parentId);
-      if (!parent) return;
-      // An idle parent with an unanswered card would have it dismissed by the message: hold until its next turn starts.
-      if (!parent.isRunning && parent.cards.pending().length > 0) return;
-      let next: { rec: ChildRecord; n: number; text: string } | undefined;
+      let next: { rec: ChildRecord; d: Delivery } | undefined;
       for (const rec of this.records) {
         if (rec.parentThreadId !== parentId) continue;
-        for (const d of rec.outbox) if (!next || d.n < next.n) next = { rec, n: d.n, text: d.text };
+        for (const d of rec.outbox) if (!next || d.n < next.d.n) next = { rec, d };
       }
       if (!next) return;
-      // Steer: into the parent's running turn, or, when it is idle, as the message that starts one.
-      await parent.submit(next.text, "steer");
-      next.rec.outbox = next.rec.outbox.filter((d) => d.n !== next!.n);
+      const parent = this.port.thread(parentId);
+      if (!parent) {
+        // The parent is gone: nobody can take these. Say so and drop them.
+        for (const rec of this.records) {
+          if (rec.parentThreadId !== parentId) continue;
+          for (const d of rec.outbox) {
+            this.ledger(rec, "system", "parent", "error", `undeliverable: parent thread ${parentId} is gone`);
+            this.port.onError(new Error(`subagent ${rec.id}: delivery ${d.id} dropped, parent ${parentId} is gone`));
+          }
+          rec.outbox = [];
+        }
+        this.persist();
+        return;
+      }
+      // An idle parent with an unanswered card would have it dismissed by the message: hold until its next turn starts.
+      if (!parent.isRunning && parent.cards.pending().length > 0) return;
+      const { rec, d } = next;
+      // Exactly once: the id travels in the steer text. A crash after the submit but before the removal below leaves the
+      // entry here; the parent already holds the id, so it is only removed.
+      if (!parent.hasUserText(`[delivery ${d.id}]`)) {
+        d.sending = true;
+        this.persist();
+        try {
+          // Steer: into the parent's running turn, or, when it is idle, as the message that starts one.
+          await parent.submit(`${d.text}\n\n[delivery ${d.id}]`, "steer");
+        } catch (e) {
+          this.port.onError(e);
+          this.retryLater(parentId);
+          return;
+        }
+      }
+      this.retryDelay.delete(parentId);
+      rec.outbox = rec.outbox.filter((x) => x.n !== d.n);
       this.persist();
     }
+  }
+
+  /** A delivery failed: try this parent again after a growing delay (kept in the outbox meanwhile). */
+  private retryLater(parentId: string): void {
+    if (this.closed || this.retryTimers.has(parentId)) return;
+    const base = this.opts.retryBaseMs ?? 500;
+    const delay = Math.min(30_000, (this.retryDelay.get(parentId) ?? base / 2) * 2);
+    this.retryDelay.set(parentId, delay);
+    const t = setTimeout(() => {
+      this.retryTimers.delete(parentId);
+      this.flush(parentId);
+    }, delay);
+    t.unref();
+    this.retryTimers.set(parentId, t);
+  }
+
+  /** Undo a spawn that did not get going: forget the child, close its thread, end its owner task. */
+  private async discard(rec: ChildRecord): Promise<void> {
+    this.records = this.records.filter((r) => r !== rec);
+    this.persist();
+    await this.port.detachChild(rec.id).catch((e) => this.port.onError(e));
+    await this.opts.releaseOwner(rec.ownerTaskId).catch((e) => this.port.onError(e));
   }
 
   // ------------------------------------------------------------- helpers
@@ -628,7 +735,7 @@ export class SubagentManager {
   }
 
   private ledger(rec: ChildRecord, from: LedgerParty, to: LedgerParty, kind: LedgerKind, text: string): void {
-    const id = (this.ledgerSeq.get(rec.id) ?? readLedger(this.port.den, rec.id).length) + 1;
+    const id = (this.ledgerSeq.get(rec.id) ?? readLedger(this.port.den, rec.id, (e) => this.port.onError(e)).length) + 1;
     this.ledgerSeq.set(rec.id, id);
     try {
       appendLedger(this.port.den, rec.id, { id, at: new Date().toISOString(), from, to, kind, text });

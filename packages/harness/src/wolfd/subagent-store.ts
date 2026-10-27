@@ -5,14 +5,18 @@
  */
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { LedgerEntry, SubagentState } from "@wolfpack/protocol";
+import { LedgerEntrySchema, SubagentStateSchema, type LedgerEntry, type SubagentState } from "@wolfpack/protocol";
 import { quarantine } from "./threads.js";
 
 /** A message waiting to reach the parent thread (a result, a question, a failure). Kept until the parent took it. */
 export interface Delivery {
   /** Orders deliveries across children of one parent. */
   n: number;
+  /** Embedded in the steer text, so the parent side can tell it already took this one (exactly-once across a crash). */
+  id: string;
   text: string;
+  /** Set (and persisted) just before the steer is submitted: a restart that finds it checks the parent before sending again. */
+  sending?: boolean;
 }
 
 export interface ChildRecord {
@@ -38,6 +42,8 @@ export interface ChildRecord {
   tokens: number;
   /** The work item this child serves. */
   taskId?: string;
+  /** Set and persisted before a resume is submitted: the parent's message count then. Tells recover() whether the submit landed. */
+  resuming?: { at: number };
   /** Who is stopping it, set while the abort is in flight. */
   stopping?: "parent" | "owner";
   outbox: Delivery[];
@@ -47,6 +53,32 @@ const registryFile = (den: string) => join(den, "wolfd", "subagents.json");
 const ledgerDir = (den: string) => join(den, "wolfd", "ledgers");
 const ledgerFile = (den: string, id: string) => join(ledgerDir(den), `${id.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`);
 
+const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+
+/** A record from disk made safe to use, or the reason it is not. */
+function checkRecord(raw: unknown): ChildRecord | string {
+  if (!raw || typeof raw !== "object") return "not an object";
+  const r = raw as Record<string, unknown>;
+  for (const k of ["id", "conversationId", "parentThreadId", "agent", "name", "startedAt"]) if (!str(r[k])) return `missing ${k}`;
+  if (!SubagentStateSchema.safeParse(r.state).success) return `bad state ${JSON.stringify(r.state)}`;
+  const tokens = typeof r.tokens === "number" && Number.isFinite(r.tokens) && r.tokens >= 0 ? Math.floor(r.tokens) : 0;
+  const outbox = Array.isArray(r.outbox)
+    ? (r.outbox as unknown[]).filter((d): d is Delivery => !!d && typeof d === "object" && typeof (d as Delivery).n === "number" && typeof (d as Delivery).text === "string").map((d) => ({ ...d, id: str(d.id) ? d.id : `${String(r.id).split("/").pop()}.${d.n}` }))
+    : [];
+  return {
+    ...(r as unknown as ChildRecord),
+    brief: typeof r.brief === "string" ? r.brief : "",
+    tier: typeof r.tier === "string" ? r.tier : "smart",
+    cwd: typeof r.cwd === "string" ? r.cwd : "",
+    isolation: r.isolation === "worktree" ? "worktree" : "none",
+    ownerTaskId: typeof r.ownerTaskId === "string" ? r.ownerTaskId : "",
+    runStartedAt: str(r.runStartedAt) ? r.runStartedAt : (r.startedAt as string),
+    tokens,
+    outbox,
+  };
+}
+
+/** The saved children. Bad records are skipped and reported; an unreadable file is quarantined (see threads.ts). */
 export function loadChildren(den: string, onError?: (e: unknown) => void): ChildRecord[] {
   const file = registryFile(den);
   let raw: string;
@@ -58,9 +90,15 @@ export function loadChildren(den: string, onError?: (e: unknown) => void): Child
     return [];
   }
   try {
-    const parsed = JSON.parse(raw) as { children?: ChildRecord[] };
+    const parsed = JSON.parse(raw) as { children?: unknown[] };
     if (!parsed || !Array.isArray(parsed.children)) throw new Error("subagents.json has no children array");
-    return parsed.children.filter((c) => c && typeof c.id === "string" && typeof c.conversationId === "string" && typeof c.parentThreadId === "string");
+    const out: ChildRecord[] = [];
+    for (const c of parsed.children) {
+      const r = checkRecord(c);
+      if (typeof r === "string") onError?.(new Error(`subagents.json: skipped a child record (${r})`));
+      else out.push(r);
+    }
+    return out;
   } catch (e) {
     quarantine(file, e, onError);
     return [];
@@ -74,22 +112,42 @@ export function saveChildren(den: string, children: readonly ChildRecord[]): voi
   renameSync(tmp, registryFile(den));
 }
 
-export function readLedger(den: string, id: string): LedgerEntry[] {
+/**
+ * A child's ledger. A torn LAST line (a crash mid-append) is dropped; any other bad line, or an unreadable file, moves the
+ * file aside (`.corrupt-<ts>`, reported through `onError`) and the ledger starts empty. Never throws.
+ */
+export function readLedger(den: string, id: string, onError?: (e: unknown) => void): LedgerEntry[] {
+  const file = ledgerFile(den, id);
+  const aside = (cause: string): LedgerEntry[] => {
+    const to = `${file}.corrupt-${Date.now()}`;
+    try {
+      renameSync(file, to);
+      onError?.(new Error(`ledger ${file} was unreadable (${cause}); moved to ${to}`));
+    } catch (e) {
+      onError?.(new Error(`ledger ${file} is unreadable (${cause}) and cannot be moved aside: ${e instanceof Error ? e.message : String(e)}`));
+    }
+    return [];
+  };
   let raw: string;
   try {
-    raw = readFileSync(ledgerFile(den, id), "utf8");
+    raw = readFileSync(file, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw e;
+    return aside(e instanceof Error ? e.message : String(e));
   }
+  const lines = raw.split("\n").filter((l) => l.trim());
   const out: LedgerEntry[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
+  for (const [i, line] of lines.entries()) {
+    let entry: LedgerEntry | undefined;
     try {
-      out.push(JSON.parse(line) as LedgerEntry);
+      const r = LedgerEntrySchema.safeParse(JSON.parse(line));
+      if (r.success) entry = r.data;
     } catch {
-      /* a torn last line from a crash: skip it */
+      /* bad line */
     }
+    if (entry) out.push(entry);
+    else if (i === lines.length - 1) break;
+    else return aside(`line ${i + 1} is not a ledger entry`);
   }
   return out;
 }

@@ -198,6 +198,7 @@ async function startConfigured(
         wolfHome: dirname(config.file),
         workspace: cwd,
         getConversation: (id) => engine.conversations.get(id),
+        releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
         resolveTier: (tier) => {
           const m = resolveWolfModel(config, tier, table);

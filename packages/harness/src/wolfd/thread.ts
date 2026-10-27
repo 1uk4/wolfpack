@@ -128,6 +128,16 @@ export class ThreadRuntime {
     return () => this.observers.delete(fn);
   }
 
+  /** How many messages the thread holds (a resume's submit adds one: recover() compares before and after). */
+  messageCount(): number {
+    return this.messages.length;
+  }
+
+  /** Whether a user message contains `needle` (a steer's delivery id: the parent already took it). */
+  hasUserText(needle: string): boolean {
+    return this.messages.some((m) => m.role === "user" && m.text.includes(needle));
+  }
+
   /** The text of the newest assistant message (a subagent's final answer once its turn ended), or "". */
   lastAssistantText(): string {
     for (let i = this.messages.length - 1; i >= 0; i--) if (this.messages[i].role === "assistant" && this.messages[i].text.trim()) return this.messages[i].text;

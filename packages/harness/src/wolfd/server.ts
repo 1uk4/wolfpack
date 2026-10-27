@@ -140,6 +140,11 @@ export class WolfServer {
             }
             return t;
           },
+          detachChild: async (id) => {
+            const t = this.threads.get(id);
+            this.threads.delete(id);
+            await t?.close();
+          },
           emitWolf: (d) => this.emitWolf(d),
           onError: (e) => this.opts.onError?.(e),
         },

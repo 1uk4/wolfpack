@@ -66,3 +66,4 @@ export * from "./session-markdown.ts";
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
 export * from "./thread-adapter.ts";
 export * from "./tool-rows.ts";
+export * from "./kb.ts";

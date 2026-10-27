@@ -70,15 +70,19 @@ describe("MemoryPanel SSR", () => {
 		assert.doesNotMatch(html, /### Decisions/);
 		assert.ok(html.indexOf("Decisions") < html.indexOf("Do it."));
 		assert.match(html, /memory-plan/);
-		assert.match(html, /aria-label="Back to feature graph"[^>]*>.*Bound item/);
+		// header: back to the feature graph by its title; child items get the ↳ arrow
+		assert.match(html, /aria-label="Back to feature graph"[^>]*>.*Feat<\/span><\/button>/);
 		assert.doesNotMatch(html, /memory-back-bound/);
 		assert.match(r("item", bound, { viewingOther: true }), /memory-back-bound/);
+		assert.doesNotMatch(html, /memory-child-arrow/);
+		const child = { item: { ...(item as object), partOf: "F" }, rec: { record: "", inheritedFrom: null } };
+		assert.match(r("item", bound, { shown: child }), /memory-child-arrow/);
 	});
 	it("viewing another task: Loading… / Couldn't load + Retry, never the bound item's title or link", () => {
 		const loading = r("item", bound, { viewingOther: true, shown: null, otherState: "loading" });
 		assert.match(loading, /memory-other-loading/);
 		assert.match(loading, /memory-back-bound/);
-		assert.match(loading, /aria-label="Back to feature graph"[^>]*>.*Task/);
+		assert.match(loading, /aria-label="Back to feature graph"[^>]*>.*Feat<\/span><\/button><button[^>]*data-testid="memory-back-bound">Bound item/);
 		assert.doesNotMatch(loading, />Item<\/a>|work-1/);
 		const failed = r("item", bound, { viewingOther: true, shown: null, otherState: "error" });
 		assert.match(failed, /Couldn&#x27;t load this task/);

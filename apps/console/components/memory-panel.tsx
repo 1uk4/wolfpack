@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeftIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, CornerDownRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
@@ -417,27 +417,43 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	onBack: () => void;
 }) {
 	const showFeed = view === "feed" || !bound;
+	const featureTitle = graph.kind === "graph" ? graph.featureTitle : null;
+	/** The shown item sits under the graphed feature (a task, not the feature itself). */
+	const isChild = !!shown?.item.partOf && graph.kind === "graph" && shown.item.partOf === graph.featureId;
 	return (
 		<section data-testid={showFeed ? "memory-feed" : view === "graph" ? "memory-graph" : "memory-record"} data-view={showFeed ? "feed" : view}>
 			<div className="mb-1 flex items-center justify-between gap-2">
 				{showFeed ? (
 					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations (live)</h3>
-				) : (
-					view === "graph" ? (
-						<h3 className="text-xs font-medium uppercase text-muted-foreground" data-testid="memory-graph-label">Feature</h3>
+				) : view === "graph" ? (
+					graph.kind === "graph" ? (
+						<>
+							<Link className="min-w-0 truncate font-medium underline-offset-2 hover:underline" href={workHref(graph.featureId)} data-testid="memory-graph-label">
+								{graph.featureTitle}
+							</Link>
+							<span className="shrink-0 text-xs text-muted-foreground" data-testid="task-graph-progress">{graph.label}</span>
+						</>
 					) : (
+						<h3 className="text-xs font-medium uppercase text-muted-foreground" data-testid="memory-graph-label">Feature</h3>
+					)
+				) : (
+					<>
 						<button
 							type="button"
-							className="group/back -ml-1 flex items-center gap-1 rounded px-1 text-xs font-medium uppercase text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							className="-ml-1 flex min-w-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 							aria-label="Back to feature graph"
 							data-testid="memory-back-graph"
 							onClick={onGraph}
 						>
-							<ChevronLeftIcon className="size-3" />
-							{viewingOther ? "Task" : "Bound item"}
-							<span className="normal-case text-[10px] opacity-60 group-hover/back:opacity-100">‹ graph</span>
+							<ChevronLeftIcon className="size-3 shrink-0" />
+							<span className="truncate">{featureTitle ?? "Feature graph"}</span>
 						</button>
-					)
+						{viewingOther ? (
+							<Button size="xs" variant="ghost" className="shrink-0" data-testid="memory-back-bound" onClick={onBack}>
+								Bound item
+							</Button>
+						) : null}
+					</>
 				)}
 				{showFeed && bound ? (
 					<button
@@ -466,12 +482,6 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 			) : view === "graph" ? (
 				graph.kind === "graph" ? (
 					<>
-						<div className="mb-1 flex items-baseline justify-between gap-2" data-testid="task-graph-header">
-							<Link className="min-w-0 truncate underline-offset-2 hover:underline" href={workHref(graph.featureId)}>
-								{graph.featureTitle}
-							</Link>
-							<span className="shrink-0 text-xs text-muted-foreground" data-testid="task-graph-progress">{graph.label}</span>
-						</div>
 						{graph.nodes.length > 0 ? <TaskGraph model={graph} onSelect={onSelect} /> : <p className="text-xs text-muted-foreground">No tasks yet.</p>}
 					</>
 				) : graph.kind === "inbox" ? (
@@ -484,11 +494,6 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 				)
 			) : (
 				<>
-					{viewingOther ? (
-						<Button size="xs" variant="ghost" className="mb-1" data-testid="memory-back-bound" onClick={onBack}>
-							« Bound item
-						</Button>
-					) : null}
 					{viewingOther && !shown ? (
 						otherState === "error" ? (
 							<p className="text-xs text-muted-foreground" data-testid="memory-other-error">
@@ -499,9 +504,12 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 							<p className="text-xs text-muted-foreground" data-testid="memory-other-loading">Loading…</p>
 						)
 					) : shown || bound ? (
-						<Link className="block underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)}>
-							{shown?.item.title || bound?.title || shown?.item.id || bound?.workId}
-						</Link>
+						<div className="flex items-start gap-1">
+							{isChild ? <CornerDownRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-label="task in this feature" data-testid="memory-child-arrow" /> : null}
+							<Link className="min-w-0 underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)}>
+								{shown?.item.title || bound?.title || shown?.item.id || bound?.workId}
+							</Link>
+						</div>
 					) : null}
 					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}
 					{shown ? (

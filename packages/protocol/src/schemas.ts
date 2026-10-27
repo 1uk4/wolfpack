@@ -471,6 +471,16 @@ export type MemoryTopic = z.infer<typeof MemoryTopicSchema>;
  * `plan` is the working document without its `## Record` section and the generated `## Log`; `record` is the
  * Record section's text (heading stripped), "" when the item has none.
  */
+/** One child of a feature, as much as a task graph needs. */
+export const WorkChildSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  stage: z.string(),
+  dependsOn: z.array(z.string()),
+});
+export type WorkChild = z.infer<typeof WorkChildSchema>;
+
 export const WorkRecordResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -479,10 +489,14 @@ export const WorkRecordResponseSchema = z.object({
   domain: z.string().optional(),
   partOf: z.string().nullable().optional(),
   dependsOn: z.array(z.string()).optional(),
+  /** A holding container (a domain's Inbox). Only present when true. */
+  container: z.boolean().optional(),
   plan: z.string(),
   record: z.string(),
   /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */
   updated: z.string().optional(),
+  /** Features only: the items directly under it. Omitted when the Work API could not list them (best effort). */
+  children: z.array(WorkChildSchema).optional(),
 });
 export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 

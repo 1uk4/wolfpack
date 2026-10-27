@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics } from "@wolfpack/memory";
-import type { BoundWork, LastPromote, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkRecordResponse } from "@wolfpack/protocol";
+import type { BoundWork, LastPromote, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import { DURABLE_SESSION_ID, getPoolStats } from "../memory/consolidation.js";
 
 /** What wolfd knows of this wolf's memory configuration (wolf.yaml, after the sandbox redirect). */
@@ -100,6 +100,7 @@ interface ApiWorkItem {
   domain?: string;
   partOf?: string | null;
   dependsOn?: string[];
+  container?: boolean;
   updated?: string;
 }
 
@@ -120,6 +121,23 @@ async function fetchWorkItem(id: string, work: { endpoint?: string; token?: stri
     return { kind: "ok", item: data.item, body: data.body ?? "" };
   } catch (e) {
     return { kind: "error", message: (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 200) };
+  }
+}
+
+/** GET <endpoint>/work?partOf=:id: the items directly under a feature. Undefined on any failure (children are best effort). */
+async function fetchChildren(id: string, work: { endpoint?: string; token?: string }): Promise<WorkChild[] | undefined> {
+  const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
+  if (!endpoint || !work.token) return undefined;
+  try {
+    const res = await fetch(`${endpoint}/work?partOf=${encodeURIComponent(id)}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { items?: ApiWorkItem[] };
+    if (!Array.isArray(data.items)) return undefined;
+    return data.items
+      .filter((c) => typeof c.id === "string")
+      .map((c) => ({ id: c.id, title: c.title ?? "", kind: c.kind ?? "", stage: c.stage ?? "", dependsOn: Array.isArray(c.dependsOn) ? c.dependsOn : [] }));
+  } catch {
+    return undefined;
   }
 }
 
@@ -145,6 +163,7 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
   if (r.kind !== "ok") return r;
   const { item, body } = r;
   const section = extractRecord(body);
+  const children = item.kind === "feature" ? await fetchChildren(item.id, work) : undefined;
   return {
     kind: "ok",
     value: {
@@ -155,6 +174,8 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
       ...(item.domain !== undefined ? { domain: item.domain } : {}),
       ...(item.partOf !== undefined ? { partOf: item.partOf } : {}),
       ...(item.dependsOn !== undefined ? { dependsOn: item.dependsOn } : {}),
+      ...(item.container ? { container: true } : {}),
+      ...(children ? { children } : {}),
       plan: withoutLog(withoutRecord(body)),
       record: section ? section.slice(RECORD_HEADING.length).trim() : "",
       ...(item.updated !== undefined ? { updated: item.updated } : {}),

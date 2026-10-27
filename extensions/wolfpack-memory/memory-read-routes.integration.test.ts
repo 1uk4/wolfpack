@@ -4,6 +4,7 @@
  * seam; the sandbox root is a temp snapshot with its own local Work server, and a "live" tree is hashed before/after.
  */
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ import { ErrorEnvelopeSchema, MemoryStatusSchema, MemoryTopicSchema, PROTOCOL_VE
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
-import { memoryState } from "../../packages/harness/src/wolfd/memory-read.js";
+import { memoryState, readWorkRecord } from "../../packages/harness/src/wolfd/memory-read.js";
 import createMemoryExtension from "./unified.js";
 
 const dirs: string[] = [];
@@ -294,6 +295,55 @@ describe("memory read routes", { timeout: 30_000 }, () => {
     const want = { workId: id, title: "Cache sessions", kind: "task" };
     expect(MemoryStatusSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory")).json()).bound).toEqual(want);
     expect((await t.client.getMemoryStatus!("testwolf", { thread: t.home })).bound).toEqual(want);
+  });
+
+  it("work record: a feature lists its children (with dependsOn); a task has none; a failing list leaves the record intact", async () => {
+    const t = await startMemoryWolf();
+    const sb = t.wolf.sandbox!;
+    const h = { "Content-Type": "application/json", "X-API-Key": sb.env.WORK_TOKEN };
+    const api = async (method: string, path: string, body?: unknown) => {
+      const r = await fetch(`${sb.env.WORK_ENDPOINT}${path}`, { method, headers: h, ...(body ? { body: JSON.stringify(body) } : {}) });
+      expect(r.ok).toBe(true);
+      return (await r.json()) as { id: string };
+    };
+    const feature = (await api("POST", "/work", { kind: "feature", domain: "wolfpack", title: "Cache", assignee: "owner" })).id;
+    const mk = async (title: string) => (await api("POST", "/work", { kind: "task", domain: "wolfpack", title, assignee: "owner", successCriteria: "done", partOf: feature })).id;
+    const [a, b, c] = [await mk("A"), await mk("B"), await mk("C")];
+    await api("PATCH", `/work/${b}`, { link: { rel: "depends_on", target: a } });
+    await api("PATCH", `/work/${c}`, { link: { rel: "depends_on", target: b } });
+
+    const rec = WorkRecordResponseSchema.parse(await (await get(t, `/v1/wolves/testwolf/work/${feature}/record`)).json());
+    expect(rec.kind).toBe("feature");
+    expect(rec.children).toHaveLength(3);
+    const byId = new Map(rec.children!.map((x) => [x.id, x]));
+    expect(byId.get(a)).toEqual({ id: a, title: "A", kind: "task", stage: expect.any(String), dependsOn: [] });
+    expect(byId.get(b)!.dependsOn).toEqual([a]);
+    expect(byId.get(c)!.dependsOn).toEqual([b]);
+    expect(await t.client.getWorkRecord!("testwolf", feature)).toEqual(rec);
+
+    const task = WorkRecordResponseSchema.parse(await (await get(t, `/v1/wolves/testwolf/work/${c}/record`)).json());
+    expect(task.children).toBeUndefined();
+
+    // the Work API serves the item but fails the list: the record is still returned, without children
+    const stub = createServer((req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url?.startsWith("/work?")) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: "boom" }));
+      } else res.end(JSON.stringify({ item: { id: "work-wolfpack-f", title: "F", kind: "feature", stage: "in_build" }, body: "## Plan\n\nx\n" }));
+    });
+    await new Promise<void>((r) => stub.listen(0, "127.0.0.1", r));
+    try {
+      const port = (stub.address() as { port: number }).port;
+      const r = await readWorkRecord("work-wolfpack-f", { endpoint: `http://127.0.0.1:${port}`, token: "x" });
+      expect(r.kind).toBe("ok");
+      if (r.kind === "ok") {
+        expect(r.value).toMatchObject({ id: "work-wolfpack-f", kind: "feature", plan: "## Plan\n\nx" });
+        expect(r.value.children).toBeUndefined();
+      }
+    } finally {
+      await new Promise((r) => stub.close(r));
+    }
   });
 
   it("work record without a Work API is 409 memory_unavailable", async () => {

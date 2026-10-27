@@ -137,6 +137,26 @@ describe("live tool results", () => {
   });
 });
 
+describe("object seq", () => {
+  const cl = (id: string, objectId: string) => ({ type: "toolCall", id, name: "show_checklist", arguments: { objectId, items: [{ id: "a", label: "A", state: "todo" }] } });
+  const assistant = (id: number, ts: number, ...calls: any[]) => entry(id, "pi.assistant", { role: "assistant", timestamp: ts, content: calls });
+  const result = (id: number, callId: string, isError = false) =>
+    entry(id, "pi.tool_result", { role: "toolResult", toolCallId: callId, isError, content: [{ type: "text", text: "ok" }] });
+  const objects = (list: any[]) => list.flatMap((m) => m.objects ?? []).map((o: any) => [o.objectId, o.rev, o.seq]);
+
+  it("a failed (isError) call bumps neither seq nor rev", () => {
+    const list: any[] = [];
+    for (const e of [assistant(1, 100, cl("a", "A")), result(2, "a"), assistant(3, 200, cl("b", "A")), result(4, "b", true)]) applyEntry(list, e);
+    expect(objects(list)).toEqual([["A", 1, 1]]);
+  });
+
+  it("a replayed result is not double-counted", () => {
+    const list: any[] = [];
+    for (const e of [assistant(1, 100, cl("a", "A")), result(2, "a"), result(3, "a")]) applyEntry(list, e);
+    expect(objects(list)).toEqual([["A", 1, 1]]);
+  });
+});
+
 describe("tool call dedup by callId", () => {
   const call = (id: string, command = "ls") => ({ type: "toolCall", id, name: "bash", arguments: { command } });
   const assistant = (id: number, ts: number, ...calls: any[]) => entry(id, "pi.assistant", { role: "assistant", timestamp: ts, content: calls });

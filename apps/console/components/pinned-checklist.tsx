@@ -41,7 +41,6 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 		[threadId],
 	);
 	if (!active) return null;
-	const expanded = open;
 	const { data } = active;
 	const { done, total } = checklistProgress(data);
 	const finished = total === 0 || done === total;
@@ -49,19 +48,19 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 	const pct = total === 0 ? 0 : (done / total) * 100;
 	const doing = data.items.find((i) => i.state === "doing");
 	const onKeyDown = (e: KeyboardEvent) => {
-		if (e.key !== "Escape" || !expanded || sessionFindHasForegroundLayer(document)) return;
+		if (e.key !== "Escape" || !open || sessionFindHasForegroundLayer(document)) return;
 		e.stopPropagation(); // claim the Esc: the dismiss chain must not also stop dictation / abort the turn
 		set(false);
 	};
 	return (
-		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="pinned-checklist" data-object-id={active.objectId} data-expanded={expanded}>
+		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="pinned-checklist" data-object-id={active.objectId} data-expanded={open}>
 			<div className="mx-auto flex min-h-0 w-full max-w-[46rem] flex-col px-4 pt-2">
 				<div onKeyDown={onKeyDown} className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lg">
 					<button
 						type="button"
-						aria-expanded={expanded}
-						aria-controls={expanded ? panelId : undefined}
-						onClick={() => set(!expanded)}
+						aria-expanded={open}
+						aria-controls={open ? panelId : undefined}
+						onClick={() => set(!open)}
 						data-testid="pinned-checklist-button"
 						className="flex w-full flex-col gap-0.5 px-3 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
 					>
@@ -70,7 +69,7 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 								{finished && total > 0 && <span aria-hidden>✓ </span>}
 								{data.title ?? "Checklist"} · {count}
 							</span>
-							<span aria-hidden className={`shrink-0 text-xs text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? "rotate-180" : ""}`}>
+							<span aria-hidden className={`shrink-0 text-xs text-muted-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}>
 								▾
 							</span>
 						</span>
@@ -93,7 +92,7 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 							{doing && <div aria-hidden className="absolute inset-y-0 right-0 animate-pulse bg-primary/30 motion-reduce:animate-none" style={{ left: `${pct}%` }} />}
 						</div>
 					</div>
-					{expanded && (
+					{open && (
 						<div id={panelId} role="region" aria-label={data.title ?? "Checklist"} data-testid="pinned-checklist-panel" className="min-h-0 overflow-y-auto overscroll-contain border-t p-3">
 							<ChecklistItems items={data.items} />
 						</div>

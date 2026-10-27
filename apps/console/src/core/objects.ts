@@ -6,8 +6,10 @@
  * and threadMessagesToNative turn both into the SAME native block, `{type:"object", objectId, objectType, rev, data}`
  * inside the assistant message (position = arrival live, `textOffset` on reload). projectView projects each block to
  * an "object" view part and `collapseObjects` folds them: per objectId the highest rev wins, shown at its FIRST
- * position; `recency` stamps the part with the ordinal of its latest upsert (recency across objects). Harness-originated revisions (no tool call) need a server-side source of upserts; they would need no
- * console change, since they arrive as the same events and history objects.
+ * position; `recency` stamps the part with the ordinal of its latest upsert (recency across objects).
+ * Naming of that ordinal: protocol `ThreadObject.seq` -> native block `upsertSeq` -> view part `recency`.
+ * Harness-originated revisions (no tool call) need a server-side source of upserts; they would need no console
+ * change, since they arrive as the same events and history objects.
  */
 import { OBJECT_TOOL_TYPES, parseObjectData, type ChecklistData } from "@wolfpack/protocol/objects";
 import type { LhViewMessage, LhViewPart } from "./view.ts";

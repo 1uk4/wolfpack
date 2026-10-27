@@ -161,6 +161,8 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
       if (obj) {
         // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
+        // Invariant: every upsert (new or revision) rewrites `seq` on the kept object, so max(seq) over the thread is
+        // always the latest upsert's ordinal, and a failed or replayed call (skipped above) never moves seq or rev.
         const byId = objectsById(list);
         const seq = Math.max(0, ...[...byId.values()].map((o) => o.seq ?? 0)) + 1; // this upsert's thread-wide ordinal
         const prior = byId.get(obj.objectId);

@@ -168,6 +168,25 @@ describe("scripted model turns", () => {
     expect(detail.messages.flatMap((m) => m.objects ?? [])).toHaveLength(0);
   });
 
+  it("show_checklist twice with one objectId: items tick, two revs, getThread returns the latest; duplicate ids give a tool error and no object", async () => {
+    const items = (a: string, b: string) => [{ id: "a", label: "Write", state: a }, { id: "b", label: "Test", state: b }];
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_checklist", { objectId: "cl", title: "Plan", items: items("doing", "todo") } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([fauxToolCall("show_checklist", { objectId: "cl", title: "Plan", items: items("done", "doing") } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([fauxToolCall("show_checklist", { objectId: "bad", items: [{ id: "a", label: "A", state: "todo" }, { id: "a", label: "B", state: "done" }] } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    const events = await tw.submit("do it");
+    const upserts = events.filter((e) => e.type === "object-upsert");
+    expect(upserts.map((e) => [e.objectId, e.objectType, e.rev])).toEqual([["cl", "checklist", 1], ["cl", "checklist", 2]]);
+    expect(events.filter((e) => e.type === "tool-end").map((e) => e.isError)).toEqual([false, false, true]);
+    const objects = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? []);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toMatchObject({ objectId: "cl", type: "checklist", rev: 2, data: { items: items("done", "doing") } });
+  });
+
   it("memory routes say the extension is not loaded (versus inert) when it is absent", async () => {
     tw = await startTestWolf({ script: [] });
     const res = await fetch(`${tw.url}/v1/wolves/testwolf/memory/consolidate`, { method: "POST", headers: { "X-Protocol-Version": "1" } });

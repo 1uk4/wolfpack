@@ -26,6 +26,8 @@ export function resolveName(name: string): string {
 }
 
 export interface LoaderConfig {
+  /** Receives the names of loaded tools that declare `raisesCard` (the wolf's card guard). */
+  onCardTool?: (name: string) => void;
   /** Wolf den path (extensions loaded from wolfDen/extensions/) */
   wolfDen: string;
   /** Wolf name for context */
@@ -103,7 +105,7 @@ export async function loadExtensions(
     return result;
   }
 
-  const { wolfDen, wolfName, domains, runtime, wolfConfig } = config;
+  const { wolfDen, wolfName, domains, runtime, wolfConfig, onCardTool } = config;
 
   // Build context for extension factories
   const context: ExtensionContext = {
@@ -160,7 +162,7 @@ export async function loadExtensions(
 
       // Adapt to runtime
       if (runtime === "pi-durable") {
-        const adapted = adaptToDurable(ext, { wolfDen, wolfName });
+        const adapted = adaptToDurable(ext, { wolfDen, wolfName, onCardTool });
         result.extensions.push(adapted);
         // Read from the original: the adapter's copy doesn't carry lifecycle
         if (ext.lifecycle) {

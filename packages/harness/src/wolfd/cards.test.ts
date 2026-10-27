@@ -5,8 +5,10 @@ import { BusyError, HttpConsoleClient, NotFoundError, ProtocolError } from "@wol
 import type { Card } from "@wolfpack/protocol";
 import { Type } from "../extension-api.js";
 import { adaptToDurable } from "../adapters/durable.js";
-import { cardResult } from "../engine/cards.js";
+import { tmpdir } from "node:os";
+import { cardResult, createCardGuardExtension } from "../engine/cards.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
+import type { ExtensionRuntime } from "./run.js";
 import { WolfServer } from "./server.js";
 import { startTestWolf, type TestWolf, type TestWolfOptions } from "./test-wolf.js";
 
@@ -269,30 +271,40 @@ describe("ask card (tool-raised, two-turn)", () => {
   });
 
   it("a card tool in a loaded (adapted) extension is auto-detected by the guard", async () => {
-    const ext = adaptToDurable(
+    const mk = (rt: ExtensionRuntime) => adaptToDurable(
       {
         name: "loaded-ask",
         tools: [{ name: "loaded_ask", description: "ask", raisesCard: true, parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "asked" }], card: { tool: "loaded_ask", fields: [{ id: "a", kind: "free-text", label: "a?" }] } }; } }],
       },
-      { wolfDen: "/unused", wolfName: "testwolf" },
+      { wolfDen: rt.den, wolfName: "testwolf", onCardTool: rt.onCardTool },
     );
     const plain = defineExtension({ name: "plain", tools: [defineTool({ name: "plain", description: "p", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "p" }] }; } })] });
-    tw = await startTestWolf({ script: [toolUse(fauxToolCall("loaded_ask", {}), fauxToolCall("plain", {})), fauxAssistantMessage("must not run")], hooks: { extensions: [ext, plain] } });
+    tw = await startTestWolf({ script: [toolUse(fauxToolCall("loaded_ask", {}), fauxToolCall("plain", {})), fauxAssistantMessage("must not run")], hooks: { extensions: (rt) => [mk(rt), plain] } });
     await tw.submit("go");
     expect(tw.scripted.faux.state.callCount).toBe(1);
     expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
   });
 
   it("an erroring card tool does not terminate the round: the model sees the error and continues", async () => {
-    const ext = adaptToDurable(
+    const mk = (rt: ExtensionRuntime) => adaptToDurable(
       { name: "bad-ask", tools: [{ name: "bad_ask", description: "ask", raisesCard: true, parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "boom" }], isError: true }; } }] },
-      { wolfDen: "/unused", wolfName: "testwolf" },
+      { wolfDen: rt.den, wolfName: "testwolf", onCardTool: rt.onCardTool },
     );
-    tw = await startTestWolf({ script: [toolUse(fauxToolCall("bad_ask", {})), fauxAssistantMessage("recovered")], hooks: { extensions: [ext] } });
+    tw = await startTestWolf({ script: [toolUse(fauxToolCall("bad_ask", {})), fauxAssistantMessage("recovered")], hooks: { extensions: (rt) => [mk(rt)] } });
     await tw.submit("go");
     expect(tw.scripted.faux.state.callCount).toBe(2);
     const d = await tw.client.getThread(tw.home);
     expect(d.status).toBe("idle");
     expect(d.messages.at(-1)!.text).toContain("recovered");
+  });
+
+  it("card tool registries are per guard: a same-named tool registered on one guard is not a card tool for another", () => {
+    const a = createCardGuardExtension();
+    const b = createCardGuardExtension();
+    const ext = { name: "x", tools: [{ name: "same", description: "d", raisesCard: true, parameters: Type.Object({}), async execute() { return { content: [] }; } }] };
+    adaptToDurable(ext, { wolfDen: tmpdir(), wolfName: "w", onCardTool: a.register });
+    expect(a.isCardTool("same")).toBe(true);
+    expect(b.isCardTool("same")).toBe(false);
+    expect(createCardGuardExtension(["native"]).isCardTool("native")).toBe(true);
   });
 });

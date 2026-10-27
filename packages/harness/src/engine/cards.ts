@@ -53,12 +53,6 @@ export function cardAnswerEntry(data: CardAnswerData): { kind: string; data: Jso
   return { kind: CARD_ANSWER_KIND, data: JSON.parse(JSON.stringify(data)) };
 }
 
-/** Names of card-raising tools, recorded by `adaptToDurable` for every tool declaring `raisesCard`. */
-const registeredCardTools = new Set<string>();
-export function registerCardTool(name: string): void {
-  registeredCardTools.add(name);
-}
-
 /**
  * Ends the whole round when the model called a card-raising tool in it, alongside other tools: pi-durable terminates
  * only when EVERY result of the round asks for it. Stateless and replay-safe: the round's calls are read from the
@@ -66,12 +60,20 @@ export function registerCardTool(name: string): void {
  * - a card tool's result terminates only when it actually produced a card (not on isError / no card in details);
  *   an erroring card tool therefore keeps the round going, so the model sees the error;
  * - any other tool's result terminates when the round contains a card tool.
- * Card tools are auto-detected (`registerCardTool`, fed by adaptToDurable); `extraCardTools` is for native pi-durable
- * extensions that bypass the adapter.
+ * Card tools are registered per guard (`register`, wired to `adaptToDurable`'s `onCardTool` for that wolf), so nothing
+ * leaks across wolves or tests; `extraCardTools` is for native pi-durable extensions that bypass the adapter.
  */
-export function createCardGuardExtension(extraCardTools: readonly string[] = []): Extension {
-  const isCardTool = (name: string) => registeredCardTools.has(name) || extraCardTools.includes(name);
-  return defineExtension({
+export interface CardGuard {
+  extension: Extension;
+  /** Record a card-raising tool by name (the `onCardTool` callback of adaptToDurable). */
+  register(name: string): void;
+  isCardTool(name: string): boolean;
+}
+
+export function createCardGuardExtension(extraCardTools: readonly string[] = []): CardGuard {
+  const registered = new Set<string>(extraCardTools);
+  const isCardTool = (name: string) => registered.has(name);
+  const extension = defineExtension({
     name: "card-guard",
     hooks: [
       hook(ToolTask, {
@@ -85,4 +87,5 @@ export function createCardGuardExtension(extraCardTools: readonly string[] = [])
       }),
     ],
   });
+  return { extension, register: (name) => void registered.add(name), isCardTool };
 }

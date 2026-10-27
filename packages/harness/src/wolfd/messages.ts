@@ -18,15 +18,15 @@
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
 import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
-import { CARD_ANSWER_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
 export function messageFromEntry(entry: Entry, now: () => Date = () => new Date()): ThreadMessage | undefined {
-  if (entry.kind !== "pi.user" && entry.kind !== "pi.assistant") return undefined;
+  if (entry.kind !== USER_ENTRY_KIND && entry.kind !== "pi.assistant") return undefined;
   const msg = entry.model?.[0] as { role?: string; content?: unknown; timestamp?: number } | undefined;
   if (!msg) return undefined;
-  const role = entry.kind === "pi.user" ? "user" : "assistant";
+  const role = entry.kind === USER_ENTRY_KIND ? "user" : "assistant";
   let text = "";
   if (typeof msg.content === "string") text = msg.content;
   else if (Array.isArray(msg.content)) {

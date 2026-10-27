@@ -14,7 +14,7 @@ import {
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
-import { cardResult, registerCardTool } from "../engine/cards.js";
+import { cardResult } from "../engine/cards.js";
 import { conversationReaderFor, onEngineCloseFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
@@ -53,6 +53,8 @@ export function toDurableResult(result: ToolResult): Omit<ToolExecutionResult, "
 interface AdapterConfig {
   wolfDen: string;
   wolfName: string;
+  /** Called with the name of every tool declaring `raisesCard` (wire to the wolf's card guard). */
+  onCardTool?: (name: string) => void;
 }
 
 /**
@@ -80,7 +82,7 @@ export function adaptToDurable(
   };
 
   // Adapt tools
-  for (const t of ext.tools ?? []) if (t.raisesCard) registerCardTool(t.name);
+  for (const t of ext.tools ?? []) if (t.raisesCard) config.onCardTool?.(t.name);
   const tools = (ext.tools ?? []).map((tool) =>
     piDefineTool({
       name: tool.name,

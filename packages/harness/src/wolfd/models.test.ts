@@ -95,6 +95,8 @@ describe("bridge seam: images reach the SDK query", () => {
     expect(blocks(msg)).toEqual([png.data]);
   });
 
+  // After the first turn the transcript holds earlier messages, and a fresh SDK query (first round of a resumed
+  // thread, crash recovery) is fed the whole history rendered as one prompt: the path that used to flatten images to "[image]".
   it("an image on a later user message, after earlier turns (the thread rebuilds its query)", async () => {
     const msg = await firstSdkMessage([
       { role: "user", content: "hi", timestamp: 0 },

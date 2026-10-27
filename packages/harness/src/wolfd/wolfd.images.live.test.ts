@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HttpConsoleClient, type ThreadEvent } from "@wolfpack/client";
 import { startWolf, type RunningWolf } from "./run.js";
 
-const live = Boolean(process.env.WOLFD_LIVE);
+const live = process.env.WOLFD_LIVE === "1";
 
 const crc = (b: Buffer) => {
   let c = ~0;
@@ -74,9 +74,10 @@ describe.skipIf(!live)("wolfd live (subscription): images reach the model", () =
     for await (const e of it) out.push(e);
     return out;
   };
-  const readResults: string[] = [];
+  let readResults: string[] = [];
   const lastReply = async () => (await client.getThread(HOME)).messages.at(-1)?.text.toLowerCase() ?? "";
   const ask = async (text: string, attach?: Buffer) => {
+    readResults = [];
     const attachments = attach ? [await client.uploadAttachment(HOME, attach, { mimeType: "image/png", name: "shot.png" })] : [];
     await client.submit(HOME, text, { whenBusy: "reject", attachments });
     for (const e of await collect(client.watch(HOME))) if (e.type === "tool-end") readResults.push(String(e.result));
@@ -92,6 +93,7 @@ describe.skipIf(!live)("wolfd live (subscription): images reach the model", () =
   }, 120_000);
 
   it("later message in the same thread: attached image is seen", async () => {
+    await ask("Reply with exactly: ready"); // its own history, so this case does not rely on test order
     expect(await ask(NO_TOOLS, solidPng(64, [0, 160, 0]))).toContain("green");
   }, 120_000);
 

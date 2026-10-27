@@ -22,6 +22,8 @@ import { rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_NAME_HEADER,
   CreateThreadBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -30,6 +32,7 @@ import {
   SubmitBodySchema,
   matchRoute,
   type Actor,
+  type AttachmentRef,
   type ConsolidateResponse,
   type ErrorCode,
   type InFlightPartial,
@@ -48,6 +51,7 @@ import {
   createEventMapper,
   stampEvent,
   type EngineConversation,
+  type SubmitOptions,
   type EngineEvent,
   type EngineSnapshot,
   type EngineWatch,
@@ -64,6 +68,7 @@ import { readDenTopics } from "@wolfpack/memory";
 import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
+import { AttachmentError, inlineAttachments, storeAttachment } from "./attachments.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -93,7 +98,8 @@ export interface WolfServerOptions {
 }
 
 class HttpError extends Error {
-  constructor(readonly code: ErrorCode, message: string) {
+  /** `drain`: bytes of the request body already consumed; the server discards the rest (bounded) so the client can read this error. */
+  constructor(readonly code: ErrorCode, message: string, readonly drain?: number) {
     super(message);
   }
 }
@@ -143,10 +149,13 @@ export class WolfServer {
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         if (!res.headersSent) {
-          this.sendError(res, e instanceof HttpError ? e : new HttpError("engine_error", e instanceof Error ? e.message : "unexpected error"));
+          this.sendError(res, e instanceof HttpError ? e : new HttpError("engine_error", e instanceof Error ? e.message : "unexpected error"), req);
         } else res.end();
       });
     });
+    // Explicit, never 0 (disabled): a stalled upload must not hold a socket forever. SSE streams are unaffected (the request is complete).
+    this.http.headersTimeout = 30_000;
+    this.http.requestTimeout = 120_000;
   }
 
   get url(): string {
@@ -354,8 +363,36 @@ export class WolfServer {
         this.checkThread(params.id);
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
-        if (body.data.input.trim() === "") throw new HttpError("invalid_request", "input is required");
-        return this.json(res, 200, await this.submit(body.data.input, body.data.whenBusy));
+        const refs = body.data.attachments ?? [];
+        if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        return this.json(res, 200, await this.submit(body.data.input, body.data.whenBusy, refs));
+      }
+      case "uploadAttachment": {
+        try {
+          this.checkThread(params.id);
+          if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to store attachments in");
+        } catch (e) {
+          // The body is unread: let the client finish writing and read the error.
+          throw e instanceof HttpError ? new HttpError(e.code, e.message, 0) : e;
+        }
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > ATTACHMENT_MAX_BYTES) {
+          throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`, 0);
+        }
+        const bytes = await readBytes(req, ATTACHMENT_MAX_BYTES);
+        const rawName = req.headers[ATTACHMENT_NAME_HEADER.toLowerCase()];
+        let name: string | undefined;
+        try {
+          name = typeof rawName === "string" ? decodeURIComponent(rawName) : undefined;
+        } catch {
+          name = undefined;
+        }
+        try {
+          return this.json(res, 201, storeAttachment(this.opts.den, params.id, bytes, req.headers["content-type"] ?? "", name));
+        } catch (e) {
+          if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
+          throw e;
+        }
       }
       case "abort": {
         this.checkThread(params.id);
@@ -516,7 +553,8 @@ export class WolfServer {
     res.end(JSON.stringify(body));
   }
 
-  private sendError(res: ServerResponse, e: HttpError): void {
+  private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
+    if (e.drain !== undefined && req) drainBounded(req, e.drain);
     res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
     res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" }));
   }
@@ -539,8 +577,18 @@ export class WolfServer {
     return { ...this.summary, messages: this.messages.map((m) => ({ ...m, ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}) })), busy: this.running !== null, lastEventId: this.seq };
   }
 
-  private async submit(input: string, whenBusy: "steer" | "followUp" | "reject"): Promise<SubmitAck> {
+  private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
     const before = this.turnStarts;
+    let input: SubmitOptions["input"] = text;
+    if (refs.length > 0) {
+      if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+      try {
+        input = inlineAttachments(this.opts.den, this.summary.id, text, refs);
+      } catch (e) {
+        if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
+        throw e;
+      }
+    }
     let r;
     try {
       r = await this.conv.submit({ input, whenBusy });
@@ -666,6 +714,47 @@ function textOf(message: unknown): string {
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("");
+}
+
+const DRAIN_MAX_BYTES = 4 * ATTACHMENT_MAX_BYTES;
+
+/** Discard what is left of a refused request body so the client finishes writing and reads our error; destroy past a bound. */
+function drainBounded(req: IncomingMessage, already = 0): void {
+  let n = already;
+  req.on("data", (c: Buffer) => {
+    n += c.length;
+    if (n > DRAIN_MAX_BYTES) req.destroy();
+  });
+  req.on("error", () => {});
+  req.resume();
+}
+
+/**
+ * Read a raw body, failing once it exceeds `max` bytes. The request is not destroyed: the handler drains the rest
+ * (see HttpError.drain) so the error response still reaches the client.
+ */
+function readBytes(req: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let n = 0;
+    const done = (fn: () => void) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      fn();
+    };
+    const onData = (c: Buffer) => {
+      n += c.length;
+      if (n > max) {
+        done(() => reject(new HttpError("invalid_request", `attachment too large (limit ${max} bytes)`, n)));
+      } else chunks.push(c);
+    };
+    const onEnd = () => done(() => resolve(Buffer.concat(chunks)));
+    const onError = (e: Error) => done(() => reject(e));
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+  });
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

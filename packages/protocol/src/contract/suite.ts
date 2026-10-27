@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACHMENT_NAME_HEADER,
   ERROR_HTTP_STATUS,
   ErrorEnvelopeSchema,
   PROTOCOL_VERSION,
@@ -176,6 +177,36 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await post(buildPath("submit", { id: threadId }), "not json"), "invalid_request");
       await expectError(await post(buildPath("submit", { id: threadId }), { whenBusy: "reject" }), "invalid_request");
       expect((await getThread(threadId)).busy).toBe(false);
+    });
+
+    describe("attachments", () => {
+      const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+      const upload = (id: string, type: string | undefined, body: Uint8Array | string, name?: string) =>
+        call(buildPath("uploadAttachment", { id }), {
+          method: "POST",
+          headers: { ...(type ? { "Content-Type": type } : {}), ...(name ? { [ATTACHMENT_NAME_HEADER]: encodeURIComponent(name) } : {}) },
+          body: body as BodyInit,
+        });
+      const send = (refs: unknown, input = "look") => post(buildPath("submit", { id: threadId }), { input, whenBusy: "reject", attachments: refs });
+
+      it("uploads an image, then submits with its ref (image-only input allowed)", async () => {
+        await waitIdle(threadId);
+        const att = await expectJson(await upload(threadId, "image/png", PNG, "shot.png"), ROUTES.uploadAttachment.response.schema, [201]);
+        expect(att).toMatchObject({ mimeType: "image/png", size: PNG.length, name: "shot.png" });
+        await expectJson(await send([{ id: att.id }], ""), ROUTES.submit.response.schema);
+        expect((await readStream(streamPath(threadId))).done).toBe(true);
+        await waitIdle(threadId);
+      });
+
+      it("refuses non-images, a missing content type, unknown refs and too many refs", async () => {
+        await waitIdle(threadId);
+        await expectError(await upload(threadId, "text/plain", "hi"), "invalid_request");
+        await expectError(await upload(threadId, undefined, PNG), "invalid_request");
+        await expectError(await send([{ id: "nope" }]), "invalid_request");
+        await expectError(await send(Array.from({ length: 9 }, (_, i) => ({ id: `a${i}` }))), "invalid_request");
+        await expectError(await upload("nope/nope", "image/png", PNG), "not_found");
+        expect((await getThread(threadId)).busy).toBe(false);
+      });
     });
 
     it("a turn streams monotonic server-minted ids, ends at turn-end with [DONE]", async () => {

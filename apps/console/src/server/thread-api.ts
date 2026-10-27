@@ -13,7 +13,7 @@
  * the client replays events with id > from, then follows live.
  */
 
-import { NotFoundError, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { getConsoleClient } from "./console-client.ts";
 
@@ -22,6 +22,33 @@ export type ClientSource = () => ConsoleClient;
 export interface ThreadRef {
 	wolf: string;
 	slug: string;
+}
+
+class TooLarge extends Error {}
+
+/** Read a request body, giving up (and cancelling the stream) once it passes `max` bytes. */
+async function readBounded(req: Request, max: number): Promise<Uint8Array> {
+	if (!req.body) return new Uint8Array(0);
+	const reader = req.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let n = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		n += value.byteLength;
+		if (n > max) {
+			await reader.cancel().catch(() => {});
+			throw new TooLarge(`attachment too large (limit ${max} bytes)`);
+		}
+		chunks.push(value);
+	}
+	const out = new Uint8Array(n);
+	let at = 0;
+	for (const c of chunks) {
+		out.set(c, at);
+		at += c.byteLength;
+	}
+	return out;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -36,8 +63,11 @@ export const isNotFound = (err: unknown): err is Error => isError(err, "NotFound
 export const isBusy = (err: unknown): err is Error => isError(err, "BusyError");
 
 function failure(err: unknown): Response {
+	if (err instanceof TooLarge) return json({ error: err.message }, 413);
 	if (isNotFound(err)) return json({ error: err.message }, 404);
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
+	// A refusal the user can act on (unsupported type, too large, unknown attachment).
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
 
@@ -93,13 +123,49 @@ export function createThreadApi(source: ClientSource) {
 
 		async submit(ref: ThreadRef, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { input?: unknown; whenBusy?: WhenBusy } | null;
-				if (typeof body?.input !== "string" || body.input.trim() === "") {
+				const body = (await req.json().catch(() => null)) as { input?: unknown; whenBusy?: WhenBusy; attachments?: unknown } | null;
+				let attachments: AttachmentRef[] = [];
+				if (body?.attachments !== undefined) {
+					const list = body.attachments;
+					if (
+						!Array.isArray(list) ||
+						list.length > ATTACHMENT_MAX_PER_SUBMIT ||
+						!list.every((a) => typeof (a as AttachmentRef | null)?.id === "string")
+					) {
+						return json({ error: `attachments must be up to ${ATTACHMENT_MAX_PER_SUBMIT} {id: string} refs` }, 400);
+					}
+					attachments = list.map((a: AttachmentRef) => ({ id: a.id }));
+				}
+				if (typeof body?.input !== "string" || (body.input.trim() === "" && attachments.length === 0)) {
 					return json({ error: "input is required" }, 400);
 				}
 				const client = source();
-				const ack = await client.submit(await resolve(client, ref), body.input, { whenBusy: body.whenBusy });
+				const ack = await client.submit(await resolve(client, ref), body.input, { whenBusy: body.whenBusy, attachments });
 				return json(ack);
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** The raw bytes are relayed to the thread's wolf (never stored here): the wolf the thread lives on keeps the file. */
+		async upload(ref: ThreadRef, req: Request): Promise<Response> {
+			try {
+				const mimeType = req.headers.get("content-type") ?? "";
+				const declared = Number(req.headers.get("content-length"));
+				if (Number.isFinite(declared) && declared > ATTACHMENT_MAX_BYTES) {
+					await req.body?.cancel().catch(() => {});
+					throw new TooLarge(`attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`);
+				}
+				const raw = req.headers.get(ATTACHMENT_NAME_HEADER);
+				let name: string | undefined;
+				try {
+					name = raw ? decodeURIComponent(raw) : undefined;
+				} catch {
+					name = undefined;
+				}
+				const bytes = await readBounded(req, ATTACHMENT_MAX_BYTES);
+				const client = source();
+				return json(await client.uploadAttachment(await resolve(client, ref), bytes, { mimeType, name }), 201);
 			} catch (err) {
 				return failure(err);
 			}

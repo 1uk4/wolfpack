@@ -572,11 +572,33 @@ export type KbEntryDetail = z.infer<typeof KbEntryDetailSchema>;
 export const WhenBusySchema = z.enum(["steer", "followUp", "reject"]);
 export type WhenBusy = z.infer<typeof WhenBusySchema>;
 
-/** `whenBusy` is required on the wire: absent -> invalid_request. SDKs may default it; the wire may not. */
+/** Reference to an uploaded attachment (see `uploadAttachment`), carried by `SubmitRequest.attachments`. */
+export const AttachmentRefSchema = z.object({ id: z.string() });
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+/** An uploaded attachment, as stored by the wolf. Type-agnostic: `mimeType` says what it is. */
+export const AttachmentSchema = z.object({
+  /** Opaque id; pass it back as an `AttachmentRef`. */
+  id: z.string(),
+  /** Original file name when the client sent one, else a generated `<id>.<ext>`. */
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+});
+export type Attachment = z.infer<typeof AttachmentSchema>;
+
+import { ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";
+export { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";
+
+/**
+ * `whenBusy` is required on the wire: absent -> invalid_request. SDKs may default it; the wire may not.
+ * `attachments` (additive, optional): uploaded files the wolf inlines into the user message; `input` may then be empty.
+ */
 export const SubmitRequestSchema = z.object({
   threadId: z.string(),
   input: z.string(),
   whenBusy: WhenBusySchema,
+  attachments: z.array(AttachmentRefSchema).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
 });
 export type SubmitRequest = z.infer<typeof SubmitRequestSchema>;
 

@@ -1,7 +1,11 @@
 import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, type ScriptStep } from "./fixture.js";
+import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol";
 import {
   BusyError,
   NotFoundError,
+  ProtocolError,
+  type Attachment,
+  type AttachmentRef,
   type ConsoleClient,
   type SubmitAck,
   type SubmitOptions,
@@ -9,6 +13,7 @@ import {
   type ThreadEvent,
   type ThreadMessage,
   type ThreadSummary,
+  type UploadOptions,
   type WatchOptions,
   type WolfSummary,
 } from "./types.js";
@@ -37,6 +42,9 @@ export class MockConsoleClient implements ConsoleClient {
   private readonly delayMs: number;
   private readonly script: ScriptStep[];
   private counter = 0;
+  /** Attachments uploaded so far (bytes dropped), and the submits that referenced them: for tests. */
+  readonly uploads: (Attachment & { threadId: string })[] = [];
+  readonly submits: { threadId: string; input: string; attachments: AttachmentRef[] }[] = [];
 
   constructor(opts: MockOptions = {}) {
     this.delayMs = opts.delayMs ?? 10;
@@ -74,6 +82,9 @@ export class MockConsoleClient implements ConsoleClient {
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {
     const t = this.get(threadId);
     const whenBusy = opts.whenBusy ?? "reject";
+    const attachments = opts.attachments ?? [];
+    for (const a of attachments) if (!this.uploads.some((u) => u.id === a.id && u.threadId === threadId)) throw new ProtocolError("invalid_request", `unknown attachment ${a.id}`, false);
+    this.submits.push({ threadId, input, attachments });
     if (!t.running) {
       const messageId = this.addUserMessage(t, input);
       this.startTurn(t);
@@ -86,6 +97,17 @@ export class MockConsoleClient implements ConsoleClient {
       return { messageId, disposition: "queued" };
     }
     return { messageId, disposition: "steered" };
+  }
+
+  async uploadAttachment(threadId: string, data: Uint8Array | Blob, opts: UploadOptions): Promise<Attachment> {
+    this.get(threadId);
+    const size = data instanceof Blob ? data.size : data.byteLength;
+    if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(opts.mimeType)) throw new ProtocolError("invalid_request", `unsupported attachment type ${opts.mimeType}`, false);
+    if (size > ATTACHMENT_MAX_BYTES) throw new ProtocolError("invalid_request", "attachment too large", false);
+    const id = `att-${++this.counter}`;
+    const att = { id, name: opts.name ?? id, mimeType: opts.mimeType, size };
+    this.uploads.push({ ...att, threadId });
+    return att;
   }
 
   async abort(threadId: string): Promise<void> {

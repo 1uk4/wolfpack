@@ -16,6 +16,7 @@ import {
   type AgentChange,
   type Conversation,
   type Extension,
+  type UserInput,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -61,7 +62,8 @@ export interface ConfigureOptions {
 }
 
 export interface SubmitOptions {
-  input: string;
+  /** Plain text, or text + image parts (pi-ai content). */
+  input: UserInput;
   whenBusy: WhenBusy;
 }
 

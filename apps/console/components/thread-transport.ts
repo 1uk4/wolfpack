@@ -14,7 +14,12 @@ export function threadTransport(wolf: string, slug: string): SessionTransport {
 	return {
 		submitUrl: `${base}/submit`,
 		submitBody: (input, opts) =>
-			JSON.stringify({ input: input.type === "text" ? input.text : "", whenBusy: opts?.whenBusy ?? "reject" }),
+			JSON.stringify({
+				input: input.type === "text" ? input.text : "",
+				whenBusy: opts?.whenBusy ?? "reject",
+				...(input.type === "text" && input.attachments?.length ? { attachments: input.attachments } : {}),
+			}),
+		uploadUrl: `${base}/attachments`,
 		steersViaSubmit: true,
 		recordUrl: base,
 		parseRecord: (json) => {

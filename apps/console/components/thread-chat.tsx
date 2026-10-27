@@ -10,7 +10,8 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
-import { Composer } from "@/components/composer";
+import { AttachmentChips, Composer } from "@/components/composer";
+import { canSendWith, readyRefs, uploadFile, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
@@ -118,14 +119,43 @@ export function ThreadChat({
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
+	// Pasted images: uploaded to the wolf at once (a chip tracks each), sent as refs with the next message.
+	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+	const patchAttachment = useCallback(
+		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
+		[],
+	);
+	const onPasteImages = useCallback(
+		(files: File[]) => {
+			for (const file of files) {
+				const key = `att-${Math.random().toString(36).slice(2)}`;
+				const name = file.name || "pasted image";
+				setAttachments((prev) => [...prev, { key, name, status: "uploading" }]);
+				uploadFile(transport.uploadUrl!, file).then(
+					({ id }) => patchAttachment(key, { status: "ready", id }),
+					(err: Error) => patchAttachment(key, { status: "error", error: err.message }),
+				);
+			}
+		},
+		[transport, patchAttachment],
+	);
+	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
+
 	const onSend = useCallback(() => {
 		const t = text.trim();
-		if (!t) return;
+		// A running turn takes the text as a steer (text only; the chips wait for the next message); Stop is the abort.
+		if (busy) {
+			if (!t) return;
+			setText("");
+			steer(t);
+			return;
+		}
+		if (!canSendWith(t, attachments)) return;
+		const refs = readyRefs(attachments);
 		setText("");
-		// A running turn takes the text as a steer; Stop is the abort.
-		if (busy) steer(t);
-		else send({ type: "text", text: t });
-	}, [text, busy, send, steer]);
+		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
+		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
+	}, [text, busy, send, steer, attachments]);
 
 	const onStop = useCallback(() => {
 		void fetch(transport.abortUrl!, { method: "POST" }).catch(() => {
@@ -239,7 +269,9 @@ export function ThreadChat({
 											onChange={setText}
 											onSend={onSend}
 											onStop={onStop}
-											canSend={text.trim().length > 0}
+											canSend={busy ? text.trim().length > 0 : canSendWith(text, attachments)}
+											onPasteImages={onPasteImages}
+											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}

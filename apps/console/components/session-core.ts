@@ -53,6 +53,8 @@ export interface SessionTransport {
 	/** Raw record JSON → native messages (null: shape not recognized). */
 	parseRecord(json: unknown): LhMessage[] | null;
 	streamUrl: string;
+	/** Attachment upload route (POST raw bytes); absent: this transport takes no attachments. */
+	uploadUrl?: string;
 	/** Abort route (POST); absent: the legacy global abort is the caller's. */
 	abortUrl?: string;
 	/** Poll out a racing turn on 409 (legacy wake race) vs. surface it. */

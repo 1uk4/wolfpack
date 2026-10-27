@@ -26,6 +26,7 @@
 		"@radix-ui/react-use-controllable-state": "^1.2.6",
 		"@rive-app/react-webgl2": "^4.32.1",
 		"@wolfpack/client": "*",
+		"@wolfpack/protocol": "*",
 		"@streamdown/cjk": "^1.0.3",
 		"@streamdown/code": "^1.1.1",
 		"@streamdown/math": "^1.0.2",

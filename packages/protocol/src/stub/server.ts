@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  ATTACHMENT_NAME_HEADER,
   PROTOCOL_VERSION_HEADER,
   SSE_DONE,
   SubmitBodySchema,
@@ -8,9 +9,12 @@ import {
   matchRoute,
 } from "../routes.js";
 import {
+  ATTACHMENT_IMAGE_TYPES,
+  ATTACHMENT_MAX_BYTES,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   type Actor,
+  type Attachment,
   type MemoryStatus,
   type ErrorCode,
   type InFlightPartial,
@@ -100,6 +104,8 @@ export class StubServer {
   private readonly delayMs: number;
   private readonly http: Server;
   private counter = 0;
+  /** `<threadId>\n<attachmentId>` of every upload (bytes are not kept). */
+  private readonly uploads = new Set<string>();
   private baseUrl = "";
 
   constructor(private readonly opts: StubOptions = {}) {
@@ -176,8 +182,31 @@ export class StubServer {
         const t = this.thread(params.id);
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
-        if (body.data.input.trim() === "") throw new HttpError("invalid_request", "input is required");
+        const refs = body.data.attachments ?? [];
+        if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        for (const r of refs) if (!this.uploads.has(`${t.summary.id}\n${r.id}`)) throw new HttpError("invalid_request", `unknown attachment ${r.id}`);
         return this.json(res, 200, this.submit(t, body.data.input, body.data.whenBusy));
+      }
+      case "uploadAttachment": {
+        const t = this.thread(params.id);
+        const mime = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+        if (!mime) throw new HttpError("invalid_request", "missing Content-Type: send the image's mime type");
+        if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) throw new HttpError("invalid_request", `unsupported attachment type ${mime}: images only`);
+        // The stub checks the size after buffering the whole body (wolfd bounds the read).
+        const bytes = await readBytes(req);
+        if (bytes.length === 0) throw new HttpError("invalid_request", "attachment is empty");
+        if (bytes.length > ATTACHMENT_MAX_BYTES) throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`);
+        const id = `att-${++this.counter}`;
+        const rawName = req.headers[ATTACHMENT_NAME_HEADER.toLowerCase()];
+        let name = id;
+        try {
+          if (typeof rawName === "string") name = decodeURIComponent(rawName);
+        } catch {
+          /* keep the generated name */
+        }
+        const att: Attachment = { id, name, mimeType: mime, size: bytes.length };
+        this.uploads.add(`${t.summary.id}\n${id}`);
+        return this.json(res, 201, att);
       }
       case "abort": {
         const t = this.thread(params.id);
@@ -418,6 +447,12 @@ export class StubServer {
 }
 
 class Aborted extends Error {}
+
+async function readBytes(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  return Buffer.concat(chunks);
+}
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];

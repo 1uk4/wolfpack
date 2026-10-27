@@ -646,6 +646,11 @@ export class SubagentManager {
 
   /** A child's turn ended: record how, and tell the parent. */
   private finishTurn(rec: ChildRecord, thread: ThreadRuntime, reason: "complete" | "aborted" | "error"): void {
+    // Already stopped (start() cancelled a turn it had just begun): the stop was recorded, nothing more to do.
+    if (rec.state === "stopped" && rec.stopping) {
+      delete rec.stopping;
+      return;
+    }
     const name = rec.name;
     const followUp = `\n\nFollow up with subagent_message({ name: "${name}", message: "…" })`;
     const elapsed = formatElapsed(Math.max(0, Math.floor((Date.now() - Date.parse(rec.runStartedAt)) / 1000)));
@@ -985,6 +990,7 @@ export class SubagentManager {
       }
     } catch (e) {
       delete rec.resuming;
+      if (rec.state === "stopped") return; // stopped meanwhile: stays stopped
       const message = e instanceof Error ? e.message : String(e);
       this.ledger(rec, "child", "parent", "error", message);
       this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);

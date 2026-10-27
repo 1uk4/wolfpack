@@ -4,7 +4,7 @@
  * queued child, stale-slot recovery.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, utimesSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, utimesSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -415,5 +415,80 @@ describe("slot pool", () => {
     latch.open();
     await new Promise((r) => setTimeout(r, 200));
     expect(slotFiles(slots)).toEqual([]);
+  });
+});
+
+describe("slot pool hardening", () => {
+  it("a renamed-away lock with a fresh holder or no owner yet is put back, never deleted", async () => {
+    const dir = tmp();
+    const p = new SlotPool(dir, 3, "w");
+    // an old-ish directory with NO owner file (a taker between mkdir and write): not deleted
+    mkdirSync(join(dir, ".lock"));
+    utimesSync(join(dir, ".lock"), new Date(Date.now() - 8_000), new Date(Date.now() - 8_000));
+    (p as unknown as { breakStale(l: string): void }).breakStale(join(dir, ".lock"));
+    expect(existsSync(join(dir, ".lock"))).toBe(true);
+    // a fresh lock (new holder) is untouched
+    rmSync(join(dir, ".lock"), { recursive: true });
+    mkdirSync(join(dir, ".lock"));
+    writeFileSync(join(dir, ".lock", "owner"), "new-holder");
+    (p as unknown as { breakStale(l: string): void }).breakStale(join(dir, ".lock"));
+    expect(readFileSync(join(dir, ".lock", "owner"), "utf8")).toBe("new-holder");
+    p.close();
+  });
+
+  it("start times are read in the C locale and UTC, and cached", async () => {
+    const dir = tmp();
+    const p = new SlotPool(dir, 3, "w");
+    expect(await p.tryAcquire("a")).toBe(true);
+    const slot = JSON.parse(readFileSync(join(dir, readdirSync(dir).find((f) => f.endsWith(".json"))!), "utf8")) as { start?: string };
+    const ref = spawnSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, encoding: "utf8" }).stdout.trim();
+    expect(slot.start).toBe(ref);
+    const t0 = Date.now();
+    for (let i = 0; i < 50; i++) p.count();
+    expect(Date.now() - t0).toBeLessThan(1500); // no ps per call
+    p.close();
+  });
+
+  it("if the owner file cannot be written the lock directory is removed", async () => {
+    const dir = tmp();
+    const p = new SlotPool(dir, 3, "w");
+    mkdirSync(dir, { recursive: true });
+    const { chmodSync } = await import("node:fs");
+    const orig = process.umask(0o577);
+    try {
+      expect(await p.tryAcquire("a")).toBe(false); // reported, not thrown
+    } finally {
+      process.umask(orig);
+    }
+    chmodSync(dir, 0o755);
+    expect(existsSync(join(dir, ".lock"))).toBe(false);
+    p.close();
+  });
+});
+
+describe("stop during start", () => {
+  it("a stop that lands while the turn is submitted: one stop entry, state stays stopped", async () => {
+    const slots = tmp();
+    const g = { a: gate(), b: gate() };
+    const ag = agents({ a: g.a.p, b: g.b.p });
+    const w = await boot(ag, { yaml: "subagents:\n  maxRunning: 1\n", slots });
+    await say(w, "spawn[a]: SLOW-a");
+    await say(w, "spawn[b]: SLOW-b");
+    await parentIdle(w);
+    await settled(w, ["a:running", "b:queued#1"]);
+    const b = (await byName(w)).b;
+    const mgr = (w.wolf.server as unknown as { subagents: { records: Array<{ id: string; state: string; stopping?: string }>; start(r: unknown): Promise<void>; finishStopped(r: unknown, by: string): void; cancelIfStopped(r: unknown, t: unknown): Promise<void>; port: { thread(id: string): unknown } } }).subagents;
+    const rec = mgr.records.find((r) => r.id === b.id)!;
+    // stopped in the window right after the submit, while the turn is running
+    const thread = mgr.port.thread(b.id) as { isRunning: boolean };
+    g.a.open();
+    await vi.waitFor(() => expect(thread.isRunning).toBe(true), { timeout: 8000 });
+    rec.state = "stopped";
+    mgr.finishStopped(rec, "parent");
+    await mgr.cancelIfStopped(rec, thread);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await view(w)).toEqual(["a:done", "b:stopped"]);
+    const ledger = await w.client.getLedger!(b.id);
+    expect(ledger.filter((e) => e.kind === "stop")).toHaveLength(1);
   });
 });

@@ -75,6 +75,7 @@ export * from "./entry-view.ts";
 export * from "./work-view.ts";
 export * from "./item-document.ts";
 export * from "./memory-panel-model.ts";
+export * from "./panel-host.ts";
 export * from "./task-graph.ts";
 export * from "./task-graph-layout.ts";
 export { coalescedRefresh } from "./coalesced-refresh.ts";

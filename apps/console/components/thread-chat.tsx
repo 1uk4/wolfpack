@@ -10,7 +10,7 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
-import { MemoryPanel } from "@/components/memory-panel";
+import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { AttachmentThumbs } from "@/components/attachment-thumbs";
@@ -356,6 +356,7 @@ export function ThreadChat({
 	}, [transport]);
 
 	return (
+		<PanelHostProvider wolf={wolf} threadId={threadId}>
 		<div
 			className="flex h-dvh"
 			data-testid="thread-chat"
@@ -536,7 +537,8 @@ export function ThreadChat({
 					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 				</div>
 			</div>
-			<MemoryPanel wolf={wolf} threadId={threadId} />
+			<RightPanelHost />
 		</div>
+		</PanelHostProvider>
 	);
 }

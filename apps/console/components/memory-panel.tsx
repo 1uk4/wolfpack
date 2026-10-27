@@ -64,7 +64,7 @@ interface Loaded {
  * this thread's events). Collapse and view state persist in
  * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
  */
-export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string }) {
+export function MemoryPanel({ wolf, threadId, embedded = false }: { wolf: string; threadId: string; /** Rendered inside the panel host: body only, the host owns the aside, header and collapse. */ embedded?: boolean }) {
 	const [open, setOpen] = useState(true);
 	useEffect(() => {
 		try {
@@ -299,6 +299,85 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const showing = viewingOther ? (selected?.own.id === selectedId ? selected : null) : bound;
 	const otherState = viewingOther && !showing ? (selectedFailed ? "error" : "loading") : undefined;
 
+	const content = (
+		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
+			{statusError && !status ? <p className="text-muted-foreground" data-testid="memory-status-error">Memory status unavailable: {statusError}</p> : null}
+			{banner ? (
+				<div className="rounded-md border border-destructive/40 px-3 py-2 text-destructive" data-testid="memory-banner" data-tone={banner.tone}>
+					<div className="font-medium">{banner.title}</div>
+					<div className="text-xs">{banner.reason}</div>
+				</div>
+			) : null}
+
+			{pool ? (
+				<section data-testid="memory-pool">
+					<div className="mb-1 flex items-center justify-between gap-2">
+						<h3 className="text-xs font-medium uppercase text-muted-foreground">Pool</h3>
+						<div className="flex items-center gap-1" data-testid="memory-actions">
+							<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
+								{consolidating ? "Consolidating…" : "Consolidate"}
+							</Button>
+							<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
+								Promote
+							</Button>
+						</div>
+					</div>
+					<div className="relative h-1.5 rounded bg-muted">
+						<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
+						<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
+					</div>
+					<p className="mt-1 text-xs text-muted-foreground" data-testid="memory-pool-line">
+						{pool.tokensText} ·{" "}
+						<button
+							type="button"
+							className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+							aria-pressed={view === "feed"}
+							data-testid="memory-observations"
+							onClick={() => chooseView(view === "feed" ? lastView.current : "feed")}
+						>
+							{pool.observationsText}
+							{view !== "feed" && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
+						</button>
+					</p>
+					{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
+					{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
+					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
+				</section>
+			) : (
+				<div data-testid="memory-actions-fallback">
+					{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
+				</div>
+			)}
+
+			<StatusSection
+				view={view}
+				bound={status?.bound ?? null}
+				graph={graph}
+				shown={showing ? { item: showing.own, rec: recordView(showing.own, showing.parent) } : null}
+				viewingOther={viewingOther}
+				otherState={otherState}
+				onRetry={() => {
+					setSelectedFailed(false);
+					void refreshSelected(selectedRef.current);
+				}}
+				feed={feed}
+				onGraph={() => {
+					setSelectedId(null);
+					chooseView("graph");
+				}}
+				onToggleFeed={() => chooseView(view === "feed" ? lastView.current : "feed")}
+				// intentionally does not persist the view: a click never changes the saved choice
+				onSelect={(id) => {
+					setSelectedId(id === boundId ? null : id);
+					setView("item");
+					lastView.current = "item";
+				}}
+				onBack={() => setSelectedId(null)}
+			/>
+		</div>
+	);
+	if (embedded) return content;
+
 	if (!open) {
 		return (
 			<aside className="flex w-9 shrink-0 flex-col items-center border-l border-border py-2" data-testid="memory-panel" data-open="false">
@@ -317,81 +396,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					<ChevronsRightIcon />
 				</Button>
 			</div>
-			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
-				{statusError && !status ? <p className="text-muted-foreground" data-testid="memory-status-error">Memory status unavailable: {statusError}</p> : null}
-				{banner ? (
-					<div className="rounded-md border border-destructive/40 px-3 py-2 text-destructive" data-testid="memory-banner" data-tone={banner.tone}>
-						<div className="font-medium">{banner.title}</div>
-						<div className="text-xs">{banner.reason}</div>
-					</div>
-				) : null}
-
-				{pool ? (
-					<section data-testid="memory-pool">
-						<div className="mb-1 flex items-center justify-between gap-2">
-							<h3 className="text-xs font-medium uppercase text-muted-foreground">Pool</h3>
-							<div className="flex items-center gap-1" data-testid="memory-actions">
-								<Button size="xs" variant="ghost" disabled={block !== null} onClick={consolidate}>
-									{consolidating ? "Consolidating…" : "Consolidate"}
-								</Button>
-								<Button size="xs" variant="ghost" disabled={block !== null} onClick={startPromote}>
-									Promote
-								</Button>
-							</div>
-						</div>
-						<div className="relative h-1.5 rounded bg-muted">
-							<div className="h-full rounded bg-foreground/60" style={{ width: `${Math.round(pool.fill * 100)}%` }} />
-							<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
-						</div>
-						<p className="mt-1 text-xs text-muted-foreground" data-testid="memory-pool-line">
-							{pool.tokensText} ·{" "}
-							<button
-								type="button"
-								className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-								aria-pressed={view === "feed"}
-								data-testid="memory-observations"
-								onClick={() => chooseView(view === "feed" ? lastView.current : "feed")}
-							>
-								{pool.observationsText}
-								{view !== "feed" && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
-							</button>
-						</p>
-						{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
-						{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
-						{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
-					</section>
-				) : (
-					<div data-testid="memory-actions-fallback">
-						{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
-					</div>
-				)}
-
-				<StatusSection
-					view={view}
-					bound={status?.bound ?? null}
-					graph={graph}
-					shown={showing ? { item: showing.own, rec: recordView(showing.own, showing.parent) } : null}
-					viewingOther={viewingOther}
-					otherState={otherState}
-					onRetry={() => {
-						setSelectedFailed(false);
-						void refreshSelected(selectedRef.current);
-					}}
-					feed={feed}
-					onGraph={() => {
-						setSelectedId(null);
-						chooseView("graph");
-					}}
-					onToggleFeed={() => chooseView(view === "feed" ? lastView.current : "feed")}
-					// intentionally does not persist the view: a click never changes the saved choice
-					onSelect={(id) => {
-						setSelectedId(id === boundId ? null : id);
-						setView("item");
-						lastView.current = "item";
-					}}
-					onBack={() => setSelectedId(null)}
-				/>
-			</div>
+		{content}
 		</aside>
 	);
 }

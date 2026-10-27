@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, poolSummary,
+	FEED_CAP, PROMOTE_IDLE, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary,
 	promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
@@ -17,11 +17,18 @@ describe("memory panel model", () => {
 		assert.equal(parseOpen(serializeOpen(false)), false);
 		assert.equal(parseOpen(serializeOpen(true)), true);
 	});
-	it("banner for off/inert/sandbox, none for live", () => {
+	it("view key helper: defaults to record, round-trips feed", () => {
+		assert.equal(MEMORY_PANEL_VIEW_KEY, "lh.memory-panel.view.v1");
+		assert.equal(parseView(null), "record");
+		assert.equal(parseView("junk"), "record");
+		assert.equal(parseView(serializeView("feed")), "feed");
+		assert.equal(parseView(serializeView("record")), "record");
+	});
+	it("banner only for off/inert, none for live or sandbox", () => {
 		assert.equal(bannerOf(st("live")), null);
 		assert.equal(bannerOf(st("off"))?.reason, "why");
 		assert.equal(bannerOf(st("inert"))?.tone, "inert");
-		assert.equal(bannerOf(st("sandbox"))?.tone, "sandbox");
+		assert.equal(bannerOf(st("sandbox")), null);
 	});
 	it("poolSummary clamps and marks target", () => {
 		const p = poolSummary({ count: 2, tokens: 3000, consolidateAtTokens: 2000, poolTarget: 500, trigger: "hybrid" });

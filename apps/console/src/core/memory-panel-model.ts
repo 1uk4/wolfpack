@@ -10,6 +10,7 @@ import type { MemoryEventFrame, MemoryPoolStatus, MemoryStatus, WorkRecordRespon
 
 export const FEED_CAP = 100;
 export const MEMORY_PANEL_OPEN_KEY = "lh.memory-panel.open.v1";
+export const MEMORY_PANEL_VIEW_KEY = "lh.memory-panel.view.v1";
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -28,23 +29,31 @@ export function parseOpen(raw: string | null | undefined): boolean {
 }
 export const serializeOpen = (open: boolean): string => (open ? "1" : "0");
 
+// ─── Persisted bound-item / feed view ────────────────────────────────────────
+
+export type PanelView = "record" | "feed";
+
+/** SSR-safe: anything but "feed" (including no stored value) is the Record view. */
+export function parseView(raw: string | null | undefined): PanelView {
+	return raw === "feed" ? "feed" : "record";
+}
+export const serializeView = (view: PanelView): string => view;
+
 // ─── Banner (memory off / inert) ─────────────────────────────────────────────
 
 export interface MemoryBanner {
-	tone: "off" | "inert" | "sandbox";
+	tone: "off" | "inert";
 	title: string;
 	reason: string;
 }
 
-/** The state banner: off/inert block the panel's actions; sandbox is informational; live shows none. */
+/** The state banner: only off/inert are explained; live and sandbox show none. */
 export function bannerOf(status: Pick<MemoryStatus, "state" | "reason">): MemoryBanner | null {
 	switch (status.state) {
 		case "off":
 			return { tone: "off", title: "Memory is off", reason: status.reason };
 		case "inert":
 			return { tone: "inert", title: "Memory is inert", reason: status.reason };
-		case "sandbox":
-			return { tone: "sandbox", title: "Memory is running in a sandbox", reason: status.reason };
 		default:
 			return null;
 	}

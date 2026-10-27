@@ -130,6 +130,29 @@ describe("stepped AskCard", () => {
 		assert.deepEqual(draftAnswers(c, { source: { value: "a" }, strategy: { value: "by-pattern" }, depth: { value: "1" }, go: { value: true } }).depth, undefined);
 	});
 
+	it("Enter in a single-line field (a single choice's Other box) advances to the next step", async () => {
+		const c: Card = {
+			tool: "t",
+			fields: [
+				{ id: "a", kind: "single", label: "A", options: [{ label: "x", value: "x" }] },
+				{ id: "b", kind: "free-text", label: "B" },
+			],
+			steps: [{ fields: ["a"] }, { fields: ["b"] }],
+		};
+		await mount(c);
+		const other = q('[data-testid="card-other"]')!;
+		await type(other, "custom");
+		assert.deepEqual(fields(), ["a"]);
+		// linkedom inputs don't bubble through React's plumbing: call the card root's onKeyDown prop as React would.
+		await act(async () => {
+			const root = q('[data-testid="pending-card"]')!;
+			const key = Object.keys(root).find((k) => k.startsWith("__reactProps"))!;
+			(root as unknown as Record<string, { onKeyDown(e: unknown): void }>)[key]!.onKeyDown({ key: "Enter", defaultPrevented: false, target: other, preventDefault() {} });
+		});
+		assert.deepEqual(fields(), ["b"], "Enter moved on to step 2");
+		assert.equal(sent.length, 0, "and did not submit");
+	});
+
 	it("a card without steps stays a single page", async () => {
 		const c = card();
 		delete c.steps;

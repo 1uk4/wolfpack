@@ -126,10 +126,50 @@ export function graphItems(nodes: readonly KbGraphNode[]): PaletteItem[] {
 	return out;
 }
 
-/** Rank `items` for `query`, grouped by kind in PALETTE_GROUPS order,
- *  best-first inside a group (stable on ties), capped, empty groups
- *  dropped. Label matches count; keywords/hints only break through when
- *  the label does not match (they ride as extra fields). */
+/** Weight of a match that only lands via keywords (hidden text such as an
+ *  entry summary) relative to a label/hint match. */
+export const KEYWORD_WEIGHT = 0.4;
+
+/** Score one item: label + hint at full weight; when they miss, the whole
+ *  haystack (keywords included) at KEYWORD_WEIGHT, so a summary hit never
+ *  outranks a title hit. null = no match. */
+export function scoreItem(query: string, item: PaletteItem): number | null {
+	const primary = fuzzyScore(query, item.label, item.hint ?? "");
+	if (primary !== null) return primary;
+	if (!item.keywords?.length) return null;
+	const loose = fuzzyScore(query, item.label, item.hint ?? "", ...item.keywords);
+	return loose === null ? null : loose * KEYWORD_WEIGHT;
+}
+
+/** Stale-while-revalidate cache around an async loader: `peek()` is the
+ *  last good value (undefined before the first success); `refresh()`
+ *  reloads, deduping concurrent calls. A rejected load is never cached —
+ *  the next refresh retries — and the stale value survives it. */
+export function createSwrCache<T>(load: () => Promise<T>): { peek(): T | undefined; refresh(): Promise<T> } {
+	let value: T | undefined;
+	let inflight: Promise<T> | null = null;
+	return {
+		peek: () => value,
+		refresh() {
+			inflight ??= load().then(
+				(v) => {
+					value = v;
+					inflight = null;
+					return v;
+				},
+				(err) => {
+					inflight = null;
+					throw err;
+				},
+			);
+			return inflight;
+		},
+	};
+}
+
+/** Rank `items` for `query`: grouped by kind in PALETTE_GROUPS order,
+ *  best-first inside a group (stable on ties), capped per group, empty
+ *  groups dropped. Keyword-only matches are down-weighted (scoreItem). */
 export function rankPalette(query: string, items: readonly PaletteItem[]): PaletteGroup[] {
 	const q = query.trim();
 	const caps = q ? PALETTE_CAPS : PALETTE_EMPTY_CAPS;
@@ -138,7 +178,7 @@ export function rankPalette(query: string, items: readonly PaletteItem[]): Palet
 		const scored: { item: PaletteItem; score: number }[] = [];
 		for (const item of items) {
 			if (item.kind !== kind) continue;
-			const score = fuzzyScore(q, item.label, item.hint ?? "", ...(item.keywords ?? []));
+			const score = scoreItem(q, item);
 			if (score !== null) scored.push({ item, score });
 		}
 		scored.sort((a, b) => b.score - a.score);

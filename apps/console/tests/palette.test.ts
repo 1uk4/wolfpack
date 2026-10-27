@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
 	buildCommandItems,
+	createSwrCache,
 	currentWolfOf,
 	focusHref,
 	graphItems,
@@ -111,5 +112,37 @@ describe("keyboard rebind", () => {
 			assert.ok(!seen.has(a.binding), `duplicate ${a.binding}`);
 			seen.add(a.binding);
 		}
+	});
+});
+
+describe("keyword weighting", () => {
+	it("a title hit outranks a summary-only hit", () => {
+		const g = rankPalette("fox", [
+			{ id: "sum", kind: "entry", label: "Zed", keywords: ["fox"] },
+			{ id: "title", kind: "entry", label: "Buried fox note" },
+		]);
+		assert.deepEqual(g[0]!.items.map((i) => i.id), ["title", "sum"]);
+	});
+});
+
+describe("createSwrCache", () => {
+	it("serves the stale value, refreshes, dedupes, and retries after rejection", async () => {
+		let n = 0;
+		let fail = false;
+		const c = createSwrCache(async () => {
+			n++;
+			if (fail) throw new Error("boom");
+			return n;
+		});
+		assert.equal(c.peek(), undefined);
+		const [a, b] = await Promise.all([c.refresh(), c.refresh()]);
+		assert.equal(a, 1);
+		assert.equal(b, 1);
+		assert.equal(c.peek(), 1);
+		fail = true;
+		await assert.rejects(c.refresh());
+		assert.equal(c.peek(), 1);
+		fail = false;
+		assert.equal(await c.refresh(), 3);
 	});
 });

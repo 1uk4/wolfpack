@@ -18,7 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
-import { CARD_DETAILS_KEY, confirmCard } from "@wolfpack/harness/engine";
+import { confirmCard } from "@wolfpack/harness/engine";
 import {
   type WorkItem,
   type CreateWorkInput,
@@ -213,83 +213,66 @@ export default function createTasksExtension(
 
   // ── Ship confirmation ───────────────────────────────────────────────────
   // task_done in a confirm policy raises a one-field confirm card (see engine/cards.ts) instead of shipping. The
-  // user's answer starts the next turn ("The user answered your task_done question …: yes (Ship)"); the model then
-  // calls task_done again with confirm: false, which ships only if that yes is in the transcript.
+  // user's answer starts the next turn; the model then calls task_done again with confirm: false, which ships only if
+  // the structured card-answer for THAT card says yes (never the model's say-so, never parsed text).
 
   /**
-   * Can a user answer a card here? Headless = no durable conversation reads (no engine behind the tool: embedded, CLI,
-   * scripts) or a task-owned conversation (a subagent: nobody reads its cards). Root and fork threads are interactive.
+   * Confirm only when someone can answer: the host serves the card protocol (capabilities.askCards: wolfd, not a pi or
+   * Telegram-only host), the tool runs inside a durable conversation, and that is not a task-owned one (a subagent:
+   * nobody reads its cards). Otherwise task_done ships at once.
    */
+  const cardCapable = context.capabilities?.askCards === true;
   async function canAsk(ctx: ToolContext): Promise<boolean> {
-    if (!ctx.conversation) return false;
+    if (!cardCapable || !ctx.conversation?.latestCard) return false;
     return (await ctx.conversation.classify())?.kind !== "task";
   }
 
+  /** The card's one field label is the exact key: it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
-  const textOf = (m: { content?: unknown }): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""));
-  /** Cards raised in this process that no later user message has answered or dismissed yet: catches parallel calls of one round. */
-  const raisedAt = new Map<string, number>();
+  const shipCard = (title: string, id: string) =>
+    confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
+  const firstLine = (m: { message: { content?: unknown } }): string => {
+    const c = m.message.content;
+    const text = typeof c === "string" ? c : Array.isArray(c) ? String((c.find((x: { type?: string }) => x?.type === "text") as { text?: string } | undefined)?.text ?? "") : "";
+    return text.split("\n")[0];
+  };
 
-  interface ShipTranscript {
-    /** A task_done confirm card for this item is waiting (nothing from the user since it was raised). */
-    pending: boolean;
-    /** The user's latest answer to a task_done ship question for this item. */
-    answer?: "yes" | "no";
-  }
+  /** Raised in this round, before the card reaches the transcript (parallel calls of one round): conversation:item -> label. */
+  const raisedThisRound = new Map<string, string>();
 
-  async function readShipTranscript(ctx: ToolContext, id: string): Promise<ShipTranscript> {
-    const marker = `(${id})?`;
-    const msgs = (await ctx.conversation?.messagesSince(undefined)) ?? [];
-    const key = `${ctx.conversationId}:${id}`;
-    let pending = false;
-    let answer: "yes" | "no" | undefined;
-    let sawUser = false;
-    let cardSeen = false;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i].message as { role: string; content?: unknown; toolName?: string; details?: Record<string, { fields?: { label?: string }[] } | undefined> };
-      if (m.role === "user") {
-        sawUser = true;
-        if (answer === undefined) {
-          const text = textOf(m);
-          const line = text.split("\n").find((l) => l.includes(marker));
-          if (text.includes("answered your task_done question") && line) answer = /: yes \(/.test(line) ? "yes" : /: no \(/.test(line) ? "no" : undefined;
-        }
-      } else if (m.role === "toolResult" && m.toolName === "task_done" && m.details?.[CARD_DETAILS_KEY]?.fields?.some((f) => f.label?.includes(marker))) {
-        cardSeen = true;
-        if (!sawUser) pending = true;
-      }
-    }
-    // Once the card is in the transcript the transcript decides; until then (parallel calls of one round) the memory does.
-    if (cardSeen) raisedAt.delete(key);
-    return { pending: pending || (!cardSeen && raisedAt.has(key)), ...(answer ? { answer } : {}) };
-  }
-
-  /** The tool result that raises (or re-points at) the ship confirmation for `id`. */
-  async function askToShip(ctx: ToolContext, id: string, title: string): Promise<ToolResult> {
-    const t = await readShipTranscript(ctx, id);
-    if (t.pending) {
-      return { content: [{ type: "text", text: `The user was already asked whether to ship ${id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
-    }
-    raisedAt.set(`${ctx.conversationId}:${id}`, Date.now());
-    return {
-      content: [{ type: "text", text: `Asked the user to confirm shipping ${id}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.` }],
-      card: confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" }),
-    };
-  }
+  /** The newest ship card for `id` at this title, from the structured transcript. */
+  const shipCardFor = (ctx: ToolContext, id: string, title: string) => ctx.conversation!.latestCard!("task_done", (c) => c.fields.length === 1 && c.fields[0].label === shipLabel(title, id));
 
   /**
    * Decide a task_done on `id`: undefined = ship now, else the result to return instead.
-   * auto policy or headless: ship (an explicit confirm: true keeps the legacy "call again" text). Interactive confirm
-   * policy: ship only on confirm: false backed by the user's yes in the transcript; anything else raises the card.
+   * Ship now when the policy is auto or nobody can answer (an explicit confirm: true keeps the legacy "call again"
+   * text). Otherwise ship only on confirm: false backed by a yes on the newest matching card that no ship has used
+   * yet; anything else raises (or re-points at) the card.
    */
-  async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, id: string, title: () => Promise<string>): Promise<ToolResult | undefined> {
+  async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, id: string, titleOf: () => Promise<string>): Promise<ToolResult | undefined> {
     if (autoShip || !(await canAsk(ctx))) {
       return args.confirm === true
         ? { content: [{ type: "text", text: `Confirmation required to ship ${id}. Call task_done again with confirm: false to ship.` }] }
         : undefined;
     }
-    if (args.confirm === false && (await readShipTranscript(ctx, id)).answer === "yes") return undefined;
-    return askToShip(ctx, id, await title());
+    const title = await titleOf();
+    const found = await shipCardFor(ctx, id, title);
+    const round = `${ctx.conversationId}:${id}`;
+    if (found) raisedThisRound.delete(round); // the transcript has it now
+    if (found?.status === "answered" && args.confirm === false) {
+      const yes = (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
+      // A yes is spent once a ship of this id followed it.
+      const spent = found.laterResults.some((m) => firstLine(m) === `Shipped: ${id}`);
+      if (yes && !spent) return undefined;
+    }
+    if (found?.status === "pending" || (!found && raisedThisRound.get(round) === shipLabel(title, id))) {
+      return { content: [{ type: "text", text: `The user was already asked whether to ship ${id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
+    }
+    raisedThisRound.set(round, shipLabel(title, id));
+    return {
+      content: [{ type: "text", text: `Asked the user to confirm shipping ${id}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.` }],
+      card: shipCard(title, id),
+    };
   }
 
   // ── Cache: sections read sync, tools write async ────────────────────────
@@ -930,6 +913,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
       // ─── task_done ───────────────────────────────────────────────────────
       defineTool({
         name: "task_done",
+        raisesCard: true,
         description: "Ship the active task and optionally bind to the next unfinished sibling." + ID_NOTE + " Shipping another item leaves your binding as it is.",
         parameters: Type.Object({
           confirm: Type.Optional(Type.Boolean({ description: "Override auto-ship policy" })),

@@ -63,6 +63,7 @@ interface Refs {
   byId: Record<string, Attachment>;
   byMessage: Record<string, string[]>;
 }
+// Single writer assumed: this process owns the den's attachments, so the cache is never invalidated by outside edits.
 const refsCache = new Map<string, Refs>();
 /** Drop the in-memory refs cache (tests simulate a restart). */
 export function forgetRefsCache(): void {
@@ -95,15 +96,20 @@ function saveRefs(den: string, threadId: string, refs: Refs): void {
 }
 
 function recordUpload(den: string, threadId: string, att: Attachment): void {
-  const refs = loadRefs(den, threadId);
-  refs.byId[att.id] = att;
-  saveRefs(den, threadId, refs);
+  try {
+    const refs = loadRefs(den, threadId);
+    refs.byId[att.id] = att;
+    saveRefs(den, threadId, refs);
+  } catch {
+    /* best-effort: history falls back to the text lines, the upload still succeeds */
+  }
 }
 
 /** After a submit is admitted (any disposition): remember which attachments rode the message `messageId`. */
 export function recordSubmission(den: string, threadId: string, messageId: string, refs: readonly AttachmentRef[]): void {
   if (refs.length === 0) return;
   const r = loadRefs(den, threadId);
+  // byMessage: nothing reads this yet (engine submission id != history entry id).
   r.byMessage[messageId] = [...new Set(refs.map((x) => x.id))];
   saveRefs(den, threadId, r);
 }
@@ -136,12 +142,10 @@ export function attachmentsInText(den: string, threadId: string, text: string): 
     const id = file.slice(0, dot);
     const mimeType = MIME_BY_EXT[file.slice(dot + 1)];
     if (dot < 0 || !mimeType || !ID_RE.test(id) || out.some((a) => a.id === id)) continue;
-    if (known[id]) {
-      out.push(known[id]);
-      continue;
-    }
+    // The file must still exist (a deleted file must not leave a ghost thumbnail); known refs supply name/size.
     try {
-      out.push({ id, name: file, mimeType, size: statSync(join(dir, file)).size });
+      const size = statSync(join(dir, file)).size;
+      out.push(known[id] ?? { id, name: file, mimeType, size });
     } catch {
       /* file gone: skip */
     }

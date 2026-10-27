@@ -116,6 +116,7 @@ describe("attachments in history and the GET route", () => {
   });
 
   it("steering a running turn with an attachment: the steered history message carries it", async () => {
+    let lastSeen: { role: string; content: string | Part[] }[] = [];
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     tw = await startTestWolf({
@@ -124,7 +125,10 @@ describe("attachments in history and the GET route", () => {
           await gate;
           return fauxAssistantMessage("first");
         },
-        fauxAssistantMessage("second"),
+        (ctx) => {
+          lastSeen = ctx.messages as never;
+          return fauxAssistantMessage("second");
+        },
       ],
     });
     const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "steer.png" });
@@ -137,6 +141,7 @@ describe("attachments in history and the GET route", () => {
     const steered = users.find((m) => m.text.startsWith("look at this"))!;
     expect(steered.attachments).toEqual([{ id: att.id, name: "steer.png", mimeType: "image/png", size: PNG.length }]);
     expect(users.find((m) => m.text === "start")!.attachments).toBeUndefined();
+    expect(lastSeen.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image"))).toBe(true);
   });
 
   it("durable refs: names survive a restart of the cache, the sidecar maps messageId, old threads fall back to the text lines", async () => {
@@ -155,6 +160,15 @@ describe("attachments in history and the GET route", () => {
     const den = tw.wolf.config.den;
     const text = `x\n\n[Attached image: /moved/den/${att.id}.png]`;
     expect(attachmentsInText(den, tw.home, text)).toEqual([{ id: att.id, name: `${att.id}.png`, mimeType: "image/png", size: PNG.length }]);
+  });
+
+  it("a single deleted file leaves no ghost attachment in history", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "gone.png" });
+    await tw.client.submit(tw.home, "x", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    rmSync(join(tw.wolf.config.den, "attachments", "testwolf", "home", `${att.id}.png`));
+    expect((await tw.client.getThread(tw.home)).messages.find((m) => m.role === "user")!.attachments).toBeUndefined();
   });
 
   it("refuses a bad, unknown or traversal id and an unknown thread as 404 not_found", async () => {

@@ -1,4 +1,4 @@
-/** The Subagent panel (real mount): header, ledger, read-only transcript, steer vs resume, Stop. Over a fake ConsoleClient via the thread API handlers. */
+/** The Subagent modal (real mount): header, ledger, read-only transcript, steer vs resume, Stop. Over a fake ConsoleClient via the thread API handlers. */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
@@ -27,7 +27,7 @@ type ThreadSummary = import("@wolfpack/client").ThreadSummary;
 type LedgerEntry = import("@wolfpack/client").LedgerEntry;
 const { BusyError } = await import("@wolfpack/client");
 const { threadFetch } = await import("./helpers/thread-fetch.ts");
-const { SubagentPanel, ledgerSender, messageHint, formatElapsed, formatTokens } = await import("../components/subagent-panel.tsx");
+const { SubagentModal, SubagentModalProvider, useSubagentModal, ledgerSender, messageHint, formatElapsed, formatTokens } = await import("../components/subagent-modal.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { PANELS } = await import("../components/panel-host.tsx");
 
@@ -74,6 +74,7 @@ function fake(summary: Partial<ThreadSummary>) {
 }
 
 let root: Root | null = null;
+const closed: number[] = [];
 const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 const qa = (sel: string) => [...document.querySelectorAll(sel)] as HTMLElement[];
 const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))));
@@ -95,7 +96,7 @@ async function mount(f: ReturnType<typeof fake>) {
 	await act(async () => {
 		root!.render(
 			<ServerEventsProvider connect={inert}>
-				<SubagentPanel wolf="w" childThreadId={CHILD} />
+				<SubagentModal wolf="w" childThreadId={CHILD} onClose={() => void closed.push(1)} />
 			</ServerEventsProvider>,
 		);
 	});
@@ -107,11 +108,9 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 });
 
-describe("subagent panel", () => {
-	it("is available only with a childThreadId", () => {
-		const def = PANELS.find((p) => p.id === "subagent")!;
-		assert.equal(def.available({ wolf: "w", threadId: "t", props: {} }), false);
-		assert.equal(def.available({ wolf: "w", threadId: "t", props: { childThreadId: CHILD } }), true);
+describe("subagent modal", () => {
+	it("is no longer a side panel", () => {
+		assert.equal(PANELS.some((p) => p.id === "subagent"), false);
 	});
 
 	it("pure helpers", () => {
@@ -300,14 +299,65 @@ describe("subagent panel", () => {
 		assert.equal(threadGets, 0);
 	});
 
-	it("a strip row opens the real Subagent panel instead of navigating", async () => {
+	it("closes with Esc, the close button and an outside click, and stays open for clicks inside", async () => {
+		const f = fake({});
+		await mount(f);
+		closed.length = 0;
+		assert.ok(q('[data-testid="subagent-modal"]'));
+		await act(async () => void q('[data-testid="subagent-modal"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.equal(closed.length, 0);
+		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
+		assert.equal(closed.length, 1);
+		await act(async () => void q('[data-testid="subagent-modal-close"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.equal(closed.length, 2);
+		const bd = q('[data-testid="subagent-modal-backdrop"]')!;
+		const key = Object.keys(bd).find((k) => k.startsWith("__reactProps$"))!;
+		const props = (bd as unknown as Record<string, Record<string, (e: unknown) => void>>)[key]!;
+		const ev = { isPrimary: true, button: 0, pointerId: 1, target: bd, currentTarget: bd };
+		await act(async () => {
+			props.onPointerDownCapture!(ev);
+			props.onPointerUpCapture!(ev);
+			props.onClickCapture!(ev);
+		});
+		assert.equal(closed.length, 3);
+	});
+
+	it("the provider opens the modal from anywhere over the current page and closes it", async () => {
+		const f = fake({});
+		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
+		let open: (id: string) => void = () => {};
+		function Opener() {
+			open = useSubagentModal().openSubagent;
+			return <div data-testid="page">current page</div>;
+		}
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<ServerEventsProvider connect={inert}>
+					<SubagentModalProvider>
+						<Opener />
+					</SubagentModalProvider>
+				</ServerEventsProvider>,
+			);
+		});
+		assert.equal(q('[data-testid="subagent-modal"]'), null);
+		await act(async () => open(CHILD));
+		await settle();
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), CHILD);
+		assert.ok(q('[data-testid="page"]'));
+		assert.equal(q('[data-testid="subagent-title"]')!.textContent, "Audit the routes");
+		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
+		assert.equal(q('[data-testid="subagent-modal"]'), null);
+	});
+
+	it("a strip row opens the modal instead of navigating", async () => {
 		const { SubagentStrip } = await import("../components/subagent-strip.tsx");
-		const { PanelHostProvider, RightPanelHost, PANELS: REAL } = await import("../components/panel-host.tsx");
 		const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 		const f = fake({});
 		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
 		const pushed: string[] = [];
-		(globalThis as Record<string, unknown>).localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		root = createRoot(host);
@@ -315,10 +365,9 @@ describe("subagent panel", () => {
 			root!.render(
 				<AppRouterContext.Provider value={{ push: (h: string) => void pushed.push(h) } as never}>
 					<ServerEventsProvider connect={inert}>
-						<PanelHostProvider wolf="w" threadId="w/home" panels={REAL.filter((p) => p.id === "subagent")}>
+						<SubagentModalProvider>
 							<SubagentStrip wolf="w" slug="home" items={[f.state.summary as never]} now={Date.now()} />
-							<RightPanelHost />
-						</PanelHostProvider>
+						</SubagentModalProvider>
 					</ServerEventsProvider>
 				</AppRouterContext.Provider>,
 			);
@@ -326,7 +375,7 @@ describe("subagent panel", () => {
 		await act(async () => void q('[data-testid="subagent-open"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		await settle();
 		assert.deepEqual(pushed, []);
-		assert.equal(q('[data-testid="subagent-panel"]')!.getAttribute("data-child"), CHILD);
-		assert.equal(q('[data-testid="subagent-title"]') !== null, true);
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), CHILD);
+		assert.equal(q('[data-testid="subagent-modal"]')!.getAttribute("role"), "dialog");
 	});
 });

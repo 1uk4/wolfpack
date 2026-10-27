@@ -8,6 +8,7 @@ import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { SubagentJobs } from "@/components/subagent-jobs";
+import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -20,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { sidebarGroups, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { isChildThread, sidebarGroups, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -384,6 +385,9 @@ function SessionsSidebar() {
 	const [query, setQuery] = useState("");
 	const pathname = usePathname();
 	const router = useRouter();
+	const { openSubagent } = useSubagentModal();
+	/** A subagent opens its modal over this page; anything else navigates. */
+	const openItem = (c: SessionItem) => (isChildThread(c) ? openSubagent(c.id) : router.push(itemHref(c)));
 	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
@@ -772,7 +776,7 @@ function SessionsSidebar() {
 									const target = shown![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
 									if (!target) return;
 									e.preventDefault();
-									router.push(itemHref(target));
+									openItem(target);
 									setKbdIndex(null);
 									e.currentTarget.blur();
 								}
@@ -814,7 +818,7 @@ function SessionsSidebar() {
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {
 											setKbdIndex(null);
-											router.push(itemHref(c));
+											openItem(c);
 										}}
 										// Thread rows have no management menu (rename/delete/export are
 										// legacy chat-record actions; the client has no such calls yet).
@@ -856,7 +860,7 @@ function SessionsSidebar() {
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
 					{/* The wolf's subagents (wolfd): running, queued and done, with the task each serves. */}
-					<SubagentJobs rows={chats ?? []} onOpen={(c) => router.push(itemHref(c))} />
+					<SubagentJobs rows={chats ?? []} onOpen={(c) => openSubagent(c.id)} />
 					{/* The legacy session-job feed: only drawn while a non-wolfd job runs. */}
 					<ActivitySection hideWhenEmpty />
 

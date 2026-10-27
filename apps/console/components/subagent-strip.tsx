@@ -1,15 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { BotIcon, ChevronDownIcon, ChevronRightIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { usePanelHost } from "@/components/panel-host";
+import { useSubagentModal } from "@/components/subagent-modal";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
 import { formatTokens } from "@/components/usage-format";
-import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, partitionChildren, stateLabel, threadHref, threadSlug, upsertChild, type ChildThread } from "@/src/core";
+import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, partitionChildren, stateLabel, threadSlug, upsertChild, type ChildThread } from "@/src/core";
 
 /** A strip row's height, for the composer reserve (see ThreadChat). */
 export const STRIP_ROW_PX = 28;
@@ -118,20 +117,14 @@ export function SubagentStripView({
 }
 
 /**
- * The status strip pinned above the composer: one row per child of this thread. Clicking a row opens the Subagent
- * panel; while that panel is not available it opens the child's own thread instead. Stop aborts the child's thread.
+ * The status strip pinned above the composer: one row per child of this thread. Clicking a row opens the subagent
+ * modal over the current page. Stop aborts the child's thread.
  */
 export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number }) {
-	const router = useRouter();
-	const host = usePanelHost();
+	const { openSubagent } = useSubagentModal();
 	const [expanded, setExpanded] = useState(false);
 	const now = useNow(items, nowProp);
-	const open = useCallback(
-		(c: ChildThread) => {
-			if (!host.openPanel("subagent", { childThreadId: c.id })) router.push(threadHref(wolf, c.id));
-		},
-		[host, router, wolf],
-	);
+	const open = useCallback((c: ChildThread) => openSubagent(c.id), [openSubagent]);
 	const [stopError, setStopError] = useState<string | null>(null);
 	// A state change (the stop took, or the child moved on) makes the error stale.
 	const states = items.map((c) => `${c.id}:${c.state}`).join();

@@ -1,6 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
@@ -268,11 +272,11 @@ function useNow(active: boolean): number {
 }
 
 /**
- * The Subagent panel: one child thread beside its parent — header (agent, state, elapsed, tokens, task, Stop), the
+ * The Subagent view: one child thread — header (agent, state, elapsed, tokens, task, Stop), the
  * ledger of hand-offs, the child's transcript (read-only, live via the thread stream) and a message field that
  * steers a running child or resumes a finished one.
  */
-export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThreadId: string }) {
+function SubagentView({ wolf, childThreadId }: { wolf: string; childThreadId: string }) {
 	const slug = threadSlug(wolf, childThreadId);
 	const base = threadBase(wolf, slug);
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -363,7 +367,7 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 	}, [base, refresh]);
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-panel" data-child={childThreadId}>
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-view" data-child={childThreadId}>
 			{(note ?? stopNote) && (
 				<div className="border-b border-border px-3 py-1 text-xs text-destructive" data-testid="subagent-note">
 					{note ?? stopNote}
@@ -379,5 +383,85 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 				<Body key={childThreadId} wolf={wolf} slug={slug} childThreadId={childThreadId} loaded={loaded} entries={entries} onSettled={refresh} onStop={stop} />
 			)}
 		</div>
+	);
+}
+
+interface SubagentOpener {
+	/** Open the subagent modal over the current page (the child's thread id, "wolf/slug"). */
+	openSubagent: (childThreadId: string) => void;
+	closeSubagent: () => void;
+}
+const OpenerContext = createContext<SubagentOpener | null>(null);
+let warned = false;
+
+/** `openSubagent(childThreadId)` from anywhere under <SubagentModalProvider>; outside one it does nothing. */
+export function useSubagentModal(): SubagentOpener {
+	const o = useContext(OpenerContext);
+	if (!o && !warned && process.env.NODE_ENV !== "production") {
+		warned = true;
+		console.warn("useSubagentModal() used outside <SubagentModalProvider>: openSubagent is a no-op");
+	}
+	return o ?? { openSubagent: () => {}, closeSubagent: () => {} };
+}
+
+/** The wolf a child thread id belongs to ("wolf/slug"). */
+export const wolfOfThread = (threadId: string): string => threadId.split("/")[0] ?? "";
+
+/** The modal: header, ledger, transcript and the steer/resume field. Esc, the close button and a click outside close it. */
+export function SubagentModal({ wolf, childThreadId, onClose }: { wolf: string; childThreadId: string; onClose: () => void }) {
+	const closeRef = useRef<HTMLButtonElement>(null);
+	const dialogRef = useRef<HTMLDivElement>(null);
+	const backdrop = useBackdropDismiss(onClose);
+	useEffect(() => {
+		closeRef.current?.focus();
+	}, []);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			// THE ONE-ESC LAW: claim it here, the window chain must not also act.
+			e.preventDefault();
+			e.stopPropagation();
+			onClose();
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [onClose]);
+	return (
+		<div
+			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+			data-testid="subagent-modal-backdrop"
+			{...backdrop}
+		>
+			<div
+				ref={dialogRef}
+				role="dialog"
+				aria-modal="true"
+				aria-label="Subagent"
+				data-testid="subagent-modal"
+				className="relative flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-background text-sm shadow-lg"
+			>
+				<Button ref={closeRef} size="icon-xs" variant="ghost" className="absolute right-2 top-2 z-10" aria-label="Close" data-testid="subagent-modal-close" onClick={onClose}>
+					<XIcon />
+				</Button>
+				<SubagentView key={childThreadId} wolf={wolf} childThreadId={childThreadId} />
+			</div>
+		</div>
+	);
+}
+
+/**
+ * App-level opener: any component calls `useSubagentModal().openSubagent(childThreadId)` and the modal opens over the
+ * current page, whichever page that is. One modal at a time; opening another child replaces it.
+ */
+export function SubagentModalProvider({ children }: { children: ReactNode }) {
+	const [open, setOpen] = useState<string | null>(null);
+	const openSubagent = useCallback((id: string) => setOpen(id), []);
+	const closeSubagent = useCallback(() => setOpen(null), []);
+	const value = useMemo(() => ({ openSubagent, closeSubagent }), [openSubagent, closeSubagent]);
+	return (
+		<OpenerContext.Provider value={value}>
+			{children}
+			{open && typeof document !== "undefined" && createPortal(<SubagentModal wolf={wolfOfThread(open)} childThreadId={open} onClose={closeSubagent} />, document.body)}
+		</OpenerContext.Provider>
 	);
 }

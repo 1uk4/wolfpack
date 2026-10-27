@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
+import { SubagentModalProvider } from "@/components/subagent-modal";
 import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
@@ -31,7 +32,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 					<AppearanceProvider>
 						<SidebarProvider>
 							<ActivityProvider>
-								<AppShell>{children}</AppShell>
+								<SubagentModalProvider>
+									<AppShell>{children}</AppShell>
+								</SubagentModalProvider>
 							</ActivityProvider>
 						</SidebarProvider>
 					</AppearanceProvider>

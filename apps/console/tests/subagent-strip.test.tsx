@@ -29,7 +29,7 @@ const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
 type ThreadSummary = import("@wolfpack/client").ThreadSummary;
 const { createThreadApi } = await import("../src/server/thread-api.ts");
 const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
-const { PanelHostProvider, RightPanelHost, PANELS } = await import("../components/panel-host.tsx");
+const { SubagentModalProvider } = await import("../components/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
 const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SubagentJobs } = await import("../components/subagent-jobs.tsx");
@@ -116,21 +116,17 @@ function routeFetch(client: SubClient): typeof fetch {
 	}) as typeof fetch;
 }
 
-/** No panels at all: like the shipped host while the Subagent panel is unavailable. */
-const NO_PANELS: typeof PANELS = [];
-
 let liveClock = false;
 function Harness() {
 	const items = useSubagentChildren("1uk4", "home", PARENT);
 	return (
 		<>
 			<SubagentStrip wolf="1uk4" slug="home" items={items} now={liveClock ? undefined : NOW} />
-			<RightPanelHost />
 		</>
 	);
 }
 
-async function mount(client: SubClient, opts: { panels?: typeof PANELS; push?: (href: string) => void } = {}) {
+async function mount(client: SubClient, opts: { push?: (href: string) => void } = {}) {
 	globalThis.fetch = routeFetch(client);
 	const host = document.createElement("div");
 	document.body.appendChild(host);
@@ -139,9 +135,9 @@ async function mount(client: SubClient, opts: { panels?: typeof PANELS; push?: (
 		root!.render(
 			<AppRouterContext.Provider value={{ push: opts.push ?? (() => {}) } as never}>
 				<ServerEventsProvider connect={eventsSource}>
-					<PanelHostProvider wolf="1uk4" threadId={PARENT} panels={opts.panels ?? NO_PANELS}>
+					<SubagentModalProvider>
 						<Harness />
-					</PanelHostProvider>
+					</SubagentModalProvider>
 				</ServerEventsProvider>
 			</AppRouterContext.Provider>,
 		);
@@ -210,21 +206,16 @@ describe("the status strip", () => {
 		assert.deepEqual(c.aborted, ["1uk4/sub-1"]);
 	});
 
-	it("a click opens the Subagent panel with the child; without the panel it navigates to the child's thread", async () => {
+	it("a click opens the subagent modal over the page, without navigating", async () => {
 		const c = new SubClient();
 		c.kids = [child(1)];
 		const pushed: string[] = [];
 		await mount(c, { push: (h) => void pushed.push(h) });
+		assert.equal(q('[data-testid="subagent-modal"]'), null);
 		await click(q('[data-testid="subagent-open"]')!);
-		assert.deepEqual(pushed, ["/wolf/1uk4/thread/sub-1"]); // no Subagent panel available: fall back to the child's own thread
-		root!.unmount();
-		document.body.innerHTML = "";
-		let opened: unknown;
-		const panel = { id: "subagent", label: "Subagent", icon: () => null, available: () => true, render: ({ props }: { props: unknown }) => ((opened = props), null) };
-		await mount(c, { panels: [panel] as never, push: (h) => void pushed.push(h) });
-		await click(q('[data-testid="subagent-open"]')!);
-		assert.deepEqual(opened, { childThreadId: "1uk4/sub-1" });
-		assert.equal(pushed.length, 1);
+		await settle();
+		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
+		assert.deepEqual(pushed, []);
 	});
 });
 

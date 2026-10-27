@@ -1,10 +1,9 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { ActivityIcon, BotIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ActivityIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
-import { SubagentPanel } from "@/components/subagent-panel";
 import { MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
 
 export type PanelProps = Record<string, unknown>;
@@ -37,13 +36,6 @@ export const PANELS: readonly PanelDef[] = [
 		available: () => true,
 		render: ({ wolf, threadId }) => <MemoryPanel embedded wolf={wolf} threadId={threadId} />,
 	},
-	{
-		id: "subagent",
-		label: "Subagent",
-		icon: BotIcon,
-		available: ({ props }) => typeof props.childThreadId === "string" && props.childThreadId !== "",
-		render: ({ wolf, props }) => <SubagentPanel key={String(props.childThreadId)} wolf={wolf} childThreadId={String(props.childThreadId)} />,
-	},
 ];
 
 /** Stable for the life of a thread view: consumers that only call these never re-render on panel changes. */
@@ -70,7 +62,7 @@ const NOOP_ACTIONS: PanelHostActions = { openPanel: () => false, closePanel: () 
 const NOOP_STATE: PanelHostState = { selected: null, open: false, available: [], contexts: {} };
 let warned = false;
 
-/** Other components call `usePanelHost().openPanel("subagent", { childThreadId })`. Outside a provider it refuses (false). */
+/** Other components call `usePanelHost().openPanel("memory")`. Outside a provider it refuses (false). */
 export function usePanelHost(): PanelHostActions {
 	const a = useContext(ActionsContext);
 	if (!a && !warned && process.env.NODE_ENV !== "production") {

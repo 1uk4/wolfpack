@@ -105,6 +105,12 @@ export interface ToolOutcome {
   isError?: boolean;
 }
 
+/** The outcome of admit(): run now, or queue at `seq`. */
+interface Admission {
+  run: boolean;
+  seq?: number;
+}
+
 export interface SpawnParams {
   agent: string;
   task: string;
@@ -187,6 +193,9 @@ export class SubagentManager {
   private gate: Promise<unknown> = Promise.resolve();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private readonly shownPosition = new Map<string, number>();
+  /** Spawns/resumes that decided to queue and have not yet put their record in: id -> queue seq (keeps FIFO tight). */
+  private readonly reserved = new Map<string, number>();
+  private lastSlotError = "";
 
   constructor(
     private readonly port: SubagentPort,
@@ -196,7 +205,7 @@ export class SubagentManager {
     for (const r of this.records) for (const d of r.outbox) this.deliverySeq = Math.max(this.deliverySeq, d.n);
     for (const r of this.records) this.queueSeq = Math.max(this.queueSeq, r.queuedSeq ?? 0);
     this.maxRunning = Math.max(1, Math.floor(opts.maxRunning ?? 3));
-    this.pool = new SlotPool(opts.slotDir ?? join(homedir(), ".wolfpack", "run", "subagent-slots"), Math.max(1, Math.floor(opts.hostMax ?? DEFAULT_HOST_MAX)), port.name);
+    this.pool = new SlotPool(opts.slotDir ?? join(homedir(), ".wolfpack", "run", "subagent-slots"), Math.max(1, Math.floor(opts.hostMax ?? DEFAULT_HOST_MAX)), port.name, (e) => this.slotError(e));
   }
 
   close(): void {
@@ -206,6 +215,7 @@ export class SubagentManager {
     // A clean shutdown gives its slots back; recover() takes them again for the children that go on.
     for (const id of this.held) this.pool.release(id);
     this.held.clear();
+    this.pool.close();
     for (const off of this.unobserve.values()) off();
     for (const off of this.parentWatch.values()) off();
     for (const t of this.retryTimers.values()) clearTimeout(t);
@@ -334,7 +344,14 @@ export class SubagentManager {
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    const run = await this.admit(id);
+    let adm: Admission;
+    try {
+      adm = await this.admit(id);
+    } catch (e) {
+      await this.opts.releaseOwner(owned.taskId).catch((err) => this.port.onError(err));
+      return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const run = adm.run;
     const rec: ChildRecord = {
       id,
       conversationId: owned.conversation.id,
@@ -349,7 +366,7 @@ export class SubagentManager {
       ...(plan.workspace ? { workspace: plan.workspace } : {}),
       ...(plan.guardDir ? { guardDir: plan.guardDir } : {}),
       state: run ? "running" : "queued",
-      ...(run ? {} : { queuedSeq: ++this.queueSeq }),
+      ...(adm.seq ? { queuedSeq: adm.seq } : {}),
       startedAt: now,
       runStartedAt: now,
       tokens: 0,
@@ -358,6 +375,7 @@ export class SubagentManager {
     };
     // Registry first, like feature threads: a crash after this leaves a child wolfd re-attaches, never an orphan conversation.
     this.records.push(rec);
+    this.reserved.delete(id);
     this.persist();
     try {
       await this.attach(rec, owned.conversation);
@@ -375,7 +393,10 @@ export class SubagentManager {
     }
     this.ledger(rec, "parent", "child", "brief", params.task);
     this.announce(rec);
-    if (!run) void this.pump(); // (a slot may have freed while this spawn was being set up; also starts the poll)
+    if (!run) {
+      this.shownPosition.set(id, this.positionOf(rec)); // (announced just above)
+      void this.pump(); // (a slot may have freed while this spawn was being set up; also starts the poll)
+    }
 
     const notes = [
       missing.length ? `Notice: this runtime has no ${missing.join(", ")} tool${missing.length > 1 ? "s" : ""}; the sub-agent runs without ${missing.length > 1 ? "them" : "it"}.` : "",
@@ -469,9 +490,11 @@ export class SubagentManager {
     }
     if (!live && !this.held.has(rec.id)) {
       // A finished child needs a slot to run again; with none free the resume queues.
-      if (!(await this.admit(rec.id))) {
-        rec.queuedSeq = ++this.queueSeq;
+      const adm = await this.admit(rec.id);
+      if (!adm.run) {
+        rec.queuedSeq = adm.seq;
         rec.pending = [text];
+        this.reserved.delete(rec.id);
         this.setState(rec, "queued");
         this.ledger(rec, from, "child", "resume", text);
         return { messageId: randomUUID(), disposition: "queued" };
@@ -692,7 +715,7 @@ export class SubagentManager {
 
   /**
    * Owner-task lifecycle. The parked owner task exists so the store knows the conversation is a child (memory quiet, no
-   * binding). It lives while the child is active (queued, running, waiting), and ends when the child reaches done, failed
+   * binding). It is made at spawn, so a queued child has one while it waits for a slot; it lives while the child is active (queued, running, waiting), and ends when the child reaches done, failed
    * or stopped: a conversation whose owner task is terminal still runs turns (a resume works), and keeps its ownership
    * record, so nothing is lost, while parked tasks stay bounded by the number of ACTIVE children. A spawn that never got
    * going releases it too (discard), and so does releaseParent.
@@ -821,27 +844,62 @@ export class SubagentManager {
     return run;
   }
 
-  /** Whether `id` runs now (and then holds its slot) or waits: never ahead of a child already queued (FIFO). */
-  private admit(id: string): Promise<boolean> {
-    return this.serialize(async () => (this.records.some((r) => r.state === "queued") ? false : this.take(id)));
+  /** A slot-directory failure: reported once per distinct message (the queue retries every poll). */
+  private slotError(e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === this.lastSlotError) return;
+    this.lastSlotError = msg;
+    this.port.onError(new Error(`subagent slots (${this.pool.dir}): ${msg}; sub-agents queue until it works`));
   }
 
-  /** Take a wolf slot and a host slot, or neither. */
+  /**
+   * Whether `id` runs now (and then holds its slot) or waits, never ahead of one already queued (FIFO). A decision to
+   * queue reserves its place in the order at once, inside the serialized section. Never rejects.
+   */
+  private admit(id: string): Promise<Admission> {
+    return this.serialize(async () => {
+      try {
+        if (this.reserved.size === 0 && !this.records.some((r) => r.state === "queued") && (await this.take(id))) return { run: true };
+      } catch (e) {
+        this.slotError(e);
+      }
+      const seq = ++this.queueSeq;
+      this.reserved.set(id, seq);
+      return { run: false, seq };
+    });
+  }
+
+  /** Take a wolf slot and a host slot, or neither. Never throws. */
   private async take(id: string): Promise<boolean> {
     if (this.closed || this.held.size >= this.maxRunning) return false;
     if (!(await this.pool.tryAcquire(id))) return false;
+    if (this.closed) {
+      this.pool.release(id); // wolfd closed while the slot was being taken
+      return false;
+    }
     this.held.add(id);
     return true;
   }
 
   /** Hold a slot regardless of the caps (a child that was already running at boot). */
   private async hold(rec: ChildRecord): Promise<void> {
-    await this.pool.claim(rec.id);
+    if (!(await this.pool.claim(rec.id))) {
+      this.held.add(rec.id); // (it is running: it counts against the wolf cap even without a host slot file)
+      return;
+    }
+    if (this.closed) {
+      this.pool.release(rec.id);
+      return;
+    }
     this.held.add(rec.id);
   }
 
   private releaseSlot(rec: ChildRecord): void {
-    if (this.held.delete(rec.id)) this.pool.release(rec.id);
+    this.releaseSlotOf(rec.id);
+  }
+
+  private releaseSlotOf(id: string): void {
+    if (this.held.delete(id)) this.pool.release(id);
   }
 
   /** What a starting child is told: its brief (a child that never ran) and the messages that arrived while it queued. */
@@ -849,33 +907,49 @@ export class SubagentManager {
     return [...(resume ? [] : [rec.brief]), ...(rec.pending ?? [])].join("\n\n");
   }
 
-  /** Start queued children, oldest first, while slots are free; then refresh their positions. */
+  /** Start queued children, oldest first, while slots are free; then refresh their positions. Never rejects. */
   private pump(): Promise<void> {
     return this.serialize(async () => {
-      while (!this.closed) {
-        const next = this.records.filter((r) => r.state === "queued").sort((a, b) => (a.queuedSeq ?? 0) - (b.queuedSeq ?? 0))[0];
-        if (!next || !(await this.take(next.id))) break;
-        await this.start(next);
-      }
-      if (this.closed) return;
-      const queued = this.records.filter((r) => r.state === "queued");
-      for (const id of [...this.shownPosition.keys()]) if (!queued.some((r) => r.id === id)) this.shownPosition.delete(id);
-      for (const r of queued) {
-        const pos = this.positionOf(r);
-        if (this.shownPosition.get(r.id) !== pos) {
-          this.shownPosition.set(r.id, pos);
-          this.announce(r);
-        }
-      }
-      // Another wolfd may free a host slot without telling us: poll while anything waits.
-      if (queued.length > 0 && !this.pollTimer) {
-        this.pollTimer = setInterval(() => void this.pump(), this.opts.slotPollMs ?? 2000);
-        this.pollTimer.unref();
-      } else if (queued.length === 0 && this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = undefined;
+      try {
+        await this.pumpOnce();
+      } catch (e) {
+        this.port.onError(e);
       }
     });
+  }
+
+  private async pumpOnce(): Promise<void> {
+    while (!this.closed) {
+      const next = this.records.filter((r) => r.state === "queued").sort((a, b) => (a.queuedSeq ?? 0) - (b.queuedSeq ?? 0))[0];
+      if (!next) break;
+      // A spawn that decided to queue ahead of it has not put its record in yet: it goes first.
+      if ([...this.reserved.values()].some((q) => q < (next.queuedSeq ?? 0))) break;
+      if (!(await this.take(next.id))) break;
+      if (next.state !== "queued") {
+        // Stopped (or otherwise settled) while its slot was being taken.
+        this.releaseSlotOf(next.id);
+        continue;
+      }
+      await this.start(next);
+    }
+    if (this.closed) return;
+    const queued = this.records.filter((r) => r.state === "queued");
+    for (const id of [...this.shownPosition.keys()]) if (!queued.some((r) => r.id === id)) this.shownPosition.delete(id);
+    for (const r of queued) {
+      const pos = this.positionOf(r);
+      if (this.shownPosition.get(r.id) !== pos) {
+        this.shownPosition.set(r.id, pos);
+        this.announce(r);
+      }
+    }
+    // Another wolfd may free a host slot without telling us: poll while anything waits.
+    if (queued.length > 0 && !this.pollTimer) {
+      this.pollTimer = setInterval(() => void this.pump(), this.opts.slotPollMs ?? 2000);
+      this.pollTimer.unref();
+    } else if (queued.length === 0 && this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+    }
   }
 
   /** A queued child got its slot: submit what it was waiting to do. */
@@ -899,6 +973,7 @@ export class SubagentManager {
           rec.runStartedAt = now;
           this.setState(rec, "running");
         }
+        await this.cancelIfStopped(rec, thread);
       } else {
         // Running is recorded before the brief goes in (recover() resubmits a brief that never landed).
         rec.runStartedAt = now;
@@ -906,6 +981,7 @@ export class SubagentManager {
         await thread.conv.submit({ input: this.startInput(rec, false), whenBusy: "reject" });
         delete rec.pending;
         this.persist();
+        await this.cancelIfStopped(rec, thread);
       }
     } catch (e) {
       delete rec.resuming;
@@ -913,6 +989,14 @@ export class SubagentManager {
       this.ledger(rec, "child", "parent", "error", message);
       this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);
     }
+  }
+
+  /** A stop that came while start() was submitting only marked the child: the turn it then started must not run on. */
+  private async cancelIfStopped(rec: ChildRecord, thread: ThreadRuntime): Promise<void> {
+    if (rec.state !== "stopped" || !thread.isRunning) return;
+    rec.stopping = "parent";
+    await thread.abort().catch((e) => this.port.onError(e));
+    if (rec.stopping) delete rec.stopping;
   }
 
   /**

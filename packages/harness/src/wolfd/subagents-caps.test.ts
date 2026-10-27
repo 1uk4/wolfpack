@@ -4,12 +4,13 @@
  * queued child, stale-slot recovery.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, utimesSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadSummary, WolfEvent } from "@wolfpack/protocol";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "./scripted-model.js";
+import { SlotPool } from "./subagent-slots.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
 const wolves: TestWolf[] = [];
@@ -297,10 +298,122 @@ describe("stale slots", () => {
     wolves.length = 0;
     // its previous process died holding a slot (here the pid is still alive, as it is the test process)
     mkdirSync(slots, { recursive: true });
-    writeFileSync(join(slots, "testwolf~sub_gone.json"), JSON.stringify({ pid: process.pid, wolf: "testwolf", child: "sub-gone" }));
+    writeFileSync(join(slots, "testwolf~sub_gone.json"), JSON.stringify({ pid: process.pid, pool: "closed-pool", wolf: "testwolf", child: "sub-gone" }));
     const w2 = await boot(agents(), { root, slots, env: { WOLFPACK_SUBAGENT_HOST_MAX: "1" } });
     await say(w2, "spawn[a]: quick");
     await settled(w2, ["a:done"]);
     expect(slotFiles(slots).some((f) => f.includes("sub_gone"))).toBe(false);
+  });
+});
+
+const poolOf = (w: TestWolf) => (w.wolf.server as unknown as { subagents: { pool: SlotPool } }).subagents.pool;
+
+describe("slot directory failures", () => {
+  it("an unwritable slot dir does not crash wolfd: the child queues, then starts once the dir works", async () => {
+    const base = tmp();
+    const blocker = join(base, "blocker");
+    writeFileSync(blocker, "a file where the directory should be");
+    const g = gate();
+    const w = await boot(agents({ a: g.p }), { slots: join(blocker, "slots") });
+    await say(w, "spawn[a]: SLOW-a");
+    await parentIdle(w);
+    await settled(w, ["a:queued#1"]);
+    await new Promise((r) => setTimeout(r, 200)); // several polls fail: still alive and queued
+    await settled(w, ["a:queued#1"]);
+    rmSync(blocker);
+    await settled(w, ["a:running"]);
+    g.open();
+    await settled(w, ["a:done"]);
+  });
+});
+
+describe("slot pool", () => {
+  it("concurrent takers racing over a stale lock: exactly hostMax win", async () => {
+    const dir = tmp();
+    mkdirSync(join(dir, ".lock"));
+    writeFileSync(join(dir, ".lock", "owner"), "9999999:dead:token");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(dir, ".lock"), old, old);
+    const pools = Array.from({ length: 8 }, (_, i) => new SlotPool(dir, 3, `w${i}`));
+    const got = await Promise.all(pools.map((p, i) => p.tryAcquire(`c${i}`)));
+    expect(got.filter(Boolean)).toHaveLength(3);
+    expect(slotFiles(dir)).toHaveLength(3);
+    expect(readdirSync(dir).filter((f) => f.startsWith(".lock"))).toEqual([]); // lock and stale remnants gone
+    pools.forEach((p) => p.close());
+  });
+
+  it("a slot whose pid now belongs to another process (start time differs) is stale", async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "old~c.json"), JSON.stringify({ pid: process.pid, start: "Mon Jan  1 00:00:00 1990", wolf: "old", child: "c" }));
+    const p = new SlotPool(dir, 1, "me");
+    expect(await p.tryAcquire("x")).toBe(true);
+    expect(slotFiles(dir)).toEqual(["me~x.json"]);
+    p.close();
+  });
+
+  it("two live wolfds with the same name: neither drops the other's slots", async () => {
+    const slots = tmp();
+    const g = gate();
+    const a = await boot(agents({ a: g.p }), { name: "twin", slots, env: { WOLFPACK_SUBAGENT_HOST_MAX: "1" } });
+    await say(a, "spawn[a]: SLOW-a");
+    await settled(a, ["a:running"]);
+    const b = await boot(agents(), { name: "twin", slots, env: { WOLFPACK_SUBAGENT_HOST_MAX: "1" } }); // boot runs dropOwn
+    expect(slotFiles(slots)).toHaveLength(1); // a's slot survived b's boot
+    await say(b, "spawn[b]: quick");
+    await parentIdle(b);
+    await settled(b, ["b:queued#1"]); // the host (cap 1) is still full
+    g.open();
+    await settled(b, ["b:done"]);
+  });
+
+  it("stop while its slot is being taken: the child stays stopped, never starts, and gives the slot back", async () => {
+    const slots = tmp();
+    const g = { a: gate(), b: gate() };
+    const ag = agents({ a: g.a.p, b: g.b.p });
+    const w = await boot(ag, { yaml: "subagents:\n  maxRunning: 1\n", slots });
+    await say(w, "spawn[a]: SLOW-a");
+    await say(w, "spawn[b]: SLOW-b");
+    await parentIdle(w);
+    await settled(w, ["a:running", "b:queued#1"]);
+    const pool = poolOf(w);
+    const orig = pool.tryAcquire.bind(pool);
+    const latch = gate();
+    pool.tryAcquire = async (id) => {
+      await latch.p;
+      return orig(id);
+    };
+    g.a.open();
+    await settled(w, ["a:done", "b:queued#1"]);
+    await say(w, "stop[b]");
+    await settled(w, ["a:done", "b:stopped"]);
+    latch.open();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(ag.started).toEqual(["SLOW-a"]);
+    expect(await view(w)).toEqual(["a:done", "b:stopped"]);
+    expect(slotFiles(slots)).toEqual([]);
+  });
+
+  it("close while a slot is being acquired gives it back", async () => {
+    const slots = tmp();
+    const g = gate();
+    const w = await boot(agents({ a: g.p, b: g.p }), { yaml: "subagents:\n  maxRunning: 1\n", slots });
+    await say(w, "spawn[a]: SLOW-a");
+    await say(w, "spawn[b]: SLOW-b");
+    await parentIdle(w);
+    await settled(w, ["a:running", "b:queued#1"]);
+    const pool = poolOf(w);
+    const orig = pool.tryAcquire.bind(pool);
+    const latch = gate();
+    pool.tryAcquire = async (id) => {
+      await latch.p;
+      return orig(id);
+    };
+    g.open(); // a finishes: the pump starts taking b's slot, held at the latch
+    await vi.waitFor(async () => expect(await view(w)).toContain("a:done"), { timeout: 8000 });
+    await w.stop();
+    wolves.length = 0;
+    latch.open();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(slotFiles(slots)).toEqual([]);
   });
 });

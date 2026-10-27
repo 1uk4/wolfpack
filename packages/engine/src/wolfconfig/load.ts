@@ -116,6 +116,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
     ...(sandbox ? { sandbox } : {}),
+    prompts: { ...(v.prompts?.structuredOutput !== undefined ? { structuredOutput: v.prompts.structuredOutput } : {}) },
     memory: {
       live: v.memory.live === true,
       librarian: v.memory.librarian === true,

@@ -78,6 +78,25 @@ describe("scripted model turns", () => {
     expect(new Set(offered).size).toBe(offered.length);
   });
 
+  it("wolf.yaml prompts.structuredOutput reaches the model's instructions (default, string, false)", async () => {
+    const seen = async (yaml?: string) => {
+      let ctx = "";
+      tw = await startTestWolf({
+        script: [(context) => { ctx = JSON.stringify(context); return fauxAssistantMessage("pong"); }],
+        ...(yaml ? { yaml } : {}),
+      });
+      await tw.submit("ping");
+      await tw.stop();
+      tw = undefined;
+      return ctx;
+    };
+    expect(await seen()).toContain("# Structured output");
+    const custom = await seen("prompts:\n  structuredOutput: CUSTOM-GUIDE\n");
+    expect(custom).toContain("CUSTOM-GUIDE");
+    expect(custom).not.toContain("show_checklist: a linear");
+    expect(await seen("prompts:\n  structuredOutput: false\n")).not.toContain("# Structured output");
+  });
+
   it("show_decision twice with one objectId: two object-upsert revs, history holds one object at the latest rev", async () => {
     const d1 = {
       objectId: "db",

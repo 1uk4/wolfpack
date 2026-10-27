@@ -16,6 +16,9 @@
  *     port: 7421                          # optional TCP (127.0.0.1); unset = none
  *   sandbox: true           # redirect den / KB_OPS / WORK_ENDPOINT at a snapshot dev root (default <dir>/sandbox)
  *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
+ *   prompts:
+ *     structuredOutput: |   # overrides the default decision/graph/checklist guidance; `false` removes the section
+ *       ...
  *   memory:
  *     defaultDomain: personal  # domain for untagged observations (one of domains; default: first)
  *     live: true            # durable memory may write the LIVE roots (nothing sets this until cutover)
@@ -30,6 +33,9 @@
  * reported in `warnings`. `den` is derived: <dir>/den.
  */
 import { z } from "zod";
+
+/** An editable prompt section: text replaces the default, `false` (or empty text) removes it. */
+export type PromptSection = string | false;
 
 export const DEFAULT_TOOLS = ["coding"] as const;
 
@@ -59,6 +65,7 @@ export const WolfFileSchema = z.object({
     .passthrough()
     .default({}),
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
+  prompts: z.object({ structuredOutput: z.union([z.string(), z.literal(false)]).optional() }).passthrough().optional(),
   memory: z
     .object({
       live: z.boolean().optional(),
@@ -90,6 +97,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "extensions",
   "serve",
   "sandbox",
+  "prompts",
   "memory",
 ];
 
@@ -115,6 +123,11 @@ export interface WolfConfig {
   };
   /** Present when `sandbox` is on: the dev root everything outward is redirected into. Absolute path. */
   sandbox?: { root: string };
+  /** Editable prompt sections; unset = the harness default. */
+  prompts: {
+    /** Replaces the default structured-output guidance; `false` removes the section. */
+    structuredOutput?: PromptSection;
+  };
   memory: {
     /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */
     live: boolean;

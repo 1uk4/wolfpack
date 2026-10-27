@@ -148,15 +148,27 @@ export class SweepManager {
       }
       emit({ type: "sweep_finished", domain: KB_DOMAIN, target: { kind: "den" }, ...r, durationMs, ...(msg ? { error: msg } : {}) });
     };
+    // Counts from item events, so a tick that throws or times out still reports what it got done.
+    const tally = { processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0 };
+    let pendingAtStart = 0;
     const onEvent = (e: SweepEvent) => {
+      // After sweep_finished (a timed-out tick still running in the background) nothing more goes out.
+      if (finished) return;
       if (e.type === "started") {
+        if (started) return;
+        pendingAtStart = e.pending;
         started = { at: new Date().toISOString(), ms: Date.now() };
         emit({ type: "sweep_started", domain: KB_DOMAIN, target: { kind: "den" }, pending: e.pending });
       } else {
+        if (!started) return;
+        tally.processed++;
+        if (e.outcome === "create") tally.created++;
+        else if (e.outcome === "merge") tally.merged++;
+        else if (e.outcome === "reject") tally.rejected++;
+        else tally.parked++;
         emit({ type: "sweep_item", domain: KB_DOMAIN, target: { kind: "den" }, from: e.from, denTopicId: e.denTopicId, outcome: e.outcome, ...(e.entryId ? { entryId: e.entryId } : {}) });
       }
     };
-    const zero = { processed: 0, created: 0, merged: 0, rejected: 0, parked: 0, remaining: 0 };
 
     try {
       // Dynamic import to keep startup fast
@@ -206,7 +218,7 @@ export class SweepManager {
     } catch (err) {
       console.error("[librarian] Sweep failed:", err instanceof Error ? err.message : err);
       const text = err instanceof Error ? err.message : String(err);
-      finish(zero, text);
+      finish({ ...tally, remaining: Math.max(0, pendingAtStart - tally.processed) }, text);
       // Unexpected failure: alert once per distinct message, not every tick.
       // (Outages never get here: the tick turns them into backoff.)
       if (text !== this.lastFailureAlert) {

@@ -1,6 +1,6 @@
 /** SweepManager -> MemoryEvents: lazy sweep_started, always-paired sweep_finished, the persisted last sweep, and the idle-tick fix. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelTable } from "@wolfpack/engine";
@@ -96,6 +96,56 @@ describe("SweepManager events", () => {
     expect(events[1]).toMatchObject({ processed: 0, error: "engine exploded" });
     expect(JSON.parse(readFileSync(lastFile(), "utf8")).error).toBe("engine exploded");
     expect(mgr.getStatus()).toMatchObject({ state: "failed", error: "engine exploded\nsecond line" });
+  });
+
+  it("a throw after items keeps the tallied counts in sweep_finished and sweep-last.json", async () => {
+    next = async (o) => {
+      o.onEvent?.({ type: "started", pending: 3 });
+      o.onEvent?.({ type: "item", from: "w1", denTopicId: "a", outcome: "create", entryId: "kb-wp-AAAAAAA" });
+      o.onEvent?.({ type: "item", from: "w1", denTopicId: "b", outcome: "parked" });
+      throw new Error("timed out");
+    };
+    await tick();
+    expect(events.at(-1)).toMatchObject({ type: "sweep_finished", processed: 2, created: 1, parked: 1, remaining: 1, error: "timed out" });
+    expect(JSON.parse(readFileSync(lastFile(), "utf8"))).toMatchObject({ processed: 2, created: 1, parked: 1, error: "timed out" });
+  });
+
+  it("events after sweep_finished are dropped, and a second started while open is ignored", async () => {
+    let late!: SweepTickOptions["onEvent"];
+    next = async (o) => {
+      late = o.onEvent;
+      o.onEvent?.({ type: "started", pending: 1 });
+      o.onEvent?.({ type: "started", pending: 9 });
+      throw new Error("budget");
+    };
+    await tick();
+    late?.({ type: "item", from: "w1", denTopicId: "late", outcome: "create", entryId: "kb-wp-LATE001" });
+    late?.({ type: "started", pending: 1 });
+    expect(events.map((e) => e.type)).toEqual(["sweep_started", "sweep_finished"]);
+  });
+
+  it("a throwing emit never breaks the sweep run or its persistence", async () => {
+    const m2 = new SweepManager({
+      kbBase: join(base, "kb"), kbOps: join(base, "ops"), denLocal: join(base, "den"),
+      models: { tiers: {} } as unknown as ModelTable,
+      emit: () => { throw new Error("subscriber bug"); },
+      sweepTick: async (o) => {
+        o.onEvent?.({ type: "started", pending: 1 });
+        return { outcome: "ran", sweep: { ...emptyResult(), processed: 1, created: 1 } };
+      },
+    });
+    await m2.start();
+    while (m2.isRunning()) await new Promise((r) => setTimeout(r, 5));
+    expect(m2.getStatus().state).toBe("completed");
+    expect(JSON.parse(readFileSync(lastFile(), "utf8"))).toMatchObject({ created: 1 });
+  });
+
+  it("a malformed sweep-last.json is tolerated by the idle status", async () => {
+    mkdirSync(join(base, "den"), { recursive: true });
+    writeFileSync(lastFile(), "{nope");
+    next = async () => ({ outcome: "idle", sweep: emptyResult() });
+    await tick();
+    expect(mgr.getStatus()).toEqual({ state: "idle" });
   });
 
   it("a throw before any work emits nothing", async () => {

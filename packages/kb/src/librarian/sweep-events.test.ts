@@ -98,6 +98,22 @@ describe("sweep onEvent", () => {
     expect(events).toEqual([{ type: "started", pending: 1 }]);
   });
 
+  it("item events come after the persist step: the entry is in the ledger and written when a create is seen", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    drop("alpha");
+    const seen: boolean[] = [];
+    await sweep({
+      engine, roots, notify: () => {},
+      onEvent: (e) => {
+        if (e.type !== "item") return;
+        const ledger = join(roots.denLocal, "ledger", "events.jsonl");
+        seen.push(existsSync(ledger) && readFileSync(ledger, "utf8").includes(e.entryId!) && existsSync(join(entries(), `${e.entryId}.md`)));
+      },
+      getEmbedder: () => ({ embed: async () => [1, 0, 0] }), loadEntryVectors: async () => [],
+    });
+    expect(seen).toEqual([true]);
+  });
+
   it("an empty inbox emits nothing", async () => {
     await run();
     expect(events).toEqual([]);

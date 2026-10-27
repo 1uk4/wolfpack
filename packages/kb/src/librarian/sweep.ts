@@ -369,6 +369,9 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     }
   };
   emit({ type: "started", pending: unseen.length });
+  // Item events go out after the persist step, so a subscriber that gets create / merge can read the entry (ledger,
+  // registry and git commit are done by then).
+  const itemEvents: SweepEvent[] = [];
 
   // The contribution gets the whole run budget. The merge threshold derives from
   // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
@@ -895,7 +898,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
     } finally {
       clearCurrent(roots);
-      if (itemEvent) emit({ type: "item", from: c.from, denTopicId: c.denTopicId, ...itemEvent });
+      if (itemEvent) itemEvents.push({ type: "item", from: c.from, denTopicId: c.denTopicId, ...itemEvent });
       const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
       ctx.notify?.(
         `item ${c.from}/${c.denTopicId}: ${route} · llm ${secs(llmMs)} · total ${secs(Date.now() - itemStart)} → ${outcome}`
@@ -919,10 +922,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
 
   // ── PERSIST ────────────────────────────────────────────────────────────────
-  if (batch.length > 0 || committed) {
-    if (batch.length > 0) appendLedger(roots, batch);
-    renderRegistry(roots, foldRegistry([...log, ...batch]));
-    gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+  try {
+    if (batch.length > 0 || committed) {
+      if (batch.length > 0) appendLedger(roots, batch);
+      renderRegistry(roots, foldRegistry([...log, ...batch]));
+      gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+    }
+  } finally {
+    for (const e of itemEvents) emit(e);
   }
 
   if (contributions.length > 0) ctx.notify?.(

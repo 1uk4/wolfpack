@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { KbRoots } from "../shared/index.js";
-import { normalizeOutcome, readPipeline, RECEIPT_CAP } from "./pipeline.js";
+import { normalizeOutcome, readPipeline, RECEIPT_CAP, PARKED_CAP } from "./pipeline.js";
 import { writeLastSweep, readLastSweep } from "../shared/last-sweep.js";
 import { writeCurrent } from "./progress.js";
 
@@ -33,7 +33,7 @@ describe("readPipeline", () => {
   });
 
   it("an empty KB reads as an empty pipeline", () => {
-    expect(readPipeline(roots)).toEqual({ lanes: [], receipts: [], parked: [], sweep: {} });
+    expect(readPipeline(roots)).toEqual({ lanes: [], receipts: [], parked: [], parkedTotal: 0, sweep: {} });
   });
 
   it("lanes count top-level files only (skips _processed and _bad) and give the oldest age", () => {
@@ -81,6 +81,35 @@ describe("readPipeline", () => {
     put(["parked", "w1", "stuck.md"], "---\nfrom: w1\nden_topic_id: stuck\n---\n\nbody\n");
     receipt("w1", "stuck", "parked", "2026-10-01T10:00:00.000Z", "failed 3 times: junk. Re-run with: wolfpack-kb unpark w1/stuck.md");
     expect(readPipeline(roots).parked).toEqual([{ wolf: "w1", file: "stuck.md", denTopicId: "stuck", reason: "failed 3 times: junk" }]);
+  });
+
+  it("a parked item's reason comes from its own receipt even when the receipt list is capped; parked is capped with a total", () => {
+    for (let i = 0; i < RECEIPT_CAP + 5; i++) {
+      const sec = 1_800_000_000 + i;
+      receipt("w1", `n${i}`, "create", new Date(sec * 1000).toISOString(), `kb-wp-${i}`, sec);
+    }
+    put(["parked", "w1", "old.md"], "---\nfrom: w1\nden_topic_id: old\n---\n\nbody\n");
+    receipt("w1", "old", "parked", "2020-01-01T00:00:00.000Z", "over its 0s time budget (2 times). Re-run with: wolfpack-kb unpark w1/old.md", 1_000_000_000);
+    expect(readPipeline(roots).receipts.some((r) => r.denTopicId === "old")).toBe(false);
+    expect(readPipeline(roots).parked[0]).toMatchObject({ denTopicId: "old", reason: "over its 0s time budget (2 times)" });
+    for (let i = 0; i < PARKED_CAP + 3; i++) put(["parked", "w2", `p${String(i).padStart(3, "0")}.md`], "x");
+    const p = readPipeline(roots);
+    expect(p.parked).toHaveLength(PARKED_CAP);
+    expect(p.parkedTotal).toBe(PARKED_CAP + 4);
+  });
+
+  it("receipt text is redacted and whitespace-collapsed", () => {
+    receipt("w1", "leak", "reject", "2026-10-01T10:00:00.000Z", "token   sk-abcdefghijklmnopqrstuvwxyz123456   used");
+    const r = readPipeline(roots).receipts[0];
+    expect(r.detail).not.toContain("sk-abcdef");
+    expect(r.detail).toContain("[REDACTED");
+    expect(r.detail).not.toContain("  ");
+  });
+
+  it("missing or unreadable lane directories read as empty", () => {
+    mkdirSync(join(base, "ops"), { recursive: true });
+    writeFileSync(join(base, "ops", "inbox"), "not a directory");
+    expect(readPipeline(roots)).toMatchObject({ lanes: [], parked: [], receipts: [] });
   });
 
   it("sweep: the item in progress and the persisted last sweep", () => {

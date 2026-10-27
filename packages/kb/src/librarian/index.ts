@@ -9,6 +9,7 @@ export {
   readPipeline,
   normalizeOutcome,
   RECEIPT_CAP,
+  PARKED_CAP,
   type Pipeline,
   type PipelineLane,
   type PipelineReceipt,

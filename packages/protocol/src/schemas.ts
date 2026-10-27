@@ -638,7 +638,10 @@ export const KbPipelineResponseSchema = z.object({
   lanes: z.array(PipelineLaneSchema),
   /** Newest first, at most 50. */
   receipts: z.array(PipelineReceiptSchema),
+  /** At most 100; `parkedTotal` counts them all. */
   parked: z.array(PipelineParkedSchema),
+  /** All parked items (absent from servers that predate it). */
+  parkedTotal: z.number().int().nonnegative().optional(),
   sweep: z.object({
     /** The item being processed right now (absent when idle). */
     current: PipelineCurrentSchema.optional(),

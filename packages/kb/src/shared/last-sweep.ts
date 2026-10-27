@@ -2,6 +2,7 @@
  * last-sweep — the last finished sweep, persisted to `<denLocal>/sweep-last.json`, so the last-run time and counts
  * survive idle ticks and restarts (`kb_sweep_status`, the pipeline view). Written by the sweep manager.
  */
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KbRoots } from "./paths.js";
@@ -27,7 +28,7 @@ export const lastSweepFile = (roots: KbRoots) => join(roots.denLocal, "sweep-las
 export function writeLastSweep(roots: KbRoots, last: LastSweep): void {
   const file = lastSweepFile(roots);
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync(tmp, JSON.stringify(last, null, 2));
   renameSync(tmp, file);
 }

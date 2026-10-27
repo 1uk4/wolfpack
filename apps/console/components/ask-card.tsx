@@ -73,17 +73,19 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	const stepOk = Object.keys(folded.errors).length === 0 && fieldsComplete(steps[step]?.fields ?? [], folded.draft);
 	// Moving between steps finishes any live dictation (its text belongs to the step it was said on), drops the claim, and
 	// puts focus on the new step's first control.
+	// The step changes only after the flush (as Submit does), so a dictation tail lands in the field it was said in.
+	const focusStep = useRef(false);
 	const goTo = (n: number) => {
-		void finishDictation();
-		dictationProps.release();
-		setStepIdx(n);
+		void finishDictation().then(() => {
+			if (!liveRef.current) return;
+			dictationProps.release();
+			focusStep.current = true;
+			setStepIdx(n);
+		});
 	};
-	const firstRender = useRef(true);
 	useEffect(() => {
-		if (firstRender.current) {
-			firstRender.current = false;
-			return;
-		}
+		if (!focusStep.current) return; // only a Back/Next/Enter move focuses, not the step list shrinking
+		focusStep.current = false;
 		(rootRef.current?.querySelector("[data-field] textarea, [data-field] input, [data-field] button") as HTMLElement | null)?.focus?.();
 	}, [step]);
 	const shownFields = closed ? visibleFields(card, answered ? answer : draft) : stepped ? (steps[step]?.fields ?? []) : visibleFields(card, folded.draft);
@@ -102,7 +104,7 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 			onKeyDown={(e) => {
 				// Enter in a single-line input advances a stepped card (the multi "Other" box claims its own Enter).
 				const t = e.target as HTMLElement;
-				if (e.key === "Enter" && !e.defaultPrevented && stepped && !lastStep && stepOk && t.tagName === "INPUT") {
+				if (e.key === "Enter" && !e.defaultPrevented && stepped && !lastStep && stepOk && t.tagName === "INPUT" && (!(t as HTMLInputElement).type || (t as HTMLInputElement).type === "text")) {
 					e.preventDefault();
 					goTo(step + 1);
 				}

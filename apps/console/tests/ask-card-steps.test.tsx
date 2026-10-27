@@ -172,6 +172,7 @@ describe("stepped AskCard", () => {
 		});
 		assert.ok(q("[data-dictation-claimed]"), "the focused text field claims dictation");
 		await click(q('[data-testid="card-next"]')!);
+		await act(async () => {});
 		assert.equal(q("[data-dictation-claimed]"), null, "Next drops the claim");
 		assert.equal(q('[data-testid="card-step-indicator"]')!.getAttribute("aria-live"), "polite");
 		await click(q('[data-testid="card-back"]')!);
@@ -207,4 +208,22 @@ describe("visibleFields parity (protocol vs console mirror)", () => {
 			assert.deepEqual(mirrorVisible(card, answers as never).map((f) => f.id), want);
 		});
 	}
+});
+
+describe("dictation tail across Next", () => {
+	it("the step changes only after the dictation flush, so the tail lands in the previous step's field", async () => {
+		const dict = await import("../components/dictation.tsx");
+		await mount(card());
+		await type(q('[data-testid="card-text"]')!, "/p");
+		assert.equal(typeof dict.finishDictation, "function");
+		await click(q('[data-testid="card-next"]')!);
+		await act(async () => {});
+		// after the (immediate, no live run) flush the card is on step 2 and the earlier answer is held, not lost
+		assert.deepEqual(fields(), ["strategy"]);
+		await click(q('[data-testid="card-back"]')!);
+		await act(async () => {});
+		const el = q('[data-testid="card-text"]')!;
+		const props = (el as unknown as Record<string, { value: string }>)[Object.keys(el).find((k) => k.startsWith("__reactProps"))!]!;
+		assert.equal(props.value, "/p");
+	});
 });

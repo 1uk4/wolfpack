@@ -211,6 +211,7 @@ const CRAWL_CHATTER = new Set(["crawl_run", "crawl_status", "crawl_stop", "crawl
 /** The message without crawl run/status/stop/release calls and results; undefined when nothing is left of it. */
 function withoutCrawlChatter(m: ConversationMessage["message"]): ConversationMessage["message"] | undefined {
   const msg = m as { role: string; toolName?: string; content?: unknown };
+  if (msg.role === "user" && typeof msg.content === "string" && /^The user answered your (crawl_run|crawl_release) question/.test(msg.content)) return undefined;
   if (msg.role === "toolResult" && msg.toolName && CRAWL_CHATTER.has(msg.toolName)) return undefined;
   if (msg.role === "assistant" && Array.isArray(msg.content)) {
     const kept = (msg.content as { type?: string; name?: string }[]).filter((b) => !(b.type === "toolCall" && b.name && CRAWL_CHATTER.has(b.name)));
@@ -247,7 +248,8 @@ export function newObserverChunks(
   const isCommitted = fp === "" || rest.some((m) => m.message.role === "assistant" && fingerprint(m.message.content) === fp);
   if (isCommitted) return { chunks: chunk(), next: { lastEntryId } };
   if (!settled) return undefined;
-  entries.push({ type: "message", id: `${lastEntryId}:current`, message: { role: "assistant", content: current.content } });
+  const unsettled = withoutCrawlChatter({ role: "assistant", content: current.content } as ConversationMessage["message"]);
+  if (unsettled) entries.push({ type: "message", id: `${lastEntryId}:current`, message: unsettled });
   return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 

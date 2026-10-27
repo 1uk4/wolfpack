@@ -367,7 +367,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
   /** The card label binds a yes to the numbers the user saw: a changed dry run (different digest) needs a fresh yes. */
   const releaseLabel = (runDir: string, digest: string) => `Release crawl ${basename(runDir)} to the librarian? (${digest})`;
   /** First line of a successful release result (the spent-yes check reads it back; the colon ends the run name). */
-const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
+  const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
   const firstLine = (m: { message: { content?: unknown } }): string => {
     const c = m.message.content;
     const block = Array.isArray(c) ? (c as { type?: string; text?: string }[]).find((x) => x?.type === "text" && typeof x.text === "string") : undefined;

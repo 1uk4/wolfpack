@@ -66,4 +66,13 @@ describe("seedWatermark", () => {
     const only = newObserverChunks([m(5, "user", "q"), { entryId: 6, message: { role: "assistant", content: [{ type: "toolCall", id: "t", name: "crawl_status", arguments: {} }] } }], { content: [] }, { lastEntryId: 4 }, true)!;
     expect(textOf(only)).toBe("[user] q");
   });
+
+  it("the unsettled current message and crawl_run/crawl_release card answers are filtered too", () => {
+    const cur = { content: [{ type: "toolCall" as const, name: "crawl_status", arguments: {} }, { type: "text" as const, text: "checking" }] };
+    const out = newObserverChunks([m(5, "user", "The user answered your crawl_run question (call c):\n- How many batches to run at once?: 8"), m(6, "user", "hello")], cur, { lastEntryId: 4 }, true)!;
+    const text = textOf(out)!;
+    expect(text).toContain("checking");
+    expect(text).toContain("hello");
+    expect(text).not.toMatch(/crawl_status|How many batches/);
+  });
 });

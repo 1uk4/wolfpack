@@ -186,7 +186,7 @@ export class HttpConsoleClient implements ConsoleClient {
    * A wolf's activity (thread status + card changes). Reconnects on a dropped stream, resuming with Last-Event-ID;
    * the server answers a stale cursor with `resync` + a baseline, which are yielded like any event (the consumer refetches).
    */
-  async *watchActivity(wolf: string, opts: { from?: number; signal?: AbortSignal } = {}): AsyncGenerator<WolfEvent> {
+  async *watchActivity(wolf: string, opts: { from?: string; signal?: AbortSignal } = {}): AsyncGenerator<WolfEvent> {
     const { signal } = opts;
     let cursor = opts.from;
     let failures = 0;
@@ -196,7 +196,7 @@ export class HttpConsoleClient implements ConsoleClient {
       signal?.addEventListener("abort", stop);
       try {
         const headers: Record<string, string> = { Accept: "text/event-stream" };
-        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = String(cursor);
+        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = cursor;
         const res = await this.request("streamWolfActivity", { name: wolf }, { headers, signal: ctl.signal }, wolf);
         if (!res.body) throw new TypeError("stream response has no body");
         for await (const frame of sseFrames(res.body)) {
@@ -210,7 +210,7 @@ export class HttpConsoleClient implements ConsoleClient {
           const parsed = parseWolfEvent(json);
           if (parsed.kind === "unknown") continue;
           if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
-          cursor = Math.max(cursor ?? 0, parsed.event.id);
+          if (frame.id) cursor = frame.id; // opaque `<boot>:<seq>`
           yield parsed.event;
         }
         throw new TypeError("stream ended");

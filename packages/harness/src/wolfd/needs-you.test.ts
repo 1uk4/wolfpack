@@ -57,11 +57,9 @@ describe("wolf activity stream", () => {
 
     await tw.client.answerCard!(tw.home, pending.card.callId, { answer: { value: "main" } });
     await drain(tw);
-    // The answer entry lands before the next turn starts, so the thread may read idle for a moment before busy.
     await vi.waitFor(() => expect(summary(seen).at(-1)).toBe("status:idle"));
-    const after = summary(seen).slice(4);
-    expect(after[0]).toBe("settled:answered");
-    expect(after).toContain("status:busy");
+    // needs-you goes straight to busy: never an idle blip between the answer and the next turn.
+    expect(summary(seen).slice(4)).toEqual(["status:busy", "settled:answered", "status:idle"]);
     const ids = seen.map((e) => e.id);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });
@@ -90,35 +88,51 @@ describe("wolf activity stream", () => {
     await vi.waitFor(() => expect(summary(seen).at(-1)).toBe("status:idle"));
   });
 
+  /** Open the activity stream (optionally with a cursor) and read `n` frames: their events and SSE ids. */
+  const readActivity = async (w: TestWolf, n: number, cursor?: string) => {
+    const ctl = new AbortController();
+    const res = await fetch(`${w.url}/v1/wolves/testwolf/activity`, {
+      headers: { Accept: "text/event-stream", ...(cursor === undefined ? {} : { "Last-Event-ID": cursor }) },
+      signal: ctl.signal,
+    });
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let text = "";
+    const frames = () => text.split("\n\n").filter((f) => f.includes("data: "));
+    while (frames().length < n) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += dec.decode(value);
+    }
+    ctl.abort();
+    const fr = frames().slice(0, n);
+    return {
+      ids: fr.map((f) => /^id: (.*)$/m.exec(f)?.[1] ?? ""),
+      events: fr.map((f) => JSON.parse(/^data: (.*)$/m.exec(f)![1]!) as WolfEvent),
+    };
+  };
+
   it("resumes from Last-Event-ID without a gap; a stale cursor gets resync + baseline", async () => {
     tw = await startTestWolf({ script: [ask("Q"), fauxAssistantMessage("x")] });
-    const open = async (cursor?: number) => {
-      const ctl = new AbortController();
-      const res = await fetch(`${tw!.url}/v1/wolves/testwolf/activity`, {
-        headers: { Accept: "text/event-stream", ...(cursor === undefined ? {} : { "Last-Event-ID": String(cursor) }) },
-        signal: ctl.signal,
-      });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let text = "";
-      const events = async (n: number): Promise<WolfEvent[]> => {
-        while ((text.match(/\ndata: /g)?.length ?? 0) + (text.startsWith("data: ") ? 1 : 0) < n) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          text += dec.decode(value);
-        }
-        ctl.abort();
-        return text.split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)) as WolfEvent);
-      };
-      return events;
-    };
-    const first = await (await open())(1);
-    expect(first).toMatchObject([{ type: "thread-status", status: "idle" }]);
+    const first = await readActivity(tw, 1);
+    expect(first.events).toMatchObject([{ type: "thread-status", status: "idle" }]);
+    expect(first.ids[0]).toMatch(/^[0-9a-f]+:\d+$/);
     await tw.submit("go");
     // Everything after the baseline cursor is replayed in order, nothing duplicated.
-    const replayed = await (await open(first[0].id))(3);
-    expect(summary(replayed)).toEqual(["status:busy", "card-pending", "status:needs-you"]);
-    const stale = await (await open(9999))(3);
-    expect(summary(stale)).toEqual(["resync", "status:needs-you", "card-pending"]);
+    const replayed = await readActivity(tw, 3, first.ids[0]);
+    expect(summary(replayed.events)).toEqual(["status:busy", "card-pending", "status:needs-you"]);
+    const boot = first.ids[0]!.split(":")[0];
+    expect(summary((await readActivity(tw, 3, `${boot}:9999`)).events)).toEqual(["resync", "status:needs-you", "card-pending"]);
+    expect(summary((await readActivity(tw, 3, "garbage")).events)).toEqual(["resync", "status:needs-you", "card-pending"]);
+  });
+
+  it("a restarted wolf (new process epoch) answers an old cursor with resync + baseline", async () => {
+    tw = await startTestWolf({ script: [ask("Q")] });
+    await tw.submit("go");
+    const old = (await readActivity(tw, 1)).ids[0]!;
+    await tw.stop();
+    tw = await startTestWolf({ script: [ask("Q")] });
+    // Same sequence number, other epoch: must not be trusted as a position.
+    expect(summary((await readActivity(tw, 2, old)).events)).toEqual(["resync", "status:idle"]);
   });
 });

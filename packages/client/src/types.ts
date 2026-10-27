@@ -102,7 +102,7 @@ export interface ConsoleClient {
    * Live status/card changes of a wolf (thread-status, card-pending, card-settled; `resync` = refetch). Starts with a
    * baseline of the current state, resumes across reconnects. Never ends on its own: stop with `signal`. Optional like watchMemory.
    */
-  watchActivity?(wolf: string, opts?: { from?: number; signal?: AbortSignal }): AsyncIterable<WolfEvent>;
+  watchActivity?(wolf: string, opts?: { from?: string; signal?: AbortSignal }): AsyncIterable<WolfEvent>;
   /**
    * Fold the wolf's observation pool into session topics; resolves with counts and topic ids. Rejects with a
    * ProtocolError `memory_unavailable` when the wolf's memory is inert or not loaded. Optional like watchMemory.

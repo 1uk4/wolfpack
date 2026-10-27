@@ -18,6 +18,7 @@
  *   (plus a text-delta carrying the partial text) so a console reattaching sees a coherent turn.
  * Limits: one wolf, home thread only; a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
+import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -143,6 +144,10 @@ export class WolfServer {
   // wolf-scoped activity stream (thread-status, card events): own id space, bounded replay buffer
   /** Starts at 1: a baseline carries the current cursor as its id, and ids are positive. */
   private wolfSeq = 1;
+  /** Per-process epoch in the SSE id (`<boot>:<seq>`): a cursor from another process is stale, whatever its number. */
+  private readonly boot = randomUUID().slice(0, 8);
+  /** Answers being submitted: the thread reads busy from the claim until the next turn starts (never idle in between). */
+  private answering = 0;
   private wolfBuffer: WolfEvent[] = [];
   private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
   private lastStatus: ThreadStatus = "idle";
@@ -681,8 +686,9 @@ export class WolfServer {
   }
 
   private status(): ThreadStatus {
-    // A claimed card (its answer is being submitted) still counts: needs-you goes straight to busy, never via idle.
-    return this.running ? "busy" : this.cards.raisedCards().length > 0 ? "needs-you" : "idle";
+    // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
+    // list/baseline agree because both read pending().
+    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
   }
 
   private threadSummary(): ThreadSummary {
@@ -756,6 +762,17 @@ export class WolfServer {
     }
     const ids = ready.map((r) => r.callId);
     const before = this.turnStarts;
+    this.answering++;
+    this.syncStatus();
+    try {
+      return await this.submitAnswers(ready, ids, before);
+    } finally {
+      this.answering--;
+      this.syncStatus();
+    }
+  }
+
+  private async submitAnswers(ready: ReturnType<CardTracker["answer"]> & object, ids: string[], before: number): Promise<SubmitAck> {
     let r;
     try {
       r = await this.conv.submit({
@@ -829,15 +846,23 @@ export class WolfServer {
    * cursor: the buffered events after it, or `resync` + baseline when the buffer cannot cover it. Open until the client goes.
    */
   private activityStream(req: IncomingMessage, res: ServerResponse, url: URL): void {
-    const from = resumeCursor(req, url);
+    const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
+    const rawStr = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+    // A cursor is `<boot>:<seq>`. Absent: fresh. Anything else (other boot, malformed) is stale.
+    let from: number | "stale" | undefined;
+    if (rawStr) {
+      const m = /^([0-9a-f]+):(\d+)$/.exec(rawStr);
+      from = m && m[1] === this.boot ? Number(m[2]) : "stale";
+    }
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
     });
     const frame = (ev: WolfEvent) => {
+      if (res.destroyed || res.writableEnded) return;
       if (res.writableLength > MEMORY_STREAM_MAX_BUFFER) return void res.destroy();
-      res.write(`id: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+      res.write(`id: ${this.boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
     };
     // Baseline events carry the current cursor as their id: resuming from one is gap-free.
     const baseline = (): WolfEvent[] => {
@@ -852,21 +877,22 @@ export class WolfServer {
     let replay: WolfEvent[];
     if (from === undefined) replay = baseline();
     else {
-      const stale = from > this.wolfSeq || (firstId === undefined ? from < this.wolfSeq : from < firstId - 1);
+      const cursor = from === "stale" ? undefined : from;
+      const stale = cursor === undefined || cursor > this.wolfSeq || (firstId === undefined ? cursor < this.wolfSeq : cursor < firstId - 1);
       replay = stale
         ? [{ type: "resync", id: this.wolfSeq, wolf: this.name, at: new Date().toISOString() }, ...baseline()]
-        : this.wolfBuffer.filter((e) => e.id > from);
+        : this.wolfBuffer.filter((e) => e.id > cursor);
     }
     for (const ev of replay) frame(ev);
     // Subscribed in the same tick as the replay was written: no event falls between.
     this.wolfSubs.add(frame);
     res.write(": connected\n\n");
-    const ka = setInterval(() => res.write(": ka\n\n"), MEMORY_KEEPALIVE_MS);
-    ka.unref();
     const gone = () => {
       clearInterval(ka);
       this.wolfSubs.delete(frame);
     };
+    const ka = setInterval(() => (res.destroyed || res.writableEnded ? gone() : res.write(": ka\n\n")), MEMORY_KEEPALIVE_MS);
+    ka.unref();
     req.on("close", gone);
     res.on("close", gone);
   }

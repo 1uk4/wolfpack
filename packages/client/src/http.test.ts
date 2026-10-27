@@ -242,3 +242,13 @@ describe("unknown error codes", () => {
     await expect(c.promoteMemory("w")).rejects.toMatchObject({ name: "ProtocolError", code: "engine_error", message: "try again soon", retryable: true });
   });
 });
+
+describe("children and ledger", () => {
+  it("list a thread's children and read a child's ledger; a missing thread is NotFoundError", async () => {
+    const c = make();
+    const home = await homeThread(c);
+    expect(await c.listChildren(home)).toEqual([]);
+    await expect(c.listChildren("nope/nope")).rejects.toBeInstanceOf(NotFoundError);
+    await expect(c.getLedger(home)).rejects.toBeInstanceOf(NotFoundError);
+  });
+});

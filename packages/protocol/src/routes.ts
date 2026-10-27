@@ -8,6 +8,7 @@ import {
   ErrorEnvelopeSchema,
   KbEntryDetailSchema,
   KbGraphSchema,
+  LedgerEntrySchema,
   MemoryEventSchema,
   WolfEventSchema,
   MemoryStatusSchema,
@@ -46,6 +47,8 @@ export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSche
 
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
+export const ListChildrenResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
+export const LedgerResponseSchema = z.object({ entries: z.array(LedgerEntrySchema) });
 export const AbortResponseSchema = z.object({ ok: z.literal(true) });
 
 export interface RouteDef {
@@ -80,6 +83,17 @@ export const ROUTES = {
     status: [200, 201],
     error: err,
   },
+  /**
+   * The subagent threads a thread spawned (any state), oldest first; empty for a thread that spawned none. 404
+   * `not_found` for an unknown thread.
+   */
+  listChildren: { method: "GET", path: "/v1/threads/:id/children", response: { kind: "json", schema: ListChildrenResponseSchema }, status: [200], error: err },
+  /**
+   * A subagent thread's ledger: every message between its parent, the child and the operator (brief, steers, questions,
+   * results), oldest first, each with sender, recipient and time. 404 `not_found` for an unknown thread or one that is
+   * not a subagent.
+   */
+  getLedger: { method: "GET", path: "/v1/threads/:id/ledger", response: { kind: "json", schema: LedgerResponseSchema }, status: [200], error: err },
   getThread: { method: "GET", path: "/v1/threads/:id", response: { kind: "json", schema: ThreadDetailSchema }, status: [200], error: err },
   submit: { method: "POST", path: "/v1/threads/:id/submit", body: SubmitBodySchema, response: { kind: "json", schema: SubmitAckSchema }, status: [200], error: err },
   /**

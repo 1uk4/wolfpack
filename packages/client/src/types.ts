@@ -2,11 +2,15 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, CreateThreadBody, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
   Attachment,
+  LedgerEntry,
+  LedgerKind,
+  LedgerParty,
+  SubagentState,
   AttachmentRef,
   SubmitAck,
   ThreadDetail,
@@ -76,6 +80,10 @@ export interface ConsoleClient {
   listWolves(): Promise<WolfSummary[]>;
   listThreads(wolf: string): Promise<ThreadSummary[]>;
   getThread(threadId: string): Promise<ThreadDetail>;
+  /** The subagent threads a thread spawned (any state), oldest first. Rejects NotFoundError for an unknown thread. Optional: the mock has no subagents. */
+  listChildren?(threadId: string): Promise<ThreadSummary[]>;
+  /** A subagent thread's ledger (brief, steers, questions, owner messages, results), oldest first. Rejects NotFoundError for an unknown thread or one that is not a subagent. Optional like listChildren. */
+  getLedger?(threadId: string): Promise<LedgerEntry[]>;
   /**
    * Open a thread: `{kind:"home"}`, or `{kind:"feature", workItemId}` for a thread bound to that feature. Idempotent:
    * the same feature returns its existing thread. Optional: not every client has it.

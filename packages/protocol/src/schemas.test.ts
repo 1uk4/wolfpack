@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AbortRequestSchema,
+  LedgerEntrySchema,
+  parseWolfEvent,
   ActorSchema,
   ConsolidateResponseSchema,
   CreateThreadRequestSchema,
@@ -488,5 +490,36 @@ describe("graph object", () => {
     expect(msg({ nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] })).toMatch(/cycle.*a, b|cycle.*b, a/);
     expect(msg({ ...graph, edges: [{ from: "b", to: "a" }, { from: "b", to: "a" }] })).toMatch(/duplicate edge/);
     expect(msg({ nodes: many(101), edges: [] })).toMatch(/100/);
+  });
+});
+
+describe("subagent threads", () => {
+  it("a summary carries the parent and the child fields, all optional", () => {
+    const plain = { id: "w/home", wolf: "w", kind: "home", title: "Home" };
+    expect(ThreadSummarySchema.parse(plain)).toEqual(plain);
+    const child = {
+      id: "w/sub-1",
+      wolf: "w",
+      kind: "subagent",
+      title: "scout",
+      parentThreadId: "w/home",
+      agent: "scout",
+      state: "queued",
+      queuePosition: 2,
+      startedAt: "2026-10-27T10:00:00.000Z",
+      step: "read",
+      tokens: 10,
+      taskId: "work-w-abc",
+    };
+    expect(ThreadSummarySchema.parse(child)).toEqual(child);
+    expect(ThreadSummarySchema.safeParse({ ...child, state: "paused" }).success).toBe(false);
+  });
+
+  it("ledger entries and the thread-updated wolf event parse", () => {
+    const entry = { id: 1, at: "2026-10-27T10:00:00.000Z", from: "owner", to: "child", kind: "steer", text: "hi" };
+    expect(LedgerEntrySchema.parse(entry)).toEqual(entry);
+    expect(LedgerEntrySchema.safeParse({ ...entry, kind: "shout" }).success).toBe(false);
+    const ev = { type: "thread-updated", id: 3, wolf: "w", at: "2026-10-27T10:00:00.000Z", thread: { id: "w/sub-1", wolf: "w", kind: "subagent", title: "t", state: "running" } };
+    expect(parseWolfEvent(ev).kind).toBe("event");
   });
 });

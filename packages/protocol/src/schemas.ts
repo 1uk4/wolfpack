@@ -308,6 +308,12 @@ export const ThreadKindSchema = z.enum(["home", "feature", "subagent", "process"
 /** `needs-you`: no turn is running and at least one card waits for the operator's answer. */
 export const ThreadStatusSchema = z.enum(["idle", "busy", "needs-you"]);
 export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
+/**
+ * A subagent's lifecycle: `queued` (waiting for a slot), `running` (a turn is in flight), `waiting` (it asked its parent
+ * a question and waits for the answer), `done`, `failed` (its turn ended in an error), `stopped` (cancelled).
+ */
+export const SubagentStateSchema = z.enum(["queued", "running", "waiting", "done", "failed", "stopped"]);
+export type SubagentState = z.infer<typeof SubagentStateSchema>;
 export const ThreadSummarySchema = z.object({
   id: z.string(),
   wolf: z.string(),
@@ -316,6 +322,22 @@ export const ThreadSummarySchema = z.object({
   boundWorkItem: z.string().optional(),
   /** Additive: absent on servers that predate cards (treat as idle/busy from `ThreadDetail.busy`). */
   status: ThreadStatusSchema.optional(),
+  /** Additive: the thread that spawned this one (subagent threads only). */
+  parentThreadId: z.string().optional(),
+  /** Additive, subagent threads only from here on. The agent profile it runs. */
+  agent: z.string().optional(),
+  state: SubagentStateSchema.optional(),
+  /** 1-based place in the queue while `state` is `queued`. */
+  queuePosition: z.number().int().positive().optional(),
+  startedAt: z.iso.datetime({ offset: true }).optional(),
+  /** Set once the child is done, failed or stopped; cleared when it is resumed. */
+  finishedAt: z.iso.datetime({ offset: true }).optional(),
+  /** What it is doing now (the tool it last started), for the status strip. */
+  step: z.string().optional(),
+  /** Tokens used so far (input + output, all turns). */
+  tokens: z.number().int().nonnegative().optional(),
+  /** The work item (task) this child serves: named in its brief, else the one its parent is bound to. */
+  taskId: z.string().optional(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -650,12 +672,15 @@ export const WolfCardPendingEventSchema = wolfBase.extend({ type: z.literal("car
 export const WolfCardSettledEventSchema = wolfBase.extend({ type: z.literal("card-settled"), threadId: z.string(), callId: z.string(), outcome: CardOutcomeSchema, closed: CardClosedSchema.optional() });
 /** The server cannot replay from the client's cursor: refetch threads and cards. */
 export const WolfResyncEventSchema = wolfBase.extend({ type: z.literal("resync") });
+/** A thread appeared or its summary changed (a subagent was spawned, or its state, step or tokens changed). Fold by `thread.id`. */
+export const WolfThreadUpdatedEventSchema = wolfBase.extend({ type: z.literal("thread-updated"), thread: ThreadSummarySchema });
 
 export const WolfEventSchema = z.discriminatedUnion("type", [
   WolfThreadStatusEventSchema,
   WolfCardPendingEventSchema,
   WolfCardSettledEventSchema,
   WolfResyncEventSchema,
+  WolfThreadUpdatedEventSchema,
 ]);
 export type WolfEvent = z.infer<typeof WolfEventSchema>;
 export type WolfEventType = WolfEvent["type"];
@@ -1064,6 +1089,29 @@ export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });
 export type AbortRequest = z.infer<typeof AbortRequestSchema>;
+
+// ------------------------------------------------------- subagent ledger
+
+/** Who a ledger entry is from or to: the spawning thread, the child, the operator (typing into the child) or wolfd itself. */
+export const LedgerPartySchema = z.enum(["parent", "child", "owner", "system"]);
+export type LedgerParty = z.infer<typeof LedgerPartySchema>;
+/**
+ * `brief` (the spawn), `steer` (a message into a running child), `resume` (a message that restarts a finished or waiting
+ * child; an answer to its question is one), `question` (the child asks its parent), `result` (its final answer),
+ * `error` (its turn failed), `stop` (it was cancelled).
+ */
+export const LedgerKindSchema = z.enum(["brief", "steer", "resume", "question", "result", "error", "stop"]);
+export type LedgerKind = z.infer<typeof LedgerKindSchema>;
+export const LedgerEntrySchema = z.object({
+  /** 1-based, per child, in order. */
+  id: z.number().int().positive(),
+  at: z.iso.datetime({ offset: true }),
+  from: LedgerPartySchema,
+  to: LedgerPartySchema,
+  kind: LedgerKindSchema,
+  text: z.string(),
+});
+export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 
 /**
  * Create a thread. Idempotent for "home": if the wolf already has a home thread it is returned unchanged (never a

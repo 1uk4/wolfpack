@@ -184,6 +184,14 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await call(buildPath("listThreads", { name: "no-such-wolf" })), "not_found");
     });
 
+    it("children and ledger: a thread with no subagents lists none; a non-subagent has no ledger; unknown threads are not_found", async () => {
+      const kids = await expectJson(await call(buildPath("listChildren", { id: threadId })), ROUTES.listChildren.response.schema);
+      expect(kids.threads).toEqual([]);
+      await expectError(await call(buildPath("getLedger", { id: threadId })), "not_found");
+      await expectError(await call(buildPath("listChildren", { id: "nope/nope" })), "not_found");
+      await expectError(await call(buildPath("getLedger", { id: "nope/nope" })), "not_found");
+    });
+
     it("GET thread returns ThreadDetail; unknown thread is a not_found envelope", async () => {
       const t = await getThread(threadId);
       expect(t.id).toBe(threadId);

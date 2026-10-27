@@ -38,6 +38,7 @@ import {
   type ThreadDetail,
   type ThreadEvent,
   type ThreadSummary,
+  type LedgerEntry,
   type WatchOptions,
   type WolfSummary,
 } from "./types.js";
@@ -92,6 +93,16 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async getThread(threadId: string): Promise<ThreadDetail> {
     return (await this.json("getThread", { id: threadId }, ROUTES.getThread.response.schema, undefined, threadId)) as ThreadDetail;
+  }
+
+  async listChildren(threadId: string): Promise<ThreadSummary[]> {
+    const r = await this.json("listChildren", { id: threadId }, ROUTES.listChildren.response.schema, undefined, threadId);
+    return (r as { threads: ThreadSummary[] }).threads;
+  }
+
+  async getLedger(threadId: string): Promise<LedgerEntry[]> {
+    const r = await this.json("getLedger", { id: threadId }, ROUTES.getLedger.response.schema, undefined, threadId);
+    return (r as { entries: LedgerEntry[] }).entries;
   }
 
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {

@@ -19,6 +19,7 @@ import {
   type MemoryStatus,
   type ErrorCode,
   type InFlightPartial,
+  type LedgerEntry,
   type SubmitAck,
   type ThreadDetail,
   type ThreadEvent,
@@ -37,6 +38,8 @@ export interface StubFixture {
   threads: ThreadSummary[];
   /** The scripted turn every submit plays. */
   script: ScriptStep[];
+  /** Ledgers of subagent threads in `threads`, by thread id. */
+  ledgers?: Record<string, LedgerEntry[]>;
 }
 
 export const DEFAULT_FIXTURE: StubFixture = {
@@ -102,6 +105,7 @@ export class StubServer {
   private readonly threads = new Map<string, ThreadState>();
   private readonly wolves: WolfSummary[];
   private readonly script: ScriptStep[];
+  private readonly ledgers: Record<string, LedgerEntry[]>;
   private readonly delayMs: number;
   private readonly http: Server;
   private counter = 0;
@@ -113,6 +117,7 @@ export class StubServer {
     const fx = opts.fixture ?? DEFAULT_FIXTURE;
     this.wolves = fx.wolves.map((w) => ({ ...w }));
     this.script = fx.script;
+    this.ledgers = fx.ledgers ?? {};
     this.delayMs = opts.delayMs ?? 10;
     for (const t of fx.threads) this.addThread({ ...t });
     this.http = createServer((req, res) => {
@@ -184,6 +189,15 @@ export class StubServer {
         const summary: ThreadSummary = { id: `${wolf.id}/home`, wolf: wolf.id, kind: "home", title: "Home" };
         this.addThread(summary);
         return this.json(res, 201, summary);
+      }
+      case "listChildren": {
+        const parent = this.thread(params.id);
+        return this.json(res, 200, { threads: [...this.threads.values()].filter((t) => t.summary.parentThreadId === parent.summary.id).map((t) => t.summary) });
+      }
+      case "getLedger": {
+        const t = this.thread(params.id);
+        if (t.summary.kind !== "subagent") throw new HttpError("not_found", `thread ${t.summary.id} has no ledger`);
+        return this.json(res, 200, { entries: this.ledgers[t.summary.id] ?? [] });
       }
       case "getThread":
         return this.json(res, 200, this.detail(this.thread(params.id)));

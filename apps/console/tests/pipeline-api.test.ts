@@ -15,7 +15,7 @@ describe("pipeline API", () => {
 		assert.deepEqual((await res.json()).lanes, []);
 	});
 	it("kb_unavailable → 409", async () => {
-		const api = createPipelineApi(stub({ getKbPipeline: async () => { throw new ProtocolError("kb_unavailable", "not a librarian"); } }));
+		const api = createPipelineApi(stub({ getKbPipeline: async () => { throw new ProtocolError("kb_unavailable", "not a librarian", false); } }));
 		const res = await api.kbPipeline("x");
 		assert.equal(res.status, 409);
 		assert.equal((await res.json()).code, "kb_unavailable");

@@ -62,7 +62,7 @@ export class ScriptedEngine implements EngineConversation {
   }
 
   async submit({ input: raw, whenBusy }: SubmitOptions): Promise<SubmitResult> {
-    // The scripted engine is text-only: image parts are dropped.
+    // The scripted engine drops image parts (text only).
     const input = typeof raw === "string" ? raw : raw.map((p) => (p.type === "text" ? p.text : "")).join("");
     const id = this.nextId++;
     if (!this.run) {

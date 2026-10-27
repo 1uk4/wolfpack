@@ -96,70 +96,70 @@ export function Composer({
 	return (
 		<>
 		{chips}
-		<form
-			data-testid="composer"
-			className="flex items-end gap-1.5 p-1.5"
-			onSubmit={(e) => {
-				e.preventDefault();
-				act();
-			}}
-		>
-			<textarea
-				ref={inputRef}
-				value={value}
-				onChange={(e) => onChange(e.target.value)}
-				onPaste={(e) => {
-					if (!onPasteImages) return;
-					const files = pastedImages(e.clipboardData);
-					if (files.length === 0) return;
+			<form
+				data-testid="composer"
+				className="flex items-end gap-1.5 p-1.5"
+				onSubmit={(e) => {
 					e.preventDefault();
-					onPasteImages(files);
+					act();
 				}}
-				onKeyDown={(e) => {
-					// Esc ends dictation before anything else Esc might someday mean
-					// here (the dictate decisions: click-again or Esc to stop).
-					// stopPropagation claims the Esc (keyboard wave A): the
-					// window-level chain must not also abort a turn under us.
-					if (e.key === "Escape" && onEscape) {
-						e.preventDefault();
-						e.stopPropagation();
-						onEscape();
-						return;
-					}
-					// Chat convention: Enter sends, Shift+Enter is a newline.
-					// ⌘/Ctrl+Enter also sends — the universal submit shortcut
-					// across every input in the app (thinking field, answers).
-					if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
-						e.preventDefault();
-						act();
-					}
-				}}
-				placeholder={placeholder}
-				autoFocus={autoFocus}
-				rows={1}
-				className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
-			/>
-			{/* The button follows the text (owner report 2026-10-03): while
-				 a turn runs WITH text typed it stays the SEND affordance
-				 (click = steer — steering must be clickable, not Enter-only);
-				 only an empty composer morphs it to Stop. ESC keeps its
-				 confirm-popup abort in every state, so stop is never
-				 unreachable. No tooltip — the ↵ glyph is the affordance
-				 (owner, subtlety round 2026-09-25). */}
-			<button
-				type="submit"
-				aria-label={busy && !canSend ? "Stop" : "Send"}
-				disabled={!busy && !canSend}
-				className={cn(
-					"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
-					busy && !canSend
-						? "bg-secondary text-foreground hover:bg-accent"
-						: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
-				)}
 			>
-				{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
-			</button>
-		</form>
+				<textarea
+					ref={inputRef}
+					value={value}
+					onChange={(e) => onChange(e.target.value)}
+					onPaste={(e) => {
+						if (!onPasteImages) return;
+						const files = pastedImages(e.clipboardData);
+						if (files.length === 0) return;
+						e.preventDefault();
+						onPasteImages(files);
+					}}
+					onKeyDown={(e) => {
+						// Esc ends dictation before anything else Esc might someday mean
+						// here (the dictate decisions: click-again or Esc to stop).
+						// stopPropagation claims the Esc (keyboard wave A): the
+						// window-level chain must not also abort a turn under us.
+						if (e.key === "Escape" && onEscape) {
+							e.preventDefault();
+							e.stopPropagation();
+							onEscape();
+							return;
+						}
+						// Chat convention: Enter sends, Shift+Enter is a newline.
+						// ⌘/Ctrl+Enter also sends — the universal submit shortcut
+						// across every input in the app (thinking field, answers).
+						if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+							e.preventDefault();
+							act();
+						}
+					}}
+					placeholder={placeholder}
+					autoFocus={autoFocus}
+					rows={1}
+					className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
+				/>
+				{/* The button follows the text (owner report 2026-10-03): while
+					 a turn runs WITH text typed it stays the SEND affordance
+					 (click = steer — steering must be clickable, not Enter-only);
+					 only an empty composer morphs it to Stop. ESC keeps its
+					 confirm-popup abort in every state, so stop is never
+					 unreachable. No tooltip — the ↵ glyph is the affordance
+					 (owner, subtlety round 2026-09-25). */}
+				<button
+					type="submit"
+					aria-label={busy && !canSend ? "Stop" : "Send"}
+					disabled={!busy && !canSend}
+					className={cn(
+						"flex size-10 shrink-0 items-center justify-center rounded-[10px] transition-colors",
+						busy && !canSend
+							? "bg-secondary text-foreground hover:bg-accent"
+							: "bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40",
+					)}
+				>
+					{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
+				</button>
+			</form>
 		</>
 	);
 }

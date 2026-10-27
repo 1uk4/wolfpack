@@ -90,3 +90,53 @@ describe("image attachments", () => {
     expect(existsSync(path)).toBe(false);
   });
 });
+
+describe("attachment edge cases", () => {
+  it("refuses a missing content type with a clear message, and caps refs per submit", async () => {
+    tw = await startTestWolf({ script: [] });
+    const url = `${tw.url}/v1/threads/${encodeURIComponent(tw.home)}/attachments`;
+    const res = await fetch(url, { method: "POST", body: PNG, headers: { "Content-Type": "" } });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { message: string }).message).toMatch(/missing Content-Type/);
+    const refs = Array.from({ length: 9 }, () => ({ id: "00000000-0000-4000-8000-000000000000" }));
+    await expect(tw.client.submit(tw.home, "x", { attachments: refs })).rejects.toThrow();
+  });
+
+  it("dedupes repeated refs: one image part per file", async () => {
+    let seen: { role: string; content: string | Part[] }[] = [];
+    tw = await startTestWolf({ script: [(ctx) => ((seen = ctx.messages as never), fauxAssistantMessage("ok"))] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png" });
+    await tw.client.submit(tw.home, "twice", { attachments: [{ id: att.id }, { id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const parts = seen.find((m) => m.role === "user")!.content as Part[];
+    expect(parts.filter((p) => p.type === "image")).toHaveLength(1);
+  });
+
+  it("an over-cap chunked upload (no Content-Length) gets the error response, not a reset", async () => {
+    tw = await startTestWolf({ script: [] });
+    let sent = 0;
+    const chunk = new Uint8Array(1024 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (sent++ >= 12) return c.close();
+        c.enqueue(chunk);
+      },
+    });
+    const res = await fetch(`${tw.url}/v1/threads/${encodeURIComponent(tw.home)}/attachments`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { message: string }).message).toMatch(/too large/);
+  });
+
+  it("an over-cap Content-Length is refused up front with the error response", async () => {
+    tw = await startTestWolf({ script: [] });
+    const big = new Uint8Array(ATTACHMENT_MAX_BYTES + 1024);
+    const res = await fetch(`${tw.url}/v1/threads/${encodeURIComponent(tw.home)}/attachments`, { method: "POST", headers: { "Content-Type": "image/png" }, body: big });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { message: string }).message).toMatch(/too large/);
+  });
+});

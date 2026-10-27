@@ -591,6 +591,8 @@ export type Attachment = z.infer<typeof AttachmentSchema>;
 export const ATTACHMENT_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 /** Upload size cap in bytes (the model providers refuse images over ~5 MB). */
 export const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+/** Most attachments one submit may reference. */
+export const ATTACHMENT_MAX_PER_SUBMIT = 8;
 
 /**
  * `whenBusy` is required on the wire: absent -> invalid_request. SDKs may default it; the wire may not.
@@ -600,7 +602,7 @@ export const SubmitRequestSchema = z.object({
   threadId: z.string(),
   input: z.string(),
   whenBusy: WhenBusySchema,
-  attachments: z.array(AttachmentRefSchema).optional(),
+  attachments: z.array(AttachmentRefSchema).max(ATTACHMENT_MAX_PER_SUBMIT).optional(),
 });
 export type SubmitRequest = z.infer<typeof SubmitRequestSchema>;
 

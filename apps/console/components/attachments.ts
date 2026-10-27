@@ -5,6 +5,8 @@
  * message: the send carries only `{id}` refs. Images only for now.
  */
 
+import { ATTACHMENT_NAME_HEADER } from "@wolfpack/client";
+
 export interface PendingAttachment {
 	/** Local key (stable across the upload). */
 	key: string;
@@ -33,7 +35,7 @@ export function pastedImages(data: ClipboardLike | null | undefined): File[] {
 /** POST the file's bytes to the thread's upload route; resolves with the wolf's attachment id. */
 export async function uploadFile(uploadUrl: string, file: File, fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<{ id: string; name: string }> {
 	const headers: Record<string, string> = { "Content-Type": file.type || "application/octet-stream" };
-	if (file.name) headers["X-Attachment-Name"] = encodeURIComponent(file.name);
+	if (file.name) headers[ATTACHMENT_NAME_HEADER] = encodeURIComponent(file.name);
 	const res = await fetchFn(uploadUrl, { method: "POST", headers, body: file });
 	const text = await res.text();
 	let body: { id?: unknown; name?: unknown; error?: unknown } = {};

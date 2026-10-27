@@ -9,7 +9,8 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { FIXTURE_THREAD, MockConsoleClient } from "@wolfpack/client";
+import { ATTACHMENT_MAX_BYTES, FIXTURE_THREAD, MockConsoleClient } from "@wolfpack/client";
+import { createThreadApi } from "../src/server/thread-api.ts";
 import { canSendWith, pastedImages, readyRefs, uploadFile, type PendingAttachment } from "../components/attachments.ts";
 import { AttachmentChips } from "../components/composer.tsx";
 import { threadTransport } from "../components/thread-transport.ts";
@@ -88,5 +89,45 @@ describe("chip state", () => {
 		assert.match(html, /data-status="uploading"/);
 		assert.match(html, /error\.png — failed/);
 		assert.equal(renderToStaticMarkup(<AttachmentChips items={[]} onRemove={() => {}} />), "");
+	});
+});
+
+describe("upload relay size cap", () => {
+	const api = (client: MockConsoleClient) => createThreadApi(() => client);
+	const ref = { wolf: "1uk4", slug: "home" };
+
+	it("rejects by Content-Length before reading, as 413", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const req = new Request("http://t/up", { method: "POST", headers: { "Content-Type": "image/png", "Content-Length": String(ATTACHMENT_MAX_BYTES + 1) }, body: PNG });
+		const res = await api(client).upload(ref, req);
+		assert.equal(res.status, 413);
+		assert.match(((await res.json()) as { error: string }).error, /too large/);
+		assert.equal(client.uploads.length, 0);
+	});
+
+	it("rejects an over-cap stream with no Content-Length, as 413, without buffering it all", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		let pulled = 0;
+		const chunk = new Uint8Array(1024 * 1024);
+		const body = new ReadableStream<Uint8Array>({
+			pull(c) {
+				if (pulled++ >= 100) return c.close();
+				c.enqueue(chunk);
+			},
+		});
+		const req = new Request("http://t/up", { method: "POST", headers: { "Content-Type": "image/png" }, body, duplex: "half" } as RequestInit);
+		const res = await api(client).upload(ref, req);
+		assert.equal(res.status, 413);
+		assert.ok(pulled < 20, `stopped reading early (pulled ${pulled} MiB)`);
+		assert.equal(client.uploads.length, 0);
+	});
+
+	it("400s malformed or excessive attachment refs on submit", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const fetchFn = threadFetch(client);
+		for (const attachments of ["x", [{ id: 1 }], [{}], Array.from({ length: 9 }, (_, i) => ({ id: `a${i}` }))]) {
+			const res = await fetchFn(transport.submitUrl, { method: "POST", body: JSON.stringify({ input: "x", attachments }) });
+			assert.equal(res.status, 400, JSON.stringify(attachments));
+		}
 	});
 });

@@ -86,7 +86,11 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {
-    const body = { input, whenBusy: opts.whenBusy ?? "reject", ...(opts.attachments?.length ? { attachments: opts.attachments } : {}) };
+    const body = {
+      input,
+      whenBusy: opts.whenBusy ?? "reject",
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+    };
     return (await this.json("submit", { id: threadId }, ROUTES.submit.response.schema, body, threadId)) as SubmitAck;
   }
 

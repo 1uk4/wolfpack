@@ -21,9 +21,9 @@ import {
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
-/** Request header carrying the client's protocol version (single integer). */
 /** Optional upload header: the URL-encoded original file name. */
 export const ATTACHMENT_NAME_HEADER = "X-Attachment-Name";
+/** Request header carrying the client's protocol version (single integer). */
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
 /** SSE resume: standard header, or the `?from=` query fallback. */
 export const LAST_EVENT_ID_HEADER = "Last-Event-ID";

@@ -98,7 +98,8 @@ export interface WolfServerOptions {
 }
 
 class HttpError extends Error {
-  constructor(readonly code: ErrorCode, message: string) {
+  /** `drain`: the request body is unread; the server discards the rest of it (bounded) so the client can read this error. */
+  constructor(readonly code: ErrorCode, message: string, readonly drain = false) {
     super(message);
   }
 }
@@ -148,7 +149,7 @@ export class WolfServer {
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         if (!res.headersSent) {
-          this.sendError(res, e instanceof HttpError ? e : new HttpError("engine_error", e instanceof Error ? e.message : "unexpected error"));
+          this.sendError(res, e instanceof HttpError ? e : new HttpError("engine_error", e instanceof Error ? e.message : "unexpected error"), req);
         } else res.end();
       });
     });
@@ -368,8 +369,7 @@ export class WolfServer {
         if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to store attachments in");
         const declared = Number(req.headers["content-length"]);
         if (Number.isFinite(declared) && declared > ATTACHMENT_MAX_BYTES) {
-          req.resume();
-          throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`);
+          throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`, true);
         }
         const bytes = await readBytes(req, ATTACHMENT_MAX_BYTES);
         const rawName = req.headers[ATTACHMENT_NAME_HEADER.toLowerCase()];
@@ -380,7 +380,7 @@ export class WolfServer {
           name = undefined;
         }
         try {
-          return this.json(res, 201, storeAttachment(this.opts.den, params.id, bytes, String(req.headers["content-type"] ?? ""), name));
+          return this.json(res, 201, storeAttachment(this.opts.den, params.id, bytes, req.headers["content-type"] ?? "", name));
         } catch (e) {
           if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
           throw e;
@@ -545,7 +545,8 @@ export class WolfServer {
     res.end(JSON.stringify(body));
   }
 
-  private sendError(res: ServerResponse, e: HttpError): void {
+  private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
+    if (e.drain && req) drainBounded(req);
     res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
     res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" }));
   }
@@ -707,19 +708,45 @@ function textOf(message: unknown): string {
     .join("");
 }
 
-/** Read a raw body, failing (after draining) once it exceeds `max` bytes. */
-async function readBytes(req: IncomingMessage, max: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
+const DRAIN_MAX_BYTES = 64 * 1024 * 1024;
+
+/** Discard what is left of a refused request body so the client finishes writing and reads our error; destroy past a bound. */
+function drainBounded(req: IncomingMessage): void {
   let n = 0;
-  for await (const c of req) {
-    n += (c as Buffer).length;
-    if (n > max) {
-      req.resume();
-      throw new HttpError("invalid_request", `attachment too large (limit ${max} bytes)`);
-    }
-    chunks.push(c as Buffer);
-  }
-  return Buffer.concat(chunks);
+  req.on("data", (c: Buffer) => {
+    n += c.length;
+    if (n > DRAIN_MAX_BYTES) req.destroy();
+  });
+  req.on("error", () => {});
+  req.resume();
+}
+
+/**
+ * Read a raw body, failing once it exceeds `max` bytes. The request is not destroyed: the handler drains the rest
+ * (see HttpError.drain) so the error response still reaches the client.
+ */
+function readBytes(req: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let n = 0;
+    const done = (fn: () => void) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      fn();
+    };
+    const onData = (c: Buffer) => {
+      n += c.length;
+      if (n > max) {
+        done(() => reject(new HttpError("invalid_request", `attachment too large (limit ${max} bytes)`, true)));
+      } else chunks.push(c);
+    };
+    const onEnd = () => done(() => resolve(Buffer.concat(chunks)));
+    const onError = (e: Error) => done(() => reject(e));
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+  });
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

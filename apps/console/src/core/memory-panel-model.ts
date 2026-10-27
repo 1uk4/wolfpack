@@ -247,3 +247,16 @@ export function refreshPlan(e: MemoryEventFrame, shown: readonly (string | null 
 	const status = e.type === "observation_captured" || e.type === "topic_consolidated" || e.type === "topic_archived" || e.type === "promote_finished" || e.type === "promote_failed";
 	return { status, record: recordStale(e, shown) };
 }
+
+// ─── Latest-wins guard ───────────────────────────────────────────────────────
+
+/** Async refetch guard: only the response of the most recently started request may be applied. */
+export function latestOnly(): { start(): number; isCurrent(token: number): boolean } {
+	let n = 0;
+	return { start: () => ++n, isCurrent: (t) => t === n };
+}
+
+/** Should a window-focus refetch run? Visible document, and at most once per `minMs` (default 5s). */
+export function focusRefetchDue(visible: boolean, now: number, last: number, minMs = 5000): boolean {
+	return visible && now - last >= minMs;
+}

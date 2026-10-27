@@ -28,10 +28,11 @@ describe("buildTaskGraph", () => {
 		assert.deepEqual(statuses(g), { a: "shipped", l: "shipped", b: "building", c: "ready", d: "blocked", e: "blocked", f: "ready" });
 	});
 
-	it("edges run dependency -> dependent and ignore dependencies outside the feature", () => {
-		const g = graph(task("b"), feature([child("a", "shipped"), child("b", "idea", ["a", "OUTSIDE"]), child("c", "idea", ["b", "a"])]));
+	it("edges run dependency -> dependent; a dependency not in the feature draws no edge and blocks", () => {
+		const g = graph(task("b"), feature([child("a", "shipped"), child("b", "idea", ["a"]), child("c", "idea", ["b", "a"]), child("d", "idea", ["OUTSIDE"])]));
 		assert.deepEqual(g.edges, [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "a", to: "c" }]);
-		assert.equal(statuses(g).b, "ready"); // the outside dep does not block
+		assert.equal(statuses(g).d, "blocked");
+		assert.equal(statuses(g).b, "ready");
 	});
 
 	it("progress counts shipped over visible nodes", () => {
@@ -40,7 +41,7 @@ describe("buildTaskGraph", () => {
 		assert.equal(g.label, "2/3 shipped");
 	});
 
-	it("archived children are hidden (no node, edge, progress, or blocking) unless the feature is archived", () => {
+	it("archived children are hidden (no node, edge, progress) unless the feature is archived; a dep on one is satisfied", () => {
 		const kids = [child("a", "archived"), child("b", "idea", ["a"]), child("c", "shipped")];
 		const hidden = graph(task("b"), feature(kids));
 		assert.deepEqual(hidden.nodes.map((n) => n.id), ["b", "c"]);
@@ -50,6 +51,7 @@ describe("buildTaskGraph", () => {
 		const shown = graph(task("b"), feature(kids, { stage: "archived" }));
 		assert.equal(shown.nodes.length, 3);
 		assert.equal(statuses(shown).a, "archived");
+		assert.equal(statuses(shown).b, "ready");
 		assert.deepEqual(shown.edges, [{ from: "a", to: "b" }]);
 	});
 
@@ -67,10 +69,11 @@ describe("buildTaskGraph", () => {
 		assert.equal(featureIdFor(rec({ id: "t", kind: "spike" })), null);
 	});
 
-	it("an Inbox parent gives a count, not a graph (container flag or the Inbox title)", () => {
+	it("an Inbox parent (container flag only) gives a count, not a graph; the title alone does not", () => {
 		const kids = [child("a", "idea"), child("b", "idea")];
-		assert.deepEqual(buildTaskGraph(task("a"), feature(kids, { container: true, title: "Inbox" })), { kind: "inbox", featureId: "F", title: "Inbox", count: 2 });
-		assert.equal(buildTaskGraph(task("a"), feature(kids, { title: "Inbox" })).kind, "inbox");
+		assert.deepEqual(buildTaskGraph(task("a"), feature([], { container: true, title: "Inbox", childCount: 205 })), { kind: "inbox", featureId: "F", title: "Inbox", count: 205 });
+		assert.deepEqual(buildTaskGraph(task("a"), feature([], { container: true, children: undefined })), { kind: "inbox", featureId: "F", title: "Feat", count: null });
+		assert.equal(buildTaskGraph(task("a"), feature(kids, { title: "Inbox" })).kind, "graph");
 	});
 
 	it("nothing to graph without a bound item, a feature record, or listed children", () => {

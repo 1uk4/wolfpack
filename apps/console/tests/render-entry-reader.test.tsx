@@ -65,4 +65,15 @@ describe("WorkItemPage (SSR)", () => {
 		assert.match(html, /Record \(from parent feature/);
 		assert.match(html, /parent notes/);
 	});
+	it("a feature renders its task graph above the plan; a task renders none", () => {
+		const kid = (id: string, stage: string, dependsOn: string[] = []) => ({ id, title: `Task ${id}`, kind: "task", stage, dependsOn });
+		const feat = { id: "F", title: "Feat", kind: "feature", stage: "in_build", domain: "wolfpack", partOf: null, dependsOn: [], plan: "the plan", record: "", children: [kid("a", "shipped"), kid("b", "idea", ["a"])] };
+		const html = renderToStaticMarkup(<WorkItemView id="F" state={{ kind: "ready", item: feat, parent: null }} />);
+		assert.match(html, /data-section="tasks"/);
+		assert.match(html, /1\/2 shipped/);
+		assert.match(html, /data-testid="task-node-a" data-status="shipped"/);
+		assert.ok(html.indexOf('data-section="tasks"') < html.indexOf('data-section="plan"'));
+		const task = renderToStaticMarkup(<WorkItemView id="t" state={{ kind: "ready", item: { ...feat, id: "t", kind: "task", children: undefined }, parent: null }} />);
+		assert.doesNotMatch(task, /data-section="tasks"/);
+	});
 });

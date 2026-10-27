@@ -42,6 +42,9 @@ const TEXT: Record<TaskStatus, string> = {
 	blocked: "fill-muted-foreground/80 text-xs",
 	archived: "fill-muted-foreground/60 text-xs",
 };
+/** Keys that activate a focused node (button semantics). */
+export const isActivateKey = (key: string): boolean => key === "Enter" || key === " ";
+
 const CHECK = "M0 5 L4 9 L12 0";
 
 export function TaskGraphSvg({
@@ -69,8 +72,8 @@ export function TaskGraphSvg({
 			viewBox={`${ox - pad} ${oy - pad} ${vbW} ${vbH}`}
 			className={`block h-auto ${naturalSize ? "" : "w-full"}`}
 			style={naturalSize ? { width: `${vbW}px` } : undefined}
-			role="img"
-			aria-label={`Task graph: ${model.featureTitle}`}
+			role="group"
+			aria-label={`Task graph: ${model.featureTitle}, ${model.label}`}
 			data-testid="task-graph-svg"
 		>
 			<defs>
@@ -112,10 +115,10 @@ export function TaskGraphSvg({
 						data-testid={`task-node-${n.id}`}
 						data-status={n.status}
 						data-bound={bound ? "true" : "false"}
-						className={`${onSelect ? "cursor-pointer " : ""}${n.status === "archived" ? "opacity-40" : ""}`}
+						className={`group/node outline-none ${onSelect ? "cursor-pointer " : ""}${n.status === "archived" ? "opacity-40" : ""}`}
 						role={onSelect ? "button" : undefined}
 						tabIndex={onSelect ? 0 : undefined}
-						aria-label={onSelect ? `${n.title} (${n.status})` : undefined}
+						aria-label={onSelect ? `${n.title} (${n.status}${bound ? ", current task" : ""})` : undefined}
 						onClick={
 							onSelect
 								? (e) => {
@@ -127,7 +130,7 @@ export function TaskGraphSvg({
 						onKeyDown={
 							onSelect
 								? (e) => {
-										if (e.key === "Enter" || e.key === " ") {
+										if (isActivateKey(e.key)) {
 											e.preventDefault();
 											e.stopPropagation();
 											onSelect(n.id);
@@ -136,7 +139,7 @@ export function TaskGraphSvg({
 								: undefined
 						}
 					>
-						<rect width={w} height={h} className={BOX[n.status]} strokeWidth={n.status === "building" ? 2 : STROKE_W} strokeDasharray={n.status === "blocked" ? "4 3" : undefined} />
+						<rect width={w} height={h} className={`${BOX[n.status]} group-focus-visible/node:stroke-ring group-focus-visible/node:stroke-2`} strokeWidth={n.status === "building" ? 2 : STROKE_W} strokeDasharray={n.status === "blocked" ? "4 3" : undefined} />
 						{bound ? (
 							<rect x={-GLOW_MARGIN} y={-GLOW_MARGIN} width={w + 2 * GLOW_MARGIN} height={h + 2 * GLOW_MARGIN} className="fill-yellow-400/25" filter={`url(#${markerId}-glow)`} data-glow="true" />
 						) : null}
@@ -156,18 +159,24 @@ export function TaskGraphSvg({
 /** The graph at panel width; a node click selects it, any other click (or the expand button) opens the overlay. */
 export function TaskGraph({ model, onSelect }: { model: GraphModel; onSelect: (id: string) => void }) {
 	const [overlay, setOverlay] = useState(false);
+	const expandRef = useRef<HTMLButtonElement>(null);
+	const close = () => {
+		setOverlay(false);
+		// focus returns to the Expand button once the overlay is gone
+		requestAnimationFrame(() => expandRef.current?.focus());
+	};
 	return (
 		<div className="relative" data-testid="task-graph">
 			<div className="cursor-zoom-in" onClick={() => setOverlay(true)}>
 				<TaskGraphSvg model={model} onSelect={onSelect} />
 			</div>
-			<Button size="icon-xs" variant="ghost" className="absolute right-0 top-0" aria-label="Expand task graph" data-testid="task-graph-expand" onClick={() => setOverlay(true)}>
+			<Button ref={expandRef} size="icon-xs" variant="ghost" className="absolute right-0 top-0" aria-label="Expand task graph" data-testid="task-graph-expand" onClick={() => setOverlay(true)}>
 				<MaximizeIcon />
 			</Button>
 			{overlay ? (
 				<TaskGraphOverlay
 					model={model}
-					onClose={() => setOverlay(false)}
+					onClose={close}
 					onSelect={(id) => {
 						setOverlay(false);
 						onSelect(id);
@@ -180,12 +189,34 @@ export function TaskGraph({ model, onSelect }: { model: GraphModel; onSelect: (i
 
 /** Larger view with pan/zoom (fit-floor semantics of components/pan-zoom). Esc closes (one Esc, one action). */
 export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphModel; onClose: () => void; onSelect: (id: string) => void }) {
+	const dialogRef = useRef<HTMLDivElement>(null);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		closeRef.current?.focus();
+	}, []);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				e.preventDefault();
 				e.stopPropagation();
 				onClose();
+			} else if (e.key === "Tab") {
+				// trap: cycle within the dialog's focusables
+				const els = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button, [tabindex="0"]') ?? []);
+				if (els.length === 0) return;
+				const first = els[0]!;
+				const last = els[els.length - 1]!;
+				const active = document.activeElement;
+				if (!dialogRef.current?.contains(active)) {
+					e.preventDefault();
+					first.focus();
+				} else if (e.shiftKey && active === first) {
+					e.preventDefault();
+					last.focus();
+				} else if (!e.shiftKey && active === last) {
+					e.preventDefault();
+					first.focus();
+				}
 			}
 		};
 		document.addEventListener("keydown", onKey);
@@ -238,6 +269,7 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 
 	return (
 		<div
+			ref={dialogRef}
 			className="fixed inset-0 z-50 flex flex-col bg-background/80 p-4 backdrop-blur-sm"
 			role="dialog"
 			aria-modal="true"
@@ -250,7 +282,7 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 			<div className="mb-2 flex items-center gap-2">
 				<span className="text-sm font-medium">{model.featureTitle}</span>
 				<span className="text-xs text-muted-foreground">{model.label}</span>
-				<Button size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close" data-testid="task-graph-close" onClick={onClose}>
+				<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close" data-testid="task-graph-close" onClick={onClose}>
 					<XIcon />
 				</Button>
 			</div>

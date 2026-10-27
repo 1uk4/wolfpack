@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary,
+	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary,
 	promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
@@ -25,6 +25,25 @@ describe("memory panel model", () => {
 		assert.equal(parseView(serializeView("item")), "item");
 		assert.equal(parseView(serializeView("graph")), "graph");
 		assert.equal(parseView("record"), "item");
+	});
+	it("view persistence: chosen view survives a serialize/parse round-trip through storage-shaped strings", () => {
+		for (const v of ["graph", "item", "feed"] as const) assert.equal(parseView(serializeView(v)), v);
+		assert.equal(parseView(undefined), "graph");
+	});
+	it("latestOnly: a stale (earlier-started) response is never current", () => {
+		const g = latestOnly();
+		const first = g.start();
+		const second = g.start(); // the user clicked another task before the first fetch returned
+		assert.equal(g.isCurrent(first), false);
+		assert.equal(g.isCurrent(second), true);
+		g.start(); // selection cleared
+		assert.equal(g.isCurrent(second), false);
+	});
+	it("focusRefetchDue: visible only, at most once per 5s", () => {
+		assert.equal(focusRefetchDue(false, 100_000, 0), false);
+		assert.equal(focusRefetchDue(true, 100_000, 0), true);
+		assert.equal(focusRefetchDue(true, 103_000, 100_000), false);
+		assert.equal(focusRefetchDue(true, 105_000, 100_000), true);
 	});
 	it("banner only for off/inert, none for live or sandbox", () => {
 		assert.equal(bannerOf(st("live")), null);

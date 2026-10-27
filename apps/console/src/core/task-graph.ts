@@ -29,14 +29,14 @@ export type TaskGraphModel =
 	/** Nothing to graph: no bound item, no parent feature, or the children could not be listed. */
 	| { kind: "none" }
 	/** The feature is a holding container (Inbox): too large and unrelated to graph, show a count. */
-	| { kind: "inbox"; featureId: string; title: string; count: number }
+	| { kind: "inbox"; featureId: string; title: string; count: number | null }
 	| {
 			kind: "graph";
 			featureId: string;
 			featureTitle: string;
 			nodes: TaskNode[];
 			edges: TaskEdge[];
-			/** The bound task (glows); null when the bound item is the feature itself. */
+			/** The bound task (glows); null when the bound item is the feature itself (task_bind cannot bind a feature; that state only remains after its last task ships). */
 			boundId: string | null;
 			progress: { shipped: number; total: number };
 			/** "7/9 shipped" */
@@ -45,34 +45,39 @@ export type TaskGraphModel =
 
 const isShipped = (stage: string): boolean => stage === "shipped" || stage === "live";
 
-/** Which feature the panel shows for a bound item: a feature shows itself, anything else its parent. Null: none. */
+/** Which feature the panel shows for a bound item: anything but a feature shows its parent; a feature binding (leftover state once its last task ships, never bound directly) shows itself. Null: none. */
 export function featureIdFor(bound: Pick<WorkRecordResponse, "id" | "kind" | "partOf">): string | null {
 	return bound.kind === "feature" ? bound.id : (bound.partOf ?? null);
 }
 
 /**
  * `bound`: the bound item's record; `feature`: the record of featureIdFor(bound) (it is `bound` itself for a
- * feature). Archived children are hidden (and left out of edges, deps and progress) unless the feature is archived.
+ * feature). Archived children are hidden (no node, edge or progress) unless the feature is archived.
  */
 export function buildTaskGraph(bound: WorkRecordResponse | null, feature: WorkRecordResponse | null): TaskGraphModel {
 	if (!bound || !feature) return { kind: "none" };
-	if (feature.container || feature.title === "Inbox") {
-		return { kind: "inbox", featureId: feature.id, title: feature.title, count: feature.children?.length ?? 0 };
+	if (feature.container) {
+		return { kind: "inbox", featureId: feature.id, title: feature.title, count: feature.childCount ?? feature.children?.length ?? null };
 	}
 	if (!feature.children) return { kind: "none" };
 
 	const showArchived = feature.stage === "archived";
 	const kids = feature.children.filter((c) => showArchived || c.stage !== "archived");
 	const ids = new Set(kids.map((c) => c.id));
-	const stageOf = new Map(kids.map((c) => [c.id, c.stage] as const));
+	// Links are same-feature only: an archived sibling counts as done; a dep missing from the list
+	// (unknown, out of the feature, or cut by the cap) conservatively blocks.
+	const stageOf = new Map(feature.children.map((c) => [c.id, c.stage] as const));
+	const satisfied = (d: string): boolean => {
+		const st = stageOf.get(d);
+		return st !== undefined && (isShipped(st) || st === "archived");
+	};
 
 	const nodes: TaskNode[] = kids.map((c) => {
-		const deps = c.dependsOn.filter((d) => ids.has(d));
 		let status: TaskStatus;
 		if (c.stage === "archived") status = "archived";
 		else if (isShipped(c.stage)) status = "shipped";
 		else if (c.stage === "in_build") status = "building";
-		else status = deps.every((d) => isShipped(stageOf.get(d) ?? "")) ? "ready" : "blocked";
+		else status = c.dependsOn.every(satisfied) ? "ready" : "blocked";
 		return { id: c.id, title: c.title, kind: c.kind, stage: c.stage, status };
 	});
 

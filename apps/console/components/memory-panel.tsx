@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
@@ -19,6 +19,8 @@ import {
 	bannerOf,
 	buildTaskGraph,
 	featureIdFor,
+	focusRefetchDue,
+	latestOnly,
 	parseOpen,
 	parseView,
 	parentToFetch,
@@ -44,6 +46,7 @@ import {
 } from "@/src/core";
 
 const REFRESH_DEBOUNCE_MS = 250;
+
 
 /** An item's own record plus the parent's when the Record is inherited. */
 interface Loaded {
@@ -104,6 +107,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	/** A task picked in the graph (not the bound item) and its record. */
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [selected, setSelected] = useState<Loaded | null>(null);
+	const [selectedFailed, setSelectedFailed] = useState(false);
 	const [feed, setFeed] = useState<FeedItem[]>([]);
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
@@ -121,7 +125,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 
 	const statusReq = useRef(0);
 	const recordReq = useRef(0);
-	const selectedReq = useRef(0);
+	const selectedReq = useRef(latestOnly());
 	const feedSeq = useRef(0);
 
 	const refreshStatus = useCallback(async () => {
@@ -167,13 +171,19 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 
 	const refreshSelected = useCallback(
 		async (id: string | null) => {
-			const req = ++selectedReq.current;
+			const guard = selectedReq.current;
+			const token = guard.start();
 			if (!id) {
 				setSelected(null);
+				setSelectedFailed(false);
 				return;
 			}
 			const l = await loadItem(id);
-			if (req === selectedReq.current && l) setSelected(l);
+			if (!guard.isCurrent(token)) return;
+			if (l) {
+				setSelected(l);
+				setSelectedFailed(false);
+			} else setSelectedFailed(true);
 		},
 		[loadItem],
 	);
@@ -220,17 +230,22 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	}, [boundId, refreshRecord]);
 	useEffect(() => {
 		setSelected(null);
+		setSelectedFailed(false);
 		void refreshSelected(selectedId);
 	}, [selectedId, refreshSelected]);
-	// Stage changes emit no event yet: refetch when the window regains focus.
+	// Stage changes emit no event yet (and a sibling's change never reaches this thread): refetch when the
+	// window regains focus, debounced via schedule(), only while visible, at most once per 5s.
+	const lastFocus = useRef(0);
 	useEffect(() => {
 		const onFocus = () => {
-			dirty.current = { status: true, record: true };
-			flush();
+			const now = Date.now();
+			if (!focusRefetchDue(document.visibilityState === "visible", now, lastFocus.current)) return;
+			lastFocus.current = now;
+			schedule({ status: true, record: true });
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
-	}, [flush]);
+	}, [schedule]);
 
 	useMemoryEvents(
 		wolf,
@@ -278,7 +293,10 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
 	const graph = buildTaskGraph(bound?.own ?? null, feature);
-	const showing = selectedId && selectedId !== boundId ? selected : bound;
+	const viewingOther = !!selectedId && selectedId !== boundId;
+	// the viewer shows a clicked task only once ITS record is in; never the bound item's under another title
+	const showing = viewingOther ? (selected?.own.id === selectedId ? selected : null) : bound;
+	const otherState = viewingOther && !showing ? (selectedFailed ? "error" : "loading") : undefined;
 
 	if (!open) {
 		return (
@@ -340,11 +358,20 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					bound={status?.bound ?? null}
 					graph={graph}
 					shown={showing ? { item: showing.own, rec: recordView(showing.own, showing.parent) } : null}
-					viewingOther={!!selectedId && selectedId !== boundId}
+					viewingOther={viewingOther}
+					otherState={otherState}
+					onRetry={() => {
+						setSelectedFailed(false);
+						void refreshSelected(selectedRef.current);
+					}}
 					feed={feed}
 					unread={unread}
-					onView={chooseView}
+					onGraph={() => {
+						setSelectedId(null);
+						chooseView("graph");
+					}}
 					onToggleFeed={() => chooseView(view === "feed" ? lastView.current : "feed")}
+					// intentionally does not persist the view: a click never changes the saved choice
 					onSelect={(id) => {
 						setSelectedId(id === boundId ? null : id);
 						setView("item");
@@ -360,7 +387,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 const MD = "text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold";
 
 /** The Status section: the feature graph, the item viewer or the live observation feed, one at a time; no bound item → feed only. */
-export function StatusSection({ view, bound, graph, shown, viewingOther = false, feed, unread, onView, onToggleFeed, onSelect, onBack }: {
+export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, feed, unread, onGraph, onToggleFeed, onSelect, onBack }: {
 	view: PanelView;
 	bound: MemoryStatus["bound"] | null;
 	graph: TaskGraphModel;
@@ -368,29 +395,39 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	shown: { item: WorkRecordResponse; rec: RecordView } | null;
 	/** The viewer shows a task other than the bound item: offer the way back. */
 	viewingOther?: boolean;
+	/** Viewing another task whose record is not in: still loading, or the fetch failed. */
+	otherState?: "loading" | "error";
+	onRetry?: () => void;
 	feed: FeedItem[];
 	unread: number;
-	onView: (v: "graph" | "item") => void;
+	/** Back to the feature graph (persisted as the graph view). */
+	onGraph: () => void;
 	onToggleFeed: () => void;
 	onSelect: (id: string) => void;
 	onBack: () => void;
 }) {
 	const showFeed = view === "feed" || !bound;
-	const tab = (v: "graph" | "item", label: string) => (
-		<Button size="xs" variant={view === v ? "secondary" : "ghost"} aria-pressed={view === v} data-testid={`memory-tab-${v}`} onClick={() => onView(v)}>
-			{label}
-		</Button>
-	);
 	return (
 		<section data-testid={showFeed ? "memory-feed" : view === "graph" ? "memory-graph" : "memory-record"} data-view={showFeed ? "feed" : view}>
 			<div className="mb-1 flex items-center justify-between gap-2">
 				{showFeed ? (
 					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations (live)</h3>
 				) : (
-					<div className="flex items-center gap-1" data-testid="memory-tabs">
-						{tab("graph", "Feature")}
-						{tab("item", "Item")}
-					</div>
+					view === "graph" ? (
+						<h3 className="text-xs font-medium uppercase text-muted-foreground" data-testid="memory-graph-label">Feature</h3>
+					) : (
+						<button
+							type="button"
+							className="group/back -ml-1 flex items-center gap-1 rounded px-1 text-xs font-medium uppercase text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label="Back to feature graph"
+							data-testid="memory-back-graph"
+							onClick={onGraph}
+						>
+							<ChevronLeftIcon className="size-3" />
+							{viewingOther ? "Task" : "Bound item"}
+							<span className="normal-case text-[10px] opacity-60 group-hover/back:opacity-100">‹ graph</span>
+						</button>
+					)
 				)}
 				{bound ? (
 					<Button size="xs" variant="ghost" data-testid="memory-view-toggle" onClick={onToggleFeed}>
@@ -424,7 +461,8 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 					</>
 				) : graph.kind === "inbox" ? (
 					<p className="text-xs text-muted-foreground" data-testid="task-graph-inbox">
-						<Link className="underline-offset-2 hover:underline" href={workHref(graph.featureId)}>{graph.title}</Link> · {graph.count} {graph.count === 1 ? "item" : "items"}
+						<Link className="underline-offset-2 hover:underline" href={workHref(graph.featureId)}>{graph.title}</Link>
+						{graph.count === null ? "" : ` · ${graph.count} ${graph.count === 1 ? "item" : "items"}`}
 					</p>
 				) : (
 					<p className="text-xs text-muted-foreground" data-testid="task-graph-none">No feature to graph.</p>
@@ -436,9 +474,18 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 							« Bound item
 						</Button>
 					) : null}
-					{shown || bound ? (
+					{viewingOther && !shown ? (
+						otherState === "error" ? (
+							<p className="text-xs text-muted-foreground" data-testid="memory-other-error">
+								Couldn't load this task.{" "}
+								<Button size="xs" variant="ghost" data-testid="memory-other-retry" onClick={onRetry}>Retry</Button>
+							</p>
+						) : (
+							<p className="text-xs text-muted-foreground" data-testid="memory-other-loading">Loading…</p>
+						)
+					) : shown || bound ? (
 						<Link className="block underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)}>
-							{shown?.item.title || (!viewingOther ? bound?.title : undefined) || shown?.item.id || bound?.workId}
+							{shown?.item.title || bound?.title || shown?.item.id || bound?.workId}
 						</Link>
 					) : null}
 					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}

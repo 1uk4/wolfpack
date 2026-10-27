@@ -34,6 +34,7 @@ import { consolidatePool, durableSessionTopics, promoteSessionTopics, type Conso
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
+import { crawlMode } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
@@ -393,7 +394,7 @@ export default function createMemoryExtension(
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean } = {}): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean; epoch?: number } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -404,6 +405,16 @@ export default function createMemoryExtension(
     }
     const cls = await reads.classify();
     if (!cls || cls.kind === "task") return;
+    // A crawl interview/plan is in progress here: reading source files must not reach the den (pi's crawlPlanMode).
+    // `opts.planning` is the state when the hook fired: runs are queued and may execute after planning has ended.
+    if (opts.planning || crawlMode.active(ctx.wolfDen, ctx.conversationId)) return;
+    if (crawlMode.takeReseed(ctx.wolfDen, ctx.conversationId)) {
+      // Planning just ended: everything committed so far is planning chatter (and this run's own message may be part
+      // of it); skip it all and observe from the next response on.
+      const committed = await reads.messagesSince(0);
+      await writeWatermark(ctx.wolfDen, ctx.conversationId, { lastEntryId: committed.reduce((m, c) => Math.max(m, c.entryId), 0) });
+      return;
+    }
 
     let watermark = await readWatermark(ctx.wolfDen, ctx.conversationId);
     if (!watermark) {
@@ -417,6 +428,9 @@ export default function createMemoryExtension(
       planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
+    // Planning may have begun (or begun and ended) while we waited for the response to commit: the crawl tool runs
+    // right after it. The first observation after planning re-seeds, so dropping this one loses nothing real.
+    if (crawlMode.active(ctx.wolfDen, ctx.conversationId) || (opts.epoch !== undefined && opts.epoch !== crawlMode.epoch(ctx.wolfDen, ctx.conversationId))) return;
     const { chunks, next } = planned;
     if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
@@ -1106,8 +1120,10 @@ export default function createMemoryExtension(
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).
+        const planning = crawlMode.active(ctx.wolfDen, ctx.conversationId);
+        const epoch = crawlMode.epoch(ctx.wolfDen, ctx.conversationId);
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
-        const run = prev.then(() => observeConversation(message, ctx)).catch((err) => {
+        const run = prev.then(() => observeConversation(message, ctx, { planning, epoch })).catch((err) => {
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

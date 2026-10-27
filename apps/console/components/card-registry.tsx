@@ -33,8 +33,8 @@ export interface ToolCardEntry {
 	threadRow?: boolean;
 }
 
-/** Structured object cards (decision, graph, checklist) — props are theirs to define. */
-export interface ObjectCardEntry<P = never> {
+/** Structured object cards (decision, graph, checklist). */
+export interface ObjectCardEntry<P = ObjectCardProps> {
 	kind: "object";
 	Renderer: ComponentType<P>;
 }
@@ -42,7 +42,7 @@ export interface ObjectCardEntry<P = never> {
 /**
  * What thread-chat hands an object card: the folded object (latest `data`,
  * `rev` = revisions so far + 1). `data` is the type's payload; each card
- * narrows it itself (see parseDecisionData).
+ * narrows it itself (see parseObjectData).
  */
 export interface ObjectCardProps {
 	objectId: string;
@@ -124,5 +124,5 @@ for (const name of ["read", "ls", "find", "grep"]) {
 }
 
 // Structured objects, keyed by object type (src/core/objects.ts folds the
-// tool calls that show them).
-registerCard("object", "decision", { Renderer: DecisionCard } satisfies Omit<ObjectCardEntry<ObjectCardProps>, "kind">);
+// object-upsert / history objects into one part per object).
+registerCard("object", "decision", { Renderer: DecisionCard });

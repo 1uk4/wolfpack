@@ -1,7 +1,7 @@
 /**
- * Structured objects (decision): a show_decision call renders a registry "object" card in ThreadChat; a revision
- * (same objectId) replaces it in place with an "updated N times" marker; live events and the history seed fold to
- * the same latest revision.
+ * Structured objects (decision): object-upsert events and ThreadMessage.objects render a registry "object" card in
+ * ThreadChat; a revision (same objectId) replaces it in place with an "updated N times" marker; live events and the
+ * history seed fold to the same latest revision.
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -35,7 +35,7 @@ const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
-const { foldObjects, threadMessagesToNative } = await import("../src/core/index.ts");
+const { renderItems, threadMessagesToNative } = await import("../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
@@ -60,12 +60,12 @@ function liveEvents(): ThreadEvent[] {
 		ev({ type: "turn-start" }),
 		ev({ type: "text-delta", text: "Weighing it." }),
 		ev({ type: "tool-start", callId: "c1", name: "show_decision", args: d1 }),
+		ev({ type: "object-upsert", objectId: "db", objectType: "decision", rev: 1, data: data1, textOffset: 12 }),
 		ev({ type: "tool-end", callId: "c1", result: 'Shown decision "db".', isError: false }),
-		ev({ type: "object-upsert", objectId: "db", objectType: "decision", rev: 1, data: data1 }),
 		ev({ type: "text-delta", text: "Rethinking." }),
 		ev({ type: "tool-start", callId: "c2", name: "show_decision", args: d2 }),
+		ev({ type: "object-upsert", objectId: "db", objectType: "decision", rev: 2, data: data2, textOffset: 26 }),
 		ev({ type: "tool-end", callId: "c2", result: 'Shown decision "db".', isError: false }),
-		ev({ type: "object-upsert", objectId: "db", objectType: "decision", rev: 2, data: data2 }),
 		ev({ type: "text-delta", text: "Done." }),
 		ev({ type: "turn-end", reason: "complete" }),
 	];
@@ -160,7 +160,7 @@ describe("ThreadChat objects", () => {
 	});
 
 	it("a single call renders the card without a marker", async () => {
-		const one: ThreadMessage[] = [history[0]!, { ...history[1]!, tools: [history[1]!.tools![0]!], objects: undefined }];
+		const one: ThreadMessage[] = [history[0]!, { ...history[1]!, tools: [history[1]!.tools![0]!], objects: [{ objectId: "db", type: "decision", rev: 1, data: data1, textOffset: 12 }] }];
 		await mount(threadMessagesToNative(one));
 		assert.equal(cards().length, 1);
 		assert.deepEqual(chosenLabels(cards()[0]!), ["Postgres"]);
@@ -168,23 +168,82 @@ describe("ThreadChat objects", () => {
 	});
 });
 
-describe("live events and reload fold to the same objects", () => {
-	function liveModel() {
-		const model = new SessionModel({ chatId: "t", initialMessages: [], transport: threadTransport("w", "t") });
-		const wire = threadTransport("w", "t").createWire();
-		for (const e of liveEvents()) for (const w of wire(e as never)) model.applyWireEvent(w);
-		return model;
-	}
+const view = (model: InstanceType<typeof SessionModel>) => model.getState().messages;
+const objectParts = (ms: ReturnType<typeof view>) => ms.flatMap((m) => m.parts.filter((p) => p.type === "object"));
+/** Render order of an assistant message: text / object / tool, as the thread draws it. */
+const kinds = (ms: ReturnType<typeof view>) => ms.filter((m) => m.role === "assistant").flatMap((m) => renderItems(m.parts, false).map((i) => i.kind));
 
-	it("live: object-upsert is accepted, and the turn folds to one decision at rev 2", () => {
-		const folded = foldObjects(liveModel().getState().messages.map((m) => ({ role: m.role, parts: m.parts })) as never);
-		assert.deepEqual([...folded.values()].map((o) => [o.objectId, o.type, o.rev, (o.data as { chosen: string }).chosen]), [["db", "decision", 2, "sq"]]);
+function liveModel(events: ThreadEvent[] = liveEvents()) {
+	const model = new SessionModel({ chatId: "t", initialMessages: [], transport: threadTransport("w", "t") });
+	const wire = threadTransport("w", "t").createWire();
+	for (const e of events) for (const w of wire(e as never)) model.applyWireEvent(w);
+	return model;
+}
+const seeded = (h: ThreadMessage[]) => new SessionModel({ chatId: "t", initialMessages: threadMessagesToNative(h), transport: threadTransport("w", "t") });
+const sig = (ms: ReturnType<typeof view>) => objectParts(ms).map((p) => [p.objectId, p.objectType, p.rev, (p.data as { chosen: string }).chosen]);
+
+describe("live events and reload agree", () => {
+	it("live: one decision part at rev 2, the show_decision rows hidden, order text/object/text", () => {
+		const ms = view(liveModel());
+		assert.deepEqual(sig(ms), [["db", "decision", 2, "sq"]]);
+		assert.ok(!kinds(ms).includes("tool"));
+		assert.ok(!kinds(ms).includes("group"));
+		assert.deepEqual(kinds(ms).filter((k) => k !== "separator"), ["text", "object", "text", "text"]);
 	});
 
-	it("reload: the history seed folds to the same object", () => {
-		const live = liveModel().getState().messages;
-		const seeded = new SessionModel({ chatId: "t", initialMessages: threadMessagesToNative(history), transport: threadTransport("w", "t") }).getState().messages;
-		const f = (ms: typeof live) => [...foldObjects(ms.map((m) => ({ role: m.role, parts: m.parts })) as never).values()].map(({ at: _at, ...o }) => o);
-		assert.deepEqual(f(seeded), f(live));
+	it("reload: the history seed gives the same object and the same render order", () => {
+		const live = view(liveModel());
+		const re = view(seeded(history));
+		assert.deepEqual(sig(re), sig(live));
+		assert.deepEqual(kinds(re).filter((k) => k !== "separator"), kinds(live).filter((k) => k !== "separator"));
+	});
+
+	it("cross-turn revision: the card stays in the first turn at the latest rev", () => {
+		const turn2 = [
+			ev({ type: "turn-start", turnId: "b" }),
+			ev({ type: "text-delta", turnId: "b", text: "Revisiting." }),
+			ev({ type: "object-upsert", turnId: "b", objectId: "db", objectType: "decision", rev: 3, data: { ...data2, rationale: "Third thoughts." }, textOffset: 11 }),
+			ev({ type: "tool-end", turnId: "b", callId: "c3", result: "ok", isError: false }),
+			ev({ type: "turn-end", turnId: "b", reason: "complete" }),
+		];
+		const ms = view(liveModel([...liveEvents(), ...turn2]));
+		assert.deepEqual(objectParts(ms).map((p) => [p.rev, (p.data as { rationale: string }).rationale]), [[3, "Third thoughts."]]);
+		const firstAssistant = ms.findIndex((m) => m.role === "assistant");
+		assert.ok(ms[firstAssistant]!.parts.some((p) => p.type === "object"));
+	});
+
+	it("invalid object data (unknown chosen, unknown type, malformed) yields no object", () => {
+		const bad = [
+			{ ...data1, chosen: "nope" },
+			{ nope: true },
+		].map((data, i) => ev({ type: "object-upsert", turnId: "a", objectId: `x${i}`, objectType: "decision", rev: 1, data }));
+		const unknown = ev({ type: "object-upsert", turnId: "a", objectId: "g", objectType: "graph", rev: 1, data: { nodes: [] } });
+		const ms = view(liveModel([ev({ type: "turn-start" }), ...bad, unknown, ev({ type: "turn-end", reason: "complete" })]));
+		assert.equal(objectParts(ms).length, 0);
+		const h: ThreadMessage[] = [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects: [{ objectId: "x", type: "decision", rev: 1, data: { ...data1, chosen: "nope" } }] }];
+		assert.equal(objectParts(view(seeded(h))).length, 0);
+	});
+
+	it("a long decision (> 4 KiB) reloads intact from history objects, though the call args are capped", () => {
+		const longRationale = "why ".repeat(2000);
+		const longDetail = "detail ".repeat(800);
+		const big = { ...data2, rationale: longRationale, options: [{ id: "pg", label: "Postgres", detail: longDetail }, { id: "sq", label: "SQLite" }] };
+		assert.ok(JSON.stringify(big).length > 4096 * 2);
+		const h: ThreadMessage[] = [
+			history[0]!,
+			{
+				id: "entry-2",
+				role: "assistant",
+				text: "",
+				at: base.at,
+				// What the server sends: capped args (truncated flag) on the tool call, the full data on the object.
+				tools: [{ callId: "c1", name: "show_decision", args: { objectId: "db", rationale: `${longRationale.slice(0, 1024)}…`, _truncated: true }, result: "ok", textOffset: 0 }],
+				objects: [{ objectId: "db", type: "decision", rev: 1, data: big, textOffset: 0 }],
+			},
+		];
+		const parts = objectParts(view(seeded(h)));
+		assert.equal(parts.length, 1);
+		assert.equal((parts[0]!.data as { rationale: string }).rationale, longRationale);
+		assert.equal((parts[0]!.data as { options: Array<{ detail?: string }> }).options[0]!.detail, longDetail);
 	});
 });

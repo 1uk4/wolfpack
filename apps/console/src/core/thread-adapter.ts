@@ -22,7 +22,7 @@
  */
 
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
-import type { SnapshotEvent, ThreadEvent, ThreadMessage, ThreadToolCall } from "@wolfpack/client";
+import type { SnapshotEvent, ThreadEvent, ThreadMessage, ThreadObject, ThreadToolCall } from "@wolfpack/client";
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { LhMessage } from "./native-messages.ts";
 
@@ -69,28 +69,41 @@ export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMe
 		if (m.role === "user") {
 			return [{ id: m.id, role: "user", content: m.text, timestamp } as UserMessage & { id: string }];
 		}
-		const tools = m.tools ?? [];
-		if (tools.length === 0) {
+		// Tool calls and objects share one offset-ordered list: an object follows the call that showed it.
+		type Item = { tool: ThreadToolCall } | { object: ThreadObject };
+		const items: Array<Item & { at: number }> = [
+			...(m.tools ?? []).map((tool, n) => ({ tool, at: tool.textOffset ?? -1, n })),
+			...(m.objects ?? []).map((object, n) => ({ object, at: object.textOffset ?? -1, n: n + 1e6 })),
+		]
+			.sort((a, b) => (a.at === b.at ? a.n - b.n : a.at - b.at))
+			.map(({ n: _n, ...x }) => x as Item & { at: number });
+		if (items.length === 0) {
 			return [{ id: m.id, ...assistantShell([{ type: "text", text: m.text }], timestamp, "stop") } as LhMessage];
 		}
 		const out: LhMessage[] = [];
 		let cursor = 0;
 		let i = 0;
 		let step = 0;
-		while (i < tools.length) {
-			const at = (n: number) => Math.min(Math.max(tools[n]!.textOffset ?? cursor, cursor), m.text.length);
+		while (i < items.length) {
+			// A missing textOffset (-1) inherits the cursor, as for tools.
+			const at = (n: number) => Math.min(Math.max(items[n]!.at < 0 ? cursor : items[n]!.at, cursor), m.text.length);
 			const offset = at(i);
-			const group: ThreadToolCall[] = [];
-			while (i < tools.length && at(i) === offset) group.push(tools[i++]!);
+			const group: Item[] = [];
+			while (i < items.length && at(i) === offset) group.push(items[i++]!);
 			const text = trimSeam(m.text.slice(cursor, offset));
 			cursor = offset;
+			const calls = group.flatMap((g) => ("tool" in g ? [g.tool] : []));
 			const content: Block[] = [
 				...(text ? [{ type: "text", text } as Block] : []),
-				...group.map((c) => ({ type: "toolCall", id: c.callId, name: c.name, arguments: c.args ?? {} }) as Block),
+				...group.map((g) =>
+					"tool" in g
+						? ({ type: "toolCall", id: g.tool.callId, name: g.tool.name, arguments: g.tool.args ?? {} } as Block)
+						: ({ type: "object", objectId: g.object.objectId, objectType: g.object.type, rev: g.object.rev, data: g.object.data } as unknown as Block),
+				),
 			];
 			out.push({ id: step === 0 ? m.id : `${m.id}-s${step}`, ...assistantShell(content, timestamp, "toolUse") } as LhMessage);
 			step++;
-			for (const c of group) {
+			for (const c of calls) {
 				if (c.result === undefined) continue;
 				const result = c.resultTruncated ? `${c.result}\n… (truncated)` : c.result;
 				out.push({
@@ -148,9 +161,13 @@ export class ThreadEventAdapter {
 			case "tool-end":
 				return this.endTool(ev, at);
 			case "object-upsert":
-				// Objects render from their tool call (src/core/objects.ts folds it to the same rev); the event
-				// stays in the log and needs no wire event of its own.
-				return [];
+				// Lands in the open message by arrival (the server emits it just before the call's tool-end, so it
+				// shares the call's step); `textOffset` only matters on reload. projectView folds revisions
+				// (max rev wins, first position — src/core/objects.ts).
+				return this.grow(at, (blocks) => [
+					...blocks,
+					{ type: "object", objectId: ev.objectId, objectType: ev.objectType, rev: ev.rev, data: ev.data } as unknown as Block,
+				]);
 			case "turn-end":
 				return this.endTurn(ev.reason, at);
 			case "error":

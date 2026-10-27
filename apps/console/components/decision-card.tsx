@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { parseDecisionData } from "@/src/core";
+import { parseObjectData } from "@wolfpack/protocol/objects";
 import type { ObjectCardProps } from "@/components/card-registry";
 
 /** "updated 1 time" / "updated N times" — rev 1 is the first showing, so a card at rev r was revised r−1 times. */
@@ -10,7 +10,7 @@ export function updatedMarker(rev: number): string | undefined {
 
 /** A decision object: the options weighed (the chosen one highlighted) and the rationale. */
 export function DecisionCard({ objectId, rev, data }: ObjectCardProps) {
-	const d = parseDecisionData(data);
+	const d = parseObjectData("decision", data);
 	if (!d) return null;
 	const marker = updatedMarker(rev);
 	return (

@@ -86,6 +86,10 @@ describe("wolf activity stream", () => {
     await tw.submit("skip those");
     await vi.waitFor(() => expect(summary(seen).slice(4).filter((s) => s.startsWith("settled"))).toEqual(["settled:dismissed", "settled:dismissed"]));
     await vi.waitFor(() => expect(summary(seen).at(-1)).toBe("status:idle"));
+    // The dismissal path: needs-you goes straight to busy (the superseding turn), never via idle.
+    const tail = summary(seen).slice(4);
+    expect(tail.indexOf("status:idle")).toBe(tail.length - 1);
+    expect(tail).toContain("status:busy");
   });
 
   /** Open the activity stream (optionally with a cursor) and read `n` frames: their events and SSE ids. */

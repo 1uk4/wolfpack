@@ -17,7 +17,7 @@ import {
 	type NeedsYouItem,
 	type ServerEvent,
 } from "../src/core/index.ts";
-import { createActivityBridge, collectNeedsYou, createNeedsYouApi } from "../src/server/needs-you-api.ts";
+import { abortableSleep, createActivityBridge, collectNeedsYou, createNeedsYouApi } from "../src/server/needs-you-api.ts";
 import { createThreadApi } from "../src/server/thread-api.ts";
 
 const ask = (question: string, title?: string): Card => ({ tool: "ask_user_question", ...(title ? { title } : {}), fields: [{ id: "answer", kind: "free-text", label: question }] });
@@ -99,7 +99,7 @@ describe("activity bridge", () => {
 		assert.deepEqual([...bridge.following], ["1uk4"]);
 		client.raiseCard(HOME, ask("Q"), "c1"); // card-pending + thread-status
 		await new Promise((r) => setTimeout(r, 20));
-		assert.deepEqual(poked, ["1uk4", "1uk4", "1uk4"]); // connect + card-pending + thread-status
+		assert.deepEqual(poked, ["1uk4", "1uk4"]); // card-pending + thread-status (no poke for the bare connect)
 		bridge.stop();
 	});
 
@@ -238,6 +238,7 @@ describe("activity bridge recovery", () => {
 		client.watchActivity = async function* () {
 			opens++;
 			if (opens < 3) throw new Error("connection lost");
+			yield { type: "resync", id: 1, wolf: "1uk4", at: new Date().toISOString() } as never; // the baseline of the good connection
 			await new Promise(() => {}); // stays open
 		};
 		const poked: string[] = [];
@@ -246,7 +247,7 @@ describe("activity bridge recovery", () => {
 		await new Promise((r) => setTimeout(r, 120));
 		bridge.stop();
 		assert.equal(opens, 3);
-		assert.equal(poked.length, 3, "one poke per (re)connect");
+		assert.equal(poked.length, 1, "one poke, after the connection that worked delivered its baseline");
 	});
 
 	it("caches the wolf list between ensure calls", async () => {
@@ -265,6 +266,63 @@ describe("activity bridge recovery", () => {
 	});
 });
 
+describe("bridge hygiene", () => {
+	it("abortableSleep leaves no abort listeners behind over many retries", async () => {
+		const ctl = new AbortController();
+		let live = 0;
+		const add = ctl.signal.addEventListener.bind(ctl.signal);
+		const remove = ctl.signal.removeEventListener.bind(ctl.signal);
+		ctl.signal.addEventListener = ((t: string, l: never, o?: never) => (live++, add(t, l, o))) as never;
+		ctl.signal.removeEventListener = ((t: string, l: never, o?: never) => (live--, remove(t, l, o))) as never;
+		for (let i = 0; i < 50; i++) await abortableSleep(1, ctl.signal);
+		assert.equal(live, 0);
+		const pending = abortableSleep(60_000, ctl.signal);
+		ctl.abort();
+		await pending; // abort ends the sleep at once
+	});
+
+	it("unfollows a wolf that is no longer listed", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		const names = ["1uk4", "extra"];
+		client.listWolves = async () => names.map((n) => ({ id: n, name: n, host: "x", status: "online" as const }));
+		const opened: string[] = [];
+		const closed: string[] = [];
+		client.watchActivity = async function* (wolf, o) {
+			opened.push(wolf);
+			await new Promise<void>((r) => o?.signal?.addEventListener("abort", () => r()));
+			closed.push(wolf);
+		};
+		const bridge = createActivityBridge(() => {}, { wolvesTtlMs: 0, backoffMs: [5] });
+		bridge.ensure(client);
+		await new Promise((r) => setTimeout(r, 20));
+		assert.deepEqual([...bridge.following].sort(), ["1uk4", "extra"]);
+		names.pop();
+		bridge.ensure(client);
+		await new Promise((r) => setTimeout(r, 40));
+		assert.deepEqual(closed, ["extra"]);
+		assert.deepEqual([...bridge.following], ["1uk4"]);
+		bridge.stop();
+	});
+
+	it("a full fetch drops wolves that left the wolf list (no ghost cards)", () => {
+		const A = item({ callId: "a" });
+		const ghost = item({ callId: "g", wolf: "gone", threadId: "gone/home" });
+		assert.deepEqual(mergeReport([A, ghost], ["1uk4"], [A], ["1uk4"]).map((i) => i.callId), ["a"]);
+		assert.deepEqual(mergeReport([A, ghost], ["1uk4"], [A]).map((i) => i.callId).sort(), ["a", "g"], "a per-wolf fetch leaves others alone");
+	});
+
+	it("a wolf that was down at first load is primed by its first report, not notified for it", () => {
+		const A = item({ callId: "a" });
+		const late = item({ callId: "l", wolf: "late", threadId: "late/home", href: "/wolf/late/thread/home" });
+		let s = planNotifications(INITIAL_NOTIFY_STATE, [A], { focused: false, responded: ["1uk4"] }).state;
+		const first = planNotifications(s, [A, late], { focused: false, responded: ["1uk4", "late"] });
+		assert.deepEqual(first.notifications, [], "its existing cards only prime");
+		s = first.state;
+		const next = item({ callId: "l2", wolf: "late", threadId: "late/home", href: "/wolf/late/thread/home" });
+		assert.equal(planNotifications(s, [A, late, next], { focused: false, responded: ["1uk4", "late"] }).notifications.length, 1);
+	});
+});
+
 describe("electron notify guards", () => {
 	const { safeNotifyHref, isMainFrameSender, createNeedsYouNotifier } = createRequire(import.meta.url)("../../desktop/electron/notify.cjs") as {
 		safeNotifyHref(h: unknown, o: string): string | null;
@@ -276,7 +334,7 @@ describe("electron notify guards", () => {
 	it("accepts in-app paths and rejects anything that leaves the origin", () => {
 		assert.equal(safeNotifyHref("/wolf/1uk4/thread/home", ORIGIN), "/wolf/1uk4/thread/home");
 		assert.equal(safeNotifyHref("/wolf/a?x=1#h", ORIGIN), "/wolf/a?x=1#h");
-		for (const bad of ["https://evil.com/x", "//evil.com", "/\\evil.com", "\\\\evil.com", "javascript:alert(1)", "http://127.0.0.1:3001/", "", 5, null]) {
+		for (const bad of ["https://evil.com/x", "//evil.com", "/.//evil.com", "/\\evil.com", "\\\\evil.com", "javascript:alert(1)", "http://127.0.0.1:3001/", "", 5, null]) {
 			assert.equal(safeNotifyHref(bad, ORIGIN), null, String(bad));
 		}
 	});

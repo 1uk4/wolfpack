@@ -19,7 +19,9 @@ function safeNotifyHref(href, appOrigin) {
 	} catch {
 		return null;
 	}
-	return u.origin === appOrigin ? `${u.pathname}${u.search}${u.hash}` : null;
+	const path = `${u.pathname}${u.search}${u.hash}`;
+	// "/.//evil.com" normalizes on the same origin but would navigate protocol-relative once re-resolved.
+	return u.origin === appOrigin && !path.startsWith("//") ? path : null;
 }
 
 /** True when the IPC event came from `win`'s main frame. */

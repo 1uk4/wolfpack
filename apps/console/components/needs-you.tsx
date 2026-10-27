@@ -184,10 +184,10 @@ export function NeedsYouPanel() {
 						try {
 							const res = await fetch(target ? `/api/needs-you?wolf=${encodeURIComponent(target)}` : "/api/needs-you", { cache: "no-store" });
 							if (!res.ok) continue;
-							const body = (await res.json()) as { items?: NeedsYouItem[]; responded?: string[] };
+							const body = (await res.json()) as { items?: NeedsYouItem[]; responded?: string[]; wolves?: string[] };
 							if (!Array.isArray(body.items)) continue;
 							const responded = body.responded ?? [];
-							const next = mergeReport(itemsRef.current, responded, body.items);
+							const next = mergeReport(itemsRef.current, responded, body.items, target === "" ? body.wolves : undefined);
 							itemsRef.current = next;
 							setItems(next);
 							const plan = planNotifications(notifyState.current, next, { focused: document.hasFocus(), responded });
@@ -205,6 +205,7 @@ export function NeedsYouPanel() {
 		[router],
 	);
 
+	const pokedWolves = useRef<Set<string>>(new Set());
 	const schedule = useCallback(
 		(payload?: { wolf?: string }) => {
 			const wolf = payload?.wolf ?? "";
@@ -218,8 +219,6 @@ export function NeedsYouPanel() {
 		},
 		[load],
 	);
-	const pokedWolves = useRef<Set<string>>(new Set());
-
 	useEffect(() => {
 		void load();
 		return () => {

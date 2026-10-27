@@ -73,8 +73,14 @@ export const itemKey = (i: Pick<NeedsYouItem, "wolf" | "threadId" | "callId">): 
  * Fold a fetch into the list: every wolf that `responded` is replaced by `fresh`; a wolf that did not respond keeps
  * its previous items (it is down, not empty).
  */
-export function mergeReport(prev: readonly NeedsYouItem[], responded: readonly string[], fresh: readonly NeedsYouItem[]): NeedsYouItem[] {
-	return sortOldestFirst([...prev.filter((i) => !responded.includes(i.wolf)), ...fresh]);
+export function mergeReport(
+	prev: readonly NeedsYouItem[],
+	responded: readonly string[],
+	fresh: readonly NeedsYouItem[],
+	/** A full fetch's wolf list: wolves no longer in it lose their items (no ghost cards). Omitted: keep them. */
+	listed?: readonly string[],
+): NeedsYouItem[] {
+	return sortOldestFirst([...prev.filter((i) => !responded.includes(i.wolf) && (!listed || listed.includes(i.wolf))), ...fresh]);
 }
 
 /** Drop an answered card from the list (before the refetch confirms it). */
@@ -97,11 +103,15 @@ export interface NeedsYouNotification {
 export interface NotifyState {
 	/** Cards seen so far (notified or not): a card is announced at most once. */
 	seen: ReadonlySet<string>;
-	/** False until the first snapshot has been taken: cards already pending at startup are not "new". */
+	/** False until a first snapshot has been taken: cards already pending at startup are not "new". */
 	primed: boolean;
+	/** Wolves whose first report has been taken (a wolf that was down at first load is primed when it first answers). */
+	primedWolves: ReadonlySet<string>;
+	/** A snapshot without per-wolf `responded` primed everyone. */
+	primedAll: boolean;
 }
 
-export const INITIAL_NOTIFY_STATE: NotifyState = { seen: new Set(), primed: false };
+export const INITIAL_NOTIFY_STATE: NotifyState = { seen: new Set(), primed: false, primedWolves: new Set(), primedAll: false };
 
 /**
  * Decide the notifications for a new snapshot of the list. A thread TRANSITIONS into needs-you when a card of it appears
@@ -129,8 +139,9 @@ export function planNotifications(
 	const reported = opts.responded ? new Set(opts.responded) : undefined;
 	for (const k of seen) if (!live.has(k) && (!reported || reported.has(k.split("\n")[0]!))) seen.delete(k);
 	const notifications: NeedsYouNotification[] = [];
-	if (state.primed && !opts.focused) {
+	if (!opts.focused) {
 		for (const item of byThread.values()) {
+			if (!state.primedAll && !state.primedWolves.has(item.wolf)) continue; // that wolf's first report only primes
 			notifications.push({
 				key: itemKey(item),
 				title: `${item.wolf} · ${item.threadTitle}`,
@@ -139,5 +150,7 @@ export function planNotifications(
 			});
 		}
 	}
-	return { notifications, state: { seen, primed: true } };
+	const primedWolves = new Set(state.primedWolves);
+	for (const w of opts.responded ?? []) primedWolves.add(w);
+	return { notifications, state: { seen, primed: true, primedWolves, primedAll: state.primedAll || opts.responded === undefined } };
 }

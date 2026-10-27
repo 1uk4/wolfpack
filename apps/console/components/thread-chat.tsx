@@ -198,7 +198,10 @@ export function ThreadChat({
 	});
 	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
 	useOptionalServerEvent("needs-you-changed", (p) => {
-		if (p.wolf === wolf && status !== "submitted" && status !== "streaming") void refreshCards();
+		if (p.wolf !== wolf || status === "submitted" || status === "streaming") return;
+		if (p.threadId !== undefined && p.threadId !== threadId) return; // another thread of the wolf
+		if (p.kind === "status" && p.status === "busy") return; // a turn started: the stream owns the view
+		void refreshCards();
 	});
 	const prevStatus = useRef(status);
 	useEffect(() => {

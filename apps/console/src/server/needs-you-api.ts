@@ -9,9 +9,9 @@
  * Answering is NOT here: it goes through the same thread route as an inline card (thread-api answerCard).
  */
 
-import type { ConsoleClient } from "@wolfpack/client";
+import type { ConsoleClient, WolfEvent } from "@wolfpack/client";
 import { buildNeedsYou, type WolfNeedsYou } from "../core/needs-you.ts";
-import { emit } from "../core/events.ts";
+import { emit, type ServerEvents } from "../core/events.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
@@ -19,8 +19,8 @@ import type { ClientSource } from "./thread-api.ts";
  * Pending cards and thread titles of every wolf (or just `only`). `responded` names the wolves that answered: an
  * unreachable wolf is absent from both, and the caller must not conclude its cards are gone.
  */
-export async function collectNeedsYou(client: ConsoleClient, only?: string): Promise<{ reports: WolfNeedsYou[]; responded: string[] }> {
-	if (!client.listCards) return { reports: [], responded: [] };
+export async function collectNeedsYou(client: ConsoleClient, only?: string): Promise<{ reports: WolfNeedsYou[]; responded: string[]; listed: string[] }> {
+	if (!client.listCards) return { reports: [], responded: [], listed: [] };
 	const names = only ? [only] : (await client.listWolves()).map((w) => w.name);
 	const reports = await Promise.all(
 		names.map(async (wolf): Promise<WolfNeedsYou | null> => {
@@ -33,7 +33,7 @@ export async function collectNeedsYou(client: ConsoleClient, only?: string): Pro
 		}),
 	);
 	const ok = reports.filter((r): r is WolfNeedsYou => r !== null);
-	return { reports: ok, responded: ok.map((r) => r.wolf) };
+	return { reports: ok, responded: ok.map((r) => r.wolf), listed: names };
 }
 
 export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client: ConsoleClient) => void } = {}) {
@@ -43,8 +43,8 @@ export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client
 			try {
 				const client = source();
 				opts.onList?.(client);
-				const { reports, responded } = await collectNeedsYou(client, wolf);
-				return Response.json({ items: buildNeedsYou(reports), responded });
+				const { reports, responded, listed } = await collectNeedsYou(client, wolf);
+				return Response.json({ items: buildNeedsYou(reports), responded, ...(wolf ? {} : { wolves: listed }) });
 			} catch (err) {
 				return Response.json({ error: err instanceof Error ? err.message : "Unexpected error" }, { status: 500 });
 			}
@@ -61,12 +61,40 @@ export interface BridgeOptions {
 	idleMs?: number;
 }
 
+/** What a wolf event says about who changed (resync: nothing, so consumers refetch everything). */
+function changeOf(ev: WolfEvent): Omit<ServerEvents["needs-you-changed"], "wolf"> {
+	switch (ev.type) {
+		case "thread-status":
+			return { threadId: ev.threadId, kind: "status", status: ev.status };
+		case "card-pending":
+			return { threadId: ev.card.threadId, kind: "card" };
+		case "card-settled":
+			return { threadId: ev.threadId, kind: "card" };
+		default:
+			return {};
+	}
+}
+
+/** Sleep that ends early on abort; the abort listener is removed when the timer fires (no growth over many retries). */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve) => {
+		if (signal.aborted) return resolve();
+		const done = () => {
+			clearTimeout(t);
+			signal.removeEventListener("abort", done);
+			resolve();
+		};
+		const t = setTimeout(done, ms);
+		signal.addEventListener("abort", done, { once: true });
+	});
+}
+
 /**
  * Follow every wolf's activity stream and poke the bus on each change. `ensure` is cheap and idempotent (the wolf list is
  * cached; a followed wolf is not followed twice). A stream that ends or gives up is retried with backoff, and every
  * (re)start pokes once: events in the gap may have been missed (or resynced), so consumers refetch.
  */
-export function createActivityBridge(poke: (wolf: string) => void = (wolf) => emit("needs-you-changed", { wolf }), opts: BridgeOptions = {}) {
+export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEvents["needs-you-changed"], "wolf">) => void = (wolf, change) => emit("needs-you-changed", { wolf, ...change }), opts: BridgeOptions = {}) {
 	const backoff = opts.backoffMs ?? [1_000, 2_000, 5_000, 15_000, 30_000];
 	const ttl = opts.wolvesTtlMs ?? 30_000;
 	const following = new Set<string>();
@@ -75,28 +103,26 @@ export function createActivityBridge(poke: (wolf: string) => void = (wolf) => em
 	let wolvesAt = 0;
 	let wolvesPending: Promise<void> | undefined;
 
-	const sleep = (ms: number) =>
-		new Promise<void>((resolve) => {
-			const t = setTimeout(resolve, ms);
-			ctl.signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
-		});
+	/** Per-wolf stop switches: a wolf that leaves the wolf list is unfollowed. */
+	const stops = new Map<string, AbortController>();
 
-	async function follow(client: ConsoleClient, wolf: string): Promise<void> {
+	async function follow(client: ConsoleClient, wolf: string, signal: AbortSignal): Promise<void> {
 		let attempt = 0;
-		while (!ctl.signal.aborted) {
+		while (!signal.aborted) {
 			try {
-				poke(wolf); // (re)connected: refetch truth, the gap may hold changes
-				for await (const _ev of client.watchActivity!(wolf, { signal: ctl.signal, ...(opts.idleMs ? { idleMs: opts.idleMs } : {}) })) {
+				// The first frame (the baseline) proves the connection; every later frame is a change. Both poke.
+				for await (const ev of client.watchActivity!(wolf, { signal, ...(opts.idleMs ? { idleMs: opts.idleMs } : {}) })) {
 					attempt = 0;
-					poke(wolf);
+					poke(wolf, changeOf(ev));
 				}
 			} catch {
 				/* retry below */
 			}
-			if (ctl.signal.aborted) break;
-			await sleep(backoff[Math.min(attempt++, backoff.length - 1)]!);
+			if (signal.aborted) break;
+			await abortableSleep(backoff[Math.min(attempt++, backoff.length - 1)]!, signal);
 		}
 		following.delete(wolf);
+		stops.delete(wolf);
 	}
 
 	function refreshWolves(client: ConsoleClient): Promise<void> {
@@ -117,10 +143,14 @@ export function createActivityBridge(poke: (wolf: string) => void = (wolf) => em
 		ensure(client: ConsoleClient): void {
 			if (!client.watchActivity || ctl.signal.aborted) return;
 			const start = () => {
+				for (const [wolf, stop] of stops) if (!wolves.includes(wolf)) stop.abort(); // no longer listed
 				for (const wolf of wolves) {
 					if (following.has(wolf)) continue;
 					following.add(wolf);
-					void follow(client, wolf);
+					const stop = new AbortController();
+					ctl.signal.addEventListener("abort", () => stop.abort(), { once: true });
+					stops.set(wolf, stop);
+					void follow(client, wolf, stop.signal);
 				}
 			};
 			if (Date.now() - wolvesAt < ttl) return start();

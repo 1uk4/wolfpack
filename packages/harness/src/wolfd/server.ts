@@ -148,6 +148,8 @@ export class WolfServer {
   private readonly boot = randomUUID().slice(0, 8);
   /** Answers being submitted: the thread reads busy from the claim until the next turn starts (never idle in between). */
   private answering = 0;
+  /** > 0 while a batch is being applied: thread-status is announced when it ends. */
+  private holdStatus = 0;
   private wolfBuffer: WolfEvent[] = [];
   private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
   private lastStatus: ThreadStatus = "idle";
@@ -239,6 +241,18 @@ export class WolfServer {
   }
 
   private applyBatch(batch: readonly EngineEvent[]): void {
+    // Status is announced once, after the whole batch is mapped: a dismissal and the turn-start it precedes must not
+    // surface as needs-you -> idle -> busy.
+    this.holdStatus++;
+    try {
+      this.applyBatchInner(batch);
+    } finally {
+      this.holdStatus--;
+      this.syncStatus();
+    }
+  }
+
+  private applyBatchInner(batch: readonly EngineEvent[]): void {
     for (const ev of batch) {
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
@@ -320,6 +334,7 @@ export class WolfServer {
 
   /** Thread status is derived; announce it whenever the derivation changes. */
   private syncStatus(): void {
+    if (this.holdStatus > 0) return;
     const status = this.status();
     if (status === this.lastStatus) return;
     this.lastStatus = status;

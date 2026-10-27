@@ -95,7 +95,7 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
-import { CHECKLIST_STATES, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
 export * from "./objects.js";
 
 /**
@@ -152,6 +152,33 @@ export const ShowChecklistParamsSchema = ChecklistDataSchema.extend({
   objectId: z.string().min(1).describe("Stable id for this checklist; call again with the same id to revise it (resend the whole checklist)"),
 }).refine((d) => parseObjectData("checklist", d) !== undefined, { message: "item ids must be unique" });
 export type ShowChecklistParams = z.infer<typeof ShowChecklistParamsSchema>;
+export const GraphNodeSchema = z.object({
+  id: z.string().min(1).max(GRAPH_LIMITS.id).describe("Short stable id of the node, unique in the graph"),
+  label: z.string().min(1).max(GRAPH_LIMITS.label).describe("What the node is, in a few words"),
+  kind: z.string().min(1).max(GRAPH_LIMITS.kind).describe("step | task | milestone (other kinds are tolerated)"),
+  status: z.enum(GRAPH_NODE_STATUSES).describe("todo | doing | done | blocked | skipped"),
+  detail: z.string().max(GRAPH_LIMITS.detail).optional().describe("Optional one-line elaboration"),
+});
+export const GraphEdgeSchema = z.object({
+  from: z.string().min(1).max(GRAPH_LIMITS.id).describe("Id of the dependent node"),
+  to: z.string().min(1).max(GRAPH_LIMITS.id).describe("Id of the node it depends on (must finish first)"),
+});
+
+/** `data` of a `graph` object: a plan/task DAG. Edges mean depends-on. Validate with `parseObjectData`. */
+export const GraphDataSchema = z.object({
+  title: z.string().optional().describe("What the graph is about"),
+  nodes: z.array(GraphNodeSchema).min(1).max(GRAPH_LIMITS.nodes).describe("The steps, tasks or milestones"),
+  edges: z.array(GraphEdgeSchema).max(GRAPH_LIMITS.edges).describe("`from` depends on `to`; both must be node ids, no self-loops, no duplicates, no cycles"),
+});
+
+/** Parameters of the `show_graph` tool: the graph plus the wolf-chosen id (reuse it to revise). */
+export const ShowGraphParamsSchema = GraphDataSchema.extend({
+  objectId: z.string().min(1).describe("Stable id for this graph; call again with the same id to revise it (resend the whole graph)"),
+}).superRefine((d, ctx) => {
+  const problem = graphProblem(d.nodes, d.edges);
+  if (problem) ctx.addIssue({ code: "custom", message: problem });
+});
+export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
 
 /**
  * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
@@ -160,6 +187,7 @@ export type ShowChecklistParams = z.infer<typeof ShowChecklistParamsSchema>;
 export const OBJECT_TOOL_PARAMS = {
   show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
   show_checklist: { type: "checklist", schema: ShowChecklistParamsSchema },
+  show_graph: { type: "graph", schema: ShowGraphParamsSchema },
 } as const satisfies Record<ObjectToolName, { type: KnownObjectType; schema: z.ZodType }>;
 
 /** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */

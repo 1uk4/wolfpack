@@ -56,14 +56,7 @@ describe("startWolf", () => {
     const agent = watch.snapshot.agent;
     await watch.stop();
     expect(agent.model).toMatchObject({ provider: "anthropic", modelId: "claude-haiku-5-5" });
-    expect(agent.tools).toEqual([
-      "bash",
-      "edit",
-      "read",
-      "show_checklist",
-      "show_decision",
-      "write",
-    ]);
+    expect(agent.tools).toEqual(["bash", "edit", "read", "show_checklist", "show_decision", "show_graph", "write"]);
     expect(agent.cwd).toBe(join(root, "work"));
     expect(agent.instructions).toContain("BOOT-TEST-AGENTS");
 

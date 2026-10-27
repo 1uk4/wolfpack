@@ -46,6 +46,8 @@ export interface LoaderConfig {
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+  /** The wolf's workspace directory (ExtensionContext.workspace). */
+  workspace?: string;
   /** Host capability signals handed to extension factories (see ExtensionContext.capabilities). */
   capabilities?: HostCapabilities;
 }
@@ -119,6 +121,7 @@ export async function loadExtensions(
     ...(config.modelTable ? { modelTable: config.modelTable } : {}),
     telegram: config.telegram,
     sweep: config.sweep,
+    ...(config.workspace ? { workspace: config.workspace } : {}),
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
   };
 

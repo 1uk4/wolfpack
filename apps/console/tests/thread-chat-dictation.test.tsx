@@ -363,4 +363,39 @@ describe("ThreadChat dictation", () => {
 		assert.equal(answers.length, 1);
 		assert.match(JSON.stringify(answers[0]!.body.answers.envs), /canary ring two/);
 	});
+
+	it("Enter while busy and dictating finishes the run and steers the tail (the button stays Stop)", async () => {
+		await mount(new CardClient(null), { inFlight: true });
+		const ws = await recording("spoken steer");
+		assert.equal(document.querySelector('[data-testid="composer"] button[aria-label="Stop"]')?.getAttribute("aria-label"), "Stop");
+		await press(composer(), { key: "Enter" });
+		await closeSocket(ws);
+		await settle();
+		assert.equal(posts.filter((p) => p.url.includes("abort")).length, 0, "no abort");
+		const sent = posts.filter((p) => p.url.includes("/submit"));
+		assert.equal(sent.length, 1);
+		assert.match(JSON.stringify(sent[0]!.body), /spoken steer/);
+	});
+
+	it("clicking Stop while busy and dictating aborts the turn", async () => {
+		await mount(new CardClient(null), { inFlight: true });
+		await recording("ignored");
+		await act(async () => {
+			composer().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+		});
+		assert.equal(posts.filter((p) => p.url.includes("abort")).length, 1);
+	});
+
+	it("an invalid multi Other tail (duplicates an option) aborts Submit: no POST, the error shows", async () => {
+		await mount(new CardClient({ tool: "ask_user_question", fields: [{ id: "envs", kind: "multi", label: "Which?", allowOther: true, options: [{ label: "dev", value: "dev" }] }] }));
+		const other = q('[data-testid="card-other"]') as HTMLInputElement;
+		await focus(other);
+		const ws = await recording("dev");
+		await click(q('[data-testid="card-submit"]')!);
+		await closeSocket(ws);
+		await settle();
+		assert.equal(posts.filter((p) => p.url.includes("/cards/")).length, 0);
+		assert.equal(other.value, "dev");
+		assert.ok(q('[data-testid="card-other-error"]'), "inline error stays");
+	});
 });

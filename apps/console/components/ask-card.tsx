@@ -40,7 +40,13 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	// while the finish is pending; afterwards the card is re-checked (liveRef) so one answered/skipped meanwhile is not answered again.
 	const [finishing, setFinishing] = useState(false);
 	const finishingRef = useRef(false);
-	const answerNow = () => onAnswer(draftAnswers(card, foldPendingOther(card, draftRef.current, typedRef.current).draft));
+	// Recomputed from the mirrors at call time (after a dictation finish the render state is stale): an invalid or
+	// incomplete result aborts the submit and leaves the typed text with its inline error.
+	const answerNow = () => {
+		const f = foldPendingOther(card, draftRef.current, typedRef.current);
+		if (Object.keys(f.errors).length > 0 || !draftComplete(card, f.draft)) return;
+		onAnswer(draftAnswers(card, f.draft));
+	};
 	const submit = () => {
 		if (finishingRef.current) return;
 		if (!isDictationActive()) return answerNow();
@@ -140,6 +146,7 @@ function useCardDictation(
 			else if (f.kind === "single") set(f.id, { value: joinDictation(otherText(cur) ?? "", t), other: true });
 			else if (f.kind === "multi") setTypedText(f.id, joinDictation(typedRef.current[f.id] ?? "", t));
 		},
+		// Deps are ref-backed: draftRef/typedRef are stable and `set`/`setTypedText` only write refs + state.
 		[card, dictField],
 	);
 	const claimed = live && dictField !== null;

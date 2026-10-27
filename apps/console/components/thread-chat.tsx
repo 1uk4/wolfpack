@@ -479,6 +479,8 @@ export function ThreadChat({
 											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
 											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
 											onEscape={dictation.active ? dictation.cancel : undefined}
+											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
+											enterSends={dictation.active}
 											onFiles={onFiles}
 											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}

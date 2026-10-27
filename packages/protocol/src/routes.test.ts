@@ -13,7 +13,7 @@ describe("route table", () => {
   });
   it("buildPath round-trips through matchRoute", () => {
     for (const [name, r] of Object.entries(ROUTES)) {
-      const p = buildPath(name as keyof typeof ROUTES, { name: "a/b", id: "a/b", attachmentId: "x" });
+      const p = buildPath(name as keyof typeof ROUTES, { name: "a/b", id: "a/b", attachmentId: "x", callId: "call_1" });
       expect(matchRoute(r.method, p)).toMatchObject({ name });
     }
   });

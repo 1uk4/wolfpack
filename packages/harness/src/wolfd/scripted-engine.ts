@@ -61,7 +61,8 @@ export class ScriptedEngine implements EngineConversation {
     this.configured.push(opts);
   }
 
-  async submit({ input: raw, whenBusy }: SubmitOptions): Promise<SubmitResult> {
+  async submit({ input: raw, whenBusy, cardAnswers }: SubmitOptions): Promise<SubmitResult> {
+    if (cardAnswers) throw new Error("ScriptedEngine does not support card answers (use a real engine with a scripted model)");
     // The scripted engine drops image parts (text only).
     const input = typeof raw === "string" ? raw : raw.map((p) => (p.type === "text" ? p.text : "")).join("");
     const id = this.nextId++;

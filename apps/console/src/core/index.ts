@@ -59,6 +59,7 @@ export * from "./session-markdown.ts";
 export * from "./thread-adapter.ts";
 export * from "./objects.ts";
 export * from "./graph-layout.ts";
+export * from "./thread-cards.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
 export * from "./graph-activity.ts";

@@ -424,6 +424,17 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
     });
 
+    it("cards: unknown wolf/thread/card are not_found, a bad answer body is invalid_request, the list is valid", async () => {
+      await expectError(await call(buildPath("listCards", { name: "no-such-wolf" })), "not_found");
+      const list = await call(buildPath("listCards", { name: wolf }));
+      expect(list.status).toBe(200);
+      ROUTES.listCards.response.schema.parse(await list.json());
+      const answer = (id: string, body: unknown) => post(buildPath("answerCard", { id, callId: "call-x" }), body);
+      await expectError(await answer("nope/nope", { answers: {} }), "not_found");
+      await expectError(await answer(threadId, { nope: 1 }), "invalid_request");
+      await expectError(await answer(threadId, { answers: { a: { value: "x" } } }), "not_found");
+    });
+
     it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
       for (const path of [buildPath("getKbGraph", { name: "no-such-wolf" }), buildPath("getKbEntry", { name: "no-such-wolf", id: "kb-x-1234567" })]) {
         await expectError(await call(path), "not_found");

@@ -10,8 +10,17 @@ import type { SessionTransport } from "@/components/session-core";
  * surfaced, never polled — idle submits are whenBusy=reject; a mid-turn
  * send is whenBusy=steer.
  */
+export function threadBase(wolf: string, slug: string): string {
+	return `/api/wolves/${encodeURIComponent(wolf)}/threads/${encodeURIComponent(slug)}`;
+}
+
+/** Where a pending card's answer is POSTed (the console's server layer, then the wolf's /v1). */
+export function cardAnswerUrl(wolf: string, slug: string, callId: string): string {
+	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/answer`;
+}
+
 export function threadTransport(wolf: string, slug: string): SessionTransport {
-	const base = `/api/wolves/${encodeURIComponent(wolf)}/threads/${encodeURIComponent(slug)}`;
+	const base = threadBase(wolf, slug);
 	return {
 		submitUrl: `${base}/submit`,
 		submitBody: (input, opts) =>

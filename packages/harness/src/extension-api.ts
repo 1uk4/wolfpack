@@ -11,6 +11,7 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import type { ModelTable } from "@wolfpack/engine";
+import type { Card } from "@wolfpack/protocol";
 
 // Re-export Type for extension authors
 export { Type };
@@ -36,12 +37,19 @@ export interface ToolContext {
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  /**
+   * Ask the operator a question: the card ends the turn and waits for an answer, which starts the next turn.
+   * `content` is the model-facing placeholder for this call. A tool that sets `card` should declare `raisesCard`.
+   */
+  card?: Card;
 }
 
 export interface Tool {
   name: string;
   description: string;
   parameters: TObject;
+  /** The tool can return a `card`; the runtime then ends the whole round, even when it ran beside other tools. */
+  raisesCard?: boolean;
   execute: (args: unknown, context: ToolContext) => Promise<ToolResult>;
 }
 

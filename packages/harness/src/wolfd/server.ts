@@ -24,6 +24,7 @@ import type { AddressInfo } from "node:net";
 import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_NAME_HEADER,
+  AnswerCardBodySchema,
   CreateThreadBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -33,7 +34,9 @@ import {
   matchRoute,
   type Actor,
   type AttachmentRef,
+  type CardAnswers,
   type ConsolidateResponse,
+  type ThreadStatus,
   type ErrorCode,
   type InFlightPartial,
   type KbPipelineResponse,
@@ -69,6 +72,7 @@ import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemo
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
+import { CardTracker, answerText, validateAnswers } from "./cards.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -118,6 +122,7 @@ export class WolfServer {
   private readonly host: string;
   private readonly settleMs: number;
   private readonly summary: ThreadSummary;
+  private readonly cards: CardTracker;
   private readonly http: Server;
   private baseUrl = "";
   private socketPath: string | undefined;
@@ -146,6 +151,7 @@ export class WolfServer {
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
     this.summary = { id: `${this.name}/home`, wolf: this.name, kind: "home", title: "Home" };
+    this.cards = new CardTracker(this.summary.id);
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         if (!res.headersSent) {
@@ -221,6 +227,8 @@ export class WolfServer {
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
         applyEntry(this.messages, ev.entry);
+        // A dismissal (plain submit superseding cards) changes thread status: wake waiters.
+        if (this.cards.apply(ev.entry).length > 0) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -246,6 +254,7 @@ export class WolfServer {
   private resetMessages(entries: EngineSnapshot["entries"]): void {
     this.messages = messagesFromEntries(entries);
     this.seenEntries = new Set(entries.map((e) => e.id));
+    this.cards.reset(entries);
   }
 
   private applyMapped(events: MappedEvent[]): void {
@@ -346,7 +355,16 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: [this.summary] });
+        return this.json(res, 200, { threads: [this.threadSummary()] });
+      case "listCards":
+        this.checkWolf(params.name);
+        return this.json(res, 200, { cards: this.cards.pending() });
+      case "answerCard": {
+        this.checkThread(params.id);
+        const body = AnswerCardBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
+        return this.json(res, 200, await this.answerCard(params.callId, body.data.answers));
+      }
       case "createThread": {
         this.checkWolf(params.name);
         const body = CreateThreadBodySchema.safeParse(await readJson(req));
@@ -354,7 +372,7 @@ export class WolfServer {
         // The home thread is the engine root conversation: it always exists once the process is up.
         const status = this.homeCreated ? 200 : 201;
         this.homeCreated = true;
-        return this.json(res, status, this.summary);
+        return this.json(res, status, this.threadSummary());
       }
       case "getThread":
         this.checkThread(params.id);
@@ -594,6 +612,14 @@ export class WolfServer {
     if (id !== this.summary.id) throw new HttpError("not_found", `thread ${id}`);
   }
 
+  private status(): ThreadStatus {
+    return this.running ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
+  }
+
+  private threadSummary(): ThreadSummary {
+    return { ...this.summary, status: this.status() };
+  }
+
   private detail(): ThreadDetail {
     const den = this.opts.den;
     const attachmentsOf = (m: ThreadMessage) => {
@@ -607,7 +633,8 @@ export class WolfServer {
       ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
       ...attachmentsOf(m),
     }));
-    return { ...this.summary, messages, busy: this.running !== null, lastEventId: this.seq };
+    const pendingCards = this.cards.pending();
+    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
   }
 
   private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
@@ -636,6 +663,42 @@ export class WolfServer {
         /* the sidecar is best-effort: history falls back to the text lines */
       }
     }
+    if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
+    return { messageId: r.messageId, disposition: r.disposition };
+  }
+
+  /**
+   * Answer a pending card. The answer is a submission placed as a card-answer entry: the next turn starts with it as
+   * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
+   * the answer is held and the ack is `queued`.
+   */
+  private async answerCard(callId: string, answers: CardAnswers): Promise<SubmitAck> {
+    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+    const pending = this.cards.get(callId);
+    if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    const bad = validateAnswers(pending.card, answers);
+    if (bad) throw new HttpError("invalid_request", bad);
+    // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
+    const ready = this.cards.answer(callId, answers);
+    if (!ready) {
+      this.notify();
+      return { messageId: `card-${callId}`, disposition: "queued" };
+    }
+    const ids = ready.map((r) => r.callId);
+    const before = this.turnStarts;
+    let r;
+    try {
+      r = await this.conv.submit({
+        input: answerText(ready),
+        whenBusy: "reject",
+        cardAnswers: { cards: ready.map(({ callId: id, answers: a }) => ({ callId: id, answers: a })) },
+      });
+    } catch (e) {
+      this.cards.release(ids);
+      if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+      throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
+    }
+    this.cards.settle(ids);
     if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
     return { messageId: r.messageId, disposition: r.disposition };
   }

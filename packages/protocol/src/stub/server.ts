@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION_HEADER,
   SSE_DONE,
   SubmitBodySchema,
+  AnswerCardBodySchema,
   CreateThreadBodySchema,
   matchRoute,
 } from "../routes.js";
@@ -216,6 +217,15 @@ export class StubServer {
         res.writeHead(200, { "Content-Type": up.att.mimeType, "Content-Length": up.bytes.length, "X-Content-Type-Options": "nosniff" });
         res.end(up.bytes);
         return;
+      }
+      case "listCards":
+        this.wolf(params.name);
+        return this.json(res, 200, { cards: [] });
+      case "answerCard": {
+        this.thread(params.id);
+        if (!AnswerCardBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {answers}");
+        // The stub's scripted turns raise no cards: every card id is unknown.
+        throw new HttpError("not_found", `card ${params.callId}`);
       }
       case "abort": {
         const t = this.thread(params.id);

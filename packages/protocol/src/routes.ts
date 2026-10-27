@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AttachmentSchema,
+  AnswerCardRequestSchema,
   ConsolidateResponseSchema,
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
@@ -10,6 +11,7 @@ import {
   MemoryEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
+  PendingCardSchema,
   PromoteResponseSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
@@ -36,6 +38,10 @@ export const SubmitBodySchema = SubmitRequestSchema.omit({ threadId: true });
 export type SubmitBody = z.infer<typeof SubmitBodySchema>;
 export const CreateThreadBodySchema = CreateThreadRequestSchema.omit({ wolf: true });
 export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
+
+export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });
+export type AnswerCardBody = z.infer<typeof AnswerCardBodySchema>;
+export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSchema) });
 
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
@@ -88,6 +94,23 @@ export const ROUTES = {
    * type as `Content-Type`, plus `X-Content-Type-Options: nosniff`.
    */
   getAttachment: { method: "GET", path: "/v1/threads/:id/attachments/:attachmentId", response: { kind: "bytes" }, status: [200], error: err },
+  /**
+   * Answer a pending card (`:callId` = the tool call that raised it). The answer resolves that call and, once no
+   * sibling card of the turn is pending, starts the next turn: the ack is the next turn's SubmitAck, or disposition
+   * `queued` while siblings wait (a held answer can be re-sent to change it). A plain submit supersedes pending cards (they
+   * become `dismissed`). 404 `not_found` for an unknown, superseded or already-answered card, 400
+   * `invalid_request` when `answers` do not match the card's fields, 409 `busy` while a turn is running.
+   */
+  answerCard: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/answer",
+    body: AnswerCardBodySchema,
+    response: { kind: "json", schema: SubmitAckSchema },
+    status: [200],
+    error: err,
+  },
+  /** Cards waiting for the operator across this wolf's threads (the needs-you list). */
+  listCards: { method: "GET", path: "/v1/wolves/:name/cards", response: { kind: "json", schema: ListCardsResponseSchema }, status: [200], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },
   /** SSE: `id: <eventId>` + `data: <ThreadEvent json>`; ends with `data: [DONE]` at the first turn-end. */
   streamThread: { method: "GET", path: "/v1/threads/:id/stream", response: { kind: "sse", event: ThreadEventSchema }, status: [200], error: err },

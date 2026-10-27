@@ -6,6 +6,8 @@ import {
   ProtocolError,
   type Attachment,
   type AttachmentRef,
+  type CardAnswers,
+  type PendingCard,
   type ConsoleClient,
   type SubmitAck,
   type SubmitOptions,
@@ -122,6 +124,17 @@ export class MockConsoleClient implements ConsoleClient {
     const bytes = this.uploadBytes.get(`${threadId}\n${attachmentId}`);
     if (!up || !bytes) throw new NotFoundError(`attachment ${attachmentId}`);
     return { bytes, mimeType: up.mimeType };
+  }
+
+  /** The mock's scripted turns raise no cards: every card is unknown. */
+  async answerCard(threadId: string, callId: string, _answers: CardAnswers): Promise<SubmitAck> {
+    this.get(threadId);
+    throw new NotFoundError(`card ${callId}`);
+  }
+
+  async listCards(wolf: string): Promise<PendingCard[]> {
+    if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
+    return [];
   }
 
   async abort(threadId: string): Promise<void> {

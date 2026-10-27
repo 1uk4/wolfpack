@@ -18,16 +18,15 @@
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
 import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
-import type { EngineEvent } from "../engine/index.js";
-import { objectFromCall } from "../engine/index.js";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
 export function messageFromEntry(entry: Entry, now: () => Date = () => new Date()): ThreadMessage | undefined {
-  if (entry.kind !== "pi.user" && entry.kind !== "pi.assistant") return undefined;
+  if (entry.kind !== USER_ENTRY_KIND && entry.kind !== "pi.assistant") return undefined;
   const msg = entry.model?.[0] as { role?: string; content?: unknown; timestamp?: number } | undefined;
   if (!msg) return undefined;
-  const role = entry.kind === "pi.user" ? "user" : "assistant";
+  const role = entry.kind === USER_ENTRY_KIND ? "user" : "assistant";
   let text = "";
   if (typeof msg.content === "string") text = msg.content;
   else if (Array.isArray(msg.content)) {
@@ -165,12 +164,37 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
         else (list[i].objects ??= []).push({ ...obj, rev: 1, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
+      const card = cardOfToolMessage(entry.model?.[0]);
+      if (card) call.card = card;
       return;
     }
     return;
   }
+  if (entry.kind === CARD_ANSWER_KIND) {
+    // A card answer is not a chat message: it resolves the call that raised the card (the answer is that call's result).
+    for (const { callId, answers } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
+        if (!call) continue;
+        call.answer = answers;
+        call.result = Object.values(answers).map((a) => a.value).join("; ");
+        call.isError = false;
+        break;
+      }
+    }
+    return;
+  }
   const m = messageFromEntry(entry, now);
-  if (m) list.push(m);
+  if (m) {
+    // A plain user message supersedes every card still waiting: they are skipped, not answerable.
+    if (m.role === "user") {
+      // Only messages after the previous user message can hold cards still waiting (earlier ones were dismissed then).
+      for (let i = list.length - 1; i >= 0 && list[i].role !== "user"; i--) {
+        for (const call of list[i].tools ?? []) if (call.card && !call.answer) call.dismissed = true;
+      }
+    }
+    list.push(m);
+  }
 }
 
 /** Every object in the list by id (one entry per id by construction). */

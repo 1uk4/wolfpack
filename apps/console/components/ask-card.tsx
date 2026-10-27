@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type Ref } from "react";
+import { useId, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
@@ -292,7 +292,8 @@ export function CardTextInput({
 	multiline,
 	testId,
 	className,
-	placeholder,
+	onKeyDown,
+	...rest
 }: {
 	value: string;
 	onChange: (text: string) => void;
@@ -301,24 +302,24 @@ export function CardTextInput({
 	multiline?: boolean;
 	testId: string;
 	className?: string;
-	placeholder?: string;
-}) {
-	const cls = cn("rounded-lg border bg-background text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className);
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "className" | "ref">) {
+	// Extra props (placeholder, onFocus, data-*, …) are spread so callers such as dictation can attach to the field.
 	const common = {
+		...rest,
 		"data-testid": testId,
-		className: cls,
+		className: cn("rounded-lg border bg-background text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className),
 		value,
-		placeholder,
 		ref: inputRef,
 		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
 	};
-	if (multiline) return <textarea {...common} />;
+	if (multiline) return <textarea {...(common as object)} onKeyDown={onKeyDown as never} />;
 	return (
 		<input
 			type="text"
-			{...common}
+			{...(common as object)}
 			onKeyDown={(e) => {
-				if (e.key === "Enter" && onEnter) {
+				onKeyDown?.(e);
+				if (e.key === "Enter" && onEnter && !e.defaultPrevented) {
 					e.preventDefault();
 					onEnter();
 				}

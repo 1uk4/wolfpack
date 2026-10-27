@@ -198,6 +198,29 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
         await waitIdle(threadId);
       });
 
+      it("serves an upload's bytes back (stored mime, nosniff) and lists it on the user message", async () => {
+        await waitIdle(threadId);
+        const att = await expectJson(await upload(threadId, "image/png", PNG, "again.png"), ROUTES.uploadAttachment.response.schema, [201]);
+        const got = await call(buildPath("getAttachment", { id: threadId, attachmentId: att.id }));
+        expect(got.status).toBe(200);
+        expect(got.headers.get("content-type")).toBe("image/png");
+        expect(got.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(new Uint8Array(await got.arrayBuffer())).toEqual(PNG);
+        await expectJson(await send([{ id: att.id }], "with pic"), ROUTES.submit.response.schema);
+        await readStream(streamPath(threadId));
+        await waitIdle(threadId);
+        const msg = (await getThread(threadId)).messages.find((m) => m.role === "user" && m.attachments?.some((a) => a.id === att.id));
+        expect(msg?.attachments?.[0]).toMatchObject({ id: att.id, mimeType: "image/png", size: PNG.length });
+      });
+
+      it("refuses an unknown, malformed or traversal attachment id, and an unknown thread, as not_found", async () => {
+        await waitIdle(threadId);
+        for (const attachmentId of ["nope", "../../etc/passwd", "..\\..\\x", "%2e%2e", "00000000-0000-0000-0000-000000000000"]) {
+          await expectError(await call(buildPath("getAttachment", { id: threadId, attachmentId })), "not_found");
+        }
+        await expectError(await call(buildPath("getAttachment", { id: "nope/nope", attachmentId: "x" })), "not_found");
+      });
+
       it("refuses non-images, a missing content type, unknown refs and too many refs", async () => {
         await waitIdle(threadId);
         await expectError(await upload(threadId, "text/plain", "hi"), "invalid_request");

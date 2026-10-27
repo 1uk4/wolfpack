@@ -11,12 +11,13 @@ import { lookupCard } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
-import { canSendWith, readyRefs, uploadFile, type PendingAttachment } from "@/components/attachments";
+import { AttachmentThumbs } from "@/components/attachment-thumbs";
+import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem, ATTACHMENTS_PART } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -124,41 +125,40 @@ export function ThreadChat({
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
-	// Pasted images: uploaded to the wolf at once (a chip tracks each), sent as refs with the next message.
+	// Pasted, dropped or picked images: prechecked, then uploaded to the wolf at once (a chip tracks each, an error
+	// chip carries the reason), sent as refs with the next message.
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const patchAttachment = useCallback(
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
-	const onPasteImages = useCallback(
+	const onFiles = useCallback(
 		(files: File[]) => {
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
-				const name = file.name || "pasted image";
-				setAttachments((prev) => [...prev, { key, name, status: "uploading" }]);
+				const { chip, upload } = chipFor(file, key);
+				setAttachments((prev) => [...prev, chip]);
+				if (!upload) continue;
 				uploadFile(transport.uploadUrl!, file).then(
-					({ id }) => patchAttachment(key, { status: "ready", id }),
+					({ id, name, mimeType, size }) => patchAttachment(key, { status: "ready", id, name, mimeType, size }),
 					(err: Error) => patchAttachment(key, { status: "error", error: err.message }),
 				);
 			}
 		},
 		[transport, patchAttachment],
 	);
+	const [dragging, setDragging] = useState(false);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
 
 	const onSend = useCallback(() => {
 		const t = text.trim();
-		// A running turn takes the text as a steer (text only; the chips wait for the next message); Stop is the abort.
-		if (busy) {
-			if (!t) return;
-			setText("");
-			steer(t);
-			return;
-		}
 		if (!canSendWith(t, attachments)) return;
-		const refs = readyRefs(attachments);
+		const refs = readyInfos(attachments);
 		setText("");
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
+		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
+		// whenBusy "steer"); Stop is the abort.
+		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
 	}, [text, busy, send, steer, attachments]);
 
@@ -169,7 +169,26 @@ export function ThreadChat({
 	}, [transport]);
 
 	return (
-		<div className="flex h-dvh" data-testid="thread-chat" data-thread={threadId}>
+		<div
+			className="flex h-dvh"
+			data-testid="thread-chat"
+			data-thread={threadId}
+			data-dragging={dragging || undefined}
+			onDragOver={(e) => {
+				if (!dragHasFiles(e.dataTransfer)) return;
+				e.preventDefault(); // take the drop instead of the browser opening the file
+				setDragging(true);
+			}}
+			onDragLeave={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+			}}
+			onDrop={(e) => {
+				if (!dragHasFiles(e.dataTransfer)) return;
+				e.preventDefault();
+				setDragging(false);
+				onFiles(droppedFiles(e.dataTransfer));
+			}}
+		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<TopBar>
 					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
@@ -196,6 +215,10 @@ export function ThreadChat({
 														.map((p) => p.text)
 														.join("\n")}
 												</div>
+												<AttachmentThumbs
+													items={(m.parts.find((p) => p.type === ATTACHMENTS_PART)?.data as AttachmentInfo[] | undefined) ?? []}
+													urlFor={transport.attachmentUrl}
+												/>
 											</div>
 										) : itemsByMessage[mi]!.length === 0 && !(status === "streaming" && mi === messages.length - 1) ? null : (
 											<Message from="assistant" className="max-w-full">
@@ -273,15 +296,16 @@ export function ThreadChat({
 							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
-									<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
+									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}
 											value={text}
 											onChange={setText}
 											onSend={onSend}
 											onStop={onStop}
-											canSend={busy ? text.trim().length > 0 : canSendWith(text, attachments)}
-											onPasteImages={onPasteImages}
+											canSend={canSendWith(text, attachments)}
+											onFiles={onFiles}
+											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
 											autoFocus

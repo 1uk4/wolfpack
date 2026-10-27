@@ -4,3 +4,4 @@ export { startSandbox, startSharedWorkServer, type RunningSandbox, type SharedWo
 export { composeProjectContext, findUp, loadSkills, type ProjectContext, type ProjectContextInput, type SkillSummary } from "./context.js";
 export { applyEntry, messageFromEntry, messagesFromEntries } from "./messages.js";
 export { probeSocket, prepareSocketPath } from "./socket.js";
+export { removeThreadAttachments } from "./attachments.js";

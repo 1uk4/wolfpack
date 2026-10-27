@@ -147,6 +147,20 @@ export function objectToolJsonSchema(name: ObjectToolName): Record<string, unkno
   const { $schema: _omit, ...rest } = z.toJSONSchema(OBJECT_TOOL_PARAMS[name].schema, { io: "input" }) as Record<string, unknown>;
   return rest;
 }
+/** Reference to an uploaded attachment (see `uploadAttachment`), carried by `SubmitRequest.attachments`. */
+export const AttachmentRefSchema = z.object({ id: z.string() });
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+/** An uploaded attachment, as stored by the wolf. Type-agnostic: `mimeType` says what it is. */
+export const AttachmentSchema = z.object({
+  /** Opaque id; pass it back as an `AttachmentRef`. */
+  id: z.string(),
+  /** Original file name when the client sent one, else a generated `<id>.<ext>`. */
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+});
+export type Attachment = z.infer<typeof AttachmentSchema>;
 
 export const ThreadMessageSchema = z.object({
   id: z.string(),
@@ -158,6 +172,12 @@ export const ThreadMessageSchema = z.object({
   tools: z.array(ThreadToolCallSchema).optional(),
   /** Assistant messages only: structured objects first shown in this message, latest rev per objectId. Optional: old servers omit it. */
   objects: z.array(ThreadObjectSchema).optional(),
+  /**
+   * User messages only (additive, optional: old servers omit it): the attachments the message was sent with, in send
+   * order. `text` is unchanged model-facing text and still ends with the `[Attached image: <path>]` lines; clients
+   * show the attachments (fetch bytes with `getAttachment`) and may strip those lines from the displayed text.
+   */
+  attachments: z.array(AttachmentSchema).optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 
@@ -640,21 +660,6 @@ export type KbEntryDetail = z.infer<typeof KbEntryDetailSchema>;
 
 export const WhenBusySchema = z.enum(["steer", "followUp", "reject"]);
 export type WhenBusy = z.infer<typeof WhenBusySchema>;
-
-/** Reference to an uploaded attachment (see `uploadAttachment`), carried by `SubmitRequest.attachments`. */
-export const AttachmentRefSchema = z.object({ id: z.string() });
-export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
-
-/** An uploaded attachment, as stored by the wolf. Type-agnostic: `mimeType` says what it is. */
-export const AttachmentSchema = z.object({
-  /** Opaque id; pass it back as an `AttachmentRef`. */
-  id: z.string(),
-  /** Original file name when the client sent one, else a generated `<id>.<ext>`. */
-  name: z.string(),
-  mimeType: z.string(),
-  size: z.number().int().nonnegative(),
-});
-export type Attachment = z.infer<typeof AttachmentSchema>;
 
 import { ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";
 export { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";

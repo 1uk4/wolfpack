@@ -9,12 +9,12 @@ export function threadFetch(client: ConsoleClient): typeof fetch {
 		const req = new Request(new URL(String(input), "http://console.test"), init);
 		const parts = new URL(req.url).pathname.split("/").filter(Boolean).map(decodeURIComponent);
 		// api / wolves / :name / threads / :slug / (submit|abort|stream|attachments)?
-		const [, , name, , slug, action] = parts;
+		const [, , name, , slug, action, attachmentId] = parts;
 		if (!name || !slug) return new Response("not found", { status: 404 });
 		const ref = { wolf: name, slug };
 		if (!action) return api.thread(ref);
 		if (action === "submit") return api.submit(ref, req);
-		if (action === "attachments") return api.upload(ref, req);
+		if (action === "attachments") return attachmentId ? api.attachment(ref, attachmentId) : api.upload(ref, req);
 		if (action === "abort") return api.abort(ref);
 		if (action === "stream") return api.stream(ref, req);
 		return new Response("not found", { status: 404 });

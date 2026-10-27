@@ -73,8 +73,16 @@ declare module "@earendil-works/pi-agent-core" {
 	}
 }
 
+/** An attachment as the UI knows it: the id is the wire ref; the rest feeds thumbnails and the optimistic bubble. */
+export interface UiAttachment {
+	id: string;
+	name?: string;
+	mimeType?: string;
+	size?: number;
+}
+
 /** A record message: a native pi message (or our marker) plus the record id. */
-export type LhMessage = (UserMessage | AssistantMessage | ToolResultMessage | LhMarkerMessage) & { id: string };
+export type LhMessage = (UserMessage & { attachments?: UiAttachment[] } | AssistantMessage | ToolResultMessage | LhMarkerMessage) & { id: string };
 
 /** A record message list is assignable to the agent's context — that IS
  *  the replay (ui-stream/chat-handler assign it to initialState.messages). */
@@ -93,12 +101,13 @@ export function newMessageId(): string {
 //     core/input-events.ts; steers in core/contracts/jobs.ts) ─────────────────
 
 /** A learner-authored user message (text input, verdict note). */
-export function newUserMessage(text: string): LhMessage & UserMessage {
+export function newUserMessage(text: string, attachments?: UiAttachment[]): LhMessage & UserMessage {
 	return {
 		id: newMessageId(),
 		role: "user",
 		content: text,
 		timestamp: Date.now(),
+		...(attachments?.length ? { attachments } : {}),
 	};
 }
 

@@ -1,5 +1,5 @@
 /** Image attachments over /v1 on a real pi-durable wolf with a scripted model: upload -> submit with ref -> the model sees the image. */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol";
@@ -88,6 +88,119 @@ describe("image attachments", () => {
     expect(existsSync(path)).toBe(true);
     removeThreadAttachments(tw.wolf.config.den, tw.home);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("attachments in history and the GET route", () => {
+  const getUrl = (t: TestWolf, thread: string, id: string) => `${t.url}/v1/threads/${encodeURIComponent(thread)}/attachments/${encodeURIComponent(id)}`;
+
+  it("upload -> submit -> getThread carries attachments; GET returns the bytes with the stored mime and nosniff", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("nice")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "shot.png" });
+    await tw.client.submit(tw.home, "what is this?", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+
+    const detail = await tw.client.getThread(tw.home);
+    const user = detail.messages.find((m) => m.role === "user")!;
+    expect(user.attachments).toEqual([{ id: att.id, name: "shot.png", mimeType: "image/png", size: PNG.length }]);
+    expect(user.text).toContain("[Attached image:"); // model-facing text unchanged
+    expect(detail.messages.find((m) => m.role === "assistant")!.attachments).toBeUndefined();
+
+    const res = await fetch(getUrl(tw, tw.home, att.id), { headers: { "X-Protocol-Version": "1" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    expect(await tw.client.getAttachment(tw.home, att.id)).toEqual({ bytes: PNG, mimeType: "image/png" });
+  });
+
+  it("steering a running turn with an attachment: the steered history message carries it", async () => {
+    let lastSeen: { role: string; content: string | Part[] }[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    tw = await startTestWolf({
+      script: [
+        async () => {
+          await gate;
+          return fauxAssistantMessage("first");
+        },
+        (ctx) => {
+          lastSeen = ctx.messages as never;
+          return fauxAssistantMessage("second");
+        },
+      ],
+    });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "steer.png" });
+    await tw.client.submit(tw.home, "start");
+    const ack = await tw.client.submit(tw.home, "look at this", { whenBusy: "steer", attachments: [{ id: att.id }] });
+    expect(ack.disposition).toBe("steered");
+    release();
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const users = (await tw.client.getThread(tw.home)).messages.filter((m) => m.role === "user");
+    const steered = users.find((m) => m.text.startsWith("look at this"))!;
+    expect(steered.attachments).toEqual([{ id: att.id, name: "steer.png", mimeType: "image/png", size: PNG.length }]);
+    expect(users.find((m) => m.text === "start")!.attachments).toBeUndefined();
+    expect(lastSeen.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image"))).toBe(true);
+  });
+
+  it("durable refs: names survive a restart of the cache, the sidecar maps messageId, old threads fall back to the text lines", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "keep.png" });
+    const ack = await tw.client.submit(tw.home, "x", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const refsFile = join(tw.wolf.config.den, "attachments", "testwolf", "home", "refs.json");
+    const refs = JSON.parse(readFileSync(refsFile, "utf8"));
+    expect(refs.byId[att.id].name).toBe("keep.png");
+    expect(refs.byMessage[ack.messageId]).toEqual([att.id]);
+    // Old thread: no sidecar, cache cold -> parse the line, name is the stored file name.
+    const { attachmentsInText, forgetRefsCache } = await import("./attachments.js");
+    rmSync(refsFile);
+    forgetRefsCache();
+    const den = tw.wolf.config.den;
+    const text = `x\n\n[Attached image: /moved/den/${att.id}.png]`;
+    expect(attachmentsInText(den, tw.home, text)).toEqual([{ id: att.id, name: `${att.id}.png`, mimeType: "image/png", size: PNG.length }]);
+  });
+
+  it("a single deleted file leaves no ghost attachment in history", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "gone.png" });
+    await tw.client.submit(tw.home, "x", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    rmSync(join(tw.wolf.config.den, "attachments", "testwolf", "home", `${att.id}.png`));
+    expect((await tw.client.getThread(tw.home)).messages.find((m) => m.role === "user")!.attachments).toBeUndefined();
+  });
+
+  it("refuses a bad, unknown or traversal id and an unknown thread as 404 not_found", async () => {
+    tw = await startTestWolf({ script: [] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png" });
+    for (const id of ["nope", "../../etc/passwd", "..\\..\\x", `${att.id}.png`, `${att.id}/../${att.id}`, "00000000-0000-4000-8000-000000000000"]) {
+      const res = await fetch(getUrl(tw, tw.home, id));
+      expect(res.status, id).toBe(404);
+      expect(((await res.json()) as { code: string }).code).toBe("not_found");
+    }
+    expect((await fetch(getUrl(tw, "testwolf/nope", att.id))).status).toBe(404);
+    // A raw (unencoded) traversal path never reaches the file system either.
+    const raw = await fetch(`${tw.url}/v1/threads/${encodeURIComponent(tw.home)}/attachments/%2e%2e%2f%2e%2e%2fhome`);
+    expect(raw.status).toBe(404);
+  });
+
+  it("a forged path line in the user's own text yields no attachment", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    await tw.client.submit(tw.home, "[Attached image: /etc/passwd]\n[Attached image: /tmp/00000000-0000-4000-8000-000000000000.png]");
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const user = (await tw.client.getThread(tw.home)).messages.find((m) => m.role === "user")!;
+    expect(user.attachments).toBeUndefined();
+  });
+
+  it("after the cleanup hook the GET answers 404 and history lists no attachment", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png" });
+    await tw.client.submit(tw.home, "x", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    removeThreadAttachments(tw.wolf.config.den, tw.home);
+    expect((await fetch(getUrl(tw, tw.home, att.id))).status).toBe(404);
+    expect((await tw.client.getThread(tw.home)).messages.find((m) => m.role === "user")!.attachments).toBeUndefined();
   });
 });
 

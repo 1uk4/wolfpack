@@ -29,7 +29,7 @@
  */
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
-import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
+import type { LhMarkerMessage, LhMessage, UiAttachment } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { collapseObjects, isObjectBlock, objectPartOf, type ObjectBlock } from "./objects.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
@@ -52,6 +52,12 @@ export interface LhViewPart extends Record<string, unknown> {
 	rawInput?: unknown;
 	errorText?: string;
 	data?: unknown;
+}
+
+/** The user-bubble attachments part: `data` is the message's `UiAttachment[]` (thumbnails render from it). */
+export const ATTACHMENTS_PART = "data-attachments";
+function attachmentsPart(messageId: string, data: UiAttachment[]): LhViewPart {
+	return { type: ATTACHMENTS_PART, id: `${messageId}-att`, data };
 }
 
 /** A view message: user (bubble) or assistant (one continuous run). */
@@ -189,7 +195,13 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 				typeof content === "string"
 					? [content]
 					: content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text);
-			out.push({ id: m.id, role: "user", parts: texts.map(textPart) });
+			// Thread history/optimistic user messages may carry attachments (thumbnails in the bubble).
+			const attachments = m.role === "user" ? m.attachments : undefined;
+			out.push({
+				id: m.id,
+				role: "user",
+				parts: [...texts.map(textPart), ...(attachments?.length ? [attachmentsPart(m.id, attachments)] : [])],
+			});
 			continue;
 		}
 

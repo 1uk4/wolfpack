@@ -44,6 +44,7 @@ export class MockConsoleClient implements ConsoleClient {
   private counter = 0;
   /** Attachments uploaded so far (bytes dropped), and the submits that referenced them: for tests. */
   readonly uploads: (Attachment & { threadId: string })[] = [];
+  private readonly uploadBytes = new Map<string, Uint8Array>();
   readonly submits: { threadId: string; input: string; attachments: AttachmentRef[] }[] = [];
 
   constructor(opts: MockOptions = {}) {
@@ -85,13 +86,17 @@ export class MockConsoleClient implements ConsoleClient {
     const attachments = opts.attachments ?? [];
     for (const a of attachments) if (!this.uploads.some((u) => u.id === a.id && u.threadId === threadId)) throw new ProtocolError("invalid_request", `unknown attachment ${a.id}`, false);
     this.submits.push({ threadId, input, attachments });
+    const atts = attachments.map((a) => {
+      const { threadId: _t, ...att } = this.uploads.find((u) => u.id === a.id && u.threadId === threadId)!;
+      return att;
+    });
     if (!t.running) {
-      const messageId = this.addUserMessage(t, input);
+      const messageId = this.addUserMessage(t, input, atts);
       this.startTurn(t);
       return { messageId, disposition: "started" };
     }
     if (whenBusy === "reject") throw new BusyError(threadId);
-    const messageId = this.addUserMessage(t, input);
+    const messageId = this.addUserMessage(t, input, atts);
     if (whenBusy === "followUp") {
       t.followUps.push(input);
       return { messageId, disposition: "queued" };
@@ -107,7 +112,16 @@ export class MockConsoleClient implements ConsoleClient {
     const id = `att-${++this.counter}`;
     const att = { id, name: opts.name ?? id, mimeType: opts.mimeType, size };
     this.uploads.push({ ...att, threadId });
+    this.uploadBytes.set(`${threadId}\n${id}`, data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new Uint8Array(data));
     return att;
+  }
+
+  async getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    this.get(threadId);
+    const up = this.uploads.find((u) => u.threadId === threadId && u.id === attachmentId);
+    const bytes = this.uploadBytes.get(`${threadId}\n${attachmentId}`);
+    if (!up || !bytes) throw new NotFoundError(`attachment ${attachmentId}`);
+    return { bytes, mimeType: up.mimeType };
   }
 
   async abort(threadId: string): Promise<void> {
@@ -157,9 +171,9 @@ export class MockConsoleClient implements ConsoleClient {
     return t;
   }
 
-  private addUserMessage(t: ThreadState, text: string): string {
+  private addUserMessage(t: ThreadState, text: string, atts: Attachment[] = []): string {
     const id = `msg-${++this.counter}`;
-    t.messages.push({ id, role: "user", text, at: new Date().toISOString() });
+    t.messages.push({ id, role: "user", text, at: new Date().toISOString(), ...(atts.length ? { attachments: atts } : {}) });
     return id;
   }
 

@@ -8,6 +8,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
+import { PINNED_CHECKLIST_RESERVE, PinnedChecklist } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -22,6 +23,7 @@ import { TopBar } from "@/components/top-bar";
 import {
 	ASSISTANT_CONTENT_CLASS,
 	NO_CARDS,
+	activeChecklist,
 	PROSE_BLOCK_CLASS,
 	foldCardEvent,
 	parseThreadCards,
@@ -272,6 +274,7 @@ export function ThreadChat({
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
 	);
+	const pinned = useMemo(() => activeChecklist(messages), [messages]);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
@@ -372,7 +375,7 @@ export function ThreadChat({
 				<div className="relative flex min-h-0 flex-1">
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinned ? PINNED_CHECKLIST_RESERVE : "pt-4"}`}>
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -521,6 +524,7 @@ export function ThreadChat({
 							</div>
 						</div>
 					</Conversation>
+					<PinnedChecklist active={pinned} threadId={threadId} />
 				</div>
 			</div>
 			<MemoryPanel wolf={wolf} threadId={threadId} />

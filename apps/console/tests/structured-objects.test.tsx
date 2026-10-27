@@ -34,9 +34,10 @@ const { MemoryEventsProvider } = await import("../components/memory-events.tsx")
 const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
 const { ChecklistCard } = await import("../components/checklist-card.tsx");
+const { PinnedChecklist } = await import("../components/pinned-checklist.tsx");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
-const { renderItems, threadMessagesToNative, collapseObjects } = await import("../src/core/index.ts");
+const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist } = await import("../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
@@ -357,5 +358,165 @@ describe("checklist card", () => {
 	it("invalid checklist data (duplicate ids) yields no object", () => {
 		const dup = { items: [{ id: "a", label: "A", state: "todo" }, { id: "a", label: "B", state: "done" }] };
 		assert.equal(objectParts(view(liveModel([ev({ type: "turn-start" }), upsert(1, dup), ev({ type: "turn-end", reason: "complete" })]))).length, 0);
+	});
+});
+
+describe("pinned checklist card", () => {
+	const mk = (title: string | undefined, states: string[]) => ({ ...(title ? { title } : {}), items: states.map((state, i) => ({ id: `i${i}`, label: `Step ${i}`, state })) });
+	const obj = (objectId: string, rev: number, data: unknown, textOffset = 0) => ({ objectId, type: "checklist", rev, data, textOffset });
+	const hist = (...objects: ReturnType<typeof obj>[]): ThreadMessage[] => [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects }];
+	const status = () => document.querySelector('[data-testid="pinned-checklist"]');
+	const summary = () => document.querySelector('[data-testid="pinned-checklist-summary"]')?.textContent?.replace(/\s+/g, " ").trim();
+	const button = () => document.querySelector('[data-testid="pinned-checklist-button"]') as HTMLElement;
+	const panel = () => document.querySelector('[data-testid="pinned-checklist-panel"]');
+	const loader = () => document.querySelector('[data-testid="pinned-checklist-loader"]')!;
+	const panelStates = () => [...panel()!.querySelectorAll('[data-testid="checklist-item"]')].map((i) => i.getAttribute("data-state"));
+	const click = () => act(async () => void button().dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+	const pressEsc = () =>
+		act(async () => {
+			const e = new dom.window.Event("keydown", { bubbles: true });
+			Object.assign(e, { key: "Escape" });
+			document.dispatchEvent(e);
+		});
+	let seq = 0;
+	/** Mount a fresh thread (own id: expanded state is kept per thread) and return a re-render with new history. */
+	async function mountThread(h: () => ThreadMessage[]) {
+		const threadId = `pin-${++seq}`;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const render = (messages: ThreadMessage[]) =>
+			act(async () => {
+				root!.render(
+					<AppRouterContext.Provider value={{ push() {} } as never}>
+						<SettingsDialogProvider>
+							<MemoryEventsProvider connect={inertSource}>
+								<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={threadMessagesToNative(messages) as never} />
+							</MemoryEventsProvider>
+						</SettingsDialogProvider>
+					</AppRouterContext.Provider>,
+				);
+			});
+		await render(h());
+		return render;
+	}
+
+	it("no checklist → no status", async () => {
+		await mountThread(() => history);
+		assert.equal(status(), null);
+	});
+
+	it("history seed (reload): collapsed by default with 'Title · done/total', a loader at done/total and the doing subtitle", async () => {
+		await mountThread(() => hist(obj("cl", 1, mk("Card testing", ["done", "doing", "todo"]))));
+		assert.equal(summary(), "Card testing · 1/3");
+		assert.equal(button().getAttribute("aria-expanded"), "false");
+		assert.equal(panel(), null);
+		assert.equal(loader().getAttribute("aria-valuenow"), "1");
+		assert.equal(loader().getAttribute("aria-valuemax"), "3");
+		assert.equal(loader().getAttribute("data-active"), "true");
+		assert.match(loader().innerHTML, /width:\s*33\.3/);
+		assert.match(document.querySelector('[data-testid="pinned-checklist-doing"]')?.textContent ?? "", /Step 1/);
+	});
+
+	it("untitled is 'Checklist'; a finished list stays pinned with ✓ and no pulse", async () => {
+		await mountThread(() => hist(obj("cl", 2, mk(undefined, ["done", "done", "skipped"]))));
+		assert.equal(summary(), "✓ Checklist · 2/2");
+		assert.equal(loader().getAttribute("data-active"), null);
+		assert.match(loader().innerHTML, /width:\s*100%/);
+	});
+
+	it("a live upsert folds into the view the card reads", () => {
+		const live = liveModel([ev({ type: "turn-start" }), ev({ type: "object-upsert", objectId: "cl", objectType: "checklist", rev: 1, data: mk("Plan", ["done", "todo", "todo"]), textOffset: 0 })]);
+		const a = activeChecklist(view(live));
+		assert.equal(a?.objectId, "cl");
+		assert.equal(checklistProgressOf(a!.data), "1/3");
+	});
+
+	const checklistProgressOf = (d: { items: { state: string }[] }) => `${d.items.filter((i) => i.state === "done").length}/${d.items.length}`;
+
+	it("click expands in place, click again collapses, Esc collapses; aria wired", async () => {
+		await mountThread(() => hist(obj("cl", 1, mk("Plan", ["doing", "todo"]))));
+		await click();
+		assert.ok(panel());
+		assert.equal(button().getAttribute("aria-expanded"), "true");
+		assert.equal(button().getAttribute("aria-controls"), panel()!.id);
+		assert.ok(status()!.contains(panel()), "same card, no separate popover");
+		await click();
+		assert.equal(panel(), null);
+		await click();
+		await pressEsc();
+		assert.equal(panel(), null);
+		assert.equal(button().getAttribute("aria-expanded"), "false");
+	});
+
+	it("a revision of the same objectId updates the card collapsed and expanded (live fold → card)", async () => {
+		const up = (rev: number, data: unknown) => ev({ type: "object-upsert", objectId: "cl", objectType: "checklist", rev, data, textOffset: 0 });
+		const events = [ev({ type: "turn-start" })];
+		const model = liveModel(events);
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const wire = threadTransport("w", "t").createWire();
+		for (const e of [events[0]!]) for (const w of wire(e as never)) model.applyWireEvent(w);
+		const show = (rev: number, data: unknown) => {
+			for (const w of wire(up(rev, data) as never)) model.applyWireEvent(w);
+			return act(async () => root!.render(<PinnedChecklist active={activeChecklist(view(model))} threadId="pin-live" />));
+		};
+		await show(1, mk("Plan", ["done", "todo", "todo"]));
+		assert.equal(summary(), "Plan · 1/3");
+		await show(2, mk("Plan", ["done", "doing", "todo"]));
+		assert.match(document.querySelector('[data-testid="pinned-checklist-doing"]')?.textContent ?? "", /Step 1/);
+		await click();
+		assert.deepEqual(panelStates(), ["done", "doing", "todo"]);
+		await show(3, mk("Plan", ["done", "done", "done"]));
+		assert.ok(panel(), "stays expanded");
+		assert.deepEqual(panelStates(), ["done", "done", "done"]);
+		assert.equal(summary(), "✓ Plan · 3/3");
+		assert.equal(document.querySelectorAll('[data-testid="pinned-checklist"]').length, 1);
+	});
+
+	it("expanded state persists per thread for the session; default collapsed", async () => {
+		const render = await mountThread(() => hist(obj("cl", 1, mk("Plan", ["todo"]))));
+		await click();
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		// Same thread id remounted → still expanded.
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={{ push() {} } as never}>
+					<SettingsDialogProvider>
+						<MemoryEventsProvider connect={inertSource}>
+							<ThreadChat wolf="w" slug="s" threadId={`pin-${seq}`} title="T" initialMessages={threadMessagesToNative(hist(obj("cl", 1, mk("Plan", ["todo"])))) as never} />
+						</MemoryEventsProvider>
+					</SettingsDialogProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		assert.ok(panel());
+		void render;
+	});
+
+	it("two checklists → the most recently revised wins (history and live)", async () => {
+		await mountThread(() => hist(obj("b", 1, mk("Second", ["todo"])), obj("a", 3, mk("First", ["done", "todo"]))));
+		assert.equal(summary(), "First · 1/2");
+		const live = liveModel([
+			ev({ type: "turn-start" }),
+			ev({ type: "object-upsert", objectId: "a", objectType: "checklist", rev: 1, data: mk("First", ["todo"]), textOffset: 0 }),
+			ev({ type: "object-upsert", objectId: "b", objectType: "checklist", rev: 1, data: mk("Second", ["todo"]), textOffset: 0 }),
+			ev({ type: "object-upsert", objectId: "a", objectType: "checklist", rev: 2, data: mk("First", ["done"]), textOffset: 0 }),
+		]);
+		assert.equal(activeChecklist(view(live))?.objectId, "a");
+	});
+
+	it("the transcript reserves top space only while a checklist is pinned", async () => {
+		await mountThread(() => hist(obj("cl", 1, mk("Plan", ["todo"]))));
+		assert.ok(document.querySelector(".pt-20"));
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		await mountThread(() => history);
+		assert.equal(document.querySelector(".pt-20"), null);
 	});
 });

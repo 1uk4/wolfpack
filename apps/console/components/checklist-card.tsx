@@ -1,9 +1,31 @@
 import { cn } from "@/lib/utils";
-import { checklistProgress, parseObjectData, type ChecklistState } from "@wolfpack/protocol/objects";
+import { checklistProgress, parseObjectData, type ChecklistData, type ChecklistState } from "@wolfpack/protocol/objects";
 import type { ObjectCardProps } from "@/components/card-registry";
 import { ObjectCardFrame } from "@/components/object-card";
 
 const ICONS: Record<ChecklistState, string> = { todo: "○", doing: "◐", done: "✓", skipped: "⊘" };
+
+/** The item rows (state icon, label, note) — shared by the inline card and the pinned panel. */
+export function ChecklistItems({ items }: { items: ChecklistData["items"] }) {
+	return (
+		<ul className="flex flex-col gap-1">
+			{items.map((i) => (
+				<li key={i.id} data-testid="checklist-item" data-state={i.state} className="flex items-start gap-2 text-sm">
+					<span aria-hidden className={cn("w-4 shrink-0 text-center", i.state === "done" || i.state === "doing" ? "text-primary" : "text-muted-foreground")}>
+						{ICONS[i.state]}
+					</span>
+					<div className="min-w-0">
+						<span className={cn((i.state === "done" || i.state === "skipped") && "text-muted-foreground", i.state === "skipped" && "line-through", i.state === "doing" && "font-medium text-foreground")}>
+							{i.label}
+						</span>
+						<span className="sr-only"> ({i.state})</span>
+						{i.note && <div className="text-xs text-muted-foreground">{i.note}</div>}
+					</div>
+				</li>
+			))}
+		</ul>
+	);
+}
 
 /** A checklist object: items with state icons, a done/total bar (skipped items leave the total) and the revision marker. */
 export function ChecklistCard({ objectId, rev, data }: ObjectCardProps) {
@@ -37,22 +59,7 @@ export function ChecklistCard({ objectId, rev, data }: ObjectCardProps) {
 			>
 				<div className="h-full bg-primary transition-[width] motion-reduce:transition-none" style={{ width: `${pct}%` }} />
 			</div>
-			<ul className="flex flex-col gap-1">
-				{c.items.map((i) => (
-					<li key={i.id} data-testid="checklist-item" data-state={i.state} className="flex items-start gap-2 text-sm">
-						<span aria-hidden className={cn("w-4 shrink-0 text-center", i.state === "done" || i.state === "doing" ? "text-primary" : "text-muted-foreground")}>
-							{ICONS[i.state]}
-						</span>
-						<div className="min-w-0">
-							<span className={cn((i.state === "done" || i.state === "skipped") && "text-muted-foreground", i.state === "skipped" && "line-through", i.state === "doing" && "font-medium text-foreground")}>
-								{i.label}
-							</span>
-							<span className="sr-only"> ({i.state})</span>
-							{i.note && <div className="text-xs text-muted-foreground">{i.note}</div>}
-						</div>
-					</li>
-				))}
-			</ul>
+			<ChecklistItems items={c.items} />
 		</ObjectCardFrame>
 	);
 }

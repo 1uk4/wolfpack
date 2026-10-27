@@ -6,10 +6,10 @@
  * and threadMessagesToNative turn both into the SAME native block, `{type:"object", objectId, objectType, rev, data}`
  * inside the assistant message (position = arrival live, `textOffset` on reload). projectView projects each block to
  * an "object" view part and `collapseObjects` folds them: per objectId the highest rev wins, shown at its FIRST
- * position. Harness-originated revisions (no tool call) need a server-side source of upserts; they would need no
+ * position; `seq` stamps the part with the ordinal of its latest upsert (recency across objects). Harness-originated revisions (no tool call) need a server-side source of upserts; they would need no
  * console change, since they arrive as the same events and history objects.
  */
-import { OBJECT_TOOL_TYPES, parseObjectData } from "@wolfpack/protocol/objects";
+import { OBJECT_TOOL_TYPES, parseObjectData, type ChecklistData } from "@wolfpack/protocol/objects";
 import type { LhViewMessage, LhViewPart } from "./view.ts";
 
 /** Names of the tools that show objects: their tool row is hidden, the card is the UX. */
@@ -36,21 +36,49 @@ export function objectPartOf(block: ObjectBlock, id: string): LhViewPart | undef
 /** Fold object parts across the whole view (in place): highest rev per objectId wins, kept at its first position. */
 export function collapseObjects(messages: LhViewMessage[]): void {
 	const first = new Map<string, LhViewPart>();
+	let seq = 0;
 	for (const m of messages) {
 		if (m.role !== "assistant") continue;
 		m.parts = m.parts.filter((p) => {
 			if (p.type !== "object") return true;
+			seq++;
 			const kept = first.get(p.objectId as string);
 			if (!kept) {
+				p.seq = seq;
 				first.set(p.objectId as string, p);
 				return true;
 			}
 			if ((p.rev as number) >= (kept.rev as number)) {
 				kept.rev = p.rev;
+				kept.seq = seq;
 				kept.objectType = p.objectType;
 				kept.data = p.data;
 			}
 			return false;
 		});
 	}
+}
+
+export interface ActiveChecklist {
+	objectId: string;
+	rev: number;
+	data: ChecklistData;
+}
+
+/**
+ * The thread's active checklist: among the folded checklist parts, the one whose latest upsert came last (`seq`).
+ * A finished (all done / all skipped) checklist stays active until a newer checklist appears. Invalid data is skipped.
+ */
+export function activeChecklist(messages: LhViewMessage[]): ActiveChecklist | undefined {
+	let best: { seq: number; value: ActiveChecklist } | undefined;
+	for (const m of messages) {
+		if (m.role !== "assistant") continue;
+		for (const p of m.parts) {
+			if (p.type !== "object" || p.objectType !== "checklist") continue;
+			const data = parseObjectData("checklist", p.data);
+			const seq = typeof p.seq === "number" ? p.seq : 0;
+			if (data && (!best || seq >= best.seq)) best = { seq, value: { objectId: p.objectId as string, rev: p.rev as number, data } };
+		}
+	}
+	return best?.value;
 }

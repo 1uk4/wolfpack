@@ -486,6 +486,67 @@ export const WorkRecordResponseSchema = z.object({
 });
 export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 
+// ------------------------------------------------------------ KB graph
+
+export const KbNodeKindSchema = z.enum(["domain", "section", "entry", "work", "den-topic"]);
+export type KbNodeKind = z.infer<typeof KbNodeKindSchema>;
+
+/** One node. `id` is `dom:<domain>` | `sec:<sectionId>` | `ent:<entryId>` | `work:<workId>` | `den:<wolf>:<topicId>`. `depth` by kind: domain 0, section 1, entry 2, work 3, den topic 4. */
+export const KbGraphNodeSchema = z.object({
+  id: z.string(),
+  kind: KbNodeKindSchema,
+  label: z.string(),
+  depth: z.number().int().min(0).max(4),
+  domain: z.string().optional(),
+  sectionId: z.string().optional(),
+  summary: z.string().optional(),
+  currency: z.string().optional(),
+  entryKind: z.string().optional(),
+  maturity: z.string().optional(),
+  authority: z.string().optional(),
+  workKind: z.string().optional(),
+  stage: z.string().optional(),
+  assignee: z.string().optional(),
+  wolf: z.string().optional(),
+  promotable: z.boolean().optional(),
+  updated: z.string().optional(),
+});
+export type KbGraphNode = z.infer<typeof KbGraphNodeSchema>;
+
+export const KbEdgeKindSchema = z.enum(["hierarchy", "partOf", "dependsOn", "related", "wikilink"]);
+export type KbEdgeKind = z.infer<typeof KbEdgeKindSchema>;
+
+export const KbGraphEdgeSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  kind: KbEdgeKindSchema,
+  /** `related` only: the relation kind (see_also, refines, ...), or `work` for a den topic's work link. */
+  relation: z.string().optional(),
+});
+export type KbGraphEdge = z.infer<typeof KbGraphEdgeSchema>;
+
+export const KbGraphSchema = z.object({
+  nodes: z.array(KbGraphNodeSchema),
+  edges: z.array(KbGraphEdgeSchema),
+  layers: z.object({ archivedWork: z.boolean(), wikilinks: z.boolean(), denTopics: z.boolean() }),
+  /** The domain filter as applied; null = all. */
+  domain: z.string().nullable(),
+  domains: z.array(z.object({ name: z.string(), label: z.string(), color: z.string().optional() })),
+  generated: IsoSchema,
+});
+export type KbGraph = z.infer<typeof KbGraphSchema>;
+
+export const KbEntryDetailSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  domain: z.string(),
+  frontmatter: z.record(z.string(), z.unknown()),
+  body: z.string(),
+  wikilinks: z.array(z.object({ target: z.string(), exists: z.boolean() })),
+  backlinks: z.array(z.object({ id: z.string(), title: z.string(), via: z.enum(["wikilink", "related"]), relation: z.string().optional() })),
+});
+export type KbEntryDetail = z.infer<typeof KbEntryDetailSchema>;
+
 // ------------------------------------------------------------- commands
 
 export const WhenBusySchema = z.enum(["steer", "followUp", "reject"]);

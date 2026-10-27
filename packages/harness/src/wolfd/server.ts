@@ -59,6 +59,8 @@ import {
 import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
+import { readDenTopics } from "@wolfpack/memory";
 import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
@@ -424,6 +426,34 @@ export class WolfServer {
         const { readPipeline } = await import("@wolfpack/kb/librarian");
         const body: KbPipelineResponse = readPipeline(roots);
         return this.json(res, 200, body);
+      }
+      case "getKbGraph": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        const flag = (k: string): boolean => {
+          const v = url.searchParams.get(k);
+          if (v === null || v === "false") return false;
+          if (v === "true") return true;
+          throw new HttpError("invalid_request", `${k} must be true or false`);
+        };
+        const domain = url.searchParams.get("domain") ?? undefined;
+        // The den layer is this wolf's own den only, never another wolf's; with no den it reports itself off.
+        const denTopics = flag("denTopics") && this.opts.den !== undefined;
+        const den = denTopics && this.opts.den ? { wolf: this.name, topics: readDenTopics(this.opts.den) } : undefined;
+        try {
+          return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), wikilinks: flag("wikilinks"), denTopics, den }));
+        } catch (e) {
+          if (e instanceof UnknownDomainError) throw new HttpError("not_found", `domain ${e.domain}`);
+          throw e;
+        }
+      }
+      case "getKbEntry": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HttpError("invalid_request", "malformed entry id");
+        const entry = readKbEntry(roots, params.id);
+        if (!entry) throw new HttpError("not_found", `entry ${params.id}`);
+        return this.json(res, 200, entry);
       }
       case "promoteMemory": {
         this.checkWolf(params.name);

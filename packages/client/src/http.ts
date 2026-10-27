@@ -17,6 +17,8 @@ import {
   type Actor,
   type ConsoleClient,
   type ConsolidateResponse,
+  type KbEntryDetail,
+  type KbGraph,
   type MemoryStatus,
   type MemoryTopic,
   type WorkRecordResponse,
@@ -166,6 +168,18 @@ export class HttpConsoleClient implements ConsoleClient {
   /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */
   async getKbPipeline(wolf: string): Promise<KbPipelineResponse> {
     return (await this.json("kbPipeline", { name: wolf }, ROUTES.kbPipeline.response.schema, undefined, wolf)) as KbPipelineResponse;
+  }
+
+  async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; wikilinks?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {
+    const q = new URLSearchParams();
+    if (opts.domain) q.set("domain", opts.domain);
+    for (const k of ["archivedWork", "wikilinks", "denTopics"] as const) if (opts[k] !== undefined) q.set(k, String(opts[k]));
+    const query = q.size ? `?${q}` : "";
+    return (await this.json("getKbGraph", { name: wolf }, ROUTES.getKbGraph.response.schema, undefined, wolf, query)) as KbGraph;
+  }
+
+  async getKbEntry(wolf: string, id: string): Promise<KbEntryDetail> {
+    return (await this.json("getKbEntry", { name: wolf, id }, ROUTES.getKbEntry.response.schema, undefined, wolf)) as KbEntryDetail;
   }
 
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */

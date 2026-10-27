@@ -207,6 +207,11 @@ export class StubServer {
       case "kbPipeline":
         this.wolf(params.name);
         throw new HttpError("kb_unavailable", "this wolf is not the librarian");
+      case "getKbGraph":
+      case "getKbEntry":
+        this.wolf(params.name);
+        // The stub is not the librarian.
+        throw new HttpError("kb_unavailable", `wolf ${params.name} is not the librarian`);
       case "streamWolfEvents": {
         this.wolf(params.name);
         // The stub emits no memory events: an open, empty stream.

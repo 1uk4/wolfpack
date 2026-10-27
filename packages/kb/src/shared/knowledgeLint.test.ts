@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { lintKnowledge, brokenLinks, stripBrokenLinks, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings } from "./knowledgeLint.js";
+import { lintKnowledge, brokenLinks, wikilinkTargets, stripBrokenLinks, stripProperties, stripLedeRepeat, stripDetailHeading, splitHistory, hardFindings, describeFindings } from "./knowledgeLint.js";
 
 const codes = (body: string, extra: Partial<Parameters<typeof lintKnowledge>[0]> = {}) =>
   lintKnowledge({ body, ...extra }).map((f) => f.code);
@@ -129,5 +129,18 @@ describe("broken wikilinks", () => {
       stripped: ["kb-...", "x"],
     });
     expect(stripBrokenLinks("old [[x]]\nnew [[y]]", live, new Set(["old [[x]]"])).text).toBe("old [[x]]\nnew y");
+  });
+});
+
+describe("wikilinkTargets", () => {
+  it("lists unique targets in order, without aliases, anchors or code fences", () => {
+    expect(wikilinkTargets("a [[x|the x]] b [[y#h]] [[x]]\n```\n[[z]]\n```\n[[]]")).toEqual(["x", "y"]);
+  });
+});
+
+describe("empty wikilink targets", () => {
+  it("brokenLinks flags them, wikilinkTargets skips them", () => {
+    expect(brokenLinks("a [[]] b [[ ]]", new Set())).toEqual([""]);
+    expect(wikilinkTargets("a [[]] b [[ ]]")).toEqual([]);
   });
 });

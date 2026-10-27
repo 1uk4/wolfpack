@@ -25,7 +25,7 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 
 ## Memory events (wolf stream)
 
-`MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId` (only the conversation backing the home thread, `<wolf>/home`), optional integer `conversationId` (the durable conversation an observation came from; absent on pool-level events), `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata plus a redacted one-line summary; never full observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`. Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
+`MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId` (only the conversation backing the home thread, `<wolf>/home`), optional integer `conversationId` (the durable conversation an observation came from; absent on pool-level events), `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata plus a redacted one-line summary; never full observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`, `record_written` (target = the work item holding the Record; `observationCount`, `chars?`), `topic_archived` (`topicId`, `absorbedInto?`: absent for a reject), and from the librarian `sweep_started` (`pending`), `sweep_item` (`from`, `denTopicId`, `outcome` create\|merge\|reject\|parked, `entryId?`; unclassified items get none) and `sweep_finished` (`processed`, `created`, `merged`, `rejected`, `parked`, `remaining`, `durationMs`, `error?`; always follows a `sweep_started`; sweep events carry `domain: "kb"`). Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
 
 ## Memory actions
 
@@ -55,6 +55,18 @@ Additive and read-only, served by any wolf for its own den (a wolf never serves 
 | `GET /v1/wolves/:name/work/:id/record` | `WorkRecordResponse` | title, kind, stage, domain, partOf, dependsOn, `plan`, `record`, `updated`, via the wolf's Work API client. 404 unknown, 409 `memory_unavailable` (no Work API), 502 `engine_error` |
 
 `WolfSummary.librarian?: boolean` marks the wolf that serves the KB (`memory.librarian` in wolf.yaml); absent when unknown (offline wolf, older server). Client: `getMemoryStatus(wolf, {thread?})`, `getMemoryTopic(wolf, id, {scope?})`, `getWorkRecord(wolf, id)` (optional on `ConsoleClient`).
+
+## KB resources
+
+Additive and read-only, served by the librarian wolf only (`WolfSummary.librarian`); any other wolf, or a librarian without KB roots, answers 409 `kb_unavailable`.
+
+| Route | Response | Notes |
+| --- | --- | --- |
+| `GET /v1/wolves/:name/kb/graph[?domain=&archivedWork=&wikilinks=&denTopics=]` | `KbGraph` | `nodes` (domain/section/entry/work/den-topic; ids `dom:`/`sec:`/`ent:`/`work:`/`den:<wolf>:<topic>`, `depth` 0-4), `edges` (`hierarchy` parent→child, `partOf` child→parent, `dependsOn`, `related` with `relation`, `wikilink`), the applied `layers` and `domain`, all `domains` (`name`, `label`, optional `color`), `generated`. No positions. Flags are `true`\|`false` (default false; else 400); unknown `domain` is 404. `denTopics` adds the serving wolf's own den topics only |
+| `GET /v1/wolves/:name/kb/entries/:id` | `KbEntryDetail` | `frontmatter`, `body`, `wikilinks` (`target`, `exists`), `backlinks` (`id`, `title`, `via` wikilink\|related, `relation`). 400 malformed id, 404 unknown |
+| `GET /v1/wolves/:name/kb/pipeline` | `KbPipelineResponse` | `lanes` (`wolf`, `pending`, `oldestAgeMs?`), `receipts` (newest 50: `wolf`, `denTopicId`, `outcome` create\|merge\|reject\|parked\|unclassified, `entryId?`, `processed`, `detail?`), `parked` (`wolf`, `file`, `denTopicId?`, `reason?`), `sweep` (`current?` item in progress, `last?` persisted last run with counts, `durationMs`, `error?`) |
+
+Client: `getKbGraph(wolf, {domain?, archivedWork?, wikilinks?, denTopics?})`, `getKbEntry(wolf, id)`, `getKbPipeline(wolf)` (optional on `ConsoleClient`).
 
 ## Tool calls in history
 

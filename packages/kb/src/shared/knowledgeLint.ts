@@ -165,16 +165,23 @@ export function lintKnowledge(input: LintInput): LintFinding[] {
 const WIKILINK = /\[\[([^\]\n]*)\]\]/g;
 const linkTarget = (inner: string) => inner.split("|")[0].split("#")[0].trim();
 
-/** Targets of the `[[…]]` links in `text` (outside code fences) that are not in `live`. */
-export function brokenLinks(text: string, live: ReadonlySet<string>): string[] {
+function linkTargetsIn(text: string, keepEmpty: boolean): string[] {
   const out: string[] = [];
   for (const l of proseLines(text)) {
     for (const m of l.matchAll(WIKILINK)) {
       const t = linkTarget(m[1]);
-      if (!live.has(t) && !out.includes(t)) out.push(t);
+      if ((t || keepEmpty) && !out.includes(t)) out.push(t);
     }
   }
   return out;
+}
+
+/** Targets of the `[[…]]` links in `text` (outside code fences), in order, unique; empty targets are skipped. */
+export const wikilinkTargets = (text: string): string[] => linkTargetsIn(text, false);
+
+/** Targets of the `[[…]]` links in `text` (outside code fences) that are not in `live`; an empty `[[]]` target is flagged. */
+export function brokenLinks(text: string, live: ReadonlySet<string>): string[] {
+  return linkTargetsIn(text, true).filter((t) => !live.has(t));
 }
 
 /**

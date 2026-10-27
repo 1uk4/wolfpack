@@ -168,7 +168,7 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
       if (other.length > 0 && f.allowOther !== true) return `field "${id}" does not accept custom entries`;
       for (const o of other) {
         if (o.trim() === "") return `field "${id}": a custom entry cannot be empty`;
-        if (f.options.some((x) => x.value === o)) return `field "${id}": custom entry "${o}" duplicates an option value`;
+        if (f.options.some((x) => x.value === o.trim())) return `field "${id}": custom entry "${o}" duplicates an option value`;
         if (!a.value.includes(o)) return `field "${id}": custom entry "${o}" is not among the picked values`;
       }
       for (const v of a.value) {

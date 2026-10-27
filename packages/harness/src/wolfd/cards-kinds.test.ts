@@ -70,6 +70,7 @@ describe("card field kind validation (pure)", () => {
     bad(MULTI_OTHER, { m: { value: ["a"], other: ["x"] } }, /not among the picked/);
     bad(MULTI_OTHER, { m: { value: ["  "], other: ["  "] } }, /cannot be empty/);
     bad(MULTI_OTHER, { m: { value: ["b"], other: ["b"] } }, /duplicates an option value/); // custom == option value
+    bad(MULTI_OTHER, { m: { value: [" b "], other: [" b "] } }, /duplicates an option value/); // whitespace doesn't dodge it
   });
 
   it("confirm: boolean only", () => {

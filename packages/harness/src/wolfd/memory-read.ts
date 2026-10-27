@@ -18,9 +18,8 @@ export interface MemoryReadConfig {
   consolidation: { threshold: number; poolTarget: number; trigger: "threshold" | "timer" | "hybrid" | "manual" };
 }
 
-/** Topic ids as the memory system writes them: a slug. Anything else is rejected before it is looked up. */
-const TOPIC_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-export const isTopicId = (id: string): boolean => TOPIC_ID.test(id);
+/** Cheap sanity check on a topic id; acceptance is an exact match against the topics listed on disk. */
+export const isTopicId = (id: string): boolean => id !== "" && id.length <= 512 && !id.includes("/") && !id.includes("\0");
 /** Work item ids (`work-<domain>-<hash>`). */
 const WORK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export const isWorkId = (id: string): boolean => WORK_ID.test(id);
@@ -57,7 +56,7 @@ export function memoryState(i: MemoryStateInput): { state: MemoryState; reason: 
       ? { state: "sandbox", reason: "running against the sandbox dev root (wolf.yaml sandbox)" }
       : { state: "live", reason: "running against the live roots (memory.live: true)" };
   }
-  if (i.config.disabled) return { state: "inert", reason: "memory is inert: disabled by memory.enabled: false" };
+  if (i.config.disabled) return { state: "off", reason: "memory is off: disabled by memory.enabled: false" };
   return { state: "inert", reason: "memory is inert: the extension is loaded but gated off (set `sandbox` or `memory.live` in wolf.yaml)" };
 }
 
@@ -106,12 +105,14 @@ interface ApiWorkItem {
 
 type WorkFetch = { kind: "ok"; item: ApiWorkItem; body: string } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
 
+const WORK_TIMEOUT_MS = 3000;
+
 /** GET <endpoint>/work/:id (the same call the memory extension's Work clients make). */
 async function fetchWorkItem(id: string, work: { endpoint?: string; token?: string }): Promise<WorkFetch> {
   const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
   if (!endpoint || !work.token) return { kind: "unconfigured" };
   try {
-    const res = await fetch(`${endpoint}/work/${encodeURIComponent(id)}`, { headers: { "X-API-Key": work.token } });
+    const res = await fetch(`${endpoint}/work/${encodeURIComponent(id)}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
     if (res.status === 404) return { kind: "not_found" };
     if (!res.ok) return { kind: "error", message: `GET ${id}: HTTP ${res.status}` };
     const data = (await res.json()) as { item?: ApiWorkItem; body?: string | null };

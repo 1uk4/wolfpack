@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { draftAnswers, draftComplete, initialDraft, multiInBounds, type CardDraft } from "@/src/core";
+import { addCustomEntry, draftAnswers, draftComplete, foldPendingOther, initialDraft, multiInBounds, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -19,7 +19,10 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	const set = (fieldId: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [fieldId]: a }));
 	const answered = answer !== undefined;
 	const closed = answered || dismissed === true;
-	const canSubmit = pending && !submitting && draftComplete(card, draft);
+	// Text typed into a multi "Other…" box but not yet added still counts on Submit (folded in, never lost).
+	const [typed, setTyped] = useState<Record<string, string>>({});
+	const folded = foldPendingOther(card, draft, typed);
+	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
 
 	return (
 		<div
@@ -40,11 +43,14 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 					value={answered ? answer[f.id] : draft[f.id]}
 					readOnly={closed || !pending || submitting}
 					onChange={(a) => set(f.id, a)}
+					typed={typed[f.id] ?? ""}
+					onType={(text) => setTyped((t) => ({ ...t, [f.id]: text }))}
+					pendingError={folded.errors[f.id]}
 				/>
 			))}
 			{!closed && (
 				<div className="mt-3 flex justify-end">
-					<Button type="button" size="sm" disabled={!canSubmit} onClick={() => onAnswer(draftAnswers(card, draft))} data-testid="card-submit">
+					<Button type="button" size="sm" disabled={!canSubmit} onClick={() => onAnswer(draftAnswers(card, folded.draft))} data-testid="card-submit">
 						{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
 					</Button>
 				</div>
@@ -58,15 +64,22 @@ function FieldView({
 	value,
 	readOnly,
 	onChange,
+	typed,
+	onType,
+	pendingError,
 }: {
 	field: CardField;
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	typed: string;
+	onType: (text: string) => void;
+	pendingError?: string;
 }) {
+	const labelId = `card-field-${useId()}`;
 	return (
 		<div className="mb-2 last:mb-0" data-field={field.id}>
-			<div className="mb-2 font-medium">
+			<div className="mb-2 font-medium" id={labelId}>
 				<MessageResponse>{field.label}</MessageResponse>
 			</div>
 			{field.description && (
@@ -75,25 +88,26 @@ function FieldView({
 				</div>
 			)}
 			{field.kind === "confirm" ? (
-				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} />
+				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} />
 			) : field.kind === "multi" ? (
-				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} />
+				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} />
 			) : field.kind === "free-text" ? (
 				readOnly ? (
 					<div className="lh-prose whitespace-pre-wrap" data-testid="card-answer-text">
 						“{typeof value?.value === "string" ? value.value : ""}”
 					</div>
 				) : (
-					<textarea
-						data-testid="card-text"
-						className="min-h-20 w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+					<CardTextInput
+						multiline
+						testId="card-text"
+						className="min-h-20 w-full resize-y px-3 py-2"
 						value={typeof value?.value === "string" ? value.value : ""}
-						onChange={(e) => onChange({ value: e.target.value })}
+						onChange={(text) => onChange({ value: text })}
 						placeholder="Your answer…"
 					/>
 				)
 			) : (
-				<div className="flex flex-col gap-1.5 text-sm" role="radiogroup">
+				<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelId}>
 					{field.options.map((o) => {
 						const other = value !== undefined && "other" in value && value.other === true;
 						const sel = !other && value?.value === o.value;
@@ -101,8 +115,7 @@ function FieldView({
 							<button
 								key={o.value}
 								type="button"
-								role="radio"
-								aria-checked={sel}
+								aria-pressed={sel}
 								disabled={readOnly}
 								data-testid="card-option"
 								data-value={o.value}
@@ -126,16 +139,12 @@ function FieldView({
 								</div>
 							)
 						) : (
-							<input
-								data-testid="card-other"
-								type="text"
-								className={cn(
-									"rounded-lg border bg-background px-3 py-1.5 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-									isOther(value) && "border-primary bg-accent",
-								)}
+							<CardTextInput
+								testId="card-other"
+								className={cn("px-3 py-1.5", isOther(value) && "border-primary bg-accent")}
 								placeholder="Other…"
 								value={otherText(value) ?? ""}
-								onChange={(e) => onChange({ value: e.target.value, other: true })}
+								onChange={(text) => onChange({ value: text, other: true })}
 							/>
 						))}
 				</div>
@@ -152,23 +161,30 @@ function MultiView({
 	value,
 	readOnly,
 	onChange,
+	labelledBy,
+	typed,
+	onType,
+	error,
 }: {
 	field: Extract<CardField, { kind: "multi" }>;
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	labelledBy: string;
+	typed: string;
+	onType: (text: string) => void;
+	error?: string;
 }) {
-	const [typed, setTyped] = useState("");
 	const picked = Array.isArray(value?.value) ? value.value : [];
 	const custom = value && "other" in value && Array.isArray(value.other) ? value.other : [];
 	const atMax = field.max !== undefined && picked.length >= field.max;
 	const write = (next: string[], nextCustom: string[]) => onChange({ value: next, ...(nextCustom.length > 0 ? { other: nextCustom } : {}) });
 	const toggle = (v: string) => (picked.includes(v) ? write(picked.filter((p) => p !== v), custom.filter((c) => c !== v)) : write([...picked, v], custom));
 	const addCustom = () => {
-		const t = typed.trim();
-		if (!t || picked.includes(t) || atMax) return;
-		write([...picked, t], [...custom, t]);
-		setTyped("");
+		const r = addCustomEntry(field, value, typed);
+		if ("error" in r) return; // shown live as `error`
+		onChange(r.answer);
+		onType("");
 	};
 	const rows = [
 		...field.options.map((o) => ({ ...o, custom: false })),
@@ -176,15 +192,14 @@ function MultiView({
 	];
 	const hint = field.min !== undefined || field.max !== undefined ? `Pick ${field.min !== undefined && field.max !== undefined ? `${field.min}–${field.max}` : field.min !== undefined ? `at least ${field.min}` : `up to ${field.max}`}` : null;
 	return (
-		<div className="flex flex-col gap-1.5 text-sm" role="group" data-testid="card-multi">
+		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
 			{rows.map((o) => {
 				const sel = picked.includes(o.value);
 				return (
 					<button
 						key={o.value}
 						type="button"
-						role="checkbox"
-						aria-checked={sel}
+						aria-pressed={sel}
 						disabled={readOnly || (!sel && atMax)}
 						data-testid="card-option"
 						data-value={o.value}
@@ -206,23 +221,15 @@ function MultiView({
 			})}
 			{field.allowOther === true && !readOnly && (
 				<div className="flex gap-2">
-					<input
-						data-testid="card-other"
-						type="text"
-						className="flex-1 rounded-lg border bg-background px-3 py-1.5 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-						placeholder="Other…"
-						value={typed}
-						onChange={(e) => setTyped(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								addCustom();
-							}
-						}}
-					/>
-					<Button type="button" size="sm" variant="outline" data-testid="card-other-add" disabled={typed.trim() === "" || atMax} onClick={addCustom}>
+					<CardTextInput testId="card-other" className="flex-1 px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} />
+					<Button type="button" size="sm" variant="outline" data-testid="card-other-add" disabled={typed.trim() === "" || error !== undefined} onClick={addCustom}>
 						Add
 					</Button>
+				</div>
+			)}
+			{!readOnly && error && (
+				<div data-testid="card-other-error" className="text-xs text-destructive">
+					{error}
 				</div>
 			)}
 			{!readOnly && hint && (
@@ -239,7 +246,9 @@ function ConfirmView({
 	value,
 	readOnly,
 	onChange,
+	labelledBy,
 }: {
+	labelledBy: string;
 	field: Extract<CardField, { kind: "confirm" }>;
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
@@ -250,8 +259,7 @@ function ConfirmView({
 	const btn = (which: boolean, label: string, testid: string) => (
 		<button
 			type="button"
-			role="radio"
-			aria-checked={picked === which}
+			aria-pressed={picked === which}
 			disabled={readOnly}
 			data-testid={testid}
 			onClick={() => onChange({ value: which, ...(note ? { note } : {}) })}
@@ -265,9 +273,56 @@ function ConfirmView({
 		</button>
 	);
 	return (
-		<div className="flex flex-wrap gap-2" role="radiogroup" data-testid="card-confirm-group">
+		<div className="flex flex-wrap gap-2" role="group" aria-labelledby={labelledBy} data-testid="card-confirm-group">
 			{btn(true, field.confirmLabel ?? "Yes", "card-confirm")}
 			{btn(false, field.rejectLabel ?? "No", "card-reject")}
 		</div>
+	);
+}
+
+/**
+ * The one text entry of the card (free text, single Other, multi Other). Dictation can wire in here once: it only needs
+ * the value, the change callback, Enter, and the element ref.
+ */
+export function CardTextInput({
+	value,
+	onChange,
+	onEnter,
+	inputRef,
+	multiline,
+	testId,
+	className,
+	placeholder,
+}: {
+	value: string;
+	onChange: (text: string) => void;
+	onEnter?: () => void;
+	inputRef?: Ref<HTMLInputElement & HTMLTextAreaElement>;
+	multiline?: boolean;
+	testId: string;
+	className?: string;
+	placeholder?: string;
+}) {
+	const cls = cn("rounded-lg border bg-background text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className);
+	const common = {
+		"data-testid": testId,
+		className: cls,
+		value,
+		placeholder,
+		ref: inputRef,
+		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+	};
+	if (multiline) return <textarea {...common} />;
+	return (
+		<input
+			type="text"
+			{...common}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" && onEnter) {
+					e.preventDefault();
+					onEnter();
+				}
+			}}
+		/>
 	);
 }

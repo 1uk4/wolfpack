@@ -225,7 +225,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await mount(client);
 		assert.ok(q('[data-testid="pending-card"]'));
 		assert.ok(q('[data-testid="card-held"]'), "held note");
-		const picked = [...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-checked"));
+		const picked = [...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-pressed"));
 		assert.deepEqual(picked, ["false", "true"]);
 		assert.match(q('[data-testid="card-submit"]')!.textContent ?? "", /Update answer/);
 		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
@@ -271,7 +271,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		const client = new CardClient(MULTI);
 		await mount(client);
 		const boxes = () => [...document.querySelectorAll('[data-testid="card-option"]')];
-		assert.deepEqual(boxes().map((o) => o.getAttribute("aria-checked")), ["true", "false", "false"]);
+		assert.deepEqual(boxes().map((o) => o.getAttribute("aria-pressed")), ["true", "false", "false"]);
 		await settle(120);
 		assert.deepEqual(client.answers, [], "default never auto-submits");
 		assert.ok(q('[data-testid="pending-card"]'));
@@ -287,7 +287,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await mount(client);
 		assert.equal(q('[data-testid="card-confirm"]')!.textContent, "Deploy");
 		assert.equal(q('[data-testid="card-reject"]')!.textContent, "Hold off");
-		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-checked"), "true");
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "true");
 		await settle(120);
 		assert.deepEqual(client.answers, []);
 		await click(q('[data-testid="card-reject"]')!);
@@ -296,7 +296,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: false } } }]);
 		const rec = q('[data-testid="answered-card"]');
 		assert.ok(rec);
-		assert.equal(rec!.querySelector('[data-testid="card-reject"]')!.getAttribute("aria-checked"), "true");
+		assert.equal(rec!.querySelector('[data-testid="card-reject"]')!.getAttribute("aria-pressed"), "true");
 		assert.equal(rec!.querySelector('[data-testid="card-reject"]')!.hasAttribute("disabled"), true);
 	});
 
@@ -305,7 +305,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		held.held = { answer: { value: ["staging"] } };
 		await mount(held);
 		assert.ok(q('[data-testid="card-held"]'));
-		assert.deepEqual([...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-checked")), ["false", "true", "false"]);
+		assert.deepEqual([...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-pressed")), ["false", "true", "false"]);
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		const skipped = new CardClient(CONFIRM);

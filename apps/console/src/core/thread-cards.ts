@@ -112,10 +112,44 @@ export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 		const a = draft[f.id];
 		if (!a) continue;
 		if (Array.isArray(a.value)) {
-			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => a.value.length > 0 && (a.value as string[]).includes(o)) : [];
+			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
 			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
 		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };
 		else out[f.id] = { value: a.value.trim(), ...("other" in a && a.other ? { other: true } : {}) };
 	}
 	return out;
+}
+
+type MultiField = Extract<Card["fields"][number], { kind: "multi" }>;
+
+/**
+ * Add one custom entry to a multi answer. Fails (with the reason) when the text collides with an option value, repeats
+ * a pick, or would exceed `max`; empty text is a no-op success.
+ */
+export function addCustomEntry(field: MultiField, answer: CardFieldAnswer | undefined, text: string): { answer: CardFieldAnswer } | { error: string } {
+	const picked = Array.isArray(answer?.value) ? answer.value : [];
+	const custom = answer && "other" in answer && Array.isArray(answer.other) ? answer.other : [];
+	const t = text.trim();
+	if (t === "") return { answer: { value: picked, ...(custom.length > 0 ? { other: custom } : {}) } };
+	if (field.options.some((o) => o.value === t)) return { error: `“${t}” is already an option: tick it instead` };
+	if (picked.includes(t)) return { error: `“${t}” is already added` };
+	if (field.max !== undefined && picked.length >= field.max) return { error: `At most ${field.max} entries` };
+	return { answer: { value: [...picked, t], other: [...custom, t] } };
+}
+
+/**
+ * Fold text typed into a multi field's "Other…" box but not yet added into the draft, so Submit never loses it.
+ * `error` names the first entry that cannot be added (Submit must then be blocked).
+ */
+export function foldPendingOther(card: Card, draft: CardDraft, typed: Record<string, string>): { draft: CardDraft; errors: Record<string, string> } {
+	const out: CardDraft = { ...draft };
+	const errors: Record<string, string> = {};
+	for (const f of card.fields) {
+		const t = typed[f.id]?.trim();
+		if (f.kind !== "multi" || !t) continue;
+		const r = addCustomEntry(f, out[f.id], t);
+		if ("error" in r) errors[f.id] = r.error;
+		else out[f.id] = r.answer;
+	}
+	return { draft: out, errors };
 }

@@ -59,7 +59,7 @@ const type = (el: HTMLInputElement, value: string) =>
 	});
 const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 const qa = (sel: string) => [...document.querySelectorAll(sel)] as HTMLElement[];
-const checked = () => qa('[data-testid="card-option"]').map((o) => o.getAttribute("aria-checked"));
+const checked = () => qa('[data-testid="card-option"]').map((o) => o.getAttribute("aria-pressed"));
 const submit = () => q('[data-testid="card-submit"]')!;
 
 afterEach(async () => {
@@ -71,7 +71,7 @@ afterEach(async () => {
 describe("AskCard multi", () => {
 	it("renders checkboxes; toggling picks, Submit sends the list in click order", async () => {
 		await mount(multi());
-		assert.equal(qa('[role="checkbox"]').length, 3);
+		assert.equal(qa('[data-testid="card-option"]').length, 3);
 		assert.equal(q('[data-testid="card-other"]'), null, "no Other without allowOther");
 		await click(qa('[data-testid="card-option"]')[2]!);
 		await click(qa('[data-testid="card-option"]')[0]!);
@@ -110,11 +110,51 @@ describe("AskCard multi", () => {
 		const rows = qa('[data-testid="card-option"]');
 		assert.equal(rows.length, 4);
 		assert.equal(rows[3]!.getAttribute("data-custom"), "true");
-		assert.equal(rows[3]!.getAttribute("aria-checked"), "true");
+		assert.equal(rows[3]!.getAttribute("aria-pressed"), "true");
 		await click(submit());
 		assert.deepEqual(sent, [{ m: { value: ["a", "mine"], other: ["mine"] } }]);
 		await click(qa('[data-testid="card-option"]')[3]!);
 		assert.equal(qa('[data-testid="card-option"]').length, 3, "unchecking a custom entry removes it");
+	});
+
+	it("text typed in Other… but not added is folded in on Submit (never lost)", async () => {
+		await mount(multi({ allowOther: true, min: 2 }));
+		await click(qa('[data-testid="card-option"]')[0]!);
+		assert.equal(submit().hasAttribute("disabled"), true, "min 2 not met yet");
+		await type(q('[data-testid="card-other"]') as HTMLInputElement, " teal ");
+		assert.equal(submit().hasAttribute("disabled"), false, "the pending entry counts toward min");
+		await click(submit());
+		assert.deepEqual(sent, [{ m: { value: ["a", "teal"], other: ["teal"] } }]);
+	});
+
+	it("a custom entry equal to an option value is rejected (Add and Submit blocked, message shown)", async () => {
+		await mount(multi({ allowOther: true }));
+		await click(qa('[data-testid="card-option"]')[0]!);
+		await type(q('[data-testid="card-other"]') as HTMLInputElement, "b");
+		assert.match(q('[data-testid="card-other-error"]')?.textContent ?? "", /already an option/);
+		assert.equal(q('[data-testid="card-other-add"]')!.hasAttribute("disabled"), true);
+		assert.equal(submit().hasAttribute("disabled"), true);
+		await click(q('[data-testid="card-other-add"]')!);
+		assert.equal(qa('[data-testid="card-option"]').length, 3);
+		await type(q('[data-testid="card-other"]') as HTMLInputElement, "");
+		assert.equal(q('[data-testid="card-other-error"]'), null);
+		assert.equal(submit().hasAttribute("disabled"), false);
+	});
+
+	it("pending Other text beyond max blocks Submit", async () => {
+		await mount(multi({ allowOther: true, max: 1 }));
+		await click(qa('[data-testid="card-option"]')[0]!);
+		await type(q('[data-testid="card-other"]') as HTMLInputElement, "extra");
+		assert.match(q('[data-testid="card-other-error"]')?.textContent ?? "", /At most 1/);
+		assert.equal(submit().hasAttribute("disabled"), true);
+	});
+
+	it("groups are labelled by the field label and buttons use aria-pressed (no radio/checkbox roles)", async () => {
+		await mount(multi());
+		const group = q('[data-testid="card-multi"]')!;
+		const label = document.getElementById(group.getAttribute("aria-labelledby")!);
+		assert.match(label?.textContent ?? "", /Pick/);
+		assert.equal(qa('[role="checkbox"], [role="radio"]').length, 0);
 	});
 
 	it("held answer pre-selects with the saved note; answered record is read-only", async () => {
@@ -128,7 +168,7 @@ describe("AskCard multi", () => {
 		assert.ok(q('[data-testid="answered-card"]'));
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		const rows = qa('[data-testid="card-option"]');
-		assert.deepEqual(rows.map((r) => r.getAttribute("aria-checked")), ["true", "false", "false", "true"]);
+		assert.deepEqual(rows.map((r) => r.getAttribute("aria-pressed")), ["true", "false", "false", "true"]);
 		assert.ok(rows.every((r) => r.hasAttribute("disabled")));
 	});
 
@@ -161,8 +201,8 @@ describe("AskCard confirm", () => {
 
 	it("default false pre-selects reject and does not auto-submit", async () => {
 		await mount(confirm({ default: false }));
-		assert.equal(q('[data-testid="card-reject"]')!.getAttribute("aria-checked"), "true");
-		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-checked"), "false");
+		assert.equal(q('[data-testid="card-reject"]')!.getAttribute("aria-pressed"), "true");
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "false");
 		await new Promise((r) => setTimeout(r, 100));
 		assert.deepEqual(sent, []);
 	});
@@ -170,13 +210,13 @@ describe("AskCard confirm", () => {
 	it("answered record marks the choice and disables both buttons; held shows its note", async () => {
 		await mount(confirm(), { answer: { c: { value: true } }, pending: false });
 		assert.ok(q('[data-testid="answered-card"]'));
-		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-checked"), "true");
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "true");
 		assert.ok(q('[data-testid="card-confirm"]')!.hasAttribute("disabled") && q('[data-testid="card-reject"]')!.hasAttribute("disabled"));
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
 		await mount(confirm(), { heldAnswer: { c: { value: false } } });
 		assert.ok(q('[data-testid="card-held"]'));
-		assert.equal(q('[data-testid="card-reject"]')!.getAttribute("aria-checked"), "true");
+		assert.equal(q('[data-testid="card-reject"]')!.getAttribute("aria-pressed"), "true");
 	});
 });
 

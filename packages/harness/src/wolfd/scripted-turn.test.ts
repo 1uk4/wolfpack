@@ -187,6 +187,45 @@ describe("scripted model turns", () => {
     expect(objects[0]).toMatchObject({ objectId: "cl", type: "checklist", rev: 2, data: { items: items("done", "doing") } });
   });
 
+  it("show_graph revised: statuses update, history holds one object at the latest rev", async () => {
+    const nodes = (s: string[]) => ["design", "build", "ship"].map((id, i) => ({ id, label: id, kind: "step", status: s[i] }));
+    const edges = [{ from: "build", to: "design" }, { from: "ship", to: "build" }];
+    const g1 = { objectId: "plan", title: "Plan", nodes: nodes(["doing", "todo", "todo"]), edges };
+    const g2 = { ...g1, nodes: nodes(["done", "doing", "todo"]) };
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_graph", g1 as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([fauxToolCall("show_graph", g2 as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    const events = await tw.submit("plan it");
+    expect(events.filter((e) => e.type === "object-upsert").map((e) => [e.objectId, e.objectType, e.rev])).toEqual([["plan", "graph", 1], ["plan", "graph", 2]]);
+    expect(events.filter((e) => e.type === "tool-end").map((e) => e.result)).toEqual(['Shown graph "plan".', 'Shown graph "plan".']);
+    const objects = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? []);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toMatchObject({ objectId: "plan", type: "graph", rev: 2 });
+    expect((objects[0]!.data as { nodes: Array<{ status: string }> }).nodes.map((n) => n.status)).toEqual(["done", "doing", "todo"]);
+  });
+
+  it.each([
+    ["a dangling edge", [{ from: "b", to: "zzz" }]],
+    ["a cycle", [{ from: "a", to: "b" }, { from: "b", to: "a" }]],
+    ["a self-loop", [{ from: "a", to: "a" }]],
+  ])("show_graph with %s is a tool error and yields no object", async (_n, edges) => {
+    const n = (id: string) => ({ id, label: id, kind: "task", status: "todo" });
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_graph", { objectId: "g", nodes: [n("a"), n("b")], edges } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("ok"),
+      ],
+    });
+    const events = await tw.submit("graph");
+    expect(events.filter((e) => e.type === "object-upsert")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "tool-end").map((e) => e.isError)).toEqual([true]);
+    expect((await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? [])).toHaveLength(0);
+  });
+
   it("memory routes say the extension is not loaded (versus inert) when it is absent", async () => {
     tw = await startTestWolf({ script: [] });
     const res = await fetch(`${tw.url}/v1/wolves/testwolf/memory/consolidate`, { method: "POST", headers: { "X-Protocol-Version": "1" } });

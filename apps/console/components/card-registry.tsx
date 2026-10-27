@@ -4,6 +4,7 @@ import { AnsweredCard } from "@/components/answered-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 import { DecisionCard } from "@/components/decision-card";
 import { ChecklistCard } from "@/components/checklist-card";
+import { PlanGraphCard } from "@/components/plan-graph-card";
 
 /**
  * Card registry — the extension point for transcript cards.
@@ -128,3 +129,4 @@ for (const name of ["read", "ls", "find", "grep"]) {
 // object-upsert / history objects into one part per object).
 registerCard("object", "decision", { Renderer: DecisionCard });
 registerCard("object", "checklist", { Renderer: ChecklistCard });
+registerCard("object", "graph", { Renderer: PlanGraphCard });

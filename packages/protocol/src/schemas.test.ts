@@ -24,6 +24,8 @@ import {
   ThreadObjectSchema,
   ThreadSummarySchema,
   ShowDecisionParamsSchema,
+  ShowChecklistParamsSchema,
+  checklistProgress,
   parseObjectData,
   OBJECT_TYPES,
   OBJECT_TOOL_TYPES,
@@ -341,5 +343,28 @@ describe("structured objects", () => {
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1" }).success).toBe(true);
     expect(ShowDecisionParamsSchema.safeParse(decision).success).toBe(false);
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1", chosen: "zzz" }).success).toBe(false);
+  });
+
+  describe("checklist", () => {
+    const checklist = { title: "Ship", items: [{ id: "a", label: "A", state: "done" }, { id: "b", label: "B", state: "doing", note: "n" }, { id: "c", label: "C", state: "skipped" }] };
+
+    it("parseObjectData accepts valid items and rejects empty, duplicate ids and unknown states", () => {
+      expect(parseObjectData("checklist", checklist)).toEqual(checklist);
+      expect(parseObjectData("checklist", { items: [] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [checklist.items[0], { ...checklist.items[1], id: "a" }] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [{ id: "a", label: "A", state: "finished" }] })).toBeUndefined();
+    });
+
+    it("ShowChecklistParamsSchema requires objectId, min 1 item and unique ids", () => {
+      expect(ShowChecklistParamsSchema.safeParse({ ...checklist, objectId: "o" }).success).toBe(true);
+      expect(ShowChecklistParamsSchema.safeParse(checklist).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [checklist.items[0], checklist.items[0]] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [{ id: "a", label: "A", state: "nope" }] }).success).toBe(false);
+    });
+
+    it("progress is derived: done over total", () => {
+      expect(checklistProgress(parseObjectData("checklist", checklist)!)).toEqual({ done: 1, total: 3 });
+    });
   });
 });

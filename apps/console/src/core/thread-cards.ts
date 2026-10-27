@@ -183,7 +183,7 @@ export function visibleSteps(card: Card, draft: CardDraft): VisibleStep[] {
  * An optional field with nothing entered (no answer, blank text, no picks). A confirm is blank only while unpicked; the
  * server (isSkipped) counts a confirm skipped only when ABSENT, so a present-but-malformed confirm is validated and rejected there.
  */
-const fieldBlank = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
+export const fieldBlank = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
 	if (a === undefined) return true;
 	if (f.kind === "confirm") return typeof a.value !== "boolean";
 	if (f.kind === "multi") return !Array.isArray(a.value) || a.value.length === 0;
@@ -223,6 +223,8 @@ export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 		}
 		if (!a) continue;
 		if (Array.isArray(a.value)) {
+			// No dedupe here: addCustomEntry refuses repeats, so the draft never holds one (and deduping after the
+			// completeness check would silently send fewer picks than min).
 			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
 			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
 		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };

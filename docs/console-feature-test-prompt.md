@@ -9,13 +9,13 @@ Ground rules
 Tests
 
 1. Pinned checklist
-   Your first show_checklist call should appear as a floating card at the top of the thread, collapsed, showing "Console acceptance · 0/13" and a progress bar. Ask me to confirm: it is collapsed by default; clicking it expands the full list in place; clicking again (or Esc while inside it) collapses it; it stays put while I scroll.
+   Your first show_checklist call should appear as a floating card at the top of the thread, collapsed, showing "Console acceptance · 0/13" and the item in progress as a subtitle, with NO progress bar yet (the bar appears once the first item is done). Ask me to confirm: it is collapsed by default; clicking it expands the full list in place; clicking again (or Esc while inside it) collapses it; it stays put while I scroll.
 
 2. Question card: every field type
    Raise ONE card with questions[] containing:
    - free text "Your name" (required);
    - single choice "Favourite colour" with options Red (red), Green (green), Blue (blue), allowOther;
-   - multi choice "Pick toppings" with options Cheese, Olives, Basil, Mushroom, max 3;
+   - multi choice "Pick toppings" with options Cheese, Olives, Basil, Mushroom, allowOther, and maxSelect 3 (the ask_user_question parameter);
    - confirm "Ready to continue?" with labels "Yes, go" / "Not yet";
    - free text "Anything else?" with optional: true.
    I will leave "Anything else?" blank and submit. Pass if Submit was enabled with that optional field blank, the indicators were large and the whole row was clickable, and your received answers show the single choice as "Label (value)", the multi as labels, the confirm as yes/no with its label, and "Anything else?" as "(skipped)". Tell me exactly what text you received.
@@ -24,7 +24,7 @@ Tests
    Raise a card with a REQUIRED multi choice (no min) and a required free text. Ask me to try to submit with nothing filled in. Pass if Submit stays disabled until both have an answer, and the multi shows "Pick at least 1" (not a red error before I touch it).
 
 4. Conditional and stepped card
-   Raise a stepped card (steps) with: step 1 single choice "Strategy" (By folder = by-folder, By pattern = by-pattern); step 2 single choice "Depth" (1, 2, 3) with showIf Strategy equals by-folder, plus free text "Notes" (optional). I will pick By pattern. Pass if Depth never appears, Back/Next work, Enter in a text field moves to the next step, Submit only appears on the last step, and you receive no Depth answer.
+   Raise a stepped card (steps) with: step 1 holds free text "Project name" (required) and single choice "Strategy" (By folder = by-folder, By pattern = by-pattern, allowOther); step 2 holds single choice "Depth" (1, 2, 3) with showIf Strategy equals by-folder, plus free text "Notes" (optional). So a text field sits on a step BEFORE the last one. I will fill "Project name", pick By pattern, and press Enter in a single-line text box (the "Other…" box under Strategy, after typing a word in it) to go to the next step; in the multi-line free-text box Enter only adds a line. Pass if Depth never appears, Back/Next work, Enter in the single-line box moves to the next step (and does nothing if the step is incomplete), Submit only appears on the last step, and you receive no Depth answer.
 
 5. Skip and supersede
    a) Raise a simple question card; I will press "Skip question". Pass if the card shows a "Skipped" badge and you were told I skipped it.

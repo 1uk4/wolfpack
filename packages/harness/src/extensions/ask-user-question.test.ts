@@ -99,3 +99,32 @@ describe("steps / showIf", () => {
     expect(askProblem({ questions: [{ id: "c", question: "C", options: opts, multiSelect: true }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/cannot control/);
   });
 });
+
+describe("minSelect / maxSelect", () => {
+  const options = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
+  it("map onto the multi field's min / max (single question and batch), and the card stays valid", () => {
+    const single = { question: "Q", options, multiSelect: true, minSelect: 1, maxSelect: 3 };
+    expect(askProblem(single)).toBeUndefined();
+    const card = askCard(single);
+    expect(card.fields[0]).toMatchObject({ kind: "multi", min: 1, max: 3 });
+    expect(CardSchema.safeParse(card).success).toBe(true);
+    const batch = { questions: [{ id: "m", question: "Q", options, multiSelect: true, maxSelect: 2 }] };
+    expect(askProblem(batch)).toBeUndefined();
+    const field = askCard(batch).fields[0];
+    expect(field).toMatchObject({ kind: "multi", max: 2 });
+    expect("min" in field).toBe(false);
+  });
+  it("readable errors: max < 1, min > max, negative or fractional, and not on a non-multi question", () => {
+    expect(askProblem({ question: "Q", options, multiSelect: true, maxSelect: 0 })).toMatch(/maxSelect must be a whole number, 1 or more/);
+    expect(askProblem({ question: "Q", options, multiSelect: true, minSelect: -1 })).toMatch(/minSelect must be a whole number, 0 or more/);
+    expect(askProblem({ question: "Q", options, multiSelect: true, maxSelect: 1.5 })).toMatch(/maxSelect must be a whole number/);
+    expect(askProblem({ question: "Q", options, multiSelect: true, minSelect: 3, maxSelect: 2 })).toMatch(/minSelect \(3\) cannot exceed maxSelect \(2\)/);
+    expect(askProblem({ question: "Q", options, maxSelect: 2 })).toMatch(/only apply to a multiSelect question with options/);
+    expect(askProblem({ question: "Q", multiSelect: true, maxSelect: 2 })).toMatch(/only apply to a multiSelect question with options/);
+    expect(askProblem({ questions: [{ question: "A" }, { question: "B", options, multiSelect: true, minSelect: 4, maxSelect: 2 }] })).toMatch(/questions\[1\]\.minSelect \(4\)/);
+  });
+  it("a min above the option count is rejected with a readable error", () => {
+    expect(askProblem({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 3 })).toMatch(/minSelect \(3\) cannot exceed the number of options \(2\)/);
+    expect(askProblem({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 2 })).toBeUndefined();
+  });
+});

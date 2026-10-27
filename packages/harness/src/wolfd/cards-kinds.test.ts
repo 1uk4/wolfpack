@@ -118,6 +118,16 @@ describe("card field kind validation (pure)", () => {
       'Red (red), Same, "Red, dark (dark)", other: "teal, ish", other: "say \\"hi\\""',
     );
   });
+
+  it("a custom multi entry reads as exactly one `other:` entry beside the ticked options; a duplicated entry is rejected, not echoed twice", () => {
+    const card: Card = { tool: "t", fields: [{ id: "m", kind: "multi", label: "Pick", allowOther: true, options: [{ label: "Alpha", value: "a" }] }] };
+    const f = card.fields[0];
+    expect(answerValue(f, { value: ["a", "mine"], other: ["mine"] })).toBe('Alpha (a), other: "mine"');
+    expect(answerValue(f, { value: ["mine"], other: ["mine"] })).toBe('other: "mine"');
+    expect(answerValue(f, { value: ["red, green"], other: ["red, green"] })).toBe('other: "red, green"');
+    expect(validateAnswers(card, { m: { value: ["a", "mine", "mine"], other: ["mine", "mine"] } })).toMatch(/duplicate entries/);
+    expect(validateAnswers(card, { m: { value: ["a", "mine"], other: ["mine"] } })).toBeUndefined();
+  });
 });
 
 describe("card schema", () => {

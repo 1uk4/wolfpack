@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
+import { addCustomEntry, closedOf, draftAnswers, draftComplete, fieldBlank, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -44,6 +44,17 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 	};
 	const liveRef = useRef(false);
 	liveRef.current = pending && !closed;
+	// Add (button or Enter) finishes a live dictation first (as Submit does), then reads the ref mirrors, never a render's
+	// props: a late dictated chunk lands in the pending text before it is added, so it cannot become a second entry.
+	const addCustomFor = (field: Extract<CardField, { kind: "multi" }>) => {
+		void finishDictation().then(() => {
+			if (!liveRef.current) return;
+			const r = addCustomEntry(field, draftRef.current[field.id], typedRef.current[field.id] ?? "");
+			if ("error" in r) return; // shown live as the field's error
+			set(field.id, r.answer);
+			setTypedText(field.id, "");
+		});
+	};
 	// The fields in play now (hidden ones and other steps' fields never take dictation).
 	const inPlay = closed ? [] : shownIds(card, draft, stepIdx);
 	const { claimed, dictationProps } = useCardDictation(card, draftRef, set, typedRef, setTypedText, pending && !closed, inPlay);
@@ -141,10 +152,12 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 					field={f}
 					value={answered ? answer[f.id] : draft[f.id]}
 					readOnly={closed || !pending || submitting}
+					skipped={answered && f.optional === true && fieldBlank(f, answer[f.id])}
 					onChange={(a) => set(f.id, a)}
 					onClear={() => clear(f.id)}
 					typed={typed[f.id] ?? ""}
 					onType={(text) => setTypedText(f.id, text)}
+					onAddCustom={f.kind === "multi" ? () => addCustomFor(f) : undefined}
 					dictation={dictationProps.field(f.id)}
 					pendingError={folded.errors[f.id]}
 				/>
@@ -267,6 +280,8 @@ function FieldView({
 	onClear,
 	typed,
 	onType,
+	onAddCustom,
+	skipped,
 	pendingError,
 	dictation,
 }: {
@@ -277,6 +292,9 @@ function FieldView({
 	onClear: () => void;
 	typed: string;
 	onType: (text: string) => void;
+	onAddCustom?: () => void;
+	/** An optional field the operator left blank, on an answered card: "Skipped" instead of empty quotes / no selection. */
+	skipped?: boolean;
 	pendingError?: string;
 	dictation: FieldDictation;
 }) {
@@ -296,10 +314,14 @@ function FieldView({
 					<MessageResponse>{field.description}</MessageResponse>
 				</div>
 			)}
-			{field.kind === "confirm" ? (
+			{skipped ? (
+				<div className="text-sm italic text-muted-foreground" data-testid="card-skipped">
+					Skipped
+				</div>
+			) : field.kind === "confirm" ? (
 				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} onClear={onClear} labelledBy={labelId} />
 			) : field.kind === "multi" ? (
-				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} dictation={dictation} />
+				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} onAdd={onAddCustom} error={pendingError} dictation={dictation} />
 			) : field.kind === "free-text" ? (
 				readOnly ? (
 					<div className="lh-prose whitespace-pre-wrap" data-testid="card-answer-text">
@@ -411,6 +433,7 @@ function MultiView({
 	labelledBy,
 	typed,
 	onType,
+	onAdd,
 	error,
 	dictation,
 }: {
@@ -421,6 +444,7 @@ function MultiView({
 	labelledBy: string;
 	typed: string;
 	onType: (text: string) => void;
+	onAdd?: () => void;
 	error?: string;
 	dictation: FieldDictation;
 }) {
@@ -429,12 +453,7 @@ function MultiView({
 	const atMax = field.max !== undefined && picked.length >= field.max;
 	const write = (next: string[], nextCustom: string[]) => onChange({ value: next, ...(nextCustom.length > 0 ? { other: nextCustom } : {}) });
 	const toggle = (v: string) => (picked.includes(v) ? write(picked.filter((p) => p !== v), custom.filter((c) => c !== v)) : write([...picked, v], custom));
-	const addCustom = () => {
-		const r = addCustomEntry(field, value, typed);
-		if ("error" in r) return; // shown live as `error`
-		onChange(r.answer);
-		onType("");
-	};
+	const addCustom = () => onAdd?.();
 	const rows = [
 		...field.options.map((o) => ({ ...o, custom: false })),
 		...custom.filter((c) => picked.includes(c)).map((c) => ({ label: c, value: c, description: undefined, custom: true })),

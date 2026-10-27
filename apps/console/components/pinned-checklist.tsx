@@ -4,6 +4,7 @@ import { useCallback, useId, useState, useSyncExternalStore, type KeyboardEvent 
 import { checklistProgress } from "@wolfpack/protocol/objects";
 import { ChecklistItems } from "@/components/checklist-card";
 import { sessionFindHasForegroundLayer } from "@/components/session-find";
+import { cn } from "@/lib/utils";
 import type { ActiveChecklist } from "@/src/core";
 
 /** Expanded state per thread, for the session (module scope: survives remounts, not a reload). Default collapsed. */
@@ -127,6 +128,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 	const finished = total === 0 || done === total;
 	const count = total === 0 ? "all skipped" : `${done}/${total}`;
 	const pct = total === 0 ? 0 : (done / total) * 100;
+	const showBar = done > 0; // nothing done yet: no empty bar (and no gap); the doing subtitle carries the activity
 	const doing = data.items.find((i) => i.state === "doing");
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key !== "Escape" || !open || sessionFindHasForegroundLayer(document)) return;
@@ -148,7 +150,7 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 						aria-controls={open ? panelId : undefined}
 						onClick={() => set(!open)}
 						data-testid="pinned-checklist-button"
-						className="flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+						className={cn("flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring", !showBar && "pb-2")}
 					>
 						<span className="flex min-w-0 items-center gap-2">
 							<span className="min-w-0 flex-1 truncate font-medium" data-testid="pinned-checklist-summary">
@@ -175,19 +177,21 @@ export function PinnedChecklist({ active, threadId, onDismiss }: { active: Activ
 					>
 						<span aria-hidden>×</span>
 					</button>
-					<div className="px-3 pb-2 pt-1.5">
-						<div
-							{...(total > 0
-								? { role: "progressbar", "aria-label": data.title ?? "Checklist progress", "aria-valuemin": 0, "aria-valuemax": total, "aria-valuenow": done, "aria-valuetext": `${done} of ${total} done` }
-								: { "aria-hidden": true })}
-							data-testid="pinned-checklist-loader"
-							data-active={doing ? "true" : undefined}
-							className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted"
-						>
-							<div className="h-full bg-primary transition-[width] motion-reduce:transition-none" style={{ width: `${pct}%` }} />
-							{doing && <div aria-hidden className="absolute inset-y-0 right-0 animate-pulse bg-primary/30 motion-reduce:animate-none" style={{ left: `${pct}%` }} />}
+					{showBar && (
+						<div className="px-3 pb-2 pt-1.5">
+							<div
+								{...(total > 0
+									? { role: "progressbar", "aria-label": data.title ?? "Checklist progress", "aria-valuemin": 0, "aria-valuemax": total, "aria-valuenow": done, "aria-valuetext": `${done} of ${total} done` }
+									: { "aria-hidden": true })}
+								data-testid="pinned-checklist-loader"
+								data-active={doing ? "true" : undefined}
+								className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted"
+							>
+								<div className="h-full bg-primary transition-[width] motion-reduce:transition-none" style={{ width: `${pct}%` }} />
+								{doing && <div aria-hidden className="absolute inset-y-0 right-0 animate-pulse bg-primary/30 motion-reduce:animate-none" style={{ left: `${pct}%` }} />}
+							</div>
 						</div>
-					</div>
+					)}
 					{open && (
 						<div id={panelId} role="region" aria-label={data.title ?? "Checklist"} data-testid="pinned-checklist-panel" className="min-h-0 overflow-y-auto overscroll-contain border-t p-3">
 							<ChecklistItems items={data.items} />

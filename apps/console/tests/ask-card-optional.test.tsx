@@ -35,13 +35,13 @@ const { visibleFields: protocolVisible } = await import("@wolfpack/protocol");
 
 let root: Root | null = null;
 const sent: CardAnswers[] = [];
-async function mount(c: Card) {
+async function mount(c: Card, answer?: CardAnswers) {
 	sent.length = 0;
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () => {
-		root!.render(<AskCard callId="c1" card={c} pending submitting={false} onAnswer={(a) => void sent.push(a)} />);
+		root!.render(<AskCard callId="c1" card={c} {...(answer ? { answer } : {})} pending={!answer} submitting={false} onAnswer={(a) => void sent.push(a)} />);
 	});
 }
 afterEach(async () => {
@@ -85,6 +85,18 @@ describe("optional fields", () => {
 		assert.match(q('[data-testid="card-optional"]')!.textContent!, /\(optional\)/);
 		await click(submitBtn()!);
 		assert.deepEqual(sent, [{ t: { value: "" }, s: { value: "" }, m: { value: [] } }]);
+	});
+
+	it("closed card: a skipped optional shows muted \"Skipped\", never empty quotes; answered ones show their answer", async () => {
+		await mount(optionalCard(), { t: { value: "" }, s: { value: "" }, m: { value: [] } });
+		const skipped = [...document.querySelectorAll('[data-testid="card-skipped"]')].map((e) => e.closest("[data-field]")!.getAttribute("data-field"));
+		assert.deepEqual(skipped, ["t", "s", "m", "c"], "confirm omitted counts too");
+		assert.ok(!document.body.textContent!.includes("“”"));
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount(optionalCard(), { t: { value: "hi" }, s: { value: "b" }, m: { value: ["a"] }, c: { value: false } });
+		assert.equal(document.querySelectorAll('[data-testid="card-skipped"]').length, 0);
+		assert.match(q('[data-testid="card-answer-text"]')!.textContent!, /hi/);
 	});
 
 	it("a required field renders no (optional) and still blocks; min/max apply once an optional multi is touched", async () => {

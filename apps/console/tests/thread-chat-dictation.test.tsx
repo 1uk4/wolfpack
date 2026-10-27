@@ -364,6 +364,26 @@ describe("ThreadChat dictation", () => {
 		assert.match(JSON.stringify(answers[0]!.body.answers.envs), /canary ring two/);
 	});
 
+	it("multi Other: Enter (Add) while dictating takes the dictated tail into the one entry, with no stray pending text", async () => {
+		await mount(new CardClient({ tool: "ask_user_question", fields: [{ id: "envs", kind: "multi", label: "Which?", allowOther: true, options: [{ label: "dev", value: "dev" }] }] }));
+		const other = q('[data-testid="card-other"]') as HTMLInputElement;
+		await focus(other);
+		const ws = await recording("canary ring");
+		// Add is still disabled (the transcript is deferred until the run ends); Enter in the box adds.
+		await press(other, { key: "Enter" });
+		await closeSocket(ws);
+		await settle();
+		const rows = [...document.querySelectorAll('[data-testid="card-option"][data-custom="true"]')];
+		assert.equal(rows.length, 1);
+		assert.match(rows[0]!.textContent!, /canary ring/);
+		assert.equal(other.value, "", "no pending text left to become a second entry");
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		const answers = posts.filter((p) => p.url.includes("/cards/"));
+		assert.equal(answers.length, 1);
+		assert.deepEqual(answers[0]!.body.answers.envs, { value: ["canary ring"], other: ["canary ring"] });
+	});
+
 	it("Enter while busy and dictating finishes the run and steers the tail (the button stays Stop)", async () => {
 		await mount(new CardClient(null), { inFlight: true });
 		const ws = await recording("spoken steer");

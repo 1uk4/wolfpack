@@ -22,6 +22,7 @@ import {
 	ASSISTANT_CONTENT_CLASS,
 	NO_CARDS,
 	PROSE_BLOCK_CLASS,
+	foldCardEvent,
 	parseThreadCards,
 	renderItems,
 	runOpen,
@@ -154,7 +155,9 @@ export function ThreadChat({
 	/** Interaction cards of the thread record (pending ones + the card-raising calls of the history). */
 	initialCards?: ThreadCards;
 }) {
-	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
+	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
+	const cardEventRef = useRef<(ev: Parameters<NonNullable<Parameters<typeof threadTransport>[2]>>[0]) => void>(() => {});
+	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev)), [wolf, slug]);
 	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
 		chatId: threadId,
 		initialMessages,
@@ -176,6 +179,11 @@ export function ThreadChat({
 			/* the next settle refetches */
 		}
 	}, [transport]);
+	// A card raised mid-stream shows at once (no wait for the turn to settle); an answer's text comes with the record.
+	cardEventRef.current = (ev) => {
+		setCards((c) => foldCardEvent(c, ev));
+		if (ev.type === "card-settled" && ev.outcome === "answered") void refreshCards();
+	};
 	const prevStatus = useRef(status);
 	useEffect(() => {
 		const was = prevStatus.current;

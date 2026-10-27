@@ -48,6 +48,9 @@ export interface ServerEvents {
 	 *  the chat; the client mirrors it by disabling the composer/dock
 	 *  submit. */
 	"compaction-changed": { chatId: string; running: boolean };
+	/** A wolf's thread status or pending cards changed (its activity stream, bridged server-side). Consumers refetch
+	 *  the needs-you list and the thread rows. */
+	"needs-you-changed": { wolf: string; /** never set: lets consumers that read `chatId` off any event keep type-checking. */ chatId?: undefined };
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -63,6 +66,7 @@ export const SERVER_EVENT_TYPES = [
 	"chats-changed",
 	"record-changed",
 	"compaction-changed",
+	"needs-you-changed",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

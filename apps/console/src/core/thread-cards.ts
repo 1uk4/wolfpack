@@ -153,3 +153,25 @@ export function foldPendingOther(card: Card, draft: CardDraft, typed: Record<str
 	}
 	return { draft: out, errors };
 }
+
+/**
+ * Fold a thread's live card event into the cards (so an inline card appears, or goes, without waiting for the turn to
+ * settle). `card-pending` adds the card or updates its held answer; `card-settled` removes it from the pending list
+ * (a dismissal also marks the call skipped; an answer's text arrives with the record refetch).
+ */
+export function foldCardEvent(
+	cards: ThreadCards,
+	ev: { type: "card-pending"; card: PendingCard } | { type: "card-settled"; callId: string; outcome: "answered" | "dismissed" },
+): ThreadCards {
+	if (ev.type === "card-pending") {
+		const p = ev.card;
+		const prior = cards.calls[p.callId];
+		const pending = cards.pending.some((x) => x.callId === p.callId) ? cards.pending.map((x) => (x.callId === p.callId ? p : x)) : [...cards.pending, p];
+		return { pending, calls: { ...cards.calls, [p.callId]: { ...(prior ?? {}), card: p.card, ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}) } } };
+	}
+	const call = cards.calls[ev.callId];
+	return {
+		pending: cards.pending.filter((p) => p.callId !== ev.callId),
+		calls: call && ev.outcome === "dismissed" ? { ...cards.calls, [ev.callId]: { ...call, dismissed: true } } : cards.calls,
+	};
+}

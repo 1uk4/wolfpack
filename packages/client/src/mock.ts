@@ -50,7 +50,7 @@ export class MockConsoleClient implements ConsoleClient {
   readonly uploads: (Attachment & { threadId: string })[] = [];
   private readonly uploadBytes = new Map<string, Uint8Array>();
   /** Card answers received, for tests. */
-  readonly answers: { threadId: string; callId: string; answers: CardAnswers }[] = [];
+  readonly cardAnswers: { threadId: string; callId: string; answers: CardAnswers }[] = [];
   /** Cards raised through {@link raiseCard} and not yet answered (the scripted turns raise none themselves). */
   private readonly pendingCards: PendingCard[] = [];
   private readonly activitySubs = new Set<(ev: WolfEvent) => void>();
@@ -183,7 +183,7 @@ export class MockConsoleClient implements ConsoleClient {
     const t = this.get(threadId);
     const at = this.pendingCards.findIndex((p) => p.threadId === threadId && p.callId === callId);
     if (at < 0) throw new NotFoundError(`card ${callId}`);
-    this.answers.push({ threadId, callId, answers });
+    this.cardAnswers.push({ threadId, callId, answers });
     this.pendingCards.splice(at, 1);
     this.emitActivity({ type: "card-settled", threadId, callId, outcome: "answered" });
     this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });

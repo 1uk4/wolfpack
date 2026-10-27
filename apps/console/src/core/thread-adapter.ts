@@ -168,6 +168,9 @@ export class ThreadEventAdapter {
 					...blocks,
 					{ type: "object", objectId: ev.objectId, objectType: ev.objectType, rev: ev.rev, data: ev.data } as unknown as Block,
 				]);
+			case "card-pending":
+			case "card-settled":
+				return []; // cards are not part of the message stream: thread-chat folds them (foldCardEvent)
 			case "turn-end":
 				return this.endTurn(ev.reason, at);
 			case "error":
@@ -317,9 +320,9 @@ export function resolveThreadId(wolf: string, slug: string, threads: readonly { 
  *  renders it unchanged) + the route it opens and its meta line. */
 export function threadListItem(
 	wolf: string,
-	thread: { id: string; title: string },
-	busy = false,
-): ChatListItem & { href: string; meta: string } {
+	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you" },
+	busy = thread.status === "busy",
+): ChatListItem & { href: string; meta: string; needsYou: boolean } {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,
@@ -332,5 +335,6 @@ export function threadListItem(
 		compacting: false,
 		href: threadHref(wolf, thread.id),
 		meta: wolf,
+		needsYou: thread.status === "needs-you",
 	};
 }

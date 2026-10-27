@@ -6,6 +6,7 @@
 #   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/dev)
 #   WOLFPACK_MODELS_FILE  models.json (transport "api")     (default: first */models.json in WOLVES_DIR)
 #   WORKERD_PORT          workerd /v1 port                  (default 7141)
+#   DEV_STACK_NO_EXT_INSTALL=1   skip the sandbox extension reinstall below
 # Secrets (ANTHROPIC_API_KEY) are sourced from ~/.wolfpack/.env when present. The key is only required when the models
 # file's transport is "api"; a "subscription" table runs through the Claude Agent SDK bridge (your local login).
 #
@@ -42,7 +43,11 @@ if grep -qsE '^\s*librarian:\s*true' "$WOLVES_DIR"/*/wolf.yaml && ! curl -fsS -m
 fi
 
 echo "dev-stack: wolves=$WOLVES_DIR  models=$WOLFPACK_MODELS_FILE ($MODELS_TRANSPORT)  workerd=:$WORKERD_PORT"
-npx turbo run build --filter=@wolfpack/harness --filter=@wolfpack/workerd --output-logs=errors-only
+npx turbo run build --filter=@wolfpack/harness --filter=@wolfpack/workerd --filter=@wolfpack/cli --output-logs=errors-only
+
+# wolfd loads each wolf's extensions from the INSTALLED bundle in its den, which nothing else rebuilds. Reinstall the
+# sandboxed wolves' bundles from this checkout's CLI when stale (non-sandbox dens are only warned about).
+node "$ROOT/scripts/dev-stack-extensions.mjs" "$WOLVES_DIR"
 
 node "$ROOT/packages/workerd/dist/bin/workerd.js" \
   --wolves "$WOLVES_DIR" --port "$WORKERD_PORT" &

@@ -35,6 +35,8 @@ const QuestionSchema = Type.Object({
   details: Type.Optional(Type.String({ description: "Optional extra context shown under the question." })),
   options: Type.Optional(Type.Array(OptionSchema, { description: "Multiple-choice options; omit for free-form text." })),
   multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
+  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed (a custom entry counts as a pick). Default 1, or 0 when optional." })),
+  maxSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the most picks allowed (at least 1; a custom entry counts as a pick)." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
   rejectLabel: Type.Optional(Type.String({ description: 'Reject button label (kind "confirm"). Default "No".' })),
@@ -63,6 +65,8 @@ const Params = Type.Object({
     }),
   ),
   multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
+  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed (a custom entry counts as a pick). Default 1, or 0 when optional." })),
+  maxSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the most picks allowed (at least 1; a custom entry counts as a pick)." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
   rejectLabel: Type.Optional(Type.String({ description: 'Reject button label (kind "confirm"). Default "No".' })),
@@ -75,6 +79,8 @@ interface AskQuestion {
   details?: string;
   options?: { label: string; value?: string; description?: string }[];
   multiSelect?: boolean;
+  minSelect?: number;
+  maxSelect?: number;
   kind?: "confirm";
   confirmLabel?: string;
   rejectLabel?: string;
@@ -90,6 +96,8 @@ interface AskArgs {
   details?: string;
   options?: { label: string; value?: string; description?: string }[];
   multiSelect?: boolean;
+  minSelect?: number;
+  maxSelect?: number;
   kind?: "confirm";
   confirmLabel?: string;
   rejectLabel?: string;
@@ -113,11 +121,25 @@ function questionField(q: AskQuestion, id: string): Card["fields"][number] {
     };
   }
   if (options.length === 0) return { ...base, kind: "free-text" };
-  return q.multiSelect ? { ...base, kind: "multi", options, allowOther: true } : { ...base, kind: "single", options };
+  return q.multiSelect
+    ? { ...base, kind: "multi", options, allowOther: true, ...(q.minSelect !== undefined ? { min: q.minSelect } : {}), ...(q.maxSelect !== undefined ? { max: q.maxSelect } : {}) }
+    : { ...base, kind: "single", options };
 }
 
 const sanitizeId = (id: string): string => id.trim().replace(/[^A-Za-z0-9_-]+/g, "-");
 const fieldId = (q: AskQuestion, i: number): string => (q.id ? sanitizeId(q.id) : "") || `q${i + 1}`;
+
+/** Why a question's minSelect / maxSelect cannot be used (`at` names the question in the message), or undefined. */
+function selectProblem(q: AskQuestion, at: string): string | undefined {
+  const { minSelect: min, maxSelect: max } = q;
+  if (min === undefined && max === undefined) return undefined;
+  if (!q.multiSelect || q.kind === "confirm" || !q.options?.some((o) => o.label?.trim())) return `ask_user_question: ${at}minSelect / maxSelect only apply to a multiSelect question with options.`;
+  if (min !== undefined && (!Number.isInteger(min) || min < 0)) return `ask_user_question: ${at}minSelect must be a whole number, 0 or more.`;
+  if (max !== undefined && (!Number.isInteger(max) || max < 1)) return `ask_user_question: ${at}maxSelect must be a whole number, 1 or more.`;
+  if (min !== undefined && max !== undefined && min > max) return `ask_user_question: ${at}minSelect (${min}) cannot exceed maxSelect (${max}).`;
+  // The Other box is always offered on a multi, so a min above the option count is still reachable; a min of 0 on a required question is raised to 1 by the card.
+  return undefined;
+}
 
 /** Why a call cannot become a card (model-facing), or undefined when it can. */
 export function askProblem(args: AskArgs): string | undefined {
@@ -129,6 +151,8 @@ export function askProblem(args: AskArgs): string | undefined {
     const seen = new Set<string>();
     for (const [i, q] of batch.entries()) {
       const id = fieldId(q, i);
+      const sel = selectProblem(q, `questions[${i}].`);
+      if (sel) return sel;
       if (seen.has(id)) return `ask_user_question: duplicate question id "${id}" (ids must be unique within a card).`;
       const s = q.showIf;
       if (s) {
@@ -155,7 +179,8 @@ export function askProblem(args: AskArgs): string | undefined {
     }
     return undefined;
   }
-  return args.question?.trim() ? undefined : "ask_user_question needs `question` or a non-empty `questions` list.";
+  if (args.question?.trim()) return selectProblem(args as AskQuestion, "");
+  return "ask_user_question needs `question` or a non-empty `questions` list.";
 }
 
 /** The card for one ask_user_question call (validated with {@link askProblem}): a single question (legacy field ids), or a batch with one field per question. */
@@ -181,7 +206,7 @@ export function createAskUserQuestionExtension(): Extension {
       defineTool({
         name: "ask_user_question",
         description:
-          "Ask the user a single question. Your turn ends and the question is shown to them as a card; their answer arrives at the start of your next turn. Use when requirements are ambiguous, a preference or decision is theirs to make, or you need confirmation before proceeding. Ask one question per call, or batch related questions into one card with `questions` (they are answered together). Set multiSelect to allow several choices, or kind \"confirm\" for yes/no.",
+          "Ask the user a single question. Your turn ends and the question is shown to them as a card; their answer arrives at the start of your next turn. Use when requirements are ambiguous, a preference or decision is theirs to make, or you need confirmation before proceeding. Ask one question per call, or batch related questions into one card with `questions` (they are answered together). Set multiSelect to allow several choices (optionally minSelect / maxSelect to bound how many), or kind \"confirm\" for yes/no.",
         parameters: Params,
         raisesCard: true,
         async execute(args) {

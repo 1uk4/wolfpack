@@ -155,7 +155,7 @@ async function startConfigured(
   // The spawn tools (subagent, subagent_message, subagents_list, subagent_stop): offered to home and feature threads only;
   // a child's conversation is configured with an explicit tool list that leaves them out.
   const subagentBridge = new SubagentBridge();
-  const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name });
+  const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
   // ls/grep/find/guarded_bash are always installed so subagent profiles can list them; the home and feature threads
   // only get them when wolf.yaml `tools:` names "readonly" (the terminal pi does not enable them by default either).
   // A tool another extension already defines keeps that definition.

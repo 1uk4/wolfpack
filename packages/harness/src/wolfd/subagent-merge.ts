@@ -8,9 +8,10 @@ import type { ChildRecord } from "./subagent-store.js";
 
 /**
  * Watches one thread's events for a successful task_done and returns the shipped work id. The memory extension's
- * result line `Shipped: <id>` is the contract (its own spent-yes check reads it too); a declined, held or failed
+ * result line `Shipped: <id>` (unified-tasks, the durable task_done) is the contract (its own spent-yes check reads it too); a declined, held or failed
  * ship never starts with it.
  */
+// (The legacy terminal-pi task_done in work-system.ts says "✓ Shipped: <title>", with no id; it never runs on wolfd.)
 export class ShipEvents {
   private readonly names = new Map<string, string>();
   see(ev: ThreadEvent): string | undefined {

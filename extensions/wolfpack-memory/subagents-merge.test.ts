@@ -3,7 +3,8 @@
  * branch and cleans up; a conflict raises the card and each choice works; home children, dirty trees, explicit abandon;
  * main is never touched. Ship goes through the real task_done tool against a local Work server.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -24,6 +25,19 @@ let endpoint: string;
 let tw: TestWolf | undefined;
 let repo: TempRepo | undefined;
 let toolResults: string[] = [];
+/** Open gates hold a child (WAIT) or the conflict worker until the test releases them. */
+let childGate: Promise<void> | undefined;
+let resolverGate: Promise<void> | undefined;
+let lastName = "";
+const cleanups: Array<() => void> = [];
+const gates: Array<() => void> = [];
+/** A closed gate and its opener (opened at the end of the test, whatever happens). */
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((r) => (open = r));
+  gates.push(open);
+  return { promise, open };
+}
 
 beforeEach(async () => {
   items.clear();
@@ -54,13 +68,18 @@ beforeEach(async () => {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  childGate = undefined;
+  resolverGate = undefined;
 });
 afterEach(async () => {
+  for (const open of gates.splice(0)) open();
   await tw?.stop();
   tw = undefined;
   repo?.cleanup();
   repo = undefined;
   await new Promise((r) => server.close(r));
+  for (const open of gates.splice(0)) open();
+  for (const c of cleanups.splice(0)) c();
 });
 
 const textOf = (c: unknown): string => (typeof c === "string" ? c : (c as Array<{ type: string; text?: string }>).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join(""));
@@ -72,7 +91,8 @@ const textOf = (c: unknown): string => (typeof c === "string" ? c : (c as Array<
  */
 function scripted(): FauxResponseStep {
   let conflictName = "";
-  return async (ctx) => {
+  return async (ctx, options) => {
+    const held = (g: Promise<void>) => Promise.race([g, new Promise<void>((r) => options?.signal?.addEventListener("abort", () => r()))]);
     const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
     const child = system.includes("You are the sub-agent");
     const users = ctx.messages.filter((m) => m.role === "user");
@@ -86,6 +106,8 @@ function scripted(): FauxResponseStep {
     if (child) {
       const brief = textOf(users[0].content);
       const rebase = /`git rebase ([^`]+)`/.exec(brief);
+      if (rebase && resolverGate) await held(resolverGate);
+      if (brief.includes("WAIT") && childGate) await held(childGate);
       if (rebase) return tool("bash", { command: `git rebase ${rebase[1]}; printf resolved > README.md; git add README.md; GIT_EDITOR=true git rebase --continue` });
       const edit = /^EDIT (\S+) (\S+)( DIRTY)?/.exec(brief);
       if (edit) return tool("bash", { command: `printf ${edit[2]} > ${edit[1]} && git add ${edit[1]} && git commit -qm child-edit${edit[3] ? " && echo junk > junk.txt" : ""}` });
@@ -96,9 +118,13 @@ function scripted(): FauxResponseStep {
     const ship = /^ship (\S+)$/.exec(lastText);
     if (ship) return tool("task_done", { id: ship[1] });
     const merge = /^merge (\S+) (\w+)$/.exec(lastText);
-    if (merge) return tool("subagent_merge", { name: merge[1], action: merge[2] });
+    if (merge) return tool("subagent_merge", { name: (lastName = merge[1]), action: merge[2] });
     const stop = /^stop (\S+) abandon$/.exec(lastText);
-    if (stop) return tool("subagent_stop", { name: stop[1], abandon: true });
+    if (stop) return tool("subagent_stop", { name: (lastName = stop[1]), abandon: true });
+    const plainStop = /^stop (\S+)$/.exec(lastText);
+    if (plainStop) return tool("subagent_stop", { name: plainStop[1] });
+    const confirm = /answered your (subagent_merge|subagent_stop) question/.exec(lastText);
+    if (confirm) return lastText.includes(": yes") ? tool(confirm[1], confirm[1] === "subagent_merge" ? { name: lastName, action: "abandon" } : { name: lastName, abandon: true }) : fauxAssistantMessage("kept");
     if (lastText.includes("answered your ask_user_question question")) {
       const action = lastText.includes("Resolve with a worker") ? "resolve" : lastText.includes("I'll do it") ? "manual" : "abandon";
       return tool("subagent_merge", { name: conflictName, action });
@@ -115,12 +141,21 @@ function scripted(): FauxResponseStep {
 
 const agentFile = (name: string) => `---\nname: ${name}\ndescription: scripted ${name}\nmodel: fast\ntools: read, write, bash\n---\n\nYou are a test agent.\n`;
 
-async function boot() {
-  repo = makeTempRepo("demo");
+const root = (): string => {
+  const r = mkdtempSync(join(tmpdir(), "merge-wolf-"));
+  cleanups.push(() => rmSync(r, { recursive: true, force: true }));
+  return r;
+};
+let wolfRoot = "";
+
+/** Start the wolf over `wolfRoot` (a restart reuses it). */
+async function start() {
   const step = scripted();
   tw = await startTestWolf({
     script: Array.from({ length: 80 }, () => step),
-    workspace: repo.dir,
+    root: wolfRoot,
+    env: { WORK_ENDPOINT: endpoint, WORK_TOKEN: "t" },
+    workspace: repo!.dir,
     yaml: `workspaces:\n  root: ${repo.root}\n`,
     hooks: {
       extensions: (rt) => [
@@ -131,11 +166,19 @@ async function boot() {
       ],
     },
   });
-  const dir = join(tw.root, "agent", "agents");
+  return tw;
+}
+
+async function boot() {
+  repo = makeTempRepo("demo");
+  wolfRoot = root();
+  await start();
+  const w = tw!;
+  const dir = join(w.root, "agent", "agents");
   mkdirSync(dir, { recursive: true });
   for (const n of ["writer", "worker"]) writeFileSync(join(dir, `${n}.md`), agentFile(n));
-  const feature = (await tw.client.createThread!("testwolf", { kind: "feature", workItemId: FEATURE })).id;
-  return { w: tw, feature };
+  const feature = (await w.client.createThread!("testwolf", { kind: "feature", workItemId: FEATURE })).id;
+  return { w, feature };
 }
 
 const say = async (w: TestWolf, text: string, id: string) => {
@@ -217,17 +260,108 @@ describe("merge on ship", () => {
     expect(existsSync(rec.workspace.path)).toBe(false);
   });
 
-  it("subagent_stop with abandon removes the worktree and branch; the child cannot be resumed", async () => {
+  /** The one pending card of a thread, answered with the confirm field. */
+  const pendingConfirm = async (w: TestWolf, feature: string) => {
+    let pending: Awaited<ReturnType<TestWolf["client"]["getThread"]>>["pendingCards"];
+    await vi.waitFor(async () => {
+      pending = (await w.client.getThread(feature)).pendingCards;
+      expect(pending).toHaveLength(1);
+    }, { timeout: 8000 });
+    const p = pending![0];
+    return { p, answer: async (yes: boolean) => { await w.client.answerCard!(feature, p.callId, { confirm: { value: yes } }); for await (const _ of w.client.watch(feature)); } };
+  };
+
+  it("abandon with unmerged commits raises a card and does nothing without a yes; no keeps the branch", async () => {
+    const { w, feature, rec, featureWs } = await withChild("EDIT a.txt one");
+    const main = repo!.git(["rev-parse", "main"]);
+    await say(w, "stop kid abandon", feature);
+    const { p, answer } = await pendingConfirm(w, feature);
+    expect(p.card.tool).toBe("subagent_stop");
+    expect(p.card.fields[0]).toMatchObject({ kind: "confirm", label: `Abandon ${rec.workspace.branch} (1 unmerged commit)?` });
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    expect(regOf(w).children[0].state).toBe("done");
+    await answer(false);
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    expect(branches(repo!)).toContain(rec.workspace.branch);
+    // asking again after a no does not raise another card
+    await say(w, "stop kid abandon", feature);
+    expect((await w.client.getThread(feature)).pendingCards ?? []).toHaveLength(0);
+    expect(toolResults.at(-1)).toContain("said no");
+    expect(repo!.git(["rev-parse", "main"])).toBe(main);
+    expect(repo!.git(["rev-parse", featureWs.branch])).toBe(featureWs && repo!.git(["rev-parse", featureWs.branch]));
+  });
+
+  it("a yes abandons (subagent_stop), once: the yes is spent and the child cannot be resumed", async () => {
     const { w, feature, rec, featureWs } = await withChild("EDIT a.txt one");
     const main = repo!.git(["rev-parse", "main"]);
     const featureHead = repo!.git(["rev-parse", featureWs.branch]);
     await say(w, "stop kid abandon", feature);
-    expect(toolResults.at(-1)).toContain(`Abandoned ${rec.workspace.branch}`);
+    const { answer } = await pendingConfirm(w, feature);
+    await answer(true);
+    await vi.waitFor(() => expect(toolResults.at(-1)).toContain(`Abandoned ${rec.workspace.branch}`), { timeout: 8000 });
     expect(existsSync(rec.workspace.path)).toBe(false);
     expect(branches(repo!)).not.toContain(rec.workspace.branch);
     expect(repo!.git(["rev-parse", "main"])).toBe(main);
     expect(repo!.git(["rev-parse", featureWs.branch])).toBe(featureHead);
     await expect(w.client.submit((await w.client.listChildren!(feature))[0].id, "hello", { whenBusy: "reject" })).rejects.toMatchObject({ code: "invalid_request" });
+    // the yes is spent: a second call neither abandons again nor asks again
+    await say(w, "stop kid abandon", feature);
+    expect((await w.client.getThread(feature)).pendingCards ?? []).toHaveLength(0);
+    expect(toolResults.at(-1)).toMatch(/no worktree/);
+  });
+
+  it("subagent_merge action abandon is gated the same way", async () => {
+    const { w, feature, rec } = await withChild("EDIT a.txt one");
+    await say(w, "merge kid abandon", feature);
+    const { p, answer } = await pendingConfirm(w, feature);
+    expect(p.card.tool).toBe("subagent_merge");
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    await answer(true);
+    await vi.waitFor(() => expect(existsSync(rec.workspace.path)).toBe(false), { timeout: 8000 });
+    expect(branches(repo!)).not.toContain(rec.workspace.branch);
+  });
+
+  it("a branch with no unmerged commits is abandoned freely", async () => {
+    const { w, feature, rec } = await withChild("NOOP");
+    await say(w, "merge kid abandon", feature);
+    expect((await w.client.getThread(feature)).pendingCards ?? []).toHaveLength(0);
+    expect(toolResults.at(-1)).toContain(`Abandoned ${rec.workspace.branch}`);
+    expect(existsSync(rec.workspace.path)).toBe(false);
+    expect(branches(repo!)).not.toContain(rec.workspace.branch);
+  });
+
+  it("recover merges a child whose task shipped while wolfd was down, once", async () => {
+    const { w, feature, rec, featureWs } = await withChild("EDIT a.txt one");
+    await w.stop();
+    items.get(TASK)!.stage = "shipped";
+    await start();
+    await parentSaid(tw!, feature, `Merged ${rec.workspace.branch} into ${featureWs.branch} (1 commit)`);
+    expect(repo!.git(["show", `${featureWs.branch}:a.txt`])).toBe("one");
+    expect(existsSync(rec.workspace.path)).toBe(false);
+    expect(regOf(tw!).children[0].workspace).toBeUndefined();
+  });
+
+  it("a child that finishes after its task shipped is merged when it finishes", async () => {
+    const g = gate();
+    const release = g.open;
+    childGate = g.promise;
+    const { w, feature } = await boot();
+    await say(w, `spawn writer name=kid: EDIT a.txt one WAIT for ${TASK}`, feature);
+    const rec = regOf(w).children[0];
+    await say(w, `ship ${TASK}`, feature);
+    await parentSaid(w, feature, "is still running");
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    release();
+    await parentSaid(w, feature, `Merged ${rec.workspace.branch} into`);
+    expect(existsSync(rec.workspace.path)).toBe(false);
+  });
+
+  it("a ship in another thread of the wolf merges the child; the child's parent is told", async () => {
+    const { w, feature, rec, featureWs } = await withChild("EDIT a.txt one");
+    await say(w, `ship ${TASK}`, w.home);
+    await parentSaid(w, feature, `Merged ${rec.workspace.branch} into ${featureWs.branch} (1 commit)`);
+    expect(repo!.git(["show", `${featureWs.branch}:a.txt`])).toBe("one");
+    expect(existsSync(rec.workspace.path)).toBe(false);
   });
 });
 
@@ -290,5 +424,36 @@ describe("conflict card", () => {
     expect(existsSync(t.rec.workspace.path)).toBe(false);
     expect(branches(repo!)).not.toContain(t.rec.workspace.branch);
     expect(repo!.git(["rev-parse", t.featureWs.branch])).toBe(featureHead);
+  });
+
+  it("while a conflict worker holds the worktree: abandon and retry are refused, a second resolve is refused; stopping the worker is reported", async () => {
+    const g = gate();
+    const release = g.open;
+    resolverGate = g.promise;
+    const t = await conflicted();
+    await t.answer("resolve");
+    await vi.waitFor(async () => expect((await t.w.client.listChildren!(t.feature)).some((c) => c.title === "kid-resolve" && c.state === "running")).toBe(true), { timeout: 8000 });
+    await say(t.w, "merge kid abandon", t.feature);
+    expect(toolResults.at(-1)).toContain("conflict worker");
+    expect((await t.w.client.getThread(t.feature)).pendingCards ?? []).toHaveLength(0);
+    await say(t.w, "merge kid retry", t.feature);
+    expect(toolResults.at(-1)).toContain("conflict worker");
+    await say(t.w, "merge kid resolve", t.feature);
+    expect(toolResults.at(-1)).toContain("already resolving");
+    expect(regOf(t.w).children.filter((c) => c.resolves === t.rec.id)).toHaveLength(1);
+    expect(existsSync(t.rec.workspace.path)).toBe(true);
+    await say(t.w, "stop kid-resolve", t.feature);
+    await parentSaid(t.w, t.feature, 'Conflict worker "kid-resolve" was stopped before');
+    expect(existsSync(t.rec.workspace.path)).toBe(true);
+    release();
+  });
+
+  it("the resolve worker is tied to its child by spawn, and cannot be resumed once the branch is merged", async () => {
+    const t = await conflicted();
+    await t.answer("resolve");
+    await parentSaid(t.w, t.feature, `Merged ${t.rec.workspace.branch} into ${t.featureWs.branch}`);
+    const worker = regOf(t.w).children.find((c) => c.agent === "worker")!;
+    expect(worker.resolves).toBe(t.rec.id);
+    await expect(t.w.client.submit(worker.id, "more", { whenBusy: "reject" })).rejects.toMatchObject({ code: "invalid_request" });
   });
 });

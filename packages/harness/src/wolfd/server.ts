@@ -41,7 +41,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
-import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
@@ -149,7 +149,13 @@ export class WolfServer {
           emitWolf: (d) => this.emitWolf(d),
           onError: (e) => this.opts.onError?.(e),
         },
-        sub,
+        {
+          ...sub,
+          workStage: sub.workStage ?? (async (id) => {
+            const r = await fetchWorkItem(id, this.opts.work ?? {});
+            return r.kind === "ok" ? r.item.stage : undefined;
+          }),
+        },
       );
       if (bridge) bridge.manager = this.subagents;
     }
@@ -256,6 +262,7 @@ export class WolfServer {
       onError: (e) => this.opts.onError?.(e),
     });
     this.threads.set(summary.id, t);
+    this.subagents?.watchShips(t);
     return t;
   }
 

@@ -51,6 +51,10 @@ export interface ChildRecord {
   queuedSeq?: number;
   /** Messages for a queued child, submitted when its slot comes (after the brief for a child that never ran). */
   pending?: string[];
+  /** The commit a worktree was cut from (unmerged commits of a home child are counted against it). */
+  base?: string;
+  /** A merge into the feature branch has been tried since the child last ran: a restart or a late finish does not repeat it. */
+  mergeTried?: true;
   /** A conflict-resolving worker: the child (record id) whose branch it rebases; when it finishes that branch is merged again. */
   resolves?: string;
   /** Who is stopping it, set while the abort is in flight. */

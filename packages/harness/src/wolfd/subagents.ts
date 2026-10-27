@@ -79,6 +79,8 @@ export interface SubagentOptions {
   slotDir?: string;
   /** How often (ms) a queued child retries a host slot another wolfd may have freed. Default 2000. */
   slotPollMs?: number;
+  /** A work item's stage from the Work API (undefined when unknown): lets a merge catch up with a ship it missed. */
+  workStage?(workId: string): Promise<string | undefined>;
   /** First delay (ms) before a failed delivery to a parent is tried again; doubles up to 30s. Default 500. */
   retryBaseMs?: number;
 }
@@ -160,6 +162,9 @@ function realpathOr(p: string): string {
   }
 }
 
+/** Work item stages after a ship. */
+const SHIPPED_STAGES = new Set(["shipped", "live", "archived"]);
+
 const WORK_ID = /\bwork-[a-z0-9]+-[A-Za-z0-9]+\b/;
 
 /** One line of "what it is doing": the tool and the first thing it was given. */
@@ -174,6 +179,7 @@ export class SubagentManager {
   private records: ChildRecord[];
   private readonly unobserve = new Map<string, () => void>();
   private readonly parentWatch = new Map<string, () => void>();
+  private readonly shipWatch = new Map<string, () => void>();
   private readonly chains = new Map<string, Promise<void>>();
   private readonly lastError = new Map<string, string>();
   private readonly ledgerSeq = new Map<string, number>();
@@ -219,6 +225,8 @@ export class SubagentManager {
     this.pool.close();
     for (const off of this.unobserve.values()) off();
     for (const off of this.parentWatch.values()) off();
+    for (const off of this.shipWatch.values()) off();
+    this.shipWatch.clear();
     for (const t of this.retryTimers.values()) clearTimeout(t);
     this.retryTimers.clear();
     this.unobserve.clear();
@@ -296,7 +304,7 @@ export class SubagentManager {
   }
 
   /** `subagent`: spawn a child and return at once. */
-  async spawn(callerConversationId: string, params: SpawnParams): Promise<ToolOutcome> {
+  async spawn(callerConversationId: string, params: SpawnParams, extra: { resolves?: string } = {}): Promise<ToolOutcome> {
     const parent = this.port.threadOfConversation(callerConversationId);
     if (!parent) return fail("Cannot spawn: the calling conversation is not a thread of this wolf.");
     // Depth 1: only home and feature threads spawn. (A child is not even offered the tool.)
@@ -355,6 +363,8 @@ export class SubagentManager {
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
     const run = adm.run;
+    // (the commit it was cut from: what a home child's unmerged commits are counted against)
+    const base = plan.workspace ? await gitOk(plan.workspace.path, ["rev-parse", "HEAD"]).catch(() => undefined) : undefined;
     const rec: ChildRecord = {
       id,
       conversationId: owned.conversation.id,
@@ -368,6 +378,8 @@ export class SubagentManager {
       isolation,
       ...(plan.workspace ? { workspace: plan.workspace } : {}),
       ...(plan.guardDir ? { guardDir: plan.guardDir } : {}),
+      ...(base ? { base } : {}),
+      ...(extra.resolves ? { resolves: extra.resolves } : {}),
       state: run ? "running" : "queued",
       ...(adm.seq ? { queuedSeq: adm.seq } : {}),
       startedAt: now,
@@ -441,13 +453,17 @@ export class SubagentManager {
     }
   }
 
-  /** `subagent_stop`: cancel a child's turn; with `abandon`, also discard its worktree and branch. */
-  async stopByName(callerConversationId: string, name: string, abandon = false): Promise<ToolOutcome> {
+  /** `subagent_stop`: cancel a child's turn; with `abandon`, also discard its worktree and branch (the tool gates unmerged work on the owner's yes). */
+  async stopByName(callerConversationId: string, name: string, abandon = false, confirmed = false): Promise<ToolOutcome> {
     const parent = this.port.threadOfConversation(callerConversationId);
     const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
     if (!rec) return fail(`No subagent named "${name}" in this thread.`);
+    if (abandon) {
+      const refusal = await this.abandonRefusal(rec, confirmed);
+      if (refusal) return fail(refusal);
+    }
     const stopped = await this.stop(rec.id, "parent");
-    return abandon ? this.abandon(rec, stopped.text) : stopped;
+    return abandon ? this.abandon(rec, confirmed, stopped.text) : stopped;
   }
 
   /** Token use of one model response of a conversation (every child's afterResponse reports here). */
@@ -476,6 +492,7 @@ export class SubagentManager {
   private async send(rec: ChildRecord, text: string, from: "parent" | "owner", whenBusy: WhenBusy, refs: Parameters<ThreadRuntime["submit"]>[2] = []): Promise<SubmitAck> {
     const thread = this.port.thread(rec.id);
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
+    if (rec.resolves && !existsSync(rec.cwd)) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: the worktree it worked in (${rec.cwd}) was merged or abandoned. Spawn a new sub-agent.`);
     if (rec.isolation === "worktree" && !rec.workspace) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: its worktree was merged or abandoned. Spawn a new sub-agent.`);
     const live = thread.isRunning;
     if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
@@ -508,6 +525,7 @@ export class SubagentManager {
     if (!live) {
       // Not `running` until the submit has landed; `resuming` (persisted first) lets recover() tell whether it did.
       rec.resuming = { at: thread.messageCount() };
+      delete rec.mergeTried; // (new work to merge when it finishes)
       this.persist();
     }
     try {
@@ -605,6 +623,8 @@ export class SubagentManager {
     }
     // Queued children (and queued resumes) start as slots allow.
     void this.pump();
+    // A ship that happened while wolfd was down (or before the child finished): merge what is ready.
+    for (const rec of this.records) if (rec.state === "done") void this.mergeIfShipped(rec).catch((e) => this.port.onError(e));
     for (const parentId of new Set(this.records.filter((r) => r.outbox.length > 0).map((r) => r.parentThreadId))) this.flush(parentId);
   }
 
@@ -620,13 +640,23 @@ export class SubagentManager {
     if (this.parentWatch.has(parentId)) return;
     const parent = this.port.thread(parentId);
     if (!parent) return;
-    const ships = new ShipEvents();
     this.parentWatch.set(
       parentId,
       parent.observe((ev) => {
         if (ev.type === "turn-start") this.flush(parentId);
+      }),
+    );
+  }
+
+  /** Watch a home or feature thread for ships (the server calls this for every such thread). */
+  watchShips(thread: ThreadRuntime): void {
+    if (this.shipWatch.has(thread.summary.id) || thread.summary.kind === "subagent") return;
+    const ships = new ShipEvents();
+    this.shipWatch.set(
+      thread.summary.id,
+      thread.observe((ev) => {
         const shipped = ships.see(ev);
-        if (shipped) void this.mergeShipped(parentId, shipped).catch((e) => this.port.onError(e));
+        if (shipped && !this.closed) void this.mergeShipped(shipped).catch((e) => this.port.onError(e));
       }),
     );
   }
@@ -697,6 +727,7 @@ export class SubagentManager {
     this.settle(rec, "done", `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
     const resolved = rec.resolves ? this.records.find((r) => r.id === rec.resolves) : undefined;
     if (resolved) void this.mergeRec(resolved).catch((e) => this.port.onError(e));
+    else void this.mergeIfShipped(rec).catch((e) => this.port.onError(e));
   }
 
   private finishStopped(rec: ChildRecord, by: "parent" | "owner"): void {
@@ -725,7 +756,10 @@ export class SubagentManager {
       this.guard.releaseAll(rec.id);
       void this.releaseOwnerOf(rec);
     }
-    if (text !== undefined) this.flush(rec.parentThreadId);
+    const target = rec.resolves && (state === "failed" || state === "stopped") ? this.records.find((r) => r.id === rec.resolves) : undefined;
+    if (target?.workspace) {
+      this.tell(rec, `Conflict worker "${rec.name}" ${state === "failed" ? "failed" : "was stopped"} before ${target.workspace.branch} was merged. Nothing was merged; the worktree ${target.workspace.path} is left as it is. Choose again with subagent_merge({ name: "${target.name}", action: "resolve" | "manual" | "abandon" }).`);
+    } else if (text !== undefined) this.flush(rec.parentThreadId);
   }
 
   /**
@@ -766,11 +800,37 @@ export class SubagentManager {
   // ------------------------------------------------------- merge on ship (ticket 8)
 
   /**
-   * Hook point: wolfd watches its feature/home threads' events (see ShipEvents) for a task_done result that says
-   * `Shipped: <id>`, so the memory extension needs no change. Every worktree child serving that task is merged.
+   * Hook point: wolfd watches every home and feature thread's events (see ShipEvents) for a task_done result that says
+   * `Shipped: <id>`, so the memory extension needs no change. The ship may come from any thread of this wolf; every
+   * worktree child serving that task is merged, and its own parent is told.
    */
-  private async mergeShipped(parentId: string, taskId: string): Promise<void> {
-    for (const rec of this.records.filter((r) => r.parentThreadId === parentId && r.taskId === taskId && r.workspace)) await this.mergeRec(rec);
+  private async mergeShipped(taskId: string): Promise<void> {
+    for (const rec of this.records.filter((r) => r.taskId === taskId && r.workspace)) await this.mergeRec(rec);
+  }
+
+  /** A finished child whose task shipped before it finished (or while wolfd was down): merge it, once. */
+  private async mergeIfShipped(rec: ChildRecord): Promise<void> {
+    if (!rec.workspace || !rec.taskId || rec.mergeTried || !this.opts.workStage || this.isActive(rec)) return;
+    const stage = await this.opts.workStage(rec.taskId);
+    if (stage && SHIPPED_STAGES.has(stage)) await this.mergeRec(rec);
+  }
+
+  private isActive(rec: ChildRecord): boolean {
+    return rec.state === "running" || rec.state === "queued" || rec.state === "waiting";
+  }
+
+  /** The conflict worker for `rec`'s branch that is still active (queued, running or waiting), if any. */
+  private activeResolver(rec: ChildRecord): ChildRecord | undefined {
+    return this.records.find((r) => r.resolves === rec.id && this.isActive(r));
+  }
+
+  /** Why `rec`'s worktree cannot be changed right now (a conflict worker holds it), or undefined. */
+  private heldBy(rec: ChildRecord): string | undefined {
+    const worker = this.activeResolver(rec);
+    const holder = rec.workspace ? this.guard.holder(rec.workspace.path) : undefined;
+    if (worker) return `the conflict worker "${worker.name}" is working in ${rec.workspace?.path}`;
+    if (holder !== undefined && holder !== rec.id) return `${this.holderName(holder)} is working in ${rec.workspace?.path}`;
+    return undefined;
   }
 
   /** The feature workspace a child merges into, or undefined for a home child (no feature branch). */
@@ -797,8 +857,16 @@ export class SubagentManager {
     try {
       const say = (text: string): string => (notify && this.tell(rec, text), text);
       const feature = this.featureWsOf(rec);
-      if (!feature) return say(homeText(rec, ws));
-      if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") return say(`Not merged: sub-agent "${rec.name}" is still ${rec.state}. Let it finish (or stop it), then call subagent_merge({ name: "${rec.name}", action: "retry" }).`);
+      if (!feature) {
+        rec.mergeTried = true;
+        this.persist();
+        return say(homeText(rec, ws));
+      }
+      if (this.isActive(rec)) return say(`Not merged yet: sub-agent "${rec.name}" is still ${rec.state}. Its branch is merged when it finishes (the task has shipped); or stop it and call subagent_merge({ name: "${rec.name}", action: "retry" }).`);
+      const held = this.heldBy(rec);
+      if (held) return say(`Not merged: ${held}. When it finishes the branch is merged again.`);
+      rec.mergeTried = true;
+      this.persist();
       let n = 0;
       try {
         n = Number(await gitOk(feature.path, ["rev-list", "--count", `${feature.branch}..${ws.branch}`]));
@@ -822,26 +890,60 @@ export class SubagentManager {
     }
   }
 
-  /** Discard a child's worktree and branch (the child must not be active). */
-  private async abandon(rec: ChildRecord, prefix = ""): Promise<ToolOutcome> {
-    const lead = prefix ? `${prefix} ` : "";
-    if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") return fail(`${lead}"${rec.name}" is still ${rec.state}: stop it first.`);
+  /** Commits on the child's branch that are in no other branch yet: against the feature branch, or for a home child the commit it was cut from. undefined when it cannot be counted. */
+  private async unmergedCount(rec: ChildRecord): Promise<number | undefined> {
     const ws = rec.workspace;
-    if (!ws) return fail(`${lead}"${rec.name}" has no worktree to abandon.`);
+    if (!ws) return undefined;
+    const base = this.featureWsOf(rec)?.branch ?? rec.base;
+    if (!base) return undefined;
+    try {
+      const n = Number(await gitOk(ws.repo.mainDir, ["rev-list", "--count", `${base}..${ws.branch}`]));
+      return Number.isFinite(n) ? n : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** What the tool's gate needs to know before an abandon: the branch and its unmerged commits (undefined count: could not be counted, so ask). Undefined when there is nothing to abandon. */
+  async abandonInfo(callerConversationId: string, name: string): Promise<{ branch: string; unmerged: number | undefined; refusal?: string } | undefined> {
+    const parent = this.port.threadOfConversation(callerConversationId);
+    const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
+    if (!rec?.workspace) return undefined;
+    const held = this.heldBy(rec);
+    return { branch: rec.workspace.branch, unmerged: await this.unmergedCount(rec), ...(held ? { refusal: `Not abandoned: ${held}. Stop it first, or wait for it to finish.` } : {}) };
+  }
+
+  /** Why an abandon must not go ahead (unconfirmed unmerged work, a conflict worker in the worktree), or undefined. */
+  private async abandonRefusal(rec: ChildRecord, confirmed: boolean): Promise<string | undefined> {
+    if (!rec.workspace) return undefined;
+    const held = this.heldBy(rec);
+    if (held) return `Not abandoned: ${held}. Stop it first, or wait for it to finish.`;
+    if (!confirmed && (await this.unmergedCount(rec)) !== 0) return `Not abandoned: ${rec.workspace.branch} has unmerged commits and the owner has not confirmed.`;
+    return undefined;
+  }
+
+  /** Discard a child's worktree and branch (the child must not be active). Unmerged commits need `confirmed` (the tool's gate). */
+  private async abandon(rec: ChildRecord, confirmed: boolean, extra = ""): Promise<ToolOutcome> {
+    if (this.isActive(rec)) return fail(`"${rec.name}" is still ${rec.state}: stop it first.`);
+    const ws = rec.workspace;
+    if (!ws) return fail(`"${rec.name}" has no worktree to abandon.`);
+    const refusal = await this.abandonRefusal(rec, confirmed);
+    if (refusal) return fail(refusal);
     try {
       await abandonChild(ws);
     } catch (e) {
-      return fail(`${lead}Could not abandon ${ws.branch}: ${e instanceof Error ? e.message : String(e)}`);
+      return fail(`Could not abandon ${ws.branch}: ${e instanceof Error ? e.message : String(e)}`);
     }
     delete rec.workspace;
     this.guard.releaseAll(rec.id);
     this.persist();
     this.ledger(rec, "parent", "child", "stop", `abandoned ${ws.branch}`);
-    return { text: `${lead}Abandoned ${ws.branch}: its worktree and branch are removed.` };
+    // (line one is what the gate's spent-yes check reads back)
+    return { text: `Abandoned ${ws.branch}: its worktree and branch are removed.${extra ? `\n${extra}` : ""}` };
   }
 
-  /** `subagent_merge`: act on a child's branch: retry the merge, hand a conflict to a worker, give the owner the manual steps, or abandon it. */
-  async mergeByName(callerConversationId: string, name: string, action: string): Promise<ToolOutcome> {
+  /** `subagent_merge`: act on a child's branch: retry the merge, hand a conflict to a worker, give the owner the manual steps, or abandon it (`confirmed`: the tool's gate passed). */
+  async mergeByName(callerConversationId: string, name: string, action: string, confirmed = false): Promise<ToolOutcome> {
     const parent = this.port.threadOfConversation(callerConversationId);
     const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
     if (!parent || !rec) return fail(`No subagent named "${name}" in this thread.`);
@@ -849,22 +951,21 @@ export class SubagentManager {
     const feature = this.featureWsOf(rec);
     switch (action) {
       case "retry": {
+        const held = this.heldBy(rec);
+        if (held) return fail(`Not merged: ${held}. When it finishes the branch is merged again.`);
         return { text: await this.mergeRec(rec, false) };
       }
       case "abandon":
-        return this.abandon(rec);
+        return this.abandon(rec, confirmed);
       case "manual":
         return feature ? { text: manualText(rec.workspace, feature) } : fail(`"${rec.name}" is a home child; ${homeText(rec, rec.workspace)}`);
       case "resolve": {
         if (!feature) return fail(`"${rec.name}" is a home child with no feature branch to rebase onto.`);
-        const workerName = `${rec.name}-resolve`;
-        const out = await this.spawn(callerConversationId, { agent: "worker", task: conflictBrief(rec.workspace, feature), name: workerName, cwd: rec.workspace.path, isolation: "none" });
+        const active = this.activeResolver(rec);
+        if (active) return fail(`A conflict worker ("${active.name}", ${active.state}) is already resolving ${rec.workspace.branch}. Wait for it, or stop it first.`);
+        const taken = this.records.filter((r) => r.parentThreadId === parent.summary.id).some((r) => r.name === `${rec.name}-resolve`);
+        const out = await this.spawn(callerConversationId, { agent: "worker", task: conflictBrief(rec.workspace, feature), name: taken ? `${rec.name}-resolve-${randomUUID().slice(0, 4)}` : `${rec.name}-resolve`, cwd: rec.workspace.path, isolation: "none" }, { resolves: rec.id });
         if (out.isError) return out;
-        const worker = this.records.filter((r) => r.parentThreadId === parent.summary.id && r.agent === "worker" && r.cwd === rec.workspace!.path && !r.resolves).at(-1);
-        if (worker) {
-          worker.resolves = rec.id;
-          this.persist();
-        }
         return { text: `A worker is resolving the conflict in ${rec.workspace.path}; when it finishes, ${rec.workspace.branch} is merged again and you are told the outcome.` };
       }
       default:

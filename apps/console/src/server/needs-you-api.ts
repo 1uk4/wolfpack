@@ -59,6 +59,8 @@ export interface BridgeOptions {
 	wolvesTtlMs?: number;
 	/** No bytes (frames or keepalives) for this long = half-open; the client reconnects. */
 	idleMs?: number;
+	/** Where a wolf's `thread-updated` goes (default: the event bus). */
+	emitThread?: (wolf: string, thread: ServerEvents["thread-updated"]["thread"]) => void;
 }
 
 /** What a wolf event says about who changed (resync: nothing, so consumers refetch everything). */
@@ -97,6 +99,7 @@ export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEvents["needs-you-changed"], "wolf">) => void = (wolf, change) => emit("needs-you-changed", { wolf, ...change }), opts: BridgeOptions = {}) {
 	const backoff = opts.backoffMs ?? [1_000, 2_000, 5_000, 15_000, 30_000];
 	const ttl = opts.wolvesTtlMs ?? 30_000;
+	const emitThread = opts.emitThread ?? ((wolf, thread) => emit("thread-updated", { wolf, thread }));
 	const following = new Set<string>();
 	const ctl = new AbortController();
 	let wolves: string[] = [];
@@ -113,7 +116,8 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 				// The first frame (the baseline) proves the connection; every later frame is a change. Both poke.
 				for await (const ev of client.watchActivity!(wolf, { signal, ...(opts.idleMs ? { idleMs: opts.idleMs } : {}) })) {
 					attempt = 0;
-					poke(wolf, changeOf(ev));
+					if (ev.type === "thread-updated") emitThread(wolf, ev.thread);
+					else poke(wolf, changeOf(ev));
 				}
 			} catch {
 				/* retry below */

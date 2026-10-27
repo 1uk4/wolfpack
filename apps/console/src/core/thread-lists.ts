@@ -1,7 +1,8 @@
 import { threadListItem } from "./thread-adapter.ts";
+import type { ChildThread } from "./subagents.ts";
 
 type Row = ReturnType<typeof threadListItem>;
-type ThreadWire = { id: string; title: string; status?: "idle" | "busy" | "needs-you" };
+type ThreadWire = { id: string; title: string; status?: "idle" | "busy" | "needs-you" } & Omit<ChildThread, "id" | "title">;
 
 /**
  * The sidebar list from one fetch per wolf. A wolf whose fetch failed (`threads` undefined: down, 5xx, bad body) keeps

@@ -248,7 +248,7 @@ function useNow(active: boolean): number {
 /** Abort states per blob id: pending (fired) / failed (backend absent). */
 type AbortState = "pending" | "failed";
 
-export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
+export function ActivitySection({ feed: feedProp, hideWhenEmpty = false }: { feed?: ActivityFeed; /** Draw nothing while no job runs (the sidebar: wolfd wolves feed subagents to the job panel instead). */ hideWhenEmpty?: boolean }) {
 	const ctx = useContext(ActivityContext);
 	const feed = feedProp ?? ctx.feed;
 	const refresh = ctx.refresh;
@@ -295,6 +295,8 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 			set((s) => ({ ...s, [blob.id]: "failed" }));
 		}
 	}, []);
+
+	if (hideWhenEmpty && blobs.length === 0) return null;
 
 	// Sidebar-native skin (owner, sidebar round): part of the sidebar's
 	// surface, not a floating card — the border-t separator matches the

@@ -10,6 +10,7 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
+import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
@@ -286,6 +287,7 @@ function ThreadChatInner({
 	const pinned = useChecklistDismissed(threadId, active?.objectId) ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
+	const subagents = useSubagentChildren(wolf, slug, threadId);
 
 	// Pasted, dropped or picked images: prechecked, then uploaded to the wolf at once (a chip tracks each, an error
 	// chip carries the reason), sent as refs with the next message.
@@ -498,12 +500,13 @@ function ThreadChatInner({
 								)}
 							</div>
 							{/* Reserve the composer's height so the tail scrolls clear of it. */}
-							<div aria-hidden className="h-40" />
+							<div aria-hidden className="h-40" style={subagents.length ? { marginTop: Math.min(subagents.length, 4) * STRIP_ROW_PX + 8 } : undefined} />
 						</ConversationContent>
 						<div className="pointer-events-none absolute inset-x-0 bottom-0">
 							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
+									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}

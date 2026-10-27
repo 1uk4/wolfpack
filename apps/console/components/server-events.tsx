@@ -167,3 +167,17 @@ export function useOptionalServerEvent<K extends ServerEventType>(type: K, cb: (
 		};
 	}, [hub, type]);
 }
+
+/** Like {@link useServerResync}, but a no-op without a provider. */
+export function useOptionalServerResync(cb: () => void): void {
+	const hub = useContext(EventsContext);
+	const cbRef = useRef(cb);
+	cbRef.current = cb;
+	useEffect(() => {
+		if (!hub) return;
+		const off = hub.onResync(() => cbRef.current());
+		return () => {
+			off();
+		};
+	}, [hub]);
+}

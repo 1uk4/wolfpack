@@ -25,6 +25,7 @@ import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil
 import type { SnapshotEvent, ThreadEvent, ThreadMessage, ThreadObject, ThreadToolCall } from "@wolfpack/client";
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { LhMessage } from "./native-messages.ts";
+import type { ChildThread } from "./subagents.ts";
 
 /** One AgentEvent-shaped wire event (what SessionModel.applyWireEvent eats). */
 export type WireEvent = Record<string, unknown> & { type: string };
@@ -320,9 +321,9 @@ export function resolveThreadId(wolf: string, slug: string, threads: readonly { 
  *  renders it unchanged) + the route it opens and its meta line. */
 export function threadListItem(
 	wolf: string,
-	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you" },
+	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you" } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
-): ChatListItem & { href: string; meta: string; needsYou: boolean } {
+): ChatListItem & { href: string; meta: string; needsYou: boolean } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,
@@ -336,5 +337,15 @@ export function threadListItem(
 		href: threadHref(wolf, thread.id),
 		meta: wolf,
 		needsYou: thread.status === "needs-you",
+		// A subagent's fields ride the row (the sidebar nests it under its parent, the job list reads its state).
+		...(thread.parentThreadId !== undefined ? { parentThreadId: thread.parentThreadId } : {}),
+		...(thread.agent !== undefined ? { agent: thread.agent } : {}),
+		...(thread.state !== undefined ? { state: thread.state } : {}),
+		...(thread.queuePosition !== undefined ? { queuePosition: thread.queuePosition } : {}),
+		...(thread.startedAt !== undefined ? { startedAt: thread.startedAt } : {}),
+		...(thread.finishedAt !== undefined ? { finishedAt: thread.finishedAt } : {}),
+		...(thread.step !== undefined ? { step: thread.step } : {}),
+		...(thread.tokens !== undefined ? { tokens: thread.tokens } : {}),
+		...(thread.taskId !== undefined ? { taskId: thread.taskId } : {}),
 	};
 }

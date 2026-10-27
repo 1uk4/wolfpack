@@ -116,6 +116,17 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** The subagent threads a thread spawned. A client without subagents has none (an empty list, not an error). */
+		async children(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				const id = await resolve(client, ref);
+				return json({ threads: client.listChildren ? await client.listChildren(id) : [] });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		/** Open a thread on a wolf: today only a feature thread (`{kind:"feature", workItemId}`), bound to that feature. */
 		async createThread(wolf: string, req: Request): Promise<Response> {
 			try {

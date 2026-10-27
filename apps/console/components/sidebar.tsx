@@ -7,6 +7,7 @@ import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { SubagentJobs } from "@/components/subagent-jobs";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
@@ -19,11 +20,11 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { threadListItem, type ChatListItem } from "@/src/core";
+import { sidebarGroups, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean };
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -257,6 +258,11 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  still rides the API payload, so this is a one-line flip back if it's
  *  ever wanted. */
 function sessionMeta(chat: SessionItem): string {
+	// A subagent: its agent and state (a running one also says what it is doing).
+	if (chat.parentThreadId !== undefined && chat.state !== undefined) {
+		const step = chat.state === "running" && chat.step ? ` · ${chat.step}` : "";
+		return `${chat.agent ?? "agent"} · ${stateLabel(chat)}${step}`;
+	}
 	if (chat.meta !== undefined && !chat.busy && !chat.needsYou) return chat.meta;
 	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
 	if (chat.needsYou) return chat.meta !== undefined ? `${chat.meta} · needs you` : "Needs you";
@@ -276,8 +282,11 @@ export function SessionRow({
 	onOpen,
 	kbdSelected = false,
 	onContextMenu,
+	nested = false,
 }: {
 	chat: SessionItem;
+	/** A subagent row under its parent: indented. */
+	nested?: boolean;
 	active: boolean;
 	onOpen: () => void;
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
@@ -296,11 +305,12 @@ export function SessionRow({
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			className={cn(
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
+				nested && "ml-4 w-[calc(100%-1rem)] py-1.5",
 				active && "bg-accent",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
 		>
-			<SessionStatus busy={chat.busy || chat.compacting} />
+			<SessionStatus busy={chat.busy || chat.compacting || chat.state === "running"} />
 			{chat.needsYou && !chat.busy && (
 				// A wolf is waiting on an answer: the one resting state that earns a mark (it needs the operator).
 				<span data-testid="needs-you-dot" role="img" aria-label="Needs you" className="size-2 shrink-0 rounded-full bg-primary" />
@@ -387,7 +397,7 @@ function SessionsSidebar() {
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
 	 * keeps the natural list order (scores are all 0, sort is stable). */
-	const shown = useMemo(() => {
+	const ranked = useMemo(() => {
 		const q = query.trim();
 		const list = chats;
 		if (!list) return list;
@@ -398,6 +408,11 @@ function SessionsSidebar() {
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);
 	}, [chats, query]);
+	/* Subagents nest under their parent thread and collapse once done (a per-parent "N done" toggle);
+	   they never sit at the top level. `shown` stays the flat walk order of the rows on screen. */
+	const [openParents, setOpenParents] = useState<ReadonlySet<string>>(() => new Set());
+	const groups = useMemo(() => (chats && ranked ? sidebarGroups(chats, ranked, query.trim() !== "", openParents) : null), [chats, ranked, query, openParents]);
+	const shown = useMemo(() => (groups ? groups.flatMap((g) => [g.top, ...g.kids]) : null), [groups]);
 
 	const refresh = useMemo(() => coalescedRefresh(async () => {
 		// In-flight coalesce (S6): event bursts may land several refresh
@@ -492,6 +507,7 @@ function SessionsSidebar() {
 	useServerEvent("turn-settled", scheduleEventRefresh);
 	useServerEvent("compaction-changed", scheduleEventRefresh);
 	useServerEvent("needs-you-changed", scheduleEventRefresh);
+	useServerEvent("thread-updated", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
 	useEffect(
 		() => () => {
@@ -773,30 +789,59 @@ function SessionsSidebar() {
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						shown.map((c, i) =>
-							renamingId === c.id ? (
-								<RenameRow
-									key={c.id}
-									chat={c}
-									onCommit={(next) => void commitRename(c.id, next)}
-									onCancel={() => setRenamingId(null)}
-								/>
-							) : (
-								<SessionRow
-									key={c.id}
-									chat={c}
-									active={pathname === itemHref(c)}
-									kbdSelected={i === kbdIndex}
-									onOpen={() => {
-										setKbdIndex(null);
-										router.push(itemHref(c));
-									}}
-									// Thread rows have no management menu (rename/delete/export are
-									// legacy chat-record actions; the client has no such calls yet).
-									onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
-								/>
-							),
-						)
+						groups!.flatMap((g) => {
+							let i = shown.indexOf(g.top);
+							const row = (c: SessionItem, nested: boolean) => {
+								const at = i++;
+								return renamingId === c.id ? (
+									<RenameRow
+										key={c.id}
+										chat={c}
+										onCommit={(next) => void commitRename(c.id, next)}
+										onCancel={() => setRenamingId(null)}
+									/>
+								) : (
+									<SessionRow
+										key={c.id}
+										chat={c}
+										nested={nested}
+										active={pathname === itemHref(c)}
+										kbdSelected={at === kbdIndex}
+										onOpen={() => {
+											setKbdIndex(null);
+											router.push(itemHref(c));
+										}}
+										// Thread rows have no management menu (rename/delete/export are
+										// legacy chat-record actions; the client has no such calls yet).
+										onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
+									/>
+								);
+							};
+							return [
+								row(g.top, false),
+								...g.kids.map((k) => row(k, true)),
+								...(g.toggle
+									? [
+											<button
+												key={`${g.top.id}:done`}
+												type="button"
+												data-testid="subagent-done-toggle"
+												aria-expanded={g.done === 0}
+												onClick={() =>
+													setOpenParents((prev) => {
+														const next = new Set(prev);
+														if (!next.delete(g.top.id)) next.add(g.top.id);
+														return next;
+													})
+												}
+												className="mb-0.5 ml-4 w-[calc(100%-1rem)] rounded-lg px-3 py-1 text-left text-xs text-muted-foreground hover:bg-accent"
+											>
+												{g.done > 0 ? `${g.done} done` : "Hide done"}
+											</button>,
+										]
+									: []),
+							];
+						})
 					)}
 				</div>
 
@@ -805,7 +850,10 @@ function SessionsSidebar() {
 					    populates and grows when processes run. The session list is
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
-					<ActivitySection />
+					{/* The wolf's subagents (wolfd): running, queued and done, with the task each serves. */}
+					<SubagentJobs rows={chats ?? []} onOpen={(c) => router.push(itemHref(c))} />
+					{/* The legacy session-job feed: only drawn while a non-wolfd job runs. */}
+					<ActivitySection hideWhenEmpty />
 
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered

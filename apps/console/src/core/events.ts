@@ -60,6 +60,13 @@ export interface ServerEvents {
 		/** never set: lets consumers that read `chatId` off any event keep type-checking. */
 		chatId?: undefined;
 	};
+	/** A wolf's thread changed (a subagent's state, step or tokens; the wolf's `thread-updated` event, bridged). Carries the
+	 *  new summary so open views patch in place; consumers that only list refetch. */
+	"thread-updated": {
+		wolf: string;
+		thread: import("./subagents.ts").ChildThread & { wolf?: string; kind?: string; status?: "idle" | "busy" | "needs-you" };
+		chatId?: undefined;
+	};
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -76,6 +83,7 @@ export const SERVER_EVENT_TYPES = [
 	"record-changed",
 	"compaction-changed",
 	"needs-you-changed",
+	"thread-updated",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */

@@ -338,7 +338,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
   // ── crawl_release ────────────────────────────────────────────────────────
 
   const releaseLabel = (runDir: string) => `Release crawl ${basename(runDir)} to the librarian?`;
-  const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}`;
+  /** First line of a successful release result (the spent-yes check reads it back; the colon ends the run name). */
+const releasedLine = (runDir: string) => `Released crawl ${basename(runDir)}:`;
   const firstLine = (m: { message: { content?: unknown } }): string => {
     const c = m.message.content;
     const block = Array.isArray(c) ? (c as { type?: string; text?: string }[]).find((x) => x?.type === "text" && typeof x.text === "string") : undefined;
@@ -420,7 +421,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
         const found = await ctx.conversation!.latestCard!("crawl_release", (c) => c.fields.length === 1 && c.fields[0].label === releaseLabel(dir));
         if (found?.status === "pending") return waiting("release confirmation");
         const yes = found?.status === "answered" && (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
-        const spent = found?.laterResults.some((m) => firstLine(m) === releasedLine(dir)) ?? false;
+        const spent = found?.laterResults.some((m) => firstLine(m).startsWith(releasedLine(dir))) ?? false;
         go = yes && !spent;
         if (!go) {
           const card = confirmCard({
@@ -448,7 +449,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput) {
         } catch {
           /* non-fatal */
         }
-        return text(`${releasedLine(dir)}: ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest } });
+        return text(`${releasedLine(dir)} ${r.emitted} contribution(s)${r.skipped ? ` (${r.skipped} unchanged)` : ""} → ${r.dest}\nDewey's sweep will route + curate them.`, { details: { emitted: r.emitted, skipped: r.skipped, dest: r.dest } });
       } catch (e) {
         return fail(`Release failed: ${e instanceof Error ? e.message : String(e)}`);
       }

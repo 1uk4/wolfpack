@@ -1,11 +1,8 @@
 /**
  * ThreadChat dictation wiring (real mount; fake Deepgram socket + mic, no real audio): the bar renders in the dock,
- * finishing inserts into the composer, a focused card field (free-text / Other) takes over as the target, focus back
- * on the composer hands it back, Esc cancels, and a missing key shows the keyless hint.
- * (header of the card test follows)
- * ThreadChat answering a wolf's card (real mount): the pending card renders inline, Submit goes through the console's
- * server layer (createThreadApi over a mock ConsoleClient), the answered card replaces the form, and the next turn's
- * text streams in. Seam 2 of the ask-card ticket.
+ * finishing inserts into the composer or the focused card field (free-text / Other), composer focus hands the target
+ * back, Esc and the lh:kbd-* events drive the run, Send/Submit while recording include the final tail exactly once,
+ * Stop stays available while a turn runs, and a missing key shows the keyless hint.
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -124,9 +121,19 @@ Object.defineProperty(globalThis, "navigator", {
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
 
-async function mount(client: CardClient) {
-	globalThis.fetch = (async (input: RequestInfo | URL) => {
-		if (String(input).includes("/api/stt/token")) {
+/** POSTs the page made (card answers, submits), bodies parsed. */
+let posts: { url: string; body: any }[] = [];
+
+async function mount(client: CardClient, opts: { inFlight?: boolean } = {}) {
+	posts = [];
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = String(input);
+		if (init?.method === "POST") {
+			posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+			return new Response(JSON.stringify({ disposition: "queued" }), { status: 200 });
+		}
+		if (opts.inFlight && url.includes("/stream")) return new Promise<Response>(() => {}); // a turn that never ends
+		if (url.includes("/api/stt/token")) {
 			return tokenStatus === 200
 				? new Response(JSON.stringify({ token: "tok" }), { status: 200 })
 				: new Response(JSON.stringify({ message: "no key" }), { status: tokenStatus });
@@ -149,6 +156,7 @@ async function mount(client: CardClient) {
 							title="Home"
 							initialMessages={threadMessagesToNative(detail.messages)}
 							initialCards={cardsOfThread(detail)}
+							initiallyInFlight={opts.inFlight}
 						/>
 					</MemoryEventsProvider>
 				</SettingsDialogProvider>
@@ -185,6 +193,22 @@ async function dictate(...finals: string[]) {
 	await act(async () => ws.emit("close", { code: 1000 }));
 	await settle();
 }
+
+/** Begin a run and deliver finals, leaving it recording (the socket stays open for a later close). */
+async function recording(...finals: string[]) {
+	await click(toggle());
+	await settle();
+	const ws = FakeWS.last!;
+	await act(async () => ws.open());
+	await act(async () => finals.forEach((f) => ws.final(f)));
+	return ws;
+}
+/** Let Deepgram close the socket after our CloseStream: the run ends and the tail flushes. */
+const closeSocket = (ws: FakeWS) => act(async () => ws.emit("close", { code: 1000 }));
+const press = (el: Element, init: { key: string; metaKey?: boolean }) =>
+	act(async () => {
+		el.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), init));
+	});
 
 after(() => {
 	globalThis.fetch = realFetch;
@@ -270,5 +294,57 @@ describe("ThreadChat dictation", () => {
 		await click(toggle());
 		await settle();
 		assert.match(toggle().textContent ?? "", /Dictation needs a Deepgram key/);
+	});
+
+	it("Send while recording finishes the run first: the final tail is in the submitted message", async () => {
+		await mount(new CardClient(null));
+		await dictate("typed"); // linkedom cannot type: a first run seeds the composer
+		const ws = await recording("spoken tail");
+		// linkedom does not submit forms on a button click: fire the submit the button would.
+		await act(async () => {
+			composer().closest("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+		});
+		await closeSocket(ws);
+		await settle();
+		const sent = posts.filter((p) => !p.url.includes("abort"));
+		assert.equal(sent.length, 1);
+		assert.match(JSON.stringify(sent[0]!.body), /typed spoken tail/);
+	});
+
+	it("Submit on a card while recording includes the tail; a double click answers once", async () => {
+		await mount(new CardClient(MIXED));
+		const field = q('[data-testid="card-text"]') as HTMLTextAreaElement;
+		await focus(field);
+		await dictate("because");
+		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
+		const ws = await recording("and more");
+		const submit = q('[data-testid="card-submit"]')!;
+		await click(submit);
+		await click(submit); // second click while the finish is pending
+		assert.equal(submit.hasAttribute("disabled"), true, "Submit disabled while finishing");
+		await closeSocket(ws);
+		await settle();
+		const answers = posts.filter((p) => p.url.includes("/cards/"));
+		assert.equal(answers.length, 1);
+		assert.equal(answers[0]!.body.answers.why.value, "because and more");
+	});
+
+	it("the lh:kbd-toggle-dictation event starts and stops a run (⌘D)", async () => {
+		await mount(new CardClient(null));
+		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation")));
+		await settle();
+		assert.ok(q('[data-testid="dictation-bar"]'), "run started");
+		await act(async () => window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation")));
+		await act(async () => FakeWS.last?.emit("close", { code: 1000 }));
+		await settle();
+		assert.equal(q('[data-testid="dictation-bar"]'), null, "run stopped");
+	});
+
+	it("while a turn runs, a live dictation keeps Stop available (not Send)", async () => {
+		await mount(new CardClient(null), { inFlight: true });
+		await click(toggle());
+		await settle();
+		const btn = document.querySelector('[data-testid="composer"] button[aria-label="Stop"], [data-testid="composer"] button[aria-label="Send"]')!;
+		assert.equal(btn.getAttribute("aria-label"), "Stop");
 	});
 });

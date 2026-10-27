@@ -183,8 +183,11 @@ export function ThreadChat({
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (wasRunning && status === "ready") void refreshCards();
 	}, [status, refreshCards]);
+	const answerInFlight = useRef(false);
 	const onAnswer = useCallback(
 		async (callId: string, answers: CardAnswers) => {
+			if (answerInFlight.current) return; // double click / Enter: one POST
+			answerInFlight.current = true;
 			setAnswering(callId);
 			setCardError(null);
 			try {
@@ -213,6 +216,7 @@ export function ThreadChat({
 			} catch (err) {
 				setCardError(err instanceof Error ? err.message : "Could not send the answer.");
 			} finally {
+				answerInFlight.current = false;
 				setAnswering(null);
 			}
 		},
@@ -290,10 +294,20 @@ export function ThreadChat({
 		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
 	}, [busy, send, steer, attachments, applyText]);
-	// Finish a live dictation first: the spoken tail must be in the message.
+	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
+	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
+	// does nothing (composer untouched) when the finish left no text and no ready attachment.
+	const doSendRef = useRef(doSend);
+	doSendRef.current = doSend;
+	const sendInFlight = useRef(false);
 	const onSend = useCallback(() => {
+		if (sendInFlight.current) return;
 		if (!dictation.active) return doSend();
-		void dictation.finish().then(doSend);
+		sendInFlight.current = true;
+		void dictation.finish().then(() => {
+			sendInFlight.current = false;
+			doSendRef.current();
+		});
 	}, [dictation, doSend]);
 
 	const onStop = useCallback(() => {
@@ -461,7 +475,9 @@ export function ThreadChat({
 											onChange={applyText}
 											onSend={onSend}
 											onStop={onStop}
-											canSend={canSendWith(text, attachments) || dictation.active}
+											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
+											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
+											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
 											onEscape={dictation.active ? dictation.cancel : undefined}
 											onFiles={onFiles}
 											onPickFiles={onFiles}

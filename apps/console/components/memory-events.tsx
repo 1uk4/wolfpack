@@ -15,7 +15,7 @@
  * TEST SEAM: `createMemoryHub(connect)` is plain (no React); the provider is
  * the adapter glue.
  */
-import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { parseMemoryEventFrame, type MemoryEventFrame } from "@/src/core";
 
 /** The minimal EventSource surface the hub consumes. */
@@ -39,7 +39,14 @@ export function openMemorySource(wolf: string): MemorySource {
 			es.onmessage = (ev) => cb(ev.data as string);
 		},
 		onError: (cb) => {
-			es.onerror = () => cb(es.readyState === 2);
+			es.addEventListener("error", (ev) => {
+				// A server `event: error` frame is a MessageEvent: terminal, and EventSource would
+				// otherwise reconnect immediately. Transport errors are plain Events.
+				if (ev instanceof MessageEvent) {
+					es.close();
+					cb(true);
+				} else cb(es.readyState === 2);
+			});
 		},
 	};
 }
@@ -54,19 +61,34 @@ interface Channel {
 	opened: boolean;
 	timer: ReturnType<typeof setTimeout> | null;
 	attempt: number;
+	openedAt: number;
+	flaps: number;
 }
 
 export const RECONNECT_BASE_MS = 1000;
 export const RECONNECT_MAX_MS = 30_000;
 
-export function createMemoryHub(connect: (wolf: string) => MemorySource = openMemorySource) {
+/** An open that errors within this window counts as a flap; FLAP_LIMIT flaps in a row are treated as closed. */
+export const FLAP_MS = 2000;
+export const FLAP_LIMIT = 2;
+
+export interface MemoryHubOptions {
+	baseMs?: number;
+	maxMs?: number;
+	now?: () => number;
+}
+
+export function createMemoryHub(connect: (wolf: string) => MemorySource = openMemorySource, opts: MemoryHubOptions = {}) {
+	const baseMs = opts.baseMs ?? RECONNECT_BASE_MS;
+	const maxMs = opts.maxMs ?? RECONNECT_MAX_MS;
+	const now = opts.now ?? Date.now;
 	const channels = new Map<string, Channel>();
 
 	function open(wolf: string, ch: Channel) {
 		const source = connect(wolf);
 		ch.source = source;
 		source.onOpen(() => {
-			ch.attempt = 0;
+			ch.openedAt = now();
 			if (ch.opened) for (const cb of [...ch.resyncs]) safe(cb);
 			ch.opened = true;
 		});
@@ -76,10 +98,23 @@ export function createMemoryHub(connect: (wolf: string) => MemorySource = openMe
 			for (const cb of [...ch.listeners]) safe(() => cb(frame));
 		});
 		source.onError((closed) => {
-			if (!closed || ch.refs === 0 || ch.timer) return;
+			if (ch.refs === 0 || ch.timer) return;
+			if (!closed) {
+				// Rapid open→error cycles (server answers 200 then drops) never reach "closed" by
+				// themselves: count them and back off like a refusal.
+				if (ch.openedAt && now() - ch.openedAt < FLAP_MS) ch.flaps++;
+				else {
+					ch.flaps = 0;
+					ch.attempt = 0;
+				}
+				if (ch.flaps < FLAP_LIMIT) return;
+			} else if (ch.openedAt && now() - ch.openedAt >= FLAP_MS) {
+				ch.attempt = 0;
+			}
+			ch.openedAt = 0;
 			source.close();
 			ch.source = null;
-			const delay = Math.min(RECONNECT_BASE_MS * 2 ** ch.attempt++, RECONNECT_MAX_MS);
+			const delay = Math.min(baseMs * 2 ** ch.attempt++, maxMs);
 			ch.timer = setTimeout(() => {
 				ch.timer = null;
 				if (ch.refs > 0) open(wolf, ch);
@@ -91,7 +126,7 @@ export function createMemoryHub(connect: (wolf: string) => MemorySource = openMe
 		subscribe(wolf: string, cb: Listener, onResync?: () => void): () => void {
 			let ch = channels.get(wolf);
 			if (!ch) {
-				ch = { refs: 0, listeners: new Set(), resyncs: new Set(), source: null, opened: false, timer: null, attempt: 0 };
+				ch = { refs: 0, listeners: new Set(), resyncs: new Set(), source: null, opened: false, timer: null, attempt: 0, openedAt: 0, flaps: 0 };
 				channels.set(wolf, ch);
 			}
 			const channel = ch;
@@ -139,9 +174,11 @@ export function useMemoryEvents(wolf: string | null, cb: (e: MemoryEventFrame) =
 	const hub = useContext(MemoryEventsContext);
 	if (!hub) throw new Error("useMemoryEvents requires <MemoryEventsProvider>");
 	const cbRef = useRef(cb);
-	cbRef.current = cb;
 	const resyncRef = useRef(onResync);
-	resyncRef.current = onResync;
+	useLayoutEffect(() => {
+		cbRef.current = cb;
+		resyncRef.current = onResync;
+	});
 	useEffect(() => {
 		if (!wolf) return;
 		return hub.subscribe(

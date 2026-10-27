@@ -38,9 +38,17 @@ const STATUS_BY_CODE: Record<string, number> = {
 };
 
 export const PING_INTERVAL_MS = 25_000;
+/** How long the events bridge waits for an immediate watchMemory failure before answering 200. */
+export const FIRST_PULL_MS = 250;
+const MAX_BACKLOG = 256;
 
 function json(body: unknown, status = 200): Response {
 	return Response.json(body, { status });
+}
+
+/** The protocol code of a ProtocolError (matched by name), else null. */
+function errorCode(err: unknown): string | null {
+	return err instanceof Error && err.name === "ProtocolError" ? ((err as Error & { code?: string }).code ?? "engine_error") : null;
 }
 
 // Matched by NAME (Next bundles @wolfpack/client per route; instanceof is unreliable).
@@ -52,9 +60,9 @@ function failure(err: unknown): Response {
 			const code = (err as Error & { code?: string }).code ?? "engine_error";
 			return json({ error: err.message, code }, STATUS_BY_CODE[code] ?? 502);
 		}
-		return json({ error: err.message }, 500);
+		console.error("[memory-api] unexpected error:", err);
 	}
-	return json({ error: "Unexpected error" }, 500);
+	return json({ error: "Internal error" }, 500);
 }
 
 const unsupported = (code: "memory_unavailable" | "kb_unavailable", what: string): Response =>
@@ -78,8 +86,10 @@ export function createMemoryApi(source: ClientSource) {
 			try {
 				const client = source();
 				if (!client.getMemoryTopic) return unsupported("memory_unavailable", "memory topics");
-				const s = scope === "den" || scope === "session" ? scope : undefined;
-				return json(await client.getMemoryTopic(wolf, id, s ? { scope: s } : {}));
+				if (scope && scope !== "den" && scope !== "session") {
+					return json({ error: "scope must be den or session", code: "invalid_request" }, 400);
+				}
+				return json(await client.getMemoryTopic(wolf, id, scope ? { scope: scope as "den" | "session" } : {}));
 			} catch (err) {
 				return failure(err);
 			}
@@ -143,8 +153,15 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
-		/** SSE bridge over client.watchMemory: `data: <json>` frames + a `: ping` comment every 25 s. */
-		events(wolf: string, req: Request): Response {
+		/**
+		 * SSE bridge over client.watchMemory: `data: <json>` frames + a `: ping` comment every 25 s.
+		 * watchMemory is lazy (errors surface on the first next()), so the first pull is raced against
+		 * FIRST_PULL_MS: an immediate failure becomes the mapped non-200 response (the browser's hub backs
+		 * off on it); a quiet stream proceeds as a 200. A mid-stream error is a terminal `event: error`
+		 * frame carrying `{code, message}`, then the stream closes.
+		 */
+		async events(wolf: string, req: Request): Promise<Response> {
+			if (req.signal?.aborted) return new Response(null, { status: 204 });
 			let client: ConsoleClient;
 			try {
 				client = source();
@@ -152,39 +169,77 @@ export function createMemoryApi(source: ClientSource) {
 				return failure(err);
 			}
 			if (!client.watchMemory) return unsupported("memory_unavailable", "memory events");
-			const watch = client.watchMemory.bind(client);
-			const encoder = new TextEncoder();
 			const abort = new AbortController();
-			req.signal?.addEventListener("abort", () => abort.abort());
+			const onAbort = () => abort.abort();
+			req.signal?.addEventListener("abort", onAbort);
+			const cleanup = () => req.signal?.removeEventListener("abort", onAbort);
+			const iterator = client.watchMemory(wolf, { signal: abort.signal })[Symbol.asyncIterator]();
+			let first = iterator.next();
+			const early = await Promise.race([
+				first.then(
+					() => null,
+					(err: unknown) => ({ err }),
+				),
+				new Promise<null>((resolve) => setTimeout(() => resolve(null), FIRST_PULL_MS)),
+			]);
+			if (early) {
+				cleanup();
+				abort.abort();
+				return failure(early.err);
+			}
+			const encoder = new TextEncoder();
 			let ping: ReturnType<typeof setInterval> | undefined;
+			let finished = false;
 			const body = new ReadableStream<Uint8Array>({
 				start(controller) {
-					const safe = (chunk: string) => {
+					const finish = () => {
+						if (finished) return;
+						finished = true;
+						clearInterval(ping);
+						cleanup();
+						abort.abort();
+						try {
+							controller.close();
+						} catch {
+							// already closed
+						}
+					};
+					const send = (chunk: string) => {
+						if (finished) return;
+						// A consumer that stopped reading must not buffer forever.
+						if ((controller.desiredSize ?? 0) < -MAX_BACKLOG) return finish();
 						try {
 							controller.enqueue(encoder.encode(chunk));
 						} catch {
-							// closed
+							finish();
 						}
 					};
-					safe(": open\n\n");
-					ping = setInterval(() => safe(": ping\n\n"), PING_INTERVAL_MS);
+					send(": open\n\n");
+					ping = setInterval(() => send(": ping\n\n"), PING_INTERVAL_MS);
 					void (async () => {
 						try {
-							for await (const ev of watch(wolf, { signal: abort.signal })) safe(`data: ${JSON.stringify(ev)}\n\n`);
-						} catch {
-							// stream lost or aborted: close, EventSource reconnects
-						} finally {
-							clearInterval(ping);
-							try {
-								controller.close();
-							} catch {
-								// already closed
+							for (;;) {
+								const next = await first;
+								if (next.done) break;
+								send(`data: ${JSON.stringify(next.value)}\n\n`);
+								if (finished) return;
+								first = iterator.next();
+							}
+						} catch (err) {
+							if (!abort.signal.aborted) {
+								const code = errorCode(err);
+								if (!code) console.error("[memory-api] watchMemory failed:", err);
+								const payload = { code: code ?? "engine_error", message: code ? (err as Error).message : "Internal error" };
+								send(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
 							}
 						}
+						finish();
 					})();
 				},
 				cancel() {
+					finished = true;
 					clearInterval(ping);
+					cleanup();
 					abort.abort();
 				},
 			});

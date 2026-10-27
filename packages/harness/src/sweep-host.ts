@@ -5,7 +5,8 @@
  */
 import type { ModelTable } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
-import { initSweepManager, type SweepManager } from "./sweep-worker.js";
+import { memoryEventsFor } from "./memory/events.js";
+import { initSweepManager, type SweepManager, type SweepWorkerConfig } from "./sweep-worker.js";
 
 /** Parse interval string (e.g., "4h", "30m", "1d") to milliseconds */
 export function parseInterval(interval: string): number {
@@ -29,6 +30,10 @@ export interface LibrarianSweepOptions {
   /** Where WOLFPACK_EMBED_URL / WOLFPACK_EMBED_MODEL / ANTHROPIC_API_KEY come from (the host's effective env). */
   env: NodeJS.ProcessEnv;
   log: (line: string) => void;
+  /** The wolf and its den: the sweep's MemoryEvents go on this den's bus (looked up on each emit, so a bus disposed and recreated is still reached). Unset: no events. */
+  events?: { den: string; wolf: string };
+  /** Test seam: replaces the shared sweep tick. */
+  sweepTick?: SweepWorkerConfig["sweepTick"];
 }
 
 /** The sweep manager of a librarian wolf (also registered as the process singleton, as before). */
@@ -43,6 +48,8 @@ export function startLibrarianSweep(opts: LibrarianSweepOptions): SweepManager {
     apiKey: opts.env.ANTHROPIC_API_KEY,
     workEndpoint: opts.env.WORK_ENDPOINT,
     workToken: opts.env.WORK_TOKEN,
+    ...(opts.events ? { emit: (draft) => memoryEventsFor(opts.events!.den, opts.events!.wolf).emit(draft) } : {}),
+    ...(opts.sweepTick ? { sweepTick: opts.sweepTick } : {}),
   });
   opts.log("[librarian] Sweep manager initialized");
   return manager;

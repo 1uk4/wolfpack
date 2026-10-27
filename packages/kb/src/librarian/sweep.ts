@@ -57,6 +57,11 @@ import {
 import type { Engine } from "@wolfpack/engine";
 import { entriesDir, type KbRoots } from "../shared/index.js";
 
+/** Structured sweep progress for hosts that surface it (wolfd's event stream). Metadata only. */
+export type SweepEvent =
+  | { type: "started"; pending: number }
+  | { type: "item"; from: string; denTopicId: string; outcome: "create" | "merge" | "reject" | "parked"; entryId?: string };
+
 export interface SweepContext {
   engine: Engine;
   roots: KbRoots;
@@ -72,6 +77,9 @@ export interface SweepContext {
   /** Time budget for the run's one contribution (default SWEEP.runBudgetMs).
    *  A test seam: lets tests exercise parking without waiting minutes. */
   budgetMs?: number;
+  /** Called when the run starts real work ("started", once) and when a contribution ends in create/merge/reject/parked
+   *  ("item"). Never called for an empty inbox. A throwing callback is ignored. */
+  onEvent?: (event: SweepEvent) => void;
 }
 
 /** One contribution the sweep could not commit, with a human-readable reason. */
@@ -353,6 +361,17 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   // Set once the entry is live and its ledger events are written.
   let committed = false;
   result.remaining = unseen.length - contributions.length;
+  const emit = (e: SweepEvent) => {
+    try {
+      ctx.onEvent?.(e);
+    } catch {
+      /* a bad subscriber never breaks the sweep */
+    }
+  };
+  emit({ type: "started", pending: unseen.length });
+  // Item events go out after the persist step, so a subscriber that gets create / merge can read the entry (ledger,
+  // registry and git commit are done by then).
+  const itemEvents: SweepEvent[] = [];
 
   // The contribution gets the whole run budget. The merge threshold derives from
   // it: budget * mergeBudgetFraction / msPerMergeChar (600s -> 24,000 chars).
@@ -369,6 +388,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
     let route = "?";
     let outcome = "?";
     let llmMs = 0;
+    let itemEvent: { outcome: "create" | "merge" | "reject" | "parked"; entryId?: string } | undefined;
     writeCurrent(roots, { from: c.from, denTopicId: c.denTopicId, startedAt: itemStart });
     const setRoute = (r: string) => {
       route = r;
@@ -597,6 +617,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           );
           markProcessed(c);
           result.rejected++;
+          itemEvent = { outcome: "reject" };
           outcome = "rejected (archived, older than live entry)";
           return null;
         }
@@ -827,6 +848,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       routing.target = entry.id;
       writeReceipt(roots, c.from, c, action, entry.id, routing);
       markProcessed(c);
+      itemEvent = { outcome: action === "create" ? "create" : "merge", entryId: entry.id };
       outcome = `${action === "create" ? "created" : "merged"} ${entry.id}`;
       if (action === "create") result.created++;
       else result.merged++;
@@ -861,6 +883,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
           : overrun ? `${reason} (${overruns} times)` : `failed ${attempts} times: ${reason}`;
         park(roots, c, why);
         outcome = `PARKED: ${why}`;
+        itemEvent = { outcome: "parked" };
         ctx.notify?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`);
         await Promise.resolve(ctx.alert?.(`sweep: parked ${c.from}/${c.denTopicId} — ${why}`)).catch(() => {});
         result.parked.push({ from: c.from, denTopicId: c.denTopicId, reason: why });
@@ -875,6 +898,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       }
     } finally {
       clearCurrent(roots);
+      if (itemEvent) itemEvents.push({ type: "item", from: c.from, denTopicId: c.denTopicId, ...itemEvent });
       const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
       ctx.notify?.(
         `item ${c.from}/${c.denTopicId}: ${route} · llm ${secs(llmMs)} · total ${secs(Date.now() - itemStart)} → ${outcome}`
@@ -898,10 +922,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
 
   // ── PERSIST ────────────────────────────────────────────────────────────────
-  if (batch.length > 0 || committed) {
-    if (batch.length > 0) appendLedger(roots, batch);
-    renderRegistry(roots, foldRegistry([...log, ...batch]));
-    gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+  try {
+    if (batch.length > 0 || committed) {
+      if (batch.length > 0) appendLedger(roots, batch);
+      renderRegistry(roots, foldRegistry([...log, ...batch]));
+      gitCommit(roots, `sweep: ${result.created}c ${result.merged}m ${result.rejected}r`);
+    }
+  } finally {
+    for (const e of itemEvents) emit(e);
   }
 
   if (contributions.length > 0) ctx.notify?.(

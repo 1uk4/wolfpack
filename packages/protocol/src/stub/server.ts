@@ -204,6 +204,9 @@ export class StubServer {
       case "getWorkRecord":
         this.wolf(params.name);
         throw new HttpError("not_found", `work item ${params.id}`);
+      case "kbPipeline":
+        this.wolf(params.name);
+        throw new HttpError("kb_unavailable", "this wolf is not the librarian");
       case "getKbGraph":
       case "getKbEntry":
         this.wolf(params.name);

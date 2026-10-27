@@ -3,7 +3,19 @@
  * registry, embeddings. Runs ONLY where Dewey runs (the harness sweep timer or
  * the kb CLI, both through runSweepTick). Imports @wolfpack/engine. Never imported by the wolf client.
  */
-export { sweep, type SweepContext, type SweepResult } from "./sweep.js";
+export { sweep, type SweepContext, type SweepResult, type SweepEvent } from "./sweep.js";
+export { readLastSweep, writeLastSweep, lastSweepFile, type LastSweep } from "../shared/last-sweep.js";
+export {
+  readPipeline,
+  normalizeOutcome,
+  RECEIPT_CAP,
+  PARKED_CAP,
+  type Pipeline,
+  type PipelineLane,
+  type PipelineReceipt,
+  type PipelineParked,
+  type PipelineOutcome,
+} from "./pipeline.js";
 export { runSweepTick, type SweepTickOptions, type SweepTickResult } from "./tick.js";
 export {
   workIdOfTopic,

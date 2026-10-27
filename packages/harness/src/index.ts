@@ -142,7 +142,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Initialize sweep manager if librarian mode is enabled (sandbox: startSandbox already proved it runs on a KB copy)
   const isLibrarian = config.memory?.librarian === true;
   const sweepManager: SweepManager | undefined = isLibrarian && kbRoots
-    ? startLibrarianSweep({ roots: kbRoots, table, env: process.env, log: (l) => console.log(l) })
+    ? startLibrarianSweep({ roots: kbRoots, table, env: process.env, log: (l) => console.log(l), events: { den: wolfDen, wolf: config.name } })
     : undefined;
 
   // Create shared telegram state if telegram is configured

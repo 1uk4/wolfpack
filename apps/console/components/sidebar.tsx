@@ -665,7 +665,11 @@ function SessionsSidebar() {
 					<Link
 						href="/"
 						data-testid="nav-graph"
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						aria-current={pathname === "/" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
 					>
 						<NetworkIcon className="size-3" />
 						Graph
@@ -673,7 +677,11 @@ function SessionsSidebar() {
 					<Link
 						href="/pipeline"
 						data-testid="nav-pipeline"
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						aria-current={pathname === "/pipeline" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/pipeline" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
 					>
 						<WorkflowIcon className="size-3" />
 						Pipeline

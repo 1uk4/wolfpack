@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { NotFoundError, ProtocolError, type ConsoleClient, type MemoryEvent } from "@wolfpack/client";
-import { createMemoryApi } from "../src/server/memory-api.ts";
+import { FIRST_PULL_MS, createMemoryApi } from "../src/server/memory-api.ts";
 
 function stub(partial: Record<string, unknown>): () => ConsoleClient {
 	return () => partial as unknown as ConsoleClient;
@@ -34,11 +34,11 @@ describe("memory API: pass-through", () => {
 		assert.deepEqual(calls[1], ["1uk4", {}]);
 	});
 
-	it("memoryTopic passes a valid scope only", async () => {
+	it("memoryTopic passes a valid scope", async () => {
 		const calls: unknown[][] = [];
 		const api = createMemoryApi(stub({ getMemoryTopic: async (...a: unknown[]) => (calls.push(a), { id: "x" }) }));
 		await api.memoryTopic("w", "x", "den");
-		await api.memoryTopic("w", "x", "bogus");
+		await api.memoryTopic("w", "x");
 		assert.deepEqual(calls[0], ["w", "x", { scope: "den" }]);
 		assert.deepEqual(calls[1], ["w", "x", {}]);
 	});
@@ -119,7 +119,16 @@ describe("memory API: error mapping", () => {
 		const mem = await api.memoryStatus("w");
 		assert.equal(mem.status, 409);
 		assert.equal((await body(mem)).code, "memory_unavailable");
-		assert.equal(api.events("w", new Request("http://t/e")).status, 409);
+		assert.equal((await api.events("w", new Request("http://t/e"))).status, 409);
+	});
+});
+
+describe("memory API: topic scope", () => {
+	it("an invalid scope is a 400", async () => {
+		const api = createMemoryApi(stub({ getMemoryTopic: async () => ({}) }));
+		const res = await api.memoryTopic("w", "x", "bogus");
+		assert.equal(res.status, 400);
+		assert.equal((await body(res)).code, "invalid_request");
 	});
 });
 
@@ -143,7 +152,7 @@ describe("memory API: events SSE", () => {
 				},
 			}),
 		);
-		const res = api.events("w", new Request("http://t/e"));
+		const res = await api.events("w", new Request("http://t/e"));
 		assert.equal(res.headers.get("content-type"), "text/event-stream; charset=utf-8");
 		const text = await res.text();
 		const frames = text.split("\n\n").filter((f) => f.startsWith("data: "));
@@ -151,6 +160,44 @@ describe("memory API: events SSE", () => {
 			frames.map((f) => (JSON.parse(f.slice(6)) as { jobId: string }).jobId),
 			["j1", "j2"],
 		);
+	});
+
+	it("watchMemory failing immediately → mapped non-200 (409 memory_unavailable)", async () => {
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory() {
+					throw new ProtocolError("memory_unavailable", "inert", false);
+				},
+			}),
+		);
+		const res = await api.events("w", new Request("http://t/e"));
+		assert.equal(res.status, 409);
+		assert.equal((await body(res)).code, "memory_unavailable");
+	});
+
+	it("a mid-stream error ends with a terminal event: error frame", async () => {
+		const api = createMemoryApi(
+			stub({
+				async *watchMemory() {
+					yield ev(1);
+					await new Promise((r) => setTimeout(r, FIRST_PULL_MS + 50));
+					throw new ProtocolError("engine_error", "lost", true);
+				},
+			}),
+		);
+		const text = await (await api.events("w", new Request("http://t/e"))).text();
+		assert.match(text, /data: \{.*"jobId":"j1"/);
+		assert.match(text, /event: error\ndata: \{"code":"engine_error","message":"lost"\}\n\n$/);
+	});
+
+	it("an already-aborted request opens no watch", async () => {
+		let watched = false;
+		const api = createMemoryApi(stub({ async *watchMemory() { watched = true; } }));
+		const ac = new AbortController();
+		ac.abort();
+		const res = await api.events("w", new Request("http://t/e", { signal: ac.signal }));
+		assert.equal(res.status, 204);
+		assert.equal(watched, false);
 	});
 
 	it("aborts the watch when the consumer cancels", async () => {
@@ -164,7 +211,7 @@ describe("memory API: events SSE", () => {
 				},
 			}),
 		);
-		const res = api.events("w", new Request("http://t/e"));
+		const res = await api.events("w", new Request("http://t/e"));
 		const reader = res.body!.getReader();
 		await reader.read(); // ": open"
 		await reader.read(); // first event

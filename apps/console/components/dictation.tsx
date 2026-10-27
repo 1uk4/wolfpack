@@ -244,13 +244,17 @@ export function useDictationUi(): DictationUi {
 /** Claim the target imperatively; returns the release (identity-guarded). */
 export function claimDictationTarget(append: (text: string) => void, key?: string, opts: { transient?: boolean } = {}): () => void {
 	const claim: Claim = { append, key, transient: opts.transient === true };
-	claims.push(claim);
+	// Persistent claims slot in BELOW any transient ones (an effect re-run must not jump above a standalone field's claim).
+	let at = claims.length;
+	if (!claim.transient) while (at > 0 && claims[at - 1]!.transient) at--;
+	claims.splice(at, 0, claim);
 	if (key) lastKey = key;
 	publishUi();
 	return () => {
 		const i = claims.indexOf(claim);
 		if (i >= 0) {
 			claims.splice(i, 1);
+			if (key && lastKey === key && !claims.some((c) => c.key === key)) lastKey = null;
 			publishUi();
 		}
 	};
@@ -636,6 +640,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		publishUi();
 		return () => {
 			hookStates.delete(id);
+			if (hookStates.size === 0) releaseTransientClaims();
 			publishUi();
 		};
 	}, []);
@@ -841,8 +846,10 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 	const keyless = state.error === DICTATION_KEYLESS;
 	const showError = state.error !== null && state.lastKey === key && !running;
 	const label = listening ? "Stop dictating" : running ? "Dictate here" : "Dictate";
+	// While ANY run is stopping, no mic may claim or retarget: the previous field's tail is still flushing.
+	const anyStopping = state.phase === "stopping";
 	const onClick = () => {
-		if (stopping) return;
+		if (anyStopping) return;
 		if (keyless) {
 			hookStatesHolder()?.clear();
 			openSettings("keys", DEEPGRAM_KEY_ID);
@@ -861,7 +868,7 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 				<button
 					type="button"
 					onClick={onClick}
-					aria-disabled={stopping || undefined}
+					aria-disabled={anyStopping || undefined}
 					aria-label={label}
 					aria-pressed={listening}
 					aria-describedby={showError ? errId : undefined}
@@ -870,7 +877,7 @@ export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: s
 					className={cn(
 						"flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground",
 						listening && "bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive",
-						stopping && "cursor-default",
+						anyStopping && "cursor-default",
 						className,
 					)}
 				>

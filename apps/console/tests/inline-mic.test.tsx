@@ -400,3 +400,18 @@ describe("module singletons", () => {
 		assert.equal(mics()[0]!.getAttribute("aria-pressed"), "true", "the live hook's phase still shows");
 	});
 });
+
+describe("stopping", () => {
+	it("no mic retargets or looks enabled while a run is stopping", async () => {
+		await mountCard();
+		await click(mics()[0]!);
+		const ws = await live("tail");
+		await click(mics()[0]!); // stop: socket stays open until Deepgram closes it
+		for (const m of mics()) assert.equal(m.getAttribute("aria-disabled"), "true");
+		await click(mics()[1]!);
+		await closeSocket(ws);
+		await settle();
+		assert.equal((q('[data-testid="card-text"]') as HTMLTextAreaElement).value, "tail");
+		assert.equal(mics()[1]!.getAttribute("aria-disabled"), null);
+	});
+});

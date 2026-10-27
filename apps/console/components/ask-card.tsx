@@ -553,6 +553,7 @@ export function CardTextInput({
 		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
 	};
 	const field = multiline ? (
+		// pr-10 on textareas (mic at right-4, clear of the scrollbar); pr-9 on inputs (mic at right-1.5, no scrollbar).
 		<textarea {...(common as object)} className={cn(common.className, mic && "pr-10")} onKeyDown={onKeyDown} />
 	) : (
 		<input

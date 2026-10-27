@@ -52,6 +52,11 @@ const SINGLE: Card = {
 		},
 	],
 };
+const MULTI: Card = {
+	tool: "ask_user_question",
+	fields: [{ id: "answer", kind: "multi", label: "Which envs?", options: [{ label: "dev", value: "dev" }, { label: "staging", value: "staging" }, { label: "prod", value: "prod" }], default: ["dev"], max: 2 }],
+};
+const CONFIRM: Card = { tool: "ask_user_question", fields: [{ id: "answer", kind: "confirm", label: "Deploy?", confirmLabel: "Deploy", rejectLabel: "Hold off", default: true }] };
 const FREE: Card = { tool: "ask_user_question", fields: [{ id: "answer", kind: "free-text", label: "Why?" }] };
 
 /** A mock whose thread already ended a turn on a card; answering records the answer and starts the next scripted turn. */
@@ -220,7 +225,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await mount(client);
 		assert.ok(q('[data-testid="pending-card"]'));
 		assert.ok(q('[data-testid="card-held"]'), "held note");
-		const picked = [...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-checked"));
+		const picked = [...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-pressed"));
 		assert.deepEqual(picked, ["false", "true"]);
 		assert.match(q('[data-testid="card-submit"]')!.textContent ?? "", /Update answer/);
 		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
@@ -260,5 +265,54 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		await settle();
 		assert.ok(q('[data-testid="dismissed-card"]'), "refetched record shows the card skipped");
 		assert.match(q('[data-testid="card-error"]')?.textContent ?? "", /card/i);
+	});
+
+	it("multi: the default is pre-checked but nothing is sent until Submit; toggled picks POST as a list", async () => {
+		const client = new CardClient(MULTI);
+		await mount(client);
+		const boxes = () => [...document.querySelectorAll('[data-testid="card-option"]')];
+		assert.deepEqual(boxes().map((o) => o.getAttribute("aria-pressed")), ["true", "false", "false"]);
+		await settle(120);
+		assert.deepEqual(client.answers, [], "default never auto-submits");
+		assert.ok(q('[data-testid="pending-card"]'));
+		await click(boxes()[2]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: ["dev", "prod"] } } }]);
+		assert.ok(q('[data-testid="answered-card"]'));
+	});
+
+	it("confirm: default pre-selects the confirm button without submitting; reject posts false", async () => {
+		const client = new CardClient(CONFIRM);
+		await mount(client);
+		assert.equal(q('[data-testid="card-confirm"]')!.textContent, "Deploy");
+		assert.equal(q('[data-testid="card-reject"]')!.textContent, "Hold off");
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "true");
+		await settle(120);
+		assert.deepEqual(client.answers, []);
+		await click(q('[data-testid="card-reject"]')!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: false } } }]);
+		const rec = q('[data-testid="answered-card"]');
+		assert.ok(rec);
+		assert.equal(rec!.querySelector('[data-testid="card-reject"]')!.getAttribute("aria-pressed"), "true");
+		assert.equal(rec!.querySelector('[data-testid="card-reject"]')!.hasAttribute("disabled"), true);
+	});
+
+	it("held multi / confirm answers show after a reload; a skipped confirm has no controls to answer with", async () => {
+		const held = new CardClient(MULTI);
+		held.held = { answer: { value: ["staging"] } };
+		await mount(held);
+		assert.ok(q('[data-testid="card-held"]'));
+		assert.deepEqual([...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-pressed")), ["false", "true", "false"]);
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		const skipped = new CardClient(CONFIRM);
+		skipped.superseded = true;
+		await mount(skipped);
+		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
+		assert.equal(q('[data-testid="card-submit"]'), null);
+		assert.equal(q('[data-testid="card-confirm"]')!.hasAttribute("disabled"), true);
 	});
 });

@@ -3,7 +3,7 @@
  * ThreadChat renders — which calls raised a card, whether it was answered, and which cards still wait. PURE.
  */
 
-import type { Card, CardAnswers, PendingCard, ThreadDetail } from "@wolfpack/client";
+import type { Card, CardAnswers, CardFieldAnswer, PendingCard, ThreadDetail } from "@wolfpack/client";
 
 /** A tool call that raised a card: the card, and the operator's answer once given. */
 export interface CardCall {
@@ -63,36 +63,93 @@ export function withHeld(cards: ThreadCards, callId: string, heldAnswer: CardAns
 	};
 }
 
-/** What the form holds per field id: the picked option value, or typed text (free-text, or Other). */
+/**
+ * What the form holds per field id, in the answer's own shape: the picked option value or typed text (free-text,
+ * single, Other), the picked values (multi, custom entries named in `other`), or the boolean (confirm).
+ */
 export interface CardDraft {
-	[fieldId: string]: { value: string; other?: boolean };
+	[fieldId: string]: CardFieldAnswer;
 }
+
+const copyAnswer = (a: CardFieldAnswer): CardFieldAnswer => {
+	if (Array.isArray(a.value)) return { value: [...a.value], ...("other" in a && Array.isArray(a.other) && a.other.length > 0 ? { other: [...a.other] } : {}) };
+	if (typeof a.value === "boolean") return { value: a.value, ...("note" in a && a.note ? { note: a.note } : {}) };
+	return { value: a.value, ...("other" in a && a.other ? { other: true } : {}) };
+};
 
 /** The draft a card starts with: field defaults pre-selected (never auto-submitted). */
 export function initialDraft(card: Card, held?: CardAnswers): CardDraft {
 	const draft: CardDraft = {};
 	for (const f of card.fields) {
 		const h = held?.[f.id];
-		if (h) draft[f.id] = { value: h.value, ...(h.other ? { other: true } : {}) };
-		else if (f.default !== undefined) draft[f.id] = { value: f.default };
+		if (h) draft[f.id] = copyAnswer(h);
+		else if (f.kind === "multi") draft[f.id] = { value: [...(f.default ?? [])] };
+		else if (f.default !== undefined) draft[f.id] = { value: f.default } as CardFieldAnswer;
 	}
 	return draft;
 }
 
-/** Every field answered (free text may be non-empty text; a single needs a pick or non-empty Other text). */
+/** Whether a multi field's pick count is within its bounds. */
+export function multiInBounds(f: Extract<Card["fields"][number], { kind: "multi" }>, count: number): boolean {
+	return count >= (f.min ?? 0) && count <= (f.max ?? Infinity);
+}
+
+/** Every field answered (text non-empty; a multi within min/max; a confirm picked). */
 export function draftComplete(card: Card, draft: CardDraft): boolean {
 	return card.fields.every((f) => {
 		const a = draft[f.id];
-		return a !== undefined && a.value.trim() !== "";
+		if (a === undefined) return false;
+		if (f.kind === "confirm") return typeof a.value === "boolean";
+		if (f.kind === "multi") return Array.isArray(a.value) && multiInBounds(f, a.value.length);
+		return typeof a.value === "string" && a.value.trim() !== "";
 	});
 }
 
-/** The answers to send: values trimmed, `other` only when set. */
+/** The answers to send: text trimmed, `other` only when set. */
 export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 	const out: CardAnswers = {};
 	for (const f of card.fields) {
 		const a = draft[f.id];
-		if (a) out[f.id] = { value: a.value.trim(), ...(a.other ? { other: true } : {}) };
+		if (!a) continue;
+		if (Array.isArray(a.value)) {
+			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
+			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
+		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };
+		else out[f.id] = { value: a.value.trim(), ...("other" in a && a.other ? { other: true } : {}) };
 	}
 	return out;
+}
+
+type MultiField = Extract<Card["fields"][number], { kind: "multi" }>;
+
+/**
+ * Add one custom entry to a multi answer. Fails (with the reason) when the text collides with an option value, repeats
+ * a pick, or would exceed `max`; empty text is a no-op success.
+ */
+export function addCustomEntry(field: MultiField, answer: CardFieldAnswer | undefined, text: string): { answer: CardFieldAnswer } | { error: string } {
+	const picked = Array.isArray(answer?.value) ? answer.value : [];
+	const custom = answer && "other" in answer && Array.isArray(answer.other) ? answer.other : [];
+	const t = text.trim();
+	if (t === "") return { answer: { value: picked, ...(custom.length > 0 ? { other: custom } : {}) } };
+	if (field.options.some((o) => o.value === t)) return { error: `“${t}” is already an option: tick it instead` };
+	if (picked.includes(t)) return { error: `“${t}” is already added` };
+	if (field.max !== undefined && picked.length >= field.max) return { error: `At most ${field.max} entries` };
+	return { answer: { value: [...picked, t], other: [...custom, t] } };
+}
+
+/**
+ * Fold text typed into a multi field's "Other…" box but not yet added into the draft, so Submit never loses it.
+ * `error` names the first entry that cannot be added (Submit must then be blocked).
+ */
+export function foldPendingOther(card: Card, draft: CardDraft, typed: Record<string, string>): { draft: CardDraft; errors: Record<string, string> } {
+	const out: CardDraft = { ...draft };
+	const errors: Record<string, string> = {};
+	for (const f of card.fields) {
+		const t = typed[f.id]?.trim();
+		if (f.kind !== "multi" || !t) continue;
+		const r = addCustomEntry(f, out[f.id], t);
+		if ("error" in r) errors[f.id] = r.error;
+		else out[f.id] = r.answer;
+	}
+	return { draft: out, errors };
 }

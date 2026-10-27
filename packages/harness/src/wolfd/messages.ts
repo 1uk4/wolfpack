@@ -19,6 +19,7 @@
  */
 import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
+import { answerValue } from "./cards.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
@@ -177,7 +178,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
         if (!call) continue;
         call.answer = answers;
-        call.result = Object.values(answers).map((a) => a.value).join("; ");
+        call.result = call.card ? call.card.fields.map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
         call.isError = false;
         break;
       }

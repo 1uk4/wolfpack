@@ -40,6 +40,38 @@ export function cardResult(card: Card, text = "The operator was asked. Your turn
   return { output: [{ type: "text", text }], details, control: { terminate: true } };
 }
 
+/**
+ * A one-field confirm card, for tools that gate an action on the operator's yes/no (e.g. `task_done`). Pair with
+ * `cardResult` (or return it as `card` from a `raisesCard` tool). `tool` must be the name of the raising tool: it
+ * keys the console's card renderer and labels the answer the model sees. The default only pre-selects; it never
+ * submits. For ship gates (task_done) leave it unset (nothing pre-selected) or false, so a hasty Submit cannot approve.
+ */
+export function confirmCard(opts: {
+  tool: string;
+  question: string;
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
+  rejectLabel?: string;
+  default?: boolean;
+}): Card {
+  return {
+    tool: opts.tool,
+    ...(opts.title ? { title: opts.title } : {}),
+    fields: [
+      {
+        id: "confirm",
+        kind: "confirm",
+        label: opts.question,
+        ...(opts.description ? { description: opts.description } : {}),
+        ...(opts.confirmLabel ? { confirmLabel: opts.confirmLabel } : {}),
+        ...(opts.rejectLabel ? { rejectLabel: opts.rejectLabel } : {}),
+        ...(opts.default !== undefined ? { default: opts.default } : {}),
+      },
+    ],
+  };
+}
+
 /** The card a tool-result message carries in `details`, if any (validated; a malformed one is ignored). */
 export function cardOfToolMessage(message: unknown): Card | undefined {
   const raw = (message as { details?: Record<string, unknown> } | undefined)?.details?.[CARD_DETAILS_KEY];

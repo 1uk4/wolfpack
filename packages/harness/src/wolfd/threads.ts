@@ -45,7 +45,7 @@ export function loadThreads(den: string, onError?: (e: unknown) => void): SavedT
   }
 }
 
-function quarantine(file: string, cause: unknown, onError?: (e: unknown) => void): void {
+export function quarantine(file: string, cause: unknown, onError?: (e: unknown) => void): void {
   const aside = `${file}.corrupt-${Date.now()}`;
   try {
     renameSync(file, aside);

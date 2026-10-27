@@ -28,11 +28,15 @@ export interface TestWolfOptions {
   name?: string;
   /** Extra top-level wolf.yaml text appended after `name` / `workspace` (e.g. a `sandbox:` block). */
   yaml?: string;
+  /** Boot over an existing root (a restart): it is reused, and `stop()` leaves it in place. Default: a fresh temp root, removed on stop. */
+  root?: string;
   /** Replaces the librarian sweep's tick (a librarian wolf only). */
   sweepTick?: StartWolfOptions["sweepTick"];
 }
 
 export interface TestWolf {
+  /** The wolf's root dir (wolf.yaml, models.json, the den). */
+  root: string;
   url: string;
   /** Thread id of the home conversation, e.g. "testwolf/home". */
   home: string;
@@ -48,14 +52,14 @@ export interface TestWolf {
 
 export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
   const name = opts.name ?? "testwolf";
-  const root = mkdtempSync(join(tmpdir(), "test-wolf-"));
+  const root = opts.root ?? mkdtempSync(join(tmpdir(), "test-wolf-"));
   const scripted = createScriptedModel(opts.script);
   const tier = { model: scripted.modelId, modelSource: "default", provider: scripted.provider, piModel: `${scripted.provider}/${scripted.modelId}` };
   writeFileSync(
     join(root, "models.json"),
     JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }),
   );
-  mkdirSync(join(root, "work"));
+  mkdirSync(join(root, "work"), { recursive: true });
   writeFileSync(join(root, "wolf.yaml"), `name: ${name}\nworkspace: ${join(root, "work")}\n${opts.yaml ?? ""}`);
 
   const afterResponse: AfterResponseCall[] = [];
@@ -86,12 +90,13 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
       },
     });
   } catch (e) {
-    rmSync(root, { recursive: true, force: true });
+    if (!opts.root) rmSync(root, { recursive: true, force: true });
     throw e;
   }
   const client = new HttpConsoleClient({ baseUrl: wolf.url });
   const home = `${name}/home`;
   return {
+    root,
     url: wolf.url,
     home,
     wolf,
@@ -106,7 +111,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
     },
     async stop() {
       await wolf.close();
-      rmSync(root, { recursive: true, force: true });
+      if (!opts.root) rmSync(root, { recursive: true, force: true });
     },
   };
 }

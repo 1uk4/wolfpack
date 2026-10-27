@@ -13,7 +13,7 @@
  * Tier switching via configure is not wired yet (main tier only).
  */
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
@@ -33,6 +33,7 @@ import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
 import { WolfServer } from "./server.js";
+import { SubagentBridge, createSubagentExtension } from "./subagent-tools.js";
 import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
 import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -145,7 +146,11 @@ async function startConfigured(
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
   // adaptToDurable register themselves via onCardTool; native pi-durable extensions that bypass the adapter must pass
   // their card tools explicitly (createCardGuardExtension([...names]) / cardGuard.register).
-  const extensions = [...toolExtensions, objectsExtension, ask, cardGuard.extension, ...loaded, ...extra];
+  // The spawn tools (subagent, subagent_message, subagents_list, subagent_stop): offered to home and feature threads only;
+  // a child's conversation is configured with an explicit tool list that leaves them out.
+  const subagentBridge = new SubagentBridge();
+  const subagentExtensions = createSubagentExtension(subagentBridge, { wolfDen: config.den, wolfName: config.identity.name });
+  const extensions = [...toolExtensions, objectsExtension, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   // `prompts?.` is defensive: a stale engine dist predates the field and would crash wolfd boot.
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
@@ -188,6 +193,17 @@ async function startConfigured(
         },
       },
       den: config.den,
+      subagents: {
+        bridge: subagentBridge,
+        wolfHome: dirname(config.file),
+        workspace: cwd,
+        createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
+        resolveTier: (tier) => {
+          const m = resolveWolfModel(config, tier, table);
+          return { provider: m.provider, modelId: m.modelId, ...(m.thinking ? { thinking: m.thinking } : {}) };
+        },
+        registeredTools: () => engine.toolNames(),
+      },
       memoryExtension: memoryExtensionInstalled(extensions),
       librarian: config.memory.librarian,
       ...(kbRoots ? { kbRoots } : {}),

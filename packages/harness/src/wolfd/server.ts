@@ -46,6 +46,7 @@ import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
+import { SubagentManager, type SubagentOptions } from "./subagents.js";
 import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, removeThread, saveThread, unbindConversation } from "./threads.js";
 
 export interface WolfServerOptions {
@@ -56,6 +57,8 @@ export interface WolfServerOptions {
   conversation: EngineConversation;
   /** Creates and reopens the conversations behind feature threads. Unset: this wolf refuses to host feature threads. */
   conversations?: ThreadConversations;
+  /** Subagents: where their roster lives and how their conversations are created. Unset: this wolf has no spawn tools' manager. */
+  subagents?: SubagentOptions & { bridge?: { manager?: SubagentManager } };
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
   /** The wolf's den: its MemoryEvent bus feeds `GET /v1/wolves/:name/events`. Omitted: that stream stays empty. */
@@ -101,6 +104,7 @@ export class WolfServer {
   private readonly opening = new Map<string, Promise<{ summary: ThreadSummary; created: boolean }>>();
   private homeCreated = false;
   private readonly memoryBus?: MemoryEventBus;
+  private readonly subagents?: SubagentManager;
   // wolf-scoped activity stream (thread-status, card events): own id space, bounded replay buffer
   /** Starts at 1: a baseline carries the current cursor as its id, and ids are positive. */
   private wolfSeq = 1;
@@ -116,6 +120,33 @@ export class WolfServer {
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
     this.homeId = `${this.name}/home`;
+    if (opts.subagents && opts.den) {
+      const { bridge, ...sub } = opts.subagents;
+      this.subagents = new SubagentManager(
+        {
+          name: this.name,
+          den: opts.den,
+          settleMs: this.settleMs,
+          thread: (id) => this.threads.get(id),
+          threadOfConversation: (cid) => [...this.threads.values()].find((t) => t.conv.id === cid),
+          attachChild: async (summary, conv) => {
+            const t = this.makeThread(summary, conv);
+            try {
+              await t.attach();
+            } catch (e) {
+              this.threads.delete(summary.id);
+              await t.close().catch(() => {});
+              throw e;
+            }
+            return t;
+          },
+          emitWolf: (d) => this.emitWolf(d),
+          onError: (e) => this.opts.onError?.(e),
+        },
+        sub,
+      );
+      if (bridge) bridge.manager = this.subagents;
+    }
     this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home" }, opts.conversation);
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
@@ -165,6 +196,11 @@ export class WolfServer {
         this.opts.onError?.(new Error(`thread ${saved.id} not attached: ${e instanceof Error ? e.message : String(e)}`));
       }
     }
+    // Children last: their parents are attached now, so a result nobody took yet can be delivered.
+    await this.subagents?.recover(async (id) => {
+      const conv = await conversations.get(id);
+      return conv;
+    });
   }
 
   async listen(port = 0): Promise<string> {
@@ -193,6 +229,7 @@ export class WolfServer {
     this.http.closeAllConnections();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
     if (this.socketPath) rmSync(this.socketPath, { force: true });
+    this.subagents?.close();
     for (const t of this.threads.values()) await t.close();
     if (this.opts.den) disposeMemoryEvents(this.opts.den);
   }
@@ -289,7 +326,8 @@ export class WolfServer {
         return this.json(res, 200, { threads: [...this.threads.values()].map((t) => t.threadSummary()) });
       case "listCards":
         this.checkWolf(params.name);
-        return this.json(res, 200, { cards: [...this.threads.values()].flatMap((t) => t.cards.pending()) });
+        // A subagent's questions go to its parent, not to the operator's needs-you list.
+        return this.json(res, 200, { cards: [...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()) });
       case "answerCard": {
         const t = this.checkThread(params.id);
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
@@ -313,6 +351,16 @@ export class WolfServer {
         this.homeCreated = true;
         return this.json(res, status, this.home.threadSummary());
       }
+      case "listChildren": {
+        const t = this.checkThread(params.id);
+        return this.json(res, 200, { threads: this.subagents?.children(t.summary.id) ?? [] });
+      }
+      case "getLedger": {
+        const t = this.checkThread(params.id);
+        const entries = this.subagents?.ledgerOf(t.summary.id);
+        if (!entries) throw new HttpError("not_found", `thread ${t.summary.id} has no ledger`);
+        return this.json(res, 200, { entries });
+      }
       case "getThread":
         return this.json(res, 200, this.checkThread(params.id).detail());
       case "submit": {
@@ -321,6 +369,8 @@ export class WolfServer {
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        // A subagent's messages from the operator go through its manager: ledger, resume, state.
+        if (t.isChild && this.subagents) return this.json(res, 200, await this.subagents.submitFromOwner(t.summary.id, body.data.input, body.data.whenBusy, refs));
         return this.json(res, 200, await t.submit(body.data.input, body.data.whenBusy, refs));
       }
       case "uploadAttachment": {
@@ -372,7 +422,9 @@ export class WolfServer {
         return;
       }
       case "abort": {
-        await this.checkThread(params.id).abort();
+        const t = this.checkThread(params.id);
+        if (t.isChild && this.subagents) await this.subagents.abortFromOwner(t.summary.id);
+        else await t.abort();
         return this.json(res, 200, { ok: true });
       }
       case "streamThread":
@@ -603,7 +655,7 @@ export class WolfServer {
       const at = new Date().toISOString();
       return [
         ...[...this.threads.values()].map((t): WolfEvent => ({ type: "thread-status", id, wolf: this.name, at, threadId: t.summary.id, status: t.status() })),
-        ...[...this.threads.values()].flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
+        ...[...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()).map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
       ];
     };
     const firstId = this.wolfBuffer[0]?.id;

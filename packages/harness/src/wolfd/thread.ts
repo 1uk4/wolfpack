@@ -82,8 +82,12 @@ export class ThreadRuntime {
   /** The engine already had history when this thread was attached (a restart): the thread existed before. */
   hadHistory = false;
 
+  /** Called for every event this thread emits (a subagent's manager watches its child's turns through it). */
+  private readonly observers = new Set<(ev: ThreadEvent) => void>();
+
   constructor(
-    readonly summary: ThreadSummary,
+    /** Replaced by the owner of a subagent thread as the child's state, step and tokens change. */
+    public summary: ThreadSummary,
     readonly conv: EngineConversation,
     private readonly host: ThreadHost,
   ) {
@@ -116,6 +120,18 @@ export class ThreadRuntime {
 
   get isRunning(): boolean {
     return this.running !== null;
+  }
+
+  /** Watch this thread's events (synchronously, in emit order). Returns the unsubscribe. */
+  observe(fn: (ev: ThreadEvent) => void): () => void {
+    this.observers.add(fn);
+    return () => this.observers.delete(fn);
+  }
+
+  /** The text of the newest assistant message (a subagent's final answer once its turn ended), or "". */
+  lastAssistantText(): string {
+    for (let i = this.messages.length - 1; i >= 0; i--) if (this.messages[i].role === "assistant" && this.messages[i].text.trim()) return this.messages[i].text;
+    return "";
   }
 
   // ------------------------------------------------------------- pump
@@ -195,15 +211,20 @@ export class ThreadRuntime {
       this.announced.delete(callId);
       const closed = closedBy.get(callId) ?? "answered";
       const outcome = closed === "answered" ? "answered" : "dismissed";
-      this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
+      if (!this.isChild) this.host.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome, closed });
       this.emit({ type: "card-settled", callId, outcome, closed });
     }
     for (const [callId, card] of live) {
       if (this.announced.has(callId)) continue;
       this.announced.add(callId);
-      this.host.emitWolf({ type: "card-pending", card });
+      if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
       this.emit({ type: "card-pending", card });
     }
+  }
+
+  /** A subagent: its questions go to the parent, so its cards never reach the operator's needs-you. */
+  get isChild(): boolean {
+    return this.summary.kind === "subagent";
   }
 
   /** A held answer changed: the card is still pending, with the new answer. */
@@ -211,7 +232,7 @@ export class ThreadRuntime {
     const card = this.cards.get(callId);
     if (!card) return;
     this.emit({ type: "card-pending", card });
-    this.host.emitWolf({ type: "card-pending", card });
+    if (!this.isChild) this.host.emitWolf({ type: "card-pending", card });
   }
 
   /** Thread status is derived; announce it whenever the derivation changes. */
@@ -273,6 +294,13 @@ export class ThreadRuntime {
     this.buffer.push(full);
     if (draft.type === "turn-end") this.running = null;
     for (const s of [...this.subs]) s(full);
+    for (const o of [...this.observers]) {
+      try {
+        o(full);
+      } catch (e) {
+        this.host.onError(e);
+      }
+    }
     this.notify();
   }
 
@@ -302,7 +330,7 @@ export class ThreadRuntime {
   status(): ThreadStatus {
     // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
     // list/baseline agree because both read pending().
-    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
+    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 && !this.isChild ? "needs-you" : "idle";
   }
 
   threadSummary(): ThreadSummary {

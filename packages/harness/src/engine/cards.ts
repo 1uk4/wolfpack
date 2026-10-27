@@ -42,7 +42,9 @@ export function cardResult(card: Card, text = "The operator was asked. Your turn
 
 /**
  * A one-field confirm card, for tools that gate an action on the operator's yes/no (e.g. `task_done`). Pair with
- * `cardResult` (or return it as `card` from a `raisesCard` tool). The default only pre-selects; it never submits.
+ * `cardResult` (or return it as `card` from a `raisesCard` tool). `tool` must be the name of the raising tool: it
+ * keys the console's card renderer and labels the answer the model sees. The default only pre-selects; it never
+ * submits. For ship gates (task_done) leave it unset (nothing pre-selected) or false, so a hasty Submit cannot approve.
  */
 export function confirmCard(opts: {
   tool: string;

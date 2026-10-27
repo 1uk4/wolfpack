@@ -5,8 +5,11 @@ import type { Card, CardAnswers } from "@wolfpack/protocol";
 import { CardSchema } from "@wolfpack/protocol";
 import { cardResult, confirmCard } from "../engine/cards.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
+import { adaptToDurable } from "../adapters/durable.js";
+import { Type } from "../extension-api.js";
+import type { ExtensionRuntime } from "./run.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
-import { answerText, validateAnswers } from "./cards.js";
+import { answerText, answerValue, validateAnswers } from "./cards.js";
 
 let tw: TestWolf | undefined;
 afterEach(async () => {
@@ -66,6 +69,7 @@ describe("card field kind validation (pure)", () => {
     bad(MULTI_OTHER, { m: { value: ["x"] } }, /not an option/); // custom entry not declared in `other`
     bad(MULTI_OTHER, { m: { value: ["a"], other: ["x"] } }, /not among the picked/);
     bad(MULTI_OTHER, { m: { value: ["  "], other: ["  "] } }, /cannot be empty/);
+    bad(MULTI_OTHER, { m: { value: ["b"], other: ["b"] } }, /duplicates an option value/); // custom == option value
   });
 
   it("confirm: boolean only", () => {
@@ -93,7 +97,7 @@ describe("card field kind validation (pure)", () => {
     expect(text).toBe(
       [
         "The user answered your raise question (call c1):",
-        "- Pick some: a, c",
+        "- Pick some: Alpha (a), Gamma (c)",
         "The user answered your raise question (call c2):",
         "- Ship it?: no (Hold)",
         "The user answered your raise question (call c3):",
@@ -101,6 +105,17 @@ describe("card field kind validation (pure)", () => {
       ].join("\n"),
     );
     expect(answerText([{ callId: "c", card: MULTI, answers: { m: { value: [] } } }])).toContain("(none selected)");
+  });
+
+  it("answerValue for multi: labels with values, custom entries marked, commas and quotes inside entries are quoted", () => {
+    const card: Card = {
+      tool: "t",
+      fields: [{ id: "m", kind: "multi", label: "Colours", allowOther: true, options: [{ label: "Red", value: "red" }, { label: "Same", value: "Same" }, { label: "Red, dark", value: "dark" }] }],
+    };
+    expect(answerValue(card.fields[0], { value: ["red"] })).toBe("Red (red)");
+    expect(answerValue(card.fields[0], { value: ["red", "Same", "dark", "teal, ish", 'say "hi"'], other: ["teal, ish", 'say "hi"'] })).toBe(
+      'Red (red), Same, "Red, dark (dark)", other: "teal, ish", other: "say \\"hi\\""',
+    );
   });
 });
 
@@ -112,6 +127,17 @@ describe("card schema", () => {
     expect(withField({ default: ["a", "b"], max: 1 })).toBe(false);
     expect(withField({ default: ["a"], min: 2 })).toBe(false);
     expect(withField({ min: 3, max: 2 })).toBe(false);
+    const msg = (f: object) => {
+      const r = CardSchema.safeParse({ tool: "t", fields: [{ id: "m", kind: "multi", label: "m", options: OPTS, ...f }] });
+      return r.success ? "ok" : r.error.issues[0].message;
+    };
+    expect(msg({ default: ["a", "a"] })).toMatch(/must not repeat/);
+    expect(msg({ min: 4 })).toMatch(/can never be satisfied/);
+    expect(msg({ min: 4, allowOther: true })).toBe("ok");
+    expect(msg({ min: 3 })).toBe("ok");
+    expect(msg({ min: 3, max: 2, allowOther: true })).toMatch(/min must not exceed its max/);
+    expect(msg({ default: ["nope"] })).toMatch(/subset/);
+    expect(msg({ default: ["a"], min: 2, allowOther: true })).toMatch(/respect its min and max/);
     expect(CardSchema.safeParse({ tool: "t", fields: [{ id: "c", kind: "confirm", label: "c", default: "yes" }] }).success).toBe(false);
   });
 });
@@ -150,12 +176,12 @@ describe("multi / confirm cards over /v1", () => {
 
     expect((await tw.client.answerCard!(tw.home, p.callId, { m: { value: ["b", "c"] } })).disposition).toBe("started");
     await drain(tw);
-    expect(seen).toContain("- Pick some: b, c");
+    expect(seen).toContain("- Pick some: Beta (b), Gamma (c)");
     const done = await tw.client.getThread(tw.home);
     expect(done.status).toBe("idle");
     const call = done.messages.flatMap((m) => m.tools ?? [])[0];
     expect(call.answer).toEqual({ m: { value: ["b", "c"] } });
-    expect(call.result).toBe("b, c");
+    expect(call.result).toBe("Beta (b), Gamma (c)");
   });
 
   it("multi with allowOther accepts custom entries, and the model sees them", async () => {
@@ -171,7 +197,7 @@ describe("multi / confirm cards over /v1", () => {
     const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
     await tw.client.answerCard!(tw.home, p.callId, { m: { value: ["a", "my own"], other: ["my own"] } });
     await drain(tw);
-    expect(seen).toContain("- Pick some: a, my own");
+    expect(seen).toContain('- Pick some: Alpha (a), other: "my own"');
   });
 
   it("confirm: only a boolean is accepted; the default is not submitted; confirm and reject both resume the turn", async () => {
@@ -246,11 +272,90 @@ describe("multi / confirm cards over /v1", () => {
     await drain(tw);
 
     expect(tw.scripted.faux.state.callCount).toBe(2); // exactly one turn started
-    const order = ["- Pick some: a", "- Ship it?: no (Hold)", "- Why?: because"].map((l) => seen.indexOf(l));
+    const order = ["- Pick some: Alpha (a)", "- Ship it?: no (Hold)", "- Why?: because"].map((l) => seen.indexOf(l));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order); // raise order, not answer order
     const done = await tw.client.getThread(tw.home);
     expect(done.status).toBe("idle");
     expect(done.pendingCards).toBeUndefined();
+  });
+});
+
+describe("confirmCard through different raising paths (ticket 5 shape)", () => {
+  const plain = defineExtension({
+    name: "plain",
+    tools: [defineTool({ name: "plain", description: "p", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "p" }] }; } })],
+  });
+
+  it("a raisesCard adapted tool (not ask_user_question) returning confirmCard: the guard ends a round with a sibling tool; the answer resumes", async () => {
+    let seen = "";
+    const mk = (rt: ExtensionRuntime) =>
+      adaptToDurable(
+        {
+          name: "gate-ext",
+          tools: [
+            {
+              name: "ship_gate",
+              description: "ask before shipping",
+              raisesCard: true,
+              parameters: Type.Object({}),
+              async execute() {
+                return { content: [{ type: "text", text: "asked" }], card: confirmCard({ tool: "ship_gate", question: "Ship it?", confirmLabel: "Ship", rejectLabel: "Not yet" }) };
+              },
+            },
+          ],
+        },
+        { wolfDen: rt.den, wolfName: "testwolf", onCardTool: rt.onCardTool },
+      );
+    tw = await startTestWolf({
+      script: [
+        toolUse(raise("x"), fauxToolCall("ship_gate", {}), fauxToolCall("plain", {})),
+        (context) => {
+          seen = lastUserText(context as never);
+          return fauxAssistantMessage("shipped");
+        },
+      ],
+      hooks: { extensions: (rt) => [mk(rt), plain, raiser({ x: CONFIRM })] },
+    });
+    await tw.submit("go");
+    expect(tw.scripted.faux.state.callCount).toBe(1); // the card tool + siblings end the round
+    const pending = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect(pending.map((p) => p.card.tool)).toEqual(["raise", "ship_gate"]);
+    expect(pending[1].card.fields[0]).toMatchObject({ kind: "confirm", id: "confirm", confirmLabel: "Ship" });
+    expect(pending[1].card.fields[0]).not.toHaveProperty("default"); // ship gates pre-select nothing
+    await tw.client.answerCard!(tw.home, pending[0].callId, { confirm: { value: false } });
+    expect((await tw.client.answerCard!(tw.home, pending[1].callId, { confirm: { value: true } })).disposition).toBe("started");
+    await drain(tw);
+    expect(seen).toContain("- Ship it?: yes (Ship)");
+    expect(tw.scripted.faux.state.callCount).toBe(2);
+  });
+
+  it("a native tool returning cardResult(confirmCard) is guarded once registered (extra list / register)", async () => {
+    const native = defineExtension({
+      name: "native-gate",
+      tools: [
+        defineTool({
+          name: "native_gate",
+          description: "gate",
+          parameters: { type: "object" as const, properties: {}, required: [] },
+          async execute() {
+            return cardResult(confirmCard({ tool: "native_gate", question: "Proceed?", default: false }));
+          },
+        }),
+      ],
+    });
+    tw = await startTestWolf({
+      script: [toolUse(fauxToolCall("native_gate", {}), fauxToolCall("plain", {})), fauxAssistantMessage("must not run")],
+      hooks: {
+        extensions: (rt) => {
+          rt.onCardTool("native_gate"); // bypasses adaptToDurable: declared explicitly
+          return [native, plain];
+        },
+      },
+    });
+    await tw.submit("go");
+    expect(tw.scripted.faux.state.callCount).toBe(1);
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect(p.card).toMatchObject({ tool: "native_gate", fields: [{ kind: "confirm", default: false }] });
   });
 });

@@ -10,7 +10,7 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import type { Card, CardAnswers, CardFieldAnswer, PendingCard } from "@wolfpack/protocol";
+import type { Card, CardAnswers, CardFieldAnswer, CardOption, PendingCard } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -106,6 +106,17 @@ export class CardTracker {
 
 const EMPTY = "(empty response)";
 
+/** Quote an entry when it would blur the comma-separated list. */
+const listSafe = (text: string): string => (/[,"]/.test(text) ? JSON.stringify(text) : text);
+
+/** One picked entry of a multi answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
+function multiEntry(options: readonly CardOption[], value: string, custom: boolean): string {
+  if (custom) return `other: ${JSON.stringify(value)}`;
+  const o = options.find((x) => x.value === value);
+  if (!o || o.label === o.value) return listSafe(value);
+  return listSafe(`${o.label} (${value})`);
+}
+
 /** The model-facing text of one answer, by field kind (labels for confirm/reject, comma list for multi). */
 export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
   if (!a) return "(no answer)";
@@ -117,7 +128,9 @@ export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | 
   }
   if (field.kind === "multi") {
     if (!Array.isArray(a.value)) return "(no answer)";
-    return a.value.length === 0 ? "(none selected)" : a.value.join(", ");
+    if (a.value.length === 0) return "(none selected)";
+    const custom = "other" in a && Array.isArray(a.other) ? a.other : [];
+    return a.value.map((v) => multiEntry(field.options, v, custom.includes(v))).join(", ");
   }
   if (typeof a.value !== "string") return "(no answer)";
   return a.value.trim() === "" ? EMPTY : a.value;
@@ -155,6 +168,7 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
       if (other.length > 0 && f.allowOther !== true) return `field "${id}" does not accept custom entries`;
       for (const o of other) {
         if (o.trim() === "") return `field "${id}": a custom entry cannot be empty`;
+        if (f.options.some((x) => x.value === o)) return `field "${id}": custom entry "${o}" duplicates an option value`;
         if (!a.value.includes(o)) return `field "${id}": custom entry "${o}" is not among the picked values`;
       }
       for (const v of a.value) {

@@ -5,7 +5,7 @@
  * and the operator's answer starts the next turn. Free text (no options), single choice (options + "Other"),
  * multi-select (`multiSelect`) and yes/no (`kind: "confirm"`).
  */
-import type { Card, CardOption } from "@wolfpack/protocol";
+import { showIfProblem, type Card, type CardOption } from "@wolfpack/protocol";
 import { confirmCard } from "../engine/cards.js";
 import { defineExtension, defineTool, Type, type Extension } from "../extension-api.js";
 
@@ -133,6 +133,13 @@ export function askProblem(args: AskArgs): string | undefined {
       }
       seen.add(id);
     }
+    // showIf against the controller's kind (the same rules the card schema enforces)
+    for (const [i, q] of batch.entries()) {
+      if (!q.showIf) continue;
+      const fields = batch.map((x, j) => questionField(x, fieldId(x, j)));
+      const why = showIfProblem({ id: fieldId(q, i), ...(fields[i].showIf ? { showIf: fields[i].showIf } : {}) }, fields);
+      if (why) return `ask_user_question: questions[${i}].showIf: ${why}.`;
+    }
     if (args.steps) {
       const ids = args.steps.flatMap((s) => s.questions.map(sanitizeId));
       const all = batch.map((q, i) => fieldId(q, i));
@@ -140,6 +147,7 @@ export function askProblem(args: AskArgs): string | undefined {
       const unknown = ids.find((i) => !all.includes(i));
       if (unknown) return `ask_user_question: steps references unknown question id "${unknown}".`;
       if (new Set(ids).size !== ids.length || ids.length !== all.length) return "ask_user_question: steps must list every question exactly once.";
+      if (ids.some((id, i) => id !== all[i])) return "ask_user_question: steps must keep the questions in their order (step 1 holds the first questions, and so on).";
     }
     return undefined;
   }

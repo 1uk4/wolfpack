@@ -6,7 +6,7 @@ import { cardResult } from "../engine/cards.js";
 import { askCard } from "../extensions/ask-user-question.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
-import { answerText, validateAnswers } from "./cards.js";
+import { answerText, dropHiddenAnswers, validateAnswers } from "./cards.js";
 
 let tw: TestWolf | undefined;
 afterEach(async () => {
@@ -38,9 +38,10 @@ describe("validateAnswers with showIf (pure)", () => {
   const ok = (a: CardAnswers) => expect(validateAnswers(CRAWL, a)).toBeUndefined();
   const bad = (a: CardAnswers, re: RegExp) => expect(validateAnswers(CRAWL, a)).toMatch(re);
 
-  it("the dependent field is required only while shown, and rejected while hidden", () => {
+  it("the dependent field is required only while shown; an answer to a hidden one is tolerated (and dropped on submit)", () => {
     ok({ source: { value: "/d" }, strategy: { value: "by-pattern" } });
-    bad({ source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } }, /not shown/);
+    ok({ source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } }); // an older console sends it anyway
+    expect(dropHiddenAnswers(CRAWL, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).toEqual({ source: { value: "/d" }, strategy: { value: "by-pattern" } });
     bad({ source: { value: "/d" }, strategy: { value: "by-folder" } }, /missing answer for field "depth"/);
     ok({ source: { value: "/d" }, strategy: { value: "by-folder" }, depth: { value: "2" } });
     bad({ source: { value: "/d" }, strategy: { value: "by-folder" }, depth: { value: "9" } }, /not an option/);
@@ -60,7 +61,7 @@ describe("stepped crawl card over /v1", () => {
     tools: [defineTool({ name: "raise", description: "raise", parameters: { type: "object" as const, properties: {} }, async execute() { return cardResult(CRAWL); } })],
   });
 
-  it("one submission answers every step; the skipped dependent field needs no answer and is invalid if sent", async () => {
+  it("one submission answers every step; the skipped dependent field needs no answer, and one sent anyway is dropped", async () => {
     let seen = "";
     tw = await startTestWolf({
       script: [
@@ -80,11 +81,11 @@ describe("stepped crawl card over /v1", () => {
     expect(p.card.fields[2].showIf).toEqual({ field: "strategy", equals: "by-folder" });
     const calls = tw.scripted.faux.state.callCount;
 
-    await expect(tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).rejects.toMatchObject({ code: "invalid_request" });
     await expect(tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-folder" } })).rejects.toMatchObject({ code: "invalid_request" });
     expect(tw.scripted.faux.state.callCount).toBe(calls);
 
-    expect((await tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" } })).disposition).toBe("started");
+    // an older console that renders every field also sends depth: wolfd drops it
+    expect((await tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).disposition).toBe("started");
     await drain(tw);
     expect(seen).toContain("- Source dir?: /d");
     expect(seen).toContain("- Strategy?: by-pattern");

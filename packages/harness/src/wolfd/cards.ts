@@ -187,6 +187,18 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
   }
 }
 
+/**
+ * The answers without those of hidden fields. An older console renders every field and may send an answer for one the
+ * showIf hides; it is dropped (not an error) so such a client still works. Returns the same object when nothing drops.
+ */
+export function dropHiddenAnswers(card: Card, answers: CardAnswers): CardAnswers {
+  const shown = new Set(visibleFields(card, answers).map((f) => f.id));
+  const dropped = Object.keys(answers).filter((k) => !shown.has(k));
+  if (dropped.length === 0) return answers;
+  console.debug(`[cards] dropped answer(s) for hidden field(s): ${dropped.join(", ")}`);
+  return Object.fromEntries(Object.entries(answers).filter(([k]) => shown.has(k)));
+}
+
 /** Check answers against the card; returns the problem, or undefined when valid. */
 export function validateAnswers(card: Card, answers: CardAnswers): string | undefined {
   const shown = visibleFields(card, answers);
@@ -197,7 +209,5 @@ export function validateAnswers(card: Card, answers: CardAnswers): string | unde
     if (problem) return problem;
   }
   const extra = Object.keys(answers).find((k) => !card.fields.some((f) => f.id === k));
-  if (extra) return `unknown field "${extra}"`;
-  const hidden = Object.keys(answers).find((k) => !shown.some((f) => f.id === k));
-  return hidden ? `field "${hidden}" is not shown for these answers (its showIf does not hold)` : undefined;
+  return extra ? `unknown field "${extra}"` : undefined;
 }

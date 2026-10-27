@@ -113,3 +113,13 @@ Normative serving semantics (implemented by the stub, asserted by the contract):
 - Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
 
 Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?})`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
+
+## Stepped and conditional cards
+
+A card may carry `steps` (`[{ title?, fields: ids[] }]`, partitioning `fields` in card order) and a field may carry
+`showIf` (`{ field, equals }` or `{ field, oneOf }`; the controller must be an earlier `single` field with option values,
+or a `confirm` with a boolean `equals`). Both are optional; consoles that ignore them render a plain form.
+
+**Hidden answers are dropped, not rejected.** wolfd requires an answer for every *visible* field only, and silently drops
+(with a debug log) any answer sent for a field its `showIf` hides, so an older console that renders every field still
+works. The model sees only visible fields' answers; the stored answer holds only those too.

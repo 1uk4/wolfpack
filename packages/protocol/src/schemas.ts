@@ -135,6 +135,23 @@ export const CardStepSchema = z.object({
 });
 export type CardStep = z.infer<typeof CardStepSchema>;
 
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask_user_question builder. */
+export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
+  const s = f.showIf;
+  if (!s) return undefined;
+  const ctl = fields.find((x) => x.id === s.field);
+  if (!ctl || ctl.id === f.id) return `showIf.field "${s.field}" is not another field of this card`;
+  if (ctl.kind === "confirm") return typeof s.equals === "boolean" && s.oneOf === undefined ? undefined : `showIf on confirm field "${ctl.id}" needs a boolean \`equals\``;
+  if (ctl.kind === "single") {
+    const values = ctl.options.map((o) => o.value);
+    const wanted = s.oneOf ?? (typeof s.equals === "string" ? [s.equals] : []);
+    if (wanted.length === 0) return `showIf on single field "${ctl.id}" needs a string \`equals\` or a non-empty \`oneOf\``;
+    const bad = wanted.find((w) => !values.includes(w));
+    return bad === undefined ? undefined : `showIf value "${bad}" is not an option of "${ctl.id}"`;
+  }
+  return `field "${ctl.id}" (${ctl.kind}) cannot control another field`;
+}
+
 export const CardSchema = z
   .object({
     /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
@@ -162,11 +179,16 @@ export const CardSchema = z
   )
   .refine(
     (c) => {
+      // Steps partition the fields in card order (so a dependent field's step is never before its controller's).
       if (!c.steps) return true;
       const ids = c.steps.flatMap((s) => s.fields);
-      return ids.length === c.fields.length && new Set(ids).size === ids.length && ids.every((i) => c.fields.some((f) => f.id === i));
+      return ids.length === c.fields.length && ids.every((id, i) => id === c.fields[i].id);
     },
-    { message: "steps must list every field exactly once", path: ["steps"] },
+    { message: "steps must list every field exactly once, in the card's field order", path: ["steps"] },
+  )
+  .refine(
+    (c) => c.fields.every((f) => showIfProblem(f, c.fields) === undefined),
+    { message: "a showIf does not fit its controlling field (confirm: boolean equals; single: option values; other kinds cannot control)", path: ["fields"] },
   )
   .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
     message: "a single field's default must be one of its option values",

@@ -24,6 +24,8 @@ describe("card steps / showIf schema", () => {
     ["a repeated field", { steps: [{ fields: ["k", "d"] }, { fields: ["d", "z"] }] }],
     ["an unknown field", { steps: [{ fields: ["k", "d", "z", "nope"] }] }],
     ["an empty step", { steps: [{ fields: [] }, { fields: ["k", "d", "z"] }] }],
+    ["steps out of card order", { steps: [{ fields: ["z"] }, { fields: ["k", "d"] }] }],
+    ["a dependent field on an earlier step than its controller", { steps: [{ fields: ["d"] }, { fields: ["k", "z"] }] }],
   ])("rejects steps with %s", (_n, extra) => {
     expect(CardSchema.safeParse(base(extra)).success).toBe(false);
   });
@@ -36,6 +38,20 @@ describe("card steps / showIf schema", () => {
     expect(CardSchema.safeParse(withShow({ field: "k", equals: "a", oneOf: ["a"] })).success).toBe(false);
     expect(CardSchema.safeParse(withShow({ field: "later", equals: "a" })).success).toBe(false);
     expect(CardSchema.safeParse(withShow({ field: "d", equals: "a" })).success).toBe(false); // itself
+  });
+
+  it("showIf must fit the controller's kind", () => {
+    const ctl = (c: object, showIf: object): Card => ({ tool: "t", fields: [{ id: "k", label: "k", ...c } as never, { id: "d", kind: "free-text", label: "d", showIf } as never] });
+    const single = { kind: "single", options: OPTS };
+    expect(CardSchema.safeParse(ctl(single, { field: "k", equals: "zzz" })).success).toBe(false); // not an option
+    expect(CardSchema.safeParse(ctl(single, { field: "k", oneOf: ["a", "nope"] })).success).toBe(false);
+    expect(CardSchema.safeParse(ctl(single, { field: "k", equals: true })).success).toBe(false);
+    expect(CardSchema.safeParse(ctl(single, { field: "k", oneOf: [] })).success).toBe(false); // empty oneOf
+    expect(CardSchema.safeParse(ctl({ kind: "confirm" }, { field: "k", equals: true })).success).toBe(true);
+    expect(CardSchema.safeParse(ctl({ kind: "confirm" }, { field: "k", equals: "yes" })).success).toBe(false);
+    expect(CardSchema.safeParse(ctl({ kind: "confirm" }, { field: "k", oneOf: ["a"] })).success).toBe(false);
+    expect(CardSchema.safeParse(ctl({ kind: "free-text" }, { field: "k", equals: "x" })).success).toBe(false);
+    expect(CardSchema.safeParse(ctl({ kind: "multi", options: OPTS }, { field: "k", equals: "a" })).success).toBe(false);
   });
 
   it("visibleFields: equals / oneOf / confirm, and a chain collapses with its root", () => {

@@ -74,7 +74,7 @@ import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemo
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
-import { CardTracker, answerText, validateAnswers } from "./cards.js";
+import { CardTracker, answerText, dropHiddenAnswers, validateAnswers } from "./cards.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -762,12 +762,13 @@ export class WolfServer {
    * input, and the history folds it onto the call that raised the card. While sibling cards of the turn still wait
    * the answer is held and the ack is `queued`.
    */
-  private async answerCard(callId: string, answers: CardAnswers): Promise<SubmitAck> {
+  private async answerCard(callId: string, rawAnswers: CardAnswers): Promise<SubmitAck> {
     if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
-    const bad = validateAnswers(pending.card, answers);
+    const bad = validateAnswers(pending.card, rawAnswers);
     if (bad) throw new HttpError("invalid_request", bad);
+    const answers = dropHiddenAnswers(pending.card, rawAnswers);
     // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
     const ready = this.cards.answer(callId, answers);
     if (!ready) {

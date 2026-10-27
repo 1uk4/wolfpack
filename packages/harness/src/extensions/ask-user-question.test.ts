@@ -56,6 +56,14 @@ describe("steps / showIf", () => {
     expect(askProblem({ questions: [{ id: "a", question: "A" }, { id: "b", question: "B", showIf: { field: "a" } }] })).toMatch(/exactly one of/);
     expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat"] }] })).toMatch(/exactly once/);
     expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat", "depth", "nope"] }] })).toMatch(/unknown question id "nope"/);
+    expect(askProblem({ questions: qs, steps: [{ questions: ["strat", "src", "depth"] }] })).toMatch(/in their order/);
     expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat", "depth"] }] })).toBeUndefined();
+    // showIf against the controller's kind
+    const opts = [{ label: "x" }];
+    expect(askProblem({ questions: [{ id: "c", question: "C", options: opts }, { id: "d", question: "D", showIf: { field: "c", equals: "nope" } }] })).toMatch(/not an option/);
+    expect(askProblem({ questions: [{ id: "c", question: "C" }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/cannot control/);
+    expect(askProblem({ questions: [{ id: "c", question: "C", kind: "confirm" }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/boolean/);
+    expect(askProblem({ questions: [{ id: "c", question: "C", kind: "confirm" }, { id: "d", question: "D", showIf: { field: "c", equals: true } }] })).toBeUndefined();
+    expect(askProblem({ questions: [{ id: "c", question: "C", options: opts, multiSelect: true }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/cannot control/);
   });
 });

@@ -27,7 +27,8 @@ function windowOptions(platform: string) {
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
-		require: (id: string) => id === "electron" ? electron : require(id),
+		require: (id: string) =>
+			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : require(id),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};

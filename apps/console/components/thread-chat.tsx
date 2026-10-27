@@ -17,7 +17,7 @@ import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFil
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
-import { useServerEvent } from "@/components/server-events";
+import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import {
 	ASSISTANT_CONTENT_CLASS,
@@ -197,7 +197,7 @@ export function ThreadChat({
 		};
 	});
 	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
-	useServerEvent("needs-you-changed", (p) => {
+	useOptionalServerEvent("needs-you-changed", (p) => {
 		if (p.wolf === wolf && status !== "submitted" && status !== "streaming") void refreshCards();
 	});
 	const prevStatus = useRef(status);

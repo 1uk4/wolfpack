@@ -266,7 +266,6 @@ describe("activity bridge recovery", () => {
 });
 
 describe("electron notify guards", () => {
-	// eslint-disable-next-line @typescript-eslint/no-require-imports
 	const { safeNotifyHref, isMainFrameSender, createNeedsYouNotifier } = createRequire(import.meta.url)("../../desktop/electron/notify.cjs") as {
 		safeNotifyHref(h: unknown, o: string): string | null;
 		isMainFrameSender(e: unknown, w: unknown): boolean;

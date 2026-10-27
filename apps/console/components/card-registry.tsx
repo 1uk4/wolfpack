@@ -64,6 +64,10 @@ export interface InteractionCardProps {
 	card: Card;
 	/** Set once answered: render the record, no controls. */
 	answer?: CardAnswers;
+	/** Superseded by a plain submit before it was answered: render as skipped, no controls. */
+	dismissed?: boolean;
+	/** The wolf holds this answer until the turn's sibling cards are answered; the card can still change it. */
+	heldAnswer?: CardAnswers;
 	/** The card waits for the operator (server-confirmed); false = raised but not yet confirmed pending. */
 	pending: boolean;
 	/** The answer is on its way to the server. */
@@ -125,16 +129,16 @@ export type ToolPartResolution =
  * being written (unless the card draws its own streaming state), else the
  * registered card, else nothing.
  */
-/** The renderer for a protocol card: its tool's own, else the default. */
-export function lookupInteractionCard(tool: string): InteractionCardEntry | undefined {
-	return lookupCard("card", tool) ?? lookupCard("card", "default");
-}
-
 export function resolveToolPart(part: ArtifactPartProps["part"]): ToolPartResolution {
 	if (!part.type.startsWith("tool-")) return { kind: "none" };
 	const card = lookupCard("tool", part.type.slice("tool-".length));
 	if (part.state === "input-streaming" && !card?.ownsStreaming) return { kind: "live" };
 	return card ? { kind: "card", Renderer: card.Renderer } : { kind: "none" };
+}
+
+/** The renderer for a protocol card: its tool's own, else the default. */
+export function lookupInteractionCard(tool: string): InteractionCardEntry | undefined {
+	return lookupCard("card", tool) ?? lookupCard("card", "default");
 }
 
 /**

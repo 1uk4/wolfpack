@@ -25,6 +25,7 @@ import {
 	renderItems,
 	runOpen,
 	withAnswer,
+	withHeld,
 	type ArtifactPartProps,
 	type LhMessage,
 	type ThreadCards,
@@ -95,6 +96,8 @@ function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
 			callId={callId}
 			card={call.card}
 			answer={call.answer}
+			dismissed={call.dismissed}
+			heldAnswer={call.heldAnswer}
 			pending={ctx.cards.pending.some((p) => p.callId === callId)}
 			submitting={ctx.answering === callId}
 			onAnswer={(answers) => ctx.onAnswer(callId, answers)}
@@ -192,13 +195,20 @@ export function ThreadChat({
 				if (!res.ok) {
 					const body = (await res.json().catch(() => null)) as { error?: string } | null;
 					setCardError(body?.error ?? `Could not send the answer (${res.status}).`);
+					// 404: the card is gone (superseded or answered elsewhere): show the thread as it is now.
+					if (res.status === 404) void refreshCards();
 					return;
 				}
 				const ack = (await res.json()) as { disposition?: string };
-				setCards((c) => withAnswer(c, callId, answers));
-				// The answer starts the next turn: attach to it. Queued = sibling cards still wait.
-				if (ack.disposition === "queued") void refreshCards();
-				else resumeStream();
+				// Queued = sibling cards still wait: the wolf holds the answer and the card stays changeable.
+				// Otherwise the answer starts the next turn: attach to it.
+				if (ack.disposition === "queued") {
+					setCards((c) => withHeld(c, callId, answers));
+					void refreshCards();
+				} else {
+					setCards((c) => withAnswer(c, callId, answers));
+					resumeStream();
+				}
 			} catch (err) {
 				setCardError(err instanceof Error ? err.message : "Could not send the answer.");
 			} finally {

@@ -14,35 +14,38 @@ import type { InteractionCardProps } from "@/components/card-registry";
  * card, "Question" kicker, markdown question, option rows with an Other entry. Pending it is a form; answered it is the
  * static record. Defaults only pre-select; nothing submits until the operator presses Submit.
  */
-export function AskCard({ card, answer, pending, submitting, onAnswer }: InteractionCardProps) {
-	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card));
+export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitting, onAnswer }: InteractionCardProps) {
+	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card, heldAnswer));
 	const set = (fieldId: string, a: CardFieldAnswer) => setDraft((d) => ({ ...d, [fieldId]: a }));
 	const answered = answer !== undefined;
+	const closed = answered || dismissed === true;
 	const canSubmit = pending && !submitting && draftComplete(card, draft);
 
 	return (
 		<div
 			className="rounded-xl border bg-card p-4 text-card-foreground"
-			data-testid={answered ? "answered-card" : "pending-card"}
+			data-testid={dismissed ? "dismissed-card" : answered ? "answered-card" : "pending-card"}
 			data-card-tool={card.tool}
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{card.title ?? "Question"}
-				{!answered && !pending && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">waiting</span>}
+				{dismissed && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">skipped</span>}
+				{!closed && !pending && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">waiting</span>}
+				{!closed && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
 			{card.fields.map((f) => (
 				<FieldView
 					key={f.id}
 					field={f}
 					value={answered ? answer[f.id] : draft[f.id]}
-					readOnly={answered || !pending || submitting}
+					readOnly={closed || !pending || submitting}
 					onChange={(a) => set(f.id, a)}
 				/>
 			))}
-			{!answered && (
+			{!closed && (
 				<div className="mt-3 flex justify-end">
 					<Button type="button" size="sm" disabled={!canSubmit} onClick={() => onAnswer(draftAnswers(card, draft))} data-testid="card-submit">
-						{submitting ? "Sending…" : "Submit"}
+						{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
 					</Button>
 				</div>
 			)}

@@ -9,6 +9,10 @@ import type { Card, CardAnswers, PendingCard, ThreadDetail } from "@wolfpack/cli
 export interface CardCall {
 	card: Card;
 	answer?: CardAnswers;
+	/** Superseded by a plain submit before it was answered: shown as skipped. */
+	dismissed?: boolean;
+	/** Answered while sibling cards still wait: held by the wolf, changeable until the last one is answered. */
+	heldAnswer?: CardAnswers;
 }
 
 export interface ThreadCards {
@@ -24,11 +28,11 @@ export function cardsOfThread(detail: Pick<ThreadDetail, "messages" | "pendingCa
 	const calls: Record<string, CardCall> = {};
 	for (const m of detail.messages) {
 		for (const t of m.tools ?? []) {
-			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}) };
+			if (t.card) calls[t.callId] = { card: t.card, ...(t.answer ? { answer: t.answer } : {}), ...(t.dismissed ? { dismissed: true } : {}) };
 		}
 	}
 	// A pending card whose call fell out of the (compacted) history still renders from the pending list.
-	for (const p of detail.pendingCards ?? []) calls[p.callId] ??= { card: p.card };
+	for (const p of detail.pendingCards ?? []) calls[p.callId] = { ...(calls[p.callId] ?? { card: p.card }), ...(p.heldAnswer ? { heldAnswer: p.heldAnswer } : {}) };
 	return { pending: detail.pendingCards ?? [], calls };
 }
 
@@ -49,16 +53,28 @@ export function withAnswer(cards: ThreadCards, callId: string, answer: CardAnswe
 	};
 }
 
+/** An answer the wolf accepted but held (siblings still wait): the card stays pending and shows it. */
+export function withHeld(cards: ThreadCards, callId: string, heldAnswer: CardAnswers): ThreadCards {
+	const call = cards.calls[callId];
+	if (!call) return cards;
+	return {
+		pending: cards.pending.map((p) => (p.callId === callId ? { ...p, heldAnswer } : p)),
+		calls: { ...cards.calls, [callId]: { ...call, heldAnswer } },
+	};
+}
+
 /** What the form holds per field id: the picked option value, or typed text (free-text, or Other). */
 export interface CardDraft {
 	[fieldId: string]: { value: string; other?: boolean };
 }
 
 /** The draft a card starts with: field defaults pre-selected (never auto-submitted). */
-export function initialDraft(card: Card): CardDraft {
+export function initialDraft(card: Card, held?: CardAnswers): CardDraft {
 	const draft: CardDraft = {};
 	for (const f of card.fields) {
-		if (f.default !== undefined) draft[f.id] = { value: f.default };
+		const h = held?.[f.id];
+		if (h) draft[f.id] = { value: h.value, ...(h.other ? { other: true } : {}) };
+		else if (f.default !== undefined) draft[f.id] = { value: f.default };
 	}
 	return draft;
 }

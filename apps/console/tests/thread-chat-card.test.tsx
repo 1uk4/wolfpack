@@ -25,7 +25,7 @@ Object.assign(globalThis, {
 	getComputedStyle: () => ({ animationName: "none" }),
 });
 
-const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
+const { MockConsoleClient, FIXTURE_THREAD, NotFoundError } = await import("@wolfpack/client");
 type Card = import("@wolfpack/client").Card;
 type CardAnswers = import("@wolfpack/client").CardAnswers;
 type ThreadDetail = import("@wolfpack/client").ThreadDetail;
@@ -59,6 +59,14 @@ class CardClient extends MockConsoleClient {
 	answers: { callId: string; answers: CardAnswers }[] = [];
 	answered?: CardAnswers;
 	failNext?: string;
+	/** The card was superseded server-side: history shows it dismissed, nothing pends. */
+	superseded = false;
+	/** An answer is held (siblings wait): the card stays pending carrying it. */
+	held?: CardAnswers;
+	/** The next answer is held instead of starting a turn. */
+	holdNext = false;
+	/** The next answer fails as an unknown card. */
+	notFoundNext = false;
 	constructor(private readonly card: Card) {
 		super({ delayMs: 0, script: [{ kind: "text", text: "Shipping from the answer." }] });
 	}
@@ -70,9 +78,11 @@ class CardClient extends MockConsoleClient {
 			role: "assistant" as const,
 			text: "",
 			at: new Date().toISOString(),
-			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}) }],
+			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}), ...(this.superseded ? { dismissed: true } : {}) }],
 		};
-		return { ...base, messages: [asked, ...base.messages], ...(this.answered ? {} : { pendingCards: [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString() }] }) };
+		const pending = !this.answered && !this.superseded;
+		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}) }];
+		return { ...base, messages: [asked, ...base.messages], ...(pending ? { pendingCards } : {}) };
 	}
 	async answerCard(threadId: string, callId: string, answers: CardAnswers) {
 		if (this.failNext) {
@@ -80,7 +90,16 @@ class CardClient extends MockConsoleClient {
 			this.failNext = undefined;
 			throw Object.assign(new Error(m), { name: "ProtocolError", code: "invalid_request" });
 		}
+		if (this.notFoundNext) {
+			this.notFoundNext = false;
+			throw new NotFoundError(`card ${callId}`);
+		}
 		this.answers.push({ callId, answers });
+		if (this.holdNext) {
+			this.holdNext = false;
+			this.held = answers;
+			return { messageId: `card-${callId}`, disposition: "queued" as const };
+		}
 		this.answered = answers;
 		return this.submit(threadId, "answer");
 	}
@@ -193,5 +212,53 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.ok(q('[data-testid="answered-card"]'));
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.match(q('[data-testid="card-answer-text"]')?.textContent ?? "", /because/);
+	});
+
+	it("a held answer (siblings wait) is shown after a reload and can be changed", async () => {
+		const client = new CardClient(SINGLE);
+		client.held = { answer: { value: "develop" } };
+		await mount(client);
+		assert.ok(q('[data-testid="pending-card"]'));
+		assert.ok(q('[data-testid="card-held"]'), "held note");
+		const picked = [...document.querySelectorAll('[data-testid="card-option"]')].map((o) => o.getAttribute("aria-checked"));
+		assert.deepEqual(picked, ["false", "true"]);
+		assert.match(q('[data-testid="card-submit"]')!.textContent ?? "", /Update answer/);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.deepEqual(client.answers, [{ callId: CALL, answers: { answer: { value: "main" } } }]);
+	});
+
+	it("a queued answer stays pending and shows as held", async () => {
+		const client = new CardClient(SINGLE);
+		client.holdNext = true;
+		await mount(client);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[1]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.ok(q('[data-testid="pending-card"]'));
+		assert.ok(q('[data-testid="card-held"]'));
+		assert.equal(q('[data-testid="answered-card"]'), null);
+	});
+
+	it("a superseded card renders as skipped with no controls", async () => {
+		const client = new CardClient(SINGLE);
+		client.superseded = true;
+		await mount(client);
+		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
+		assert.equal(q('[data-testid="card-submit"]'), null);
+		assert.equal(q('[data-testid="pending-card"]'), null);
+	});
+
+	it("a 404 on answer (superseded meanwhile) refreshes the thread: the card turns skipped", async () => {
+		const client = new CardClient(SINGLE);
+		await mount(client);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
+		client.notFoundNext = true;
+		client.superseded = true;
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.ok(q('[data-testid="dismissed-card"]'), "refetched record shows the card skipped");
+		assert.match(q('[data-testid="card-error"]')?.textContent ?? "", /card/i);
 	});
 });

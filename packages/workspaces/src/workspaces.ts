@@ -143,6 +143,21 @@ export async function createChildWorkspace(opts: {
   return ensureWorktree(featureWs.repo, branch, workspacePath(opts.root, featureWs.repo.name, branch), featureWs.branch);
 }
 
+/**
+ * A child with no feature: feat/home--<slug> cut from the current HEAD of `baseDir` (a checkout of `repo`), plus its
+ * worktree (idempotent). Merging it back is left to the caller.
+ */
+export async function createHomeChildWorkspace(opts: {
+  root: string;
+  repo: RepoInfo;
+  childSlug: string;
+  baseDir: string;
+}): Promise<Workspace> {
+  const branch = childBranch("home", opts.childSlug);
+  const head = await gitOk(opts.baseDir, ["rev-parse", "HEAD"]);
+  return ensureWorktree(opts.repo, branch, workspacePath(opts.root, opts.repo.name, branch), head);
+}
+
 async function isDirty(dir: string): Promise<boolean> {
   return (await gitOk(dir, ["status", "--porcelain"])) !== "";
 }

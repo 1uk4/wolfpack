@@ -48,6 +48,7 @@
     "@earendil-works/pi-durable": "^1.4.0",
     "@wolfpack/agent": "*",
     "@wolfpack/agents": "*",
+    "@wolfpack/workspaces": "*",
     "@wolfpack/engine": "*",
     "@wolfpack/protocol": "*",
     "grammy": "^1.21.0",

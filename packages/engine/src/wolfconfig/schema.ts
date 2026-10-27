@@ -99,6 +99,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "sandbox",
   "prompts",
   "memory",
+  "workspaces",
 ];
 
 export interface TierOverrideConfig {

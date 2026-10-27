@@ -12,7 +12,7 @@
  * Agent state is only rewritten when it differs from what config + context say (configure appends a history entry).
  * Tier switching via configure is not wired yet (main tier only).
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
@@ -27,6 +27,8 @@ import {
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
+import { resolveWorkspacesRoot } from "@wolfpack/workspaces";
+import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
 import { createAskUserQuestionExtension } from "../extensions/ask-user-question.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
@@ -39,6 +41,7 @@ import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
+import { loadThreads } from "./threads.js";
 
 export interface StartWolfOptions {
   /** Path to wolf.yaml. */
@@ -188,7 +191,9 @@ async function startConfigured(
         create: () => engine.conversations.create(desired),
         get: async (id) => {
           const conv = await engine.conversations.get(id);
-          if (conv) await reconcile(conv, desired);
+          // A feature thread whose workspace was created keeps its cwd there (home's would move it back).
+          const workspace = loadThreads(config.den).find((t) => t.conversationId === id)?.workspace;
+          if (conv) await reconcile(conv, workspace ? { ...desired, cwd: workspace.path } : desired);
           return conv;
         },
       },
@@ -197,6 +202,7 @@ async function startConfigured(
         bridge: subagentBridge,
         wolfHome: dirname(config.file),
         workspace: cwd,
+        workspacesRoot: resolveWorkspacesRoot(dirname(config.file), readWorkspacesConfig(config.file)),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
@@ -324,4 +330,14 @@ async function reconcile(conv: EngineConversation, want: ConfigureOptions): Prom
     (have.thinkingLevel ?? undefined) === (want.thinkingLevel ?? undefined) &&
     sameTools;
   if (!same) await conv.configure(want);
+}
+
+/** The `workspaces:` block of wolf.yaml (its root); the engine's config loader does not model it. */
+function readWorkspacesConfig(file: string): { workspaces?: { root?: string } } | null {
+  try {
+    const doc = parseYaml(readFileSync(file, "utf8")) as { workspaces?: { root?: unknown } } | null;
+    return typeof doc?.workspaces?.root === "string" ? { workspaces: { root: doc.workspaces.root } } : null;
+  } catch {
+    return null;
+  }
 }

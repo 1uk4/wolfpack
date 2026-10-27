@@ -7,6 +7,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findHolder, writeBindingFile } from "@wolfpack/memory";
+import type { Workspace } from "@wolfpack/workspaces";
 import { fetchWorkItem } from "./memory-read.js";
 
 export interface SavedThread {
@@ -15,6 +16,8 @@ export interface SavedThread {
   kind: "feature";
   workItemId: string;
   title: string;
+  /** The feature branch's worktree, set on the first worktree spawn; the thread's cwd lives there from then on. */
+  workspace?: Workspace;
 }
 
 const registryFile = (den: string) => join(den, "wolfd", "threads.json");
@@ -65,6 +68,13 @@ function writeThreads(den: string, threads: SavedThread[]): void {
 
 export function saveThread(den: string, thread: SavedThread, onError?: (e: unknown) => void): void {
   writeThreads(den, [...loadThreads(den, onError).filter((t) => t.id !== thread.id), thread]);
+}
+
+/** Record the feature workspace of a saved thread (no-op when the thread is not saved). */
+export function setThreadWorkspace(den: string, id: string, workspace: Workspace, onError?: (e: unknown) => void): void {
+  const threads = loadThreads(den, onError);
+  if (!threads.some((t) => t.id === id)) return;
+  writeThreads(den, threads.map((t) => (t.id === id ? { ...t, workspace } : t)));
 }
 
 export function removeThread(den: string, id: string, onError?: (e: unknown) => void): void {

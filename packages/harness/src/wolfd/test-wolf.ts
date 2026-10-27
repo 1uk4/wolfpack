@@ -26,6 +26,8 @@ export interface TestWolfOptions {
     extensions?: Extension[] | ((rt: ExtensionRuntime) => Extension[]);
   };
   name?: string;
+  /** The wolf's workspace (home cwd). Default: a `work` dir under the root. */
+  workspace?: string;
   /** Extra top-level wolf.yaml text appended after `name` / `workspace` (e.g. a `sandbox:` block). */
   yaml?: string;
   /** Boot over an existing root (a restart): it is reused, and `stop()` leaves it in place. Default: a fresh temp root, removed on stop. */
@@ -60,7 +62,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
     JSON.stringify({ location: "local", transport: "api", transportSource: "default", tiers: { main: tier, smart: tier, fast: tier }, steps: {}, warnings: [] }),
   );
   mkdirSync(join(root, "work"), { recursive: true });
-  writeFileSync(join(root, "wolf.yaml"), `name: ${name}\nworkspace: ${join(root, "work")}\n${opts.yaml ?? ""}`);
+  writeFileSync(join(root, "wolf.yaml"), `name: ${name}\nworkspace: ${opts.workspace ?? join(root, "work")}\n${opts.yaml ?? ""}`);
 
   const afterResponse: AfterResponseCall[] = [];
   const recorder = defineExtension({

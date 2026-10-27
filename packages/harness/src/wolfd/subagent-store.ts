@@ -6,6 +6,7 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LedgerEntrySchema, SubagentStateSchema, type LedgerEntry, type SubagentState } from "@wolfpack/protocol";
+import type { Workspace } from "@wolfpack/workspaces";
 import { quarantine } from "./threads.js";
 
 /** A message waiting to reach the parent thread (a result, a question, a failure). Kept until the parent took it. */
@@ -31,6 +32,10 @@ export interface ChildRecord {
   tier: string;
   cwd: string;
   isolation: "worktree" | "none";
+  /** The child's own worktree (isolation worktree): its branch is what ticket 8 merges. */
+  workspace?: Workspace;
+  /** The git working dir this writer holds in the writer guard until it is done; re-acquired after a restart. */
+  guardDir?: string;
   state: SubagentState;
   startedAt: string;
   /** Start of the current run (the spawn, or the latest resume): the elapsed time a result reports. */

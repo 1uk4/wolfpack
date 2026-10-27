@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  abandonChild, assertSlug, createChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, makeTempRepo,
+  abandonChild, assertSlug, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, makeTempRepo,
   mergeChild, repoOf, resolveWorkspacesRoot, WriterGuard, type RepoInfo, type TempRepo,
 } from "./index.js";
 
@@ -274,5 +274,16 @@ describe("worktrees", () => {
     g.acquire(t.dir, "a"); g.acquire(join(t.base, "other"), "a"); g.acquire(t.base, "b");
     expect(g.releaseAll("a")).toBe(2);
     expect(g.holder(t.base)).toBe("b");
+  });
+});
+
+describe("createHomeChildWorkspace", () => {
+  it("cuts feat/home--<slug> from the HEAD of baseDir, idempotently", async () => {
+    const repo = (await repoOf(t.dir)) as RepoInfo;
+    const a = await createHomeChildWorkspace({ root: t.root, repo, childSlug: "w-1", baseDir: t.dir });
+    expect(a.branch).toBe("feat/home--w-1");
+    expect(a.path).toBe(join(t.root, "demo", "feat-home--w-1"));
+    expect(t.git(["rev-parse", a.branch])).toBe(t.git(["rev-parse", "HEAD"]));
+    expect(await createHomeChildWorkspace({ root: t.root, repo, childSlug: "w-1", baseDir: t.dir })).toEqual(a);
   });
 });

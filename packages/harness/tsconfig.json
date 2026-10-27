@@ -16,6 +16,9 @@
     },
     {
       "path": "../agents"
+    },
+    {
+      "path": "../workspaces"
     }
   ]
 }

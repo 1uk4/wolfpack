@@ -49,8 +49,8 @@ const SpawnParams = Type.Object({
   isolation: Type.Optional(
     Type.String({
       description:
-        'Where the sub-agent works: "worktree" (its own git worktree and branch) or "none" (the shared checkout). Default: the agent\'s own setting. ' +
-        "Worktrees are not available yet: every sub-agent runs in the shared checkout.",
+        'Where the sub-agent works: "worktree" (its own git worktree and branch) or "none" (the shared checkout). Default: the agent\'s own setting, else a worktree for an agent that can write (edit, write or bash) in a git directory, else none. ' +
+        'A writer with "none" is refused while another writer is working in the same checkout. Outside git it is always "none".',
     }),
   ),
 });

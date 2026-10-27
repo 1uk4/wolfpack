@@ -34,11 +34,12 @@ const QuestionSchema = Type.Object({
   question: Type.String({ description: "The question." }),
   details: Type.Optional(Type.String({ description: "Optional extra context shown under the question." })),
   options: Type.Optional(Type.Array(OptionSchema, { description: "Multiple-choice options; omit for free-form text." })),
-  multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options)." })),
+  multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
   rejectLabel: Type.Optional(Type.String({ description: 'Reject button label (kind "confirm"). Default "No".' })),
   showIf: Type.Optional(ShowIfSchema),
+  optional: Type.Optional(Type.Boolean({ description: "Let the user skip this question (Submit is not blocked while it is blank). Default false: required." })),
 });
 
 const Params = Type.Object({
@@ -61,10 +62,11 @@ const Params = Type.Object({
       description: "Optional multiple-choice options. Omit or pass an empty array for free-form text. The user can always type a custom answer too.",
     }),
   ),
-  multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options)." })),
+  multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
   rejectLabel: Type.Optional(Type.String({ description: 'Reject button label (kind "confirm"). Default "No".' })),
+  optional: Type.Optional(Type.Boolean({ description: "Let the user skip the question (Submit is not blocked while it is blank). Default false: required." })),
 });
 
 interface AskQuestion {
@@ -77,6 +79,7 @@ interface AskQuestion {
   confirmLabel?: string;
   rejectLabel?: string;
   showIf?: { field: string; equals?: string | boolean; oneOf?: string[] };
+  optional?: boolean;
 }
 
 interface AskArgs {
@@ -90,6 +93,7 @@ interface AskArgs {
   kind?: "confirm";
   confirmLabel?: string;
   rejectLabel?: string;
+  optional?: boolean;
 }
 
 /** One card field for a question; `id` keys the answer. */
@@ -99,7 +103,7 @@ function questionField(q: AskQuestion, id: string): Card["fields"][number] {
     .filter((o) => o.label.length > 0);
   const description = q.details?.trim() || undefined;
   const showIf = q.showIf ? { field: sanitizeId(q.showIf.field), ...(q.showIf.oneOf ? { oneOf: q.showIf.oneOf } : { equals: q.showIf.equals as string | boolean }) } : undefined;
-  const base = { id, label: q.question, ...(description ? { description } : {}), ...(showIf ? { showIf } : {}) };
+  const base = { id, label: q.question, ...(description ? { description } : {}), ...(showIf ? { showIf } : {}), ...(q.optional ? { optional: true } : {}) };
   if (q.kind === "confirm") {
     return {
       ...base,
@@ -163,7 +167,8 @@ export function askCard(args: AskArgs): Card {
   }
   const q = args as AskQuestion;
   if (q.kind === "confirm") {
-    return confirmCard({ tool: "ask_user_question", question: q.question, description: q.details?.trim() || undefined, confirmLabel: q.confirmLabel?.trim(), rejectLabel: q.rejectLabel?.trim() });
+    const card = confirmCard({ tool: "ask_user_question", question: q.question, description: q.details?.trim() || undefined, confirmLabel: q.confirmLabel?.trim(), rejectLabel: q.rejectLabel?.trim() });
+    return q.optional ? { ...card, fields: card.fields.map((f) => ({ ...f, optional: true })) } : card;
   }
   return { tool: "ask_user_question", ...title, fields: [questionField(q, "answer")] };
 }

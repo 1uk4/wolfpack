@@ -89,9 +89,13 @@ export function initialDraft(card: Card, held?: CardAnswers): CardDraft {
 	return draft;
 }
 
-/** Whether a multi field's pick count is within its bounds. */
+/**
+ * Whether a multi field's pick count is within its bounds. A required multi needs at least one pick (an explicit `min`
+ * applies on top; `min: 0` counts as 1); an optional one may be blank, and once something is picked min/max apply.
+ */
 export function multiInBounds(f: Extract<Card["fields"][number], { kind: "multi" }>, count: number): boolean {
-	return count >= (f.min ?? 0) && count <= (f.max ?? Infinity);
+	if (f.optional && count === 0) return true;
+	return count >= Math.max(f.min ?? 0, f.optional ? 0 : 1) && count <= (f.max ?? Infinity);
 }
 
 /**
@@ -135,7 +139,19 @@ export function visibleSteps(card: Card, draft: CardDraft): VisibleStep[] {
 	return out;
 }
 
+/**
+ * An optional field with nothing entered (no answer, blank text, no picks). A confirm is blank only while unpicked; the
+ * server (isSkipped) counts a confirm skipped only when ABSENT, so a present-but-malformed confirm is validated and rejected there.
+ */
+const fieldBlank = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
+	if (a === undefined) return true;
+	if (f.kind === "confirm") return typeof a.value !== "boolean";
+	if (f.kind === "multi") return !Array.isArray(a.value) || a.value.length === 0;
+	return typeof a.value !== "string" || a.value.trim() === "";
+};
+
 const fieldDone = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
+	if (f.optional && fieldBlank(f, a)) return true; // skipped; once something is picked, min/max still apply below
 	if (a === undefined) return false;
 	if (f.kind === "confirm") return typeof a.value === "boolean";
 	if (f.kind === "multi") return Array.isArray(a.value) && multiInBounds(f, a.value.length);
@@ -152,11 +168,19 @@ export function draftComplete(card: Card, draft: CardDraft): boolean {
 	return fieldsComplete(visibleFields(card, draft), draft);
 }
 
-/** The answers to send: text trimmed, `other` only when set. */
+/**
+ * The answers to send: text trimmed, `other` only when set. A skipped optional field is sent empty (free-text/single
+ * `{value: ""}`, multi `{value: []}`); a skipped optional confirm is left out (there is no empty boolean).
+ */
 export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 	const out: CardAnswers = {};
 	for (const f of visibleFields(card, draft)) {
 		const a = draft[f.id];
+		if (f.optional && fieldBlank(f, a)) {
+			if (f.kind === "multi") out[f.id] = { value: [] };
+			else if (f.kind !== "confirm") out[f.id] = { value: "" };
+			continue;
+		}
 		if (!a) continue;
 		if (Array.isArray(a.value)) {
 			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];

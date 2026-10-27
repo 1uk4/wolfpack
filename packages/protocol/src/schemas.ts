@@ -92,6 +92,12 @@ const cardFieldBase = z.object({
   description: z.string().optional(),
   /** Conditional visibility (stepped/dependent cards); absent = always shown. */
   showIf: FieldShowIfSchema.optional(),
+  /**
+   * The operator may leave it blank. Default (absent) = required. A skipped optional field is submitted empty
+   * (free-text/single `{value: ""}`, multi `{value: []}`, confirm: no answer) and the wolf is told it was skipped;
+   * an answer that is given is validated normally (a multi's min/max still apply once something is picked).
+   */
+  optional: z.boolean().optional(),
 });
 export const FreeTextFieldSchema = cardFieldBase.extend({
   kind: z.literal("free-text"),
@@ -112,7 +118,7 @@ export const MultiFieldSchema = cardFieldBase.extend({
   allowOther: z.boolean().optional(),
   /** Option values to pre-select. */
   default: z.array(z.string()).optional(),
-  /** Bounds on the number of picked entries (options and custom ones together). */
+  /** Bounds on the number of picked entries (options and custom ones together). A required multi needs at least one pick regardless; optional: true allows blank. */
   min: z.number().int().min(0).optional(),
   max: z.number().int().min(1).optional(),
 });
@@ -1020,7 +1026,7 @@ export type SubmitAck = z.infer<typeof SubmitAckSchema>;
 
 /**
  * Answer a pending card. The answer is a submission: the card's tool call is resolved with it and the next turn starts
- * (when no sibling card of the same turn is still pending). `answers` must cover every field of the card.
+ * (when no sibling card of the same turn is still pending). `answers` must cover every VISIBLE REQUIRED field; optional and showIf-hidden fields may be omitted.
  * Wire: the thread id and `callId` ride the path.
  */
 export const AnswerCardRequestSchema = z.object({

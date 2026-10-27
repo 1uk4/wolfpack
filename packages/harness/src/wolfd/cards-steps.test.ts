@@ -50,7 +50,7 @@ describe("validateAnswers with showIf (pure)", () => {
 
   it("answerText lists only the visible questions", () => {
     const text = answerText([{ callId: "c", card: CRAWL, answers: { source: { value: "/d" }, strategy: { value: "by-pattern" } } }]);
-    expect(text).toContain("- Strategy?: by-pattern");
+    expect(text).toContain("- Strategy?: By pattern (by-pattern)");
     expect(text).not.toContain("Depth?");
   });
 });
@@ -88,12 +88,12 @@ describe("stepped crawl card over /v1", () => {
     expect((await tw.client.answerCard!(tw.home, p.callId, { source: { value: "/d" }, strategy: { value: "by-pattern" }, depth: { value: "1" } })).disposition).toBe("started");
     await drain(tw);
     expect(seen).toContain("- Source dir?: /d");
-    expect(seen).toContain("- Strategy?: by-pattern");
+    expect(seen).toContain("- Strategy?: By pattern (by-pattern)");
     expect(seen).not.toContain("Depth?");
     const done = await tw.client.getThread(tw.home);
     expect(done.status).toBe("idle");
     const call = done.messages.flatMap((m) => m.tools ?? [])[0];
     expect(call.answer).toEqual({ source: { value: "/d" }, strategy: { value: "by-pattern" } });
-    expect(call.result).toBe("/d; by-pattern");
+    expect(call.result).toBe("/d; By pattern (by-pattern)");
   });
 });

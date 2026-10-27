@@ -108,11 +108,20 @@ export class CardTracker {
 }
 
 const EMPTY = "(empty response)";
+const SKIPPED = "(skipped)";
+
+/** An optional field left blank: no answer, empty text (free-text/single, no custom entry), or no picks (multi). A confirm is skipped only when absent: a present but malformed one (non-boolean) falls through to validateField and is rejected. */
+function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined): boolean {
+  if (a === undefined) return true;
+  if (field.kind === "confirm") return false;
+  if (field.kind === "multi") return Array.isArray(a.value) && a.value.length === 0;
+  return typeof a.value === "string" && a.value.trim() === "";
+}
 
 /** Quote an entry when it would blur the comma-separated list. */
 const listSafe = (text: string): string => (/[,"]/.test(text) ? JSON.stringify(text) : text);
 
-/** One picked entry of a multi answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
+/** One picked entry of a multi or single answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
 function multiEntry(options: readonly CardOption[], value: string, custom: boolean): string {
   if (custom) return `other: ${JSON.stringify(value)}`;
   const o = options.find((x) => x.value === value);
@@ -122,6 +131,7 @@ function multiEntry(options: readonly CardOption[], value: string, custom: boole
 
 /** The model-facing text of one answer, by field kind (labels for confirm/reject, comma list for multi). */
 export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
+  if (field.optional && isSkipped(field, a)) return SKIPPED;
   if (!a) return "(no answer)";
   if (field.kind === "confirm") {
     if (typeof a.value !== "boolean") return "(no answer)";
@@ -136,7 +146,12 @@ export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | 
     return a.value.map((v) => multiEntry(field.options, v, custom.includes(v))).join(", ");
   }
   if (typeof a.value !== "string") return "(no answer)";
-  return a.value.trim() === "" ? EMPTY : a.value;
+  if (a.value.trim() === "") return EMPTY;
+  if (field.kind === "single") {
+    if ("other" in a && a.other === true) return `other: ${JSON.stringify(a.value)}`;
+    return multiEntry(field.options, a.value, false);
+  }
+  return a.value;
 }
 
 /** The model-facing user message for an answer submission: every card's questions with their answers, in raise order. */
@@ -155,6 +170,7 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
     case "free-text":
       if (typeof a.value !== "string") return `field "${id}" is free text: the answer must be a string`;
       if ("other" in a && a.other) return `field "${id}" is free text: "other" does not apply`;
+      if (!f.optional && a.value.trim() === "") return `field "${id}" is required: the answer cannot be blank`;
       return undefined;
     case "single": {
       if (typeof a.value !== "string") return `field "${id}": the answer must be a string`;
@@ -177,7 +193,9 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
       for (const v of a.value) {
         if (!other.includes(v) && !f.options.some((o) => o.value === v)) return `"${v}" is not an option of field "${id}"`;
       }
-      if (f.min !== undefined && a.value.length < f.min) return `field "${id}": pick at least ${f.min}`;
+      // A required multi needs at least one pick, whatever its min (an optional one may be blank, which never reaches here).
+      const min = Math.max(f.min ?? 0, f.optional ? 0 : 1);
+      if (min > 0 && a.value.length < min) return `field "${id}": pick at least ${min}`;
       if (f.max !== undefined && a.value.length > f.max) return `field "${id}": pick at most ${f.max}`;
       return undefined;
     }
@@ -204,6 +222,7 @@ export function validateAnswers(card: Card, answers: CardAnswers): string | unde
   const shown = visibleFields(card, answers);
   for (const f of shown) {
     const a = answers[f.id];
+    if (f.optional && isSkipped(f, a)) continue;
     if (!a) return `missing answer for field "${f.id}"`;
     const problem = validateField(f, a);
     if (problem) return problem;

@@ -123,3 +123,24 @@ or a `confirm` with a boolean `equals`). Both are optional; consoles that ignore
 **Hidden answers are dropped, not rejected.** wolfd requires an answer for every *visible* field only, and silently drops
 (with a debug log) any answer sent for a field its `showIf` hides, so an older console that renders every field still
 works. The model sees only visible fields' answers; the stored answer holds only those too.
+
+## Required means non-blank
+
+A required field must be non-blank, whatever its kind: free-text/single non-empty, confirm answered, and a `multi` needs
+at least one pick (`min` applies on top; `min: 0` on a required multi counts as 1). An optional field may be blank. The server enforces this for free-text too: an older client sending a blank required free-text now gets a 400.
+
+## Optional fields
+
+A field may set `optional: true` (additive; absent = required). The operator can leave it blank and still submit.
+A skipped optional field is submitted **empty**, by kind:
+
+| kind | skipped answer |
+| --- | --- |
+| `free-text`, `single` | `{ "value": "" }` |
+| `multi` | `{ "value": [] }` (the multi's `min` does not apply to a blank one; once something is picked, `min`/`max` apply) |
+| `confirm` | no entry for the field (there is no empty boolean); `answers[id]` is absent. The model still sees `- <label>: (skipped)` |
+
+wolfd accepts all of these for an optional visible field (a missing answer too, for any kind) and validates a non-empty
+answer normally. The model-facing answer text reads `- <label>: (skipped)` for a skipped optional field. A required
+field is unchanged (missing/blank single, multi below `min`, or missing confirm is still rejected). A field hidden by
+`showIf` is never required, optional or not. `ask_user_question` takes `optional` per question (and on a single `question`).

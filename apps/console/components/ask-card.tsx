@@ -26,6 +26,12 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 		draftRef.current = { ...draftRef.current, [fieldId]: a };
 		setDraft(draftRef.current);
 	};
+	// Un-pick an optional single/confirm (clicking the selected option again): the entry leaves the draft, so a default does not come back.
+	const clear = (fieldId: string) => {
+		const { [fieldId]: _gone, ...rest } = draftRef.current;
+		draftRef.current = rest;
+		setDraft(rest);
+	};
 	const answered = answer !== undefined;
 	const closed = answered || dismissed === true;
 	// Text typed into a multi "Other…" box but not yet added still counts on Submit (folded in, never lost).
@@ -129,6 +135,7 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 					value={answered ? answer[f.id] : draft[f.id]}
 					readOnly={closed || !pending || submitting}
 					onChange={(a) => set(f.id, a)}
+					onClear={() => clear(f.id)}
 					typed={typed[f.id] ?? ""}
 					onType={(text) => setTypedText(f.id, text)}
 					dictation={dictationProps.field(f.id)}
@@ -237,6 +244,7 @@ function FieldView({
 	value,
 	readOnly,
 	onChange,
+	onClear,
 	typed,
 	onType,
 	pendingError,
@@ -246,6 +254,7 @@ function FieldView({
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	onClear: () => void;
 	typed: string;
 	onType: (text: string) => void;
 	pendingError?: string;
@@ -254,8 +263,13 @@ function FieldView({
 	const labelId = `card-field-${useId()}`;
 	return (
 		<div className="mb-2 last:mb-0" data-field={field.id}>
-			<div className="mb-2 font-medium" id={labelId}>
+			<div className="mb-2 flex flex-wrap items-baseline gap-x-2 font-medium" id={labelId}>
 				<MessageResponse>{field.label}</MessageResponse>
+				{field.optional && (
+					<span className="text-xs font-normal text-muted-foreground" data-testid="card-optional">
+						(optional)
+					</span>
+				)}
 			</div>
 			{field.description && (
 				<div className="mb-3 text-sm text-muted-foreground">
@@ -263,7 +277,7 @@ function FieldView({
 				</div>
 			)}
 			{field.kind === "confirm" ? (
-				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} />
+				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} onClear={onClear} labelledBy={labelId} />
 			) : field.kind === "multi" ? (
 				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} dictation={dictation} />
 			) : field.kind === "free-text" ? (
@@ -295,15 +309,18 @@ function FieldView({
 								disabled={readOnly}
 								data-testid="card-option"
 								data-value={o.value}
-								onClick={() => onChange({ value: o.value })}
+								onClick={() => (sel && field.optional ? onClear() : onChange({ value: o.value }))}
 								className={cn(
-									"flex flex-col items-start rounded-lg border px-3 py-1.5 text-left transition-colors",
+									OPTION_ROW,
 									sel ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
 									readOnly && !sel && "text-muted-foreground",
 								)}
 							>
-								<MessageResponse>{o.label}</MessageResponse>
-								{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+								<Indicator shape="radio" on={sel} />
+								<span className="flex min-w-0 flex-col items-start">
+									<MessageResponse>{o.label}</MessageResponse>
+									{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
+								</span>
 							</button>
 						);
 					})}
@@ -327,6 +344,39 @@ function FieldView({
 				</div>
 			)}
 		</div>
+	);
+}
+
+/** One option row: the whole button (indicator + label) is the click target. */
+// Confirm rows add "w-auto": cn() (tailwind-merge) lets the later w-auto replace this w-full.
+const OPTION_ROW = "flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
+
+/**
+ * The 20px choice indicator of an option row: a rounded square with a check (multi) or a circle with a dot (single,
+ * confirm). Unselected it is a 2px foreground-tinted outline (readable on light and dark), selected it fills with the
+ * primary colour. Decorative: the row's aria-pressed carries the state.
+ */
+function Indicator({ shape, on }: { shape: "check" | "radio"; on: boolean }) {
+	return (
+		<span
+			aria-hidden
+			data-testid="card-indicator"
+			data-on={on || undefined}
+			className={cn(
+				"mt-px flex size-5 shrink-0 items-center justify-center border-2 transition-colors",
+				shape === "check" ? "rounded-md" : "rounded-full",
+				on ? "border-primary bg-primary text-primary-foreground" : "border-foreground/50 bg-background",
+			)}
+		>
+			{on &&
+				(shape === "check" ? (
+					<svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+						<path d="M3.5 8.5l3 3 6-7" />
+					</svg>
+				) : (
+					<span className="size-2 rounded-full bg-current" />
+				))}
+		</span>
 	);
 }
 
@@ -369,7 +419,8 @@ function MultiView({
 		...field.options.map((o) => ({ ...o, custom: false })),
 		...custom.filter((c) => picked.includes(c)).map((c) => ({ label: c, value: c, description: undefined, custom: true })),
 	];
-	const hint = field.min !== undefined || field.max !== undefined ? `Pick ${field.min !== undefined && field.max !== undefined ? `${field.min}–${field.max}` : field.min !== undefined ? `at least ${field.min}` : `up to ${field.max}`}` : null;
+	const min = Math.max(field.min ?? 0, field.optional ? 0 : 1);
+	const hint = min > 0 || field.max !== undefined ? `Pick ${min > 0 && field.max !== undefined ? `${min}–${field.max}` : min > 0 ? `at least ${min}` : `up to ${field.max}`}` : null;
 	return (
 		<div className="flex flex-col gap-1.5 text-sm" role="group" aria-labelledby={labelledBy} data-testid="card-multi">
 			{rows.map((o) => {
@@ -385,16 +436,18 @@ function MultiView({
 						data-custom={o.custom ? "true" : undefined}
 						onClick={() => toggle(o.value)}
 						className={cn(
-							"flex flex-col items-start rounded-lg border px-3 py-1.5 text-left transition-colors",
+							OPTION_ROW,
 							sel ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
 							readOnly && !sel && "text-muted-foreground",
+							// at max: the unpicked rows stay visible but clearly unavailable
+							!readOnly && !sel && atMax && "cursor-not-allowed opacity-50",
 						)}
 					>
-						<span className="flex items-center gap-2">
-							<span aria-hidden>{sel ? "☑" : "☐"}</span>
+						<Indicator shape="check" on={sel} />
+						<span className="flex min-w-0 flex-col items-start">
 							<MessageResponse>{o.label}</MessageResponse>
+							{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
 						</span>
-						{o.description && <MessageResponse className="lh-prose block text-xs text-muted-foreground">{o.description}</MessageResponse>}
 					</button>
 				);
 			})}
@@ -412,7 +465,7 @@ function MultiView({
 				</div>
 			)}
 			{!readOnly && hint && (
-				<div data-testid="card-multi-hint" className={cn("text-xs text-muted-foreground", !multiInBounds(field, picked.length) && "text-destructive")}>
+				<div data-testid="card-multi-hint" className={cn("text-xs text-muted-foreground", picked.length > 0 && !multiInBounds(field, picked.length) && "text-destructive")}>
 					{hint}
 				</div>
 			)}
@@ -425,6 +478,7 @@ function ConfirmView({
 	value,
 	readOnly,
 	onChange,
+	onClear,
 	labelledBy,
 }: {
 	labelledBy: string;
@@ -432,6 +486,7 @@ function ConfirmView({
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	onClear: () => void;
 }) {
 	const picked = typeof value?.value === "boolean" ? value.value : undefined;
 	const note = value && "note" in value ? value.note : undefined;
@@ -441,13 +496,15 @@ function ConfirmView({
 			aria-pressed={picked === which}
 			disabled={readOnly}
 			data-testid={testid}
-			onClick={() => onChange({ value: which, ...(note ? { note } : {}) })}
+			onClick={() => (picked === which && field.optional ? onClear() : onChange({ value: which, ...(note ? { note } : {}) }))}
 			className={cn(
-				"rounded-lg border px-4 py-1.5 text-sm transition-colors",
+				OPTION_ROW,
+				"w-auto items-center pr-4",
 				picked === which ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
 				readOnly && picked !== which && "text-muted-foreground",
 			)}
 		>
+			<Indicator shape="radio" on={picked === which} />
 			{label}
 		</button>
 	);

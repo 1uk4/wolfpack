@@ -128,7 +128,7 @@ describe("crawl run wizard as a stepped card (/v1, scripted model)", { timeout: 
     // an older console sends the hidden concurrency answer too: it is dropped, not an error
     await b.client.answerCard!(b.home, p1.callId, { resume: { value: "cancel" }, concurrency: { value: "8" } });
     await b.drain();
-    expect(reply).toContain("- Resume the outstanding crawl?: cancel");
+    expect(reply).toContain("- Resume the outstanding crawl?: Cancel (cancel)");
     expect(reply).not.toContain("How many batches");
     expect((await b.client.getThread(b.home)).status).toBe("idle");
   });

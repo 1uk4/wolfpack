@@ -97,7 +97,8 @@ export const ROUTES = {
   /**
    * Answer a pending card (`:callId` = the tool call that raised it). The answer resolves that call and, once no
    * sibling card of the turn is pending, starts the next turn: the ack is the next turn's SubmitAck, or disposition
-   * `queued` while siblings wait. 404 `not_found` for an unknown, superseded or already-answered card, 400
+   * `queued` while siblings wait (a held answer can be re-sent to change it). A plain submit supersedes pending cards (they
+   * become `dismissed`). 404 `not_found` for an unknown, superseded or already-answered card, 400
    * `invalid_request` when `answers` do not match the card's fields, 409 `busy` while a turn is running.
    */
   answerCard: {

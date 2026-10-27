@@ -92,12 +92,14 @@ export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema
 export type CardField = z.infer<typeof CardFieldSchema>;
 export type CardFieldKind = CardField["kind"];
 
-export const CardSchema = z.object({
-  /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
-  tool: z.string(),
-  title: z.string().optional(),
-  fields: z.array(CardFieldSchema).min(1),
-});
+export const CardSchema = z
+  .object({
+    /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
+    tool: z.string(),
+    title: z.string().optional(),
+    fields: z.array(CardFieldSchema).min(1),
+  })
+  .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] });
 export type Card = z.infer<typeof CardSchema>;
 
 /**
@@ -115,6 +117,11 @@ export const PendingCardSchema = z.object({
   callId: z.string(),
   threadId: z.string(),
   card: CardSchema,
+  /**
+   * The answer already given while sibling cards of the same turn still wait (held, not yet submitted). The card is
+   * still pending: it can be answered again to change it until the last sibling is answered.
+   */
+  heldAnswer: CardAnswersSchema.optional(),
   /** ISO time the card was raised (the tool call's result time). */
   raisedAt: z.iso.datetime({ offset: true }),
 });
@@ -166,6 +173,8 @@ export const ThreadToolCallSchema = z.object({
   card: CardSchema.optional(),
   /** The operator's answer to that card (absent while it is pending). The `result` then carries the answer text. */
   answer: CardAnswersSchema.optional(),
+  /** The card was superseded by a plain submit before it was answered: shown as skipped, no longer answerable. */
+  dismissed: z.boolean().optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });

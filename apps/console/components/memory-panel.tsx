@@ -6,6 +6,7 @@ import { ChevronsLeftIcon, ChevronsRightIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fetchMemoryStatus, fetchMemoryTopic, fetchWorkRecord, postConsolidate, postPromote, type KbResult } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
+import { WorkBadges } from "@/components/work-badges";
 import { useMemoryEvents } from "@/components/memory-events";
 import {
 	BUSY_TEXT,
@@ -277,6 +278,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					view={view}
 					bound={status?.bound ?? null}
 					rec={rec}
+					item={own}
 					feed={feed}
 					unread={unread}
 					onToggle={() => chooseView(showFeed ? "record" : "feed")}
@@ -323,10 +325,12 @@ function TopicList({ title, topics, onOpen }: { title: string; topics: MemoryTop
 }
 
 /** The bound item's Record (markdown) or the live observation feed, one at a time; no bound item → feed only. */
-export function BoundOrFeed({ view, bound, rec, feed, unread, onToggle }: {
+export function BoundOrFeed({ view, bound, rec, item, feed, unread, onToggle }: {
 	view: PanelView;
 	bound: MemoryStatus["bound"] | null;
 	rec: ReturnType<typeof recordView> | null;
+	/** The bound item itself (for its kind/stage/domain badges); null until fetched. */
+	item?: WorkRecordResponse | null;
 	feed: FeedItem[];
 	unread: number;
 	onToggle: () => void;
@@ -360,6 +364,7 @@ export function BoundOrFeed({ view, bound, rec, feed, unread, onToggle }: {
 				<Link className="underline-offset-2 hover:underline" href={workHref(bound.workId)}>
 					{bound.title ?? bound.workId}
 				</Link>
+				{item ? <WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mt-1.5" /> : null}
 				{rec ? (
 					<div className="mt-2">
 						{rec.inheritedFrom ? <p className="text-xs text-muted-foreground">Record from parent: {rec.inheritedFrom.title}</p> : null}

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchWolves, fetchWorkRecord } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
+import { WorkBadges } from "@/components/work-badges";
 import { useLibrarian } from "@/components/use-librarian";
 import { resolveWork, workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
@@ -91,11 +92,7 @@ function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkReco
 	const deps = item.dependsOn ?? [];
 	return (
 		<article>
-			<div className="mb-4 flex flex-wrap gap-1.5" data-testid="work-badges">
-				<Badge name="kind" value={item.kind} />
-				<Badge name="stage" value={item.stage.replace(/_/g, " ")} />
-				{item.domain && <Badge name="domain" value={item.domain} />}
-			</div>
+			<WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mb-4" />
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 				{item.partOf && (
 					<div data-fact="parent">
@@ -154,14 +151,4 @@ function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkReco
 	);
 }
 
-function Badge({ name, value }: { name: string; value: string }) {
-	return (
-		<span
-			data-fact={name}
-			title={name}
-			className="rounded-full border border-border px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
-		>
-			{value}
-		</span>
-	);
-}
+

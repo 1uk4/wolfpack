@@ -17,7 +17,7 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { fuzzyScore } from "@/src/core";
+import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { threadListItem, type ChatListItem } from "@/src/core";
 
@@ -286,6 +286,8 @@ export function SessionRow({
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
 	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
+	// The thread you are looking at needs no mark: you are already there.
+	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
 	return (
 		<button
 			type="button"
@@ -397,33 +399,32 @@ function SessionsSidebar() {
 			.map((r) => r.c);
 	}, [chats, query]);
 
-	const refreshInFlightRef = useRef(false);
-	const refresh = useCallback(async () => {
+	const refresh = useMemo(() => coalescedRefresh(async () => {
 		// In-flight coalesce (S6): event bursts may land several refresh
-		// calls at once — one fetch serves them all; anything newer arrives
-		// with the next event's fetch.
-		if (refreshInFlightRef.current) return;
-		refreshInFlightRef.current = true;
+		// calls at once. A call during a fetch marks it dirty and ONE more
+		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
 			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
 				wolves: { name: string }[];
 			};
-			const lists = await Promise.all(
+			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
-					const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-					const d = (await res.json()) as { threads: { id: string; title: string; status?: "idle" | "busy" | "needs-you" }[] };
-					return d.threads.map((t) => threadListItem(w.name, t));
+					try {
+						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you" }[] };
+						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+					} catch {
+						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
+					}
 				}),
 			);
-			setChats(lists.flat());
+			setChats((prev) => foldWolfThreads(prev, results));
 		} catch {
 			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
-		} finally {
-			refreshInFlightRef.current = false;
 		}
-	}, []);
+	}), []);
 
 	/* Instant rename propagation (2026-09-17): the chat header's rename
 	   commits dispatch lh:chat-renamed; patch the snapshot in place instead

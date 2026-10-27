@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    include: ["packages/*/src/**/*.test.ts", "extensions/wolfpack-subagents/*.test.ts", "extensions/wolfpack-memory/*.test.ts"],
+    include: ["packages/*/src/**/*.test.ts", "extensions/wolfpack-subagents/*.test.ts", "extensions/wolfpack-memory/*.test.ts", "scripts/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
     // Tests run from inside a wolf's shell; never let them log usage (or
     // anything else keyed off the den) into that wolf's real den.

@@ -533,7 +533,7 @@ async function main() {
 	setupAutoUpdater();
 	ipcMain.on("lh:update-install", () => installUpdateNow());
 	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
-	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin });
+	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
 	ipcMain.on("lh:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
 
 	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes

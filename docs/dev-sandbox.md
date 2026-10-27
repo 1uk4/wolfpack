@@ -108,6 +108,18 @@ npm run dev:stack:desktop      # or dev:stack for the browser console
 To keep model usage low while testing, add `tiers: {main: {model: claude-haiku-5-5}, smart: {model: claude-haiku-5-5}}` to
 the wolves' `wolf.yaml`.
 
+**Extension bundles.** wolfd loads each wolf's extensions from the installed bundle in its den
+(`<sandbox>/dens/<wolf>/extensions/<ext>/index.js`), which nothing else rebuilds. On every start `dev-stack.sh` builds the
+CLI from this checkout and runs `sandbox install-extensions` for each sandboxed wolf whose bundle is missing or older than
+its sources (`scripts/dev-stack-extensions.mjs`; one line per wolf: installed / up to date). Non-sandbox dens are only
+warned about, never written. Set `DEV_STACK_NO_EXT_INSTALL=1` to skip. Do not use a global `wolfpack` for this: the CLI
+bundles the checkout it lives in.
+
+**Desktop notifications.** The dev Electron app is "Electron" in macOS: allow it under System Settings → Notifications →
+"Electron" (it only appears there after the first notification attempt). Every notification decision (received, rejected
+with the reason, shown, clicked) is written to the desktop main log; the renderer logs why it skipped one via
+`console.debug` ("needs-you: no notification ...").
+
 ### Debugging the live chat stream
 
 Set `WOLFPACK_DEBUG_STREAM=1` in the environment of the wolf process (wolfd) to log, for every in-flight assistant

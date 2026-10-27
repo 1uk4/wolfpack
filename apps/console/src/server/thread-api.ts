@@ -116,6 +116,21 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** Open a thread on a wolf: today only a feature thread (`{kind:"feature", workItemId}`), bound to that feature. */
+		async createThread(wolf: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { kind?: unknown; workItemId?: unknown } | null;
+				if (body?.kind !== "feature" || typeof body.workItemId !== "string" || body.workItemId === "") {
+					return json({ error: 'body must be {kind:"feature", workItemId}' }, 400);
+				}
+				const client = source();
+				if (!client.createThread) return json({ error: "this wolf cannot open feature threads" }, 501);
+				return json(await client.createThread(wolf, { kind: "feature", workItemId: body.workItemId }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async thread(ref: ThreadRef): Promise<Response> {
 			try {
 				const client = source();

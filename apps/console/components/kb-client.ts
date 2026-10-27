@@ -68,6 +68,15 @@ export function fetchWorkRecord(wolf: string, id: string): Promise<KbResult<Work
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(id)}/record`);
 }
 
+/** Open (or reopen) the feature's thread on a wolf: `{id, title, ...}` of the ThreadSummary. */
+export function openFeatureThread(wolf: string, workItemId: string): Promise<KbResult<{ id: string; title: string }>> {
+	return request(`/api/wolves/${seg(wolf)}/threads`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ kind: "feature", workItemId }),
+	});
+}
+
 export function fetchKbGraph(librarian: string, opts: KbGraphOptions = {}): Promise<KbResult<KbGraph>> {
 	const p = new URLSearchParams();
 	if (opts.domain) p.set("domain", opts.domain);

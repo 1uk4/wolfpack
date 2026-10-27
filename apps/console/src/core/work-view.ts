@@ -58,3 +58,12 @@ export async function resolveWork(
 	}
 	return { kind: "none" };
 }
+
+/**
+ * Wolves a feature thread can be opened on: every online wolf, the first non-librarian first (the librarian serves
+ * the KB; coding work goes to the others). Empty when none is online.
+ */
+export function featureThreadWolves(wolves: readonly WolfLike[]): string[] {
+	const online = wolves.filter((w) => w.status !== "offline");
+	return [...online.filter((w) => !w.librarian), ...online.filter((w) => w.librarian)].map((w) => w.name);
+}

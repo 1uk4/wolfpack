@@ -59,6 +59,26 @@ export function memoryEmitter(wolfDen: string, wolfName: string, defaultDomain: 
         lane: `inbox/${wolfName}`,
       });
     },
+    /** A Record was rewritten from tagged observations. `work` holds the Record (target = that work item). */
+    recordWritten(r: { work: string; observationCount: number; chars?: number }): void {
+      bus.emit({
+        type: "record_written",
+        domain: defaultDomain,
+        target: { kind: "work", workId: r.work },
+        observationCount: r.observationCount,
+        ...(r.chars !== undefined ? { chars: r.chars } : {}),
+      });
+    },
+    /** A den topic left the den: absorbed into `entryId`, or rejected (`entryId` null). */
+    topicArchived(a: { id: string; entryId: string | null }): void {
+      bus.emit({
+        type: "topic_archived",
+        domain: defaultDomain,
+        target: { kind: "den", topicId: a.id },
+        topicId: a.id,
+        ...(a.entryId ? { absorbedInto: a.entryId } : {}),
+      });
+    },
     promoteStarted(jobId: string): void {
       bus.emit({ type: "promote_started", domain: defaultDomain, target: { kind: "den" }, jobId });
     },

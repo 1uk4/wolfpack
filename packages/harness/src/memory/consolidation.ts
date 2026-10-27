@@ -130,6 +130,10 @@ export interface ConsolidationConfig {
   onProgress?: (msg: string) => void;
   /** Called per topic written (session topics or, on the legacy path, den topics). Metadata only. */
   onTopic?: (t: ConsolidatedTopic) => void;
+  /** Called per Record rewritten from tagged observations. `work` is the item that holds the Record (the feature when the Record lives there). Metadata only. */
+  onRecord?: (r: { work: string; observationCount: number; chars?: number }) => void;
+  /** Called per den topic archived by the legacy path's reconcile (`entryId` null: rejected). */
+  onArchive?: (a: { id: string; entryId: string | null }) => void;
   /** Engine override (tests); built from the table when omitted. */
   engine?: Engine;
   /** Where work Records are written (default: the Work API from WORK_ENDPOINT / WORK_TOKEN, when set). */
@@ -300,6 +304,7 @@ async function consolidatePoolInner(
       observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o.status] as const)));
     for (const o of workObs) {
       const st = status.get(poolKey(o));
@@ -341,6 +346,7 @@ async function consolidatePoolInner(
     try {
       const r = reconcileDen(wolfDen, kbRoots, wolfName);
       onProgress?.(`reconciled: ${r.archived.length} archived, ${r.pending.length} pending`);
+      for (const a of r.archived) safely(() => config.onArchive?.(a));
     } catch (err) {
       onProgress?.(`reconcile skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -584,6 +590,8 @@ export interface PromoteSessionConfig {
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
+  /** Called per den topic the promote's reconcile step archived (`entryId` null: rejected). */
+  onArchive?: (a: { id: string; entryId: string | null }) => void;
 }
 
 /**
@@ -602,5 +610,6 @@ export function promoteSessionTopics(config: PromoteSessionConfig): Promise<Cons
     skipClaims: false,
     onProgress: config.onProgress,
     onEmit: config.onEmit,
+    onArchive: config.onArchive,
   });
 }

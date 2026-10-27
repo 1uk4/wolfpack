@@ -9,7 +9,7 @@ import { defineExtension, defineTask, GenerationTask, hook, type Extension } fro
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { HttpConsoleClient, type ThreadEvent } from "@wolfpack/client";
 import { createScriptedModel, type FauxResponseStep, type ScriptedModel } from "./scripted-model.js";
-import { startWolf, type ExtensionRuntime, type RunningWolf } from "./run.js";
+import { startWolf, type ExtensionRuntime, type RunningWolf, type StartWolfOptions } from "./run.js";
 
 export interface AfterResponseCall {
   message: AssistantMessage;
@@ -28,6 +28,8 @@ export interface TestWolfOptions {
   name?: string;
   /** Extra top-level wolf.yaml text appended after `name` / `workspace` (e.g. a `sandbox:` block). */
   yaml?: string;
+  /** Replaces the librarian sweep's tick (a librarian wolf only). */
+  sweepTick?: StartWolfOptions["sweepTick"];
 }
 
 export interface TestWolf {
@@ -77,6 +79,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
       env: { WOLFPACK_MODELS_FILE: join(root, "models.json") },
       home: root,
       models: scripted.models,
+      ...(opts.sweepTick ? { sweepTick: opts.sweepTick } : {}),
       extraExtensions: (rt) => {
         const extra = opts.hooks?.extensions;
         return [recorder, ...(typeof extra === "function" ? extra(rt) : (extra ?? []))];

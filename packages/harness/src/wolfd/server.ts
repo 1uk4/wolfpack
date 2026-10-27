@@ -33,6 +33,7 @@ import {
   type ConsolidateResponse,
   type ErrorCode,
   type InFlightPartial,
+  type KbPipelineResponse,
   type LastPromote,
   type PromoteResponse,
   type SubmitAck,
@@ -417,6 +418,14 @@ export class WolfServer {
         if (r.kind === "not_found") throw new HttpError("not_found", `work item ${params.id}`);
         if (r.kind === "error") throw new HttpError("engine_error", `work API: ${r.message}`);
         return this.json(res, 200, r.value);
+      }
+      case "kbPipeline": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        // Loaded on first use: only the librarian ever gets here, and the pipeline reader pulls in the librarian package.
+        const { readPipeline } = await import("@wolfpack/kb/librarian");
+        const body: KbPipelineResponse = readPipeline(roots);
+        return this.json(res, 200, body);
       }
       case "getKbGraph": {
         this.checkWolf(params.name);

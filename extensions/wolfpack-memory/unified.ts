@@ -544,6 +544,8 @@ export default function createMemoryExtension(
       minObservations: opts.minObservations,
       onProgress: (msg) => console.log(`[memory] ${msg}`),
       onTopic: mem.topic,
+      onRecord: (r) => mem.recordWritten(r),
+      onArchive: mem.topicArchived,
     });
   }
   const consolidateToSessions = (opts: { poolTarget?: number; minObservations: number }) => serialized(() => consolidateInner(opts));
@@ -593,6 +595,7 @@ export default function createMemoryExtension(
               defaultDomain,
               onProgress: (msg) => console.log(`[memory] ${msg}`),
               onEmit: mem.contribution,
+              onArchive: mem.topicArchived,
             });
             return { consolidated: c, promoted: p };
           });

@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse } from "@wolfpack/protocol";
+import type { Actor, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -31,8 +31,8 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
 export type ThreadKind = ThreadSummary["kind"];
@@ -93,6 +93,8 @@ export interface ConsoleClient {
   getMemoryTopic?(wolf: string, topicId: string, opts?: { scope?: "den" | "session" }): Promise<MemoryTopic>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
+  /** Dewey's pipeline view. Librarian only: other wolves reject (kb_unavailable). */
+  getKbPipeline?(wolf: string): Promise<KbPipelineResponse>;
   /** The KB graph (librarian wolf only; rejects ProtocolError `kb_unavailable` elsewhere, NotFoundError for an unknown domain). Layers default off. */
   getKbGraph?(wolf: string, opts?: { domain?: string; archivedWork?: boolean; wikilinks?: boolean; denTopics?: boolean }): Promise<KbGraph>;
   /** One KB entry with its body, wikilinks and backlinks (librarian only). Rejects NotFoundError for an unknown entry. */

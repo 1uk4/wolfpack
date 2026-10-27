@@ -290,6 +290,49 @@ export const PromoteFailedEventSchema = memoryBase.extend({
   message: z.string(),
 });
 
+/** A bound consolidate folded observations into the work item's Record (target = the work item). */
+export const RecordWrittenEventSchema = memoryBase.extend({
+  type: z.literal("record_written"),
+  /** Observations folded into the Record by this write. */
+  observationCount: z.number().int().nonnegative(),
+  /** Size of the Record body after the write, when known. */
+  chars: z.number().int().nonnegative().optional(),
+});
+/** A den topic left the den: absorbed into a KB entry's lane or rejected (target = the den topic). */
+export const TopicArchivedEventSchema = memoryBase.extend({
+  type: z.literal("topic_archived"),
+  topicId: z.string(),
+  /** The KB entry id the topic was absorbed into; absent for rejects. */
+  absorbedInto: z.string().optional(),
+});
+/** Librarian: a sweep began real work (never emitted for an idle tick). `domain` is "kb", `target` {kind:"den"}. */
+export const SweepStartedEventSchema = memoryBase.extend({ type: z.literal("sweep_started"), pending: z.number().int().nonnegative() });
+export const SweepOutcomeSchema = z.enum(["create", "merge", "reject", "parked"]);
+export type SweepOutcome = z.infer<typeof SweepOutcomeSchema>;
+/** Librarian: one contribution ended. `unclassified` receipts get no sweep_item (pipeline receipts only). */
+export const SweepItemEventSchema = memoryBase.extend({
+  type: z.literal("sweep_item"),
+  /** The contributing wolf (the inbox lane). */
+  from: z.string(),
+  denTopicId: z.string(),
+  outcome: SweepOutcomeSchema,
+  /** The resulting entry (create / merge). */
+  entryId: z.string().optional(),
+});
+/** Librarian: a sweep that emitted sweep_started ended (always paired, also on failure). */
+export const SweepFinishedEventSchema = memoryBase.extend({
+  type: z.literal("sweep_finished"),
+  processed: z.number().int().nonnegative(),
+  created: z.number().int().nonnegative(),
+  merged: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  parked: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  /** One line, capped; set when the run threw. */
+  error: z.string().optional(),
+});
+
 export const MemoryEventSchema = z.discriminatedUnion("type", [
   ObservationCapturedEventSchema,
   TopicConsolidatedEventSchema,
@@ -297,6 +340,11 @@ export const MemoryEventSchema = z.discriminatedUnion("type", [
   PromoteStartedEventSchema,
   PromoteFinishedEventSchema,
   PromoteFailedEventSchema,
+  RecordWrittenEventSchema,
+  TopicArchivedEventSchema,
+  SweepStartedEventSchema,
+  SweepItemEventSchema,
+  SweepFinishedEventSchema,
 ]);
 export type MemoryEvent = z.infer<typeof MemoryEventSchema>;
 export type MemoryEventType = MemoryEvent["type"];
@@ -531,3 +579,77 @@ export const CreateThreadRequestSchema = z.object({ wolf: z.string(), kind: z.li
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequestSchema>;
 /** Response of create thread. */
 export const CreateThreadResponseSchema = ThreadSummarySchema;
+
+// ------------------------------------------------------- KB pipeline
+
+/** An outcome as receipts spell it after normalising (`created`/`updated`/`rejected` -> create/merge/reject). */
+export const PipelineOutcomeSchema = z.enum(["create", "merge", "reject", "parked", "unclassified"]);
+export type PipelineOutcome = z.infer<typeof PipelineOutcomeSchema>;
+
+/** One wolf's inbox lane. */
+export const PipelineLaneSchema = z.object({
+  wolf: z.string(),
+  /** Contributions waiting (top-level .md files; `_processed` and `_bad` are not counted). */
+  pending: z.number().int().nonnegative(),
+  /** Age of the longest-waiting one, ms. Absent when the lane is empty. */
+  oldestAgeMs: z.number().int().nonnegative().optional(),
+});
+export const PipelineReceiptSchema = z.object({
+  wolf: z.string(),
+  denTopicId: z.string(),
+  outcome: PipelineOutcomeSchema,
+  /** The resulting entry (create / merge). */
+  entryId: z.string().optional(),
+  /** Receipt time (ISO). */
+  processed: z.string(),
+  /** One line of the receipt body (reason for reject / parked / unclassified), capped. */
+  detail: z.string().optional(),
+});
+export const PipelineParkedSchema = z.object({
+  wolf: z.string(),
+  file: z.string(),
+  denTopicId: z.string().optional(),
+  /** Why it was parked (from its receipt), when known. */
+  reason: z.string().optional(),
+});
+/** The last finished sweep (persisted to `<den>/kb/sweep-last.json`). */
+export const PipelineLastSweepSchema = z.object({
+  startedAt: z.string(),
+  finishedAt: z.string(),
+  processed: z.number().int().nonnegative(),
+  created: z.number().int().nonnegative(),
+  merged: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  parked: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  error: z.string().optional(),
+});
+export type PipelineLastSweep = z.infer<typeof PipelineLastSweepSchema>;
+export const PipelineCurrentSchema = z.object({
+  from: z.string(),
+  denTopicId: z.string(),
+  startedAt: z.string(),
+  route: z.string().optional(),
+});
+
+/** `GET /v1/wolves/:name/kb/pipeline` (librarian only; 409 `kb_unavailable` otherwise). */
+export const KbPipelineResponseSchema = z.object({
+  lanes: z.array(PipelineLaneSchema),
+  /** Newest first, at most 50. */
+  receipts: z.array(PipelineReceiptSchema),
+  /** At most 100; `parkedTotal` counts them all. */
+  parked: z.array(PipelineParkedSchema),
+  /** All parked items (absent from servers that predate it). */
+  parkedTotal: z.number().int().nonnegative().optional(),
+  sweep: z.object({
+    /** The item being processed right now (absent when idle). */
+    current: PipelineCurrentSchema.optional(),
+    last: PipelineLastSweepSchema.optional(),
+  }),
+});
+export type KbPipelineResponse = z.infer<typeof KbPipelineResponseSchema>;
+export type PipelineLane = z.infer<typeof PipelineLaneSchema>;
+export type PipelineReceipt = z.infer<typeof PipelineReceiptSchema>;
+export type PipelineParked = z.infer<typeof PipelineParkedSchema>;
+export type PipelineCurrent = z.infer<typeof PipelineCurrentSchema>;

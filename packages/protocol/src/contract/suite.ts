@@ -385,6 +385,16 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "kb_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await e.json()).code);
     });
 
+    it("kb pipeline: unknown wolf is not_found; otherwise a valid pipeline, or kb_unavailable when not the librarian", async () => {
+      await expectError(await call(buildPath("kbPipeline", { name: "no-such-wolf" })), "not_found");
+      const p = await call(buildPath("kbPipeline", { name: wolf }));
+      if (p.status === 200) ROUTES.kbPipeline.response.schema.parse(await p.json());
+      else {
+        expect(p.status).toBe(409);
+        expect(ErrorEnvelopeSchema.parse(await p.json()).code).toBe("kb_unavailable");
+      }
+    });
+
     it("protocol version: matching or absent is accepted, mismatch is 426 version_mismatch", async () => {
       const ok = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) } });
       expect(ok.status).toBe(200);

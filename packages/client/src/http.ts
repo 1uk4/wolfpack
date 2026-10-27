@@ -18,6 +18,7 @@ import {
   ProtocolError,
   type Actor,
   type CardAnswers,
+  type CreateThreadBody,
   type ConsoleClient,
   type ConsolidateResponse,
   type KbEntryDetail,
@@ -83,6 +84,10 @@ export class HttpConsoleClient implements ConsoleClient {
   async listThreads(wolf: string): Promise<ThreadSummary[]> {
     const r = await this.json("listThreads", { name: wolf }, ROUTES.listThreads.response.schema);
     return (r as { threads: ThreadSummary[] }).threads;
+  }
+
+  async createThread(wolf: string, body: CreateThreadBody): Promise<ThreadSummary> {
+    return (await this.json("createThread", { name: wolf }, ROUTES.createThread.response.schema, body, undefined)) as ThreadSummary;
   }
 
   async getThread(threadId: string): Promise<ThreadDetail> {

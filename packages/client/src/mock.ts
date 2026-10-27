@@ -8,6 +8,7 @@ import {
   type AttachmentRef,
   type Card,
   type CardAnswers,
+  type CreateThreadBody,
   type WolfEvent,
   type PendingCard,
   type ConsoleClient,
@@ -79,6 +80,18 @@ export class MockConsoleClient implements ConsoleClient {
   async listThreads(wolf: string): Promise<ThreadSummary[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
     return [...this.threads.values()].map((t) => ({ ...t.summary, status: this.statusOf(t) }));
+  }
+
+  /** Feature threads are created on demand (one per work item); `home` returns the fixture thread. */
+  async createThread(wolf: string, body: CreateThreadBody): Promise<ThreadSummary> {
+    if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
+    if (body.kind === "home") return { ...FIXTURE_THREAD };
+    const id = `${FIXTURE_WOLF.id}/feature-${body.workItemId}`;
+    const have = this.threads.get(id);
+    if (have) return { ...have.summary, status: this.statusOf(have) };
+    const summary: ThreadSummary = { id, wolf, kind: "feature", title: body.workItemId, boundWorkItem: body.workItemId };
+    this.threads.set(id, { summary, messages: [], events: [], running: null, followUps: [], waiters: new Set(), seq: 0 });
+    return { ...summary, status: "idle" };
   }
 
   private statusOf(t: ThreadState): NonNullable<ThreadSummary["status"]> {

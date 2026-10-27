@@ -83,8 +83,8 @@ Discovered from (priority: project > global > package):
 
 - **project** — `<cwd>/.pi/agents/*.md`
 - **global** — `$PI_CODING_AGENT_DIR/agents/*.md` (wolf-specific agents only)
-- **package** — this extension's bundled `agents/` (`worker`, `scout`, `planner`,
-  `reviewer`), plus the `pi.agents` dirs of every local package in the wolf's
+- **package** — the shared roster in `packages/agents/agents/` (`worker`, `scout`, `planner`,
+  `reviewer`; also used by wolfd), plus the `pi.agents` dirs of every local package in the wolf's
   `settings.json` (e.g. `wolfpack-visual-tools` → `visualizer`).
   Repo agents load from the repo; don't copy them into the wolf's agent dir, or
   the copy shadows (and drifts from) the repo file.
@@ -148,7 +148,6 @@ wolfpack-subagents/
 │   ├── tmux.ts         # tmux backend
 │   └── herdr.ts        # Herdr backend (herdr pane verbs)
 ├── tools/safe-bash.ts  # safe_bash + guarded_bash (read-only guard, tools/command-guard.ts)
-├── agents/             # bundled agent definitions
 ├── prompts/            # workflow presets
 └── config.json.example # status widget config
 ```

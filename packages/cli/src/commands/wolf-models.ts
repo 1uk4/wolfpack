@@ -26,6 +26,7 @@ import {
 import { AgentClient } from "../agent-client.js";
 import { allBackends } from "../backend/index.js";
 import { loadConfig, getHost, localWolfDir, LOCAL_HOST, type CliConfig } from "../config.js";
+import { bundledAgentsDir } from "@wolfpack/agents";
 import { extensionsDir } from "../extensions.js";
 import { resolveLocalWolfModels, resolveRemoteWolfModels } from "../models.js";
 import { c, table as renderTable } from "../render.js";
@@ -117,16 +118,20 @@ export function agentsForWolf(repo: AgentModelRef[], wolfAgentDir: string | unde
 }
 
 /** Read every repo subagent file (extensions/*\/agents/*.md) and its `model:`. */
-export function readRepoAgents(dir: string = extensionsDir()): AgentModelRef[] {
+export function readRepoAgents(dir?: string, sharedDir?: string): AgentModelRef[] {
+  // Both default together: an explicit `dir` (tests) reads only what it names.
+  const extRoot = dir ?? extensionsDir();
+  const shared = sharedDir ?? (dir === undefined ? bundledAgentsDir() : undefined);
   const agents: AgentModelRef[] = [];
   let exts: string[] = [];
   try {
-    exts = fs.readdirSync(dir).sort();
+    exts = fs.readdirSync(extRoot).sort();
   } catch {
     return agents;
   }
-  for (const ext of exts) {
-    const agentsDir = path.join(dir, ext, "agents");
+  // The shared roster (packages/agents) is the repo's bundled profiles for both runtimes.
+  const places = [...exts.map((ext): [string, string] => [ext, path.join(extRoot, ext, "agents")]), ...(shared ? [["agents", shared] as [string, string]] : [])];
+  for (const [ext, agentsDir] of places) {
     let files: string[];
     try {
       files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort();

@@ -16,6 +16,14 @@ import {
 import { homedir } from "node:os";
 import { isTier, loadModelTable, TIERS, type Tier } from "@wolfpack/engine";
 import {
+  bundledAgentsDir,
+  discoverAgents,
+  loadAgent,
+  type AgentDefaults,
+  type ListedAgentDefinition,
+  type SubagentSessionMode,
+} from "@wolfpack/agents";
+import {
   isMuxAvailable,
   createSurface,
   isBackgroundSurfaceId,
@@ -134,44 +142,6 @@ const SubagentParams = Type.Object({
     }),
   ),
 });
-
-type SubagentSessionMode = "standalone" | "lineage-only" | "fork";
-
-interface AgentDefaults {
-  /** Model tier (main | smart | fast); resolved through the model table at spawn. */
-  model?: string;
-  tools?: string;
-  skills?: string;
-  /**
-   * If set (non-empty), this agent is granted the full subagent spawning
-   * toolset and may only spawn the listed agents. Presence of this field —
-   * not the `tools` list — is what grants spawning. Enforced in the child via
-   * the PI_SUBAGENT_ALLOWED env var.
-   */
-  subagentAgents?: string[];
-  autoExit?: boolean;
-  interactive?: boolean;
-  /** Run in a multiplexer pane (true) or as a background process (false/absent). */
-  pane?: boolean;
-  systemPromptMode?: "append" | "replace";
-  sessionMode?: SubagentSessionMode;
-  cwd?: string;
-  cli?: string;
-  body?: string;
-  disableModelInvocation?: boolean;
-}
-
-type AgentSource = "package" | "global" | "project";
-
-interface AgentDefinition extends AgentDefaults {
-  name: string;
-  description?: string;
-  disableModelInvocation: boolean;
-}
-
-interface ListedAgentDefinition extends AgentDefinition {
-  source: AgentSource;
-}
 
 /**
  * The full subagent lifecycle/spawning toolset registered by this extension.
@@ -357,12 +327,6 @@ const SUBAGENT_ALLOWLIST: Set<string> | null = (() => {
   return list.length > 0 ? new Set(list) : null;
 })();
 
-function getBundledAgentsDir(): string {
-  // Flattened wolfpack layout: index.ts sits at the extension root, so the
-  // package-bundled agents live in ./agents (amos's repo had them two levels up).
-  return join(SUBAGENTS_DIR, "agents");
-}
-
 /**
  * Agent dirs shipped by packages: this extension's own, then every local
  * package in the wolf's settings.json that declares `pi.agents` (e.g.
@@ -370,7 +334,7 @@ function getBundledAgentsDir(): string {
  * the repo, so no copy in the wolf's agent dir can drift from them.
  */
 function getPackageAgentsDirs(): string[] {
-  const dirs = [getBundledAgentsDir()];
+  const dirs = [bundledAgentsDir()];
   const configDir = getAgentConfigDir();
   let packages: unknown[] = [];
   try {
@@ -400,85 +364,10 @@ function getPackageAgentsDirs(): string[] {
   return dirs;
 }
 
-function getFrontmatterValue(frontmatter: string, key: string): string | undefined {
-  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-  return match ? match[1].trim() : undefined;
-}
-
-function parseOptionalBoolean(value: string | undefined): boolean | undefined {
-  return value != null ? value === "true" : undefined;
-}
-
-/** Parse a comma-separated frontmatter value into a trimmed list (or undefined). */
-function parseCommaList(value: string | undefined): string[] | undefined {
-  if (value == null) return undefined;
-  const list = value.split(",").map((s) => s.trim()).filter(Boolean);
-  return list.length > 0 ? list : undefined;
-}
-
-function parseSessionMode(value: string | undefined): SubagentSessionMode | undefined {
-  if (value === "standalone" || value === "lineage-only" || value === "fork") {
-    return value;
-  }
-  return undefined;
-}
-
-function parseAgentDefinition(content: string, fallbackName: string): AgentDefinition | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return null;
-
-  const frontmatter = match[1];
-  const body = content.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
-  const systemPromptMode = getFrontmatterValue(frontmatter, "system-prompt");
-
-  return {
-    name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
-    description: getFrontmatterValue(frontmatter, "description"),
-    model: getFrontmatterValue(frontmatter, "model"),
-    tools: getFrontmatterValue(frontmatter, "tools"),
-    systemPromptMode:
-      systemPromptMode === "replace"
-        ? "replace"
-        : systemPromptMode === "append"
-          ? "append"
-          : undefined,
-    skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
-    subagentAgents: parseCommaList(getFrontmatterValue(frontmatter, "subagent_agents")),
-    autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
-    interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
-    pane: parseOptionalBoolean(getFrontmatterValue(frontmatter, "pane")),
-    sessionMode: parseSessionMode(getFrontmatterValue(frontmatter, "session-mode")),
-    cwd: getFrontmatterValue(frontmatter, "cwd"),
-    cli: getFrontmatterValue(frontmatter, "cli"),
-    body: body || undefined,
-    disableModelInvocation:
-      getFrontmatterValue(frontmatter, "disable-model-invocation")?.toLowerCase() === "true",
-  };
-}
-
 function discoverAgentDefinitions(): ListedAgentDefinition[] {
-  const agents = new Map<string, ListedAgentDefinition>();
-  const dirs: Array<{ path: string; source: AgentSource }> = [
-    ...getPackageAgentsDirs().map((path) => ({ path, source: "package" as AgentSource })),
-    { path: join(getAgentConfigDir(), "agents"), source: "global" },
-    { path: join(process.cwd(), ".pi", "agents"), source: "project" },
-  ];
-
-  for (const { path: dir, source } of dirs) {
-    if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir).filter((entry) => entry.endsWith(".md"))) {
-      const parsed = parseAgentDefinition(
-        readFileSync(join(dir, file), "utf8"),
-        file.replace(/\.md$/, ""),
-      );
-      if (!parsed) continue;
-      agents.set(parsed.name, { ...parsed, source });
-    }
-  }
-
+  const all = discoverAgents({ cwd: process.cwd(), agentDir: getAgentConfigDir(), packageDirs: getPackageAgentsDirs() });
   // When this process is itself a restricted subagent, only expose the agents
   // it is permitted to spawn (PI_SUBAGENT_ALLOWED). Top-level sessions see all.
-  const all = [...agents.values()];
   return SUBAGENT_ALLOWLIST ? all.filter((a) => SUBAGENT_ALLOWLIST.has(a.name)) : all;
 }
 
@@ -562,20 +451,7 @@ function resolveEffectivePane(
 }
 
 function loadAgentDefaults(agentName: string): AgentDefaults | null {
-  const configDir = getAgentConfigDir();
-  const paths = [
-    join(process.cwd(), ".pi", "agents", `${agentName}.md`),
-    join(configDir, "agents", `${agentName}.md`),
-    ...getPackageAgentsDirs().map((dir) => join(dir, `${agentName}.md`)),
-  ];
-
-  for (const p of paths) {
-    if (!existsSync(p)) continue;
-    const parsed = parseAgentDefinition(readFileSync(p, "utf8"), agentName);
-    if (parsed) return parsed;
-  }
-
-  return null;
+  return loadAgent(agentName, { cwd: process.cwd(), agentDir: getAgentConfigDir(), packageDirs: getPackageAgentsDirs() });
 }
 
 function formatElapsed(seconds: number): string {

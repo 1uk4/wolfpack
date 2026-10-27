@@ -6,6 +6,7 @@
   "description": "Interactive async subagents for wolfpack — spawn agents in visible multiplexer panes (Herdr on macOS, tmux on Linux, configurable per wolf), with a live widget and results steered back. Ported from amosblomqvist/pi-interactive-subagents.",
   "keywords": ["pi-package", "wolfpack"],
   "dependencies": {
+    "@wolfpack/agents": "*",
     "@wolfpack/engine": "*"
   },
   "peerDependencies": {
@@ -15,7 +16,7 @@
   },
   "pi": {
     "extensions": ["./index.ts"],
-    "agents": ["./agents/*.md"],
+    "agents": ["../../packages/agents/agents/*.md"],
     "prompts": ["./prompts/*.md"]
   }
 }

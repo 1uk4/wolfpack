@@ -17,6 +17,7 @@
   "exclude": ["infra/**", "extensions/**", "apps/**", "node_modules/**", "vitest.config.ts"],
   "references": [
     { "path": "packages/engine" },
+    { "path": "packages/agents" },
     { "path": "packages/memory" },
     { "path": "packages/kb" },
     { "path": "packages/client" },

@@ -17,6 +17,7 @@
     "yaml": "^2.6.0",
     "nanoid": "^5.1.0",
     "esbuild": "^0.28.0",
+    "@wolfpack/agents": "*",
     "@wolfpack/engine": "*",
     "@earendil-works/pi-ai": "^1.1.0"
   },

@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronsLeftIcon, ChevronsRightIcon, XIcon } from "lucide-react";
+import { ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchMemoryStatus, fetchMemoryTopic, fetchWorkRecord, postConsolidate, postPromote, type KbResult } from "@/components/kb-client";
+import { fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { WorkBadges } from "@/components/work-badges";
 import { useMemoryEvents } from "@/components/memory-events";
@@ -33,8 +33,6 @@ import {
 	workHref,
 	type FeedItem,
 	type MemoryStatus,
-	type MemoryTopic,
-	type MemoryTopicRef,
 	type PanelView,
 	type PromoteState,
 	type WorkRecordResponse,
@@ -45,7 +43,7 @@ const REFRESH_DEBOUNCE_MS = 250;
 /**
  * The thread's memory panel (flex sibling of the conversation column):
  * off/inert banner, pool gauge with its consolidate / promote actions,
- * session/den topics (click → body drawer), and one section that toggles
+ * and one section, running to the bottom of the panel, that toggles
  * between the bound item's Record and the live observation feed (live-only,
  * capped, this thread's events). Collapse and view state persist in
  * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
@@ -90,7 +88,6 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
-	const [drawer, setDrawer] = useState<{ ref: MemoryTopicRef; scope: "den" | "session"; topic: MemoryTopic | null; error: string | null } | null>(null);
 
 	const boundId = status?.bound?.workId ?? null;
 	const boundTitle = status?.bound?.title;
@@ -208,12 +205,6 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		}
 	};
 
-	const openTopic = async (ref: MemoryTopicRef, scope: "den" | "session") => {
-		setDrawer({ ref, scope, topic: null, error: null });
-		const r: KbResult<MemoryTopic> = await fetchMemoryTopic(wolf, ref.id, scope);
-		setDrawer((d) => (d && d.ref.id === ref.id && d.scope === scope ? (r.ok ? { ...d, topic: r.data } : { ...d, error: r.message }) : d));
-	};
-
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
 	const showFeed = view === "feed" || !status?.bound;
@@ -283,44 +274,8 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					unread={unread}
 					onToggle={() => chooseView(showFeed ? "record" : "feed")}
 				/>
-
-				{status ? <TopicList title="Session topics" topics={status.sessionTopics} onOpen={(t) => openTopic(t, "session")} /> : null}
-				{status ? <TopicList title="Den topics" topics={status.denTopics} onOpen={(t) => openTopic(t, "den")} /> : null}
 			</div>
-
-			{drawer ? (
-				<div className="absolute inset-0 z-10 flex flex-col bg-background" data-testid="memory-topic-drawer">
-					<div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
-						<span className="truncate font-medium">{drawer.ref.title}</span>
-						<Button variant="ghost" size="icon" aria-label="Close topic" onClick={() => setDrawer(null)}>
-							<XIcon />
-						</Button>
-					</div>
-					<div className="min-h-0 flex-1 overflow-y-auto p-3">
-						{drawer.error ? <p className="text-muted-foreground">{drawer.error}</p> : drawer.topic ? <pre className="whitespace-pre-wrap text-xs">{drawer.topic.body}</pre> : <p className="text-muted-foreground">Loading…</p>}
-					</div>
-				</div>
-			) : null}
 		</aside>
-	);
-}
-
-function TopicList({ title, topics, onOpen }: { title: string; topics: MemoryTopicRef[]; onOpen: (t: MemoryTopicRef) => void }) {
-	return (
-		<section data-testid={`memory-topics-${title.split(" ")[0]?.toLowerCase()}`}>
-			<h3 className="mb-1 text-xs font-medium uppercase text-muted-foreground">
-				{title} ({topics.length})
-			</h3>
-			<ul className="flex flex-col">
-				{topics.map((t) => (
-					<li key={t.id}>
-						<button type="button" className="w-full truncate rounded px-1 py-0.5 text-left text-xs hover:bg-muted" title={t.summary} onClick={() => onOpen(t)}>
-							{t.title}
-						</button>
-					</li>
-				))}
-			</ul>
-		</section>
 	);
 }
 
@@ -369,7 +324,7 @@ export function BoundOrFeed({ view, bound, rec, item, feed, unread, onToggle }: 
 					<div className="mt-2">
 						{rec.inheritedFrom ? <p className="text-xs text-muted-foreground">Record from parent: {rec.inheritedFrom.title}</p> : null}
 						{rec.record.trim() ? (
-							<div className="mt-1 max-h-60 overflow-auto text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold" data-testid="memory-record-md">
+							<div className="mt-1 text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold" data-testid="memory-record-md">
 								<KbMarkdown>{rec.record}</KbMarkdown>
 							</div>
 						) : (

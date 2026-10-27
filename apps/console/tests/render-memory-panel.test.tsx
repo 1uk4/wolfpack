@@ -48,18 +48,13 @@ describe("MemoryPanel SSR", () => {
 		assert.match(html, /data-testid="task-graph-svg"/);
 		assert.doesNotMatch(html, /Decisions/);
 	});
-	it("graph SVG: statuses map to data attributes, check, dash, glow on the bound task only", () => {
+	it("graph: statuses map to data attributes on the cards, the bound task flagged", () => {
 		const html = r("graph", bound);
 		assert.match(html, /data-testid="task-node-a" data-status="shipped" data-bound="false"/);
 		assert.match(html, /data-testid="task-node-b" data-status="building" data-bound="true"/);
 		assert.match(html, /data-testid="task-node-c" data-status="blocked" data-bound="false"/);
-		assert.equal(html.match(/data-glow="true"/g)?.length, 1);
+		assert.equal(html.match(/>current</g)?.length, 1);
 		assert.equal(html.match(/data-check="true"/g)?.length, 1);
-		assert.match(html, /stroke-sky-400/);
-		assert.equal(html.match(/stroke-dasharray="4 3"/g)?.length, 1);
-		assert.match(html, /data-edge="a-&gt;b"/);
-		assert.match(html, /data-edge="b-&gt;c"/);
-		assert.doesNotMatch(html, /data-edge="b-&gt;a"/);
 	});
 	it("graph view for an Inbox parent: count, no svg", () => {
 		const inbox = buildTaskGraph({ id: "t", kind: "task", title: "", stage: "", plan: "", record: "", partOf: "I" }, { ...feat, id: "I", title: "Inbox", container: true } as never);
@@ -93,7 +88,7 @@ describe("MemoryPanel SSR", () => {
 	it("graph a11y: group role, current task named in the node label, activation keys", () => {
 		const html = r("graph", bound);
 		assert.match(html, /role="group" aria-label="Task graph: Feat, 1\/3 shipped"/);
-		assert.match(html, /aria-label="Task b \(building, current task\)"/);
+		assert.match(html, /aria-label="Task b \(in build, current task\)"/);
 		assert.match(html, /aria-label="Task a \(shipped\)"/);
 		assert.match(html, /tabindex="0"/);
 		assert.equal(isActivateKey("Enter"), true);

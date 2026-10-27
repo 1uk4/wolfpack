@@ -1,162 +1,179 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { MaximizeIcon, MinusIcon, PlusIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { CheckIcon, MaximizeIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fitGraphView, fitZoomFor, zoomedGraphView, type Viewport } from "@/components/pan-zoom";
-import {
-	ARROW_HEAD,
-	GLOW_BLUR,
-	GLOW_MARGIN,
-	GLOW_REACH,
-	LINE_H,
-	NODE_H,
-	NODE_W_MIN,
-	STROKE_W,
-	blockLayout,
-	edgePathD,
-	wrapTitle,
-} from "@/components/plan-block";
-import type { TaskGraphModel, TaskStatus } from "@/src/core";
+import { layoutTaskGraph, type TaskGraphModel, type TaskNode, type TaskStatus } from "@/src/core";
 
 type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;
 
 /**
- * The feature's task graph: a dagre top-down layout (the learnharness plan
- * block's engine and geometry, via components/plan-block) drawn as SVG.
- * Status → look: shipped = filled bright + check; building = sky stroke;
- * ready = normal; blocked = muted + dashed; archived = dimmed. The bound
- * task carries a blurred yellow glow. Edges run dependency → dependent.
+ * The feature's task graph, drawn by React Flow (HTML cards, so titles wrap
+ * and clamp; real edges; pan/zoom) over the pure placement in
+ * src/core/task-graph-layout (dagre per connected component, chains stacked,
+ * single tasks packed into a wrapped grid). Status → look: shipped = muted +
+ * check; building = sky border + dot; ready = normal; blocked = dashed;
+ * archived = faded. The bound task wears a yellow ring and "current". Edges
+ * run dependency → dependent.
  */
-const BOX: Record<TaskStatus, string> = {
-	shipped: "fill-foreground/20 stroke-foreground",
-	building: "fill-background/50 stroke-sky-400",
-	ready: "fill-background/50 stroke-foreground/70",
-	blocked: "fill-card stroke-border",
-	archived: "fill-card stroke-border",
+
+const STATUS_LABEL: Record<TaskStatus, string> = { shipped: "Shipped", building: "In build", ready: "Ready", blocked: "Blocked", archived: "Archived" };
+const LEGEND: TaskStatus[] = ["building", "ready", "blocked", "shipped"];
+
+const CARD: Record<TaskStatus, string> = {
+	shipped: "border-border bg-muted/60 text-muted-foreground",
+	building: "border-sky-400 bg-card text-foreground",
+	ready: "border-foreground/40 bg-card text-foreground",
+	blocked: "border-dashed border-border bg-card/60 text-muted-foreground",
+	archived: "border-border bg-card/40 text-muted-foreground opacity-50",
 };
-const TEXT: Record<TaskStatus, string> = {
-	shipped: "fill-foreground text-xs font-medium",
-	building: "fill-foreground text-xs",
-	ready: "fill-foreground text-xs",
-	blocked: "fill-muted-foreground/80 text-xs",
-	archived: "fill-muted-foreground/60 text-xs",
+const DOT: Record<TaskStatus, string> = {
+	shipped: "bg-muted-foreground/60",
+	building: "bg-sky-400",
+	ready: "bg-foreground/60",
+	blocked: "border border-muted-foreground/60",
+	archived: "bg-muted-foreground/30",
 };
+
+export interface TaskNodeView {
+	id: string;
+	title: string;
+	status: TaskStatus;
+	statusLabel: string;
+	kind: string;
+	bound: boolean;
+	ariaLabel: string;
+	cardClass: string;
+	dotClass: string;
+}
+
+/** Everything a card shows, derived (pure). */
+export function taskNodeView(n: Pick<TaskNode, "id" | "title" | "kind" | "status">, bound: boolean): TaskNodeView {
+	const statusLabel = STATUS_LABEL[n.status];
+	return {
+		id: n.id,
+		title: n.title,
+		status: n.status,
+		statusLabel,
+		kind: n.kind,
+		bound,
+		ariaLabel: `${n.title} (${statusLabel.toLowerCase()}${bound ? ", current task" : ""})`,
+		cardClass: `${CARD[n.status]}${bound ? " ring-2 ring-yellow-400/80 shadow-[0_0_14px_2px_rgba(250,204,21,0.35)]" : ""}`,
+		dotClass: DOT[n.status],
+	};
+}
+
 /** Keys that activate a focused node (button semantics). */
 export const isActivateKey = (key: string): boolean => key === "Enter" || key === " ";
 
-const CHECK = "M0 5 L4 9 L12 0";
-
-export function TaskGraphSvg({
-	model,
-	onSelect,
-	naturalSize,
-}: {
-	model: GraphModel;
+interface CardData extends Record<string, unknown> {
+	view: TaskNodeView;
 	onSelect?: (id: string) => void;
-	/** Render at the viewBox size in px (the overlay's pan/zoom math needs 1 unit = 1 px). */
-	naturalSize?: boolean;
-}) {
-	const markerId = useId().replace(/[^a-zA-Z0-9-]/g, "");
-	const layout = useMemo(() => blockLayout(model.nodes, model.edges), [model.nodes, model.edges]);
-	const pad = GLOW_REACH;
-	const ox = layout.originX ?? 0;
-	const oy = layout.originY ?? 0;
-	const vbW = Math.max(layout.width, 1) + 2 * pad;
-	const vbH = Math.max(layout.height, 1) + 2 * pad;
-	const statusOf = new Map(model.nodes.map((n) => [n.id, n.status] as const));
-	const headH = 16 * (STROKE_W / 1.5);
-	const headW = (50.2 * headH) / 104;
+}
+
+/** One task card (also rendered alone in tests). */
+export function TaskCard({ view, onSelect }: { view: TaskNodeView; onSelect?: (id: string) => void }) {
 	return (
-		<svg
-			viewBox={`${ox - pad} ${oy - pad} ${vbW} ${vbH}`}
-			className={`block h-auto ${naturalSize ? "" : "w-full"}`}
-			style={naturalSize ? { width: `${vbW}px` } : undefined}
-			role="group"
-			aria-label={`Task graph: ${model.featureTitle}, ${model.label}`}
-			data-testid="task-graph-svg"
+		<div
+			data-testid={`task-node-${view.id}`}
+			data-status={view.status}
+			data-bound={view.bound ? "true" : "false"}
+			className={`nopan pointer-events-auto flex h-full w-full flex-col gap-1.5 rounded-lg border px-3 py-3 font-sans outline-none focus-visible:ring-2 focus-visible:ring-ring ${onSelect ? "cursor-pointer" : ""} ${view.cardClass}`}
+			role={onSelect ? "button" : undefined}
+			tabIndex={onSelect ? 0 : undefined}
+			aria-label={onSelect ? view.ariaLabel : undefined}
+			onClick={onSelect ? (e) => { e.stopPropagation(); onSelect(view.id); } : undefined}
+			onKeyDown={
+				onSelect
+					? (e) => {
+							if (isActivateKey(e.key)) {
+								e.preventDefault();
+								e.stopPropagation();
+								onSelect(view.id);
+							}
+						}
+					: undefined
+			}
 		>
-			<defs>
-				<marker id={markerId} viewBox="0 0 50.2 104" refX={27.2} refY={52} markerWidth={headW} markerHeight={headH} markerUnits="userSpaceOnUse" orient="auto">
-					<path d={ARROW_HEAD} className="fill-muted-foreground" />
-				</marker>
-				<filter id={`${markerId}-glow`} x="-60%" y="-60%" width="220%" height="220%">
-					<feGaussianBlur stdDeviation={GLOW_BLUR} />
-				</filter>
-			</defs>
-			{model.edges.map((e) => {
-				const pts = layout.edgePts.get(`${e.from}->${e.to}`);
-				if (!pts) return null;
-				const tx = layout.x.get(e.to);
-				const ty = layout.y.get(e.to);
-				const target = tx !== undefined && ty !== undefined ? { x: tx, y: ty, w: layout.nodeW.get(e.to) ?? NODE_W_MIN, h: layout.nodeH.get(e.to) ?? NODE_H } : undefined;
-				const dim = statusOf.get(e.from) === "archived" || statusOf.get(e.to) === "archived";
-				return (
-					<path
-						key={`${e.from}->${e.to}`}
-						d={edgePathD(pts, target)}
-						className={`fill-none stroke-muted-foreground${dim ? " opacity-40" : ""}`}
-						strokeWidth={STROKE_W}
-						markerEnd={`url(#${markerId})`}
-						data-edge={`${e.from}->${e.to}`}
-					/>
-				);
-			})}
-			{model.nodes.map((n) => {
-				const lines = wrapTitle(n.title);
-				const h = layout.nodeH.get(n.id) ?? NODE_H;
-				const w = layout.nodeW.get(n.id) ?? NODE_W_MIN;
-				const y0 = (h - lines.length * LINE_H) / 2 + 10;
-				const bound = n.id === model.boundId;
-				return (
-					<g
-						key={n.id}
-						transform={`translate(${layout.x.get(n.id) ?? 0}, ${layout.y.get(n.id) ?? 0})`}
-						data-testid={`task-node-${n.id}`}
-						data-status={n.status}
-						data-bound={bound ? "true" : "false"}
-						className={`group/node outline-none ${onSelect ? "cursor-pointer " : ""}${n.status === "archived" ? "opacity-40" : ""}`}
-						role={onSelect ? "button" : undefined}
-						tabIndex={onSelect ? 0 : undefined}
-						aria-label={onSelect ? `${n.title} (${n.status}${bound ? ", current task" : ""})` : undefined}
-						onClick={
-							onSelect
-								? (e) => {
-										e.stopPropagation();
-										onSelect(n.id);
-									}
-								: undefined
-						}
-						onKeyDown={
-							onSelect
-								? (e) => {
-										if (isActivateKey(e.key)) {
-											e.preventDefault();
-											e.stopPropagation();
-											onSelect(n.id);
-										}
-									}
-								: undefined
-						}
-					>
-						<rect width={w} height={h} className={`${BOX[n.status]} group-focus-visible/node:stroke-ring group-focus-visible/node:stroke-2`} strokeWidth={n.status === "building" ? 2 : STROKE_W} strokeDasharray={n.status === "blocked" ? "4 3" : undefined} />
-						{bound ? (
-							<rect x={-GLOW_MARGIN} y={-GLOW_MARGIN} width={w + 2 * GLOW_MARGIN} height={h + 2 * GLOW_MARGIN} className="fill-yellow-400/25" filter={`url(#${markerId}-glow)`} data-glow="true" />
-						) : null}
-						{lines.map((line, i) => (
-							<text key={i} x={w / 2} y={y0 + i * LINE_H} textAnchor="middle" className={TEXT[n.status]}>
-								{line}
-							</text>
-						))}
-						{n.status === "shipped" ? <path d={CHECK} transform={`translate(${w - 18}, 6)`} className="fill-none stroke-foreground" strokeWidth={1.5} data-check="true" /> : null}
-					</g>
-				);
-			})}
-		</svg>
+			<div className="flex h-5 items-center gap-1.5 text-[11px] leading-none">
+				{view.status === "shipped" ? <CheckIcon className="size-3.5 shrink-0" aria-hidden data-check="true" /> : <span className={`size-2 shrink-0 rounded-full ${view.dotClass}`} aria-hidden />}
+				<span className="font-medium">{view.statusLabel}</span>
+				{view.bound ? <span className="rounded bg-yellow-400/20 px-1 py-0.5 font-medium text-yellow-600 dark:text-yellow-300" data-testid="task-current">current</span> : null}
+				<span className="ml-auto text-muted-foreground/70">{view.kind}</span>
+			</div>
+			<div className="line-clamp-3 break-words text-[13px] leading-[18px]" title={view.title}>
+				{view.title}
+			</div>
+		</div>
 	);
 }
 
-/** The graph at panel width; a node click selects it, any other click (or the expand button) opens the overlay. */
+function TaskFlowNode({ data }: NodeProps<Node<CardData>>) {
+	return (
+		<>
+			<Handle type="target" position={Position.Top} isConnectable={false} style={{ opacity: 0, pointerEvents: "none" }} />
+			<TaskCard view={data.view} onSelect={data.onSelect} />
+			<Handle type="source" position={Position.Bottom} isConnectable={false} style={{ opacity: 0, pointerEvents: "none" }} />
+		</>
+	);
+}
+const nodeTypes = { task: TaskFlowNode };
+
+/** React Flow's chrome follows the console tokens. */
+const FLOW_STYLE = {
+	background: "transparent",
+	"--xy-controls-button-background-color-default": "var(--card)",
+	"--xy-controls-button-background-color-hover-default": "var(--accent)",
+	"--xy-controls-button-color-default": "var(--foreground)",
+	"--xy-controls-button-color-hover-default": "var(--foreground)",
+	"--xy-controls-button-border-color-default": "var(--border)",
+	"--xy-attribution-background-color-default": "transparent",
+} as CSSProperties;
+
+const NODE_W_COMPACT = 220;
+const NODE_W_OVERLAY = 220;
+const COMPACT_MAX_H = 420;
+
+function useFlow(model: GraphModel, nodeWidth: number, maxWidth: number, onSelect: ((id: string) => void) | undefined) {
+	const layout = useMemo(() => layoutTaskGraph(model.nodes, model.edges, { nodeWidth, maxWidth }), [model.nodes, model.edges, nodeWidth, maxWidth]);
+	const nodes = useMemo<Node<CardData>[]>(() => {
+		const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
+		return layout.nodes.map((p) => ({
+			id: p.id,
+			type: "task",
+			position: { x: p.x, y: p.y },
+			width: p.w,
+			height: p.h,
+			data: { view: taskNodeView(byId.get(p.id)!, p.id === model.boundId), onSelect },
+			draggable: false,
+			connectable: false,
+			selectable: false,
+			focusable: false,
+		}));
+	}, [layout, model.nodes, model.boundId, onSelect]);
+	const edges = useMemo<Edge[]>(() => {
+		const status = new Map(model.nodes.map((n) => [n.id, n.status] as const));
+		return model.edges.map((e) => {
+			const live = status.get(e.to) === "building" || status.get(e.to) === "ready";
+			const color = live ? "var(--foreground)" : "var(--muted-foreground)";
+			const dim = status.get(e.from) === "archived" || status.get(e.to) === "archived";
+			return {
+				id: `${e.from}->${e.to}`,
+				source: e.from,
+				target: e.to,
+				type: "smoothstep",
+				focusable: false,
+				selectable: false,
+				markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
+				style: { stroke: color, strokeWidth: 1.5, opacity: dim ? 0.3 : live ? 0.85 : 0.55 },
+			};
+		});
+	}, [model.nodes, model.edges]);
+	return { layout, nodes, edges };
+}
+
+/** Panel-width graph: not zoomable (the panel scrolls), fitted to the panel, nodes clickable; Expand opens the overlay. */
 export function TaskGraph({ model, onSelect }: { model: GraphModel; onSelect: (id: string) => void }) {
 	const [overlay, setOverlay] = useState(false);
 	const expandRef = useRef<HTMLButtonElement>(null);
@@ -167,10 +184,8 @@ export function TaskGraph({ model, onSelect }: { model: GraphModel; onSelect: (i
 	};
 	return (
 		<div className="relative" data-testid="task-graph">
-			<div className="cursor-zoom-in" onClick={() => setOverlay(true)}>
-				<TaskGraphSvg model={model} onSelect={onSelect} />
-			</div>
-			<Button ref={expandRef} size="icon-xs" variant="ghost" className="absolute right-0 top-0" aria-label="Expand task graph" data-testid="task-graph-expand" onClick={() => setOverlay(true)}>
+			<TaskGraphCompact model={model} onSelect={onSelect} />
+			<Button ref={expandRef} size="icon-xs" variant="outline" className="absolute right-0 top-0 z-10" aria-label="Expand task graph" data-testid="task-graph-expand" onClick={() => setOverlay(true)}>
 				<MaximizeIcon />
 			</Button>
 			{overlay ? (
@@ -187,7 +202,50 @@ export function TaskGraph({ model, onSelect }: { model: GraphModel; onSelect: (i
 	);
 }
 
-/** Larger view with pan/zoom (fit-floor semantics of components/pan-zoom). Esc closes (one Esc, one action). */
+export function TaskGraphCompact({ model, onSelect }: { model: GraphModel; onSelect?: (id: string) => void }) {
+	const wrapRef = useRef<HTMLDivElement>(null);
+	const [width, setWidth] = useState(300);
+	useEffect(() => {
+		const el = wrapRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => setWidth(el.clientWidth || 300));
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const { layout, nodes, edges } = useFlow(model, NODE_W_COMPACT, width, onSelect);
+	const scale = Math.min(1, (width - 8) / Math.max(layout.width, 1));
+	const height = Math.round(Math.min(COMPACT_MAX_H, Math.max(96, layout.height * scale + 16)));
+	return (
+		<div ref={wrapRef} style={{ height }} className="w-full" role="group" aria-label={`Task graph: ${model.featureTitle}, ${model.label}`} data-testid="task-graph-svg">
+			<ReactFlow
+				nodes={nodes}
+				edges={edges}
+				nodeTypes={nodeTypes}
+				style={FLOW_STYLE}
+				width={width}
+				height={height}
+				fitView
+				fitViewOptions={{ padding: 0.04, maxZoom: 1 }}
+				minZoom={0.1}
+				maxZoom={1}
+				nodesDraggable={false}
+				nodesConnectable={false}
+				nodesFocusable={false}
+				edgesFocusable={false}
+				elementsSelectable={false}
+				panOnDrag={false}
+				panOnScroll={false}
+				zoomOnScroll={false}
+				zoomOnPinch={false}
+				zoomOnDoubleClick={false}
+				preventScrolling={false}
+				proOptions={{ hideAttribution: true }}
+			/>
+		</div>
+	);
+}
+
+/** Full-screen view with pan/zoom + Controls. Esc closes (one Esc, one action). */
 export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphModel; onClose: () => void; onSelect: (id: string) => void }) {
 	const dialogRef = useRef<HTMLDivElement>(null);
 	const closeRef = useRef<HTMLButtonElement>(null);
@@ -197,6 +255,7 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
+				// THE ONE-ESC LAW: claim at the document level, the window chain must not also act.
 				e.preventDefault();
 				e.stopPropagation();
 				onClose();
@@ -224,116 +283,61 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 	}, [onClose]);
 
 	const viewportRef = useRef<HTMLDivElement>(null);
-	const [size, setSize] = useState({ w: 0, h: 0 });
+	const [width, setWidth] = useState(1000);
 	useEffect(() => {
 		const el = viewportRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
-		const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+		setWidth(el.clientWidth || 1000);
+		const ro = new ResizeObserver(() => setWidth(el.clientWidth || 1000));
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, []);
-
-	const layout = useMemo(() => blockLayout(model.nodes, model.edges), [model.nodes, model.edges]);
-	const box = useMemo(() => ({ w: Math.max(layout.width, 1) + 2 * GLOW_REACH, h: Math.max(layout.height, 1) + 2 * GLOW_REACH }), [layout]);
-	const fitZoom = useMemo(() => fitZoomFor(box, size), [box, size]);
-	const [view, setView] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
-	const adjusted = useRef(false);
-	const atFloor = view.zoom <= fitZoom + 1e-9;
-	useEffect(() => {
-		if (atFloor) adjusted.current = false;
-	}, [atFloor]);
-	useEffect(() => {
-		if (adjusted.current || !size.w || !size.h) return;
-		setView(fitGraphView(box, size, fitZoom));
-	}, [fitZoom, size, box]);
-
-	useEffect(() => {
-		const el = viewportRef.current;
-		if (!el) return;
-		const onWheel = (e: WheelEvent) => {
-			e.preventDefault();
-			const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-			const rect = el.getBoundingClientRect();
-			setView((v) => zoomedGraphView(v, Math.exp(-dy * 0.0015), fitZoom, { x: e.clientX - rect.left, y: e.clientY - rect.top }, box, size));
-			adjusted.current = true;
-		};
-		el.addEventListener("wheel", onWheel, { passive: false });
-		return () => el.removeEventListener("wheel", onWheel);
-	}, [fitZoom, box, size]);
-
-	const drag = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null);
-	const stepZoom = (factor: number) => {
-		adjusted.current = true;
-		setView((v) => zoomedGraphView(v, factor, fitZoom, { x: size.w / 2, y: size.h / 2 }, box, size));
-	};
+	const { nodes, edges } = useFlow(model, NODE_W_OVERLAY, width - 48, onSelect);
 
 	return (
 		<div
 			ref={dialogRef}
-			className="fixed inset-0 z-50 flex flex-col bg-background/80 p-4 backdrop-blur-sm"
+			className="fixed inset-0 z-50 flex flex-col bg-background p-4"
 			role="dialog"
 			aria-modal="true"
 			aria-label={`Task graph: ${model.featureTitle}`}
 			data-testid="task-graph-overlay"
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose();
-			}}
 		>
-			<div className="mb-2 flex items-center gap-2">
-				<span className="text-sm font-medium">{model.featureTitle}</span>
+			<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+				<span className="font-sans text-sm font-medium">{model.featureTitle}</span>
 				<span className="text-xs text-muted-foreground">{model.label}</span>
+				<ul className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground" aria-label="Legend">
+					{LEGEND.map((s) => (
+						<li key={s} className="flex items-center gap-1">
+							{s === "shipped" ? <CheckIcon className="size-3" aria-hidden /> : <span className={`size-2 rounded-full ${DOT[s]}`} aria-hidden />}
+							{STATUS_LABEL[s]}
+						</li>
+					))}
+					{model.boundId ? <li className="flex items-center gap-1"><span className="size-2 rounded-full ring-2 ring-yellow-400/80" aria-hidden />Current</li> : null}
+				</ul>
 				<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close" data-testid="task-graph-close" onClick={onClose}>
 					<XIcon />
 				</Button>
 			</div>
-			<div
-				ref={viewportRef}
-				className={`relative min-h-0 flex-1 touch-none select-none overflow-hidden rounded-xl border ${atFloor ? "cursor-default" : "cursor-grab"}`}
-				onPointerDown={(e) => {
-					if (e.button !== 0 || atFloor) return;
-					drag.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y, moved: false };
-					e.currentTarget.setPointerCapture(e.pointerId);
-				}}
-				onPointerMove={(e) => {
-					const d = drag.current;
-					if (!d) return;
-					d.moved = true;
-					setView((v) => (v.zoom <= fitZoom + 1e-9 ? v : { ...v, x: d.x + (e.clientX - d.px), y: d.y + (e.clientY - d.py) }));
-				}}
-				onPointerUp={() => {
-					if (drag.current?.moved) adjusted.current = true;
-					drag.current = null;
-				}}
-				onPointerCancel={() => {
-					drag.current = null;
-				}}
-			>
-				<div className="absolute left-0 top-0 origin-top-left" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
-					<TaskGraphSvg model={model} onSelect={onSelect} naturalSize />
-				</div>
-				<div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2">
-					<span className="text-xs text-muted-foreground/60">Drag to pan · scroll to zoom</span>
-					<div className="flex gap-1">
-						<Button size="icon-xs" variant="outline" className="pointer-events-auto" aria-label="Zoom out" onClick={() => stepZoom(1 / 1.25)}>
-							<MinusIcon />
-						</Button>
-						<Button
-							size="icon-xs"
-							variant="outline"
-							className="pointer-events-auto"
-							aria-label="Fit graph to screen"
-							onClick={() => {
-								adjusted.current = false;
-								if (size.w && size.h) setView(fitGraphView(box, size, fitZoom));
-							}}
-						>
-							<MaximizeIcon />
-						</Button>
-						<Button size="icon-xs" variant="outline" className="pointer-events-auto" aria-label="Zoom in" onClick={() => stepZoom(1.25)}>
-							<PlusIcon />
-						</Button>
-					</div>
-				</div>
+			<div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden rounded-xl border bg-background">
+				<ReactFlow
+					nodes={nodes}
+					edges={edges}
+					nodeTypes={nodeTypes}
+					style={FLOW_STYLE}
+					fitView
+					fitViewOptions={{ padding: 0.1, maxZoom: 1 }}
+					minZoom={0.1}
+					maxZoom={2}
+					nodesDraggable={false}
+					nodesConnectable={false}
+					nodesFocusable={false}
+					edgesFocusable={false}
+					elementsSelectable={false}
+					proOptions={{ hideAttribution: true }}
+				>
+					<Controls showInteractive={false} position="bottom-right" />
+				</ReactFlow>
 			</div>
 		</div>
 	);

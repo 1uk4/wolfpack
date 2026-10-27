@@ -125,7 +125,7 @@ describe("notification trigger (planNotifications)", () => {
 	it("never fires for the first snapshot (cards already pending at startup)", () => {
 		const r = planNotifications(INITIAL_NOTIFY_STATE, [A], { focused: false });
 		assert.deepEqual(r.notifications, []);
-		assert.equal(r.state.primed, true);
+		assert.equal(r.state.primedAll, true);
 	});
 
 	it("fires for a card that newly appears while unfocused: wolf + thread in the title, the question in the body", () => {

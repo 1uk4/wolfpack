@@ -103,15 +103,13 @@ export interface NeedsYouNotification {
 export interface NotifyState {
 	/** Cards seen so far (notified or not): a card is announced at most once. */
 	seen: ReadonlySet<string>;
-	/** False until a first snapshot has been taken: cards already pending at startup are not "new". */
-	primed: boolean;
 	/** Wolves whose first report has been taken (a wolf that was down at first load is primed when it first answers). */
 	primedWolves: ReadonlySet<string>;
 	/** A snapshot without per-wolf `responded` primed everyone. */
 	primedAll: boolean;
 }
 
-export const INITIAL_NOTIFY_STATE: NotifyState = { seen: new Set(), primed: false, primedWolves: new Set(), primedAll: false };
+export const INITIAL_NOTIFY_STATE: NotifyState = { seen: new Set(), primedWolves: new Set(), primedAll: false };
 
 /**
  * Decide the notifications for a new snapshot of the list. A thread TRANSITIONS into needs-you when a card of it appears
@@ -152,5 +150,5 @@ export function planNotifications(
 	}
 	const primedWolves = new Set(state.primedWolves);
 	for (const w of opts.responded ?? []) primedWolves.add(w);
-	return { notifications, state: { seen, primed: true, primedWolves, primedAll: state.primedAll || opts.responded === undefined } };
+	return { notifications, state: { seen, primedWolves, primedAll: state.primedAll || opts.responded === undefined } };
 }

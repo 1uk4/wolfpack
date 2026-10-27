@@ -148,7 +148,10 @@ export function createActivityBridge(poke: (wolf: string, change?: Omit<ServerEv
 					if (following.has(wolf)) continue;
 					following.add(wolf);
 					const stop = new AbortController();
-					ctl.signal.addEventListener("abort", () => stop.abort(), { once: true });
+					const cascade = () => stop.abort();
+					ctl.signal.addEventListener("abort", cascade, { once: true });
+					// An unfollowed wolf must not leave its cascade listener on the long-lived bridge signal.
+					stop.signal.addEventListener("abort", () => ctl.signal.removeEventListener("abort", cascade), { once: true });
 					stops.set(wolf, stop);
 					void follow(client, wolf, stop.signal);
 				}

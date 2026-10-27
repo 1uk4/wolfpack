@@ -441,13 +441,15 @@ export default function createTasksExtension(
 
     sections: [
       // Task tools instructions
-      section("task_tools", () => {
+      section("task_tools", async (sc) => {
         const domainList = domains.join(", ") || "(none configured)";
+        // A subagent never binds: the pi child (env flag) or a task-owned conversation (read-only binding) gets no rules for it.
+        const quiet = isSubagent() || (await resolveBindingRoot({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation })).readOnly;
         return `## Task Tools
 
 Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
-Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
+Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       }),
 
       // Active task section — shows current binding with feature context
@@ -919,7 +921,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             const moved = args.to === "shipped" ? await ship(target) : await client.stage(target, args.to);
             if (moved.stage === "in_build") await syncFeatureStage(client, moved).catch(() => {});
             let reply = `${target} → ${args.to}`;
-            if (moved.stage === "in_build" && !binding && !isSubagent() && ["task", "issue", "spike"].includes(moved.kind)) {
+            if (moved.stage === "in_build" && !binding && !isSubagent() && !(await resolveBindingRoot(ctx)).readOnly && ["task", "issue", "spike"].includes(moved.kind)) {
               const refused = await writeBinding(ctx, moved.id, moved.domain as string, await recordFeatureId(client, moved));
               if (!refused) {
                 await writeCache(moved);

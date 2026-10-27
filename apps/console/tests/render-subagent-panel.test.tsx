@@ -25,6 +25,7 @@ Object.assign(globalThis, {
 type ConsoleClient = import("@wolfpack/client").ConsoleClient;
 type ThreadSummary = import("@wolfpack/client").ThreadSummary;
 type LedgerEntry = import("@wolfpack/client").LedgerEntry;
+const { BusyError } = await import("@wolfpack/client");
 const { threadFetch } = await import("./helpers/thread-fetch.ts");
 const { SubagentPanel, ledgerSender, messageHint, formatElapsed, formatTokens } = await import("../components/subagent-panel.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
@@ -40,7 +41,9 @@ const LEDGER: LedgerEntry[] = [
 function fake(summary: Partial<ThreadSummary>) {
 	const calls = { aborts: 0, submits: [] as { input: string; whenBusy?: string }[] };
 	const state = { summary: { ...base, ...summary }, ledger: LEDGER };
-	const running = () => state.summary.state === "running";
+	// The child's real state, which the summary may lag behind (stale-state tests flip it without the summary).
+	const live = { running: summary.state === undefined || summary.state === "running", submitError: false };
+	const running = () => live.running;
 	const client = {
 		listThreads: async () => [state.summary],
 		getThread: async () => ({
@@ -53,14 +56,20 @@ function fake(summary: Partial<ThreadSummary>) {
 			],
 		}),
 		getLedger: async () => state.ledger,
-		abort: async () => void calls.aborts++,
+		abort: async () => {
+			calls.aborts++;
+			if (live.submitError) throw new Error("stop refused");
+		},
 		submit: async (_id: string, input: string, opts?: { whenBusy?: string }) => {
 			calls.submits.push({ input, whenBusy: opts?.whenBusy });
+			if (live.submitError) throw new Error("wolf unreachable");
+			// reject on a running child and steer on an idle one are both 409s
+			if ((opts?.whenBusy === "reject" && running()) || (opts?.whenBusy === "steer" && !running())) throw new BusyError("busy");
 			return { disposition: running() ? "steered" : "started" };
 		},
 		watch: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }) }),
 	} as unknown as ConsoleClient;
-	return { client, calls, state };
+	return { client, calls, state, live };
 }
 
 let root: Root | null = null;
@@ -151,6 +160,97 @@ describe("subagent panel", () => {
 		await act(async () => void q('[data-testid="subagent-send"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		await settle();
 		assert.deepEqual(f.calls.submits.map((s) => [s.input, s.whenBusy]), [["one more thing", "reject"]]);
+	});
+
+	const send = async (f: ReturnType<typeof fake>, v: string) => {
+		await type(q('[data-testid="subagent-input"]') as HTMLTextAreaElement, v);
+		await act(async () => void q('[data-testid="subagent-send"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		await settle();
+	};
+
+	it("stale summary 'done' but the child runs: the resume is retried as a steer", async () => {
+		const f = fake({ state: "done", finishedAt: new Date().toISOString() });
+		f.live.running = true;
+		await mount(f);
+		await send(f, "hello");
+		assert.deepEqual(f.calls.submits.map((s) => s.whenBusy), ["reject", "steer"]);
+		assert.equal((q('[data-testid="subagent-input"]') as HTMLTextAreaElement).value, "");
+	});
+
+	it("stale summary 'running' but the child is idle: the steer is retried as a resume", async () => {
+		const f = fake({});
+		f.live.running = false;
+		await mount(f);
+		await send(f, "hello");
+		assert.deepEqual(f.calls.submits.map((s) => s.whenBusy), ["steer", "reject"]);
+	});
+
+	it("a failed send keeps the text and shows the error", async () => {
+		const f = fake({});
+		f.live.submitError = true;
+		await mount(f);
+		await send(f, "keep me");
+		assert.match(q('[data-testid="subagent-send-error"]')!.textContent!, /wolf unreachable/);
+		assert.equal((q('[data-testid="subagent-input"]') as HTMLTextAreaElement).value, "keep me");
+	});
+
+	it("Enter sends, Shift+Enter does not", async () => {
+		const f = fake({});
+		await mount(f);
+		const ta = q('[data-testid="subagent-input"]') as HTMLTextAreaElement;
+		await type(ta, "via enter");
+		const key = (shiftKey: boolean) =>
+			act(async () => {
+				const rp = Object.keys(ta).find((k) => k.startsWith("__reactProps$"))!;
+				(ta as unknown as Record<string, { onKeyDown: (e: unknown) => void }>)[rp]!.onKeyDown({ key: "Enter", shiftKey, preventDefault() {} });
+			});
+		await key(true);
+		await settle();
+		assert.equal(f.calls.submits.length, 0);
+		await key(false);
+		await settle();
+		assert.deepEqual(f.calls.submits.map((s) => [s.input, s.whenBusy]), [["via enter", "steer"]]);
+	});
+
+	it("a failed Stop shows the error; queued children get Stop too", async () => {
+		const f = fake({ state: "queued", queuePosition: 2 });
+		f.live.submitError = true;
+		await mount(f);
+		assert.match(q('[data-testid="subagent-state"]')!.textContent!, /queued #2/);
+		await act(async () => void q('[data-testid="subagent-stop"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		await settle();
+		assert.match(q('[data-testid="subagent-note"]')!.textContent!, /stop refused/);
+		assert.ok(q('[data-testid="subagent-header"]'));
+	});
+
+	it("a transient refresh error after load keeps the view with a note; a send refetches the ledger", async () => {
+		const f = fake({});
+		await mount(f);
+		let ledgerGets = 0;
+		const orig = f.client.getLedger!;
+		f.client.getLedger = async (id: string) => (ledgerGets++, orig(id));
+		await send(f, "again");
+		assert.ok(ledgerGets >= 1);
+		f.client.getThread = async () => {
+			throw new Error("blip");
+		};
+		await send(f, "again");
+		assert.ok(q('[data-testid="subagent-transcript"]'));
+		assert.ok(q('[data-testid="subagent-note"]'));
+		assert.equal(q('[data-testid="subagent-failed"]'), null);
+	});
+
+	it("no ledger support (501) is told apart from an empty ledger", async () => {
+		const f = fake({});
+		f.client.getLedger = undefined;
+		await mount(f);
+		assert.ok(q('[data-testid="subagent-ledger-missing"]'));
+		const g = fake({});
+		g.state.ledger = [];
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount(g);
+		assert.equal(q('[data-testid="subagent-ledger-missing"]'), null);
 	});
 
 	it("an unknown child shows a quiet failure", async () => {

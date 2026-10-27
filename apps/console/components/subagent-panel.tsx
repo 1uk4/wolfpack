@@ -39,7 +39,7 @@ export const messageHint = (state: SubagentState | undefined): { mode: "steer" |
 function Header({ summary, now, onStop }: { summary: ThreadSummary | null; now: number; onStop: () => void }) {
 	if (!summary) return <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">Loading…</div>;
 	const state = summary.state;
-	const running = state === "running";
+	const stoppable = state === "running" || state === "queued";
 	const started = summary.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary.finishedAt ? Date.parse(summary.finishedAt) : now;
 	return (
@@ -48,7 +48,7 @@ function Header({ summary, now, onStop }: { summary: ThreadSummary | null; now: 
 				<div className="min-w-0 truncate font-medium" data-testid="subagent-title">
 					{summary.title}
 				</div>
-				{running && (
+				{stoppable && (
 					<button type="button" data-testid="subagent-stop" className="rounded border border-border px-2 py-0.5 text-xs hover:bg-accent" onClick={onStop}>
 						Stop
 					</button>
@@ -73,7 +73,13 @@ function Header({ summary, now, onStop }: { summary: ThreadSummary | null; now: 
 	);
 }
 
-function Ledger({ entries }: { entries: readonly LedgerEntry[] }) {
+function Ledger({ entries }: { entries: readonly LedgerEntry[] | null }) {
+	if (entries === null)
+		return (
+			<div className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="subagent-ledger-missing">
+				This wolf has no subagent ledger.
+			</div>
+		);
 	if (entries.length === 0) return null;
 	return (
 		<details className="border-b border-border px-3 py-1.5 text-xs" data-testid="subagent-ledger" open>
@@ -144,9 +150,9 @@ interface Loaded {
 	messages: LhMessage[];
 }
 
-function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }: { wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[]; onSettled: () => void; onStop: () => void }) {
+function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }: { wolf: string; slug: string; childThreadId: string; loaded: Loaded; entries: LedgerEntry[] | null; onSettled: () => void; onStop: () => void }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
+	const { messages, status, error, clearError, resumeStream } = useChatSession({
 		chatId: childThreadId,
 		initialMessages: loaded.messages,
 		initiallyInFlight: loaded.summary.busy,
@@ -154,26 +160,51 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }:
 	});
 	const busy = status === "submitted" || status === "streaming";
 	const summary = loaded.summary;
-	// A turn that started elsewhere (a parent's resume): attach to it.
+	// A turn that started elsewhere (a parent's resume): attach to it. Right after our own turn settles the summary is
+	// still the stale "running" one: wait for the refetched summary before attaching again.
 	const state = summary.state;
 	const wasRunning = useRef(false);
+	const settledSummary = useRef<ThreadSummary | null>(null);
 	useEffect(() => {
-		if (state === "running" && !busy) resumeStream();
-	}, [state, busy, resumeStream]);
+		if (state === "running" && !busy && settledSummary.current !== summary) resumeStream();
+	}, [state, busy, summary, resumeStream]);
 	useEffect(() => {
-		if (wasRunning.current && !busy) onSettled();
+		if (wasRunning.current && !busy) {
+			settledSummary.current = summary;
+			onSettled();
+		}
 		wasRunning.current = busy;
-	}, [busy, onSettled]);
+	}, [busy, onSettled]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	const hint = messageHint(state);
+	// Steer or resume from the live truth first (a running stream), then the summary: either can be stale, so a 409
+	// from the wrong guess is retried once the other way.
+	const hint = messageHint(busy ? "running" : state);
 	const [text, setText] = useState("");
 	const [expanded, setExpanded] = useState(false);
-	const submit = () => {
+	const [sendError, setSendError] = useState<string | null>(null);
+	const sending = useRef(false);
+	const post = (input: string, whenBusy: "steer" | "reject") =>
+		fetch(transport.submitUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: transport.submitBody({ type: "text", text: input }, { whenBusy: whenBusy as "steer" }) });
+	const submit = async () => {
 		const t = text.trim();
-		if (!t) return;
-		setText("");
-		if (busy || hint.mode === "steer") void steer(t);
-		else void send({ type: "text", text: t });
+		if (!t || sending.current) return;
+		sending.current = true;
+		setSendError(null);
+		try {
+			let res = await post(t, hint.mode === "steer" ? "steer" : "reject");
+			if (res.status === 409) res = await post(t, hint.mode === "steer" ? "reject" : "steer");
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				return void setSendError(body?.error ?? `Could not send the message (${res.status}).`);
+			}
+			setText("");
+			onSettled();
+			resumeStream();
+		} catch (err) {
+			setSendError(err instanceof Error ? err.message : "Could not send the message.");
+		} finally {
+			sending.current = false;
+		}
 	};
 	const now = useNow(state === "running");
 
@@ -198,6 +229,11 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }:
 					<div data-testid="subagent-hint" data-mode={hint.mode} className="text-muted-foreground">
 						{hint.text}
 					</div>
+					{sendError && (
+						<div data-testid="subagent-send-error" className="text-destructive">
+							{sendError}
+						</div>
+					)}
 					<textarea
 						data-testid="subagent-input"
 						className="min-h-14 w-full resize-none rounded border border-border bg-background p-1.5"
@@ -206,11 +242,11 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled, onStop }:
 						onKeyDown={(e) => {
 							if (e.key === "Enter" && !e.shiftKey) {
 								e.preventDefault();
-								submit();
+								void submit();
 							}
 						}}
 					/>
-					<button type="button" data-testid="subagent-send" disabled={!text.trim()} className="self-end rounded border border-border px-2 py-0.5 hover:bg-accent disabled:opacity-50" onClick={submit}>
+					<button type="button" data-testid="subagent-send" disabled={!text.trim()} className="self-end rounded border border-border px-2 py-0.5 hover:bg-accent disabled:opacity-50" onClick={() => void submit()}>
 						{hint.mode === "steer" ? "Steer" : "Resume"}
 					</button>
 				</div>
@@ -240,7 +276,10 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 	const slug = threadSlug(wolf, childThreadId);
 	const base = threadBase(wolf, slug);
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
-	const [entries, setEntries] = useState<LedgerEntry[]>([]);
+	const [entries, setEntries] = useState<LedgerEntry[] | null>([]);
+	const [note, setNote] = useState<string | null>(null);
+	const [stopNote, setStopNote] = useState<string | null>(null);
+	const loadedRef = useRef(false);
 	const [failed, setFailed] = useState<string | null>(null);
 	const seq = useRef(0);
 	const refresh = useCallback(async () => {
@@ -248,17 +287,23 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 		try {
 			const [detail, ledger] = await Promise.all([fetch(base), fetch(`${base}/ledger`)]);
 			if (mine !== seq.current) return;
-			if (!detail.ok) return void setFailed(detail.status === 404 ? "This subagent no longer exists." : `Could not load the subagent (${detail.status}).`);
+			if (!detail.ok) {
+				const msg = detail.status === 404 ? "This subagent no longer exists." : `Could not load the subagent (${detail.status}).`;
+				// After the first load a transient error keeps the view; only a vanished child replaces it.
+				return void (loadedRef.current && detail.status !== 404 ? setNote(msg) : setFailed(msg));
+			}
 			const json = (await detail.json()) as ThreadSummary & { busy?: boolean; messages?: unknown };
 			const messages = threadTransport(wolf, slug).parseRecord?.(json) ?? [];
-			const led = ledger.ok ? ((await ledger.json()) as { entries?: LedgerEntry[] }).entries ?? [] : null;
+			const led = ledger.ok ? ((await ledger.json()) as { entries?: LedgerEntry[] }).entries ?? [] : ledger.status === 501 ? null : undefined;
 			if (mine !== seq.current) return;
+			loadedRef.current = true;
 			setFailed(null);
+			setNote(null);
 			// The transcript is owned by the live session once mounted; only the summary is replaced.
 			setLoaded((prev) => ({ summary: json, messages: prev?.messages ?? messages }));
-			if (led) setEntries(led);
+			if (led !== undefined) setEntries(led);
 		} catch {
-			/* the next change refetches */
+			if (loadedRef.current) setNote("Could not refresh the subagent; showing the last view.");
 		}
 	}, [base, wolf, slug]);
 	useEffect(() => {
@@ -270,13 +315,23 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 		void refresh();
 	});
 	const stop = useCallback(() => {
-		void fetch(`${base}/abort`, { method: "POST" })
-			.catch(() => {})
+		fetch(`${base}/abort`, { method: "POST" })
+			.then(async (res) => {
+				if (res.ok) return setStopNote(null);
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				setStopNote(body?.error ?? `Could not stop the subagent (${res.status}).`);
+			})
+			.catch((err) => setStopNote(err instanceof Error ? err.message : "Could not stop the subagent."))
 			.finally(() => void refresh());
 	}, [base, refresh]);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="subagent-panel" data-child={childThreadId}>
+			{(note ?? stopNote) && (
+				<div className="border-b border-border px-3 py-1 text-xs text-destructive" data-testid="subagent-note">
+					{note ?? stopNote}
+				</div>
+			)}
 			{failed ? (
 				<div className="p-3 text-xs text-muted-foreground" data-testid="subagent-failed">
 					{failed}

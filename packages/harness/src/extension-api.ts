@@ -245,6 +245,8 @@ export interface ExtensionContext {
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+  /** The wolf's workspace directory (where its tools run). Absent in hosts that have none. */
+  workspace?: string;
   /** What the host offers the model beside this extension; absent means nothing beyond the plain tools. */
   capabilities?: HostCapabilities;
 }
@@ -254,6 +256,9 @@ export interface HostCapabilities {
   /**
    * The host installs a card-raising `ask_user_question` (wolfd: single/multi/confirm/free-text fields, batched via
    * `questions`; the answers arrive as the next submission). Interactive flows may interview the user through it.
+   * Host-level: it says wolfd serves the console card protocol, NOT that the current conversation has an operator
+   * (a task-owned conversation, e.g. a subagent, has none). Callers that need the latter combine it with their own
+   * conversation check (ticket 5: "askCards and not task-owned").
    */
   askCards?: boolean;
 }

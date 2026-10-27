@@ -245,6 +245,7 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
     env,
     modelTable,
     ...(onCardTool ? { onCardTool } : {}),
+    workspace: config.capability.workspace,
     // wolfd always installs the card-raising ask_user_question (see startWolf).
     capabilities: { askCards: true },
     ...(sweep ? { sweep } : {}),

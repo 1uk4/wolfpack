@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
 } from "@wolfpack/harness/extension";
 import createMemoryExtension, { type MemoryConfig } from "./unified.js";
+import createCrawlExtension from "./unified-crawl.js";
 import createTasksExtension, { type TasksConfig } from "./unified-tasks.js";
 
 // ─── Combined Config ───────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export default function createWolfpackMemoryExtension(
   
   const memoryExt = createMemoryExtension(memoryConfig, context);
   const tasksExt = createTasksExtension(tasksConfig, context);
+  const crawlExt = createCrawlExtension({ defaultDomain: memoryConfig.defaultDomain }, context);
 
   // Combine into single extension
   return defineExtension({
@@ -41,6 +43,7 @@ export default function createWolfpackMemoryExtension(
     tools: [
       ...(memoryExt.tools ?? []),
       ...(tasksExt.tools ?? []),
+      ...(crawlExt.tools ?? []),
     ],
 
     sections: [

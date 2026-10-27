@@ -9,6 +9,7 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { artifactRenderers } from "@/components/artifacts";
 import { Separator } from "@/components/ui/separator";
+import { MemoryPanel } from "@/components/memory-panel";
 import { Composer } from "@/components/composer";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
@@ -249,6 +250,7 @@ export function ThreadChat({
 					</Conversation>
 				</div>
 			</div>
+			<MemoryPanel wolf={wolf} threadId={threadId} />
 		</div>
 	);
 }

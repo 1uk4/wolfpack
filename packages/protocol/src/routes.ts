@@ -4,7 +4,11 @@ import {
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
   ErrorEnvelopeSchema,
+  KbEntryDetailSchema,
+  KbGraphSchema,
   MemoryEventSchema,
+  MemoryStatusSchema,
+  MemoryTopicSchema,
   PromoteResponseSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
@@ -12,6 +16,8 @@ import {
   ThreadEventSchema,
   ThreadSummarySchema,
   WolfSummarySchema,
+  WorkRecordResponseSchema,
+  KbPipelineResponseSchema,
 } from "./schemas.js";
 
 /** Request header carrying the client's protocol version (single integer). */
@@ -95,6 +101,37 @@ export const ROUTES = {
     status: [202],
     error: err,
   },
+  /**
+   * Read-only memory status: state (live|sandbox|inert|off) with the reason, pool count/tokens against the
+   * consolidate thresholds, session- and den-topic lists, last promote. Answers 200 even when memory is inert or off
+   * (that is the state being reported). A wolf serves only its own den. `?thread=<id>` adds that thread's bound work
+   * item (`bound`); an unknown thread is 404 `not_found`.
+   */
+  getMemoryStatus: { method: "GET", path: "/v1/wolves/:name/memory", response: { kind: "json", schema: MemoryStatusSchema }, status: [200], error: err },
+  /**
+   * One den or session topic with its body. `?scope=den|session` picks the store (default: den, then session).
+   * 400 `invalid_request` for a malformed id or scope, 404 `not_found` for an unknown topic,
+   * 409 `memory_unavailable` when memory is inert or off.
+   */
+  getMemoryTopic: { method: "GET", path: "/v1/wolves/:name/memory/topics/:id", response: { kind: "json", schema: MemoryTopicSchema }, status: [200], error: err },
+  /**
+   * A work item's page data (plan + Record + links), fetched through the wolf's Work API client. 404 `not_found` for an unknown item or wolf,
+   * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.
+   */
+  getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
+   * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).
+   */
+  kbPipeline: { method: "GET", path: "/v1/wolves/:name/kb/pipeline", response: { kind: "json", schema: KbPipelineResponseSchema }, status: [200], error: err },
+  /**
+   * The KB graph, served by the librarian wolf only (409 `kb_unavailable` elsewhere). Query: `domain` (one domain; unknown = 404 `not_found`),
+   * and the layer flags `archivedWork`, `wikilinks`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).
+   * `denTopics` adds the serving wolf's own den topics only.
+   */
+  getKbGraph: { method: "GET", path: "/v1/wolves/:name/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
+  /** One KB entry (frontmatter, body, wikilinks, backlinks). Librarian only. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
+  getKbEntry: { method: "GET", path: "/v1/wolves/:name/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

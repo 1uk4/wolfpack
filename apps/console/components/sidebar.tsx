@@ -5,11 +5,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
+import { CommandPalette } from "@/components/command-palette";
 import { SettingsDialogProvider, useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
@@ -662,6 +663,30 @@ function SessionsSidebar() {
 						<PlusIcon className="size-3" />
 						New session
 					</button>
+					<Link
+						href="/"
+						data-testid="nav-graph"
+						aria-current={pathname === "/" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
+					>
+						<NetworkIcon className="size-3" />
+						Graph
+					</Link>
+					<Link
+						href="/pipeline"
+						data-testid="nav-pipeline"
+						aria-current={pathname === "/pipeline" ? "page" : undefined}
+						className={cn(
+							"flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider transition-colors hover:bg-accent hover:text-foreground",
+							pathname === "/pipeline" ? "bg-accent text-foreground" : "text-muted-foreground",
+						)}
+					>
+						<WorkflowIcon className="size-3" />
+						Pipeline
+					</Link>
 				</div>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
@@ -864,6 +889,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}
 			<KeyboardShortcuts />
+			<CommandPalette />
 		</SettingsDialogProvider>
 	);
 }

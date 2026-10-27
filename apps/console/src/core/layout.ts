@@ -1,18 +1,18 @@
 /**
  * The layout engine — d3-force, everywhere (DECIDED 2026-09-13).
  *
- * One engine owns the equilibrium: the merge-time incremental settle AND
+ * One engine owns the equilibrium: the incremental settle AND
  * the live drag physics run the SAME force set (links as springs, charge
- * repulsion, weak gravity), so the positions ledger and the transient
+ * repulsion, weak gravity), so the stored positions and the transient
  * simulation agree on what "resting" means. (FA2 was replaced after a
  * research round: it has no annealing/pinning/settle model and mixing it
  * with a different live engine visibly re-flows the graph on every drag.)
  *
  * Layout EVOLVES instead of reshuffling (Option A): each settle warm-starts
- * from the positions ledger and spring-ties every previously-positioned
+ * from the stored positions and spring-ties every previously-positioned
  * node toward its anchor (a per-node anchor force). New nodes seed near
  * their positioned neighbors; orphans seed on the rim OUTSIDE the core and
- * are anchored there, so they read as "not yet connected knowledge".
+ * are anchored there.
  *
  * Design constraints (kept deliberately, for live physics):
  *  - PURE: no fs, no server types — this module runs server-side (the
@@ -32,7 +32,7 @@ import {
 	type SimulationLinkDatum,
 	type SimulationNodeDatum,
 } from "d3-force";
-import type { GraphEdge, GraphNode, Position } from "./contracts.ts";
+import type { Position } from "./contracts.ts";
 import { seededRandom } from "./question-core.ts";
 
 /** A node the d3 simulation mutates (x/y/vx/vy; fx/fy = pinned). */
@@ -43,120 +43,27 @@ export interface LayoutNode extends SimulationNodeDatum {
 /** A link as d3 sees it (id strings resolve to node refs on init). */
 type SimLink = SimulationLinkDatum<LayoutNode>;
 
-/** How the inference rank is expressed spatially (playground, 2026-09-13):
- *  the graph's `follows`/`supports` edges encode derivation (premise →
- *  conclusion), so depth-0 nodes (no incoming edges — the fundamentals)
- *  can anchor a shared baseline and every derivation level rises from it.
- *  `vertical`: levels are horizontal rows, arrows point up.
- *  `radial`: levels are concentric rings, foundations at the center, the
- *  outer boundary IS the edge of the user's knowledge.
- *  `off`: today's free layout. */
+/** How hierarchy depth is expressed spatially (domain 0 → section 1 →
+ *  entry 2 → work 3 → den topic 4; the KB graph supplies each node's depth).
+ *  `vertical`: levels are horizontal rows, domains on top, deeper kinds below.
+ *  `radial`: levels are concentric rings, domains at the center.
+ *  `off`: the free layout (the default). */
 export type DepthAnchorMode = "off" | "vertical" | "radial";
 
 export interface DepthAnchor {
 	mode: DepthAnchorMode;
 	/** Anchor pull toward the level (same units as clusterPull). */
 	strength: number;
-	/** Distance between consecutive inference levels (world units). */
+	/** Distance between consecutive hierarchy levels (world units). */
 	spacing: number;
+	/** Hierarchy depth per node id (nodes absent from the map are not
+	 *  anchored). */
+	depths: ReadonlyMap<string, number>;
 	/** Baseline point: vertical mode uses .y as the depth-0 line; radial
 	 *  mode uses the full point as the ring center. Default (0,0). */
 	center?: { x: number; y: number };
 	/** Inner ring radius (radial only; depth-0 nodes sit at this ring). */
 	baseRadius?: number;
-}
-
-/** Inference depth per node: the longest chain of directed edges from a
- * base node. CYCLE-SAFE (2026-09-13, user requirement — the DAG property
- * is typical, not guaranteed): Tarjan SCC condensation collapses each
- * strongly connected component to one super-node, ranks the (always
- * acyclic) condensation, and every cycle member shares its component's
- * depth — mutual support reads as equal footing. Iterative Tarjan (no
- * recursion depth limits), O(V+E), deterministic. */
-export function inferenceDepths(
-	nodes: ReadonlyArray<Pick<GraphNode, "id">>,
-	edges: ReadonlyArray<LayoutEdge>,
-): Map<string, number> {
-	const valid = new Set(nodes.map((n) => n.id));
-	const adj = new Map<string, string[]>();
-	for (const e of edges) {
-		if (e.from === e.to || !valid.has(e.from) || !valid.has(e.to)) continue;
-		let list = adj.get(e.from);
-		if (!list) adj.set(e.from, (list = []));
-		list.push(e.to);
-	}
-
-	// Iterative Tarjan SCC.
-	const num = new Map<string, number>();
-	const low = new Map<string, number>();
-	const onStack = new Set<string>();
-	const stack: string[] = [];
-	const comp = new Map<string, number>();
-	let counter = 0;
-	let compCount = 0;
-	for (const start of valid) {
-		if (num.has(start)) continue;
-		num.set(start, counter);
-		low.set(start, counter);
-		counter++;
-		stack.push(start);
-		onStack.add(start);
-		const work: [string, number][] = [[start, 0]];
-		while (work.length > 0) {
-			const frame = work[work.length - 1]!;
-			const v = frame[0];
-			const outs = adj.get(v) ?? [];
-			if (frame[1] < outs.length) {
-				const i = frame[1];
-				frame[1] = i + 1;
-				const w = outs[i]!;
-				if (!num.has(w)) {
-					num.set(w, counter);
-					low.set(w, counter);
-					counter++;
-					stack.push(w);
-					onStack.add(w);
-					work.push([w, 0]);
-				} else if (onStack.has(w)) {
-					low.set(v, Math.min(low.get(v)!, num.get(w)!));
-				}
-			} else {
-				work.pop();
-				if (low.get(v) === num.get(v)) {
-					let w: string;
-					do {
-						w = stack.pop()!;
-						onStack.delete(w);
-						comp.set(w, compCount);
-					} while (w !== v);
-					compCount++;
-				}
-				if (work.length > 0) {
-					const parent = work[work.length - 1]![0];
-					low.set(parent, Math.min(low.get(parent)!, low.get(v)!));
-				}
-			}
-		}
-	}
-
-	// Condensation predecessors, then longest path. Tarjan emits sinks
-	// first, so descending comp index = topological order (sources first).
-	const preds: Set<number>[] = Array.from({ length: compCount }, () => new Set<number>());
-	for (const e of edges) {
-		const a = comp.get(e.from);
-		const b = comp.get(e.to);
-		if (a == null || b == null || a === b) continue;
-		preds[b]!.add(a);
-	}
-	const depth = new Array<number>(compCount).fill(0);
-	for (let c = compCount - 1; c >= 0; c--) {
-		let d = 0;
-		for (const p of preds[c]!) d = Math.max(d, depth[p]! + 1);
-		depth[c] = d;
-	}
-	const out = new Map<string, number>();
-	for (const n of nodes) out.set(n.id, depth[comp.get(n.id)!] ?? 0);
-	return out;
 }
 
 export interface SimOptions {
@@ -175,27 +82,14 @@ export interface SimOptions {
 	alphaDecay?: number;
 	/** Velocity damping per tick (d3 default 0.4). Higher = more friction. */
 	velocityDecay?: number;
-	/** Inference-depth anchoring (see DepthAnchor). Off by default. */
+	/** Hierarchy-depth anchoring (see DepthAnchor). Off by default. */
 	depthAnchor?: DepthAnchor;
-	/** The LOGICAL edge list (proposition→conclusion, imp hops
-	 *  contracted) for the depth machinery — orphan detection AND the
-	 *  rank pass (owner, 2026-09-30). Absent = `edges` (legacy
-	 *  behavior). Springs ALWAYS run over `edges` — the drawn arrows. */
-	logicalEdges?: ReadonlyArray<LayoutEdge>;
-	/** The derived imp nodes' chain linkage (id + members), straight
-	 *  from deriveView. Drives the IMP MIDPOINT ANCHOR (owner,
-	 *  2026-09-30): an implication node's depth is the average of the
-	 *  HIGHEST premise row and the conclusion's row — strictly above
-	 *  every premise, strictly below the conclusion, uniform in vertical
-	 *  (a row) and radial (a ring) modes. Absent = imp nodes keep the
-	 *  legacy orphan exemption (never depth-anchored). */
-	impLinks?: ReadonlyArray<ImpLink>;
 	/** Cluster centroid pull (the "virtual node" without the node):
 	 *  members of each cluster accelerate toward their own cluster's
 	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
 	 *  node (which would need one extra link spring per member plus a
 	 *  maintained position). Strength 0 or absent = force off.
-	 *  Callers supply the partition (Louvain output shape). */
+	 *  Callers supply the partition (the active grouping). */
 	clusterPull?: {
 		clusters: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 		strength: number;
@@ -208,24 +102,7 @@ export interface LayoutEdge {
 	to: string;
 }
 
-/** A derived implication node's chain linkage — what the depth pass needs
- *  to anchor the junction between its premises and their conclusion. */
-export interface ImpLink {
-	/** The imp node's id (arg_-prefixed — the stored chain's id). */
-	id: string;
-	premises: ReadonlyArray<string>;
-	conclusion: string;
-}
-
 export const LINK_DISTANCE = 40;
-/** Implication-node id prefix (the mint law lives in core/graph.ts's
- *  newGraphChainId). Layout-side: links TOUCHING an imp node get HALF
- *  the base rest length — the argument's geometry (a converging point)
- *  sits tight against its premises/conclusion instead of spread like a
- *  real proposition citizen (owner ruling, rendering arc 2026-09-30). */
-const IMP_ID_PREFIX = "arg_";
-const impLinkId = (v: string | number | { id: string }): string =>
-	typeof v === "object" ? v.id : String(v);
 export const CHARGE_STRENGTH = -240; // 2026-09-17: −120 → −240 (user: repulsion default too weak); the default is shared with render-settings (gm-centered in CHARGE_RANGE).
 /** Per-tick anchor re-blend: fraction of an anchored node's displacement
  *  from its previous position that SURVIVES each tick. 0.85 = gentle
@@ -277,16 +154,7 @@ export function createGraphSimulation(
 				edges.map((e) => ({ source: e.from, target: e.to })),
 			)
 				.id((d) => d.id)
-				// Per-link rest length (rendering arc, owner 2026-09-30): a
-				// link touching an implication node (arg_-prefixed id — the
-				// string form pre-init, the node ref after) gets HALF the
-				// base distance, default or user-tuned alike.
-				.distance(
-					(l) =>
-						impLinkId(l.source).startsWith(IMP_ID_PREFIX) || impLinkId(l.target).startsWith(IMP_ID_PREFIX)
-							? linkDistance / 2
-							: linkDistance,
-				)
+				.distance(linkDistance)
 				.strength(
 					(l) =>
 						(linkStrength * 1) /
@@ -302,69 +170,15 @@ export function createGraphSimulation(
 	// y axis, so gravity goes x-only (it would fight the level lines); in
 	// radial mode a center pull is purely radial and would fight the
 	// rings, so it is dropped entirely (rings already bound the radius).
-	// Depth mode projections (DECIDED 2026-09-13), with the ORPHAN RULE
-	// (user-decided, same day): a node with no edges at all has no
-	// dependency structure — depth is a property of inference chains, so
-	// stamping unconnected propositions onto the baseline / base ring
-	// assigns them meaning they don't have. Orphans are exempt from the
-	// depth force and keep the REGULAR view's forces instead (full center
-	// gravity + full cluster pull, unprojected). AMENDED (owner,
-	// 2026-09-30 physics follow-up): in VERTICAL mode the central pole is
-	// a HORIZONTAL force for everyone — structured and orphan/imp alike —
-	// y belongs to the depth rows and to nothing else; the full regular
-	// pull survives only in radial mode (where the rings own the radius).
-	const mode = options.depthAnchor?.mode ?? "off";
-	// The depth machinery reads the LOGICAL edge list when supplied —
-	// structure is inference over propositions, not the drawn geometry.
-	const depthEdges = options.logicalEdges ?? edges;
-	let orphan: Uint8Array | null = null;
-	let depthsComputed: Map<string, number> | null = null;
-	if (mode !== "off") {
-		const connected = new Set<string>();
-		const valid = new Set(nodes.map((n) => n.id));
-		for (const e of depthEdges) {
-			// Self-loops and dangling endpoints are not a structure (same
-			// guards as inferenceDepths).
-			if (e.from === e.to || !valid.has(e.from) || !valid.has(e.to)) continue;
-			connected.add(e.from);
-			connected.add(e.to);
-		}
-		// Proposition ranks first; then the IMP MIDPOINT ANCHOR (owner,
-		// 2026-09-30): an implication node's depth = (highest premise row
-		// + conclusion row) / 2 — the junction sits strictly above every
-		// premise and strictly below the conclusion (a conclusion is
-		// always ≥ highest premise + 1), uniform in both modes: a row in
-		// vertical, a ring in radial. Imp ids WITHOUT a supplied link
-		// keep the legacy exemption.
-		depthsComputed = inferenceDepths(
-			nodes.filter((n) => !n.id.startsWith(IMP_ID_PREFIX)),
-			depthEdges,
-		);
-		const anchored = new Set<string>();
-		if (options.impLinks) {
-			for (const link of options.impLinks) {
-				const conclusionDepth = depthsComputed.get(link.conclusion);
-				if (conclusionDepth === undefined || link.premises.length === 0) continue;
-				let highest = -Infinity;
-				let complete = true;
-				for (const premise of link.premises) {
-					const d = depthsComputed.get(premise);
-					if (d === undefined) {
-						complete = false;
-						break;
-					}
-					if (d > highest) highest = d;
-				}
-				if (!complete) continue;
-				depthsComputed.set(link.id, (highest + conclusionDepth) / 2);
-				anchored.add(link.id);
-			}
-		}
-		orphan = new Uint8Array(nodes.length);
+	// Only nodes the depth map covers are projected; the rest keep the
+	// regular pull.
+	const da = options.depthAnchor;
+	const mode = da?.mode ?? "off";
+	const depths = da?.depths;
+	const anchored = new Uint8Array(nodes.length);
+	if (mode !== "off" && depths) {
 		nodes.forEach((n, i) => {
-			// IMP nodes with a midpoint anchor are STRUCTURED (they sit on
-			// their half-row); unlinked arg_ ids keep the orphan exemption.
-			if (!connected.has(n.id) && !(n.id.startsWith(IMP_ID_PREFIX) && anchored.has(n.id))) orphan![i] = 1;
+			if (depths.has(n.id)) anchored[i] = 1;
 		});
 	}
 	const g = options.gravity;
@@ -372,24 +186,16 @@ export function createGraphSimulation(
 		sim.force("x", forceX<LayoutNode>(g.x).strength(g.strength));
 		sim.force("y", forceY<LayoutNode>(g.y).strength(g.strength));
 	} else if (g) {
-		// Mode-projected gravity, EXACTLY d3's forceX/forceY math (restoring
-		// force × strength × alpha). VERTICAL (owner, 2026-09-30 physics
-		// follow-up): the central pole is horizontal-ONLY for EVERY node —
-		// structured (the depth force owns y) and orphan/imp alike (an
-		// unstructured node has no row to sit on and no pole to sag
-		// toward; its y is free). RADIAL: orphans keep the full regular
-		// pull; structured nodes get nothing (the rings own the radius).
-		const orphanMask = orphan!;
 		sim.force("gravity", (alpha: number) => {
 			for (let i = 0; i < nodes.length; i++) {
 				const n = nodes[i]!;
-				if (mode === "vertical") {
-					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
-				} else if (orphanMask[i]) {
+				if (!anchored[i]) {
 					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
 					n.vy = (n.vy ?? 0) + (g.y - (n.y ?? 0)) * g.strength * alpha;
+				} else if (mode === "vertical") {
+					n.vx = (n.vx ?? 0) + (g.x - (n.x ?? 0)) * g.strength * alpha;
 				}
-				// radial + structured: nothing — the rings own the radius.
+				// radial + anchored: nothing — the rings own the radius.
 			}
 		});
 	}
@@ -414,8 +220,8 @@ export function createGraphSimulation(
 		// (the radial component would drag members off their rings; the
 		// tangential component still tightens each cluster's angular
 		// spread, which is all clustering needs to do there).
-		const ringCx = options.depthAnchor?.center?.x ?? 0;
-		const ringCy = options.depthAnchor?.center?.y ?? 0;
+		const ringCx = da?.center?.x ?? 0;
+		const ringCy = da?.center?.y ?? 0;
 		sim.force("clusterPull", (alpha: number) => {
 			sumX.fill(0);
 			sumY.fill(0);
@@ -436,13 +242,12 @@ export function createGraphSimulation(
 				const py = n.y ?? 0;
 				const ux = sumX[ci]! / cnt[ci]! - px;
 				const uy = sumY[ci]! / cnt[ci]! - py;
-				if (orphan && orphan[i]) {
-					// Orphans: full regular-view pull (see the ORPHAN RULE above).
+				if (!anchored[i]) {
 					n.vx = (n.vx ?? 0) + ux * strength * alpha;
 					n.vy = (n.vy ?? 0) + uy * strength * alpha;
 				} else if (mode === "vertical") {
 					n.vx = (n.vx ?? 0) + ux * strength * alpha;
-				} else if (mode === "radial") {
+				} else {
 					const rx = px - ringCx;
 					const ry = py - ringCy;
 					const r = Math.hypot(rx, ry);
@@ -452,35 +257,26 @@ export function createGraphSimulation(
 						n.vx = (n.vx ?? 0) + (ux - dot * rx) * strength * alpha;
 						n.vy = (n.vy ?? 0) + (uy - dot * ry) * strength * alpha;
 					}
-				} else {
-					n.vx = (n.vx ?? 0) + ux * strength * alpha;
-					n.vy = (n.vy ?? 0) + uy * strength * alpha;
 				}
 			}
 		});
 	}
 
-	// ── Inference-depth anchoring ────────────────────────────────────────
-	// The rank is COMPUTED (not simulated): per-node target scalar derived
-	// from inferenceDepths, then one O(n) pull pass per tick. Soft knob —
-	// high strength approaches pinned rows/rings while low strength leaves
-	// organic sag.
-	const da = options.depthAnchor;
-	if (da && da.mode !== "off" && da.strength > 0) {
-		// The rank map (propositions + imp midpoint anchors) was computed
-		// with the orphan mask above — one pass, shared.
-		const depths = depthsComputed!;
+	// ── Hierarchy-depth anchoring ────────────────────────────────────────
+	// The level is GIVEN (the node's hierarchy depth): per-node target
+	// scalar, then one O(n) pull pass per tick. Soft knob — high strength
+	// approaches pinned rows/rings while low strength leaves organic sag.
+	if (da && mode !== "off" && depths && da.strength > 0) {
 		const strength = da.strength;
 		const spacing = da.spacing;
 		const c = da.center ?? { x: 0, y: 0 };
-		const orphanMask = orphan; // ORPHAN RULE: depth skips unstructured nodes
-		if (da.mode === "vertical") {
+		if (mode === "vertical") {
 			const baseY = c.y;
 			sim.force("depth", (alpha: number) => {
 				for (let i = 0; i < nodes.length; i++) {
-					if (orphanMask?.[i]) continue;
+					if (!anchored[i]) continue;
 					const n = nodes[i]!;
-					const targetY = baseY - (depths.get(n.id) ?? 0) * spacing;
+					const targetY = baseY + (depths.get(n.id) ?? 0) * spacing;
 					n.vy = (n.vy ?? 0) + (targetY - (n.y ?? 0)) * strength * alpha;
 				}
 			});
@@ -490,9 +286,9 @@ export function createGraphSimulation(
 			const cy0 = c.y;
 			sim.force("depth", (alpha: number) => {
 				for (let i = 0; i < nodes.length; i++) {
-					if (orphanMask?.[i]) continue;
+					if (!anchored[i]) continue;
 					const n = nodes[i]!;
-				const dx = (n.x ?? 0) - cx0;
+					const dx = (n.x ?? 0) - cx0;
 					const dy = (n.y ?? 0) - cy0;
 					// Degenerate direction at the exact ring center: nudge
 					// outward on a deterministic axis.
@@ -518,19 +314,14 @@ export interface IncrementalLayoutOptions {
 	/** Center-of-mass gravity strength override (tuning/A-B experiments;
 	 *  defaults to the internal bootstrap/incremental constants). */
 	gravityStrength?: number;
-	/** Cluster partition (Louvain output shape). Supplied by callers so
-	 *  this module stays louvain-free (the browser bundle must not carry
-	 *  embedding ledger; absent = no cluster pull. */
+	/** Cluster partition (the active grouping: domains or sections).
+	 *  Absent = no cluster pull. */
 	clusters?: ReadonlyArray<{ members: ReadonlyArray<string> }>;
 	/** Cluster centroid pull strength (default CLUSTER_PULL_STRENGTH). */
 	clusterPullStrength?: number;
-	/** Inference-depth anchoring (see DepthAnchor). `center` defaults to
+	/** Hierarchy-depth anchoring (see DepthAnchor). `center` defaults to
 	 *  the anchored core's centroid. */
 	depthAnchor?: DepthAnchor;
-	/** The LOGICAL edge list for the depth pass (see SimOptions). */
-	logicalEdges?: ReadonlyArray<LayoutEdge>;
-	/** The imp chain linkage for the midpoint anchor (see SimOptions). */
-	impLinks?: ReadonlyArray<ImpLink>;
 }
 
 /**
@@ -540,7 +331,7 @@ export interface IncrementalLayoutOptions {
  * for EVERY node in `nodes`.
  */
 export function incrementalLayout(
-	nodes: ReadonlyArray<Pick<GraphNode, "id">>,
+	nodes: ReadonlyArray<{ id: string }>,
 	edges: ReadonlyArray<LayoutEdge>,
 	previous: ReadonlyMap<string, Position>,
 	options: IncrementalLayoutOptions = {},
@@ -669,8 +460,6 @@ export function incrementalLayout(
 			options.depthAnchor && options.depthAnchor.mode !== "off"
 				? { ...options.depthAnchor, center: options.depthAnchor.center ?? { x: cx, y: cy } }
 				: options.depthAnchor,
-		logicalEdges: options.logicalEdges,
-		impLinks: options.impLinks,
 	});
 	const dMode = options.depthAnchor?.mode ?? "off";
 	const dCenter = options.depthAnchor?.center ?? { x: cx, y: cy };

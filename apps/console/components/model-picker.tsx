@@ -269,7 +269,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 		[chatId, models, save, saveChat],
 	);
 
-	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
+	// Shortcut seams (keyboard wave A): ⌘⇧M opens the model menu (the
 	// universal command convention); Shift+Tab cycles the thinking level
 	// up the ladder (wrapping) — the owner's replacement for browser
 	// tab-focus. Both work from any focus, including mid-typing.
@@ -311,7 +311,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 		apply(m.provider, m.id, nextLevel);
 	};
 
-	// Stale-while-revalidate on manual open too (⌘K covers the keyboard
+	// Stale-while-revalidate on manual open too (⌘⇧M covers the keyboard
 	// path above): the cached list shows instantly, the fresh federation
 	// swaps in when it lands.
 	const openMenu = (kind: "model" | "thinking") => {
@@ -324,7 +324,7 @@ export function ModelControl({ chatId }: { chatId?: string }) {
 		<div ref={containerRef} className="relative flex items-center gap-1.5" data-testid="model-control">
 			<Hint
 				// Trimmed (owner, subtlety round 2026-09-25): "Model selector"
-				// — the long sentence was way too much. ⌘K opens this same
+				// — the long sentence was way too much. ⌘⇧M opens this same
 				// menu (registry, override-aware).
 				label="Model selector"
 				action="open-model-picker"

@@ -128,7 +128,7 @@ export class WorkerdServer {
         try {
           const body = (await getJson(upstream, "/v1/wolves", timeout)) as { wolves?: WolfSummary[] };
           const own = body.wolves?.find((x) => x.name === w.name);
-          if (own) return { ...base, host: own.host, status: own.status };
+          if (own) return { ...base, host: own.host, status: own.status, ...(own.librarian !== undefined ? { librarian: own.librarian } : {}) };
         } catch {
           /* fall through */
         }

@@ -12,10 +12,9 @@
 import assert from "node:assert/strict";
 import { describe, it, it as test } from "node:test";
 import {
-	applyClusterLabels,
-	arrowGeometry,
-	isImpNodeId,
 	boxBlurRound,
+	createCommitScheduler,
+	edgeGeometry,
 	fitTransform,
 	labelAlpha,
 	pickNearest,
@@ -117,60 +116,25 @@ describe("fitTransform", () => {
 	});
 });
 
-describe("arrowGeometry", () => {
-	test("the tip lands exactly on the target disc edge", () => {
-		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5);
+describe("edgeGeometry (plain segments, no arrowheads)", () => {
+	test("the segment is trimmed to clear both discs", () => {
+		const g = edgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 4);
 		assert.ok(g, "non-degenerate edge");
-		assert.ok(Math.abs(g!.tip.x - 94) < 1e-9 && Math.abs(g!.tip.y) < 1e-9);
-	});
-
-	test("the shaft starts outside the source disc", () => {
-		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5)!;
-		assert.ok(Math.abs(g.shaftFrom.x - 6) < 1e-9 && Math.abs(g.shaftFrom.y) < 1e-9);
-		// Shaft ends at the head base; head is drawn from base to tip.
-		assert.ok(Math.abs(g.shaftTo.x - 89) < 1e-9);
-	});
-
-	test("the head triangle is symmetric around the shaft axis (0.8x wideness)", () => {
-		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 6, 5)!;
-		// halfW = 0.4 x headLength = 2; both base corners share x, mirrored y.
-		assert.ok(Math.abs(Math.abs(g.left.y) - 2) < 1e-9 && Math.abs(Math.abs(g.right.y) - 2) < 1e-9);
-		assert.ok(Math.abs(g.left.y + g.right.y) < 1e-9); // mirror
-		assert.ok(Math.abs(g.left.x - g.right.x) < 1e-9);
+		assert.ok(Math.abs(g!.from.x - 6) < 1e-9 && Math.abs(g!.from.y) < 1e-9);
+		assert.ok(Math.abs(g!.to.x - 96) < 1e-9 && Math.abs(g!.to.y) < 1e-9);
 	});
 
 	test("works at arbitrary angles (diagonal stays normalized)", () => {
-		const a = { x: 0, y: 0 };
-		const b = { x: 60, y: 80 }; // len 100, dir (0.6, 0.8)
-		const g = arrowGeometry(a, b, 10, 10, 8)!;
-		assert.ok(Math.abs(g.tip.x - (60 - 0.6 * 10)) < 1e-9 && Math.abs(g.tip.y - (80 - 0.8 * 10)) < 1e-9);
+		const g = edgeGeometry({ x: 0, y: 0 }, { x: 60, y: 80 }, 10, 10)!; // len 100, dir (0.6, 0.8)
+		assert.ok(Math.abs(g.from.x - 6) < 1e-9 && Math.abs(g.from.y - 8) < 1e-9);
+		assert.ok(Math.abs(g.to.x - 54) < 1e-9 && Math.abs(g.to.y - 72) < 1e-9);
 	});
 
-	test("null for coincident endpoints (never a NaN arrow)", () => {
-		assert.equal(arrowGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6, 5), null);
-	});
-
-	// The rendering arc's geometry laws (owner, 2026-09-30): an edge INTO
-	// an imp point is drawn with toRadius 0 (headless, terminates at the
-	// center); an edge OUT of one with fromRadius 0 (starts at the center).
-	test("toRadius 0 — the tip lands exactly at the target CENTER (headless convergence)", () => {
-		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 0, 5)!;
-		assert.ok(Math.abs(g.tip.x - 100) < 1e-9 && Math.abs(g.tip.y) < 1e-9, "tip = the center, past which no shaft draws");
-	});
-
-	test("fromRadius 0 — the shaft starts exactly at the source CENTER", () => {
-		const g = arrowGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 0, 6, 5)!;
-		assert.ok(Math.abs(g.shaftFrom.x) < 1e-9 && Math.abs(g.shaftFrom.y) < 1e-9, "shaftFrom = the center");
+	test("null for coincident or overlapping discs (never a NaN or backwards line)", () => {
+		assert.equal(edgeGeometry({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6), null);
+		assert.equal(edgeGeometry({ x: 0, y: 0 }, { x: 10, y: 0 }, 6, 6), null);
 	});
 });
-
-describe("isImpNodeId (the pure-geometry law, rendering arc 2026-09-30)", () => {
-	test("arg_-prefixed ids are geometry; proposition ids are citizens", () => {
-		assert.equal(isImpNodeId("arg_123af5a046ba"), true);
-		assert.equal(isImpNodeId("n_abc123"), false);
-	});
-});
-
 
 describe("pickNearest (distance-check picking)", () => {
 	const nodes = [
@@ -202,6 +166,22 @@ describe("pickNearest (distance-check picking)", () => {
 
 	test("empty node list picks nothing", () => {
 		assert.equal(pickNearest([], 0, 0, 100), null);
+	});
+
+	test("distance is measured from the disc EDGE: a big node is hit across its body", () => {
+		const big = [{ id: "dom", x: 0, y: 0, r: 30 }];
+		assert.equal(pickNearest(big, 28, 0, 10)?.id, "dom", "inside the disc");
+		assert.equal(pickNearest(big, 38, 0, 10)?.id, "dom", "within the pad of the edge");
+		assert.equal(pickNearest(big, 45, 0, 10), null, "beyond the pad");
+	});
+
+	test("a small node on top of a big neighbour's pad is still pickable", () => {
+		const mixed = [
+			{ id: "big", x: 0, y: 0, r: 30 },
+			{ id: "small", x: 36, y: 0, r: 2 },
+		];
+		assert.equal(pickNearest(mixed, 36, 0, 10)?.id, "small", "dead on the small disc");
+		assert.equal(pickNearest(mixed, 31, 0, 10)?.id, "big", "just outside the big disc edge");
 	});
 });
 
@@ -337,80 +317,54 @@ describe("wrapRegionLabel (wave 7: session names / file paths)", () => {
 	});
 });
 
+describe("createCommitScheduler (flush on replace / destroy)", () => {
+	function fake() {
+		let next = 1;
+		const timers = new Map<number, () => void>();
+		return {
+			timers,
+			api: {
+				set: (fn: () => void) => {
+					timers.set(next, fn);
+					return next++;
+				},
+				clear: (h: unknown) => void timers.delete(h as number),
+			},
+			fire: () => [...timers.values()].forEach((f) => f()),
+		};
+	}
 
-describe("applyClusterLabels (the label-only rename channel)", () => {
-	const measure = (s: string) => s.length * 5;
-	const W = 220;
-	const MAXL = 3;
-
-	const fixture = () => ({
-		clusters: [
-			{ id: "chat_a", label: "Old title" },
-			{ id: "chat_b", label: null },
-			{ id: "seedplan", label: "Orbital mechanics" },
-		],
-		regionMeta: [
-			{ id: "chat_a", label: "Old title", lines: ["Old title"], cx: 0, cy: 0, hue: 10 },
-			{ id: "chat_b", label: null, lines: null, cx: 1, cy: 1, hue: 20 },
-			{ id: "seedplan", label: "Orbital mechanics", lines: ["Orbital mechanics"], cx: 2, cy: 2, hue: 30 },
-		],
+	test("schedule runs once when the timer fires; rescheduling restarts it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.schedule();
+		assert.equal(f.timers.size, 1);
+		f.fire();
+		assert.equal(runs, 1);
+		assert.equal(s.pending(), false);
 	});
 
-	it("patches the matching cluster and re-wraps its region meta", () => {
-		const f = fixture();
-		// 5px/char and W=220: a 45-char title just overflows one line
-		// ("...for the" is 40 chars, appending " graph" reads 46).
-		const longTitle = "A much longer new session title for the graph";
-		const changed = applyClusterLabels(
-			f.clusters, f.regionMeta, new Map([["chat_a", longTitle]]),
-			W, MAXL, measure,
-		);
-		assert.equal(changed, true);
-		assert.equal(f.clusters[0]!.label, longTitle);
-		assert.deepEqual(f.regionMeta[0]!.lines, ["A much longer new session title for the", "graph"]);
-		// untouched entries stay byte-identical
-		assert.equal(f.clusters[1]!.label, null);
-		assert.equal(f.clusters[2]!.label, "Orbital mechanics");
-		assert.deepEqual(f.regionMeta[2]!.lines, ["Orbital mechanics"]);
+	test("flush runs a pending commit immediately and disarms the timer", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.flush();
+		assert.equal(runs, 1);
+		assert.equal(f.timers.size, 0);
+		s.flush(); // nothing pending → no second run
+		assert.equal(runs, 1);
 	});
 
-	it("hull silence: a null-label cluster never gains a label", () => {
-		const f = fixture();
-		const changed = applyClusterLabels(
-			f.clusters, f.regionMeta, new Map([["chat_b", "Resurrected?"]]),
-			W, MAXL, measure,
-		);
-		assert.equal(changed, false);
-		assert.equal(f.clusters[1]!.label, null);
-		assert.equal(f.regionMeta[1]!.lines, null);
-	});
-
-	it("a label already matching is a no-op (no redraw)", () => {
-		const f = fixture();
-		const changed = applyClusterLabels(
-			f.clusters, f.regionMeta, new Map([["seedplan", "Orbital mechanics"]]),
-			W, MAXL, measure,
-		);
-		assert.equal(changed, false);
-	});
-
-	it("an explicit null clears a labeled cluster's lines", () => {
-		const f = fixture();
-		const changed = applyClusterLabels(
-			f.clusters, f.regionMeta, new Map([["chat_a", null]]),
-			W, MAXL, measure,
-		);
-		assert.equal(changed, true);
-		assert.equal(f.clusters[0]!.label, null);
-		assert.equal(f.regionMeta[0]!.lines, null);
-	});
-
-	it("unknown ids in the map change nothing", () => {
-		const f = fixture();
-		const changed = applyClusterLabels(
-			f.clusters, f.regionMeta, new Map([["chat_ghost", "Nope"]]),
-			W, MAXL, measure,
-		);
-		assert.equal(changed, false);
+	test("cancel drops the pending commit without running it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.cancel();
+		s.flush();
+		assert.equal(runs, 0);
 	});
 });

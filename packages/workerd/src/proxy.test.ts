@@ -39,6 +39,24 @@ describe("workerd proxy", () => {
     }
   });
 
+  it("passes the librarian flag through the aggregate (omitted when the wolf does not report it)", async () => {
+    const body = await (await fetch(`${base}/v1/wolves`)).json();
+    expect(body.wolves.map((w: { name: string; librarian?: boolean }) => [w.name, w.librarian])).toEqual([["alpha", false], ["beta", true], ["gamma", false]]);
+  });
+
+  it("forwards the memory status, topic and work record routes unchanged (path params and query)", async () => {
+    for (const n of ["alpha", "beta"]) {
+      expect(await (await fetch(`${base}/v1/wolves/${n}/memory?thread=${encodeURIComponent(`${n}/home`)}`)).json()).toEqual({ served_by: n, query: `?thread=${encodeURIComponent(`${n}/home`)}` });
+      expect(await (await fetch(`${base}/v1/wolves/${n}/memory/topics/caching?scope=den`)).json()).toEqual({ served_by: n, topic: "caching", query: "?scope=den" });
+      expect(await (await fetch(`${base}/v1/wolves/${n}/work/work-wolfpack-abcdefg/record`)).json()).toEqual({ served_by: n, work: "work-wolfpack-abcdefg" });
+    }
+    for (const p of ["/v1/wolves/nope/memory", "/v1/wolves/nope/memory/topics/x", "/v1/wolves/nope/work/work-wolfpack-abcdefg/record"]) {
+      const r = await fetch(`${base}${p}`);
+      expect(r.status).toBe(404);
+      expect(await r.json()).toMatchObject({ code: "not_found" });
+    }
+  });
+
   it("404 not_found envelope for an unknown wolf", async () => {
     for (const p of ["/v1/wolves/nope/threads", `/v1/threads/${encodeURIComponent("nope/home")}`, "/v1/threads/nohome"]) {
       const r = await fetch(`${base}${p}`);

@@ -7,8 +7,7 @@
 export * from "./chat-handler.ts";
 export * from "./events-stream.ts";
 export * from "./chats.ts";
-export * from "./graph.ts";
-export * from "./commit-positions.ts";
+export * from "./graph-positions.ts";
 export * from "./jobs.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
@@ -46,3 +45,5 @@ export * from "./model-catalog.ts";
 // Response handlers the /api/wolves routes and the wolf pages share.
 export * from "./console-client.ts";
 export * from "./thread-api.ts";
+export * from "./memory-api.ts";
+export * from "./pipeline-api.ts";

@@ -33,6 +33,8 @@ import {
   type ConsolidateResponse,
   type ErrorCode,
   type InFlightPartial,
+  type KbPipelineResponse,
+  type LastPromote,
   type PromoteResponse,
   type SubmitAck,
   type ThreadDetail,
@@ -56,6 +58,10 @@ import {
 } from "../engine/index.js";
 import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
+import type { KbRoots } from "@wolfpack/kb/shared";
+import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
+import { readDenTopics } from "@wolfpack/memory";
+import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 
@@ -71,6 +77,17 @@ export interface WolfServerOptions {
   den?: string;
   /** Whether the memory extension is installed on this wolf; picks the `memory_unavailable` message. Unset: generic. */
   memoryExtension?: boolean;
+  /**
+   * KB roots resolved at startup (sandbox-aware: KB_BASE / KB_OPS from the effective env, den-local state under the
+   * den). Unset when the wolf has none. The KB routes (graph, entries, pipeline) read from here.
+   */
+  kbRoots?: KbRoots;
+  /** This wolf is the librarian (wolf.yaml `memory.librarian`): reported as `librarian` on its summary. */
+  librarian?: boolean;
+  /** Memory settings for the read-only memory status route. Unset: sandbox off, default thresholds. */
+  memoryConfig?: MemoryReadConfig;
+  /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
+  work?: { endpoint?: string; token?: string };
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -374,6 +391,70 @@ export class WolfServer {
         };
         return this.json(res, 200, body);
       }
+      case "getMemoryStatus": {
+        this.checkWolf(params.name);
+        const thread = url.searchParams.get("thread");
+        if (thread !== null) this.checkThread(thread);
+        // wolfd serves one conversation (the home thread = the engine root), so every thread resolves to its binding.
+        const bound = this.opts.den ? await readBound(this.opts.den, this.conv.id, this.opts.work ?? {}) : null;
+        return this.json(res, 200, await readMemoryStatus(this.memoryReadInput(), this.lastPromote(), bound));
+      }
+      case "getMemoryTopic": {
+        this.checkWolf(params.name);
+        if (!isTopicId(params.id)) throw new HttpError("invalid_request", "malformed topic id");
+        const scope = url.searchParams.get("scope");
+        if (scope !== null && scope !== "den" && scope !== "session") throw new HttpError("invalid_request", "scope must be den or session");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        const topic = readMemoryTopic(this.opts.den!, params.id, scope ?? undefined);
+        if (!topic) throw new HttpError("not_found", `topic ${params.id}`);
+        return this.json(res, 200, topic);
+      }
+      case "getWorkRecord": {
+        this.checkWolf(params.name);
+        if (!isWorkId(params.id)) throw new HttpError("invalid_request", "malformed work item id");
+        const r = await readWorkRecord(params.id, this.opts.work ?? {});
+        if (r.kind === "unconfigured") throw new HttpError("memory_unavailable", "no Work API configured on this wolf (WORK_ENDPOINT / WORK_TOKEN)");
+        if (r.kind === "not_found") throw new HttpError("not_found", `work item ${params.id}`);
+        if (r.kind === "error") throw new HttpError("engine_error", `work API: ${r.message}`);
+        return this.json(res, 200, r.value);
+      }
+      case "kbPipeline": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        // Loaded on first use: only the librarian ever gets here, and the pipeline reader pulls in the librarian package.
+        const { readPipeline } = await import("@wolfpack/kb/librarian");
+        const body: KbPipelineResponse = readPipeline(roots);
+        return this.json(res, 200, body);
+      }
+      case "getKbGraph": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        const flag = (k: string): boolean => {
+          const v = url.searchParams.get(k);
+          if (v === null || v === "false") return false;
+          if (v === "true") return true;
+          throw new HttpError("invalid_request", `${k} must be true or false`);
+        };
+        const domain = url.searchParams.get("domain") ?? undefined;
+        // The den layer is this wolf's own den only, never another wolf's; with no den it reports itself off.
+        const denTopics = flag("denTopics") && this.opts.den !== undefined;
+        const den = denTopics && this.opts.den ? { wolf: this.name, topics: readDenTopics(this.opts.den) } : undefined;
+        try {
+          return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), wikilinks: flag("wikilinks"), denTopics, den }));
+        } catch (e) {
+          if (e instanceof UnknownDomainError) throw new HttpError("not_found", `domain ${e.domain}`);
+          throw e;
+        }
+      }
+      case "getKbEntry": {
+        this.checkWolf(params.name);
+        const roots = this.requireKb();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(params.id)) throw new HttpError("invalid_request", "malformed entry id");
+        const entry = readKbEntry(roots, params.id);
+        if (!entry) throw new HttpError("not_found", `entry ${params.id}`);
+        return this.json(res, 200, entry);
+      }
       case "promoteMemory": {
         this.checkWolf(params.name);
         const actions = this.memoryActions();
@@ -386,6 +467,33 @@ export class WolfServer {
         return this.json(res, 202, body);
       }
     }
+  }
+
+  /**
+   * The KB roots for a KB route. The KB graph / entry / pipeline routes are librarian-only: a wolf that is not the
+   * librarian, or has no KB roots (no KB_BASE / KB_OPS), answers `kb_unavailable` (409).
+   */
+  private requireKb(): KbRoots {
+    if (!this.opts.librarian) throw new HttpError("kb_unavailable", `wolf ${this.name} is not the librarian`);
+    if (!this.opts.kbRoots) throw new HttpError("kb_unavailable", "this wolf has no KB roots (KB_BASE and KB_OPS)");
+    return this.opts.kbRoots;
+  }
+
+  /** How the last promote on this den ended (the bus keeps it; in memory only, so null after a restart). */
+  private lastPromote(): LastPromote | null {
+    const ev = this.memoryBus?.lastPromoteEvent?.();
+    if (ev?.type === "promote_finished") return { jobId: ev.jobId, at: ev.timestamp, result: "finished", consolidated: ev.consolidated, contributions: ev.contributions };
+    if (ev?.type === "promote_failed") return { jobId: ev.jobId, at: ev.timestamp, result: "failed", message: ev.message };
+    return null;
+  }
+
+  private memoryReadInput() {
+    return {
+      den: this.opts.den,
+      extensionInstalled: this.opts.memoryExtension,
+      running: this.opts.den ? memoryActionsFor(this.opts.den) !== undefined : false,
+      config: this.opts.memoryConfig ?? { sandbox: false, consolidation: { threshold: 20000, poolTarget: 10000, trigger: "hybrid" as const } },
+    };
   }
 
   /** The memory extension's actions for this wolf; `memory_unavailable` when memory is inert or not loaded. */
@@ -416,7 +524,7 @@ export class WolfServer {
   // ------------------------------------------------------------ state
 
   private wolfSummary(): WolfSummary {
-    return { id: this.name, name: this.name, host: this.host, status: this.running ? "busy" : "online" };
+    return { id: this.name, name: this.name, host: this.host, status: this.running ? "busy" : "online", librarian: this.opts.librarian === true };
   }
 
   private checkWolf(name: string): void {

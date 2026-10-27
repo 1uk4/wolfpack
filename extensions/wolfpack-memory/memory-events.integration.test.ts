@@ -3,7 +3,7 @@
  * a scripted turn -> observation_captured -> topic_consolidated (low threshold) -> promote_started,
  * contribution_emitted, promote_finished. The memory Engine is the stubbed `engine.call` seam.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +47,7 @@ function stubEngine(opts: { failDistill?: boolean } = {}): Engine {
           actions: [{ sessionTopicId: "x", action: "create", reasoning: "new", result: { id: "caching", title: "Caching", summary: "Session lookups are cached", body: "Cache session lookups for five minutes." } }],
         });
       }
+      if (step === "workRecord") return schema.parse({ decisions: [{ decision: "Cache five minutes", why: "hot path" }], changes: [], findings: [], problems: [] });
       if (step === "distill" && opts.failDistill) throw new Error("distill down");
       if (step === "distill") return schema.parse({ contributions: [{ slug: "main", title: "Caching", summary: "Session lookups are cached", body: "## Details\nCache session lookups." }] });
       throw new Error(`unexpected step ${step}`);
@@ -177,6 +178,54 @@ describe("MemoryEvents on the wolf stream", { timeout: 30_000 }, () => {
     expect(types(events)).not.toContain("promote_failed");
     expect(types(events)).not.toContain("contribution_emitted");
     expect(events.find((e) => e.type === "promote_finished")).toMatchObject({ pending: 1, contributions: 0 });
+  });
+
+  it("a bound consolidate emits record_written for the Record holder (the feature), with counts only", async () => {
+    const t = await startWolf("memory:\n  consolidation:\n    threshold: 20\n    poolTarget: 1\n");
+    const sb = t.wolf.sandbox!;
+    const http = async (body: unknown) =>
+      (await (await fetch(`${sb.resolved.workEndpoint}/work`, { method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": sb.env.WORK_TOKEN }, body: JSON.stringify(body) })).json()) as { id: string };
+    const feature = await http({ kind: "feature", domain: "wolfpack", title: "rec feature", assignee: "owner" });
+    const task = await http({ kind: "task", domain: "wolfpack", title: "rec task", assignee: "testwolf", successCriteria: "ok", partOf: feature.id });
+    writeBindingFile(t.wolf.config.den, 1, { workId: task.id, domain: "wolfpack", boundAt: new Date().toISOString(), featureId: feature.id });
+    const { events } = collect(t);
+    await new Promise((r) => setTimeout(r, 100));
+
+    await t.submit("hello");
+    await waitFor(() => types(events).includes("record_written"));
+    const rec = events.find((e) => e.type === "record_written")!;
+    expect(rec).toMatchObject({ type: "record_written", wolf: "testwolf", observationCount: 1, target: { kind: "work", workId: feature.id } });
+    expect((rec as { chars?: number }).chars).toBeGreaterThan(0);
+    expect(MemoryEventSchema.safeParse(rec).success).toBe(true);
+    expect(JSON.stringify(rec)).not.toContain("END_OF_OBSERVATION");
+  });
+
+  it("a promote after the sweep absorbed a contribution emits topic_archived with absorbedInto", async () => {
+    const t = await startWolf("memory:\n  consolidation:\n    threshold: 20\n    poolTarget: 1\n");
+    const { events } = collect(t);
+    await new Promise((r) => setTimeout(r, 100));
+    await t.submit("hello");
+    await waitFor(() => types(events).includes("topic_consolidated"));
+    const actions = memoryActionsFor(t.wolf.config.den)!;
+    const first = actions.promote();
+    if (first.status !== "started") throw new Error("not started");
+    await first.done;
+    await waitFor(() => types(events).includes("promote_finished"));
+    expect(types(events)).not.toContain("topic_archived");
+
+    // Dewey's receipt for the emitted contribution: same file name as the inbox file.
+    const ops = t.wolf.sandbox!.resolved.kbOps;
+    const file = readdirSync(join(ops, "inbox", "testwolf")).find((f) => f.endsWith(".md"))!;
+    mkdirSync(join(ops, "receipts", "testwolf"), { recursive: true });
+    writeFileSync(join(ops, "receipts", "testwolf", file), `---\nfrom: testwolf\nden_topic_id: caching\noutcome: create\nprocessed: 2026-10-25T11:00:00.000Z\n---\n\nkb-wolfpack-AAAAAAA\n`);
+
+    const second = actions.promote();
+    if (second.status !== "started") throw new Error("not started");
+    await second.done;
+    await waitFor(() => types(events).includes("topic_archived"));
+    const arch = events.find((e) => e.type === "topic_archived")!;
+    expect(arch).toMatchObject({ type: "topic_archived", topicId: "caching", absorbedInto: "kb-wolfpack-AAAAAAA", target: { kind: "den", topicId: "caching" } });
+    expect(MemoryEventSchema.safeParse(arch).success).toBe(true);
   });
 
   it("disconnecting a client returns the bus listener count to 0", async () => {

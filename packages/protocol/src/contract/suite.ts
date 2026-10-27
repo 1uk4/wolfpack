@@ -355,6 +355,46 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       }
     });
 
+    it("memory read routes: unknown wolf is not_found; otherwise a valid status (any state), topic envelope or work error", async () => {
+      for (const path of [buildPath("getMemoryStatus", { name: "no-such-wolf" }), buildPath("getMemoryTopic", { name: "no-such-wolf", id: "x" }), buildPath("getWorkRecord", { name: "no-such-wolf", id: "work-x-1234567" })]) {
+        await expectError(await call(path), "not_found");
+      }
+      const s = await call(buildPath("getMemoryStatus", { name: wolf }));
+      expect(s.status).toBe(200);
+      ROUTES.getMemoryStatus.response.schema.parse(await s.json());
+      const t = await call(buildPath("getMemoryTopic", { name: wolf, id: "no-such-topic" }));
+      expect(t.status).toBeGreaterThanOrEqual(400);
+      expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await t.json()).code);
+      const w = await call(buildPath("getWorkRecord", { name: wolf, id: "work-x-1234567" }));
+      expect(w.status).toBeGreaterThanOrEqual(400);
+      expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
+    });
+
+    it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
+      for (const path of [buildPath("getKbGraph", { name: "no-such-wolf" }), buildPath("getKbEntry", { name: "no-such-wolf", id: "kb-x-1234567" })]) {
+        await expectError(await call(path), "not_found");
+      }
+      const g = await call(buildPath("getKbGraph", { name: wolf }));
+      if (g.status === 200) ROUTES.getKbGraph.response.schema.parse(await g.json());
+      else {
+        expect(g.status).toBe(409);
+        expect(ErrorEnvelopeSchema.parse(await g.json()).code).toBe("kb_unavailable");
+      }
+      const e = await call(buildPath("getKbEntry", { name: wolf, id: "no-such-entry" }));
+      expect(e.status).toBeGreaterThanOrEqual(400);
+      expect(["not_found", "kb_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await e.json()).code);
+    });
+
+    it("kb pipeline: unknown wolf is not_found; otherwise a valid pipeline, or kb_unavailable when not the librarian", async () => {
+      await expectError(await call(buildPath("kbPipeline", { name: "no-such-wolf" })), "not_found");
+      const p = await call(buildPath("kbPipeline", { name: wolf }));
+      if (p.status === 200) ROUTES.kbPipeline.response.schema.parse(await p.json());
+      else {
+        expect(p.status).toBe(409);
+        expect(ErrorEnvelopeSchema.parse(await p.json()).code).toBe("kb_unavailable");
+      }
+    });
+
     it("protocol version: matching or absent is accepted, mismatch is 426 version_mismatch", async () => {
       const ok = await call(buildPath("listWolves"), { headers: { [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) } });
       expect(ok.status).toBe(200);

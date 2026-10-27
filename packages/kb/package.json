@@ -11,7 +11,8 @@
     ".": "./dist/index.js",
     "./shared": "./dist/shared/index.js",
     "./client": "./dist/client/index.js",
-    "./librarian": "./dist/librarian/index.js"
+    "./librarian": "./dist/librarian/index.js",
+    "./graph": "./dist/graph/index.js"
   },
   "scripts": {
     "build": "tsc --build",

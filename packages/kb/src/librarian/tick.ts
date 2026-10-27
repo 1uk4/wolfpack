@@ -11,7 +11,7 @@
  */
 import { SWEEP, type Engine } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
-import { sweep, emptyResult, type SweepResult } from "./sweep.js";
+import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
 import { countPending } from "./intake.js";
 import { readLedger, foldRegistry } from "./ledger.js";
@@ -34,6 +34,10 @@ export interface SweepTickOptions {
   budgetMs?: number;
   /** Where link-back notes for graduated work go (default: the Work API from WORK_ENDPOINT / WORK_TOKEN; none → they stay queued). */
   notePoster?: NotePoster | null;
+  /** Structured sweep progress (see SweepContext.onEvent). */
+  onEvent?: (event: SweepEvent) => void;
+  /** Test seam: replaces the tick's embedder (default: the KB's cached embedder). */
+  getEmbedder?: () => CachedEmbedder;
 }
 
 export interface SweepTickResult {
@@ -100,7 +104,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
 
   // Built on first use: a duplicate-only inbox never reads the vector cache.
   let embedder: CachedEmbedder | undefined;
-  const getEmbedder = () => (embedder ??= createEmbedder(roots));
+  const getEmbedder = () => (embedder ??= opts.getEmbedder?.() ?? createEmbedder(roots));
   let liveEntries = 0;
   const loadEntryVectors = async () => {
     const vectors = await buildEntryVectors(roots, foldRegistry(readLedger(roots)), getEmbedder());
@@ -111,7 +115,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // A hung call must never hold the tick: past the run budget plus slack, give
   // up (the KB lock still guards against overlap).
   const swept = await withBudget(SWEEP.runBudgetMs + SWEEP.embedTimeoutMs * 4, () =>
-    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs })
+    sweep({ engine, roots, loadEntryVectors, getEmbedder, notify, alert: opts.alert, budgetMs: opts.budgetMs, onEvent: opts.onEvent })
   );
 
   let reorged: ReorgResult | undefined;

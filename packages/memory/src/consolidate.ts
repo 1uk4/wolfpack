@@ -58,6 +58,8 @@ export interface ConsolidateOptions {
   onProgress?: (msg: string) => void;
   /** Called per contribution written to the KB inbox (metadata only). */
   onEmit?: (c: { id: string; denTopicId: string; domain: string }) => void;
+  /** Called per den topic the reconcile step archived because the KB absorbed it. `entryId` is null for a rejected topic. */
+  onArchive?: (a: { id: string; entryId: string | null }) => void;
 }
 
 export interface ConsolidateResult {
@@ -108,6 +110,9 @@ export async function consolidateSession(
     try {
       const r = reconcileDen(den.denRoot, kbRoots, den.wolfName);
       onProgress?.(`reconciled: ${r.archived.length} archived, ${r.pending.length} pending`);
+      for (const a of r.archived) {
+        try { options.onArchive?.(a); } catch { /* an observer never breaks promote */ }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       onProgress?.(`reconcile skipped: ${msg}`);

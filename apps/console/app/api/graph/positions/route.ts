@@ -1,24 +1,36 @@
 /**
- * PUT /api/graph/positions — the live-physics drag commit. The client
- * anneals a drag to rest and sends the new positions; the server
- * sanitizes (finite coords, known ids only), writes the ledger, and if
- * the graph grew mid-drag runs one incremental settle to absorb the new
- * nodes with the client's arrangement as anchors. See
- * src/server/commit-positions.ts.
+ * /api/graph/positions — the KB graph's stored node positions (the
+ * console's own data dir; the KB is never written).
  *
- *   PUT → 200 {positions: {...}} with whatever survived sanitizing
- *         (empty object = nothing written).
+ *   GET → 200 {positions}: the whole stored map, nodeId → {x, y}.
+ *   PUT → 200 {positions}: the live-physics commit. The body (a map of
+ *         nodeId → {x, y}) is sanitized and merged over the stored map;
+ *         the response is the batch that was applied (empty = nothing
+ *         valid, nothing written).
  */
-import { commitPositions } from "@/src/server";
+import { commitGraphPositions, graphPositions } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+	return Response.json({ positions: graphPositions() });
+}
+
+/** A full 20k-node map is ~1.5MB; anything past this is not ours. */
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 export async function PUT(request: Request) {
+	const declared = Number(request.headers.get("content-length") ?? 0);
+	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+		return Response.json({ error: "body too large" }, { status: 413 });
+	}
 	let body: unknown;
 	try {
-		body = await request.json();
+		const text = await request.text();
+		if (text.length > MAX_BODY_BYTES) return Response.json({ error: "body too large" }, { status: 413 });
+		body = JSON.parse(text);
 	} catch {
 		return Response.json({ error: "invalid JSON body" }, { status: 400 });
 	}
-	return Response.json({ positions: commitPositions(body) });
+	return Response.json({ positions: commitGraphPositions(body) });
 }

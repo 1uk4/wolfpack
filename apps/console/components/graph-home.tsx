@@ -15,10 +15,21 @@
  * canvas's renderer (`controllerRef.current?.renderer()`), and `kb.refetch()`
  * re-runs the current graph query; positions and camera survive the refetch.
  */
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { WaypointsIcon } from "lucide-react";
-import { focusStep, parseFocusParam, type FocusRemedy } from "@/src/core";
+import {
+	activityWolves,
+	createPulseBatcher,
+	focusStep,
+	parseFocusParam,
+	pulseTargets,
+	type FocusRemedy,
+	type KbGraph,
+	type MemoryEventFrame,
+} from "@/src/core";
+import { fetchWolves } from "./kb-client";
+import { useMemoryEvents } from "./memory-events";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
@@ -48,6 +59,35 @@ export function GraphUnavailable({ message }: { message?: string | null }) {
 	);
 }
 
+/** Sweep refetches are debounced: a run's closing events can arrive in a burst. */
+const REFETCH_DEBOUNCE_MS = 500;
+
+/** One SSE subscription (hooks can't loop over wolves). */
+function WolfTap({ wolf, onEvent, onResync }: { wolf: string; onEvent: (e: MemoryEventFrame) => void; onResync?: () => void }) {
+	useMemoryEvents(wolf, onEvent, onResync);
+	return null;
+}
+
+/** Librarian + online wolves to watch for activity (capped). */
+function useActivityWolves(librarian: string | null): string[] {
+	const [wolves, setWolves] = useState<string[]>([]);
+	useEffect(() => {
+		if (!librarian) {
+			setWolves([]);
+			return;
+		}
+		let cancelled = false;
+		void fetchWolves().then((res) => {
+			if (cancelled) return;
+			setWolves(activityWolves(librarian, res.ok ? res.data.wolves : []));
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [librarian]);
+	return wolves.length > 0 || !librarian ? wolves : [librarian];
+}
+
 function GraphHomeInner() {
 	const router = useRouter();
 	const params = useSearchParams();
@@ -65,6 +105,40 @@ function GraphHomeInner() {
 		denTopics: settings.layers.denTopics || !!forced.denTopics,
 	});
 	const controllerRef = useRef<GraphViewController | null>(null);
+
+	// Live activity: pulse the nodes events name; refetch when the librarian
+	// finishes a sweep (positions survive: the view keeps what it has).
+	const activity = useActivityWolves(librarian);
+	const graphRef = useRef<KbGraph | null>(null);
+	graphRef.current = kb.graph;
+	const refetchRef = useRef(kb.refetch);
+	refetchRef.current = kb.refetch;
+	const batcher = useMemo(
+		() => createPulseBatcher((ids) => controllerRef.current?.renderer()?.pulse(ids)),
+		[],
+	);
+	const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const scheduleRefetch = useCallback(() => {
+		if (refetchTimer.current) clearTimeout(refetchTimer.current);
+		refetchTimer.current = setTimeout(() => {
+			refetchTimer.current = null;
+			refetchRef.current();
+		}, REFETCH_DEBOUNCE_MS);
+	}, []);
+	useEffect(
+		() => () => {
+			batcher.cancel();
+			if (refetchTimer.current) clearTimeout(refetchTimer.current);
+		},
+		[batcher],
+	);
+	const onEvent = useCallback(
+		(e: MemoryEventFrame) => {
+			batcher.add(pulseTargets(e, graphRef.current));
+			if (e.type === "sweep_finished" && e.wolf === librarian) scheduleRefetch();
+		},
+		[batcher, scheduleRefetch, librarian],
+	);
 
 	// The focus flow (focusStep): wait until the graph for the CURRENT query
 	// has arrived, then focus, or widen the view once, or give up.
@@ -127,6 +201,9 @@ function GraphHomeInner() {
 	return (
 		<div className="relative h-full w-full">
 			{body}
+			{activity.map((w) => (
+				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={w === librarian ? scheduleRefetch : undefined} />
+			))}
 			{kb.status === "error" && graph !== null && (
 				<div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-lg border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg">
 					<span>Couldn&apos;t refresh the graph: {kb.message}</span>

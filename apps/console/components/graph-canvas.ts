@@ -247,6 +247,7 @@ export const LABELS_FADE_RATIO = 0.5;
 
 const GLOW_SCALE = 1.7; // halo outer radius = node radius x this (proportional, like blurring a copy of the disc)
 const GLOW_ALPHA = 0.3; // halo opacity at the disc edge, fading outward
+const PULSE_MS = 2000; // default activity-pulse length
 const HOVER_FADE_MS = 180; // hover halo opacity fade length
 const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~250ms per notch)
 
@@ -553,6 +554,10 @@ export function createCommitScheduler(
 
 // ─── The renderer ───────────────────────────────────────────────────────────
 
+function prefersReducedMotion(): boolean {
+	return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
 export class GraphCanvasRenderer {
 	private canvas: HTMLCanvasElement;
 	private ctx: CanvasRenderingContext2D;
@@ -613,6 +618,9 @@ export class GraphCanvasRenderer {
 	private hoverFrom = 0;
 	private hoverTarget = 0;
 	private hoverStart = 0;
+	/** Live-activity pulses: node id → expiry timestamp + length. Drawn with
+	 *  the hover halo look, fading out; the loop runs only while any exist. */
+	private pulses = new Map<string, { start: number; ms: number }>();
 	// Smooth wheel zoom: wheel events accumulate a target scale (cursor-
 	// anchored); each tick eases the camera toward it instead of jumping.
 	private zoomTarget: { k: number; x: number; y: number } | null = null;
@@ -774,6 +782,24 @@ export class GraphCanvasRenderer {
 		this.buildSim();
 		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
+	}
+
+	/** Flash the halo on these nodes for `ms`, fading out. Ids not in the
+	 *  graph are ignored. Under prefers-reduced-motion the halo is shown
+	 *  static for the duration instead of fading. Returns how many landed. */
+	pulse(ids: readonly string[], ms = PULSE_MS): number {
+		const now = performance.now();
+		let n = 0;
+		for (const id of ids) {
+			if (!this.nodeById.has(id)) continue;
+			this.pulses.set(id, { start: now, ms });
+			n++;
+		}
+		if (n > 0) {
+			this.animating = true;
+			this.markDirty();
+		}
+		return n;
 	}
 
 	setSettings(settings: GraphRenderSettings): void {
@@ -1099,7 +1125,7 @@ export class GraphCanvasRenderer {
 			// Clamp the dt: a long idle gap must not teleport the ease forward.
 			const dt = Math.min(Math.max(now - this.lastTickAt, 8), 100);
 			this.lastTickAt = now;
-			const hoverAnim = this.advanceHover();
+			const hoverAnim = this.advanceHover() || this.pulses.size > 0;
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
 			this.draw();
@@ -1706,6 +1732,34 @@ export class GraphCanvasRenderer {
 				ctx.font = this.worldLabelFont;
 				drawNameLines(ctx, n.x, n.y, this.labelLines.get(n.id) ?? [], this.world, nodeR, data.colors.hoverText);
 				ctx.restore();
+			}
+		}
+
+		// 7b. Activity pulses: the same halo, in the node's colour, fading
+		// with age (static while reduced motion is on). Expired ones drop.
+		if (this.pulses.size > 0) {
+			const now = performance.now();
+			const reduce = prefersReducedMotion();
+			for (const [id, p] of this.pulses) {
+				const age = (now - p.start) / p.ms;
+				if (age >= 1) {
+					this.pulses.delete(id);
+					continue;
+				}
+				const n = this.nodeById.get(id);
+				if (!n || (this.visible && !this.visible.has(id))) continue;
+				const strength = reduce ? 1 : 1 - age;
+				const nodeR = this.radiusOf(n);
+				const outer = nodeR * (reduce ? GLOW_SCALE : GLOW_SCALE + 0.6 * age);
+				const color = n.color ?? data.colors.node;
+				const glow = ctx.createRadialGradient(n.x, n.y, nodeR, n.x, n.y, outer);
+				glow.addColorStop(0, rgbaFromHex(color, Math.min(1, GLOW_ALPHA * 2 * strength)));
+				glow.addColorStop(1, rgbaFromHex(color, 0));
+				ctx.fillStyle = glow;
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, outer, 0, Math.PI * 2);
+				ctx.arc(n.x, n.y, nodeR, 0, Math.PI * 2, true);
+				ctx.fill("evenodd");
 			}
 		}
 

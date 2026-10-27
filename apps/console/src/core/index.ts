@@ -58,6 +58,7 @@ export * from "./session-markdown.ts";
 export * from "./thread-adapter.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
+export * from "./graph-activity.ts";
 // The KB graph (graph home): the librarian's graph payload → canvas data,
 // domain colours, node styles, cards; and the console's own persistence
 // rules (positions, camera). Pure, browser-safe.

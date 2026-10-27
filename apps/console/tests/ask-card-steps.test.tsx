@@ -29,7 +29,8 @@ Object.assign(globalThis, {
 type Card = import("@wolfpack/client").Card;
 type CardAnswers = import("@wolfpack/client").CardAnswers;
 const { AskCard } = await import("../components/ask-card.tsx");
-const { draftAnswers, draftComplete, initialDraft, visibleSteps } = await import("../src/core/index.ts");
+const { draftAnswers, draftComplete, initialDraft, visibleSteps, visibleFields: mirrorVisible } = await import("../src/core/index.ts");
+const { visibleFields: protocolVisible } = await import("@wolfpack/protocol");
 
 
 const strategy = [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }];
@@ -137,4 +138,50 @@ describe("stepped AskCard", () => {
 		assert.equal(q('[data-testid="card-next"]'), null);
 		assert.ok(q('[data-testid="card-submit"]'));
 	});
+
+	it("Next and Back release a dictation claim; Enter in a text input advances; focus moves to the new step", async () => {
+		await mount(card());
+		const input = q('[data-testid="card-text"]')!;
+		await type(input, "/p");
+		await act(async () => {
+			const key = Object.keys(input).find((k) => k.startsWith("__reactProps"))!;
+			(input as unknown as Record<string, { onFocus(): void }>)[key]!.onFocus();
+		});
+		assert.ok(q("[data-dictation-claimed]"), "the focused text field claims dictation");
+		await click(q('[data-testid="card-next"]')!);
+		assert.equal(q("[data-dictation-claimed]"), null, "Next drops the claim");
+		assert.equal(q('[data-testid="card-step-indicator"]')!.getAttribute("aria-live"), "polite");
+		await click(q('[data-testid="card-back"]')!);
+		assert.equal(q("[data-dictation-claimed]"), null, "Back does not resurrect it");
+		// Enter advances from a single-line input (the free-text box is a textarea: Enter stays a newline there)
+		const root = q('[data-testid="pending-card"]')!;
+		await act(async () => {
+			const ev = Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Enter" });
+			Object.defineProperty(ev, "target", { value: { tagName: "TEXTAREA" } });
+			root.dispatchEvent(ev);
+		});
+		assert.deepEqual(fields(), ["source"], "Enter in a textarea does not advance");
+	});
+});
+
+/** One table of showIf cases, run against the protocol's visibleFields and the console's mirror. */
+describe("visibleFields parity (protocol vs console mirror)", () => {
+	const OPTS = [{ label: "A", value: "a" }, { label: "B", value: "b" }];
+	const c = (fields: object[]): Card => ({ tool: "t", fields }) as Card;
+	const cases: [string, Card, Record<string, { value: unknown }>, string[]][] = [
+		["no showIf", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "z", kind: "free-text", label: "z" }]), {}, ["k", "z"]],
+		["equals unmet", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "d", kind: "free-text", label: "d", showIf: { field: "k", equals: "a" } }]), { k: { value: "b" } }, ["k"]],
+		["equals met", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "d", kind: "free-text", label: "d", showIf: { field: "k", equals: "a" } }]), { k: { value: "a" } }, ["k", "d"]],
+		["oneOf met", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "d", kind: "free-text", label: "d", showIf: { field: "k", oneOf: ["a", "b"] } }]), { k: { value: "b" } }, ["k", "d"]],
+		["oneOf, controller unanswered", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "d", kind: "free-text", label: "d", showIf: { field: "k", oneOf: ["a"] } }]), {}, ["k"]],
+		["confirm true", c([{ id: "m", kind: "confirm", label: "m" }, { id: "n", kind: "free-text", label: "n", showIf: { field: "m", equals: true } }]), { m: { value: true } }, ["m", "n"]],
+		["confirm false hides", c([{ id: "m", kind: "confirm", label: "m" }, { id: "n", kind: "free-text", label: "n", showIf: { field: "m", equals: true } }]), { m: { value: false } }, ["m"]],
+		["chain collapses with its root", c([{ id: "k", kind: "single", label: "k", options: OPTS }, { id: "m", kind: "confirm", label: "m", showIf: { field: "k", equals: "a" } }, { id: "n", kind: "free-text", label: "n", showIf: { field: "m", equals: true } }]), { k: { value: "b" }, m: { value: true } }, ["k"]],
+	];
+	for (const [name, card, answers, want] of cases) {
+		it(name, () => {
+			assert.deepEqual(protocolVisible(card, answers as never).map((f) => f.id), want);
+			assert.deepEqual(mirrorVisible(card, answers as never).map((f) => f.id), want);
+		});
+	}
 });

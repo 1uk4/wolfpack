@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	FEED_CAP, PROMOTE_IDLE, actionBlock, applyFeed, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, poolSummary,
+	FEED_CAP, PROMOTE_IDLE, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, poolSummary,
 	promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
@@ -38,16 +38,34 @@ describe("memory panel model", () => {
 		assert.equal(destinationLabel({ kind: "den" }), "den pool");
 	});
 	it("feed: thread-scoped, newest first, capped", () => {
-		let f = applyFeed([], obs("t", { kind: "den", topicId: "x" }), "t");
-		f = applyFeed(f, obs("other", { kind: "den" }), "t");
-		f = applyFeed(f, obs(undefined, { kind: "den" }), "t");
-		f = applyFeed(f, { ...base, type: "promote_started", jobId: "j", target: { kind: "den" } } as MemoryEventFrame, "t");
+		let n = 0;
+		const add = (f: ReturnType<typeof pushFeed>, e: MemoryEventFrame) => {
+			const it = feedItemOf(e, "t", `k${n++}`);
+			return it ? pushFeed(f, it) : f;
+		};
+		let f = add([], obs("t", { kind: "den", topicId: "x" }));
+		f = add(f, obs("other", { kind: "den" }));
+		f = add(f, obs(undefined, { kind: "den" }));
+		f = add(f, { ...base, type: "promote_started", jobId: "j", target: { kind: "den" } } as MemoryEventFrame);
 		assert.equal(f.length, 1);
-		f = applyFeed(f, obs("t", { kind: "work", workId: "w" }, "second"), "t");
+		f = add(f, obs("t", { kind: "work", workId: "w" }, "second"));
 		assert.equal(f[0]?.summary, "second");
 		assert.equal(f[0]?.destination, "Record of w");
-		for (let i = 0; i < FEED_CAP + 20; i++) f = applyFeed(f, obs("t", { kind: "den" }), "t");
+		for (let i = 0; i < FEED_CAP + 20; i++) f = add(f, obs("t", { kind: "den" }));
 		assert.equal(f.length, FEED_CAP);
+	});
+	it("a promote POST answer only applies while still starting", () => {
+		const running = { phase: "running", jobId: "j" } as const;
+		assert.deepEqual(settlePromotePost({ phase: "starting" }, running), running);
+		const fin = { phase: "finished", jobId: "j", consolidated: 1, contributions: 0, pending: 0 } as const;
+		assert.equal(settlePromotePost(fin, running), fin);
+		assert.equal(settlePromotePost(fin, PROMOTE_IDLE), fin);
+	});
+	it("refreshPlan: observations refresh status; record_written refreshes the shown Record", () => {
+		assert.deepEqual(refreshPlan(obs("t", { kind: "den" }), ["a"]), { status: true, record: false });
+		const rw = { ...base, type: "record_written", observationCount: 1, target: { kind: "work", workId: "a" } } as MemoryEventFrame;
+		assert.deepEqual(refreshPlan(rw, ["a"]), { status: false, record: true });
+		assert.deepEqual(refreshPlan({ ...base, type: "sweep_started" } as MemoryEventFrame, ["a"]), { status: false, record: false });
 	});
 	it("promote lifecycle and busy gating", () => {
 		let s = applyPromoteEvent(PROMOTE_IDLE, { ...base, type: "promote_started", jobId: "j" } as MemoryEventFrame);

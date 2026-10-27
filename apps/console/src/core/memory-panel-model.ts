@@ -106,19 +106,21 @@ export function destinationLabel(t: Target | undefined, workTitles: Readonly<Rec
 	return "pool";
 }
 
-/** True when the event came out of this thread (threadId; events without one are pool-level, not the thread's). */
+/**
+ * True when the event came out of this thread. Only events from the wolf's HOME conversation carry a
+ * threadId; pool-level events (consolidate, promote) and other conversations' events have none and are not the thread's.
+ */
 export const eventInThread = (e: MemoryEventFrame, threadId: string): boolean => str((e as Record<string, unknown>).threadId) === threadId;
 
-let seq = 0;
-/** An observation_captured event of this thread → a feed item; anything else → null. */
-export function feedItemOf(e: MemoryEventFrame, threadId: string, workTitles?: Readonly<Record<string, string>>): FeedItem | null {
+/** An observation_captured event of this thread → a feed item (caller supplies the unique key); anything else → null. */
+export function feedItemOf(e: MemoryEventFrame, threadId: string, key: string, workTitles?: Readonly<Record<string, string>>): FeedItem | null {
 	if (e.type !== "observation_captured" || !eventInThread(e, threadId)) return null;
 	const o = e as Record<string, unknown>;
 	const t = targetOf(e);
 	const kind = t?.kind === "work" || t?.kind === "session" ? t.kind : "den";
 	const id = kind === "work" ? t?.workId : t?.topicId;
 	return {
-		key: `${str(o.timestamp) ?? ""}#${seq++}`,
+		key,
 		timestamp: str(o.timestamp) ?? "",
 		count: num(o.count) ?? 1,
 		summary: str(o.summary) ?? "",
@@ -128,9 +130,7 @@ export function feedItemOf(e: MemoryEventFrame, threadId: string, workTitles?: R
 }
 
 /** Newest first, capped. */
-export function applyFeed(feed: readonly FeedItem[], e: MemoryEventFrame, threadId: string, workTitles?: Readonly<Record<string, string>>, cap = FEED_CAP): FeedItem[] {
-	const item = feedItemOf(e, threadId, workTitles);
-	if (!item) return feed as FeedItem[];
+export function pushFeed(feed: readonly FeedItem[], item: FeedItem, cap = FEED_CAP): FeedItem[] {
 	return [item, ...feed].slice(0, cap);
 }
 
@@ -165,6 +165,11 @@ export function applyPromoteEvent(s: PromoteState, e: MemoryEventFrame): Promote
 /** The POST /promote answer → state ("already_running" adopts the job in flight). */
 export function promoteStartedState(r: { jobId: string }): PromoteState {
 	return { phase: "running", jobId: r.jobId };
+}
+
+/** Apply the POST /promote answer only while still "starting": a promote_* event that raced ahead wins. */
+export function settlePromotePost(s: PromoteState, next: PromoteState): PromoteState {
+	return s.phase === "starting" ? next : s;
 }
 
 export const promoteBusy = (s: PromoteState): boolean => s.phase === "starting" || s.phase === "running";
@@ -224,4 +229,12 @@ export function recordView(own: WorkRecordResponse, parent: WorkRecordResponse |
 		return { workId: parent.id, title: parent.title, record: parent.record, inheritedFrom: { id: parent.id, title: parent.title } };
 	}
 	return { workId: own.id, title: own.title, record: own.record, inheritedFrom: null };
+}
+
+// ─── Refetch planning ────────────────────────────────────────────────────────
+
+/** What an event makes stale: status (pool/topics/promote result) and/or the shown Record. */
+export function refreshPlan(e: MemoryEventFrame, shown: readonly (string | null | undefined)[]): { status: boolean; record: boolean } {
+	const status = e.type === "observation_captured" || e.type === "topic_consolidated" || e.type === "topic_archived" || e.type === "promote_finished" || e.type === "promote_failed";
+	return { status, record: recordStale(e, shown) };
 }

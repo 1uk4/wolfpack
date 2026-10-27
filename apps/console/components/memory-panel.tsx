@@ -12,16 +12,17 @@ import {
 	MEMORY_PANEL_OPEN_KEY,
 	PROMOTE_IDLE,
 	actionBlock,
-	applyFeed,
 	applyPromoteEvent,
 	bannerOf,
 	parseOpen,
 	parentToFetch,
 	poolSummary,
-	promoteBusy,
 	promoteLine,
 	promoteStartedState,
-	promoteTerminal,
+	pushFeed,
+	feedItemOf,
+	refreshPlan,
+	settlePromotePost,
 	recordStale,
 	recordView,
 	serializeOpen,
@@ -33,6 +34,8 @@ import {
 	type PromoteState,
 	type WorkRecordResponse,
 } from "@/src/core";
+
+const REFRESH_DEBOUNCE_MS = 250;
 
 /**
  * The thread's memory panel (flex sibling of the conversation column):
@@ -73,8 +76,14 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const parentRef = useRef<string | null>(null);
 	parentRef.current = own?.partOf ?? null;
 
+	const statusReq = useRef(0);
+	const recordReq = useRef(0);
+	const feedSeq = useRef(0);
+
 	const refreshStatus = useCallback(async () => {
+		const req = ++statusReq.current;
 		const r = await fetchMemoryStatus(wolf, threadId);
+		if (req !== statusReq.current) return;
 		if (r.ok) {
 			setStatus(r.data);
 			setStatusError(null);
@@ -82,19 +91,47 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	}, [wolf, threadId]);
 
 	const refreshRecord = useCallback(async (id: string | null) => {
+		const req = ++recordReq.current;
 		if (!id) {
 			setOwn(null);
 			setParent(null);
 			return;
 		}
 		const r = await fetchWorkRecord(wolf, id);
-		if (!r.ok) return;
-		setOwn(r.data);
+		if (req !== recordReq.current || !r.ok) return;
 		const pid = parentToFetch(r.data);
-		if (!pid) return setParent(null);
-		const p = await fetchWorkRecord(wolf, pid);
-		setParent(p.ok ? p.data : null);
+		const p = pid ? await fetchWorkRecord(wolf, pid) : null;
+		if (req !== recordReq.current) return;
+		setOwn(r.data);
+		setParent(p?.ok ? p.data : null);
 	}, [wolf]);
+
+	// Trailing-debounced refetch shared by status + record: event bursts coalesce.
+	const dirty = useRef({ status: false, record: false });
+	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const flush = useCallback(() => {
+		if (timer.current) clearTimeout(timer.current);
+		timer.current = null;
+		const d = dirty.current;
+		dirty.current = { status: false, record: false };
+		if (d.status) void refreshStatus();
+		if (d.record) void refreshRecord(boundRef.current);
+	}, [refreshStatus, refreshRecord]);
+	const schedule = useCallback(
+		(plan: { status: boolean; record: boolean }) => {
+			if (!plan.status && !plan.record) return;
+			dirty.current = { status: dirty.current.status || plan.status, record: dirty.current.record || plan.record };
+			if (timer.current) clearTimeout(timer.current);
+			timer.current = setTimeout(flush, REFRESH_DEBOUNCE_MS);
+		},
+		[flush],
+	);
+	useEffect(
+		() => () => {
+			if (timer.current) clearTimeout(timer.current);
+		},
+		[],
+	);
 
 	useEffect(() => {
 		setFeed([]);
@@ -109,19 +146,18 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		wolf,
 		(e) => {
 			const titles = boundRef.current && boundTitle ? { [boundRef.current]: boundTitle } : undefined;
-			setFeed((f) => applyFeed(f, e, threadId, titles));
-			if (e.type.startsWith("promote_")) {
-				setPromote((s) => applyPromoteEvent(s, e));
-				if (promoteTerminal(applyPromoteEvent(PROMOTE_IDLE, e))) void refreshStatus();
-			} else if (e.type === "topic_consolidated" || e.type === "topic_archived") void refreshStatus();
-			if (recordStale(e, [boundRef.current, parentRef.current])) void refreshRecord(boundRef.current);
+			const item = feedItemOf(e, threadId, `f${feedSeq.current++}`, titles);
+			if (item) setFeed((f) => pushFeed(f, item));
+			if (e.type.startsWith("promote_")) setPromote((s) => applyPromoteEvent(s, e));
+			schedule(refreshPlan(e, [boundRef.current, parentRef.current]));
 		},
 		() => {
-			void refreshStatus();
-			void refreshRecord(boundRef.current);
+			dirty.current = { status: true, record: true };
+			flush();
 		},
 	);
 
+	const pline = promoteLine(promote);
 	const block = actionBlock({ status, promote, consolidating });
 
 	const consolidate = async () => {
@@ -138,9 +174,9 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		setNote(null);
 		setPromote({ phase: "starting" });
 		const r = await postPromote(wolf);
-		if (r.ok) setPromote(promoteStartedState(r.data));
+		if (r.ok) setPromote((s) => settlePromotePost(s, promoteStartedState(r.data)));
 		else {
-			setPromote(PROMOTE_IDLE);
+			setPromote((s) => settlePromotePost(s, PROMOTE_IDLE));
 			setNote(r.message);
 		}
 	};
@@ -148,7 +184,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const openTopic = async (ref: MemoryTopicRef, scope: "den" | "session") => {
 		setDrawer({ ref, scope, topic: null, error: null });
 		const r: KbResult<MemoryTopic> = await fetchMemoryTopic(wolf, ref.id, scope);
-		setDrawer((d) => (d && d.ref.id === ref.id ? (r.ok ? { ...d, topic: r.data } : { ...d, error: r.message }) : d));
+		setDrawer((d) => (d && d.ref.id === ref.id && d.scope === scope ? (r.ok ? { ...d, topic: r.data } : { ...d, error: r.message }) : d));
 	};
 
 	const banner = status ? bannerOf(status) : null;
@@ -198,11 +234,11 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					<Button size="sm" variant="outline" disabled={block !== null} onClick={consolidate}>
 						{consolidating ? "Consolidating…" : "Consolidate"}
 					</Button>
-					<Button size="sm" variant="outline" disabled={block === "inactive" || promoteBusy(promote)} onClick={startPromote}>
+					<Button size="sm" variant="outline" disabled={block !== null} onClick={startPromote}>
 						Promote
 					</Button>
 					{block === "memory_busy" ? <p className="w-full text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
-					{promoteLine(promote) ? <p className="w-full text-xs text-muted-foreground" data-testid="memory-promote">{promoteLine(promote)}</p> : null}
+					{pline ? <p className="w-full text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 					{note ? <p className="w-full text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}
 				</div>
 

@@ -2,7 +2,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
@@ -27,6 +27,7 @@ const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
 // ThreadChat slots the MemoryPanel, which subscribes to memory events: an inert source keeps EventSource out of linkedom.
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
+const realFetch = globalThis.fetch;
 globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
 
 let root: Root | null = null;
@@ -64,6 +65,10 @@ const key = () =>
 	act(async () => {
 		window.dispatchEvent(Object.assign(new dom.window.Event("keydown"), { key: "t", metaKey: true }));
 	});
+
+after(() => {
+	globalThis.fetch = realFetch;
+});
 
 afterEach(async () => {
 	await act(async () => root?.unmount());

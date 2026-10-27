@@ -165,10 +165,10 @@ describe("tool rows", () => {
 
 describe("ToolRow with an artifact renderer", () => {
 	it("registered tools (read) expand into the artifact card; others show text output", async () => {
-		const { artifactRenderers } = await import("../components/artifacts/index.ts");
+		const { lookupCard } = await import("../components/card-registry.tsx");
 		const part = { type: "tool-read", toolCallId: "c", state: "output-available", input: { path: "a.md" }, output: "BODY" };
 		const entry = { callId: "c", name: "read", summary: "a.md", status: "done" as const, result: "BODY" };
-		const withCard = renderToStaticMarkup(<ToolRow entry={entry} artifact={{ Renderer: artifactRenderers.read!, part: part as never }} />);
+		const withCard = renderToStaticMarkup(<ToolRow entry={entry} artifact={{ Renderer: lookupCard("tool", "read")!.Renderer, part: part as never }} />);
 		assert.match(withCard, /data-testid="tool-row"/);
 		assert.match(withCard, /data-testid="tool-call-card"/);
 		assert.doesNotMatch(withCard, /data-testid="tool-row-output"/);

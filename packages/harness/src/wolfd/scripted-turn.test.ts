@@ -78,6 +78,49 @@ describe("scripted model turns", () => {
     expect(new Set(offered).size).toBe(offered.length);
   });
 
+  it("show_decision twice with one objectId: two object-upsert revs, history holds one object at the latest rev", async () => {
+    const d1 = {
+      objectId: "db",
+      title: "Datastore",
+      options: [{ id: "pg", label: "Postgres" }, { id: "sq", label: "SQLite", detail: "embedded" }],
+      chosen: "pg",
+      rationale: "Concurrent writers.",
+    };
+    const d2 = { ...d1, chosen: "sq", rationale: "Single writer after all." };
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxText("Weighing it"), fauxToolCall("show_decision", d1 as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage([fauxToolCall("show_decision", d2 as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    const events = await tw.submit("pick a datastore");
+    expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
+    const upserts = events.filter((e) => e.type === "object-upsert");
+    expect(upserts.map((e) => [e.objectId, e.objectType, e.rev])).toEqual([["db", "decision", 1], ["db", "decision", 2]]);
+    expect(upserts[1]).toMatchObject({ data: { chosen: "sq", rationale: "Single writer after all." } });
+    expect(events.filter((e) => e.type === "tool-end").map((e) => e.result)).toEqual(['Shown decision "db".', 'Shown decision "db".']);
+
+    const detail = await tw.client.getThread(tw.home);
+    const objects = detail.messages.flatMap((m) => m.objects ?? []);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toMatchObject({ objectId: "db", type: "decision", rev: 2, data: { chosen: "sq", title: "Datastore" } });
+    expect(objects[0].textOffset).toBe("Weighing it".length);
+  });
+
+  it("a show_decision with invalid arguments yields no object", async () => {
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_decision", { objectId: "x", options: [], chosen: "a", rationale: "r" } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("ok"),
+      ],
+    });
+    const events = await tw.submit("decide");
+    expect(events.filter((e) => e.type === "object-upsert")).toHaveLength(0);
+    const detail = await tw.client.getThread(tw.home);
+    expect(detail.messages.flatMap((m) => m.objects ?? [])).toHaveLength(0);
+  });
+
   it("memory routes say the extension is not loaded (versus inert) when it is absent", async () => {
     tw = await startTestWolf({ script: [] });
     const res = await fetch(`${tw.url}/v1/wolves/testwolf/memory/consolidate`, { method: "POST", headers: { "X-Protocol-Version": "1" } });

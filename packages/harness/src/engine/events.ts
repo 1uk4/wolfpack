@@ -15,6 +15,8 @@
  * - Tool events: tool-start (name/callId/args), tool-update carries the FULL accumulated output (engine sends
  *   set/append/trimStart ops; details-only updates are dropped), tool-end carries the result text + isError from the
  *   result entry (absent entry = faulted tool = isError). Nested tool calls (parentToolCallId) are not surfaced.
+ * - Object tools (`show_decision`) additionally yield an `object-upsert` at tool end (rev = calls so far per objectId,
+ *   seeded from the attach snapshot's completed calls).
  * - An assistant message that ends with stopReason "error" yields an `error` event before turn-end(error).
  * - message_update changes of every kind (text_start/thinking_start/block/message as well as the deltas) update a
  *   per-block map; the aggregate is diffed against what has streamed: a suffix becomes a delta, anything else a
@@ -27,6 +29,7 @@
  */
 import type { Actor, ThreadEvent } from "@wolfpack/protocol";
 import type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
+import { objectFromCall } from "./objects.js";
 
 export type EngineEvent = AgentEvent;
 export type EngineSnapshot = SnapshotEvent;
@@ -89,6 +92,10 @@ interface MapperState {
   /** The in-flight assistant message's text/thinking blocks by content index (tool-call blocks are not tracked). */
   blocks: Map<string, { kind: "text" | "thinking"; index: number; text: string }>;
   tools: Map<string, string>;
+  /** Object-tool calls in flight: callId -> name + args. */
+  objectCalls: Map<string, { name: string; args: unknown }>;
+  /** Revs issued so far per objectId. */
+  objectRevs: Map<string, number>;
 }
 
 interface TextBlock {
@@ -128,7 +135,7 @@ const turnIdFor = (input: number | undefined) => `turn-${input ?? "unknown"}`;
 
 /** Seed from an attach snapshot so a mid-run joiner's deltas map to the right turn. */
 export function createEventMapper(seed?: EngineSnapshot): EventMapper {
-  const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map() };
+  const s: MapperState = { hint: "complete", text: "", thinking: "", blocks: new Map(), tools: new Map(), objectCalls: new Map(), objectRevs: new Map() };
   const debugStream = process.env.WOLFPACK_DEBUG_STREAM === "1";
 
   /** Re-seed the block map from a (partial) message's content. */
@@ -189,6 +196,29 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     }
   };
 
+  /** Rev counters from calls whose result is already in the entries; calls still awaiting one end later. */
+  const seedObjects = (snap: EngineSnapshot) => {
+    s.objectCalls = new Map();
+    s.objectRevs = new Map();
+    const done = new Set<string>();
+    for (const e of snap.entries) {
+      const m = e.model?.[0] as { toolCallId?: string } | undefined;
+      if (e.kind.startsWith("pi.tool") && m?.toolCallId) done.add(m.toolCallId);
+    }
+    for (const e of snap.entries) {
+      if (e.kind !== "pi.assistant") continue;
+      const content = (e.model?.[0] as { content?: unknown } | undefined)?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content as Array<{ type: string; id?: string; name?: string; arguments?: unknown }>) {
+        if (b.type !== "toolCall" || !b.id) continue;
+        const o = objectFromCall(b.name, b.arguments);
+        if (!o) continue;
+        if (done.has(b.id)) s.objectRevs.set(o.objectId, (s.objectRevs.get(o.objectId) ?? 0) + 1);
+        else s.objectCalls.set(b.id, { name: b.name!, args: b.arguments });
+      }
+    }
+  };
+
   // The block map is seeded alongside the flat text/thinking totals so a mid-run joiner's later block changes diff correctly.
   const seedFrom = (snap: EngineSnapshot) => {
     s.turnId = snap.run ? turnIdFor(Number(snap.run.inputs[0])) : undefined;
@@ -199,6 +229,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
     s.thinking = partial.thinking;
     seedBlocks(snap.generation?.message);
     s.tools = new Map(snap.tools.filter((t) => t.status !== "done").map((t) => [t.callId, t.output ?? ""]));
+    seedObjects(snap);
   };
   if (seed) seedFrom(seed);
 
@@ -315,6 +346,7 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
       case "tool_execution_start": {
         if (e.parentToolCallId || !s.turnId) return;
         s.tools.set(e.toolCallId, "");
+        s.objectCalls.set(e.toolCallId, { name: e.toolName, args: e.args });
         out.push({ type: "tool-start", turnId: s.turnId, callId: e.toolCallId, name: e.toolName, args: e.args });
         return;
       }
@@ -341,6 +373,14 @@ export function createEventMapper(seed?: EngineSnapshot): EventMapper {
           result: msg ? resultText(msg) : partial || "Tool did not complete.",
           isError: msg ? msg.isError === true : true,
         });
+        const call = s.objectCalls.get(e.toolCallId);
+        s.objectCalls.delete(e.toolCallId);
+        const obj = msg && msg.isError !== true && call ? objectFromCall(call.name, call.args) : undefined;
+        if (obj) {
+          const rev = (s.objectRevs.get(obj.objectId) ?? 0) + 1;
+          s.objectRevs.set(obj.objectId, rev);
+          out.push({ type: "object-upsert", turnId: s.turnId, objectId: obj.objectId, objectType: obj.type, rev, data: obj.data });
+        }
         return;
       }
 

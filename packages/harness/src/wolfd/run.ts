@@ -25,6 +25,7 @@ import {
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
+import { objectsExtension } from "../engine/objects.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
@@ -133,7 +134,7 @@ async function startConfigured(
   const kbRoots = kbRootsFor(config, env);
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
   const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
-  const extensions = [...toolExtensions, ...loaded, ...extra];
+  const extensions = [...toolExtensions, objectsExtension, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 

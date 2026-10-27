@@ -10,11 +10,14 @@
  *   joined by a blank line, so the thread shows one assistant message per turn; a steer's user message splits them.
  * - Ids are `entry-<engine entry id>` (of the first merged entry; a turn that starts with a tool-only round uses that
  *   entry's id, since such rounds now yield a message) (NOT the submit ack's messageId, which is the engine submission id).
+ * - Object tool calls (`show_decision`) become `objects` on the assistant message of their first call: one entry per
+ *   objectId, holding the latest rev's data (rev = number of calls with that id).
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
 import type { ThreadMessage } from "@wolfpack/protocol";
 import type { EngineEvent } from "../engine/index.js";
+import { objectFromCall } from "../engine/objects.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
@@ -130,6 +133,13 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const call = { callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before };
         if (round !== undefined) callRound.set(call, round);
         (target.tools ??= []).push(call);
+        const obj = objectFromCall(b.name, b.arguments);
+        if (obj) {
+          // A revision replaces the object where it first appeared (latest rev wins); a new id lands in this message.
+          const prior = list.flatMap((m) => m.objects ?? []).find((o) => o.objectId === obj.objectId);
+          if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
+          else (target.objects ??= []).push({ ...obj, rev: 1, textOffset: base + before });
+        }
       }
     }
     if (roundText !== "") target.text = target.text === "" ? roundText : `${target.text}\n\n${roundText}`;

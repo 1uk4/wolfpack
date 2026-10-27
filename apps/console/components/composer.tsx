@@ -1,8 +1,8 @@
 "use client";
 
-import { CornerDownLeftIcon, ImageIcon, SquareIcon, XIcon } from "lucide-react";
+import { CornerDownLeftIcon, ImageIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { pastedImages, type PendingAttachment } from "@/components/attachments";
+import { droppedFiles, pastedImages, PICKER_ACCEPT, type PendingAttachment } from "@/components/attachments";
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -37,13 +37,13 @@ export function AttachmentChips({ items, onRemove }: { items: readonly PendingAt
 					data-status={a.status}
 					title={a.error}
 					className={cn(
-						"flex max-w-48 items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 font-ui text-xs",
-						a.status === "error" && "border-destructive/50 text-destructive",
+						"flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 font-ui text-xs",
+						a.status === "error" ? "max-w-96 border-destructive/50 text-destructive" : "max-w-48",
 						a.status === "uploading" && "opacity-60",
 					)}
 				>
 					<ImageIcon className="size-3 shrink-0" />
-					<span className="truncate">{a.status === "error" ? `${a.name} — failed` : a.status === "uploading" ? `${a.name}…` : a.name}</span>
+					<span className={a.status === "error" ? "break-words" : "truncate"}>{a.status === "error" ? `${a.name} — ${a.error ?? "failed"}` : a.status === "uploading" ? `${a.name}…` : a.name}</span>
 					<button type="button" aria-label={`Remove ${a.name}`} onClick={() => onRemove(a.key)} className="shrink-0 hover:text-foreground">
 						<XIcon className="size-3" />
 					</button>
@@ -65,6 +65,7 @@ export function Composer({
 	onEscape,
 	placeholder = "Ask, answer, or steer…",
 	onPasteImages,
+	onPickFiles,
 	chips,
 }: {
 	busy: boolean;
@@ -85,6 +86,8 @@ export function Composer({
 	placeholder?: string;
 	/** Images pasted into the textarea (the paste is swallowed only when it held images). */
 	onPasteImages?: (files: File[]) => void;
+	/** Files chosen with the picker button (absent: no button). */
+	onPickFiles?: (files: File[]) => void;
 	/** Pending attachment chips, rendered above the row. */
 	chips?: React.ReactNode;
 }) {
@@ -104,6 +107,31 @@ export function Composer({
 					act();
 				}}
 			>
+				{onPickFiles && (
+					<>
+						<input
+							type="file"
+							multiple
+							accept={PICKER_ACCEPT}
+							data-testid="attachment-picker"
+							className="hidden"
+							tabIndex={-1}
+							onChange={(e) => {
+								const files = droppedFiles(e.target);
+								e.target.value = ""; // the same file can be picked again
+								if (files.length > 0) onPickFiles(files);
+							}}
+						/>
+						<button
+							type="button"
+							aria-label="Attach images"
+							onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.click()}
+							className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+						>
+							<PaperclipIcon className="size-4" />
+						</button>
+					</>
+				)}
 				<textarea
 					ref={inputRef}
 					value={value}

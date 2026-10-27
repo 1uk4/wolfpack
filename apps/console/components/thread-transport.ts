@@ -1,4 +1,5 @@
 import type { ThreadEvent } from "@wolfpack/client";
+import { withHistoryAttachments } from "@/components/attachments";
 import { ThreadEventAdapter, threadMessagesToNative } from "@/src/core";
 import type { SessionTransport } from "@/components/session-core";
 
@@ -17,14 +18,15 @@ export function threadTransport(wolf: string, slug: string): SessionTransport {
 			JSON.stringify({
 				input: input.type === "text" ? input.text : "",
 				whenBusy: opts?.whenBusy ?? "reject",
-				...(input.type === "text" && input.attachments?.length ? { attachments: input.attachments } : {}),
+				...(input.type === "text" && input.attachments?.length ? { attachments: input.attachments.map((a) => ({ id: a.id })) } : {}),
 			}),
 		uploadUrl: `${base}/attachments`,
+		attachmentUrl: (id) => `${base}/attachments/${encodeURIComponent(id)}`,
 		steersViaSubmit: true,
 		recordUrl: base,
 		parseRecord: (json) => {
 			const messages = (json as { messages?: Parameters<typeof threadMessagesToNative>[0] }).messages;
-			return Array.isArray(messages) ? threadMessagesToNative(messages) : null;
+			return Array.isArray(messages) ? withHistoryAttachments(threadMessagesToNative(messages), messages) : null;
 		},
 		streamUrl: `${base}/stream`,
 		abortUrl: `${base}/abort`,

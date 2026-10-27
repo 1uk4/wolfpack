@@ -189,7 +189,13 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 				typeof content === "string"
 					? [content]
 					: content.filter((c) => c.type === "text").map((c) => (c as { text: string }).text);
-			out.push({ id: m.id, role: "user", parts: texts.map(textPart) });
+			// Thread history/optimistic user messages may carry attachments (thumbnails in the bubble).
+			const attachments = (m as { attachments?: unknown[] }).attachments;
+			out.push({
+				id: m.id,
+				role: "user",
+				parts: [...texts.map(textPart), ...(attachments?.length ? [{ type: "data-attachments", id: `${m.id}-att`, data: attachments }] : [])],
+			});
 			continue;
 		}
 

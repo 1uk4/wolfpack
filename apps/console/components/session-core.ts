@@ -55,6 +55,8 @@ export interface SessionTransport {
 	streamUrl: string;
 	/** Attachment upload route (POST raw bytes); absent: this transport takes no attachments. */
 	uploadUrl?: string;
+	/** URL of an uploaded attachment's bytes (thumbnails); absent: no attachments. */
+	attachmentUrl?: (id: string) => string;
 	/** Abort route (POST); absent: the legacy global abort is the caller's. */
 	abortUrl?: string;
 	/** Poll out a racing turn on 409 (legacy wake race) vs. surface it. */
@@ -86,6 +88,9 @@ export interface SessionModelDeps {
 	transport?: SessionTransport;
 	waitMaxMs?: number;
 }
+
+/** One attachment on a text input: the wire ref is the id; the rest feeds the optimistic bubble. */
+export type ChatAttachment = NonNullable<Extract<ChatInput, { type: "text" }>["attachments"]>[number];
 
 /** A local optimistic id (never a server stamp — absorption and the
  *  settle swap both key on this prefix). */
@@ -586,7 +591,12 @@ export class SessionModel {
 		// write-ahead will persist (inputAppends), with LOCAL ids so
 		// adoption can tell them from the record's absorbed copies.
 		const optimistic: LhMessage[] = [];
-		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
+		if (input.type === "text") {
+			// Attachments ride the optimistic message so its bubble shows the thumbnails at once (the record's
+			// copy carries the same list; adoption matches on content only).
+			const atts = input.attachments?.length ? { attachments: input.attachments } : {};
+			optimistic.push({ ...newUserMessage(input.text), id: localId(), ...atts } as LhMessage);
+		}
 		else if (input.type === "answer") {
 			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
 			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
@@ -651,10 +661,12 @@ export class SessionModel {
 	 *  settled mid-send (the race): fall back to the plain text send —
 	 *  the entry is dropped and send() pushes its own optimistic card.
 	 */
-	async steer(text: string): Promise<void> {
+	async steer(text: string, attachments?: ChatAttachment[]): Promise<void> {
 		const t = text.trim();
+		if (!t && !attachments?.length) return;
+		// Attachments ride the submit route only (the legacy /steer queue takes text).
+		if (this.transport.steersViaSubmit) return this.steerViaSubmit(t, attachments);
 		if (!t) return;
-		if (this.transport.steersViaSubmit) return this.steerViaSubmit(t);
 		const id = `steer_${localId()}`;
 		this.steerQueueValue = [...this.steerQueueValue, { id, text: t }];
 		this.onChange?.();
@@ -685,8 +697,8 @@ export class SessionModel {
 	/** Thread steer: the text is recorded in history inside the running turn,
 	 *  so echo it as a normal user message (local id; adoptRecord drops it
 	 *  once the record carries the server copy) and submit whenBusy "steer". */
-	private async steerViaSubmit(t: string): Promise<void> {
-		const echo = { ...newUserMessage(t), id: localId() } as LhMessage;
+	private async steerViaSubmit(t: string, attachments?: ChatAttachment[]): Promise<void> {
+		const echo = { ...newUserMessage(t), id: localId(), ...(attachments?.length ? { attachments } : {}) } as LhMessage;
 		const dropEcho = () =>
 			this.mutate(() => {
 				this.tail = this.tail.filter((m) => m !== echo);
@@ -698,7 +710,7 @@ export class SessionModel {
 			const res = await this.fetch(this.transport.submitUrl, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: this.transport.submitBody({ type: "text", text: t }, { whenBusy: "steer" }),
+				body: this.transport.submitBody({ type: "text", text: t, ...(attachments?.length ? { attachments } : {}) }, { whenBusy: "steer" }),
 			});
 			if (res.ok) {
 				await res.text().catch(() => {});

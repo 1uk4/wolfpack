@@ -347,4 +347,20 @@ describe("ThreadChat dictation", () => {
 		const btn = document.querySelector('[data-testid="composer"] button[aria-label="Stop"], [data-testid="composer"] button[aria-label="Send"]')!;
 		assert.equal(btn.getAttribute("aria-label"), "Stop");
 	});
+
+	it("multi Other is a target: dictated text lands in the pending entry and is folded on Submit", async () => {
+		await mount(new CardClient({ tool: "ask_user_question", fields: [{ id: "envs", kind: "multi", label: "Which?", allowOther: true, options: [{ label: "dev", value: "dev" }] }] }));
+		const other = q('[data-testid="card-other"]') as HTMLInputElement;
+		await focus(other);
+		await dictate("canary ring");
+		assert.equal(other.value, "canary ring");
+		// Second run while the first is still pending text: appended.
+		await dictate("two");
+		assert.equal(other.value, "canary ring two");
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		const answers = posts.filter((p) => p.url.includes("/cards/"));
+		assert.equal(answers.length, 1);
+		assert.match(JSON.stringify(answers[0]!.body.answers.envs), /canary ring two/);
+	});
 });

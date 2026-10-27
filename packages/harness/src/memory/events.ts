@@ -17,7 +17,7 @@ export interface MemoryEventBus {
   /** Returns the unsubscribe function. */
   subscribe(listener: MemoryEventListener): () => void;
   /** The last promote_finished / promote_failed emitted on this bus, kept even with no subscriber (undefined: none since start). */
-  lastPromoteEvent(): MemoryEvent | undefined;
+  lastPromoteEvent?(): MemoryEvent | undefined;
 }
 
 // Registry on globalThis (precedent: the memory actions registry in ./actions.ts, also keyed by den): the memory extension and wolfd's server must share one bus per den even when the module is loaded

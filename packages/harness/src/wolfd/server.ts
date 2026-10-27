@@ -136,9 +136,7 @@ export class WolfServer {
     this.name = opts.name;
     this.host = opts.host ?? "local";
     this.settleMs = opts.settleTimeoutMs ?? 5000;
-    if (opts.den) {
-      this.memoryBus = memoryEventsFor(opts.den, opts.name);
-    }
+    if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
     this.summary = { id: `${this.name}/home`, wolf: this.name, kind: "home", title: "Home" };
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
@@ -453,7 +451,7 @@ export class WolfServer {
 
   /** How the last promote on this den ended (the bus keeps it; in memory only, so null after a restart). */
   private lastPromote(): LastPromote | null {
-    const ev = this.memoryBus?.lastPromoteEvent();
+    const ev = this.memoryBus?.lastPromoteEvent?.();
     if (ev?.type === "promote_finished") return { jobId: ev.jobId, at: ev.timestamp, result: "finished", consolidated: ev.consolidated, contributions: ev.contributions };
     if (ev?.type === "promote_failed") return { jobId: ev.jobId, at: ev.timestamp, result: "failed", message: ev.message };
     return null;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Button } from "@/components/ui/button";
-import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
+import { finishDictation, InlineMic, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { addCustomEntry, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
@@ -172,7 +172,7 @@ function shownIds(card: InteractionCardProps["card"], draft: CardDraft, stepIdx:
 }
 
 /** Props spread onto a text input that is a dictation target. */
-type FieldDictation = { onFocus: () => void; onKeyDown: (e: React.KeyboardEvent) => void };
+type FieldDictation = { onFocus: () => void; onKeyDown: (e: React.KeyboardEvent) => void; mic: { targetKey: string; onClaim: () => void } };
 
 /** Esc in a card field cancels a live dictation (the hook listens for this event; the Esc is claimed). */
 function stopDictationOnEscape(e: React.KeyboardEvent) {
@@ -200,6 +200,7 @@ function useCardDictation(
 	inPlay: string[],
 ) {
 	const rootRef = useRef<HTMLDivElement>(null);
+	const uid = useId();
 	const [dictField, setDictField] = useState<string | null>(null);
 	// The targeted field became hidden (or left the step): the claim goes with it.
 	const inPlayKey = inPlay.join("\0");
@@ -228,12 +229,12 @@ function useCardDictation(
 		[card, dictField, inPlayKey],
 	);
 	const claimed = live && dictField !== null;
-	useDictationTarget(append, claimed);
+	useDictationTarget(append, claimed, dictField === null ? undefined : `${uid}:${dictField}`);
 	return {
 		claimed,
 		dictationProps: {
 			root: { ref: rootRef },
-			field: (id: string): FieldDictation => ({ onFocus: () => setDictField(id), onKeyDown: stopDictationOnEscape }),
+			field: (id: string): FieldDictation => ({ onFocus: () => setDictField(id), onKeyDown: stopDictationOnEscape, mic: { targetKey: `${uid}:${id}`, onClaim: () => setDictField(id) } }),
 			release: () => setDictField(null),
 		},
 	};
@@ -529,6 +530,7 @@ export function CardTextInput({
 	testId,
 	className,
 	onKeyDown,
+	mic,
 	...rest
 }: {
 	value: string;
@@ -538,6 +540,8 @@ export function CardTextInput({
 	multiline?: boolean;
 	testId: string;
 	className?: string;
+	/** Inline dictation mic at the field's trailing edge (see InlineMic). */
+	mic?: { targetKey: string; onClaim: () => void };
 } & Omit<InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>, "value" | "onChange" | "className" | "ref">) {
 	// Extra props (placeholder, onFocus, data-*, …) are spread so callers such as dictation can attach to the field.
 	const common = {
@@ -548,11 +552,13 @@ export function CardTextInput({
 		ref: inputRef,
 		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
 	};
-	if (multiline) return <textarea {...(common as object)} onKeyDown={onKeyDown} />;
-	return (
+	const field = multiline ? (
+		<textarea {...(common as object)} className={cn(common.className, mic && "pr-9")} onKeyDown={onKeyDown} />
+	) : (
 		<input
 			type="text"
 			{...(common as object)}
+			className={cn(common.className, mic && "w-full pr-9")}
 			onKeyDown={(e) => {
 				onKeyDown?.(e);
 				if (e.key === "Enter" && onEnter && !e.defaultPrevented) {
@@ -561,5 +567,12 @@ export function CardTextInput({
 				}
 			}}
 		/>
+	);
+	if (!mic) return field;
+	return (
+		<div className={cn("relative", !multiline && "min-w-0 flex-1")}>
+			{field}
+			<InlineMic {...mic} className={cn("absolute right-1.5", multiline ? "top-1.5" : "top-1/2 -translate-y-1/2")} />
+		</div>
 	);
 }

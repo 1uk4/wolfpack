@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
+import { InlineMic, joinDictation, useFieldMic } from "@/components/dictation";
 import { useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
 import type React from "react";
@@ -394,13 +395,7 @@ export function AgentSection({
 						</div>
 						<div>
 							<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">Override</p>
-							<textarea
-								value={segmentDraft[info.path] ?? info.overrideText ?? ""}
-								onChange={(e) => setSegmentDraft({ ...segmentDraft, [info.path]: e.target.value })}
-								aria-label="Your version of the instructions"
-								placeholder="Add your own instructions…"
-								className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 font-ui text-xs text-foreground outline-none"
-							/>
+							<OverrideTextarea value={draft} onChange={(v) => setSegmentDraft({ ...segmentDraft, [info.path]: v })} micKey={`prompt-override:${info.path}`} />
 						</div>
 						<div className="flex items-center gap-3">
 							<button
@@ -613,5 +608,27 @@ export function AgentSection({
 				)}
 			</SettingsGroup>
 		</>
+	);
+}
+
+/** The prompt-override editor: prose, so it carries an inline dictation mic (dictated text appends with joinDictation spacing). */
+export function OverrideTextarea({ value, onChange, micKey }: { value: string; onChange: (v: string) => void; micKey: string }) {
+	const valueRef = useRef(value);
+	valueRef.current = value;
+	const mic = useFieldMic(micKey, (t) => {
+		valueRef.current = joinDictation(valueRef.current, t);
+		onChange(valueRef.current);
+	});
+	return (
+		<div className="relative">
+			<textarea
+				value={value}
+				onChange={(e) => onChange(e.target.value)}
+				aria-label="Your version of the instructions"
+				placeholder="Add your own instructions…"
+				className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 pr-9 font-ui text-xs text-foreground outline-none"
+			/>
+			<InlineMic {...mic} className="absolute right-1.5 top-1.5" />
+		</div>
 	);
 }

@@ -25,6 +25,9 @@ export interface KbGraphState {
 	status: KbGraphStatus;
 	graph: KbGraph | null;
 	message: string | null;
+	/** True while `graph` was fetched with an OLDER query than the current
+	 *  one (a toggle/filter change is in flight; the old graph stays up). */
+	isStale: boolean;
 	/** Re-run the current query (keeps the current graph on screen meanwhile). */
 	refetch: () => void;
 }
@@ -32,7 +35,9 @@ export interface KbGraphState {
 /** `librarian` null = no librarian known (after wolves loaded) → unavailable;
  *  pass `loading: true` while that is still being resolved. */
 export function useKbGraph(librarian: string | null, loading: boolean, query: KbGraphOptions): KbGraphState {
-	const [state, setState] = useState<Omit<KbGraphState, "refetch">>({ status: "loading", graph: null, message: null });
+	const [state, setState] = useState<Omit<KbGraphState, "refetch" | "isStale">>({ status: "loading", graph: null, message: null });
+	// The query key the current `graph` was fetched with.
+	const [settledKey, setSettledKey] = useState<string | null>(null);
 	const [tick, setTick] = useState(0);
 	const refetch = useCallback(() => setTick((t) => t + 1), []);
 	// A stable key for the query object (callers pass a fresh literal).
@@ -49,6 +54,9 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 		let cancelled = false;
 		void fetchKbGraph(librarian, queryRef.current).then((res) => {
 			if (cancelled) return;
+			// Failures settle the key too: nothing newer is coming, so
+			// waiters must not wait forever.
+			setSettledKey(queryKey);
 			if (res.ok) setState({ status: "ready", graph: res.data, message: null });
 			else if (res.reason === "unavailable") setState({ status: "unavailable", graph: null, message: res.message });
 			else setState((prev) => ({ status: "error", graph: prev.graph, message: res.message }));
@@ -58,5 +66,5 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 		};
 	}, [librarian, loading, queryKey, tick]);
 
-	return { ...state, refetch };
+	return { ...state, isStale: settledKey !== queryKey, refetch };
 }

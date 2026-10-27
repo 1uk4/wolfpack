@@ -18,7 +18,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { WaypointsIcon } from "lucide-react";
-import { focusRemedy, parseFocusParam, type FocusRemedy } from "@/src/core";
+import { focusStep, parseFocusParam, type FocusRemedy } from "@/src/core";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
@@ -66,29 +66,34 @@ function GraphHomeInner() {
 	});
 	const controllerRef = useRef<GraphViewController | null>(null);
 
-	// A focus target the loaded graph lacks: widen the view once (the
-	// remedy computed against what is currently applied); if nothing helps,
-	// drop the param.
+	// The focus flow (focusStep): wait until the graph for the CURRENT query
+	// has arrived, then focus, or widen the view once, or give up.
 	const [notice, setNotice] = useState<string | null>(null);
 	const graph = kb.graph;
-	const present = focusParam !== null && graph !== null && graph.nodes.some((n) => n.id === focusParam);
-	useEffect(() => {
-		if (!focusParam || !graph || kb.status !== "ready" || present) return;
-		const remedy = focusRemedy(focusParam, {
+	const step = focusStep({
+		focusId: focusParam,
+		graph,
+		settled: kb.status === "ready" && !kb.isStale,
+		view: {
 			layers: {
 				archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
 				wikilinks: settings.layers.wikilinks,
 				denTopics: settings.layers.denTopics || !!forced.denTopics,
 			},
 			domain: forced.allDomains ? null : settings.domain,
-		});
-		if (remedy) {
-			setForced((f) => ({ ...f, ...remedy }));
-			return;
-		}
+		},
+	});
+	const remedy = step.kind === "widen" ? step.remedy : null;
+	const missing = step.kind === "missing";
+	useEffect(() => {
+		if (remedy) setForced((f) => ({ ...f, ...remedy }));
+	}, [remedy]);
+	useEffect(() => {
+		if (!missing) return;
 		setNotice("That item isn't in the graph.");
 		router.replace("/", { scroll: false });
-	}, [focusParam, graph, kb.status, present, settings, forced, router]);
+	}, [missing, router]);
+	const present = step.kind === "focus";
 	useEffect(() => {
 		if (!notice) return;
 		const id = setTimeout(() => setNotice(null), 4000);

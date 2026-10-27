@@ -15,6 +15,7 @@ import {
 	domainColors,
 	domainHue,
 	focusRemedy,
+	focusStep,
 	groupClusters,
 	hashString,
 	isNodeVisible,
@@ -375,5 +376,37 @@ describe("focusRemedy", () => {
 		assert.equal(focusRemedy("ent:x", view()), null);
 		assert.equal(focusRemedy("work:x", view({ archivedWork: true })), null);
 		assert.equal(focusRemedy("den:hal:t", view({ denTopics: true })), null);
+	});
+});
+
+describe("focusStep (the /?focus= flow)", () => {
+	const g = fixture();
+	const view = { layers: { archivedWork: false, wikilinks: false, denTopics: false }, domain: null as string | null };
+	const base = { focusId: "work:w9", graph: g, settled: true, view };
+
+	it("no param → idle", () => assert.deepEqual(focusStep({ ...base, focusId: null }), { kind: "idle" }));
+
+	it("waits while the graph on screen belongs to an older query (the widened one is in flight)", () => {
+		assert.deepEqual(focusStep({ ...base, settled: false }), { kind: "wait" });
+		assert.deepEqual(focusStep({ ...base, graph: null }), { kind: "wait" });
+	});
+
+	it("present → focus, even from a stale graph's replacement", () => {
+		assert.deepEqual(focusStep({ ...base, focusId: "ent:e1" }), { kind: "focus" });
+	});
+
+	it("absent from a settled graph → widen once, then (widened and settled) → missing", () => {
+		assert.deepEqual(focusStep(base), { kind: "widen", remedy: { archivedWork: true } });
+		const widened = { ...view, layers: { ...view.layers, archivedWork: true } };
+		assert.deepEqual(focusStep({ ...base, view: widened }), { kind: "missing" });
+	});
+
+	it("full flow: widen → wait (refetching) → focus when the widened graph lands", () => {
+		const s1 = focusStep(base);
+		assert.equal(s1.kind, "widen");
+		const widened = { ...view, layers: { ...view.layers, archivedWork: true } };
+		assert.equal(focusStep({ ...base, view: widened, settled: false }).kind, "wait");
+		const landed = { ...g, nodes: [...g.nodes, node({ id: "work:w9", kind: "work", domain: "wolfpack" })] };
+		assert.equal(focusStep({ ...base, graph: landed, view: widened }).kind, "focus");
 	});
 });

@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { describe, it, it as test } from "node:test";
 import {
 	boxBlurRound,
+	createCommitScheduler,
 	edgeGeometry,
 	fitTransform,
 	labelAlpha,
@@ -313,5 +314,57 @@ describe("wrapRegionLabel (wave 7: session names / file paths)", () => {
 	it("the ellipsis itself never exceeds the width", () => {
 		const lines = wrapRegionLabel("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", W, 2, measure);
 		assert.ok(measure(lines[1]!) <= W, "ellipsized tail fits");
+	});
+});
+
+describe("createCommitScheduler (flush on replace / destroy)", () => {
+	function fake() {
+		let next = 1;
+		const timers = new Map<number, () => void>();
+		return {
+			timers,
+			api: {
+				set: (fn: () => void) => {
+					timers.set(next, fn);
+					return next++;
+				},
+				clear: (h: unknown) => void timers.delete(h as number),
+			},
+			fire: () => [...timers.values()].forEach((f) => f()),
+		};
+	}
+
+	test("schedule runs once when the timer fires; rescheduling restarts it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.schedule();
+		assert.equal(f.timers.size, 1);
+		f.fire();
+		assert.equal(runs, 1);
+		assert.equal(s.pending(), false);
+	});
+
+	test("flush runs a pending commit immediately and disarms the timer", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.flush();
+		assert.equal(runs, 1);
+		assert.equal(f.timers.size, 0);
+		s.flush(); // nothing pending → no second run
+		assert.equal(runs, 1);
+	});
+
+	test("cancel drops the pending commit without running it", () => {
+		const f = fake();
+		let runs = 0;
+		const s = createCommitScheduler(250, () => runs++, f.api);
+		s.schedule();
+		s.cancel();
+		s.flush();
+		assert.equal(runs, 0);
 	});
 });

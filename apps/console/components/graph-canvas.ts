@@ -517,6 +517,40 @@ const DIM_LABEL_ALPHA = 0.6;
 /** Faint (related / wikilink) edges draw at this fraction of the edge alpha. */
 const FAINT_EDGE_ALPHA = 0.4;
 
+/** Debounced "rest state" commit with a flush: schedule() restarts the
+ *  delay, cancel() drops it, flush() runs it NOW if one is pending. Pure
+ *  (timers injectable) so the flush-on-replace/destroy law is testable. */
+export function createCommitScheduler(
+	delayMs: number,
+	run: () => void,
+	timers: {
+		set: (fn: () => void, ms: number) => unknown;
+		clear: (h: unknown) => void;
+	} = { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) },
+): { schedule(): void; cancel(): void; flush(): void; pending(): boolean } {
+	let handle: unknown = null;
+	return {
+		schedule() {
+			if (handle !== null) timers.clear(handle);
+			handle = timers.set(() => {
+				handle = null;
+				run();
+			}, delayMs);
+		},
+		cancel() {
+			if (handle !== null) timers.clear(handle);
+			handle = null;
+		},
+		flush() {
+			if (handle === null) return;
+			timers.clear(handle);
+			handle = null;
+			run();
+		},
+		pending: () => handle !== null,
+	};
+}
+
 // ─── The renderer ───────────────────────────────────────────────────────────
 
 export class GraphCanvasRenderer {
@@ -557,7 +591,7 @@ export class GraphCanvasRenderer {
 	private dragId: string | null = null;
 	private dragOrigin: Pt | null = null;
 	private simMoved = false; // any real movement since the last commit
-	private commitTimer: ReturnType<typeof setTimeout> | null = null;
+	private commit = createCommitScheduler(COMMIT_DEBOUNCE_MS, () => this.commitNow());
 
 	private frameId: number | null = null;
 	private dirty = true;
@@ -710,6 +744,9 @@ export class GraphCanvasRenderer {
 	// ── Public API ──
 
 	setData(data: CanvasData): void {
+		// A rest state waiting out its debounce belongs to the OLD nodes:
+		// commit it before they are replaced.
+		this.flushCommit();
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
 		let minX = Infinity;
@@ -728,12 +765,8 @@ export class GraphCanvasRenderer {
 		// gate's "1×" reference still needs the fresh bbox's fit zoom.
 		else this.refreshFitZoom();
 		// Rebuild the live sim around the fresh nodes. New data means the
-		// server spoke (merge or refetch); any pending commit is moot and
-		// the graph is at rest until the next drag.
-		if (this.commitTimer) {
-			clearTimeout(this.commitTimer);
-			this.commitTimer = null;
-		}
+		// server spoke (merge or refetch); any pending commit was flushed
+		// above and the graph is at rest until the next drag.
 		this.simActive = false;
 		this.dragId = null;
 		this.simMoved = false;
@@ -749,9 +782,8 @@ export class GraphCanvasRenderer {
 		this.markDirty();
 	}
 
-	/** Dev tuning for region rendering (session-only, never persisted):
-	 *  invalid numbers fall back to defaults — the number inputs can be
-	 *  emptied while typing. Forces a region bitmap rebuild. */
+	/** Region rendering tuning (the persisted settings feed it): invalid
+	 *  values fall back to defaults. Forces a region bitmap rebuild. */
 	setRegionTuning(input: Partial<RegionTuning>): void {
 		this.regionTuning = sanitizeRegionTuning(input);
 		this.regionBuiltVersion = -2; // never equals geoVersion → rebuild
@@ -865,7 +897,7 @@ export class GraphCanvasRenderer {
 
 	destroy(): void {
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
-		if (this.commitTimer) clearTimeout(this.commitTimer);
+		this.flushCommit();
 		this.sim = null;
 		this.simActive = false;
 		this.dragId = null;
@@ -907,10 +939,7 @@ export class GraphCanvasRenderer {
 					Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
 				if (moved) {
 					// First real movement: reheat and glue the node to the cursor.
-					if (this.commitTimer) {
-						clearTimeout(this.commitTimer);
-						this.commitTimer = null;
-					}
+					this.commit.cancel();
 					this.sim?.alphaTarget(DRAG_ALPHA_TARGET);
 					this.simActive = true;
 					this.markDirty();
@@ -1112,17 +1141,22 @@ export class GraphCanvasRenderer {
 		return true;
 	}
 
-	/** Debounced rest-state commit. A new drag or setData cancels it. */
+	/** Debounced rest-state commit. A new drag cancels it; setData and
+	 *  destroy FLUSH it so a settled arrangement is never lost. */
 	private scheduleCommit(): void {
-		if (this.commitTimer) clearTimeout(this.commitTimer);
-		this.commitTimer = setTimeout(() => {
-			this.commitTimer = null;
-			if (!this.data || !this.simMoved) return;
-			this.simMoved = false;
-			const positions: Record<string, Position> = {};
-			for (const n of this.data.nodes) positions[n.id] = { x: n.x, y: n.y };
-			this.callbacks.onCommit(positions);
-		}, COMMIT_DEBOUNCE_MS);
+		this.commit.schedule();
+	}
+
+	private flushCommit(): void {
+		this.commit.flush();
+	}
+
+	private commitNow(): void {
+		if (!this.data || !this.simMoved) return;
+		this.simMoved = false;
+		const positions: Record<string, Position> = {};
+		for (const n of this.data.nodes) positions[n.id] = { x: n.x, y: n.y };
+		this.callbacks.onCommit(positions);
 	}
 
 	/** Hover fade step; returns true while still moving. */

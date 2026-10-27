@@ -25,10 +25,12 @@ export const GRAPH_CAMERA_KEY = "lh.graph.camera.v1";
 
 export type PositionMap = Record<string, Position>;
 
-/** Own, safe property name check: ids are `dom:` / `sec:` / `ent:` / `work:`
- *  / `den:` prefixed, so nothing in this namespace can alias a prototype key. */
+/** The KB graph's node id shape: `dom:` / `sec:` / `ent:` / `work:` / `den:`
+ *  prefixed. Nothing in this namespace can alias a prototype key. */
+export const NODE_ID_PATTERN = /^(dom|sec|ent|work|den):.+/;
+
 function isStorableId(id: string): boolean {
-	return id.length > 0 && id.length <= MAX_ID_LENGTH && /^[a-z]+:/.test(id);
+	return id.length <= MAX_ID_LENGTH && NODE_ID_PATTERN.test(id);
 }
 
 /**

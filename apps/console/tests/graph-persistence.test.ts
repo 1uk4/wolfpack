@@ -153,3 +153,10 @@ describe("the positions store (console data dir)", () => {
 });
 
 process.on("exit", () => fs.rmSync(TMP, { recursive: true, force: true }));
+
+describe("sanitizePositions id namespace", () => {
+	it("only dom|sec|ent|work|den prefixes are storable", () => {
+		const out = sanitizePositions({ "foo:bar": { x: 1, y: 1 }, "ent:ok": { x: 1, y: 1 }, "den:hal:t": { x: 2, y: 2 }, "node:1": { x: 1, y: 1 } });
+		assert.deepEqual(Object.keys(out).sort(), ["den:hal:t", "ent:ok"]);
+	});
+});

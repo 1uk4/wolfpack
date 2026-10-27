@@ -18,6 +18,7 @@
 
 import { entryHref, workHref } from "./kb.ts";
 import type { KbGraph, KbGraphNode, KbNodeKind } from "./kb.ts";
+import { NODE_ID_PATTERN } from "./graph-persistence.ts";
 import type { GraphLayerToggles, GroupBy } from "./render-settings.ts";
 
 /** One entry of the payload's `domains` list. */
@@ -419,7 +420,6 @@ export function describeNode(graph: KbGraph, nodeId: string): NodeCard | null {
 
 // ─── Focus param ────────────────────────────────────────────────────────────
 
-const NODE_ID_PATTERN = /^(dom|sec|ent|work|den):.+/;
 const MAX_NODE_ID = 512;
 
 /** The `focus` query parameter of `/?focus=<nodeId>`: a well-formed graph
@@ -450,4 +450,26 @@ export function focusRemedy(nodeId: string, view: { layers: GraphLayerToggles; d
 	if (nodeId.startsWith("den:") && !view.layers.denTopics) r.denTopics = true;
 	if (view.domain !== null) r.allDomains = true;
 	return Object.keys(r).length > 0 ? r : null;
+}
+
+/** One step of the `/?focus=` flow. `settled` = the graph in hand was
+ *  fetched with the CURRENT query (not a previous one still on screen). */
+export type FocusStep =
+	| { kind: "idle" }
+	| { kind: "wait" }
+	| { kind: "focus" }
+	| { kind: "widen"; remedy: FocusRemedy }
+	| { kind: "missing" };
+
+export function focusStep(input: {
+	focusId: string | null;
+	graph: Pick<KbGraph, "nodes"> | null;
+	settled: boolean;
+	view: { layers: GraphLayerToggles; domain: string | null };
+}): FocusStep {
+	if (!input.focusId) return { kind: "idle" };
+	if (!input.graph || !input.settled) return { kind: "wait" };
+	if (input.graph.nodes.some((n) => n.id === input.focusId)) return { kind: "focus" };
+	const remedy = focusRemedy(input.focusId, input.view);
+	return remedy ? { kind: "widen", remedy } : { kind: "missing" };
 }

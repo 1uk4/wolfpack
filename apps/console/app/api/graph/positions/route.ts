@@ -16,10 +16,19 @@ export async function GET() {
 	return Response.json({ positions: graphPositions() });
 }
 
+/** A full 20k-node map is ~1.5MB; anything past this is not ours. */
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 export async function PUT(request: Request) {
+	const declared = Number(request.headers.get("content-length") ?? 0);
+	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+		return Response.json({ error: "body too large" }, { status: 413 });
+	}
 	let body: unknown;
 	try {
-		body = await request.json();
+		const text = await request.text();
+		if (text.length > MAX_BODY_BYTES) return Response.json({ error: "body too large" }, { status: 413 });
+		body = JSON.parse(text);
 	} catch {
 		return Response.json({ error: "invalid JSON body" }, { status: 400 });
 	}

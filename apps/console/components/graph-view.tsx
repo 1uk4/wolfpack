@@ -26,7 +26,7 @@
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
@@ -354,19 +354,19 @@ export function GraphView({
 	// Programmatic focus: frame the node(s), then (re)open the card at the
 	// node's new screen position. The camera callback closes any open card
 	// first; the select that follows wins (React batches them).
-	const focusNode = (nodeId: string): boolean => {
+	const focusNode = useCallback((nodeId: string): boolean => {
 		const renderer = rendererRef.current;
 		if (!renderer || !renderer.focusOn([nodeId], 3)) return false;
 		const anchor = renderer.nodeScreenPos(nodeId);
 		if (anchor) setSelected({ id: nodeId, anchor });
 		return true;
-	};
-	const focusNodes = (ids: string[], anchorId: string) => {
+	}, []);
+	const focusNodes = useCallback((ids: string[], anchorId: string) => {
 		const renderer = rendererRef.current;
 		if (!renderer || !renderer.focusOn(ids, 2.5)) return;
 		const anchor = renderer.nodeScreenPos(anchorId);
 		if (anchor) setSelected({ id: anchorId, anchor });
-	};
+	}, []);
 	const focusNodeRef = useRef(focusNode);
 	focusNodeRef.current = focusNode;
 	useEffect(() => {
@@ -382,13 +382,34 @@ export function GraphView({
 
 	// The focus param: act once the data feed has handed the renderer its
 	// nodes (declared after the feeds, so it runs after them in a commit).
+	// A node the search hides clears the search first; a canvas that isn't
+	// sized yet is retried for a few frames. onFocusHandled fires only once
+	// the focus actually landed (or the retries ran out).
 	const onFocusHandledRef = useRef(onFocusHandled);
 	onFocusHandledRef.current = onFocusHandled;
+	const hiddenBySearch = !!focusId && query.trim() !== "" && !visibleIds.has(focusId);
 	useEffect(() => {
 		if (!focusId || isEmpty || !storedLoaded) return;
-		focusNodeRef.current(focusId);
-		onFocusHandledRef.current?.(focusId);
-	}, [focusId, isEmpty, storedLoaded, canvasData]);
+		if (hiddenBySearch) {
+			setQuery("");
+			return;
+		}
+		let frames = 0;
+		let raf = 0;
+		const attempt = () => {
+			if (focusNodeRef.current(focusId)) {
+				onFocusHandledRef.current?.(focusId);
+				return;
+			}
+			if (++frames > 60) {
+				onFocusHandledRef.current?.(focusId); // give up; clear the param
+				return;
+			}
+			raf = requestAnimationFrame(attempt);
+		};
+		attempt();
+		return () => cancelAnimationFrame(raf);
+	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,

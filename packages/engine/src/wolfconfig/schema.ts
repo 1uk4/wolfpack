@@ -14,6 +14,8 @@
  *   serve:                  # all optional
  *     socket: ~/.wolfpack/run/1uk4.sock   # default shown
  *     port: 7421                          # optional TCP (127.0.0.1); unset = none
+ *   subagents:              # optional
+ *     maxRunning: 3         # subagents running at once for this wolf (default 3); the rest queue
  *   sandbox: true           # redirect den / KB_OPS / WORK_ENDPOINT at a snapshot dev root (default <dir>/sandbox)
  *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
  *   prompts:
@@ -64,6 +66,7 @@ export const WolfFileSchema = z.object({
     })
     .passthrough()
     .default({}),
+  subagents: z.object({ maxRunning: z.number().int().min(1).optional() }).passthrough().optional(),
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
   prompts: z.object({ structuredOutput: z.union([z.string(), z.literal(false)]).optional() }).passthrough().optional(),
   memory: z
@@ -96,6 +99,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "workspace",
   "extensions",
   "serve",
+  "subagents",
   "sandbox",
   "prompts",
   "memory",
@@ -122,6 +126,8 @@ export interface WolfConfig {
     /** Optional 127.0.0.1 TCP port; undefined = not listening on TCP. */
     port?: number;
   };
+  /** Subagent limits (wolf.yaml `subagents:`); unset fields take wolfd's defaults. */
+  subagents?: { maxRunning?: number };
   /** Present when `sandbox` is on: the dev root everything outward is redirected into. Absolute path. */
   sandbox?: { root: string };
   /** Editable prompt sections; unset = the harness default. */

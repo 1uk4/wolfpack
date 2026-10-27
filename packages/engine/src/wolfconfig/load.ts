@@ -115,6 +115,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
       socket: v.serve.socket ? expand(v.serve.socket, dir, home) : defaultSocketPath(v.name, home),
       ...(v.serve.port !== undefined ? { port: v.serve.port } : {}),
     },
+    ...(v.subagents?.maxRunning !== undefined ? { subagents: { maxRunning: v.subagents.maxRunning } } : {}),
     ...(sandbox ? { sandbox } : {}),
     prompts: { ...(v.prompts?.structuredOutput !== undefined ? { structuredOutput: v.prompts.structuredOutput } : {}) },
     memory: {

@@ -13,6 +13,7 @@
  * Tier switching via configure is not wired yet (main tier only).
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
@@ -222,6 +223,11 @@ async function startConfigured(
         workspace: cwd,
         instructionsFor: (at) => contextFor(at).instructions,
         workspacesRoot: resolveWorkspacesRoot(dirname(config.file), readWorkspacesConfig(config.file)),
+        ...(config.subagents?.maxRunning !== undefined ? { maxRunning: config.subagents.maxRunning } : {}),
+        // Per-host cap and slot directory: shared by every wolfd on the host (env WOLFPACK_SUBAGENT_HOST_MAX / _SLOTS).
+        ...(Number(env.WOLFPACK_SUBAGENT_HOST_MAX) >= 1 ? { hostMax: Number(env.WOLFPACK_SUBAGENT_HOST_MAX) } : {}),
+        ...(Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) > 0 ? { slotPollMs: Number(env.WOLFPACK_SUBAGENT_SLOT_POLL_MS) } : {}),
+        slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(opts.home ?? homedir(), ".wolfpack", "run", "subagent-slots"),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),

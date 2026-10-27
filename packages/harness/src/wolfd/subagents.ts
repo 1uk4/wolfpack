@@ -16,10 +16,21 @@
  * in the shared checkout (isolation none) is refused while another writer holds it (WriterGuard). Outside git nothing
  * runs git at all.
  *
- * Plug-in point for a later ticket: `admit()` (caps and queue, ticket 4).
+ * Concurrency: a child holds a slot from the moment it starts until it is done, failed or stopped. That includes
+ * `waiting` (it asked its parent a question): it keeps its slot, because its conversation and warm claude process stay
+ * loaded and the reply resumes it at once; releasing it would let a queued child take the slot and leave the answered
+ * child queued behind it, parent waiting on both. Per-wolf cap (wolf.yaml `subagents.maxRunning`, default 3) is counted
+ * in-process; the per-host cap (default 6) is a slot directory shared by every wolfd on the host (subagent-slots.ts).
+ * A spawn past either cap is `queued` (persisted, FIFO, position in the summary) and starts when a slot frees; a resume
+ * of a finished child needs a slot too and queues the same way. Home and feature threads never take one.
+ * Limit: the claude bridge keeps an idle child process for its provider-wide idleTtlMs (10 min, ~200 MB) after a turn,
+ * with no per-conversation release, so a done child's process can outlive its slot; the cap bounds RUNNING children,
+ * not those lingering processes (lowering idleTtlMs would be provider-wide, home included).
+ *
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { discoverAgents, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
@@ -28,6 +39,7 @@ import { WriterGuard, abandonChild, createChildWorkspace, createHomeChildWorkspa
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { HttpError } from "./http-error.js";
+import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { appendLedger, loadChildren, readLedger, saveChildren, type ChildRecord, type Delivery } from "./subagent-store.js";
 import type { ThreadRuntime, WolfEventDraft } from "./thread.js";
 import { loadThreads, setThreadWorkspace, type SavedThread } from "./threads.js";
@@ -58,6 +70,14 @@ export interface SubagentOptions {
   resolveTier(tier: string): { provider: string; modelId: string; thinking?: string };
   /** Names of every tool the engine can offer a conversation. */
   registeredTools(): string[];
+  /** Per-wolf cap on running children (wolf.yaml `subagents.maxRunning`). Default 3. */
+  maxRunning?: number;
+  /** Per-host cap across every wolfd on the host. Default 6. */
+  hostMax?: number;
+  /** The host-wide slot directory. Default `~/.wolfpack/run/subagent-slots`. */
+  slotDir?: string;
+  /** How often (ms) a queued child retries a host slot another wolfd may have freed. Default 2000. */
+  slotPollMs?: number;
   /** First delay (ms) before a failed delivery to a parent is tried again; doubles up to 30s. Default 500. */
   retryBaseMs?: number;
 }
@@ -159,6 +179,14 @@ export class SubagentManager {
   /** The running writers, by git working dir (children; the threads themselves are checked live). */
   private readonly guard = new WriterGuard();
   private readonly featureLocks = new Map<string, Promise<unknown>>();
+  private readonly pool: SlotPool;
+  private readonly maxRunning: number;
+  /** Children holding a slot (running or waiting). */
+  private readonly held = new Set<string>();
+  private queueSeq = 0;
+  private gate: Promise<unknown> = Promise.resolve();
+  private pollTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly shownPosition = new Map<string, number>();
 
   constructor(
     private readonly port: SubagentPort,
@@ -166,10 +194,18 @@ export class SubagentManager {
   ) {
     this.records = loadChildren(port.den, (e) => port.onError(e));
     for (const r of this.records) for (const d of r.outbox) this.deliverySeq = Math.max(this.deliverySeq, d.n);
+    for (const r of this.records) this.queueSeq = Math.max(this.queueSeq, r.queuedSeq ?? 0);
+    this.maxRunning = Math.max(1, Math.floor(opts.maxRunning ?? 3));
+    this.pool = new SlotPool(opts.slotDir ?? join(homedir(), ".wolfpack", "run", "subagent-slots"), Math.max(1, Math.floor(opts.hostMax ?? DEFAULT_HOST_MAX)), port.name);
   }
 
   close(): void {
     this.closed = true;
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = undefined;
+    // A clean shutdown gives its slots back; recover() takes them again for the children that go on.
+    for (const id of this.held) this.pool.release(id);
+    this.held.clear();
     for (const off of this.unobserve.values()) off();
     for (const off of this.parentWatch.values()) off();
     for (const t of this.retryTimers.values()) clearTimeout(t);
@@ -206,7 +242,13 @@ export class SubagentManager {
       ...(r.step ? { step: r.step } : {}),
       tokens: r.tokens,
       ...(r.taskId ? { taskId: r.taskId } : {}),
+      ...(r.state === "queued" ? { queuePosition: this.positionOf(r) } : {}),
     };
+  }
+
+  /** 1-based place in the queue. */
+  private positionOf(r: ChildRecord): number {
+    return 1 + this.records.filter((o) => o.state === "queued" && (o.queuedSeq ?? 0) < (r.queuedSeq ?? 0)).length;
   }
 
   private roster(): DiscoverOptions {
@@ -292,6 +334,7 @@ export class SubagentManager {
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
 
+    const run = await this.admit(id);
     const rec: ChildRecord = {
       id,
       conversationId: owned.conversation.id,
@@ -305,7 +348,8 @@ export class SubagentManager {
       isolation,
       ...(plan.workspace ? { workspace: plan.workspace } : {}),
       ...(plan.guardDir ? { guardDir: plan.guardDir } : {}),
-      state: this.admit(parent.summary.id) === "run" ? "running" : "queued",
+      state: run ? "running" : "queued",
+      ...(run ? {} : { queuedSeq: ++this.queueSeq }),
       startedAt: now,
       runStartedAt: now,
       tokens: 0,
@@ -321,14 +365,17 @@ export class SubagentManager {
       await this.discard(rec);
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
-    try {
-      await owned.conversation.submit({ input: params.task, whenBusy: "reject" });
-    } catch (e) {
-      await this.discard(rec);
-      return fail(`Sub-agent "${name}" could not start: ${e instanceof Error ? e.message : String(e)}`);
+    if (run) {
+      try {
+        await owned.conversation.submit({ input: params.task, whenBusy: "reject" });
+      } catch (e) {
+        await this.discard(rec);
+        return fail(`Sub-agent "${name}" could not start: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     this.ledger(rec, "parent", "child", "brief", params.task);
     this.announce(rec);
+    if (!run) void this.pump(); // (a slot may have freed while this spawn was being set up; also starts the poll)
 
     const notes = [
       missing.length ? `Notice: this runtime has no ${missing.join(", ")} tool${missing.length > 1 ? "s" : ""}; the sub-agent runs without ${missing.length > 1 ? "them" : "it"}.` : "",
@@ -337,7 +384,9 @@ export class SubagentManager {
     return {
       text:
         (notes.length ? `${notes.join(" ")} ` : "") +
-        `Sub-agent "${name}" launched and is now running. ` +
+        (run
+          ? `Sub-agent "${name}" launched and is now running. `
+          : `Sub-agent "${name}" is queued (position ${this.positionOf(rec)}): ${this.maxRunning} sub-agents per wolf and ${this.pool.hostMax} per host run at once. It starts by itself when a slot frees. `) +
         `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
         `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
         `Until then, move on to other work or tell the user you're waiting.`,
@@ -404,12 +453,29 @@ export class SubagentManager {
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
     const live = thread.isRunning;
     if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
+    if (rec.state === "queued") {
+      // Not started yet: the message waits with it and goes in when its slot comes.
+      (rec.pending ??= []).push(text);
+      this.persist();
+      this.ledger(rec, from, "child", "steer", text);
+      return { messageId: randomUUID(), disposition: "queued" };
+    }
     // An owner release still in flight must finish first: its abort could otherwise kill the turn started below.
     await this.releasing.get(rec.id);
     if (!live && rec.guardDir) {
       // A resumed writer is a running writer again: it needs its working dir free.
       const held = this.guard.acquire(rec.guardDir, rec.id);
       if (!held.ok) throw new HttpError("invalid_request", `cannot resume "${rec.name}": ${this.holderName(held.owner)} is working in ${rec.guardDir}. ${WORKTREE_HINT}`);
+    }
+    if (!live && !this.held.has(rec.id)) {
+      // A finished child needs a slot to run again; with none free the resume queues.
+      if (!(await this.admit(rec.id))) {
+        rec.queuedSeq = ++this.queueSeq;
+        rec.pending = [text];
+        this.setState(rec, "queued");
+        this.ledger(rec, from, "child", "resume", text);
+        return { messageId: randomUUID(), disposition: "queued" };
+      }
     }
     if (!live) {
       // Not `running` until the submit has landed; `resuming` (persisted first) lets recover() tell whether it did.
@@ -433,6 +499,7 @@ export class SubagentManager {
     } catch (e) {
       if (!live) {
         delete rec.resuming;
+        if (rec.state === "done" || rec.state === "failed" || rec.state === "stopped") this.releaseSlot(rec);
         this.persist();
         if (rec.state === "done" || rec.state === "failed" || rec.state === "stopped") this.guard.releaseAll(rec.id);
       }
@@ -461,6 +528,8 @@ export class SubagentManager {
 
   /** Re-attach every persisted child (call after the feature threads, before the engine resumes). */
   async recover(): Promise<void> {
+    // The previous wolfd of this wolf is gone (one per wolf): whatever slots it left are stale.
+    this.pool.dropOwn();
     for (const rec of [...this.records]) {
       try {
         const conv = await this.opts.getConversation(rec.conversationId);
@@ -471,25 +540,32 @@ export class SubagentManager {
         // Writers that were active hold their working dir again (the guard is in memory).
         if (rec.guardDir && (rec.state === "running" || rec.state === "queued" || rec.state === "waiting" || rec.resuming)) this.guard.acquire(rec.guardDir, rec.id);
         const thread = await this.attach(rec, conv);
+        // Children that were running or waiting still hold their slot (even past a cap that has since been lowered).
+        if (rec.state === "running" || rec.state === "waiting") await this.hold(rec);
         if (rec.ownerTaskId && (rec.state === "done" || rec.state === "failed" || rec.state === "stopped") && !rec.resuming) void this.releaseOwnerOf(rec);
         if (rec.resuming) {
           // A resume was submitted: did it land before the crash?
           const landed = thread.messageCount() > rec.resuming.at;
           if (!landed) {
-            delete rec.resuming; // no: the previous answer was already handled, nothing to redo
+            delete rec.resuming; // no: the previous answer was already handled, nothing to redo (a queued resume stays queued)
             this.persist();
           } else if (thread.isRunning) {
+            await this.hold(rec);
             rec.state = "running";
             delete rec.finishedAt;
+            delete rec.queuedSeq;
+            delete rec.pending;
             this.persist();
           } else {
+            await this.hold(rec);
             this.finishTurn(rec, thread, "complete"); // landed and finished: this is a NEW answer
           }
-        } else if (rec.state === "running" || rec.state === "queued") {
+        } else if (rec.state === "running") {
           if (!thread.hadHistory) {
             // Crashed between creating the conversation and submitting the brief.
-            await conv.submit({ input: rec.brief, whenBusy: "reject" });
-            if (rec.state === "queued") rec.state = "running";
+            await conv.submit({ input: this.startInput(rec, false), whenBusy: "reject" });
+            delete rec.pending;
+            this.persist();
           } else if (!thread.isRunning) {
             // The turn ended but wolfd went down before the result was recorded.
             this.finishTurn(rec, thread, "complete");
@@ -499,6 +575,8 @@ export class SubagentManager {
         this.port.onError(new Error(`subagent ${rec.id} not attached: ${e instanceof Error ? e.message : String(e)}`));
       }
     }
+    // Queued children (and queued resumes) start as slots allow.
+    void this.pump();
     for (const parentId of new Set(this.records.filter((r) => r.outbox.length > 0).map((r) => r.parentThreadId))) this.flush(parentId);
   }
 
@@ -726,6 +804,7 @@ export class SubagentManager {
   private async discard(rec: ChildRecord): Promise<void> {
     this.records = this.records.filter((r) => r !== rec);
     this.guard.releaseAll(rec.id);
+    this.releaseSlot(rec);
     this.persist();
     if (rec.workspace) await this.dropWorkspace(rec.workspace);
     await this.port.detachChild(rec.id).catch((e) => this.port.onError(e));
@@ -734,12 +813,106 @@ export class SubagentManager {
 
   // ------------------------------------------------------------- helpers
 
-  /**
-   * Whether a new child runs now or waits for a slot. Ticket 4 plugs the caps (3 per wolf, 6 per host) and the queue in
-   * here; until then every child runs at once.
-   */
-  private admit(_parentThreadId: string): "run" | "queue" {
-    return "run";
+  // ----------------------------------------------------- caps and queue
+
+  private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.gate.then(fn, fn);
+    this.gate = run.catch(() => {});
+    return run;
+  }
+
+  /** Whether `id` runs now (and then holds its slot) or waits: never ahead of a child already queued (FIFO). */
+  private admit(id: string): Promise<boolean> {
+    return this.serialize(async () => (this.records.some((r) => r.state === "queued") ? false : this.take(id)));
+  }
+
+  /** Take a wolf slot and a host slot, or neither. */
+  private async take(id: string): Promise<boolean> {
+    if (this.closed || this.held.size >= this.maxRunning) return false;
+    if (!(await this.pool.tryAcquire(id))) return false;
+    this.held.add(id);
+    return true;
+  }
+
+  /** Hold a slot regardless of the caps (a child that was already running at boot). */
+  private async hold(rec: ChildRecord): Promise<void> {
+    await this.pool.claim(rec.id);
+    this.held.add(rec.id);
+  }
+
+  private releaseSlot(rec: ChildRecord): void {
+    if (this.held.delete(rec.id)) this.pool.release(rec.id);
+  }
+
+  /** What a starting child is told: its brief (a child that never ran) and the messages that arrived while it queued. */
+  private startInput(rec: ChildRecord, resume: boolean): string {
+    return [...(resume ? [] : [rec.brief]), ...(rec.pending ?? [])].join("\n\n");
+  }
+
+  /** Start queued children, oldest first, while slots are free; then refresh their positions. */
+  private pump(): Promise<void> {
+    return this.serialize(async () => {
+      while (!this.closed) {
+        const next = this.records.filter((r) => r.state === "queued").sort((a, b) => (a.queuedSeq ?? 0) - (b.queuedSeq ?? 0))[0];
+        if (!next || !(await this.take(next.id))) break;
+        await this.start(next);
+      }
+      if (this.closed) return;
+      const queued = this.records.filter((r) => r.state === "queued");
+      for (const id of [...this.shownPosition.keys()]) if (!queued.some((r) => r.id === id)) this.shownPosition.delete(id);
+      for (const r of queued) {
+        const pos = this.positionOf(r);
+        if (this.shownPosition.get(r.id) !== pos) {
+          this.shownPosition.set(r.id, pos);
+          this.announce(r);
+        }
+      }
+      // Another wolfd may free a host slot without telling us: poll while anything waits.
+      if (queued.length > 0 && !this.pollTimer) {
+        this.pollTimer = setInterval(() => void this.pump(), this.opts.slotPollMs ?? 2000);
+        this.pollTimer.unref();
+      } else if (queued.length === 0 && this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = undefined;
+      }
+    });
+  }
+
+  /** A queued child got its slot: submit what it was waiting to do. */
+  private async start(rec: ChildRecord): Promise<void> {
+    const thread = this.port.thread(rec.id);
+    if (!thread) {
+      this.ledger(rec, "system", "parent", "error", "could not start: the child's thread is not attached");
+      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: its thread is not attached.`);
+      return;
+    }
+    const resume = thread.hadHistory || thread.messageCount() > 0; // (hadHistory is the state at attach)
+    const now = new Date().toISOString();
+    try {
+      if (resume) {
+        // As in send(): the marker (persisted first) tells recover() whether the submit landed.
+        rec.resuming = { at: thread.messageCount() };
+        this.persist();
+        await thread.submit(this.startInput(rec, true), "reject");
+        delete rec.pending;
+        if (rec.resuming) {
+          rec.runStartedAt = now;
+          this.setState(rec, "running");
+        }
+      } else {
+        // Running is recorded before the brief goes in (recover() resubmits a brief that never landed).
+        rec.runStartedAt = now;
+        this.setState(rec, "running");
+        await thread.conv.submit({ input: this.startInput(rec, false), whenBusy: "reject" });
+        delete rec.pending;
+        this.persist();
+      }
+    } catch (e) {
+      delete rec.resuming;
+      const message = e instanceof Error ? e.message : String(e);
+      this.ledger(rec, "child", "parent", "error", message);
+      this.settle(rec, "failed", `Sub-agent "${rec.name}" could not start: ${message}`);
+    }
   }
 
   /**
@@ -924,11 +1097,20 @@ export class SubagentManager {
     if (state === "done" || state === "failed" || state === "stopped") {
       rec.finishedAt = new Date().toISOString();
       delete rec.step;
+      delete rec.queuedSeq;
+      delete rec.pending;
+      this.releaseSlot(rec);
     } else if (state === "running") {
       delete rec.finishedAt;
+      delete rec.queuedSeq;
+    } else if (state === "queued") {
+      delete rec.finishedAt;
+      delete rec.step;
     }
     this.persist();
     this.announce(rec);
+    // A slot may have freed, or the queue changed shape.
+    if (state === "done" || state === "failed" || state === "stopped" || state === "queued") void this.pump();
   }
 
   /** The thread's summary changed: update it and tell the clients. */

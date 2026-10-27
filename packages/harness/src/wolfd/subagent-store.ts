@@ -47,6 +47,10 @@ export interface ChildRecord {
   taskId?: string;
   /** Set and persisted before a resume is submitted: the parent's message count then. Tells recover() whether the submit landed. */
   resuming?: { at: number };
+  /** Set while `queued`: orders the queue (FIFO) across spawns and queued resumes. */
+  queuedSeq?: number;
+  /** Messages for a queued child, submitted when its slot comes (after the brief for a child that never ran). */
+  pending?: string[];
   /** Who is stopping it, set while the abort is in flight. */
   stopping?: "parent" | "owner";
   outbox: Delivery[];

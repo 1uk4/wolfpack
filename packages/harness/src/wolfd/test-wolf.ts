@@ -32,6 +32,8 @@ export interface TestWolfOptions {
   yaml?: string;
   /** Boot over an existing root (a restart): it is reused, and `stop()` leaves it in place. Default: a fresh temp root, removed on stop. */
   root?: string;
+  /** Extra env for the wolf (e.g. WOLFPACK_SUBAGENT_SLOTS / WOLFPACK_SUBAGENT_HOST_MAX to share a slot dir between test wolves). */
+  env?: Record<string, string>;
   /** Replaces the librarian sweep's tick (a librarian wolf only). */
   sweepTick?: StartWolfOptions["sweepTick"];
 }
@@ -82,7 +84,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
   try {
     wolf = await startWolf({
       configPath: join(root, "wolf.yaml"),
-      env: { WOLFPACK_MODELS_FILE: join(root, "models.json") },
+      env: { WOLFPACK_MODELS_FILE: join(root, "models.json"), ...(opts.env ?? {}) },
       home: root,
       models: scripted.models,
       ...(opts.sweepTick ? { sweepTick: opts.sweepTick } : {}),

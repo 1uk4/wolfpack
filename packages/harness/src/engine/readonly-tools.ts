@@ -169,7 +169,7 @@ export function runSearch(spec: SearchSpec, opts: { deadlineMs?: number; maxVisi
         finish({ lines, visited, ...(note ? { note } : {}) });
       }
     });
-    worker.on("error", (e) => finish(e));
+    worker.on("error", (e) => finish(e instanceof Error ? e : new Error(String(e))));
     worker.on("exit", (code) => finish(new Error(`search worker exited with code ${code}`)));
   });
 }

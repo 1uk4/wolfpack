@@ -143,7 +143,8 @@ describe("durable observer pauses during crawl planning", () => {
     await tw.submit(say("USER_CRAWL"));
     await tw.submit(say("USER_CANCEL"));
     await tw.submit(say("USER_AFTER"));
-    await observed(tw);
+    // the re-seed also advances the watermark, so wait for the positive signal itself, then a quiet period
+    await waitFor(() => stub.text().includes("A_AFTER"));
     await quiet();
 
     const all = stub.text();

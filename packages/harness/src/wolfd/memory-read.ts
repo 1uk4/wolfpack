@@ -124,6 +124,9 @@ async function fetchWorkItem(id: string, work: { endpoint?: string; token?: stri
   }
 }
 
+/** Children cap: a feature past it gets the first CHILDREN_CAP and `childrenTruncated`. */
+export const CHILDREN_CAP = 200;
+
 /** GET <endpoint>/work?partOf=:id: the items directly under a feature. Undefined on any failure (children are best effort). */
 async function fetchChildren(id: string, work: { endpoint?: string; token?: string }): Promise<WorkChild[] | undefined> {
   const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
@@ -163,7 +166,11 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
   if (r.kind !== "ok") return r;
   const { item, body } = r;
   const section = extractRecord(body);
-  const children = item.kind === "feature" ? await fetchChildren(item.id, work) : undefined;
+  const listed = item.kind === "feature" ? await fetchChildren(item.id, work) : undefined;
+  // a container (Inbox) can be huge: only its count goes out; a feature's list is capped
+  const childCount = item.container && listed ? listed.length : undefined;
+  const truncated = !item.container && listed !== undefined && listed.length > CHILDREN_CAP;
+  const children = item.container ? undefined : truncated ? listed!.slice(0, CHILDREN_CAP) : listed;
   return {
     kind: "ok",
     value: {
@@ -176,6 +183,8 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
       ...(item.dependsOn !== undefined ? { dependsOn: item.dependsOn } : {}),
       ...(item.container ? { container: true } : {}),
       ...(children ? { children } : {}),
+      ...(truncated ? { childrenTruncated: true } : {}),
+      ...(childCount !== undefined ? { childCount } : {}),
       plan: withoutLog(withoutRecord(body)),
       record: section ? section.slice(RECORD_HEADING.length).trim() : "",
       ...(item.updated !== undefined ? { updated: item.updated } : {}),

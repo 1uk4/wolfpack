@@ -324,6 +324,27 @@ describe("memory read routes", { timeout: 30_000 }, () => {
     const task = WorkRecordResponseSchema.parse(await (await get(t, `/v1/wolves/testwolf/work/${c}/record`)).json());
     expect(task.children).toBeUndefined();
 
+    // a container sends only a count; a feature past the cap is cut and flagged
+    const many = Array.from({ length: 205 }, (_, i) => ({ id: `work-wolfpack-c${i}`, title: `C${i}`, kind: "task", stage: "idea", dependsOn: [] }));
+    const big = createServer((req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url?.startsWith("/work?")) res.end(JSON.stringify({ items: many }));
+      else if (req.url?.includes("inbox")) res.end(JSON.stringify({ item: { id: "work-wolfpack-inbox", title: "Inbox", kind: "feature", stage: "in_build", container: true }, body: "" }));
+      else res.end(JSON.stringify({ item: { id: "work-wolfpack-f", title: "F", kind: "feature", stage: "in_build" }, body: "" }));
+    });
+    await new Promise<void>((r) => big.listen(0, "127.0.0.1", r));
+    try {
+      const w = { endpoint: `http://127.0.0.1:${(big.address() as { port: number }).port}`, token: "x" };
+      const inbox = await readWorkRecord("work-wolfpack-inbox", w);
+      expect(inbox.kind === "ok" && inbox.value).toMatchObject({ container: true, childCount: 205 });
+      expect(inbox.kind === "ok" && inbox.value.children).toBeUndefined();
+      const capped = await readWorkRecord("work-wolfpack-f", w);
+      expect(capped.kind === "ok" && capped.value.children).toHaveLength(200);
+      expect(capped.kind === "ok" && capped.value.childrenTruncated).toBe(true);
+    } finally {
+      await new Promise((r) => big.close(r));
+    }
+
     // the Work API serves the item but fails the list: the record is still returned, without children
     const stub = createServer((req, res) => {
       res.setHeader("Content-Type", "application/json");

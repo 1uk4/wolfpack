@@ -466,11 +466,6 @@ export const MemoryTopicSchema = MemoryTopicRefSchema.extend({
 });
 export type MemoryTopic = z.infer<typeof MemoryTopicSchema>;
 
-/**
- * `GET /v1/wolves/:name/work/:id/record`: a work item's page data through the wolf's Work API client.
- * `plan` is the working document without its `## Record` section and the generated `## Log`; `record` is the
- * Record section's text (heading stripped), "" when the item has none.
- */
 /** One child of a feature, as much as a task graph needs. */
 export const WorkChildSchema = z.object({
   id: z.string(),
@@ -481,6 +476,11 @@ export const WorkChildSchema = z.object({
 });
 export type WorkChild = z.infer<typeof WorkChildSchema>;
 
+/**
+ * `GET /v1/wolves/:name/work/:id/record`: a work item's page data through the wolf's Work API client.
+ * `plan` is the working document without its `## Record` section and the generated `## Log`; `record` is the
+ * Record section's text (heading stripped), "" when the item has none.
+ */
 export const WorkRecordResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -497,6 +497,10 @@ export const WorkRecordResponseSchema = z.object({
   updated: z.string().optional(),
   /** Features only: the items directly under it. Omitted when the Work API could not list them (best effort). */
   children: z.array(WorkChildSchema).optional(),
+  /** Set (true) when the feature has more children than the cap and `children` was cut. */
+  childrenTruncated: z.boolean().optional(),
+  /** Holding containers only: how many items sit under it (no list is sent). */
+  childCount: z.number().int().optional(),
 });
 export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 

@@ -91,10 +91,12 @@ function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkReco
 	const deps = item.dependsOn ?? [];
 	return (
 		<article>
+			<div className="mb-4 flex flex-wrap gap-1.5" data-testid="work-badges">
+				<Badge name="kind" value={item.kind} />
+				<Badge name="stage" value={item.stage.replace(/_/g, " ")} />
+				{item.domain && <Badge name="domain" value={item.domain} />}
+			</div>
 			<dl className="mb-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-				<Fact name="kind" value={item.kind} />
-				<Fact name="stage" value={item.stage} />
-				{item.domain && <Fact name="domain" value={item.domain} />}
 				{item.partOf && (
 					<div data-fact="parent">
 						<dt className={LABEL}>part of</dt>
@@ -152,11 +154,14 @@ function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkReco
 	);
 }
 
-function Fact({ name, value }: { name: string; value: string }) {
+function Badge({ name, value }: { name: string; value: string }) {
 	return (
-		<div data-fact={name}>
-			<dt className={LABEL}>{name}</dt>
-			<dd>{value}</dd>
-		</div>
+		<span
+			data-fact={name}
+			title={name}
+			className="rounded-full border border-border px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+		>
+			{value}
+		</span>
 	);
 }

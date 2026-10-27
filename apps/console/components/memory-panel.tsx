@@ -263,7 +263,6 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 							<div className="absolute top-[-2px] h-2.5 w-px bg-foreground" style={{ left: `${Math.round(pool.targetMark * 100)}%` }} title={`pool target ${pool.poolTarget.toLocaleString("en-US")}`} />
 						</div>
 						<p className="mt-1 text-xs text-muted-foreground">{pool.label}</p>
-						<p className="text-xs text-muted-foreground">target {pool.poolTarget.toLocaleString("en-US")} · trigger {pool.trigger}</p>
 						{block === "memory_busy" ? <p className="text-xs text-muted-foreground" data-testid="memory-busy">{BUSY_TEXT}</p> : null}
 						{pline ? <p className="text-xs text-muted-foreground" data-testid="memory-promote">{pline}</p> : null}
 						{note ? <p className="text-xs text-muted-foreground" data-testid="memory-note">{note}</p> : null}

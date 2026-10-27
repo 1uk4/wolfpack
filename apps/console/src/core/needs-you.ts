@@ -83,11 +83,6 @@ export function mergeReport(
 	return sortOldestFirst([...prev.filter((i) => !responded.includes(i.wolf) && (!listed || listed.includes(i.wolf))), ...fresh]);
 }
 
-/** Drop an answered card from the list (before the refetch confirms it). */
-export function withoutItem(items: readonly NeedsYouItem[], key: string): NeedsYouItem[] {
-	return items.filter((i) => itemKey(i) !== key);
-}
-
 // ------------------------------------------------------------ notifications
 
 /** An OS notification to show: the wolf and thread in the title, the card question in the body. */

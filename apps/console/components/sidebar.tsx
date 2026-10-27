@@ -7,7 +7,7 @@ import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
-import { NeedsYouPanel, NotifyToggle } from "@/components/needs-you";
+import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
@@ -700,8 +700,8 @@ function SessionsSidebar() {
 					</Link>
 				</div>
 
-				{/* Needs you (ticket 4): pinned above the session list, across all wolves; hidden when nothing waits. */}
-				<NeedsYouPanel />
+				{/* Headless: raises OS/browser notifications for newly waiting cards. The rows carry the visible needs-you mark. */}
+				<NeedsYouNotifier />
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>

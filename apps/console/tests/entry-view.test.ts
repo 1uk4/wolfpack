@@ -49,7 +49,7 @@ describe("frontmatter views", () => {
 	});
 	it("breadcrumb is domain then optional section", () => {
 		assert.deepEqual(entryBreadcrumb({ domain: "wolfpack", frontmatter: {} }), [{ label: "wolfpack", kind: "domain" }]);
-		assert.equal(entryBreadcrumb({ domain: "wolfpack", frontmatter: { section: "memory" } })[1].label, "memory");
+		assert.equal(entryBreadcrumb({ domain: "wolfpack", frontmatter: { section: "memory" } })[1]?.label, "memory");
 	});
 	it("entryRelated reads strings and objects, deduped", () => {
 		assert.deepEqual(entryRelated({ related: ["x", { target: "y", kind: "supersedes" }], relations: ["x"] }), [

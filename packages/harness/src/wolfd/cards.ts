@@ -10,7 +10,7 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import type { Card, CardAnswers, PendingCard } from "@wolfpack/protocol";
+import type { Card, CardAnswers, CardFieldAnswer, PendingCard } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -104,18 +104,70 @@ export class CardTracker {
   }
 }
 
+const EMPTY = "(empty response)";
+
+/** The model-facing text of one answer, by field kind (labels for confirm/reject, comma list for multi). */
+export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
+  if (!a) return "(no answer)";
+  if (field.kind === "confirm") {
+    if (typeof a.value !== "boolean") return "(no answer)";
+    const text = a.value ? `yes (${field.confirmLabel ?? "Yes"})` : `no (${field.rejectLabel ?? "No"})`;
+    const note = "note" in a ? a.note?.trim() : undefined;
+    return note ? `${text} — ${note}` : text;
+  }
+  if (field.kind === "multi") {
+    if (!Array.isArray(a.value)) return "(no answer)";
+    return a.value.length === 0 ? "(none selected)" : a.value.join(", ");
+  }
+  if (typeof a.value !== "string") return "(no answer)";
+  return a.value.trim() === "" ? EMPTY : a.value;
+}
+
 /** The model-facing user message for an answer submission: every card's questions with their answers, in raise order. */
 export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
   for (const { callId, card, answers } of cards) {
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
-    for (const f of card.fields) {
-      const a = answers[f.id];
-      const value = a ? (a.value.trim() === "" ? "(empty response)" : a.value) : "(no answer)";
-      lines.push(`- ${f.label}: ${value}`);
-    }
+    for (const f of card.fields) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
   }
   return lines.join("\n");
+}
+
+function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | undefined {
+  const id = f.id;
+  switch (f.kind) {
+    case "free-text":
+      if (typeof a.value !== "string") return `field "${id}" is free text: the answer must be a string`;
+      if ("other" in a && a.other) return `field "${id}" is free text: "other" does not apply`;
+      return undefined;
+    case "single": {
+      if (typeof a.value !== "string") return `field "${id}": the answer must be a string`;
+      if ("other" in a && a.other) {
+        if (f.allowOther === false) return `field "${id}" does not accept a custom answer`;
+        if (a.value.trim() === "") return `field "${id}": a custom answer cannot be empty`;
+      } else if (!f.options.some((o) => o.value === a.value)) return `"${a.value}" is not an option of field "${id}"`;
+      return undefined;
+    }
+    case "multi": {
+      if (!Array.isArray(a.value)) return `field "${id}": the answer must be a list of strings`;
+      const other = "other" in a && Array.isArray(a.other) ? a.other : [];
+      if (new Set(a.value).size !== a.value.length) return `field "${id}": duplicate entries`;
+      if (other.length > 0 && f.allowOther !== true) return `field "${id}" does not accept custom entries`;
+      for (const o of other) {
+        if (o.trim() === "") return `field "${id}": a custom entry cannot be empty`;
+        if (!a.value.includes(o)) return `field "${id}": custom entry "${o}" is not among the picked values`;
+      }
+      for (const v of a.value) {
+        if (!other.includes(v) && !f.options.some((o) => o.value === v)) return `"${v}" is not an option of field "${id}"`;
+      }
+      if (f.min !== undefined && a.value.length < f.min) return `field "${id}": pick at least ${f.min}`;
+      if (f.max !== undefined && a.value.length > f.max) return `field "${id}": pick at most ${f.max}`;
+      return undefined;
+    }
+    case "confirm":
+      if (typeof a.value !== "boolean") return `field "${id}" is a confirm: the answer must be true or false`;
+      return undefined;
+  }
 }
 
 /** Check answers against the card; returns the problem, or undefined when valid. */
@@ -123,14 +175,8 @@ export function validateAnswers(card: Card, answers: CardAnswers): string | unde
   for (const f of card.fields) {
     const a = answers[f.id];
     if (!a) return `missing answer for field "${f.id}"`;
-    if (f.kind === "free-text") {
-      if (a.other) return `field "${f.id}" is free text: "other" does not apply`;
-    } else if (a.other) {
-      if (f.allowOther === false) return `field "${f.id}" does not accept a custom answer`;
-      if (a.value.trim() === "") return `field "${f.id}": a custom answer cannot be empty`;
-    } else if (!f.options.some((o) => o.value === a.value)) {
-      return `"${a.value}" is not an option of field "${f.id}"`;
-    }
+    const problem = validateField(f, a);
+    if (problem) return problem;
   }
   const extra = Object.keys(answers).find((k) => !card.fields.some((f) => f.id === k));
   return extra ? `unknown field "${extra}"` : undefined;

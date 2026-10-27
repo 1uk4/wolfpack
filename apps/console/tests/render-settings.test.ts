@@ -8,7 +8,6 @@
 import assert from "node:assert/strict";
 import { describe, it as test } from "node:test";
 import {
-	ARROW_LENGTH_LADDER,
 	CHARGE_RANGE,
 	CLUSTER_LABEL_SIZE_LADDER,
 	CLUSTER_PULL_RANGE,
@@ -65,7 +64,6 @@ describe("sanitizeRenderSettings", () => {
 			sizeUnits: "world",
 			nodeSize: 999,
 			edgeWidth: 0,
-			arrowLength: -5,
 			labelZoom: 100,
 			labelSize: "big" as unknown as number,
 			clusterLabels: "yes" as unknown as boolean,
@@ -73,7 +71,6 @@ describe("sanitizeRenderSettings", () => {
 		});
 		assert.equal(s.nodeSize, NODE_SIZE_LADDER[NODE_SIZE_LADDER.length - 1]); // snapped to the ladder top
 		assert.equal(s.edgeWidth, EDGE_WIDTH_LADDER[0]); // snapped to the ladder floor
-		assert.equal(s.arrowLength, ARROW_LENGTH_LADDER[0]);
 		assert.equal(s.labelZoom, LABEL_ZOOM_LADDER[LABEL_ZOOM_LADDER.length - 1]);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize); // NaN-safe reset
 		assert.equal(s.clusterLabels, DEFAULT_RENDER_SETTINGS.clusterLabels);
@@ -103,19 +100,21 @@ describe("sanitizeRenderSettings", () => {
 	});
 
 	test("the low ends accept small sizes (ladder floors)", () => {
-		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 0.3, edgeWidth: 0.1, arrowLength: 0.2, labelSize: 0.3 });
+		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 0.3, edgeWidth: 0.1, labelSize: 0.3 });
 		assert.deepEqual(
-			{ nodeSize: s.nodeSize, edgeWidth: s.edgeWidth, arrowLength: s.arrowLength, labelSize: s.labelSize },
-			{ nodeSize: 0.25, edgeWidth: 0.1, arrowLength: 0.25, labelSize: 0.5 }, // snapped to the ladder floors
+			{ nodeSize: s.nodeSize, edgeWidth: s.edgeWidth, labelSize: s.labelSize },
+			{ nodeSize: 0.25, edgeWidth: 0.1, labelSize: 0.5 }, // snapped to the ladder floors
 		);
 	});
 
 	test("a fully valid object passes through unchanged", () => {
 		const valid = {
 			sizeUnits: "world",
+			groupBy: "section",
+			layers: { archivedWork: true, wikilinks: false, denTopics: true },
+			domain: "wolfpack",
 			nodeSize: 4,
 			edgeWidth: 2,
-			arrowLength: 3,
 			labelZoom: 2,
 			labelSize: 4,
 			clusterLabels: false,
@@ -140,7 +139,7 @@ describe("sanitizeRenderSettings", () => {
 		// those loads must get defaults, not crash, not shift anything.
 		// It also predates sizeUnits — the sizes reset (below), the flat
 		// fields keep their stored values (snapped to the nearest stop).
-		const s = sanitizeRenderSettings({ nodeSize: 4, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true });
+		const s = sanitizeRenderSettings({ nodeSize: 4, edgeWidth: 1, labelZoom: 0.5, clusterLabels: true });
 		assert.deepEqual(s.regions, DEFAULT_REGION_TUNING);
 		assert.deepEqual(s.physics, DEFAULT_PHYSICS_TUNING);
 		assert.equal(s.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize); // legacy sizes reset
@@ -154,7 +153,7 @@ describe("sanitizeRenderSettings", () => {
 		// cannot be carried into world units honestly → reset; everything
 		// whose semantics did NOT change keeps its stored value.
 		const s = sanitizeRenderSettings({
-			nodeSize: 2, labelSize: 2, arrowLength: 2,
+			nodeSize: 2, labelSize: 2,
 			edgeWidth: 3, labelZoom: 0.75, clusterLabelSize: 21,
 			regions: { dilation: 28, blur: 8.1, bitmap: 512, edgeAlpha: 0.6, enabled: false },
 			physics: { linkStrength: 2 },
@@ -162,7 +161,6 @@ describe("sanitizeRenderSettings", () => {
 		assert.equal(s.sizeUnits, "world"); // the sanitizer always stamps
 		assert.equal(s.nodeSize, DEFAULT_RENDER_SETTINGS.nodeSize);
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize);
-		assert.equal(s.arrowLength, DEFAULT_RENDER_SETTINGS.arrowLength);
 		assert.equal(s.regions.dilation, DEFAULT_REGION_TUNING.dilation);
 		// Unchanged semantics survive — snapped to the ladder:
 		assert.equal(s.edgeWidth, 3);
@@ -176,19 +174,17 @@ describe("sanitizeRenderSettings", () => {
 	});
 
 	test("a stamped world-unit file keeps its size values", () => {
-		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 6, arrowLength: 8, labelSize: 3 });
+		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 6, labelSize: 3 });
 		assert.equal(s.nodeSize, 6);
-		assert.equal(s.arrowLength, 8);
 		assert.equal(s.labelSize, 3);
 	});
 
 	test("the 2026-09-17 defaults are the user's live-tuned bake", () => {
-		// nodeSize 2, edgeWidth 1, arrowLength 2, labelSize 3, labelZoom
+		// nodeSize 2, edgeWidth 1, labelSize 3, labelZoom
 		// 0.5 (displays 1×), dilation 20, blur 40, edgeAlpha 0.2, bitmap
 		// 256 — each dead-center on its re-centered ladder (owner, 2026-10-07).
 		assert.equal(DEFAULT_RENDER_SETTINGS.nodeSize, 2);
 		assert.equal(DEFAULT_RENDER_SETTINGS.edgeWidth, 1);
-		assert.equal(DEFAULT_RENDER_SETTINGS.arrowLength, 2);
 		assert.equal(DEFAULT_RENDER_SETTINGS.labelSize, 3);
 		assert.equal(DEFAULT_RENDER_SETTINGS.labelZoom, 0.5); // displays 1× (owner, 2026-10-07)
 		assert.equal(DEFAULT_REGION_TUNING.dilation, 20);
@@ -217,10 +213,42 @@ describe("sanitizeRenderSettings", () => {
 
 	test("the pre-wave stored shape (no labelSize) still loads", () => {
 		// localStorage-era records lacked labelSize — must not shift anything.
-		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 4, edgeWidth: 1, arrowLength: 5, labelZoom: 0.5, clusterLabels: true });
+		const s = sanitizeRenderSettings({ sizeUnits: "world", nodeSize: 4, edgeWidth: 1, labelZoom: 0.5, clusterLabels: true });
 		assert.equal(s.labelSize, DEFAULT_RENDER_SETTINGS.labelSize);
 		assert.equal(s.nodeSize, 4);
 		assert.equal(s.labelZoom, 0.5); // 0.5 IS the dead-center stop now
+	});
+});
+
+describe("KB-graph view settings", () => {
+	test("defaults: group by domain, KB + open work only, no domain filter, depth anchor off", () => {
+		assert.equal(DEFAULT_RENDER_SETTINGS.groupBy, "domain");
+		assert.deepEqual(DEFAULT_RENDER_SETTINGS.layers, { archivedWork: false, wikilinks: false, denTopics: false });
+		assert.equal(DEFAULT_RENDER_SETTINGS.domain, null);
+		assert.equal(DEFAULT_RENDER_SETTINGS.physics.depthMode, "off");
+	});
+
+	test("groupBy accepts domain|section only", () => {
+		assert.equal(sanitizeRenderSettings({ groupBy: "section" }).groupBy, "section");
+		assert.equal(sanitizeRenderSettings({ groupBy: "folder" }).groupBy, "domain");
+		assert.equal(sanitizeRenderSettings({ groupBy: 3 }).groupBy, "domain");
+	});
+
+	test("layers: booleans only, missing keys keep their default", () => {
+		const s = sanitizeRenderSettings({ layers: { archivedWork: true, wikilinks: "yes", extra: true } });
+		assert.deepEqual(s.layers, { archivedWork: true, wikilinks: false, denTopics: false });
+		assert.deepEqual(sanitizeRenderSettings({ layers: "all" }).layers, DEFAULT_RENDER_SETTINGS.layers);
+	});
+
+	test("domain filter: a trimmed non-empty string, else null", () => {
+		assert.equal(sanitizeRenderSettings({ domain: " snapjack " }).domain, "snapjack");
+		assert.equal(sanitizeRenderSettings({ domain: "" }).domain, null);
+		assert.equal(sanitizeRenderSettings({ domain: 7 }).domain, null);
+		assert.equal(sanitizeRenderSettings({ domain: "x".repeat(200) }).domain, null);
+	});
+
+	test("the arrowhead setting is gone: a stale key drops silently", () => {
+		assert.equal("arrowLength" in sanitizeRenderSettings({ arrowLength: 3 }), false);
 	});
 });
 
@@ -228,7 +256,6 @@ describe("ladder mapping (11 stops, default-centered)", () => {
 	const LADDERS: [string, readonly number[], number][] = [
 		["nodeSize", NODE_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.nodeSize],
 		["edgeWidth", EDGE_WIDTH_LADDER, DEFAULT_RENDER_SETTINGS.edgeWidth],
-		["arrowLength", ARROW_LENGTH_LADDER, DEFAULT_RENDER_SETTINGS.arrowLength],
 		["labelSize", LABEL_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.labelSize],
 		["labelZoom", LABEL_ZOOM_LADDER, DEFAULT_RENDER_SETTINGS.labelZoom],
 		["clusterLabelSize", CLUSTER_LABEL_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.clusterLabelSize],

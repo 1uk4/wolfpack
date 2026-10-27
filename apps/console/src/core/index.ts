@@ -9,9 +9,6 @@
  *   components/**  →  "@/src/core"        (this barrel, ONLY)
  *   app/**         →  "@/src/core" + "@/src/server"
  *
- * Server-only core modules (core/graph.ts emission/derivation) are pure
- * but need storage ports passed in by a server caller, so they are
- * deliberately NOT re-exported here — the server imports them directly.
  * The storage PORT TYPES are types-only and browser-safe, hence re-exported.
  */
 
@@ -24,11 +21,6 @@ export * from "./question-core.ts";
 // for every layer; the browser shell consumes the types + the runtime names
 // through this barrel (shell law: pure core via @/src/core only).
 export * from "./events.ts";
-// clusters.ts (Louvain) is deliberately NOT re-exported: nothing in the
-// shell runs community detection — the snapshot carries the partition
-// from the server. Keeping it out keeps the heavy clustering deps out of the
-// client bundle (verified 2026-09-13: chunks contained it while this
-// line existed). Same logic as layout-settle.ts below.
 export * from "./layout.ts";
 export * from "./pending.ts";
 export * from "./prompt-segments.ts";
@@ -67,3 +59,8 @@ export * from "./session-markdown.ts";
 export * from "./thread-adapter.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
+// The KB graph (graph home): the librarian's graph payload → canvas data,
+// domain colours, node styles, cards; and the console's own persistence
+// rules (positions, camera). Pure, browser-safe.
+export * from "./kb-graph-model.ts";
+export * from "./graph-persistence.ts";

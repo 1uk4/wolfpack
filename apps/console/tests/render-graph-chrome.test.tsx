@@ -1,9 +1,8 @@
 /**
- * Empty-graph chrome pins (empty-graph chrome wave, owner 2026-09-25):
- * search + settings render only when the snapshot has nodes (dead controls
- * are lies — the honesty principle); an empty graph renders no chrome.
- * GraphChromeRow is the pure seam (the DeleteNodeBody pattern): SSR of
- * both states pins the ruling. Fetches don't run under renderToStaticMarkup
+ * Graph chrome pins: the search box renders only when there are nodes to
+ * search (dead controls are lies — the honesty principle); the settings gear
+ * stays — the layer toggles and the domain filter are how an empty view gets
+ * un-emptied. GraphChromeRow is the pure seam: SSR of both states pins it. Fetches don't run under renderToStaticMarkup
  * (effects never fire), so these pins exercise the component directly.
  */
 
@@ -30,21 +29,19 @@ const PROPS = {
 };
 
 describe("GraphChromeRow — the empty-graph ruling (owner, 2026-09-25)", () => {
-	it("EMPTY graph: nothing renders — search + settings absent", () => {
+	it("EMPTY view: no search, but the settings gear stays (the filter lives there)", () => {
 		const html = renderToStaticMarkup(createElement(GraphChromeRow, { ...PROPS, isEmpty: true }));
-		assert.ok(!html.includes("import-notes"), "the import entry point retired with the extraction pipeline");
 		assert.ok(!html.includes("Search nodes…"), "search is a lie on an empty graph");
 		// the settings gear is the lucide-settings svg (tooltip wave: its old
 		// native title is gone — the styled tooltip carries the label now)
-		assert.ok(!html.includes("lucide-settings"), "settings is a lie on an empty graph");
-		assert.ok(!html.includes("graph-chrome-fade-in"), "nothing gated = nothing fading in");
+		assert.ok(html.includes("lucide-settings"), "settings stays reachable");
+		assert.equal(html.split("graph-chrome-fade-in").length - 1, 1, "one fade carrier: the gear");
 	});
 
 	it("POPULATED graph: search + settings render, both carrying the fade", () => {
 		const html = renderToStaticMarkup(createElement(GraphChromeRow, { ...PROPS, isEmpty: false }));
 		assert.ok(html.includes("Search nodes…"));
 		assert.ok(html.includes("lucide-settings"), "the settings gear renders");
-		// the appear-once fade rides exactly the two gated controls
 		assert.equal(html.split("graph-chrome-fade-in").length - 1, 2, "two fade carriers: search + settings");
 	});
 

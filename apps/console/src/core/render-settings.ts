@@ -2,7 +2,9 @@
  * Graph render settings: the shape, the defaults, the sanitizer, and the
  * slider mapping (log-scaled, default-centered) — shared by the client (components/graph-canvas.ts,
  * graph-view.tsx), the server store (src/store/render-settings.ts, which
- * persists them to data/render-settings.json), and the API route.
+ * persists them to data/graph/render-settings.json), and the API route.
+ * Besides the display knobs they carry the KB-graph VIEW choices: what the
+ * regions group by, which optional layers are on, and the domain filter.
  *
  * This module is pure: no DOM, no d3, no node APIs — safe everywhere.
  *
@@ -10,7 +12,7 @@
  * is over. Whatever arrives from disk or the network is passed through
  * sanitizeRenderSettings before use — never trusted raw.
  *
- * SIZE SEMANTICS (2026-09-15 pivot): nodeSize, labelSize, arrowLength and
+ * SIZE SEMANTICS (2026-09-15 pivot): nodeSize, labelSize and
  * regions.dilation are WORLD UNITS — the same law as the physics spacings.
  * The world scale is canonical: identical settings render identically at
  * any graph size, at any zoom. (They were "screen px at fit zoom" before,
@@ -40,16 +42,34 @@ import {
 	type DepthAnchorMode,
 } from "./layout.ts";
 
+/** What the region glow (and the cluster pull) groups nodes by. */
+export type GroupBy = "domain" | "section";
+export const GROUP_BY_OPTIONS: readonly GroupBy[] = ["domain", "section"];
+
+/** The optional graph layers (query params of the librarian's graph route).
+ *  Open work and the KB itself are always on. */
+export interface GraphLayerToggles {
+	archivedWork: boolean;
+	wikilinks: boolean;
+	denTopics: boolean;
+}
+export const DEFAULT_GRAPH_LAYERS: GraphLayerToggles = { archivedWork: false, wikilinks: false, denTopics: false };
+
 export interface GraphRenderSettings {
 	/** Semantic stamp for the size-unit pivot (2026-09-15): "world" =
-	 *  nodeSize/labelSize/arrowLength/regions.dilation are WORLD units;
+	 *  nodeSize/labelSize/regions.dilation are WORLD units;
 	 *  absent = the old "screen px at fit zoom" semantics — the
-	 *  sanitizer resets those four fields (their meaning changed, not
+	 *  sanitizer resets those fields (their meaning changed, not
 	 *  their magnitude) and keeps everything else. */
 	sizeUnits: "world";
+	/** Region glow + cluster pull grouping. Default "domain". */
+	groupBy: GroupBy;
+	/** Optional layers; default KB + open work only. */
+	layers: GraphLayerToggles;
+	/** Domain filter (a domain name), null = all domains. */
+	domain: string | null;
 	nodeSize: number;
 	edgeWidth: number;
-	arrowLength: number;
 	/** Camera-ratio threshold for node labels (see module doc). */
 	labelZoom: number;
 	/** Node + hover label font size, WORLD units (scales with camera). */
@@ -63,7 +83,7 @@ export interface GraphRenderSettings {
 	/** Region rendering (the blurred cluster tints). Server-persisted
 	 *  since 2026-09-13 (user request) — was session-only dev state. */
 	regions: RegionTuning;
-	/** Live-sim physics + inference-depth anchoring. Server-persisted
+	/** Live-sim physics + hierarchy-depth anchoring. Server-persisted
 	 *  since 2026-09-13 (user request) — was session-only dev state. */
 	physics: PhysicsTuning;
 }
@@ -88,11 +108,19 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 	// carried into world units honestly, so they reset to defaults; the
 	// reference default IS the old tuned look expressed in world units.
 	const legacySizes = r.sizeUnits !== "world";
+	const layers = (r.layers ?? {}) as Partial<GraphLayerToggles>;
+	const flag = (v: unknown, dflt: boolean) => (typeof v === "boolean" ? v : dflt);
 	return {
 		sizeUnits: "world",
+		groupBy: r.groupBy === "section" ? "section" : "domain",
+		layers: {
+			archivedWork: flag(layers.archivedWork, DEFAULT_GRAPH_LAYERS.archivedWork),
+			wikilinks: flag(layers.wikilinks, DEFAULT_GRAPH_LAYERS.wikilinks),
+			denTopics: flag(layers.denTopics, DEFAULT_GRAPH_LAYERS.denTopics),
+		},
+		domain: typeof r.domain === "string" && r.domain.trim() !== "" && r.domain.length <= 128 ? r.domain.trim() : null,
 		nodeSize: legacySizes ? DEFAULT_RENDER_SETTINGS.nodeSize : ladd(r.nodeSize, NODE_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.nodeSize),
 		edgeWidth: ladd(r.edgeWidth, EDGE_WIDTH_LADDER, DEFAULT_RENDER_SETTINGS.edgeWidth),
-		arrowLength: legacySizes ? DEFAULT_RENDER_SETTINGS.arrowLength : ladd(r.arrowLength, ARROW_LENGTH_LADDER, DEFAULT_RENDER_SETTINGS.arrowLength),
 		labelZoom: ladd(r.labelZoom, LABEL_ZOOM_LADDER, DEFAULT_RENDER_SETTINGS.labelZoom),
 		labelSize: legacySizes ? DEFAULT_RENDER_SETTINGS.labelSize : ladd(r.labelSize, LABEL_SIZE_LADDER, DEFAULT_RENDER_SETTINGS.labelSize),
 		clusterLabels:
@@ -205,11 +233,12 @@ export interface PhysicsTuning {
 	clusterPull: number;
 	/** Per-tick velocity damping (d3 default 0.4). */
 	velocityDecay: number;
-	/** Inference-depth anchoring mode (see DepthAnchor in core). */
+	/** Hierarchy-depth anchoring mode (domain → section → entry → work);
+	 *  off by default. */
 	depthMode: DepthAnchorMode;
 	/** Depth-anchor pull strength. */
 	depthStrength: number;
-	/** Spacing between inference levels (world units). */
+	/** Spacing between hierarchy levels (world units). */
 	depthSpacing: number;
 	/** Inner ring radius, radial mode (world units). */
 	depthBaseRadius: number;
@@ -223,9 +252,7 @@ export const DEFAULT_PHYSICS_TUNING: PhysicsTuning = {
 	clusterPull: CLUSTER_PULL_STRENGTH,
 	velocityDecay: 0.4,
 	depthMode: "off",
-	// 0.8 by sweep on the real graph: 215/216 arrows read upward with
-	// organic sag (mean |dev| from level ~34u at spacing 60); 1.5 gives
-	// crisp rows (dev ~18) if the promoted default wants them.
+	// 0.8: organic sag around the level (1.5 gives crisp rows).
 	depthStrength: 0.8,
 	depthSpacing: 60,
 	depthBaseRadius: 220,
@@ -258,9 +285,11 @@ export function sanitizePhysicsTuning(input: Partial<PhysicsTuning> | null | und
 // real graph after the world-unit pivot), each dead-center on its ladder.
 export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 	sizeUnits: "world",
+	groupBy: "domain",
+	layers: DEFAULT_GRAPH_LAYERS,
+	domain: null,
 	nodeSize: 2,
 	edgeWidth: 1,
-	arrowLength: 2,
 	// New default 0.5 — displays as 1× on the slider (owner, 2026-10-07:
 	// "labels until zoom default one" — the owner speaks in display
 	// values, and the display is ratio/0.5). Labels once zoomed past fit.
@@ -287,7 +316,6 @@ export const DEFAULT_RENDER_SETTINGS: GraphRenderSettings = {
 // (powers of two at the floors where the series would go fractional).
 export const NODE_SIZE_LADDER = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12] as const;
 export const EDGE_WIDTH_LADDER = [0.1, 0.2, 0.4, 0.6, 0.8, 1, 1.5, 2, 3, 4, 6] as const;
-export const ARROW_LENGTH_LADDER = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12] as const;
 export const LABEL_SIZE_LADDER = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16] as const;
 // Screen px at any zoom (drawn at size / k). 14 = the old REGION_LABEL_SIZE.
 export const CLUSTER_LABEL_SIZE_LADDER = [7, 8, 9, 10, 12, 14, 16, 18, 20, 24, 28] as const;

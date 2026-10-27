@@ -30,10 +30,11 @@ import {
   buildDomainContext,
   type RawObservation,
 } from "@wolfpack/memory";
-import { consolidatePool, durableSessionTopics, promoteSessionTopics, type ConsolidationResult } from "@wolfpack/harness/memory";
+import { consolidatePool, durableSessionTopics, promoteSessionTopics, stripSupersededNotes, type ConsolidationResult } from "@wolfpack/harness/memory";
 import { registerMemoryActions, unregisterMemoryActions, type MemoryActions, type PromoteOutcome } from "./memory-actions.js";
 import { HttpWorkRecordStore } from "@wolfpack/memory";
 import { memoryEmitter } from "./memory-events.js";
+import { crawlMode, noteToolCalls, sweepStaleMarkers } from "./crawl-mode.js";
 import { readBoundTask } from "./unified-tasks.js";
 import { drainInbox, kbLockFile, listParked, type ParsedContribution, type KbRoots, type ParkedItem } from "@wolfpack/kb/librarian";
 import { ledgerFile, vectorsDir, workLedgerFile } from "@wolfpack/kb/shared";
@@ -204,6 +205,34 @@ function fingerprint(content: unknown): string {
  * twin: a user message in between means the observed response never committed (aborted), and a later identical reply
  * is new.
  */
+/** Crawl run chatter (progress, release previews, stop notes) is operational, not memory: kept out of observer chunks. */
+const CRAWL_CHATTER = new Set(["crawl_run", "crawl_status", "crawl_stop", "crawl_release"]);
+
+/** The message without crawl run/status/stop/release calls and results; undefined when nothing is left of it. */
+function withoutCrawlChatter(m: ConversationMessage["message"]): ConversationMessage["message"] | undefined {
+  const msg = m as { role: string; toolName?: string; content?: unknown };
+  // A user message that superseded pending cards carries wolfd's note at its head: memory records what the user said.
+  if (msg.role === "user" && typeof msg.content === "string") {
+    const text = stripSupersededNotes(msg.content);
+    if (text !== msg.content) return { ...m, content: text } as ConversationMessage["message"];
+  } else if (msg.role === "user" && Array.isArray(msg.content)) {
+    const blocks = msg.content as { type?: string; text?: string }[];
+    const first = blocks.findIndex((b) => b.type === "text" && typeof b.text === "string");
+    if (first >= 0) {
+      const text = stripSupersededNotes(blocks[first].text!);
+      if (text !== blocks[first].text) return { ...m, content: blocks.map((b, i) => (i === first ? { ...b, text } : b)) } as ConversationMessage["message"];
+    }
+  }
+  if (msg.role === "user" && typeof msg.content === "string" && /^The user answered your (crawl_run|crawl_release) question/.test(msg.content)) return undefined;
+  if (msg.role === "toolResult" && msg.toolName && CRAWL_CHATTER.has(msg.toolName)) return undefined;
+  if (msg.role === "assistant" && Array.isArray(msg.content)) {
+    const kept = (msg.content as { type?: string; name?: string }[]).filter((b) => !(b.type === "toolCall" && b.name && CRAWL_CHATTER.has(b.name)));
+    if (kept.length === msg.content.length) return m;
+    return kept.length ? ({ ...m, content: kept } as ConversationMessage["message"]) : undefined;
+  }
+  return m;
+}
+
 export function newObserverChunks(
   committed: ConversationMessage[],
   current: AssistantMessage,
@@ -218,7 +247,10 @@ export function newObserverChunks(
     }
   }
   const lastEntryId = committed.length ? committed[committed.length - 1].entryId : watermark.lastEntryId;
-  const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.map((m) => ({ type: "message", id: String(m.entryId), message: m.message }));
+  const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.flatMap((m) => {
+    const message = withoutCrawlChatter(m.message);
+    return message ? [{ type: "message", id: String(m.entryId), message }] : [];
+  });
   const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true }));
 
   const fp = fingerprint(current.content);
@@ -228,7 +260,8 @@ export function newObserverChunks(
   const isCommitted = fp === "" || rest.some((m) => m.message.role === "assistant" && fingerprint(m.message.content) === fp);
   if (isCommitted) return { chunks: chunk(), next: { lastEntryId } };
   if (!settled) return undefined;
-  entries.push({ type: "message", id: `${lastEntryId}:current`, message: { role: "assistant", content: current.content } });
+  const unsettled = withoutCrawlChatter({ role: "assistant", content: current.content } as ConversationMessage["message"]);
+  if (unsettled) entries.push({ type: "message", id: `${lastEntryId}:current`, message: unsettled });
   return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 
@@ -306,6 +339,7 @@ export default function createMemoryExtension(
   console.log(`[memory] ${gate.enabled ? "starting: " : "inert: "}${gate.reason}`);
   if (!gate.enabled) return defineExtension({ name: "wolfpack-memory", runtimes: ["pi", "pi-durable"] });
 
+  sweepStaleMarkers(wolfDen);
   const defaultDomain = resolveDefaultDomain(config.defaultDomain, domains);
   // Per-observation classification, as pi: built once, only when there is a choice to make.
   const domainKbBase = (context.env ?? process.env).KB_BASE;
@@ -393,7 +427,7 @@ export default function createMemoryExtension(
    * fork); task-owned conversations (subagents) capture nothing. Unbound talk lands in the pool and consolidates to
    * den topics. The binding is the conversation's lineage binding, re-read each chunk.
    */
-  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean } = {}): Promise<void> {
+  async function observeConversation(message: AssistantMessage, ctx: HookContext, opts: { flush?: boolean; planning?: boolean } = {}): Promise<void> {
     const reads = ctx.conversation;
     if (!reads) {
       if (!warnedNoReads) {
@@ -404,6 +438,17 @@ export default function createMemoryExtension(
     }
     const cls = await reads.classify();
     if (!cls || cls.kind === "task") return;
+    // A crawl interview/plan is in progress here: reading source files must not reach the den (pi's crawlPlanMode).
+    // `opts.planning` is the state when the hook fired: runs are queued and may execute after planning has ended.
+    const mode = crawlMode.status(ctx.wolfDen, ctx.conversationId); // one stat per response when nothing is planning
+    if (opts.planning || mode === "planning") return;
+    if (mode === "reseed" && crawlMode.takeReseed(ctx.wolfDen, ctx.conversationId)) {
+      // Planning just ended: everything committed so far is planning chatter (and this run's own message may be part
+      // of it); skip it all and observe from the next response on.
+      const committed = await reads.messagesSince(0);
+      await writeWatermark(ctx.wolfDen, ctx.conversationId, { lastEntryId: committed.reduce((m, c) => Math.max(m, c.entryId), 0) });
+      return;
+    }
 
     let watermark = await readWatermark(ctx.wolfDen, ctx.conversationId);
     if (!watermark) {
@@ -417,6 +462,9 @@ export default function createMemoryExtension(
       planned = newObserverChunks(committed, message, watermark, attempt >= COMMIT_WAITS_MS.length);
       if (!planned) await new Promise((r) => setTimeout(r, COMMIT_WAITS_MS[attempt]));
     }
+    // Planning may have begun (or begun and ended) while we waited for the response to commit. Whatever is pending
+    // (planning, or its re-seed) means the chunks may hold planning turns; the re-seed happens on the next run.
+    if (mode !== undefined || crawlMode.pending(ctx.wolfDen, ctx.conversationId)) return;
     const { chunks, next } = planned;
     if (!opts.flush && chunks.reduce((n, c) => n + c.text.length, 0) < minTextLength) return; // keep accumulating
 
@@ -1106,8 +1154,16 @@ export default function createMemoryExtension(
       afterResponse: (message: AssistantMessage, ctx: HookContext) => {
         // Fire-and-forget; one observation at a time per conversation (afterResponse fires per model response, so a
         // tool round fires twice and the second must see the first's watermark).
+        // Note the response's crawl tool calls NOW, before they run and before anything can classify this response.
+        let planning = false;
+        try {
+          noteToolCalls(ctx.wolfDen, ctx.conversationId, message.content.flatMap((b) => (b.type === "toolCall" ? [b.name] : [])));
+          planning = crawlMode.active(ctx.wolfDen, ctx.conversationId);
+        } catch (e) {
+          console.error("[memory] crawl planning check failed:", e instanceof Error ? e.message : e);
+        }
         const prev = observing.get(ctx.conversationId) ?? Promise.resolve();
-        const run = prev.then(() => observeConversation(message, ctx)).catch((err) => {
+        const run = prev.then(() => observeConversation(message, ctx, { planning })).catch((err) => {
           console.error("[memory] observation error:", err instanceof Error ? err.message : err);
         });
         observing.set(ctx.conversationId, run);

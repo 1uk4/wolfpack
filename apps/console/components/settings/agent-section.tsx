@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
+import { InlineMic, joinDictation, useFieldMic } from "@/components/dictation";
 import { useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
 import type React from "react";
@@ -394,13 +395,11 @@ export function AgentSection({
 						</div>
 						<div>
 							<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">Override</p>
-							<textarea
-								value={segmentDraft[info.path] ?? info.overrideText ?? ""}
-								onChange={(e) => setSegmentDraft({ ...segmentDraft, [info.path]: e.target.value })}
-								aria-label="Your version of the instructions"
-								placeholder="Add your own instructions…"
-								className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 font-ui text-xs text-foreground outline-none"
-							/>
+							<OverrideTextarea
+								value={draft}
+								onChange={(v) => setSegmentDraft((d) => ({ ...d, [info.path]: v }))}
+								onAppend={(t) => setSegmentDraft((d) => ({ ...d, [info.path]: joinDictation(d[info.path] ?? info.overrideText ?? "", t) }))}
+								micKey={`prompt-override:${info.path}`} />
 						</div>
 						<div className="flex items-center gap-3">
 							<button
@@ -613,5 +612,22 @@ export function AgentSection({
 				)}
 			</SettingsGroup>
 		</>
+	);
+}
+
+/** The prompt-override editor: prose, so it carries an inline dictation mic (dictated text appends with joinDictation spacing). */
+export function OverrideTextarea({ value, onChange, onAppend, micKey }: { value: string; onChange: (v: string) => void; onAppend: (t: string) => void; micKey: string }) {
+	const mic = useFieldMic(micKey, onAppend);
+	return (
+		<div className="relative">
+			<textarea
+				value={value}
+				onChange={(e) => onChange(e.target.value)}
+				aria-label="Your version of the instructions"
+				placeholder="Add your own instructions…"
+				className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 pr-10 font-ui text-xs text-foreground outline-none"
+			/>
+			<InlineMic {...mic} className="absolute right-4 top-1.5" />
+		</div>
 	);
 }

@@ -106,6 +106,23 @@ describe("SessionRow", () => {
 	});
 });
 
+describe("needs-you dot", () => {
+	const waiting = () => item({ needsYou: true } as Partial<ChatListItem>);
+	it("shows for a waiting thread you are not viewing", () => {
+		const html = render(waiting());
+		assert.match(html, /data-testid="needs-you-dot"/);
+		assert.match(html, /needs you/i);
+	});
+	it("is hidden for the active thread (and its meta drops 'needs you')", () => {
+		const html = render(waiting(), true);
+		assert.doesNotMatch(html, /needs-you-dot/);
+		assert.doesNotMatch(html, /needs you/i);
+	});
+	it("is absent once the thread is idle (status cleared)", () => {
+		assert.doesNotMatch(render(item({ needsYou: false } as Partial<ChatListItem>)), /needs-you-dot/);
+	});
+});
+
 describe("timeAgo", () => {
 	const now = new Date("2026-01-02T12:00:00.000Z");
 

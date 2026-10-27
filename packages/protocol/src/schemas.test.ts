@@ -24,6 +24,9 @@ import {
   ThreadObjectSchema,
   ThreadSummarySchema,
   ShowDecisionParamsSchema,
+  ShowChecklistParamsSchema,
+  checklistProgress,
+  ShowGraphParamsSchema,
   parseObjectData,
   OBJECT_TYPES,
   OBJECT_TOOL_TYPES,
@@ -337,9 +340,151 @@ describe("structured objects", () => {
     for (const [name, v] of Object.entries(OBJECT_TOOL_PARAMS)) expect(OBJECT_TOOL_TYPES[name as keyof typeof OBJECT_TOOL_TYPES]).toBe(v.type);
   });
 
+  it("decision: tool schema and parser agree (non-string title/detail are rejected, not dropped)", () => {
+    const o = (over: object = {}) => ({ ...decision, ...over });
+    const cases: Array<[string, unknown, boolean]> = [
+      ["valid", decision, true],
+      ["title ok", o({ title: "T" }), true],
+      ["non-string title", o({ title: 5 }), false],
+      ["non-string detail", o({ options: [{ id: "a", label: "A", detail: 5 }], chosen: "a" }), false],
+      ["unknown chosen", o({ chosen: "zzz" }), false],
+      ["no options", o({ options: [] }), false],
+      ["empty option id", o({ options: [{ id: "", label: "A" }], chosen: "" }), false],
+    ];
+    for (const [name, c, ok] of cases) {
+      expect([name, ShowDecisionParamsSchema.safeParse({ ...(c as object), objectId: "o" }).success]).toEqual([name, ok]);
+      expect([name, parseObjectData("decision", c) !== undefined]).toEqual([name, ok]);
+    }
+  });
+
   it("ShowDecisionParamsSchema requires objectId and a chosen id among the options", () => {
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1" }).success).toBe(true);
     expect(ShowDecisionParamsSchema.safeParse(decision).success).toBe(false);
     expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1", chosen: "zzz" }).success).toBe(false);
+  });
+
+  describe("checklist", () => {
+    const checklist = { title: "Ship", items: [{ id: "a", label: "A", state: "done" }, { id: "b", label: "B", state: "doing", note: "n" }, { id: "c", label: "C", state: "skipped" }] };
+
+    it("parseObjectData accepts valid items and rejects empty, duplicate ids and unknown states", () => {
+      expect(parseObjectData("checklist", checklist)).toEqual(checklist);
+      expect(parseObjectData("checklist", { items: [] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [checklist.items[0], { ...checklist.items[1], id: "a" }] })).toBeUndefined();
+      expect(parseObjectData("checklist", { items: [{ id: "a", label: "A", state: "finished" }] })).toBeUndefined();
+    });
+
+    it("ShowChecklistParamsSchema requires objectId, min 1 item and unique ids", () => {
+      expect(ShowChecklistParamsSchema.safeParse({ ...checklist, objectId: "o" }).success).toBe(true);
+      expect(ShowChecklistParamsSchema.safeParse(checklist).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [checklist.items[0], checklist.items[0]] }).success).toBe(false);
+      expect(ShowChecklistParamsSchema.safeParse({ objectId: "o", items: [{ id: "a", label: "A", state: "nope" }] }).success).toBe(false);
+    });
+
+    it("all done plus skipped reaches 100%; all skipped has total 0", () => {
+      const p = (states: string[]) => checklistProgress(parseObjectData("checklist", { items: states.map((state, i) => ({ id: `i${i}`, label: "x", state })) })!);
+      expect(p(["done", "done", "skipped"])).toEqual({ done: 2, total: 2, skipped: 1 });
+      expect(p(["skipped", "skipped"])).toEqual({ done: 0, total: 0, skipped: 2 });
+    });
+
+    it("ShowChecklistParamsSchema and parseObjectData agree on a table of cases", () => {
+      const it1 = { id: "a", label: "A", state: "todo" };
+      const cases: unknown[] = [
+        { items: [it1] },
+        { items: [] },
+        { items: [{ ...it1, id: "" }] },
+        { items: [{ ...it1, label: "" }] },
+        { items: [{ ...it1, extra: 1 }] },
+        { items: [{ ...it1, note: 5 }] },
+        { items: [it1, it1] },
+        { items: [{ ...it1, state: "bad" }] },
+        { title: 3, items: [it1] },
+        { items: [{ ...it1, note: "n" }], title: "t" },
+      ];
+      for (const c of cases) {
+        // Duplicate ids are enforced by the tool-params refine, so compare against the schema the tool really uses.
+        const z = ShowChecklistParamsSchema.safeParse({ ...(c as object), objectId: "o" }).success;
+        expect([JSON.stringify(c), parseObjectData("checklist", c) !== undefined]).toEqual([JSON.stringify(c), z]);
+      }
+    });
+
+    it("progress is derived: done over total", () => {
+      expect(checklistProgress(parseObjectData("checklist", checklist)!)).toEqual({ done: 1, total: 2, skipped: 1 });
+    });
+  });
+});
+
+describe("graph object", () => {
+  const node = (id: string, status = "todo") => ({ id, label: id.toUpperCase(), kind: "step", status });
+  const graph = { title: "Plan", nodes: [node("a", "done"), node("b", "doing"), node("c")], edges: [{ from: "b", to: "a" }, { from: "c", to: "b" }] };
+
+  it("parseObjectData accepts a valid DAG (open kind, optional detail) and keeps edges", () => {
+    expect(parseObjectData("graph", graph)).toMatchObject({ title: "Plan", nodes: [{ id: "a" }, { id: "b" }, { id: "c" }], edges: [{ from: "b", to: "a" }, { from: "c", to: "b" }] });
+    expect(parseObjectData("graph", { nodes: [{ ...node("a"), kind: "epic", detail: "d" }], edges: [] })).toBeDefined();
+  });
+
+  it("rejects dangling edges, self-loops, cycles, duplicate ids, empty nodes and bad status", () => {
+    expect(parseObjectData("graph", { ...graph, edges: [{ from: "b", to: "zzz" }] })).toBeUndefined();
+    expect(parseObjectData("graph", { ...graph, edges: [{ from: "zzz", to: "a" }] })).toBeUndefined();
+    expect(parseObjectData("graph", { ...graph, edges: [{ from: "a", to: "a" }] })).toBeUndefined();
+    expect(parseObjectData("graph", { ...graph, edges: [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "a" }] })).toBeUndefined();
+    expect(parseObjectData("graph", { ...graph, nodes: [node("a"), node("a")], edges: [] })).toBeUndefined();
+    expect(parseObjectData("graph", { nodes: [], edges: [] })).toBeUndefined();
+    expect(parseObjectData("graph", { ...graph, nodes: [node("a", "weird")], edges: [] })).toBeUndefined();
+  });
+
+  it("ShowGraphParamsSchema requires objectId and rejects the same invalid graphs with a message", () => {
+    expect(ShowGraphParamsSchema.safeParse({ ...graph, objectId: "g" }).success).toBe(true);
+    expect(ShowGraphParamsSchema.safeParse(graph).success).toBe(false);
+    const dangling = ShowGraphParamsSchema.safeParse({ ...graph, objectId: "g", edges: [{ from: "b", to: "zzz" }] });
+    expect(dangling.success).toBe(false);
+    expect(JSON.stringify(dangling.error?.issues)).toMatch(/unknown node id/);
+    const self = ShowGraphParamsSchema.safeParse({ ...graph, objectId: "g", edges: [{ from: "a", to: "a" }] });
+    expect(JSON.stringify(self.error?.issues)).toMatch(/self-loop/);
+    const cycle = ShowGraphParamsSchema.safeParse({ ...graph, objectId: "g", edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] });
+    expect(JSON.stringify(cycle.error?.issues)).toMatch(/cycle/);
+  });
+
+  const n = (id: string, over: Record<string, unknown> = {}) => ({ ...node(id), ...over });
+  const many = (k: number) => Array.from({ length: k }, (_, i) => node(`n${i}`));
+  const cases: Array<[string, unknown, boolean]> = [
+    ["valid", graph, true],
+    ["valid, no edges, open kind", { nodes: [n("a", { kind: "epic", detail: "d" })], edges: [] }, true],
+    ["dangling", { ...graph, edges: [{ from: "b", to: "zzz" }] }, false],
+    ["self-loop", { ...graph, edges: [{ from: "a", to: "a" }] }, false],
+    ["cycle", { ...graph, edges: [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "c", to: "a" }] }, false],
+    ["duplicate id", { nodes: [n("a"), n("a")], edges: [] }, false],
+    ["duplicate edge", { ...graph, edges: [{ from: "b", to: "a" }, { from: "b", to: "a" }] }, false],
+    ["empty nodes", { nodes: [], edges: [] }, false],
+    ["bad status", { nodes: [n("a", { status: "weird" })], edges: [] }, false],
+    ["empty id", { nodes: [n("")], edges: [] }, false],
+    ["empty label", { nodes: [n("a", { label: "" })], edges: [] }, false],
+    ["empty kind", { nodes: [n("a", { kind: "" })], edges: [] }, false],
+    ["empty edge end", { ...graph, edges: [{ from: "", to: "a" }] }, false],
+    ["non-string title", { ...graph, title: 5 }, false],
+    ["non-string detail", { nodes: [n("a", { detail: 5 })], edges: [] }, false],
+    ["non-string label", { nodes: [n("a", { label: 5 })], edges: [] }, false],
+    ["missing edges", { nodes: [n("a")] }, false],
+    ["101 nodes", { nodes: many(101), edges: [] }, false],
+    ["100 nodes ok", { nodes: many(100), edges: [] }, true],
+    ["301 edges", { nodes: many(100), edges: Array.from({ length: 301 }, (_, i) => ({ from: `n${(i % 99) + 1}`, to: `n${Math.floor(i / 99)}` })) }, false],
+    ["long id", { nodes: [n("x".repeat(65))], edges: [] }, false],
+    ["long label", { nodes: [n("a", { label: "x".repeat(121) })], edges: [] }, false],
+    ["long kind", { nodes: [n("a", { kind: "x".repeat(33) })], edges: [] }, false],
+    ["long detail", { nodes: [n("a", { detail: "x".repeat(501) })], edges: [] }, false],
+    ["max-length strings ok", { nodes: [n("x".repeat(64), { label: "x".repeat(120), kind: "x".repeat(32), detail: "x".repeat(500) })], edges: [] }, true],
+  ];
+  it.each(cases)("tool schema and parser agree: %s", (_name, c, ok) => {
+    const viaSchema = ShowGraphParamsSchema.safeParse({ ...(c as object), objectId: "g" }).success;
+    const viaParser = parseObjectData("graph", c) !== undefined;
+    expect(viaSchema).toBe(ok);
+    expect(viaParser).toBe(ok);
+  });
+
+  it("errors are specific: cycle lists the nodes, caps and duplicates are named", () => {
+    const msg = (c: object) => JSON.stringify(ShowGraphParamsSchema.safeParse({ ...c, objectId: "g" }).error?.issues);
+    expect(msg({ nodes: [node("a"), node("b")], edges: [{ from: "a", to: "b" }, { from: "b", to: "a" }] })).toMatch(/cycle.*a, b|cycle.*b, a/);
+    expect(msg({ ...graph, edges: [{ from: "b", to: "a" }, { from: "b", to: "a" }] })).toMatch(/duplicate edge/);
+    expect(msg({ nodes: many(101), edges: [] })).toMatch(/100/);
   });
 });

@@ -7,6 +7,7 @@ import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
+import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { LhMark } from "@/components/lh-mark";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
@@ -16,13 +17,13 @@ import { Hint } from "@/components/ui/hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { fuzzyScore } from "@/src/core";
+import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { threadListItem, type ChatListItem } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string };
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean };
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -70,6 +71,10 @@ declare global {
 			/** Auto-update channel (Wave C, 2026-10-10): "lh:update-status" pushes once a staged update exists. */
 			onUpdateStatus?: (cb: (status: { status: string; version: string | null }) => void) => () => void;
 			installUpdate?: () => void;
+			/** Needs-you notification (ticket 4): main shows it only while the window is unfocused, once per `key`. */
+			notify?: (n: { key: string; title: string; body: string; href: string }) => void;
+			/** The OS notification was clicked: main focused the window; open this href. Returns unsubscribe. */
+			onNavigate?: (cb: (href: string) => void) => () => void;
 		};
 	}
 }
@@ -252,8 +257,9 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  still rides the API payload, so this is a one-line flip back if it's
  *  ever wanted. */
 function sessionMeta(chat: SessionItem): string {
-	if (chat.meta !== undefined && !chat.busy) return chat.meta;
+	if (chat.meta !== undefined && !chat.busy && !chat.needsYou) return chat.meta;
 	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
+	if (chat.needsYou) return chat.meta !== undefined ? `${chat.meta} · needs you` : "Needs you";
 	if (chat.pendingQuestion) return `Waiting for input · ${timeAgo(chat.updatedAt)}`;
 	if (chat.busy) return "Working…";
 	return timeAgo(chat.updatedAt);
@@ -280,6 +286,8 @@ export function SessionRow({
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
 	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
+	// The thread you are looking at needs no mark: you are already there.
+	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
 	return (
 		<button
 			type="button"
@@ -293,6 +301,10 @@ export function SessionRow({
 			)}
 		>
 			<SessionStatus busy={chat.busy || chat.compacting} />
+			{chat.needsYou && !chat.busy && (
+				// A wolf is waiting on an answer: the one resting state that earns a mark (it needs the operator).
+				<span data-testid="needs-you-dot" role="img" aria-label="Needs you" className="size-2 shrink-0 rounded-full bg-primary" />
+			)}
 			<span className="min-w-0 flex-1">
 				{/* Titles are human WORDS — Source Sans 3, the
 				    same voice the words were typed in (every input is lh-prose);
@@ -387,33 +399,32 @@ function SessionsSidebar() {
 			.map((r) => r.c);
 	}, [chats, query]);
 
-	const refreshInFlightRef = useRef(false);
-	const refresh = useCallback(async () => {
+	const refresh = useMemo(() => coalescedRefresh(async () => {
 		// In-flight coalesce (S6): event bursts may land several refresh
-		// calls at once — one fetch serves them all; anything newer arrives
-		// with the next event's fetch.
-		if (refreshInFlightRef.current) return;
-		refreshInFlightRef.current = true;
+		// calls at once. A call during a fetch marks it dirty and ONE more
+		// fetch follows, so the final event of a burst is never lost.
 		try {
 			// The list is the ConsoleClient's: every wolf's threads.
 			const wolves = (await (await fetch("/api/wolves", { cache: "no-store" })).json()) as {
 				wolves: { name: string }[];
 			};
-			const lists = await Promise.all(
+			const results = await Promise.all(
 				wolves.wolves.map(async (w) => {
-					const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-					const d = (await res.json()) as { threads: { id: string; title: string }[] };
-					return d.threads.map((t) => threadListItem(w.name, t));
+					try {
+						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you" }[] };
+						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
+					} catch {
+						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
+					}
 				}),
 			);
-			setChats(lists.flat());
+			setChats((prev) => foldWolfThreads(prev, results));
 		} catch {
 			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
-		} finally {
-			refreshInFlightRef.current = false;
 		}
-	}, []);
+	}), []);
 
 	/* Instant rename propagation (2026-09-17): the chat header's rename
 	   commits dispatch lh:chat-renamed; patch the snapshot in place instead
@@ -480,6 +491,7 @@ function SessionsSidebar() {
 	useServerEvent("turn-started", scheduleEventRefresh);
 	useServerEvent("turn-settled", scheduleEventRefresh);
 	useServerEvent("compaction-changed", scheduleEventRefresh);
+	useServerEvent("needs-you-changed", scheduleEventRefresh);
 	useServerResync(() => void refreshRef.current());
 	useEffect(
 		() => () => {
@@ -689,6 +701,9 @@ function SessionsSidebar() {
 					</Link>
 				</div>
 
+				{/* Headless: raises OS/browser notifications for newly waiting cards. The rows carry the visible needs-you mark. */}
+				<NeedsYouNotifier />
+
 				<div className="mx-3 mb-2 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
 					<Hint label="Search sessions" action="sessions-search" side="bottom">
@@ -796,6 +811,7 @@ function SessionsSidebar() {
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
 					<div className="px-3 pb-3 pt-1">
+						<NotifyToggle />
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"

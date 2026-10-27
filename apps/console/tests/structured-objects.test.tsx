@@ -7,7 +7,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { after, afterEach, describe, it } from "node:test";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
@@ -27,15 +27,22 @@ Object.assign(globalThis, {
 	getComputedStyle: () => ({ animationName: "none" }),
 });
 
+const store = new Map<string, string>();
+Object.assign(globalThis, {
+	localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k), clear: () => store.clear() },
+});
+
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
 const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
+const { ChecklistCard } = await import("../components/checklist-card.tsx");
+const { PinnedChecklist, resetDismissedCache } = await import("../components/pinned-checklist.tsx");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
-const { renderItems, threadMessagesToNative, collapseObjects } = await import("../src/core/index.ts");
+const { renderItems, threadMessagesToNative, collapseObjects, activeChecklist } = await import("../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
@@ -293,5 +300,385 @@ describe("hidden rows, empty shells, collapse", () => {
 		assert.equal(ms[0]!.parts[0], firstPart);
 		assert.equal((firstPart as { rev?: number }).rev, 3);
 		assert.deepEqual(ms[1]!.parts.map((p) => p.type), ["text"]);
+	});
+});
+
+describe("checklist card", () => {
+	const items = (a: string, b: string, c: string) => [
+		{ id: "a", label: "Write", state: a },
+		{ id: "b", label: "Test", state: b, note: "vitest" },
+		{ id: "c", label: "Ship", state: c },
+	];
+	const c1 = { title: "Plan", items: items("doing", "todo", "todo") };
+	const c2 = { title: "Plan", items: items("done", "doing", "skipped") };
+	const clCards = () => [...document.querySelectorAll('[data-testid="checklist-card"]')];
+	const states = (card: Element) => [...card.querySelectorAll('[data-testid="checklist-item"]')].map((i) => i.getAttribute("data-state"));
+
+	it("is registered under kind object", () => {
+		assert.equal(lookupCard("object", "checklist")?.Renderer, ChecklistCard);
+	});
+
+	it("renders items, state icons, derived progress; no marker at rev 1; marker on revision", () => {
+		const html1 = renderToStaticMarkup(<ChecklistCard objectId="cl" type="checklist" rev={1} data={c1} />);
+		assert.match(html1, /0\/3/);
+		assert.match(html1, /aria-valuenow="0"/);
+		assert.match(html1, /vitest/);
+		assert.doesNotMatch(html1, /updated/);
+		const html2 = renderToStaticMarkup(<ChecklistCard objectId="cl" type="checklist" rev={3} data={c2} />);
+		assert.match(html2, /1\/2 done · 1 skipped/);
+		assert.match(html2, /aria-valuetext="1 of 2 done"/);
+		assert.match(html2, /\(skipped\)/);
+		assert.match(html2, /updated 2 times/);
+		assert.equal(renderToStaticMarkup(<ChecklistCard objectId="x" type="checklist" rev={1} data={{ items: [] }} />), "");
+	});
+
+	it("fully resolved reaches 100%; all skipped says so without dividing by zero", () => {
+		const mk = (states: string[]) => ({ items: states.map((state, i) => ({ id: `i${i}`, label: "x", state })) });
+		const done = renderToStaticMarkup(<ChecklistCard objectId="c" type="checklist" rev={1} data={mk(["done", "done", "skipped"])} />);
+		assert.match(done, /2\/2 done · 1 skipped/);
+		assert.match(done, /width:100%/);
+		const none = renderToStaticMarkup(<ChecklistCard objectId="c" type="checklist" rev={1} data={mk(["skipped", "skipped"])} />);
+		assert.match(none, /all skipped/);
+		assert.doesNotMatch(none, /NaN|Infinity/);
+	});
+
+	const upsert = (rev: number, data: unknown, id = "cl") => ev({ type: "object-upsert", objectId: id, objectType: "checklist", rev, data, textOffset: 0 });
+
+	it("live revision ticks the same card in place (one card, rev 2, hidden tool rows)", async () => {
+		const model = liveModel([ev({ type: "turn-start" }), ev({ type: "tool-start", callId: "k1", name: "show_checklist", args: { objectId: "cl", ...c1 } }), upsert(1, c1), ev({ type: "tool-end", callId: "k1", result: "ok", isError: false }), ev({ type: "tool-start", callId: "k2", name: "show_checklist", args: { objectId: "cl", ...c2 } }), upsert(2, c2), ev({ type: "tool-end", callId: "k2", result: "ok", isError: false }), ev({ type: "turn-end", reason: "complete" })]);
+		const ms = view(model);
+		assert.deepEqual(objectParts(ms).map((p) => [p.objectId, p.rev]), [["cl", 2]]);
+		assert.ok(!kinds(ms).includes("tool"));
+	});
+
+	it("reload: history object renders the latest rev with progress and marker", async () => {
+		const h: ThreadMessage[] = [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects: [{ objectId: "cl", type: "checklist", rev: 2, data: c2, textOffset: 0 }] }];
+		await mount(threadMessagesToNative(h));
+		assert.equal(clCards().length, 1);
+		assert.deepEqual(states(clCards()[0]!), ["done", "doing", "skipped"]);
+		assert.match(clCards()[0]!.textContent ?? "", /1\/2 done · 1 skipped/);
+		assert.match(clCards()[0]!.querySelector('[data-testid="object-updated"]')?.textContent ?? "", /updated 1 time/);
+	});
+
+	it("invalid checklist data (duplicate ids) yields no object", () => {
+		const dup = { items: [{ id: "a", label: "A", state: "todo" }, { id: "a", label: "B", state: "done" }] };
+		assert.equal(objectParts(view(liveModel([ev({ type: "turn-start" }), upsert(1, dup), ev({ type: "turn-end", reason: "complete" })]))).length, 0);
+	});
+});
+
+describe("pinned checklist card", () => {
+	const mk = (title: string | undefined, states: string[]) => ({ ...(title ? { title } : {}), items: states.map((state, i) => ({ id: `i${i}`, label: `Step ${i}`, state })) });
+	/** A history object; `seq` is the server's thread-wide ordinal of its latest upsert. */
+	const obj = (objectId: string, rev: number, data: unknown, seq?: number, textOffset = 0) => ({ objectId, type: "checklist", rev, data, textOffset, ...(seq ? { seq } : {}) });
+	const hist = (...objects: ReturnType<typeof obj>[]): ThreadMessage[] => [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects }];
+	const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
+	const status = () => q('[data-testid="pinned-checklist"]');
+	const summary = () => q('[data-testid="pinned-checklist-summary"]')?.textContent?.replace(/\s+/g, " ").trim();
+	const button = () => q('[data-testid="pinned-checklist-button"]')!;
+	const panel = () => q('[data-testid="pinned-checklist-panel"]');
+	const loader = () => q('[data-testid="pinned-checklist-loader"]')!;
+	const doingText = () => q('[data-testid="pinned-checklist-doing"]')?.textContent ?? "";
+	const panelStates = () => [...panel()!.querySelectorAll('[data-testid="checklist-item"]')].map((i) => i.getAttribute("data-state"));
+	const fire = (el: Element, type: string, init: Record<string, unknown> = {}) => act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), init)));
+	const click = () => fire(button(), "click");
+	const pressEsc = (el: Element) => fire(el, "keydown", { key: "Escape" });
+	const tree = (threadId: string, messages: unknown[], inFlight = false) => (
+		<AppRouterContext.Provider value={{ push() {} } as never}>
+			<SettingsDialogProvider>
+				<MemoryEventsProvider connect={inertSource}>
+					<ThreadChat wolf="w" slug="s" threadId={threadId} title="T" initialMessages={messages as never} initiallyInFlight={inFlight} />
+				</MemoryEventsProvider>
+			</SettingsDialogProvider>
+		</AppRouterContext.Provider>
+	);
+	let seq = 0;
+	/** Mount a fresh thread (own id: expanded state is kept per thread). */
+	async function mountThread(messages: ThreadMessage[]) {
+		const threadId = `pin-${++seq}`;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(tree(threadId, threadMessagesToNative(messages))));
+	}
+	const sseFrame = (e: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`);
+	const upsertEv = (id: string, rev: number, data: unknown) => ev({ type: "object-upsert", objectId: id, objectType: "checklist", rev, data, textOffset: 0 });
+
+	it("no checklist → no status and no reserved top space", async () => {
+		await mountThread(history);
+		assert.equal(status(), null);
+		assert.equal(q(".pt-24"), null);
+	});
+
+	it("history seed (reload): collapsed by default with 'Title · done/total', a loader at done/total and the doing subtitle", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Card testing", ["done", "doing", "todo"]))));
+		assert.equal(summary(), "Card testing · 1/3");
+		assert.equal(button().getAttribute("aria-expanded"), "false");
+		assert.equal(button().getAttribute("aria-controls"), null);
+		assert.equal(panel(), null);
+		assert.ok(q(".pt-24"), "top space reserved");
+		// The loader is not inside the button (children of a button are presentational).
+		assert.ok(!button().contains(loader()));
+		assert.equal(loader().getAttribute("role"), "progressbar");
+		assert.equal(loader().getAttribute("aria-valuenow"), "1");
+		assert.equal(loader().getAttribute("aria-valuemax"), "3");
+		assert.equal(loader().getAttribute("aria-valuetext"), "1 of 3 done");
+		assert.equal(loader().getAttribute("data-active"), "true");
+		assert.match(loader().innerHTML, /width:\s*33\.3/);
+		assert.match(doingText(), /Step 1/);
+	});
+
+	it("untitled is 'Checklist'; a finished list stays pinned with ✓ and no pulse; all skipped has no degenerate bar", async () => {
+		await mountThread(hist(obj("cl", 2, mk(undefined, ["done", "done", "skipped"]))));
+		assert.equal(summary(), "✓ Checklist · 2/2");
+		assert.equal(loader().getAttribute("data-active"), null);
+		assert.match(loader().innerHTML, /width:\s*100%/);
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		await mountThread(hist(obj("cl", 2, mk("Plan", ["skipped", "skipped"]))));
+		assert.equal(summary(), "Plan · all skipped");
+		assert.equal(q('[data-testid="pinned-checklist-loader"]'), null, "nothing done: no bar");
+	});
+
+	it("nothing done yet: no empty bar (no gap); the doing subtitle stays, and the bar appears with the first done", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["doing", "todo"]))));
+		assert.equal(summary(), "Plan · 0/2");
+		assert.equal(q('[data-testid="pinned-checklist-loader"]'), null);
+		assert.match(doingText(), /Step 0/);
+		assert.match(button().className, /pb-2/, "the button carries the bottom padding the bar's wrapper would have");
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		await mountThread(hist(obj("cl", 2, mk("Plan", ["done", "doing"]))));
+		assert.ok(loader());
+		assert.doesNotMatch(button().className, /pb-2/);
+	});
+
+	it("click expands in place, click again collapses; aria wired", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["doing", "todo"]))));
+		await click();
+		assert.ok(panel());
+		assert.equal(button().getAttribute("aria-expanded"), "true");
+		assert.equal(button().getAttribute("aria-controls"), panel()!.id);
+		assert.ok(status()!.contains(panel()), "same card, no separate popover");
+		await click();
+		assert.equal(panel(), null);
+	});
+
+	it("Esc inside the expanded card collapses it", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["doing", "todo"]))));
+		await click();
+		await pressEsc(button());
+		assert.equal(panel(), null);
+		assert.equal(button().getAttribute("aria-expanded"), "false");
+	});
+
+	it("Esc in the composer does not collapse the card; Esc with a popover open leaves the card alone", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["doing", "todo"]))));
+		await click();
+		// (linkedom cannot dispatch React events on the textarea itself; its wrapper is outside the card all the same)
+		await pressEsc(q("textarea")!.parentElement!);
+		assert.ok(panel(), "composer Esc is not the card's");
+		const menu = document.createElement("div");
+		menu.setAttribute("role", "menu");
+		document.body.appendChild(menu);
+		await pressEsc(button());
+		assert.ok(panel(), "a surfaced menu outranks the card");
+		menu.remove();
+		await pressEsc(button());
+		assert.equal(panel(), null);
+	});
+
+	it("a live object-upsert streamed into a mounted ThreadChat shows, then a revision updates it collapsed and expanded", async () => {
+		let push!: (e: unknown) => void;
+		let end!: () => void;
+		const body = new ReadableStream<Uint8Array>({
+			start(c) {
+				push = (e) => c.enqueue(sseFrame(e));
+				end = () => c.close();
+			},
+		});
+		globalThis.fetch = (async (input: RequestInfo | URL) => (String(input).endsWith("/stream") ? new Response(body, { status: 200 }) : new Response("{}", { status: 404 }))) as typeof fetch;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(tree(`pin-${++seq}`, threadMessagesToNative(history), true)));
+		const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+		assert.equal(status(), null);
+		push(ev({ type: "turn-start" }));
+		push(upsertEv("cl", 1, mk("Live", ["doing", "todo", "todo"])));
+		await settle();
+		assert.equal(summary(), "Live · 0/3");
+		push(upsertEv("cl", 2, mk("Live", ["done", "doing", "todo"])));
+		await settle();
+		assert.equal(summary(), "Live · 1/3");
+		assert.match(doingText(), /Step 1/);
+		await click();
+		assert.deepEqual(panelStates(), ["done", "doing", "todo"]);
+		push(upsertEv("cl", 3, mk("Live", ["done", "done", "done"])));
+		await settle();
+		assert.deepEqual(panelStates(), ["done", "done", "done"]);
+		assert.equal(summary(), "✓ Live · 3/3");
+		end();
+		await settle();
+		globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
+	});
+
+	it("expanded state persists per thread for the session; default collapsed", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["todo"]))));
+		await click();
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(tree(`pin-${seq}`, threadMessagesToNative(hist(obj("cl", 1, mk("Plan", ["todo"])))))));
+		assert.ok(panel(), "same thread id → still expanded");
+		await click();
+	});
+
+	it("two checklists → the most recently revised wins; live and reload agree across messages", async () => {
+		// A is created first and revised after B: the server stamps A's latest upsert last (seq 3) although B sits later in the thread.
+		const a = { id: "m1", role: "assistant", text: "", at: base.at, objects: [obj("a", 2, mk("First", ["done", "todo"]), 3)] } as ThreadMessage;
+		const b = { id: "m2", role: "assistant", text: "", at: base.at, objects: [obj("b", 1, mk("Second", ["todo"]), 2)] } as ThreadMessage;
+		await mountThread([history[0]!, a, b]);
+		assert.equal(summary(), "First · 1/2");
+		const live = liveModel([
+			ev({ type: "turn-start" }),
+			upsertEv("a", 1, mk("First", ["todo", "todo"])),
+			upsertEv("b", 1, mk("Second", ["todo"])),
+			upsertEv("a", 2, mk("First", ["done", "todo"])),
+		]);
+		assert.equal(activeChecklist(view(live))?.objectId, "a");
+		assert.equal(activeChecklist(view(seeded([history[0]!, a, b])))?.objectId, "a");
+		// Without a server seq (older harness) reload falls back to position order.
+		const noSeq = (m: ThreadMessage) => ({ ...m, objects: m.objects!.map(({ seq: _s, ...o }) => o) }) as ThreadMessage;
+		assert.equal(activeChecklist(view(seeded([history[0]!, noSeq(a), noSeq(b)])))?.objectId, "b");
+	});
+
+	beforeEach(() => {
+		store.clear();
+		resetDismissedCache();
+	});
+	const closeBtn = () => q('[aria-label="Dismiss checklist"]');
+	const remount = async (threadId: string, messages: ThreadMessage[]) => {
+		if (root) await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(tree(threadId, threadMessagesToNative(messages))));
+	};
+
+	it("same-objectId revision updates in place (one card); stays visible at 100%; a new objectId replaces it", async () => {
+		const threadId = `pin-${++seq}`;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const active = (messages: ThreadMessage[]) => activeChecklist(view(seeded(messages)));
+		const render = (messages: ThreadMessage[]) => act(async () => root!.render(<PinnedChecklist active={active(messages)} threadId={threadId} />));
+		await render(hist(obj("cl", 1, mk("Plan", ["done", "todo"]), 1)));
+		assert.equal(summary(), "Plan · 1/2");
+		await render(hist(obj("cl", 2, mk("Plan", ["done", "done"]), 2)));
+		assert.equal(document.querySelectorAll('[data-testid="pinned-checklist"]').length, 1);
+		assert.equal(summary(), "✓ Plan · 2/2", "finished stays pinned");
+		await render(hist(obj("cl", 2, mk("Plan", ["done", "done"]), 2), obj("other", 1, mk("Next", ["todo"]), 3)));
+		assert.equal(summary(), "Next · 0/1");
+		assert.equal(status()!.getAttribute("data-object-id"), "other");
+		await render(hist(obj("cl", 2, mk("Plan", ["done", "done"]), 2), obj("other", 2, mk("Next", ["done"]), 4)));
+		assert.equal(summary(), "✓ Next · 1/1");
+		assert.equal(document.querySelectorAll('[data-testid="pinned-checklist"]').length, 1);
+	});
+
+	it("14/14 and all-skipped stay pinned", async () => {
+		await mountThread(hist(obj("cl", 1, mk("Big", Array(14).fill("done")))));
+		assert.equal(summary(), "✓ Big · 14/14");
+		await act(async () => root!.unmount());
+		document.body.innerHTML = "";
+		await mountThread(hist(obj("cl", 1, mk("Skip", ["skipped", "skipped"]))));
+		assert.equal(summary(), "Skip · all skipped");
+	});
+
+	it("user dismissal hides it (and its reserved space), survives remount via localStorage, same-objectId revisions stay hidden, a new objectId re-pins", async () => {
+		store.clear();
+		const threadId = `pin-${++seq}`;
+		const h1 = hist(obj("cl", 1, mk("Plan", ["todo"]), 1));
+		await remount(threadId, h1);
+		assert.equal(summary(), "Plan · 0/1");
+		assert.ok(q(".pt-24"), "space reserved before dismissal");
+		await fire(closeBtn()!, "click");
+		assert.equal(status(), null);
+		assert.equal(q(".pt-24"), null);
+		await remount(threadId, h1);
+		assert.equal(status(), null, "survives reload");
+		await remount(threadId, hist(obj("cl", 2, mk("Plan", ["done"]), 2)));
+		assert.equal(status(), null, "same objectId revision stays dismissed");
+		await remount(threadId, hist(obj("cl", 2, mk("Plan", ["done"]), 2), obj("new", 1, mk("Next", ["todo"]), 3)));
+		assert.equal(summary(), "Next · 0/1", "different objectId re-pins");
+		await remount(`pin-${++seq}`, h1);
+		assert.equal(summary(), "Plan · 0/1", "dismissal is per thread");
+	});
+
+	it("the close button is separate from the toggle and does not expand", async () => {
+		store.clear();
+		await mountThread(hist(obj("cl", 1, mk("Plan", ["todo"]))));
+		assert.equal(closeBtn()!.tagName, "BUTTON");
+		assert.ok(!button().contains(closeBtn()));
+		assert.equal(button().getAttribute("aria-expanded"), "false");
+		await fire(closeBtn()!, "click");
+		assert.equal(panel(), null);
+		assert.equal(status(), null);
+	});
+
+	it("revising the old objectId after a newer one replaced it re-pins the old one", async () => {
+		const active = (messages: ThreadMessage[]) => activeChecklist(view(seeded(messages)));
+		const threadId = `pin-${++seq}`;
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		const render = (messages: ThreadMessage[]) => act(async () => root!.render(<PinnedChecklist active={active(messages)} threadId={threadId} />));
+		await render(hist(obj("old", 1, mk("Old", ["todo"]), 1), obj("new", 1, mk("New", ["todo"]), 2)));
+		assert.equal(status()!.getAttribute("data-object-id"), "new");
+		await render(hist(obj("old", 2, mk("Old", ["done"]), 3), obj("new", 1, mk("New", ["todo"]), 2)));
+		assert.equal(status()!.getAttribute("data-object-id"), "old");
+	});
+
+	it("localStorage throwing → memory fallback; corrupt JSON → none dismissed", async () => {
+		const real = globalThis.localStorage;
+		const h = hist(obj("cl", 1, mk("Plan", ["todo"]), 1));
+		try {
+			Object.assign(globalThis, { localStorage: { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("quota"); } } });
+			const threadId = `pin-${++seq}`;
+			await remount(threadId, h);
+			await fire(closeBtn()!, "click");
+			assert.equal(status(), null);
+			await remount(threadId, h);
+			assert.equal(status(), null, "memory fallback keeps it dismissed");
+		} finally {
+			Object.assign(globalThis, { localStorage: real });
+		}
+		resetDismissedCache();
+		store.set("wp.pinned-checklist.dismissed.v1", "{not json");
+		await remount(`pin-${++seq}`, h);
+		assert.equal(summary(), "Plan · 0/1");
+	});
+
+	it("the stored list is capped at the newest 200", async () => {
+		const key = "wp.pinned-checklist.dismissed.v1";
+		store.set(key, JSON.stringify(Array.from({ length: 200 }, (_, i) => `old-${i}`)));
+		await remount(`pin-${++seq}`, hist(obj("cl", 1, mk("Plan", ["todo"]), 1)));
+		await fire(closeBtn()!, "click");
+		const list = JSON.parse(store.get(key)!) as string[];
+		assert.equal(list.length, 200);
+		assert.equal(list[0], "old-1");
+		assert.match(list[199]!, /"cl"/);
+	});
+
+	it("a storage event from another tab hides the card", async () => {
+		const threadId = `pin-${++seq}`;
+		const h = hist(obj("cl", 1, mk("Plan", ["todo"]), 1));
+		await remount(threadId, h);
+		assert.ok(status());
+		store.set("wp.pinned-checklist.dismissed.v1", JSON.stringify([JSON.stringify([threadId, "cl"])]));
+		await fire(dom.window as never, "storage", { key: "wp.pinned-checklist.dismissed.v1" });
+		assert.equal(status(), null);
 	});
 });

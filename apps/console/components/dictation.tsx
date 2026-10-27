@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { Hint } from "@/components/ui/hint";
+import { cn } from "@/lib/utils";
 
 /**
  * Voice dictation — the cloud engine (STT wave 1, 2026-09-17).
@@ -202,7 +203,79 @@ export function rmsToMeter(rms: number): number {
  * sibling subtree far from the hook's owner, and there is exactly one
  * window, one pending question, one target at a time.
  */
-let questionTarget: ((text: string) => void) | null = null;
+type Claim = { append: (text: string) => void; key?: string; transient: boolean };
+/** Claim STACK, top wins. Persistent claims (the question dock, a focused card field) sit underneath; an inline mic on a
+ *  standalone field pushes a TRANSIENT claim on top, dropped when the run ends (see releaseTransientClaims, called from
+ *  the hook's cleanup — every end path, including a failed start). So after a standalone run, a still-mounted card
+ *  claim is automatically back on top ("re-assert"), and with none, ⌘D goes to the page composer. */
+const claims: Claim[] = [];
+const topClaim = (): Claim | undefined => claims[claims.length - 1];
+
+/* Observable UI state for the inline mics (a few fields far from the hook's owner): the run's phase + error, the
+ * top claim's key, the key of the last claimant (where an error is announced), and whether any hook is mounted. Hooks
+ * register in `hookStates`; the LAST-mounted one is the guard-holder whose phase/error is mirrored (two hooks overlap
+ * briefly across a route transition — the old one's unmount must not clobber the new one). */
+type DictationUi = { phase: DictationPhase; error: string | null; targetKey: string | null; lastKey: string | null; available: boolean };
+let ui: DictationUi = { phase: "idle", error: null, targetKey: null, lastKey: null, available: false };
+let lastKey: string | null = null;
+const hookStates = new Map<symbol, { phase: DictationPhase; error: string | null; clear: () => void }>();
+const uiListeners = new Set<() => void>();
+function publishUi() {
+	const holder = [...hookStates.values()].pop();
+	const next: DictationUi = {
+		phase: holder?.phase ?? "idle",
+		error: holder?.error ?? null,
+		targetKey: topClaim()?.key ?? null,
+		lastKey,
+		available: hookStates.size > 0,
+	};
+	if (next.phase === ui.phase && next.error === ui.error && next.targetKey === ui.targetKey && next.lastKey === ui.lastKey && next.available === ui.available) return;
+	ui = next; // stored synchronously so getSnapshot is always current; only the NOTIFICATION is deferred
+	scheduleUiNotify();
+}
+/* Listeners are useSyncExternalStore handlers of InlineMic fibers. publishUi runs from effects in the same commit that
+ * places/removes those fibers (route transitions), and a synchronous forced rerender can hit a fiber that hasn't
+ * mounted yet ("Can't perform a React state update on a component that hasn't mounted yet"). Defer + coalesce. */
+let uiNotifyPending = false;
+function scheduleUiNotify() {
+	if (uiNotifyPending) return;
+	uiNotifyPending = true;
+	queueMicrotask(() => {
+		uiNotifyPending = false;
+		for (const l of [...uiListeners]) l();
+	});
+}
+const subscribeUi = (l: () => void) => {
+	uiListeners.add(l);
+	return () => void uiListeners.delete(l);
+};
+export function useDictationUi(): DictationUi {
+	return useSyncExternalStore(subscribeUi, () => ui, () => ui);
+}
+
+/** Claim the target imperatively; returns the release (identity-guarded). */
+export function claimDictationTarget(append: (text: string) => void, key?: string, opts: { transient?: boolean } = {}): () => void {
+	const claim: Claim = { append, key, transient: opts.transient === true };
+	// Persistent claims slot in BELOW any transient ones (an effect re-run must not jump above a standalone field's claim).
+	let at = claims.length;
+	if (!claim.transient) while (at > 0 && claims[at - 1]!.transient) at--;
+	claims.splice(at, 0, claim);
+	if (key) lastKey = key;
+	publishUi();
+	return () => {
+		const i = claims.indexOf(claim);
+		if (i >= 0) {
+			claims.splice(i, 1);
+			if (key && lastKey === key && !claims.some((c) => c.key === key)) lastKey = null;
+			publishUi();
+		}
+	};
+}
+
+function releaseTransientClaims() {
+	for (let i = claims.length - 1; i >= 0; i--) if (claims[i]!.transient) claims.splice(i, 1);
+	publishUi();
+}
 
 /* Is a dictation run live on this page? The Esc chain (keyboard wave A,
  * components/keyboard-shortcuts.tsx) needs a SYNCHRONOUS answer — the
@@ -235,14 +308,11 @@ export function joinDictation(current: string, final: string): string {
  * unmount guard is identity-based so dev-mode double-invoked effects
  * can't clear another claimant.
  */
-export function useDictationTarget(append: (text: string) => void, claimed: boolean) {
+export function useDictationTarget(append: (text: string) => void, claimed: boolean, key?: string) {
 	useEffect(() => {
 		if (!claimed) return;
-		questionTarget = append;
-		return () => {
-			if (questionTarget === append) questionTarget = null;
-		};
-	}, [append, claimed]);
+		return claimDictationTarget(append, key);
+	}, [append, claimed, key]);
 }
 
 export type DictationPhase = "idle" | "connecting" | "recording" | "stopping";
@@ -323,7 +393,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 		if (bufferRef.current.length === 0) return;
 		const text = bufferRef.current.join(" ");
 		bufferRef.current = [];
-		(questionTarget ?? appendRef.current)(text);
+		(topClaim()?.append ?? appendRef.current)(text);
 	}, []);
 
 	/** Full teardown of one run's machinery. Idempotent; generation-guarded by callers. */
@@ -351,6 +421,7 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			} catch {}
 		}
 		setPhase("idle");
+		releaseTransientClaims(); // after the flush: a standalone field's claim lasts one run
 		// The finish() waiters ride until NOW — post-flush, post-teardown:
 		// a submit path resuming after `await finishDictation()` reads the
 		// target field with the dictated tail already in it.
@@ -573,6 +644,25 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
 			if (dictationFinisher === finish) dictationFinisher = null;
 		};
 	}, [finish]);
+	// Mirror the run state for the inline mics (see hookStates).
+	const idRef = useRef<symbol>(Symbol("dictation"));
+	useEffect(() => {
+		const id = idRef.current;
+		hookStates.set(id, { phase: "idle", error: null, clear: () => setError(null) });
+		publishUi();
+		return () => {
+			hookStates.delete(id);
+			if (hookStates.size === 0) releaseTransientClaims();
+			publishUi();
+		};
+	}, []);
+	useEffect(() => {
+		const st = hookStates.get(idRef.current);
+		if (!st) return;
+		st.phase = phase;
+		st.error = error;
+		publishUi();
+	}, [phase, error]);
 
 	const toggle = useCallback(() => {
 		if (phase === "idle") void start();
@@ -744,4 +834,93 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 			</div>
 		</div>
 	);
+}
+
+/**
+ * The inline mic of a prose field: a small icon button at the field's trailing edge. Click claims the dictation target
+ * for this field (`onClaim`, which must make `targetKey` the claimed key) and starts the run; click while this field is
+ * listening finishes it (the transcript lands once, as with ⌘D); click while another field listens retargets the run
+ * here ("Dictate here"). Esc cancels (the existing chain). A missing Deepgram key sends the click to Settings → Keys, as
+ * the bar does; other errors are announced (aria-live) on the field that was last claimed.
+ *
+ * Scope rules: the mic HIDES when no dictation hook is mounted on the page (nothing could start it). It is NOT added to
+ * the legacy question dock's fields — those are the mount-claimed primary target, covered by the page's DictationBar.
+ */
+export function InlineMic({ targetKey: key, onClaim, className }: { targetKey: string; onClaim: () => void; className?: string }) {
+	const state = useDictationUi();
+	const { open: openSettings } = useSettingsDialog();
+	const errId = `${useId()}-mic-error`;
+	if (!state.available) return null;
+	const mine = state.targetKey === key;
+	const running = state.phase !== "idle";
+	const listening = mine && running;
+	const stopping = listening && state.phase === "stopping";
+	const keyless = state.error === DICTATION_KEYLESS;
+	const showError = state.error !== null && state.lastKey === key && !running;
+	const label = listening ? "Stop dictating" : running ? "Dictate here" : "Dictate";
+	// While ANY run is stopping, no mic may claim or retarget: the previous field's tail is still flushing.
+	const anyStopping = state.phase === "stopping";
+	const onClick = () => {
+		if (anyStopping) return;
+		if (keyless) {
+			hookStatesHolder()?.clear();
+			openSettings("keys", DEEPGRAM_KEY_ID);
+			return;
+		}
+		if (listening) {
+			window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+			return;
+		}
+		onClaim();
+		if (!running) window.dispatchEvent(new CustomEvent("lh:kbd-toggle-dictation"));
+	};
+	return (
+		<>
+			<Hint label={listening ? "Stop dictating" : label === "Dictate" && state.error ? state.error : label} action={state.error ? undefined : "toggle-dictation"} side="top">
+				<button
+					type="button"
+					onClick={onClick}
+					aria-disabled={anyStopping || undefined}
+					aria-label={label}
+					aria-pressed={listening}
+					aria-describedby={showError ? errId : undefined}
+					data-testid="inline-mic"
+					data-listening={listening || undefined}
+					className={cn(
+						"flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground",
+						listening && "bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive",
+						anyStopping && "cursor-default",
+						className,
+					)}
+				>
+					{stopping ? <Loader2Icon className="size-3.5 animate-spin" /> : <MicIcon className={cn("size-3.5", listening && "animate-pulse")} />}
+				</button>
+			</Hint>
+			<span id={errId} role="status" aria-live="polite" className="sr-only">
+				{showError ? state.error : ""}
+			</span>
+		</>
+	);
+}
+
+const hookStatesHolder = () => [...hookStates.values()].pop();
+
+/**
+ * Dictation for a standalone prose field: returns the props for <InlineMic>. The claim is TRANSIENT — taken on click,
+ * dropped when the run ends (success, cancel or failed start; the store's cleanup does it) or the field unmounts, so
+ * ⌘D afterwards goes back to the page composer (or a still-mounted focused card field). `append` may close over
+ * changing state; it is read through a ref.
+ */
+export function useFieldMic(key: string, append: (text: string) => void) {
+	const appendRef = useRef(append);
+	appendRef.current = append;
+	const releaseRef = useRef<(() => void) | null>(null);
+	useEffect(() => () => releaseRef.current?.(), []);
+	return {
+		targetKey: key,
+		onClaim: () => {
+			releaseRef.current?.();
+			releaseRef.current = claimDictationTarget((t) => appendRef.current(t), key, { transient: true });
+		},
+	};
 }

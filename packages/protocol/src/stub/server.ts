@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION_HEADER,
   SSE_DONE,
   SubmitBodySchema,
+  AnswerCardBodySchema,
   CreateThreadBodySchema,
   matchRoute,
 } from "../routes.js";
@@ -104,8 +105,8 @@ export class StubServer {
   private readonly delayMs: number;
   private readonly http: Server;
   private counter = 0;
-  /** `<threadId>\n<attachmentId>` of every upload (bytes are not kept). */
-  private readonly uploads = new Set<string>();
+  /** `<threadId>\n<attachmentId>` -> the upload (kept in memory so `getAttachment` can serve it). */
+  private readonly uploads = new Map<string, { att: Attachment; bytes: Uint8Array }>();
   private baseUrl = "";
 
   constructor(private readonly opts: StubOptions = {}) {
@@ -185,7 +186,8 @@ export class StubServer {
         const refs = body.data.attachments ?? [];
         if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
         for (const r of refs) if (!this.uploads.has(`${t.summary.id}\n${r.id}`)) throw new HttpError("invalid_request", `unknown attachment ${r.id}`);
-        return this.json(res, 200, this.submit(t, body.data.input, body.data.whenBusy));
+        const atts = refs.map((r) => this.uploads.get(`${t.summary.id}\n${r.id}`)!.att);
+        return this.json(res, 200, this.submit(t, body.data.input, body.data.whenBusy, atts));
       }
       case "uploadAttachment": {
         const t = this.thread(params.id);
@@ -205,9 +207,29 @@ export class StubServer {
           /* keep the generated name */
         }
         const att: Attachment = { id, name, mimeType: mime, size: bytes.length };
-        this.uploads.add(`${t.summary.id}\n${id}`);
+        this.uploads.set(`${t.summary.id}\n${id}`, { att, bytes });
         return this.json(res, 201, att);
       }
+      case "getAttachment": {
+        const t = this.thread(params.id);
+        const up = this.uploads.get(`${t.summary.id}\n${params.attachmentId}`);
+        if (!up) throw new HttpError("not_found", `unknown attachment ${params.attachmentId}`);
+        res.writeHead(200, { "Content-Type": up.att.mimeType, "Content-Length": up.bytes.length, "X-Content-Type-Options": "nosniff" });
+        res.end(up.bytes);
+        return;
+      }
+      case "listCards":
+        this.wolf(params.name);
+        return this.json(res, 200, { cards: [] });
+      case "answerCard": {
+        this.thread(params.id);
+        if (!AnswerCardBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {answers}");
+        // The stub's scripted turns raise no cards: every card id is unknown.
+        throw new HttpError("not_found", `card ${params.callId}`);
+      }
+      case "skipCard":
+        this.thread(params.id);
+        throw new HttpError("not_found", `card ${params.callId}`);
       case "abort": {
         const t = this.thread(params.id);
         t.followUps = [];
@@ -283,14 +305,14 @@ export class StubServer {
     return { ...t.summary, messages: t.messages.map((m) => ({ ...m })), busy: t.running !== null, lastEventId: t.seq };
   }
 
-  private submit(t: ThreadState, input: string, whenBusy: "steer" | "followUp" | "reject"): SubmitAck {
+  private submit(t: ThreadState, input: string, whenBusy: "steer" | "followUp" | "reject", atts: Attachment[] = []): SubmitAck {
     if (!t.running) {
-      const messageId = this.addUserMessage(t, input);
+      const messageId = this.addUserMessage(t, input, atts);
       this.startTurn(t);
       return { messageId, disposition: "started" };
     }
     if (whenBusy === "reject") throw new HttpError("busy", `thread ${t.summary.id} is busy`);
-    const messageId = this.addUserMessage(t, input);
+    const messageId = this.addUserMessage(t, input, atts);
     if (whenBusy === "followUp") {
       t.followUps.push(input);
       return { messageId, disposition: "queued" };
@@ -298,9 +320,9 @@ export class StubServer {
     return { messageId, disposition: "steered" };
   }
 
-  private addUserMessage(t: ThreadState, text: string): string {
+  private addUserMessage(t: ThreadState, text: string, atts: Attachment[] = []): string {
     const id = `msg-${++this.counter}`;
-    t.messages.push({ id, role: "user", text, at: new Date().toISOString() });
+    t.messages.push({ id, role: "user", text, at: new Date().toISOString(), ...(atts.length ? { attachments: atts } : {}) });
     return id;
   }
 

@@ -153,3 +153,17 @@ export function useServerResync(cb: () => void): void {
 		};
 	}, [hub]);
 }
+
+/** Like {@link useServerEvent}, but a no-op without a provider (components that also render standalone, e.g. in tests). */
+export function useOptionalServerEvent<K extends ServerEventType>(type: K, cb: (payload: ServerEvents[K]) => void): void {
+	const hub = useContext(EventsContext);
+	const cbRef = useRef(cb);
+	cbRef.current = cb;
+	useEffect(() => {
+		if (!hub) return;
+		const off = hub.subscribe(type, (payload) => cbRef.current(payload));
+		return () => {
+			off();
+		};
+	}, [hub, type]);
+}

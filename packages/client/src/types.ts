@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -34,6 +34,8 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
+export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
+export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
 export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 
@@ -77,6 +79,18 @@ export interface ConsoleClient {
   submit(threadId: string, input: string, opts?: SubmitOptions): Promise<SubmitAck>;
   /** Stores one file on the thread's wolf and returns its reference for `submit`. Rejects with ProtocolError `invalid_request` for a type or size the wolf refuses. */
   uploadAttachment(threadId: string, data: Uint8Array | Blob, opts: UploadOptions): Promise<Attachment>;
+  /** Fetches an uploaded attachment's bytes and stored mime type. Rejects with NotFoundError for an id the thread does not have. */
+  getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
+  /**
+   * Answer a pending card (`callId` = the tool call that raised it, see `PendingCard`). Resolves that call with the
+   * answer and starts the next turn; the ack is that turn's, or disposition `queued` while sibling cards still wait.
+   * Rejects NotFoundError for an unknown / already-answered card, BusyError while a turn runs. Optional: the mock has no cards.
+   */
+  answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
+  /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
+  skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
+  /** Cards waiting for the operator on this wolf (the needs-you list). Optional like answerCard. */
+  listCards?(wolf: string): Promise<PendingCard[]>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */
   abort(threadId: string): Promise<void>;
   /** Replays from `from`, then continues live until turn-end (inclusive). */
@@ -86,6 +100,11 @@ export interface ConsoleClient {
    * `signal`. Optional: not every client (e.g. the mock) has a wolf stream.
    */
   watchMemory?(wolf: string, opts?: { signal?: AbortSignal }): AsyncIterable<MemoryEvent>;
+  /**
+   * Live status/card changes of a wolf (thread-status, card-pending, card-settled; `resync` = refetch). Starts with a
+   * baseline of the current state, resumes across reconnects. Never ends on its own: stop with `signal`. Optional like watchMemory.
+   */
+  watchActivity?(wolf: string, opts?: { from?: string; signal?: AbortSignal; idleMs?: number }): AsyncIterable<WolfEvent>;
   /**
    * Fold the wolf's observation pool into session topics; resolves with counts and topic ids. Rejects with a
    * ProtocolError `memory_unavailable` when the wolf's memory is inert or not loaded. Optional like watchMemory.

@@ -24,12 +24,13 @@
  *     would shadow every settings-page key change until restart.
  */
 
-const { app, BrowserWindow, Menu, ipcMain, session, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Notification, ipcMain, session, shell, dialog } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { createNeedsYouNotifier } = require("./notify.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -531,6 +532,9 @@ async function main() {
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
 	ipcMain.on("lh:update-install", () => installUpdateNow());
+	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
+	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin, log });
+	ipcMain.on("lh:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
 
 	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes
 	// the sidebar below SIDEBAR_AUTOCLOSE (928px); opening it again at that

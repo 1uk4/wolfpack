@@ -11,8 +11,10 @@ import {
   GenerationTask,
   CompactionTask,
   type Extension as PiDurableExtension,
+  type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
+import { cardResult } from "../engine/cards.js";
 import { conversationReaderFor, onEngineCloseFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
@@ -32,7 +34,7 @@ import type {
  * API ("content cannot be empty if is_error is true"), wedging the
  * conversation. An error always carries text.
  */
-export function toDurableResult(result: ToolResult): { output: ToolResult["content"]; isError?: boolean } {
+export function toDurableResult(result: ToolResult): Omit<ToolExecutionResult, "output"> & { output: ToolResult["content"] } {
   const content = (result.content ?? []).filter((c) => c.type !== "text" || c.text.trim() !== "");
   if (result.isError) {
     return {
@@ -40,12 +42,20 @@ export function toDurableResult(result: ToolResult): { output: ToolResult["conte
       isError: true,
     };
   }
+  // A card result carries the card in details (see engine/cards.ts) and always terminates the run.
+  if (result.card) {
+    const raised = cardResult(result.card, content.map((c) => c.text).join("\n") || undefined);
+    return raised;
+  }
+  if (result.endTurn) return { output: content, control: { terminate: true } };
   return { output: content };
 }
 
 interface AdapterConfig {
   wolfDen: string;
   wolfName: string;
+  /** Called with the name of every tool declaring `raisesCard` (wire to the wolf's card guard). */
+  onCardTool?: (name: string) => void;
 }
 
 /**
@@ -66,6 +76,7 @@ export function adaptToDurable(
         classify: () => reader.classify(conversationId),
         classifyOther: (id: number) => reader.classify(id),
         messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+        latestCard: (tool, matches) => reader.latestCard(conversationId, tool, matches),
         onEngineClose: (fn) => reader.onClose(fn),
         hostConsolidationTimer: reader.hostConsolidationTimer === true,
       },
@@ -73,6 +84,7 @@ export function adaptToDurable(
   };
 
   // Adapt tools
+  for (const t of ext.tools ?? []) if (t.raisesCard) config.onCardTool?.(t.name);
   const tools = (ext.tools ?? []).map((tool) =>
     piDefineTool({
       name: tool.name,

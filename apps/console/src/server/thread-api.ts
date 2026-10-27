@@ -13,7 +13,8 @@
  * the client replays events with id > from, then follows live.
  */
 
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { getConsoleClient } from "./console-client.ts";
 
@@ -25,6 +26,9 @@ export interface ThreadRef {
 }
 
 class TooLarge extends Error {}
+
+/** Attachment ids are opaque tokens (wolf UUIDs, mock `att-N`): never a path. */
+const ATTACHMENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** Read a request body, giving up (and cancelling the stream) once it passes `max` bytes. */
 async function readBounded(req: Request, max: number): Promise<Uint8Array> {
@@ -166,6 +170,58 @@ export function createThreadApi(source: ClientSource) {
 				const bytes = await readBounded(req, ATTACHMENT_MAX_BYTES);
 				const client = source();
 				return json(await client.uploadAttachment(await resolve(client, ref), bytes, { mimeType, name }), 201);
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/**
+		 * The bytes of one attachment, relayed from the thread's wolf. The id is validated (opaque ids only: no
+		 * separators or dots) before it goes anywhere, only image types are served, and the response is sniff-proof
+		 * and sandboxed so a stored file can never run as a page on the console's origin.
+		 */
+		async attachment(ref: ThreadRef, attachmentId: string): Promise<Response> {
+			try {
+				if (!ATTACHMENT_ID.test(attachmentId)) return json({ error: "unknown attachment" }, 404);
+				const client = source();
+				const { bytes, mimeType } = await client.getAttachment(await resolve(client, ref), attachmentId);
+				const mime = mimeType.split(";")[0]!.trim().toLowerCase();
+				if (!(ATTACHMENT_IMAGE_TYPES as readonly string[]).includes(mime)) return json({ error: "unknown attachment" }, 404);
+				return new Response(bytes as BodyInit, {
+					headers: {
+						"Content-Type": mime,
+						"Content-Length": String(bytes.byteLength),
+						"X-Content-Type-Options": "nosniff",
+						"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+						"Cache-Control": "private, max-age=31536000, immutable",
+					},
+				});
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Answer a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/answer`. */
+		async answerCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown } | null;
+				if (!body || typeof body.answers !== "object" || body.answers === null || Array.isArray(body.answers)) {
+					return json({ error: "answers is required" }, 400);
+				}
+				const client = source();
+				if (!client.answerCard) return json({ error: "this client has no cards" }, 501);
+				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Skip a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/skip`. */
+		async skipCard(ref: ThreadRef, callId: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.skipCard) return json({ error: "this client has no cards" }, 501);
+				return json(await client.skipCard(await resolve(client, ref), callId));
 			} catch (err) {
 				return failure(err);
 			}

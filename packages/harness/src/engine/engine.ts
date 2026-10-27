@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { cardAnswerEntry, type CardAnswerData } from "./cards.js";
 import { attachConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
 import type { EngineEvent, EngineSnapshot } from "./events.js";
@@ -65,6 +66,11 @@ export interface SubmitOptions {
   /** Plain text, or text + image parts (pi-ai content). */
   input: UserInput;
   whenBusy: WhenBusy;
+  /**
+   * The input answers pending cards: it is placed as a card-answer entry instead of a plain user message (the model
+   * still sees `input` as a user message). See cards.ts.
+   */
+  cardAnswers?: CardAnswerData;
 }
 
 export interface SubmitResult {
@@ -157,10 +163,10 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
   const wrap = (conv: Conversation): EngineConversation => ({
     id: String(conv.id),
 
-    async submit({ input, whenBusy }) {
+    async submit({ input, whenBusy, cardAnswers }) {
       let sub;
       try {
-        sub = await conv.submit({ type: "input", content: input, whenBusy }, ctx);
+        sub = await conv.submit({ type: "input", content: input, whenBusy, ...(cardAnswers ? { entry: cardAnswerEntry(cardAnswers) } : {}) }, ctx);
       } catch (err) {
         if (err instanceof ConversationBusy) throw new EngineBusyError();
         throw err;

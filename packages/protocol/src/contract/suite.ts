@@ -198,6 +198,29 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
         await waitIdle(threadId);
       });
 
+      it("serves an upload's bytes back (stored mime, nosniff) and lists it on the user message", async () => {
+        await waitIdle(threadId);
+        const att = await expectJson(await upload(threadId, "image/png", PNG, "again.png"), ROUTES.uploadAttachment.response.schema, [201]);
+        const got = await call(buildPath("getAttachment", { id: threadId, attachmentId: att.id }));
+        expect(got.status).toBe(200);
+        expect(got.headers.get("content-type")).toBe("image/png");
+        expect(got.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(new Uint8Array(await got.arrayBuffer())).toEqual(PNG);
+        await expectJson(await send([{ id: att.id }], "with pic"), ROUTES.submit.response.schema);
+        await readStream(streamPath(threadId));
+        await waitIdle(threadId);
+        const msg = (await getThread(threadId)).messages.find((m) => m.role === "user" && m.attachments?.some((a) => a.id === att.id));
+        expect(msg?.attachments?.[0]).toMatchObject({ id: att.id, mimeType: "image/png", size: PNG.length });
+      });
+
+      it("refuses an unknown, malformed or traversal attachment id, and an unknown thread, as not_found", async () => {
+        await waitIdle(threadId);
+        for (const attachmentId of ["nope", "../../etc/passwd", "..\\..\\x", "%2e%2e", "00000000-0000-0000-0000-000000000000"]) {
+          await expectError(await call(buildPath("getAttachment", { id: threadId, attachmentId })), "not_found");
+        }
+        await expectError(await call(buildPath("getAttachment", { id: "nope/nope", attachmentId: "x" })), "not_found");
+      });
+
       it("refuses non-images, a missing content type, unknown refs and too many refs", async () => {
         await waitIdle(threadId);
         await expectError(await upload(threadId, "text/plain", "hi"), "invalid_request");
@@ -399,6 +422,20 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       const w = await call(buildPath("getWorkRecord", { name: wolf, id: "work-x-1234567" }));
       expect(w.status).toBeGreaterThanOrEqual(400);
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
+    });
+
+    it("cards: unknown wolf/thread/card are not_found, a bad answer body is invalid_request, the list is valid", async () => {
+      await expectError(await call(buildPath("listCards", { name: "no-such-wolf" })), "not_found");
+      const list = await call(buildPath("listCards", { name: wolf }));
+      expect(list.status).toBe(200);
+      ROUTES.listCards.response.schema.parse(await list.json());
+      const answer = (id: string, body: unknown) => post(buildPath("answerCard", { id, callId: "call-x" }), body);
+      await expectError(await answer("nope/nope", { answers: {} }), "not_found");
+      await expectError(await answer(threadId, { nope: 1 }), "invalid_request");
+      await expectError(await answer(threadId, { answers: { a: { value: "x" } } }), "not_found");
+      const skip = (id: string) => post(buildPath("skipCard", { id, callId: "call-x" }), {});
+      await expectError(await skip("nope/nope"), "not_found");
+      await expectError(await skip(threadId), "not_found");
     });
 
     it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {

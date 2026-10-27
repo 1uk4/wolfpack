@@ -1,8 +1,12 @@
 import type { ComponentType } from "react";
+import type { CardAnswers, CardClosed, Card } from "@wolfpack/client";
 import type { ArtifactPartProps, QuestionAnswerData } from "@/src/core";
 import { AnsweredCard } from "@/components/answered-card";
+import { AskCard } from "@/components/ask-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
 import { DecisionCard } from "@/components/decision-card";
+import { ChecklistCard } from "@/components/checklist-card";
+import { PlanGraphCard } from "@/components/plan-graph-card";
 
 /**
  * Card registry — the extension point for transcript cards.
@@ -51,7 +55,43 @@ export interface ObjectCardProps {
 	data: unknown;
 }
 
-export type CardEntry = ToolCardEntry | ObjectCardEntry;
+
+/**
+ * What a wolf thread hands an interaction card (a tool-raised protocol Card, ticket "ask card"): the card, the
+ * operator's answer once given (read-only record), and the answer callback while pending.
+ */
+export interface InteractionCardProps {
+	callId: string;
+	card: Card;
+	/** Set once answered: render the record, no controls. */
+	answer?: CardAnswers;
+	/** Closed without an answer (skipped, or superseded by a plain submit): render read-only with its badge, no controls. */
+	dismissed?: boolean;
+	/** How the card closed (answered / skipped / superseded); absent while pending. A bare `dismissed` reads as superseded. */
+	closed?: CardClosed;
+	/** The wolf holds the operator's skip until the turn's sibling cards are resolved. */
+	heldSkip?: boolean;
+	/** The wolf holds this answer until the turn's sibling cards are answered; the card can still change it. */
+	heldAnswer?: CardAnswers;
+	/** The card waits for the operator (server-confirmed); false = raised but not yet confirmed pending. */
+	pending: boolean;
+	/** The answer is on its way to the server. */
+	submitting: boolean;
+	onAnswer(answers: CardAnswers): void;
+	/** Skip the card instead of answering it. */
+	onSkip?(): void;
+}
+
+/**
+ * Interaction cards raised by tools (wolf threads), keyed by the card's `tool` name; "default" renders any card
+ * whose tool has no renderer of its own.
+ */
+export interface InteractionCardEntry {
+	kind: "card";
+	Renderer: ComponentType<InteractionCardProps>;
+}
+
+export type CardEntry = ToolCardEntry | ObjectCardEntry | InteractionCardEntry;
 export type CardKind = CardEntry["kind"];
 type EntryOf<K extends CardKind> = Extract<CardEntry, { kind: K }>;
 
@@ -103,6 +143,11 @@ export function resolveToolPart(part: ArtifactPartProps["part"]): ToolPartResolu
 	return card ? { kind: "card", Renderer: card.Renderer } : { kind: "none" };
 }
 
+/** The renderer for a protocol card: its tool's own, else the default. */
+export function lookupInteractionCard(tool: string): InteractionCardEntry | undefined {
+	return lookupCard("card", tool) ?? lookupCard("card", "default");
+}
+
 /**
  * Pending/streaming questions live in the dock, not the transcript;
  * answered ones render as graded records.
@@ -116,6 +161,10 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 	registerCard("tool", name, { Renderer: QuestionCard, ownsStreaming: true });
 }
 
+// Wolf-thread interaction cards (protocol cards): the ask card renders any free-text / single card.
+registerCard("card", "ask_user_question", { Renderer: AskCard });
+registerCard("card", "default", { Renderer: AskCard });
+
 // The filesystem set: one quiet expandable tool-call card each —
 // collapsed one-liner (tool name + headline argument), full
 // input/output on expand.
@@ -126,3 +175,5 @@ for (const name of ["read", "ls", "find", "grep"]) {
 // Structured objects, keyed by object type (src/core/objects.ts folds the
 // object-upsert / history objects into one part per object).
 registerCard("object", "decision", { Renderer: DecisionCard });
+registerCard("object", "checklist", { Renderer: ChecklistCard });
+registerCard("object", "graph", { Renderer: PlanGraphCard });

@@ -23,6 +23,15 @@ nothing engine-shaped leaks here. **Zero wolfpack dependencies** (zod only).
 
 Event `id`s are per-thread monotonic positive integers minted by the *serving process* (the bridge/daemon) and carried as the SSE `id:` frame for `Last-Event-ID` resume. The underlying engine has no event ids or replay of its own; there is no engine sequence to reconcile with. A `snapshot` event (baseline `ThreadDetail`, optional in-flight partial, and `upToId` = the last event id it supersedes) lets a server reset a stale consumer at any time.
 
+## Wolf activity (needs-you stream)
+
+`GET /v1/wolves/:name/activity` (SSE) carries `WolfEvent`s: `thread-status`, `card-pending`, `card-settled`, `resync` (`parseWolfEvent`; ignore unknown types). Thread streams also carry `card-pending` / `card-settled` events so an open thread shows a card the moment it is raised.
+
+- **Ids.** The SSE `id:` is `<boot>:<seq>`: `boot` is a per-process epoch, `seq` a per-wolf monotonic integer. The JSON `id` is the `seq`. Treat the SSE id as opaque and send it back as `Last-Event-ID` (or `?from=`).
+- **Baseline.** A connection without a cursor starts with the current state: one `thread-status`, then one `card-pending` per pending card, all carrying the current cursor. `status` and the baseline agree: a thread is `busy` while a turn runs or an answer is being submitted, else `needs-you` iff cards are pending.
+- **Replay.** With a cursor of the current boot the server replays the bounded buffer (256 events) after it, gap-free. A cursor from another boot (restart), beyond the head, older than the buffer, or malformed gets `resync` followed by the baseline: refetch, do not trust earlier state.
+- The stream never ends with `[DONE]`; it stays open until the client disconnects.
+
 ## Memory events (wolf stream)
 
 `MemoryEvent` is a wolf-scoped union, separate from `ThreadEvent` (added without a version bump: new type, new route). Delivered on `GET /v1/wolves/:name/events` (SSE, `data: <MemoryEvent json>`; live only, no ids/replay; stays open until the client disconnects). Every event carries `wolf`, optional `threadId` (only the conversation backing the home thread, `<wolf>/home`), optional integer `conversationId` (the durable conversation an observation came from; absent on pool-level events), `timestamp`, `domain` and `target` (`den` / `session` topic id, or a `work` item id + feature). Payloads are metadata plus a redacted one-line summary; never full observation text. Variants: `observation_captured`, `topic_consolidated`, `contribution_emitted`, `promote_started|finished|failed`, `record_written` (target = the work item holding the Record; `observationCount`, `chars?`), `topic_archived` (`topicId`, `absorbedInto?`: absent for a reject), and from the librarian `sweep_started` (`pending`), `sweep_item` (`from`, `denTopicId`, `outcome` create\|merge\|reject\|parked, `entryId?`; unclassified items get none) and `sweep_finished` (`processed`, `created`, `merged`, `rejected`, `parked`, `remaining`, `durationMs`, `error?`; always follows a `sweep_started`; sweep events carry `domain: "kb"`). Use `parseMemoryEvent(raw)`; consumers MUST ignore unknown types (`{kind:"unknown"}`). The client SDK exposes `HttpConsoleClient.watchMemory(wolf)`.
@@ -72,6 +81,10 @@ Client: `getKbGraph(wolf, {domain?, archivedWork?, wikilinks?, denTopics?})`, `g
 
 **Attachments** (additive, no version bump). `POST /v1/threads/:id/attachments` uploads one file to the thread's wolf: the body is the raw bytes, `Content-Type` is the mime type, optional `X-Attachment-Name` is the URL-encoded file name. It answers `201 Attachment {id, name, mimeType, size}`. The route is type-agnostic; the wolf accepts images only for now (`ATTACHMENT_IMAGE_TYPES`: png, jpeg, gif, webp; content-sniffed; at most `ATTACHMENT_MAX_BYTES` = 5 MiB) and answers anything else 400 `invalid_request`. Files live at `<den>/attachments/<threadId>/<id>.<ext>`. `SubmitRequest.attachments?: {id}[]` references uploads; `input` may then be empty. At submit the wolf inlines each file as an image part of the user message and appends `[Attached image: <path>]` lines to the text, so history `text` carries the path (the image bytes stay in the engine entry, not in `ThreadMessage`). An unknown or malformed id is 400 `invalid_request`; so is more than `ATTACHMENT_MAX_PER_SUBMIT` (8) refs, and an upload with no `Content-Type` ("missing Content-Type"). wolfd answers an oversize upload 400 `invalid_request` (it is a protocol error envelope); the console's relay route, which is not the protocol, answers 413. Browser code can import the constants from the dependency-free `@wolfpack/protocol/attachments`. SDK: `uploadAttachment(threadId, bytes, {mimeType, name?})` and `submit(..., {attachments})`.
 
+Attachments in history and bytes. `ThreadMessage.attachments?: Attachment[]` (additive, user messages only) lists the attachments a message was sent with; `text` is unchanged and still ends with the `[Attached image: <path>]` lines (model-facing), which a UI may strip from what it displays. `GET /v1/threads/:id/attachments/:attachmentId` (`getAttachment`, response kind `bytes`) serves the stored bytes with the stored mime as `Content-Type` and `X-Content-Type-Options: nosniff`; an id that is malformed, unknown or another thread's is 404 `not_found`. SDK: `getAttachment(threadId, attachmentId) -> {bytes, mimeType}`. A steer may carry attachments too (`whenBusy:"steer"` with `attachments`). History entries are derived from the engine entries (the `[Attached image: <path>]` lines); the original file name is not kept, so a reloaded attachment's `name` is its stored file name.
+
+Cleanup seam. When a wolf deletes a thread, it must call `removeThreadAttachments(den, threadId)` (exported from `@wolfpack/harness/wolfd`, defined in `wolfd/attachments.ts`), which removes `<den>/attachments/<threadId>/` recursively and is a no-op when none exists. Thread deletion does not exist yet; nothing calls the hook today.
+
 `ThreadMessage.tools?` (additive, optional, no version bump; old servers omit it, clients must tolerate absence) lists an assistant message's tool calls in call order: `{callId, name, args, result?, isError?, resultTruncated?, textOffset?}`. `text` is unchanged (text blocks only); `textOffset` is the length of `text` when the call happened, so a consumer can interleave tool rows with the merged rounds' text. `args` stays an OBJECT: each string value (nested included) is cut to 1 KB, then the largest strings are shortened until the JSON fits ~4 KB, and any cut sets `_truncated: true` at the top level of `args` (consumers must not assume truncated args are complete). `result` is capped at ~4 KB (`resultTruncated: true` when cut). A pure tool round yields an assistant message with `text: ""`. Thinking is never in history. Id note: because a tool-only round now yields a message, a turn that starts with a tool-only round gets that entry's id (`entry-<id>`) instead of the id of its first text round; consumers must reseed from `getThread` rather than cache ids across the upgrade.
 
 **Structured objects** (additive, no version bump). A wolf shows a typed object (`decision` now; checklist and graph later) through a dedicated tool (`show_decision`) whose parameter schema is the protocol schema plus a wolf-chosen `objectId`; calling it again with the same `objectId` revises the object. The thread event is `object-upsert {turnId, objectId, objectType, rev, data, textOffset?}`: the field is `objectType` because `type` is the event discriminator. `rev` is the number of successful completed calls with that `objectId` so far (1 for the first; failed, aborted or invalid calls count for nothing), `textOffset` the length of the turn's merged assistant text when it appeared (absent for a mid-turn joiner). The event is emitted just before the call's `tool-end`. History carries the same: `ThreadMessage.objects?: {objectId, type, rev, data, textOffset?}[]` on the assistant message of an object's first call, ONE entry per `objectId` holding the latest rev's full `data` (not capped, unlike `tools[].args`), so `getThread` and snapshots return the latest revision at its first position. A consumer folds by `objectId`, highest `rev` wins, shown at the first position, and validates `data` per type with `parseObjectData` (dependency-free subpath `@wolfpack/protocol/objects`, which also checks `chosen` names an option); an unknown `type` is skipped.
@@ -100,3 +113,53 @@ Normative serving semantics (implemented by the stub, asserted by the contract):
 - Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
 
 Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?})`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
+
+## Stepped and conditional cards
+
+A card may carry `steps` (`[{ title?, fields: ids[] }]`, partitioning `fields` in card order) and a field may carry
+`showIf` (`{ field, equals }` or `{ field, oneOf }`; the controller must be an earlier `single` field with option values,
+or a `confirm` with a boolean `equals`). Both are optional; consoles that ignore them render a plain form.
+
+**Hidden answers are dropped, not rejected.** wolfd requires an answer for every *visible* field only, and silently drops
+(with a debug log) any answer sent for a field its `showIf` hides, so an older console that renders every field still
+works. The model sees only visible fields' answers; the stored answer holds only those too.
+
+## Required means non-blank
+
+A required field must be non-blank, whatever its kind: free-text/single non-empty, confirm answered, and a `multi` needs
+at least one pick (`min` applies on top; `min: 0` on a required multi counts as 1). An optional field may be blank. The server enforces this for free-text too: an older client sending a blank required free-text now gets a 400.
+
+## Optional fields
+
+A field may set `optional: true` (additive; absent = required). The operator can leave it blank and still submit.
+A skipped optional field is submitted **empty**, by kind:
+
+| kind | skipped answer |
+| --- | --- |
+| `free-text`, `single` | `{ "value": "" }` |
+| `multi` | `{ "value": [] }` (the multi's `min` does not apply to a blank one; once something is picked, `min`/`max` apply) |
+| `confirm` | no entry for the field (there is no empty boolean); `answers[id]` is absent. The model still sees `- <label>: (skipped)` |
+
+wolfd accepts all of these for an optional visible field (a missing answer too, for any kind) and validates a non-empty
+answer normally. The model-facing answer text reads `- <label>: (skipped)` for a skipped optional field. A required
+field is unchanged (missing/blank single, multi below `min`, or missing confirm is still rejected). A field hidden by
+`showIf` is never required, optional or not. `ask_user_question` takes `optional` per question (and on a single `question`).
+
+## Skipping and superseding a card
+
+A card closes one of three ways, reported as `closed: "answered" | "skipped" | "superseded"` (additive, optional):
+
+- **answered** — the operator submitted answers (`POST .../cards/:callId/answer`).
+- **skipped** — the operator dismissed it explicitly: `POST /v1/threads/:id/cards/:callId/skip` (`skipCard`, no body; ack is the
+  `answerCard` ack). A skip is that card's resolution: with sibling cards of one turn the skip is held (`PendingCard.heldSkip`,
+  replaceable by an answer) until every sibling is answered or skipped, then ONE turn starts. The model reads
+  `The user skipped your <tool> question (call <id>).` (among the answered cards' text, in raise order). Tool gates read it as
+  "no": `CardLookup.status` is `"skipped"` and carries no answers, so `task_done` / `crawl_release` never treat it as a yes.
+- **superseded** — a plain chat message replaced the pending card. The model reads a note at the head of that message:
+  `(Your pending <tool> question (call <id>) was superseded by this message.)` per card, then a blank line. The thread history
+  strips the note again, so the operator's message shows as typed.
+
+Where it appears: `ThreadToolCall.closed` (history; absent while pending), `card-settled.closed` (thread and wolf events).
+Older clients keep working: `ThreadToolCall.dismissed: true` is still set for BOTH skipped and superseded, and `card-settled.outcome`
+stays `"answered" | "dismissed"` (`dismissed` for both). A skipped call's `result` is `(skipped by the user)` and has no `answer`.
+Skipping a card that is unknown, already closed, or held by a running turn is 404 `not_found` / 409 `busy`, as for answering.

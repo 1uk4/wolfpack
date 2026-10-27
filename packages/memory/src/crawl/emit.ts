@@ -46,6 +46,11 @@ export interface EmitCrawlOptions {
    * their own clean closeout instead of leaking raw pipeline output.
    */
   quiet?: boolean;
+  /**
+   * Explicit KB roots for hosts whose effective env is not process.env (wolfd sandboxing): the inbox root (real emit),
+   * the KB base, and the den's local state dir. Each defaults to the process env as before.
+   */
+  roots?: { opsRoot?: string; kbBase?: string; denLocal?: string };
 }
 
 /** One contribution that emit would (or did) hand to the inbox. */
@@ -85,7 +90,7 @@ export function emitCrawl(
 
   // Resolve the inbox target. Dry-run writes into the sink so you can inspect
   // the exact contribution files; a real emit requires KB_OPS.
-  const opsRoot = opts.dryRun ? sink.dir : process.env.KB_OPS;
+  const opsRoot = opts.dryRun ? sink.dir : (opts.roots?.opsRoot ?? process.env.KB_OPS);
   if (!opsRoot) {
     throw new Error(
       "KB_OPS is required to emit to the real inbox (or use --dry-run)."
@@ -97,9 +102,9 @@ export function emitCrawl(
   // throwaway.
   const denLocal = opts.dryRun
     ? join(sink.dir, "den-kb")
-    : join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
+    : (opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb"));
   const roots: KbRoots = {
-    kbBase: process.env.KB_BASE ?? "",
+    kbBase: opts.roots?.kbBase ?? process.env.KB_BASE ?? "",
     opsRoot,
     denLocal,
   };

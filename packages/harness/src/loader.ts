@@ -7,7 +7,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { Extension as PiDurableExtension } from "@earendil-works/pi-durable";
-import type { Extension, ExtensionLifecycle, Runtime, ExtensionContext, ExtensionFactory, TelegramSharedState, SweepManager } from "./extension-api.js";
+import type { Extension, ExtensionLifecycle, Runtime, ExtensionContext, ExtensionFactory, HostCapabilities, TelegramSharedState, SweepManager } from "./extension-api.js";
 import { supportsRuntime } from "./extension-api.js";
 import { adaptToDurable } from "./adapters/durable.js";
 
@@ -26,6 +26,8 @@ export function resolveName(name: string): string {
 }
 
 export interface LoaderConfig {
+  /** Receives the names of loaded tools that declare `raisesCard` (the wolf's card guard). */
+  onCardTool?: (name: string) => void;
   /** Wolf den path (extensions loaded from wolfDen/extensions/) */
   wolfDen: string;
   /** Wolf name for context */
@@ -44,6 +46,10 @@ export interface LoaderConfig {
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+  /** The wolf's workspace directory (ExtensionContext.workspace). */
+  workspace?: string;
+  /** Host capability signals handed to extension factories (see ExtensionContext.capabilities). */
+  capabilities?: HostCapabilities;
 }
 
 /**
@@ -103,7 +109,7 @@ export async function loadExtensions(
     return result;
   }
 
-  const { wolfDen, wolfName, domains, runtime, wolfConfig } = config;
+  const { wolfDen, wolfName, domains, runtime, wolfConfig, onCardTool } = config;
 
   // Build context for extension factories
   const context: ExtensionContext = {
@@ -115,6 +121,8 @@ export async function loadExtensions(
     ...(config.modelTable ? { modelTable: config.modelTable } : {}),
     telegram: config.telegram,
     sweep: config.sweep,
+    ...(config.workspace ? { workspace: config.workspace } : {}),
+    ...(config.capabilities ? { capabilities: config.capabilities } : {}),
   };
 
   for (const shortName of names) {
@@ -160,7 +168,7 @@ export async function loadExtensions(
 
       // Adapt to runtime
       if (runtime === "pi-durable") {
-        const adapted = adaptToDurable(ext, { wolfDen, wolfName });
+        const adapted = adaptToDurable(ext, { wolfDen, wolfName, onCardTool });
         result.extensions.push(adapted);
         // Read from the original: the adapter's copy doesn't carry lifecycle
         if (ext.lifecycle) {

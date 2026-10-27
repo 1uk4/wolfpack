@@ -20,12 +20,15 @@ import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTabl
 import {
   objectsExtension,
   openWolfEngine,
+  createCardGuardExtension,
   resolveToolNames,
   type ConfigureOptions,
   type EngineConversation,
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
+import { adaptToDurable } from "../adapters/durable.js";
+import { createAskUserQuestionExtension } from "../extensions/ask-user-question.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
@@ -67,6 +70,8 @@ export interface ExtensionRuntime {
   den: string;
   env: NodeJS.ProcessEnv;
   sandbox?: RunningSandbox;
+  /** Register a card-raising tool with this wolf's card guard (pass to adaptToDurable as `onCardTool`). */
+  onCardTool: (name: string) => void;
 }
 
 export interface RunningWolf {
@@ -125,7 +130,8 @@ async function startConfigured(
   const table = applyWolfTierOverrides(fileTable, config);
   const model = resolveWolfModel(config, "main", table);
   const { extensions: toolExtensions, tools } = resolveToolNames(config.capability.tools);
-  const extra = typeof opts.extraExtensions === "function" ? opts.extraExtensions({ config, den: config.den, env, ...(sandbox ? { sandbox } : {}) }) : (opts.extraExtensions ?? []);
+  const cardGuard = createCardGuardExtension();
+  const extra = typeof opts.extraExtensions === "function" ? opts.extraExtensions({ config, den: config.den, env, onCardTool: cardGuard.register, ...(sandbox ? { sandbox } : {}) }) : (opts.extraExtensions ?? []);
   // The wolf's configured extensions, through the same loader createWolfHarness uses. This runs AFTER the sandbox
   // redirect (config.den and env are the sandbox's) and the assertSandboxed gate above, so the extensions' own
   // fail-closed gates (memoryGate) see the effective den/env.
@@ -133,10 +139,16 @@ async function startConfigured(
   // uses: KB_BASE/KB_OPS from the effective env (a sandbox KB copy), den-local state under the wolf's den.
   const kbRoots = kbRootsFor(config, env);
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
-  const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
-  const extensions = [...toolExtensions, objectsExtension, ...loaded, ...extra];
+  const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep, cardGuard.register);
+  const askExt = createAskUserQuestionExtension();
+  const ask = adaptToDurable(askExt, { wolfDen: config.den, wolfName: config.identity.name, onCardTool: cardGuard.register });
+  // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts). Tools adapted through
+  // adaptToDurable register themselves via onCardTool; native pi-durable extensions that bypass the adapter must pass
+  // their card tools explicitly (createCardGuardExtension([...names]) / cardGuard.register).
+  const extensions = [...toolExtensions, objectsExtension, ask, cardGuard.extension, ...loaded, ...extra];
   const cwd = config.capability.workspace;
-  const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
+  // `prompts?.` is defensive: a stale engine dist predates the field and would crash wolfd boot.
+  const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
 
   // Refuse before touching the store: a second wolfd on a live wolf's den would double-open its sqlite.
   if (opts.socket) await prepareSocketPath(opts.socket);
@@ -219,7 +231,7 @@ async function startConfigured(
  * A missing extension is a warning (as in createWolfHarness); one that is present but fails to build (a gate refusing
  * a misconfigured sandbox, a broken bundle) refuses to start the wolf rather than booting quietly without it.
  */
-async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, modelTable: ModelTable, extra: readonly Extension[], log: (line: string) => void, sweep?: SweepManager): Promise<Extension[]> {
+async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessEnv, modelTable: ModelTable, extra: readonly Extension[], log: (line: string) => void, sweep?: SweepManager, onCardTool?: (name: string) => void): Promise<Extension[]> {
   const names = withoutProvided(config.extensions, extra);
   if (names.length === 0) return [];
   const blocks: Record<string, unknown> = { ...config.extensionConfig };
@@ -232,6 +244,10 @@ async function loadConfiguredExtensions(config: WolfConfig, env: NodeJS.ProcessE
     wolfConfig: { name: config.identity.name, domains: config.identity.domains, ...blocks, ...(config.sandbox ? { sandbox: config.sandbox } : {}) },
     env,
     modelTable,
+    ...(onCardTool ? { onCardTool } : {}),
+    workspace: config.capability.workspace,
+    // wolfd always installs the card-raising ask_user_question (see startWolf).
+    capabilities: { askCards: true },
     ...(sweep ? { sweep } : {}),
   });
   reportLoad(result, { info: log, warn: (l) => log(`warning: ${l}`) });

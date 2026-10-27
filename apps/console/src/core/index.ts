@@ -58,6 +58,10 @@ export * from "./session-markdown.ts";
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
 export * from "./thread-adapter.ts";
 export * from "./objects.ts";
+// needs-you.ts: the cross-wolf pending-card list + the notification trigger logic. Pure.
+export * from "./needs-you.ts";
+export * from "./graph-layout.ts";
+export * from "./thread-cards.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
 export * from "./graph-activity.ts";
@@ -73,3 +77,5 @@ export * from "./item-document.ts";
 export * from "./memory-panel-model.ts";
 export * from "./task-graph.ts";
 export * from "./task-graph-layout.ts";
+export { coalescedRefresh } from "./coalesced-refresh.ts";
+export * from "./thread-lists.ts";

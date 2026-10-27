@@ -24,3 +24,9 @@ describe("toDurableResult", () => {
     }
   });
 });
+
+describe("toDurableResult endTurn", () => {
+  it("terminates the round without a card", () => {
+    expect(toDurableResult({ content: [{ type: "text", text: "pending" }], endTurn: true })).toEqual({ output: [{ type: "text", text: "pending" }], control: { terminate: true } });
+  });
+});

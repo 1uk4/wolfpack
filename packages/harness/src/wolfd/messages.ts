@@ -17,17 +17,20 @@
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
-import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
-import type { EngineEvent } from "../engine/index.js";
-import { objectFromCall } from "../engine/index.js";
+import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
+import { answerValue } from "./cards.js";
+import { stripSupersededNotes, type SupersededCard } from "../superseded-note.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
+const SKIPPED_RESULT = "(skipped by the user)";
+
 export function messageFromEntry(entry: Entry, now: () => Date = () => new Date()): ThreadMessage | undefined {
-  if (entry.kind !== "pi.user" && entry.kind !== "pi.assistant") return undefined;
+  if (entry.kind !== USER_ENTRY_KIND && entry.kind !== "pi.assistant") return undefined;
   const msg = entry.model?.[0] as { role?: string; content?: unknown; timestamp?: number } | undefined;
   if (!msg) return undefined;
-  const role = entry.kind === "pi.user" ? "user" : "assistant";
+  const role = entry.kind === USER_ENTRY_KIND ? "user" : "assistant";
   let text = "";
   if (typeof msg.content === "string") text = msg.content;
   else if (Array.isArray(msg.content)) {
@@ -161,16 +164,61 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
       if (obj) {
         // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
-        const prior = objectsById(list).get(obj.objectId);
-        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
-        else (list[i].objects ??= []).push({ ...obj, rev: 1, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
+        // Invariant: every upsert (new or revision) rewrites `seq` on the kept object, so max(seq) over the thread is
+        // always the latest upsert's ordinal, and a failed or replayed call (skipped above) never moves seq or rev.
+        const byId = objectsById(list);
+        const seq = Math.max(0, ...[...byId.values()].map((o) => o.seq ?? 0)) + 1; // this upsert's thread-wide ordinal
+        const prior = byId.get(obj.objectId);
+        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1, seq });
+        else (list[i].objects ??= []).push({ ...obj, rev: 1, seq, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
+      const card = cardOfToolMessage(entry.model?.[0]);
+      if (card) call.card = card;
       return;
     }
     return;
   }
+  if (entry.kind === CARD_ANSWER_KIND) {
+    // A card answer is not a chat message: it resolves the call that raised the card (the answer is that call's result).
+    for (const { callId, answers, skipped } of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const call = [...(list[i].tools ?? [])].reverse().find((c) => c.callId === callId);
+        if (!call) continue;
+        if (skipped) {
+          // `dismissed` stays true for clients that predate `closed`.
+          call.dismissed = true;
+          call.closed = "skipped";
+          call.result = SKIPPED_RESULT;
+          call.isError = false;
+          break;
+        }
+        call.answer = answers;
+        call.closed = "answered";
+        call.result = call.card ? visibleFields(call.card, answers).map((f) => answerValue(f, answers[f.id])).join("; ") : Object.values(answers).map((a) => String(a.value)).join("; ");
+        call.isError = false;
+        break;
+      }
+    }
+    return;
+  }
   const m = messageFromEntry(entry, now);
-  if (m) list.push(m);
+  if (m) {
+    // A plain user message supersedes every card still waiting: they are skipped, not answerable.
+    if (m.role === "user") {
+      // Only messages after the previous user message can hold cards still waiting (earlier ones were dismissed then).
+      const replaced: SupersededCard[] = [];
+      for (let i = list.length - 1; i >= 0 && list[i].role !== "user"; i--) {
+        for (const call of list[i].tools ?? []) {
+          if (!call.card || call.answer || call.closed) continue;
+          Object.assign(call, { dismissed: true, closed: "superseded" });
+          replaced.push({ tool: call.card.tool, callId: call.callId });
+        }
+      }
+      // wolfd put a note for exactly these cards at the head of the message (server.ts submit): the operator sees what they typed.
+      if (replaced.length) m.text = stripSupersededNotes(m.text, replaced);
+    }
+    list.push(m);
+  }
 }
 
 /** Every object in the list by id (one entry per id by construction). */

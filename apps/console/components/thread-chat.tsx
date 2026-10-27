@@ -1,22 +1,45 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
-import { lookupCard } from "@/components/card-registry";
+import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
+import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
-import { canSendWith, readyRefs, uploadFile, type PendingAttachment } from "@/components/attachments";
+import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
+import { AttachmentThumbs } from "@/components/attachment-thumbs";
+import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { threadTransport } from "@/components/thread-transport";
+import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
+import {
+	ASSISTANT_CONTENT_CLASS,
+	NO_CARDS,
+	activeChecklist,
+	PROSE_BLOCK_CLASS,
+	foldCardEvent,
+	withHeldSkip,
+	withSkip,
+	parseThreadCards,
+	renderItems,
+	runOpen,
+	withAnswer,
+	withHeld,
+	type ArtifactPartProps,
+	type LhMessage,
+	type ThreadCards,
+	type ToolItem,
+	ATTACHMENTS_PART,
+} from "@/src/core";
+import type { CardAnswers } from "@wolfpack/client";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -62,7 +85,44 @@ function ThreadReasoning({
 	);
 }
 
-function ToolItemRow({ item, open, onOpenChange }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void }) {
+/** What the rows need to render tool-raised cards inline (cards.calls keys the card-raising calls). */
+interface CardContext {
+	cards: ThreadCards;
+	answering: string | null;
+	onAnswer: (callId: string, answers: CardAnswers) => void;
+	onSkip: (callId: string) => void;
+}
+
+/** A tool call that raised an interaction card renders as that card (its renderer comes from the card registry). */
+function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
+	const call = ctx.cards.calls[callId];
+	const entry = call && lookupInteractionCard(call.card.tool);
+	if (!call || !entry) return null;
+	const { Renderer } = entry;
+	return (
+		<Renderer
+			callId={callId}
+			card={call.card}
+			answer={call.answer}
+			dismissed={call.dismissed}
+			closed={call.closed}
+			heldAnswer={call.heldAnswer}
+			heldSkip={call.heldSkip}
+			pending={ctx.cards.pending.some((p) => p.callId === callId)}
+			submitting={ctx.answering === callId}
+			onAnswer={(answers) => ctx.onAnswer(callId, answers)}
+			onSkip={() => ctx.onSkip(callId)}
+		/>
+	);
+}
+
+const raisesCard = (ctx: CardContext, callId: string): boolean => {
+	const call = ctx.cards.calls[callId];
+	return call !== undefined && lookupInteractionCard(call.card.tool) !== undefined;
+};
+
+function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void; cardCtx: CardContext }) {
+	if (raisesCard(cardCtx, item.entry.callId)) return <InlineCard callId={item.entry.callId} ctx={cardCtx} />;
 	const card = lookupCard("tool", item.entry.name);
 	const Renderer = card?.threadRow ? card.Renderer : undefined;
 	return (
@@ -92,6 +152,7 @@ export function ThreadChat({
 	title,
 	initialMessages,
 	initiallyInFlight,
+	initialCards = NO_CARDS,
 }: {
 	wolf: string;
 	slug: string;
@@ -100,16 +161,116 @@ export function ThreadChat({
 	title: string;
 	initialMessages: LhMessage[];
 	initiallyInFlight?: boolean;
+	/** Interaction cards of the thread record (pending ones + the card-raising calls of the history). */
+	initialCards?: ThreadCards;
 }) {
-	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError } = useChatSession({
+	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
+	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
+	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev)), [wolf, slug]);
+	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
 		chatId: threadId,
 		initialMessages,
 		initiallyInFlight,
 		transport,
 	});
+	const [cards, setCards] = useState<ThreadCards>(initialCards);
+	const [answering, setAnswering] = useState<string | null>(null);
+	const [cardError, setCardError] = useState<string | null>(null);
+	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
+	// after an answer that did not start a turn (siblings still wait).
+	// Sequenced: only the newest response applies, and a response that a card event overtook is refetched, so a slow
+	// record can never undo a newer live event.
+	const refreshSeq = useRef(0);
+	const cardEpoch = useRef(0);
+	const refreshCards = useCallback(async () => {
+		const seq = ++refreshSeq.current;
+		const epoch = cardEpoch.current;
+		try {
+			const res = await fetch(transport.recordUrl);
+			if (!res.ok || seq !== refreshSeq.current) return;
+			const next = parseThreadCards(await res.json());
+			if (seq !== refreshSeq.current) return;
+			if (epoch !== cardEpoch.current) return void refreshCards(); // a card event landed meanwhile: fetch again
+			if (next) setCards(next);
+		} catch {
+			/* the next settle refetches */
+		}
+	}, [transport]);
+	// A card raised mid-stream shows at once (no wait for the turn to settle); an answer's text comes with the record.
+	useEffect(() => {
+		cardEventRef.current = (ev) => {
+			cardEpoch.current++;
+			setCards((c) => foldCardEvent(c, ev));
+			// Answered or skipped: the record carries the result text.
+			if (ev.type === "card-settled" && (ev.outcome === "answered" || ev.closed === "skipped")) void refreshCards();
+		};
+	});
+	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
+	useOptionalServerEvent("needs-you-changed", (p) => {
+		if (p.wolf !== wolf || status === "submitted" || status === "streaming") return;
+		if (p.threadId !== undefined && p.threadId !== threadId) return; // another thread of the wolf
+		if (p.kind === "status" && p.status === "busy") return; // a turn started: the stream owns the view
+		void refreshCards();
+	});
+	const prevStatus = useRef(status);
+	useEffect(() => {
+		const was = prevStatus.current;
+		prevStatus.current = status;
+		const wasRunning = was === "submitted" || was === "streaming";
+		if (wasRunning && status === "ready") void refreshCards();
+	}, [status, refreshCards]);
+	const answerInFlight = useRef(false);
+	// An answer (answers given) or a skip (no answers) of one card: the same POST/ack handling.
+	const resolveCard = useCallback(
+		async (callId: string, answers?: CardAnswers) => {
+			if (answerInFlight.current) return; // double click / Enter: one POST
+			answerInFlight.current = true;
+			setAnswering(callId);
+			setCardError(null);
+			try {
+				const res = await fetch(answers ? cardAnswerUrl(wolf, slug, callId) : cardSkipUrl(wolf, slug, callId), {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: answers ? JSON.stringify({ answers }) : undefined,
+				});
+				if (!res.ok) {
+					const body = (await res.json().catch(() => null)) as { error?: string } | null;
+					setCardError(body?.error ?? `Could not send the ${answers ? "answer" : "skip"} (${res.status}).`);
+					// 404: the card is gone (superseded or answered elsewhere): show the thread as it is now.
+					if (res.status === 404) void refreshCards();
+					return;
+				}
+				const ack = (await res.json()) as { disposition?: string };
+				// Queued = sibling cards still wait: the wolf holds the answer and the card stays changeable.
+				// Otherwise the answer starts the next turn: attach to it.
+				if (ack.disposition === "queued") {
+					setCards((c) => (answers ? withHeld(c, callId, answers) : withHeldSkip(c, callId)));
+					void refreshCards();
+				} else {
+					setCards((c) => (answers ? withAnswer(c, callId, answers) : withSkip(c, callId)));
+					resumeStream();
+				}
+			} catch (err) {
+				setCardError(err instanceof Error ? err.message : `Could not send the ${answers ? "answer" : "skip"}.`);
+			} finally {
+				answerInFlight.current = false;
+				setAnswering(null);
+			}
+		},
+		[wolf, slug, resumeStream, refreshCards],
+	);
+	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void resolveCard(callId, answers), onSkip: (callId) => void resolveCard(callId) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
+	// Ref mirror of the composer text: a dictation flush lands via setState, which a send resuming after
+	// `await dictation.finish()` cannot observe in time (same law as chat.tsx).
+	const textRef = useRef("");
+	const applyText = useCallback((v: string) => {
+		textRef.current = v;
+		setText(v);
+	}, []);
+	// Voice dictation: finals append to the composer unless a card field claims the target (see AskCard).
+	const dictation = useDictation({ append: (t) => applyText(joinDictation(textRef.current, t)) });
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
 	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
 	const setRowOpen = useCallback(
@@ -121,46 +282,72 @@ export function ThreadChat({
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
 	);
+	const active = useMemo(() => activeChecklist(messages), [messages]);
+	const pinned = useChecklistDismissed(threadId, active?.objectId) ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
-	// Pasted images: uploaded to the wolf at once (a chip tracks each), sent as refs with the next message.
+	// Pasted, dropped or picked images: prechecked, then uploaded to the wolf at once (a chip tracks each, an error
+	// chip carries the reason), sent as refs with the next message.
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const patchAttachment = useCallback(
 		(key: string, patch: Partial<PendingAttachment>) => setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a))),
 		[],
 	);
-	const onPasteImages = useCallback(
+	const onFiles = useCallback(
 		(files: File[]) => {
 			for (const file of files) {
 				const key = `att-${Math.random().toString(36).slice(2)}`;
-				const name = file.name || "pasted image";
-				setAttachments((prev) => [...prev, { key, name, status: "uploading" }]);
+				const { chip, upload } = chipFor(file, key);
+				setAttachments((prev) => [...prev, chip]);
+				if (!upload) continue;
 				uploadFile(transport.uploadUrl!, file).then(
-					({ id }) => patchAttachment(key, { status: "ready", id }),
+					({ id, name, mimeType, size }) => patchAttachment(key, { status: "ready", id, name, mimeType, size }),
 					(err: Error) => patchAttachment(key, { status: "error", error: err.message }),
 				);
 			}
 		},
 		[transport, patchAttachment],
 	);
+	const [dragging, setDragging] = useState(false);
 	const removeAttachment = useCallback((key: string) => setAttachments((prev) => prev.filter((a) => a.key !== key)), []);
 
-	const onSend = useCallback(() => {
-		const t = text.trim();
-		// A running turn takes the text as a steer (text only; the chips wait for the next message); Stop is the abort.
-		if (busy) {
-			if (!t) return;
-			setText("");
-			steer(t);
-			return;
+	// A run that ends hands the cursor to the composer, unless a card field holds the dictation target.
+	const dictationWasActive = useRef(false);
+	useEffect(() => {
+		if (dictation.active) dictationWasActive.current = true;
+		else if (dictationWasActive.current) {
+			dictationWasActive.current = false;
+			if (!document.querySelector("[data-dictation-claimed]")) inputRef.current?.focus();
 		}
+	}, [dictation.active]);
+
+	const doSend = useCallback(() => {
+		const t = textRef.current.trim();
 		if (!canSendWith(t, attachments)) return;
-		const refs = readyRefs(attachments);
-		setText("");
+		const refs = readyInfos(attachments);
+		applyText("");
 		setAttachments((prev) => prev.filter((a) => a.status === "uploading"));
+		// A running turn takes the message as a steer, attachments included (the submit route accepts them with
+		// whenBusy "steer"); Stop is the abort.
+		if (busy) return steer(t, refs);
 		send({ type: "text", text: t, ...(refs.length ? { attachments: refs } : {}) });
-	}, [text, busy, send, steer, attachments]);
+	}, [busy, send, steer, attachments, applyText]);
+	// Finish a live dictation first: the spoken tail must be in the message. One send in flight at a time (a second
+	// Enter/click during the finish must not send twice); doSend runs through a ref so it sees the settled state, and
+	// does nothing (composer untouched) when the finish left no text and no ready attachment.
+	const doSendRef = useRef(doSend);
+	doSendRef.current = doSend;
+	const sendInFlight = useRef(false);
+	const onSend = useCallback(() => {
+		if (sendInFlight.current) return;
+		if (!dictation.active) return doSend();
+		sendInFlight.current = true;
+		void dictation.finish().then(() => {
+			sendInFlight.current = false;
+			doSendRef.current();
+		});
+	}, [dictation, doSend]);
 
 	const onStop = useCallback(() => {
 		void fetch(transport.abortUrl!, { method: "POST" }).catch(() => {
@@ -169,7 +356,26 @@ export function ThreadChat({
 	}, [transport]);
 
 	return (
-		<div className="flex h-dvh" data-testid="thread-chat" data-thread={threadId}>
+		<div
+			className="flex h-dvh"
+			data-testid="thread-chat"
+			data-thread={threadId}
+			data-dragging={dragging || undefined}
+			onDragOver={(e) => {
+				if (!dragHasFiles(e.dataTransfer)) return;
+				e.preventDefault(); // take the drop instead of the browser opening the file
+				setDragging(true);
+			}}
+			onDragLeave={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+			}}
+			onDrop={(e) => {
+				if (!dragHasFiles(e.dataTransfer)) return;
+				e.preventDefault();
+				setDragging(false);
+				onFiles(droppedFiles(e.dataTransfer));
+			}}
+		>
 			<div className="flex min-w-0 flex-1 flex-col">
 				<TopBar>
 					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
@@ -178,7 +384,7 @@ export function ThreadChat({
 				<div className="relative flex min-h-0 flex-1">
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 pt-4`}>
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinned ? PINNED_CHECKLIST_RESERVE : "pt-4"}`}>
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -196,6 +402,10 @@ export function ThreadChat({
 														.map((p) => p.text)
 														.join("\n")}
 												</div>
+												<AttachmentThumbs
+													items={(m.parts.find((p) => p.type === ATTACHMENTS_PART)?.data as AttachmentInfo[] | undefined) ?? []}
+													urlFor={transport.attachmentUrl}
+												/>
 											</div>
 										) : itemsByMessage[mi]!.length === 0 && !(status === "streaming" && mi === messages.length - 1) ? null : (
 											<Message from="assistant" className="max-w-full">
@@ -227,20 +437,30 @@ export function ThreadChat({
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":
-																return <ToolItemRow key={item.key} item={item} open={runOpen(openRows, item.key)} onOpenChange={setRowOpen(item.key)} />;
-															case "group":
+																return <ToolItemRow key={item.key} item={item} open={runOpen(openRows, item.key)} onOpenChange={setRowOpen(item.key)} cardCtx={cardCtx} />;
+															case "group": {
+																// A card never hides inside a collapsed group: it renders after the group's plain rows.
+																const plain = item.items.filter((t) => !raisesCard(cardCtx, t.entry.callId));
+																const raised = item.items.filter((t) => raisesCard(cardCtx, t.entry.callId));
 																return (
-																	<ToolGroup
-																		key={item.key}
-																		entries={item.entries}
-																		open={runOpen(openRows, item.key, item.items[0]!.key)}
-																		onOpenChange={setRowOpen(item.key)}
-																	>
-																		{item.items.map((t) => (
-																			<ToolItemRow key={t.key} item={t} open={runOpen(openRows, t.key)} onOpenChange={setRowOpen(t.key)} />
+																	<Fragment key={item.key}>
+																		{plain.length > 0 && (
+																			<ToolGroup
+																				entries={plain.map((t) => t.entry)}
+																				open={runOpen(openRows, item.key, item.items[0]!.key)}
+																				onOpenChange={setRowOpen(item.key)}
+																			>
+																				{plain.map((t) => (
+																					<ToolItemRow key={t.key} item={t} open={runOpen(openRows, t.key)} onOpenChange={setRowOpen(t.key)} cardCtx={cardCtx} />
+																				))}
+																			</ToolGroup>
+																		)}
+																		{raised.map((t) => (
+																			<InlineCard key={t.key} callId={t.entry.callId} ctx={cardCtx} />
 																		))}
-																	</ToolGroup>
+																	</Fragment>
 																);
+															}
 														}
 													})}
 												</MessageContent>
@@ -253,6 +473,17 @@ export function ThreadChat({
 										<BrailleSpinner label="Thinking" />
 										<Shimmer duration={1}>THINKING…</Shimmer>
 									</span>
+								)}
+								{cardError && (
+									<div
+										data-testid="card-error"
+										className="flex items-center justify-between rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm"
+									>
+										<span>{cardError}</span>
+										<button type="button" onClick={() => setCardError(null)} className="text-xs underline">
+											Dismiss
+										</button>
+									</div>
 								)}
 								{error && (
 									<div
@@ -273,25 +504,36 @@ export function ThreadChat({
 							<div className="h-16 bg-gradient-to-t from-background to-transparent" />
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
-									<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
+									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}
 											value={text}
-											onChange={setText}
+											onChange={applyText}
 											onSend={onSend}
 											onStop={onStop}
-											canSend={busy ? text.trim().length > 0 : canSendWith(text, attachments)}
-											onPasteImages={onPasteImages}
+											// A live dictation makes an idle composer sendable (chat.tsx), but while a turn runs it must not turn Stop into
+											// Send: deviation from chat.tsx, Stop stays available (the tail is sent once text exists).
+											canSend={canSendWith(text, attachments) || (dictation.active && !busy)}
+											onEscape={dictation.active ? dictation.cancel : undefined}
+											// Enter while dictating finishes and steers the spoken text; the button stays Stop.
+											enterSends={dictation.active}
+											onFiles={onFiles}
+											onPickFiles={onFiles}
 											chips={<AttachmentChips items={attachments} onRemove={removeAttachment} />}
 											inputRef={inputRef}
 											autoFocus
 											placeholder={busy ? "Steer the running turn…" : "Message the wolf…"}
 										/>
+										{/* Dictation sits under the message field (owner, 2026-10-27). */}
+										<div className="px-3 pb-2" data-testid="dictation-slot">
+											<DictationBar dictation={dictation} />
+										</div>
 									</div>
 								</div>
 							</div>
 						</div>
 					</Conversation>
+					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 				</div>
 			</div>
 			<MemoryPanel wolf={wolf} threadId={threadId} />

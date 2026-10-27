@@ -113,7 +113,7 @@ async function setup(script = 8): Promise<Setup> {
     hooks: {
       extensions: ({ config, den, env }) => {
         const c = { wolfDen: den, wolfName: "testwolf", domains: ["wolfpack"], wolfConfig: { sandbox: config.sandbox }, env };
-        tasks = createTasksExtension({}, c);
+        tasks = createTasksExtension({ autoShip: true }, c);
         memory = createMemoryExtension({ ...config.memory, engine }, c);
         return [parkExtension, adaptToDurable(memory, { wolfDen: den, wolfName: "testwolf" }), adaptToDurable(tasks, { wolfDen: den, wolfName: "testwolf" })];
       },

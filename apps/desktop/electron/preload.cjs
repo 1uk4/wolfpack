@@ -23,6 +23,12 @@
  *   asks main to kill the server and quit-and-install. Browser builds:
  *   both absent, the banner never renders.
  *
+ *   window.lh.notify({key,title,body,href}) / window.lh.onNavigate(cb) —
+ *   needs-you notifications (ticket 4): the renderer decides WHEN (a new
+ *   pending card), main shows the OS notification only while the window is
+ *   unfocused (once per key) and, on click, focuses the window and sends
+ *   "lh:navigate" with the thread's href back.
+ *
  * Channel names are mirrored in electron/main.cjs — keep them in sync.
  */
 const { contextBridge, ipcRenderer } = require("electron");
@@ -42,4 +48,10 @@ contextBridge.exposeInMainWorld("lh", {
 		return () => ipcRenderer.removeListener("lh:update-status", listener);
 	},
 	installUpdate: () => ipcRenderer.send("lh:update-install"),
+	notify: (n) => ipcRenderer.send("lh:notify", n),
+	onNavigate: (cb) => {
+		const listener = (_event, href) => cb(href);
+		ipcRenderer.on("lh:navigate", listener);
+		return () => ipcRenderer.removeListener("lh:navigate", listener);
+	},
 });

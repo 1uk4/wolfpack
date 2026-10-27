@@ -27,7 +27,8 @@ function windowOptions(platform: string) {
 		session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
 	};
 	const context = {
-		require: (id: string) => id === "electron" ? electron : require(id),
+		require: (id: string) =>
+			id === "electron" ? electron : id === "./notify.cjs" ? require("../../desktop/electron/notify.cjs") : require(id),
 		process: { platform, argv: [], env: {}, on() {} },
 		__dirname: dirname(mainFile),
 	};
@@ -77,7 +78,7 @@ describe("desktop window chrome", () => {
 		runInNewContext(readFileSync(new URL("../../desktop/electron/preload.cjs", import.meta.url), "utf8"), context);
 		assert.equal(bridge.platform, "win32");
 		assert.deepEqual(Object.keys(bridge).sort(), [
-			"expandWindow", "getZoom", "installUpdate", "onUpdateStatus", "onZoom", "platform",
+			"expandWindow", "getZoom", "installUpdate", "notify", "onNavigate", "onUpdateStatus", "onZoom", "platform",
 		]);
 	});
 });

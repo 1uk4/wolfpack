@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { resolveThreadId, threadMessagesToNative } from "@/src/core";
+import { cardsOfThread, resolveThreadId, threadMessagesToNative } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
+import { withHistoryAttachments } from "@/components/attachments";
 import { ThreadChat } from "@/components/thread-chat";
 
 export const dynamic = "force-dynamic";
@@ -25,8 +26,9 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				slug={slug}
 				threadId={thread.id}
 				title={thread.title}
-				initialMessages={threadMessagesToNative(thread.messages)}
+				initialMessages={withHistoryAttachments(threadMessagesToNative(thread.messages), thread.messages)}
 				initiallyInFlight={thread.busy}
+				initialCards={cardsOfThread(thread)}
 			/>
 		);
 	} catch (err) {

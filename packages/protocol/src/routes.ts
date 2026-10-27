@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AttachmentSchema,
+  AnswerCardRequestSchema,
   ConsolidateResponseSchema,
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
@@ -8,8 +9,10 @@ import {
   KbEntryDetailSchema,
   KbGraphSchema,
   MemoryEventSchema,
+  WolfEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
+  PendingCardSchema,
   PromoteResponseSchema,
   SubmitAckSchema,
   SubmitRequestSchema,
@@ -37,6 +40,10 @@ export type SubmitBody = z.infer<typeof SubmitBodySchema>;
 export const CreateThreadBodySchema = CreateThreadRequestSchema.omit({ wolf: true });
 export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
 
+export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });
+export type AnswerCardBody = z.infer<typeof AnswerCardBodySchema>;
+export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSchema) });
+
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
 export const AbortResponseSchema = z.object({ ok: z.literal(true) });
@@ -48,7 +55,11 @@ export interface RouteDef {
   /** JSON request body schema, if any. */
   readonly body?: z.ZodType;
   /** Success response: a JSON body schema, or an SSE stream of events. */
-  readonly response: { readonly kind: "json"; readonly schema: z.ZodType } | { readonly kind: "sse"; readonly event: z.ZodType };
+  readonly response:
+    | { readonly kind: "json"; readonly schema: z.ZodType }
+    | { readonly kind: "sse"; readonly event: z.ZodType }
+    /** Raw bytes; `Content-Type` is the stored mime type. */
+    | { readonly kind: "bytes" };
   /** Success status(es). */
   readonly status: readonly number[];
   /** Every non-2xx response is an ErrorEnvelope. */
@@ -78,6 +89,43 @@ export const ROUTES = {
    * 400 `invalid_request`. Returns the stored attachment; reference it from `submit`.
    */
   uploadAttachment: { method: "POST", path: "/v1/threads/:id/attachments", response: { kind: "json", schema: AttachmentSchema }, status: [201], error: err },
+  /**
+   * Fetch one uploaded attachment's raw bytes. `:attachmentId` must be an id returned by `uploadAttachment` for THIS
+   * thread; anything else (malformed, traversal, another thread's) is 404 `not_found`. Answers with the stored mime
+   * type as `Content-Type`, plus `X-Content-Type-Options: nosniff`.
+   */
+  getAttachment: { method: "GET", path: "/v1/threads/:id/attachments/:attachmentId", response: { kind: "bytes" }, status: [200], error: err },
+  /**
+   * Answer a pending card (`:callId` = the tool call that raised it). The answer resolves that call and, once no
+   * sibling card of the turn is pending, starts the next turn: the ack is the next turn's SubmitAck, or disposition
+   * `queued` while siblings wait (a held answer can be re-sent to change it). A plain submit supersedes pending cards (they
+   * become `dismissed`). 404 `not_found` for an unknown, superseded or already-answered card, 400
+   * `invalid_request` when `answers` do not match the card's fields, 409 `busy` while a turn is running.
+   */
+  answerCard: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/answer",
+    body: AnswerCardBodySchema,
+    response: { kind: "json", schema: SubmitAckSchema },
+    status: [200],
+    error: err,
+  },
+  /**
+   * Skip a pending card (`:callId` = the tool call that raised it) without answering. No body. The card closes as
+   * `skipped` (`ThreadToolCall.closed`, `dismissed: true` for older clients), the agent is told, and the ack is as for
+   * `answerCard` (the next turn's SubmitAck, or `queued` while a sibling card still waits: a skip counts as that
+   * card's resolution). Same errors as `answerCard`: 404 `not_found` for an unknown, superseded, skipped or answered
+   * card, 409 `busy` while a turn is running.
+   */
+  skipCard: {
+    method: "POST",
+    path: "/v1/threads/:id/cards/:callId/skip",
+    response: { kind: "json", schema: SubmitAckSchema },
+    status: [200],
+    error: err,
+  },
+  /** Cards waiting for the operator across this wolf's threads (the needs-you list). */
+  listCards: { method: "GET", path: "/v1/wolves/:name/cards", response: { kind: "json", schema: ListCardsResponseSchema }, status: [200], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },
   /** SSE: `id: <eventId>` + `data: <ThreadEvent json>`; ends with `data: [DONE]` at the first turn-end. */
   streamThread: { method: "GET", path: "/v1/threads/:id/stream", response: { kind: "sse", event: ThreadEventSchema }, status: [200], error: err },
@@ -86,6 +134,13 @@ export const ROUTES = {
    * unlike a thread stream it never ends with `[DONE]`, it stays open until the client disconnects.
    */
   streamWolfEvents: { method: "GET", path: "/v1/wolves/:name/events", response: { kind: "sse", event: MemoryEventSchema }, status: [200], error: err },
+  /**
+   * SSE: wolf-scoped WolfEvents (`thread-status`, `card-pending`, `card-settled`, `resync`) with `id: <eventId>` per
+   * frame. A fresh connection (no cursor) starts with a baseline: a `thread-status` per thread and a `card-pending`
+   * per pending card. `Last-Event-ID` / `?from=` replays what was missed from a bounded buffer, or answers `resync`
+   * (then the baseline) when the cursor is stale. Never ends with `[DONE]`: open until the client disconnects.
+   */
+  streamWolfActivity: { method: "GET", path: "/v1/wolves/:name/activity", response: { kind: "sse", event: WolfEventSchema }, status: [200], error: err },
   /**
    * Fold the observation pool into session topics; answers with the counts. 409 `memory_unavailable` when the wolf's
    * memory is inert or not loaded; 409 `memory_busy` (retryable) while a promote runs.

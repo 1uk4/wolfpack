@@ -14,6 +14,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { PromptSection } from "@wolfpack/engine";
 
 export interface ProjectContextInput {
   name: string;
@@ -24,7 +25,20 @@ export interface ProjectContextInput {
   den: string;
   /** Upper bound of the walk. Default: os.homedir(). */
   home?: string;
+  /** wolf.yaml `prompts.structuredOutput`: a string replaces the default guidance; `false` or an empty/whitespace string removes it. */
+  structuredOutput?: PromptSection;
 }
+
+/**
+ * Default "Structured output" section: when to emit show_decision / show_graph / show_checklist. Overridable per wolf
+ * (wolf.yaml `prompts.structuredOutput`); a settings UI would read/write that field (with versioning/reset on top).
+ */
+export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show the user live structured objects; prose stays the primary channel.
+- show_graph: a plan with dependencies or branching (3+ steps with ordering); revise statuses as work progresses.
+- show_checklist: a linear to-do you tick off in place. Don't emit both a graph and a checklist for the same plan.
+- show_decision: records a choice you have made (options, the chosen one, the rationale). To ask the user an open question, use ask_user_question instead.
+- Revise an object by reusing its objectId and resending it in full.
+- No objects for trivial answers or one-step tasks.`;
 
 export interface FoundFile {
   path: string;
@@ -111,5 +125,7 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
     const list = skills.map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""} (${s.path})`).join("\n");
     parts.push(`# Skills\n\nRead a skill's SKILL.md with the read tool when its description matches the task.\n\n${list}`);
   }
+  const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
+  if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
   return { agents, claude, skills, instructions: parts.join("\n\n") };
 }

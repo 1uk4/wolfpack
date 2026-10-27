@@ -65,3 +65,54 @@ describe("bridge seam: tool schemas reach the model inline", () => {
     expect(o.allowedTools).toEqual([expect.stringMatching(/__task_bind$/)]);
   });
 });
+
+describe("bridge seam: images reach the SDK query", () => {
+  const png = { type: "image", data: "UElYRUw=", mimeType: "image/png" };
+  const toolImage = { type: "image", data: "VE9PTA==", mimeType: "image/png" };
+
+  /** Run one turn through the real bridge core with a fake SDK and return the first user message it was fed. */
+  async function firstSdkMessage(messages: any[]) {
+    let first: any;
+    const queryFn = ((args: any) => {
+      first = (async () => (await args.prompt[Symbol.asyncIterator]().next()).value)();
+      return (async function* () {})();
+    }) as any;
+    const m = buildWolfModels(
+      { transport: "subscription", provider: "claude-bridge" },
+      { cwd: "/w", env: { PATH: "/bin" }, createProvider: (o) => createClaudeBridgeProvider({ ...o, queryFn, checkAuth: false, sweepOrphans: false }) },
+    );
+    const provider = m.models!.getProvider("claude-bridge") as any;
+    const model = { id: "claude-haiku-4-5", name: "haiku", api: "claude-bridge", provider: "claude-bridge", baseUrl: "claude-bridge", reasoning: false, input: ["text", "image"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 8192 };
+    for await (const _ of provider.streamSimple(model, { systemPrompt: "sys", messages, tools: [] }, {})) { /* drain */ }
+    m.shutdown();
+    return first;
+  }
+  const blocks = (msg: any) => msg.message.content.filter((b: any) => b.type === "image").map((b: any) => b.source.data);
+  const assistant = { role: "assistant", content: [{ type: "text", text: "ok" }], api: "claude-bridge", provider: "claude-bridge", model: "x", usage: {}, stopReason: "stop", timestamp: 0 };
+
+  it("an image on the first user message", async () => {
+    const msg = await firstSdkMessage([{ role: "user", content: [{ type: "text", text: "look" }, png], timestamp: 0 }]);
+    expect(blocks(msg)).toEqual([png.data]);
+  });
+
+  // After the first turn the transcript holds earlier messages, and a fresh SDK query (first round of a resumed
+  // thread, crash recovery) is fed the whole history rendered as one prompt: the path that used to flatten images to "[image]".
+  it("an image on a later user message, after earlier turns (the thread rebuilds its query)", async () => {
+    const msg = await firstSdkMessage([
+      { role: "user", content: "hi", timestamp: 0 },
+      assistant,
+      { role: "user", content: [{ type: "text", text: "and this?" }, png], timestamp: 1 },
+    ]);
+    expect(blocks(msg)).toEqual([png.data]);
+    expect(JSON.stringify(msg.message.content)).not.toContain("[image]");
+  });
+
+  it("an image returned by a tool", async () => {
+    const msg = await firstSdkMessage([
+      { role: "user", content: "read it", timestamp: 0 },
+      { ...assistant, content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "a.png" } }], stopReason: "toolUse" },
+      { role: "toolResult", toolCallId: "t1", toolName: "read", content: [toolImage], isError: false, timestamp: 1 },
+    ]);
+    expect(blocks(msg)).toEqual([toolImage.data]);
+  });
+});

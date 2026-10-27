@@ -23,12 +23,12 @@
 
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { LhMessage } from "./native-messages.ts";
-import { danglingQuestionOf, newAnswerResult, newUserMessage } from "./native-messages.ts";
+import { danglingQuestionOf, newAnswerResult, newUserMessage, type UiAttachment } from "./native-messages.ts";
 import { QUESTION_TOOLS, toolQuestionKind } from "./pending.ts";
 
 /** One client-originated input event (the POST body's `input`). */
 export type ChatInput =
-	| { type: "text"; text: string; attachments?: { id: string }[] }
+	| { type: "text"; text: string; attachments?: UiAttachment[] }
 	| { type: "answer"; toolCallId: string; answer: QuestionAnswerData }
 	| { type: "continue" };
 

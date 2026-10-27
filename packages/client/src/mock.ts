@@ -6,6 +6,10 @@ import {
   ProtocolError,
   type Attachment,
   type AttachmentRef,
+  type Card,
+  type CardAnswers,
+  type WolfEvent,
+  type PendingCard,
   type ConsoleClient,
   type SubmitAck,
   type SubmitOptions,
@@ -24,7 +28,7 @@ export interface MockOptions {
   script?: ScriptStep[];
 }
 
-type Distribute<T> = T extends unknown ? Omit<T, "id" | "threadId" | "at" | "actor"> : never;
+type Distribute<T, K extends string = "id" | "threadId" | "at" | "actor"> = T extends unknown ? Omit<T, K> : never;
 type EventInput = Distribute<ThreadEvent>;
 
 interface ThreadState {
@@ -44,6 +48,14 @@ export class MockConsoleClient implements ConsoleClient {
   private counter = 0;
   /** Attachments uploaded so far (bytes dropped), and the submits that referenced them: for tests. */
   readonly uploads: (Attachment & { threadId: string })[] = [];
+  private readonly uploadBytes = new Map<string, Uint8Array>();
+  /** Card answers received, for tests. */
+  readonly cardAnswers: { threadId: string; callId: string; answers: CardAnswers }[] = [];
+  readonly cardSkips: { threadId: string; callId: string }[] = [];
+  /** Cards raised through {@link raiseCard} and not yet answered (the scripted turns raise none themselves). */
+  private readonly pendingCards: PendingCard[] = [];
+  private readonly activitySubs = new Set<(ev: WolfEvent) => void>();
+  private activitySeq = 0;
   readonly submits: { threadId: string; input: string; attachments: AttachmentRef[] }[] = [];
 
   constructor(opts: MockOptions = {}) {
@@ -66,16 +78,60 @@ export class MockConsoleClient implements ConsoleClient {
 
   async listThreads(wolf: string): Promise<ThreadSummary[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
-    return [...this.threads.values()].map((t) => ({ ...t.summary }));
+    return [...this.threads.values()].map((t) => ({ ...t.summary, status: this.statusOf(t) }));
+  }
+
+  private statusOf(t: ThreadState): NonNullable<ThreadSummary["status"]> {
+    return t.running ? "busy" : this.pendingCards.some((p) => p.threadId === t.summary.id) ? "needs-you" : "idle";
+  }
+
+  /** Test seam: the wolf asks the operator `card` on `threadId`. The thread turns needs-you and activity watchers hear it. */
+  raiseCard(threadId: string, card: Card, callId = `call-${++this.counter}`, raisedAt = new Date().toISOString()): PendingCard {
+    const t = this.get(threadId);
+    const pending: PendingCard = { callId, threadId, card, raisedAt };
+    this.pendingCards.push(pending);
+    this.emitActivity({ type: "card-pending", card: pending });
+    this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
+    return pending;
+  }
+
+  private emitActivity(draft: Distribute<WolfEvent, "id" | "wolf" | "at">): void {
+    const ev = { ...draft, id: ++this.activitySeq, wolf: FIXTURE_WOLF.id, at: new Date().toISOString() } as WolfEvent;
+    for (const s of [...this.activitySubs]) s(ev);
+  }
+
+  async *watchActivity(wolf: string, opts: { signal?: AbortSignal } = {}): AsyncIterable<WolfEvent> {
+    if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
+    const queue: WolfEvent[] = [];
+    let wake: (() => void) | undefined;
+    const sub = (ev: WolfEvent) => {
+      queue.push(ev);
+      wake?.();
+    };
+    this.activitySubs.add(sub);
+    const onAbort = () => wake?.();
+    opts.signal?.addEventListener("abort", onAbort);
+    try {
+      while (!opts.signal?.aborted) {
+        const next = queue.shift();
+        if (next) yield next;
+        else await new Promise<void>((r) => (wake = r));
+      }
+    } finally {
+      this.activitySubs.delete(sub);
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async getThread(threadId: string): Promise<ThreadDetail> {
     const t = this.get(threadId);
     return {
       ...t.summary,
+      status: this.statusOf(t),
       messages: t.messages.map((m) => ({ ...m })),
       busy: t.running !== null,
       lastEventId: t.seq,
+      ...(this.pendingCards.some((p) => p.threadId === threadId) ? { pendingCards: this.pendingCards.filter((p) => p.threadId === threadId) } : {}),
     };
   }
 
@@ -85,13 +141,17 @@ export class MockConsoleClient implements ConsoleClient {
     const attachments = opts.attachments ?? [];
     for (const a of attachments) if (!this.uploads.some((u) => u.id === a.id && u.threadId === threadId)) throw new ProtocolError("invalid_request", `unknown attachment ${a.id}`, false);
     this.submits.push({ threadId, input, attachments });
+    const atts = attachments.map((a) => {
+      const { threadId: _t, ...att } = this.uploads.find((u) => u.id === a.id && u.threadId === threadId)!;
+      return att;
+    });
     if (!t.running) {
-      const messageId = this.addUserMessage(t, input);
+      const messageId = this.addUserMessage(t, input, atts);
       this.startTurn(t);
       return { messageId, disposition: "started" };
     }
     if (whenBusy === "reject") throw new BusyError(threadId);
-    const messageId = this.addUserMessage(t, input);
+    const messageId = this.addUserMessage(t, input, atts);
     if (whenBusy === "followUp") {
       t.followUps.push(input);
       return { messageId, disposition: "queued" };
@@ -107,7 +167,45 @@ export class MockConsoleClient implements ConsoleClient {
     const id = `att-${++this.counter}`;
     const att = { id, name: opts.name ?? id, mimeType: opts.mimeType, size };
     this.uploads.push({ ...att, threadId });
+    this.uploadBytes.set(`${threadId}\n${id}`, data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new Uint8Array(data));
     return att;
+  }
+
+  async getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    this.get(threadId);
+    const up = this.uploads.find((u) => u.threadId === threadId && u.id === attachmentId);
+    const bytes = this.uploadBytes.get(`${threadId}\n${attachmentId}`);
+    if (!up || !bytes) throw new NotFoundError(`attachment ${attachmentId}`);
+    return { bytes, mimeType: up.mimeType };
+  }
+
+  /** Answers a card raised through `raiseCard` (no next turn is started); any other card is unknown. */
+  async answerCard(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck> {
+    const t = this.get(threadId);
+    const at = this.pendingCards.findIndex((p) => p.threadId === threadId && p.callId === callId);
+    if (at < 0) throw new NotFoundError(`card ${callId}`);
+    this.cardAnswers.push({ threadId, callId, answers });
+    this.pendingCards.splice(at, 1);
+    this.emitActivity({ type: "card-settled", threadId, callId, outcome: "answered" });
+    this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
+    return { messageId: `card-${callId}`, disposition: "started" };
+  }
+
+  /** Skips a card raised through `raiseCard` (no next turn is started); any other card is unknown. */
+  async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
+    const t = this.get(threadId);
+    const at = this.pendingCards.findIndex((p) => p.threadId === threadId && p.callId === callId);
+    if (at < 0) throw new NotFoundError(`card ${callId}`);
+    this.cardSkips.push({ threadId, callId });
+    this.pendingCards.splice(at, 1);
+    this.emitActivity({ type: "card-settled", threadId, callId, outcome: "dismissed", closed: "skipped" });
+    this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
+    return { messageId: `card-${callId}`, disposition: "started" };
+  }
+
+  async listCards(wolf: string): Promise<PendingCard[]> {
+    if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
+    return this.pendingCards.map((p) => ({ ...p }));
   }
 
   async abort(threadId: string): Promise<void> {
@@ -157,9 +255,9 @@ export class MockConsoleClient implements ConsoleClient {
     return t;
   }
 
-  private addUserMessage(t: ThreadState, text: string): string {
+  private addUserMessage(t: ThreadState, text: string, atts: Attachment[] = []): string {
     const id = `msg-${++this.counter}`;
-    t.messages.push({ id, role: "user", text, at: new Date().toISOString() });
+    t.messages.push({ id, role: "user", text, at: new Date().toISOString(), ...(atts.length ? { attachments: atts } : {}) });
     return id;
   }
 

@@ -51,6 +51,246 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   kb_unavailable: 409,
 };
 
+// ---------------------------------------------------------------- cards
+
+/**
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask_user_question` or a
+ * tool such as `task_done`). A card holds one or more fields; the shape extends `ask_user_question`
+ * (question / options / free text). Additive: no version bump.
+ *
+ * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
+ * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
+ */
+export const CardOptionSchema = z.object({
+  label: z.string(),
+  /** Machine-readable value returned when picked. Defaults to the label. */
+  value: z.string(),
+  description: z.string().optional(),
+});
+export type CardOption = z.infer<typeof CardOptionSchema>;
+
+/**
+ * A field shown only while an earlier field's answer matches: `equals` compares a single/free-text value or a confirm
+ * boolean; `oneOf` matches any of several single values. Exactly one of the two. A hidden field is neither shown nor
+ * required, and any answer it carries is rejected.
+ */
+export const FieldShowIfSchema = z
+  .object({
+    /** Id of the controlling field; it must be declared earlier in the card. */
+    field: z.string().min(1),
+    equals: z.union([z.string(), z.boolean()]).optional(),
+    oneOf: z.array(z.string()).min(1).optional(),
+  })
+  .refine((s) => (s.equals === undefined) !== (s.oneOf === undefined), { message: "showIf needs exactly one of equals / oneOf" });
+export type FieldShowIf = z.infer<typeof FieldShowIfSchema>;
+
+const cardFieldBase = z.object({
+  /** Unique within the card; keys the answer. */
+  id: z.string().min(1),
+  label: z.string(),
+  /** Extra context shown under the label. */
+  description: z.string().optional(),
+  /** Conditional visibility (stepped/dependent cards); absent = always shown. */
+  showIf: FieldShowIfSchema.optional(),
+  /**
+   * The operator may leave it blank. Default (absent) = required. A skipped optional field is submitted empty
+   * (free-text/single `{value: ""}`, multi `{value: []}`, confirm: no answer) and the wolf is told it was skipped;
+   * an answer that is given is validated normally (a multi's min/max still apply once something is picked).
+   */
+  optional: z.boolean().optional(),
+});
+export const FreeTextFieldSchema = cardFieldBase.extend({
+  kind: z.literal("free-text"),
+  default: z.string().optional(),
+});
+export const SingleFieldSchema = cardFieldBase.extend({
+  kind: z.literal("single"),
+  options: z.array(CardOptionSchema).min(1),
+  /** Offer an "Other" free-text entry beside the options (the `ask_user_question` behaviour). Default true. */
+  allowOther: z.boolean().optional(),
+  /** An option `value` to pre-select. */
+  default: z.string().optional(),
+});
+export const MultiFieldSchema = cardFieldBase.extend({
+  kind: z.literal("multi"),
+  options: z.array(CardOptionSchema).min(1),
+  /** Offer custom entries beside the options. Default false (unlike `single`): a multi answer is a subset of the options. */
+  allowOther: z.boolean().optional(),
+  /** Option values to pre-select. */
+  default: z.array(z.string()).optional(),
+  /** Bounds on the number of picked entries (options and custom ones together). A required multi needs at least one pick regardless; optional: true allows blank. */
+  min: z.number().int().min(0).optional(),
+  max: z.number().int().min(1).optional(),
+});
+export const ConfirmFieldSchema = cardFieldBase.extend({
+  kind: z.literal("confirm"),
+  /** Button labels; default "Yes" / "No". */
+  confirmLabel: z.string().optional(),
+  rejectLabel: z.string().optional(),
+  /** Pre-selects confirm (true) or reject (false); the operator still has to submit. */
+  default: z.boolean().optional(),
+});
+export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema, SingleFieldSchema, MultiFieldSchema, ConfirmFieldSchema]);
+export type CardField = z.infer<typeof CardFieldSchema>;
+export type CardFieldKind = CardField["kind"];
+
+export const CardStepSchema = z.object({
+  title: z.string().optional(),
+  /** Field ids shown on this step, in order. */
+  fields: z.array(z.string().min(1)).min(1),
+});
+export type CardStep = z.infer<typeof CardStepSchema>;
+
+/** Why a field's showIf cannot work against its controller (undefined = fine). Shared with the ask_user_question builder. */
+export function showIfProblem(f: { id: string; showIf?: FieldShowIf }, fields: readonly CardField[]): string | undefined {
+  const s = f.showIf;
+  if (!s) return undefined;
+  const ctl = fields.find((x) => x.id === s.field);
+  if (!ctl || ctl.id === f.id) return `showIf.field "${s.field}" is not another field of this card`;
+  if (ctl.kind === "confirm") return typeof s.equals === "boolean" && s.oneOf === undefined ? undefined : `showIf on confirm field "${ctl.id}" needs a boolean \`equals\``;
+  if (ctl.kind === "single") {
+    const values = ctl.options.map((o) => o.value);
+    const wanted = s.oneOf ?? (typeof s.equals === "string" ? [s.equals] : []);
+    if (wanted.length === 0) return `showIf on single field "${ctl.id}" needs a string \`equals\` or a non-empty \`oneOf\``;
+    const bad = wanted.find((w) => !values.includes(w));
+    return bad === undefined ? undefined : `showIf value "${bad}" is not an option of "${ctl.id}"`;
+  }
+  return `field "${ctl.id}" (${ctl.kind}) cannot control another field`;
+}
+
+export const CardSchema = z
+  .object({
+    /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
+    tool: z.string(),
+    title: z.string().optional(),
+    fields: z.array(CardFieldSchema).min(1),
+    /**
+     * Optional stepped presentation: the fields grouped into ordered steps (every field in exactly one step; a step
+     * whose fields are all hidden by `showIf` is skipped). The answer is still ONE submission for the whole card.
+     * Absent = a single-page form.
+     */
+    steps: z.array(CardStepSchema).min(1).optional(),
+  })
+  .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
+  .refine(
+    (c) => {
+      const seen = new Set<string>();
+      return c.fields.every((f) => {
+        const ok = f.showIf === undefined || (seen.has(f.showIf.field) && f.showIf.field !== f.id);
+        seen.add(f.id);
+        return ok;
+      });
+    },
+    { message: "a field's showIf must reference a field declared before it", path: ["fields"] },
+  )
+  .refine(
+    (c) => {
+      // Steps partition the fields in card order (so a dependent field's step is never before its controller's).
+      if (!c.steps) return true;
+      const ids = c.steps.flatMap((s) => s.fields);
+      return ids.length === c.fields.length && ids.every((id, i) => id === c.fields[i].id);
+    },
+    { message: "steps must list every field exactly once, in the card's field order", path: ["steps"] },
+  )
+  .refine(
+    (c) => c.fields.every((f) => showIfProblem(f, c.fields) === undefined),
+    { message: "a showIf does not fit its controlling field (confirm: boolean equals; single: option values; other kinds cannot control)", path: ["fields"] },
+  )
+  .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
+    message: "a single field's default must be one of its option values",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.default ?? []).every((d) => f.options.some((o) => o.value === d))), {
+    message: "a multi field's default must be a subset of its option values",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || new Set(f.default ?? []).size === (f.default ?? []).length), {
+    message: "a multi field's default must not repeat a value",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.min ?? 0) <= (f.max ?? Infinity)), {
+    message: "a multi field's min must not exceed its max",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.allowOther === true || (f.min ?? 0) <= f.options.length), {
+    message: "a multi field's min exceeds its number of options (and allowOther is not set), so it can never be satisfied",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || f.default === undefined || (f.default.length >= (f.min ?? 0) && f.default.length <= (f.max ?? Infinity))), {
+    message: "a multi field's default must respect its min and max",
+    path: ["fields"],
+  });
+export type Card = z.infer<typeof CardSchema>;
+
+/** Whether the answers so far satisfy a field's `showIf` (always true without one). */
+export function fieldVisible(field: CardField, answers: Readonly<Record<string, { value: unknown } | undefined>>): boolean {
+  const s = field.showIf;
+  if (!s) return true;
+  const v = answers[s.field]?.value;
+  if (s.equals !== undefined) return v === s.equals;
+  return typeof v === "string" && (s.oneOf ?? []).includes(v);
+}
+
+/**
+ * The fields in play for these answers: a field is hidden when its `showIf` fails OR its controlling field is itself
+ * hidden (so a chain collapses with its root).
+ */
+export function visibleFields(card: Card, answers: Readonly<Record<string, { value: unknown } | undefined>>): CardField[] {
+  const shown = new Set<string>();
+  const out: CardField[] = [];
+  for (const f of card.fields) {
+    if (f.showIf && !shown.has(f.showIf.field)) continue;
+    if (!fieldVisible(f, answers)) continue;
+    shown.add(f.id);
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * One answered field; the `value` type follows the field kind.
+ * - free-text / single: `value` is the text or option value; `other` is true when the operator typed an answer instead
+ *   of picking an option (`single` with allowOther).
+ * - multi: `value` lists the picked option values plus any custom entries; `other` names the custom entries (a subset
+ *   of `value`).
+ * - confirm: `value` is true (confirm) or false (reject), with an optional `note`.
+ */
+export const TextFieldAnswerSchema = z.object({ value: z.string(), other: z.boolean().optional() });
+export const MultiFieldAnswerSchema = z.object({ value: z.array(z.string()), other: z.array(z.string()).optional() });
+export const ConfirmFieldAnswerSchema = z.object({ value: z.boolean(), note: z.string().optional() });
+export const CardFieldAnswerSchema = z.union([TextFieldAnswerSchema, MultiFieldAnswerSchema, ConfirmFieldAnswerSchema]);
+export type TextFieldAnswer = z.infer<typeof TextFieldAnswerSchema>;
+export type MultiFieldAnswer = z.infer<typeof MultiFieldAnswerSchema>;
+export type ConfirmFieldAnswer = z.infer<typeof ConfirmFieldAnswerSchema>;
+export type CardFieldAnswer = z.infer<typeof CardFieldAnswerSchema>;
+/** Answers keyed by field id. */
+export const CardAnswersSchema = z.record(z.string(), CardFieldAnswerSchema);
+export type CardAnswers = z.infer<typeof CardAnswersSchema>;
+
+/**
+ * How a card closed: `answered` (the operator submitted answers), `skipped` (the operator dismissed it explicitly; the
+ * agent was told), `superseded` (a plain chat message replaced it; the agent was told).
+ */
+export const CardClosedSchema = z.enum(["answered", "skipped", "superseded"]);
+export type CardClosed = z.infer<typeof CardClosedSchema>;
+
+/** A card waiting for the operator. `callId` is the tool call that raised it and identifies it in the answer command. */
+export const PendingCardSchema = z.object({
+  callId: z.string(),
+  threadId: z.string(),
+  card: CardSchema,
+  /**
+   * The answer already given while sibling cards of the same turn still wait (held, not yet submitted). The card is
+   * still pending: it can be answered again to change it until the last sibling is answered.
+   */
+  heldAnswer: CardAnswersSchema.optional(),
+  /** The operator skipped this card while sibling cards still wait (held, changeable like a held answer). */
+  heldSkip: z.boolean().optional(),
+  /** ISO time the card was raised (the tool call's result time). */
+  raisedAt: z.iso.datetime({ offset: true }),
+});
+export type PendingCard = z.infer<typeof PendingCardSchema>;
+
 // ------------------------------------------------------------ resources
 
 export const WolfStatusSchema = z.enum(["online", "offline", "busy"]);
@@ -65,12 +305,17 @@ export const WolfSummarySchema = z.object({
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 
 export const ThreadKindSchema = z.enum(["home", "feature", "subagent", "process"]);
+/** `needs-you`: no turn is running and at least one card waits for the operator's answer. */
+export const ThreadStatusSchema = z.enum(["idle", "busy", "needs-you"]);
+export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
 export const ThreadSummarySchema = z.object({
   id: z.string(),
   wolf: z.string(),
   kind: ThreadKindSchema,
   title: z.string(),
   boundWorkItem: z.string().optional(),
+  /** Additive: absent on servers that predate cards (treat as idle/busy from `ThreadDetail.busy`). */
+  status: ThreadStatusSchema.optional(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -88,6 +333,17 @@ export const ThreadToolCallSchema = z.object({
   result: z.string().optional(),
   isError: z.boolean().optional(),
   resultTruncated: z.boolean().optional(),
+  /** A card-raising call: the card it raised. */
+  card: CardSchema.optional(),
+  /** The operator's answer to that card (absent while it is pending). The `result` then carries the answer text. */
+  answer: CardAnswersSchema.optional(),
+  /**
+   * The card closed without an answer (skipped by the operator, or superseded by a plain submit): no longer answerable.
+   * Kept `true` for both so older clients still show it closed; `closed` tells the two apart.
+   */
+  dismissed: z.boolean().optional(),
+  /** Additive: how the card closed. Absent while pending (and on servers that predate it: read `answer` / `dismissed`). */
+  closed: CardClosedSchema.optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -95,7 +351,7 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
-import { parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+import { CHECKLIST_STATES, GRAPH_LIMITS, GRAPH_NODE_STATUSES, graphProblem, parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
 export * from "./objects.js";
 
 /**
@@ -109,6 +365,8 @@ export const ThreadObjectSchema = z.object({
   /** 1 for the first upsert of `objectId` in the thread, +1 per revision. */
   rev: z.number().int().positive(),
   data: z.unknown(),
+  /** History only: ordinal (1-based, per thread) of this object's LATEST upsert; orders objects by recency across reloads. */
+  seq: z.number().int().positive().optional(),
   /** History only: length of the message's `text` when the object first appeared (interleaves it with the text). */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -134,12 +392,60 @@ export const ShowDecisionParamsSchema = DecisionDataSchema.extend({
 }).refine((d) => parseObjectData("decision", d) !== undefined, { message: "chosen must be the id of one of the options" });
 export type ShowDecisionParams = z.infer<typeof ShowDecisionParamsSchema>;
 
+export const ChecklistItemSchema = z.object({
+  id: z.string().min(1).describe("Short stable id of the item"),
+  label: z.string().min(1).describe("The step, in a few words"),
+  state: z.enum(CHECKLIST_STATES).describe("todo | doing | done | skipped"),
+  note: z.string().optional().describe("Optional one-line note"),
+});
+
+/** `data` of a `checklist` object. Progress (done/total) is derived on render, not sent. */
+export const ChecklistDataSchema = z.object({
+  title: z.string().optional().describe("What the checklist is for"),
+  items: z.array(ChecklistItemSchema).min(1).describe("The items, in order"),
+});
+
+/** Parameters of the `show_checklist` tool: the checklist plus the wolf-chosen id (reuse it to revise). */
+export const ShowChecklistParamsSchema = ChecklistDataSchema.extend({
+  objectId: z.string().min(1).describe("Stable id for this checklist; call again with the same id to revise it (resend the whole checklist)"),
+}).refine((d) => parseObjectData("checklist", d) !== undefined, { message: "item ids must be unique" });
+export type ShowChecklistParams = z.infer<typeof ShowChecklistParamsSchema>;
+export const GraphNodeSchema = z.object({
+  id: z.string().min(1).max(GRAPH_LIMITS.id).describe("Short stable id of the node, unique in the graph"),
+  label: z.string().min(1).max(GRAPH_LIMITS.label).describe("What the node is, in a few words"),
+  kind: z.string().min(1).max(GRAPH_LIMITS.kind).describe("step | task | milestone (other kinds are tolerated)"),
+  status: z.enum(GRAPH_NODE_STATUSES).describe("todo | doing | done | blocked | skipped"),
+  detail: z.string().max(GRAPH_LIMITS.detail).optional().describe("Optional one-line elaboration"),
+});
+export const GraphEdgeSchema = z.object({
+  from: z.string().min(1).max(GRAPH_LIMITS.id).describe("Id of the dependent node"),
+  to: z.string().min(1).max(GRAPH_LIMITS.id).describe("Id of the node it depends on (must finish first)"),
+});
+
+/** `data` of a `graph` object: a plan/task DAG. Edges mean depends-on. Validate with `parseObjectData`. */
+export const GraphDataSchema = z.object({
+  title: z.string().optional().describe("What the graph is about"),
+  nodes: z.array(GraphNodeSchema).min(1).max(GRAPH_LIMITS.nodes).describe("The steps, tasks or milestones"),
+  edges: z.array(GraphEdgeSchema).max(GRAPH_LIMITS.edges).describe("`from` depends on `to`; both must be node ids, no self-loops, no duplicates, no cycles"),
+});
+
+/** Parameters of the `show_graph` tool: the graph plus the wolf-chosen id (reuse it to revise). */
+export const ShowGraphParamsSchema = GraphDataSchema.extend({
+  objectId: z.string().min(1).describe("Stable id for this graph; call again with the same id to revise it (resend the whole graph)"),
+}).superRefine((d, ctx) => {
+  const problem = graphProblem(d.nodes, d.edges);
+  if (problem) ctx.addIssue({ code: "custom", message: problem });
+});
+export type ShowGraphParams = z.infer<typeof ShowGraphParamsSchema>;
+
 /**
  * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
  * registration hands the model). A new object type adds one entry here and one in objects.ts.
  */
 export const OBJECT_TOOL_PARAMS = {
   show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
+  show_checklist: { type: "checklist", schema: ShowChecklistParamsSchema },
+  show_graph: { type: "graph", schema: ShowGraphParamsSchema },
 } as const satisfies Record<ObjectToolName, { type: KnownObjectType; schema: z.ZodType }>;
 
 /** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */
@@ -147,6 +453,20 @@ export function objectToolJsonSchema(name: ObjectToolName): Record<string, unkno
   const { $schema: _omit, ...rest } = z.toJSONSchema(OBJECT_TOOL_PARAMS[name].schema, { io: "input" }) as Record<string, unknown>;
   return rest;
 }
+/** Reference to an uploaded attachment (see `uploadAttachment`), carried by `SubmitRequest.attachments`. */
+export const AttachmentRefSchema = z.object({ id: z.string() });
+export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
+
+/** An uploaded attachment, as stored by the wolf. Type-agnostic: `mimeType` says what it is. */
+export const AttachmentSchema = z.object({
+  /** Opaque id; pass it back as an `AttachmentRef`. */
+  id: z.string(),
+  /** Original file name when the client sent one, else a generated `<id>.<ext>`. */
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+});
+export type Attachment = z.infer<typeof AttachmentSchema>;
 
 export const ThreadMessageSchema = z.object({
   id: z.string(),
@@ -158,6 +478,12 @@ export const ThreadMessageSchema = z.object({
   tools: z.array(ThreadToolCallSchema).optional(),
   /** Assistant messages only: structured objects first shown in this message, latest rev per objectId. Optional: old servers omit it. */
   objects: z.array(ThreadObjectSchema).optional(),
+  /**
+   * User messages only (additive, optional: old servers omit it): the attachments the message was sent with, in send
+   * order. `text` is unchanged model-facing text and still ends with the `[Attached image: <path>]` lines; clients
+   * show the attachments (fetch bytes with `getAttachment`) and may strip those lines from the displayed text.
+   */
+  attachments: z.array(AttachmentSchema).optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 
@@ -167,6 +493,8 @@ export const ThreadDetailSchema = ThreadSummarySchema.extend({
   busy: z.boolean(),
   /** Id of the latest event emitted on this thread (0 if none). */
   lastEventId: z.number().int().nonnegative(),
+  /** Additive: cards waiting for the operator (survives reconnect and restart). Absent = none / older server. */
+  pendingCards: z.array(PendingCardSchema).optional(),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetailSchema>;
 
@@ -254,6 +582,17 @@ export const SnapshotEventSchema = base.extend({
   inFlight: InFlightPartialSchema.optional(),
 });
 
+/**
+ * A card is waiting for the operator: raised, or its held answer changed (fold by `callId`, the latest wins). Additive:
+ * older clients skip it and read `ThreadDetail.pendingCards` instead.
+ */
+export const CardPendingEventSchema = base.extend({ type: z.literal("card-pending"), card: PendingCardSchema });
+/** How a pending card left the pending list: answered (the answer was submitted) or dismissed (a plain submit superseded it). */
+export const CardOutcomeSchema = z.enum(["answered", "dismissed"]);
+export type CardOutcome = z.infer<typeof CardOutcomeSchema>;
+/** `closed` is additive and finer than `outcome` (a skip and a supersede are both `dismissed`, so older clients keep working). */
+export const CardSettledEventSchema = base.extend({ type: z.literal("card-settled"), callId: z.string(), outcome: CardOutcomeSchema, closed: CardClosedSchema.optional() });
+
 export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnStartEventSchema,
   TextDeltaEventSchema,
@@ -264,6 +603,8 @@ export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnEndEventSchema,
   ErrorEventSchema,
   ObjectUpsertEventSchema,
+  CardPendingEventSchema,
+  CardSettledEventSchema,
   SnapshotEventSchema,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
@@ -292,6 +633,43 @@ export function parseThreadEvent(input: unknown): ParsedThreadEvent {
   if (!env.success) return { kind: "invalid", error: env.error };
   if (!KNOWN_TYPES.has(env.data.type)) return { kind: "unknown", event: { envelope: env.data, raw: input } };
   const ev = ThreadEventSchema.safeParse(input);
+  return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
+}
+
+// ------------------------------------------------------- wolf events
+
+/**
+ * Wolf-scoped activity: what the sidebar and notifications need without opening every thread. `id` is minted per wolf
+ * process (monotonic, positive) and is the SSE `id:` so a reconnect can resume with Last-Event-ID.
+ */
+const wolfBase = z.object({ id: EventIdSchema, wolf: z.string(), at: IsoSchema });
+/** A thread's status changed (also sent once per thread as the baseline of a fresh connection). */
+export const WolfThreadStatusEventSchema = wolfBase.extend({ type: z.literal("thread-status"), threadId: z.string(), status: ThreadStatusSchema });
+/** A card was raised (or its held answer changed). Same payload as the thread event. */
+export const WolfCardPendingEventSchema = wolfBase.extend({ type: z.literal("card-pending"), card: PendingCardSchema });
+export const WolfCardSettledEventSchema = wolfBase.extend({ type: z.literal("card-settled"), threadId: z.string(), callId: z.string(), outcome: CardOutcomeSchema, closed: CardClosedSchema.optional() });
+/** The server cannot replay from the client's cursor: refetch threads and cards. */
+export const WolfResyncEventSchema = wolfBase.extend({ type: z.literal("resync") });
+
+export const WolfEventSchema = z.discriminatedUnion("type", [
+  WolfThreadStatusEventSchema,
+  WolfCardPendingEventSchema,
+  WolfCardSettledEventSchema,
+  WolfResyncEventSchema,
+]);
+export type WolfEvent = z.infer<typeof WolfEventSchema>;
+export type WolfEventType = WolfEvent["type"];
+
+const WOLF_EVENT_TYPES: ReadonlySet<string> = new Set(WolfEventSchema.options.map((o) => o.shape.type.value));
+
+export type ParsedWolfEvent = { kind: "event"; event: WolfEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
+
+/** Same ignore-unknown contract as parseThreadEvent. */
+export function parseWolfEvent(input: unknown): ParsedWolfEvent {
+  const env = wolfBase.extend({ type: z.string() }).safeParse(input);
+  if (!env.success) return { kind: "invalid", error: env.error };
+  if (!WOLF_EVENT_TYPES.has(env.data.type)) return { kind: "unknown" };
+  const ev = WolfEventSchema.safeParse(input);
   return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
 }
 
@@ -641,21 +1019,6 @@ export type KbEntryDetail = z.infer<typeof KbEntryDetailSchema>;
 export const WhenBusySchema = z.enum(["steer", "followUp", "reject"]);
 export type WhenBusy = z.infer<typeof WhenBusySchema>;
 
-/** Reference to an uploaded attachment (see `uploadAttachment`), carried by `SubmitRequest.attachments`. */
-export const AttachmentRefSchema = z.object({ id: z.string() });
-export type AttachmentRef = z.infer<typeof AttachmentRefSchema>;
-
-/** An uploaded attachment, as stored by the wolf. Type-agnostic: `mimeType` says what it is. */
-export const AttachmentSchema = z.object({
-  /** Opaque id; pass it back as an `AttachmentRef`. */
-  id: z.string(),
-  /** Original file name when the client sent one, else a generated `<id>.<ext>`. */
-  name: z.string(),
-  mimeType: z.string(),
-  size: z.number().int().nonnegative(),
-});
-export type Attachment = z.infer<typeof AttachmentSchema>;
-
 import { ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";
 export { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT } from "./attachments.js";
 
@@ -677,6 +1040,26 @@ export const SubmitAckSchema = z.object({
   disposition: z.enum(["started", "steered", "queued"]),
 });
 export type SubmitAck = z.infer<typeof SubmitAckSchema>;
+
+/**
+ * Answer a pending card. The answer is a submission: the card's tool call is resolved with it and the next turn starts
+ * (when no sibling card of the same turn is still pending). `answers` must cover every VISIBLE REQUIRED field; optional and showIf-hidden fields may be omitted.
+ * Wire: the thread id and `callId` ride the path.
+ */
+export const AnswerCardRequestSchema = z.object({
+  threadId: z.string(),
+  callId: z.string(),
+  answers: CardAnswersSchema,
+});
+export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
+
+/**
+ * Skip a pending card without answering it. The agent is told ("The user skipped your <tool> question (call X)") and,
+ * like an answer, the next turn starts once every sibling card of the turn is answered or skipped. Wire: the thread id
+ * and `callId` ride the path; there is no body.
+ */
+export const SkipCardRequestSchema = z.object({ threadId: z.string(), callId: z.string() });
+export type SkipCardRequest = z.infer<typeof SkipCardRequestSchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });

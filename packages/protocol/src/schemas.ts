@@ -491,6 +491,8 @@ export const WorkRecordResponseSchema = z.object({
   dependsOn: z.array(z.string()).optional(),
   /** A holding container (a domain's Inbox). Only present when true. */
   container: z.boolean().optional(),
+  /** The item's `successCriteria` frontmatter (the done-condition; may hold markdown bullets). Omitted when it has none. */
+  successCriteria: z.string().optional(),
   plan: z.string(),
   record: z.string(),
   /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */

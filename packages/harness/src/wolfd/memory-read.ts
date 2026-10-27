@@ -101,6 +101,7 @@ interface ApiWorkItem {
   partOf?: string | null;
   dependsOn?: string[];
   container?: boolean;
+  successCriteria?: string;
   updated?: string;
 }
 
@@ -185,6 +186,7 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
       ...(children ? { children } : {}),
       ...(truncated ? { childrenTruncated: true } : {}),
       ...(childCount !== undefined ? { childCount } : {}),
+      ...(item.successCriteria?.trim() ? { successCriteria: item.successCriteria } : {}),
       plan: withoutLog(withoutRecord(body)),
       record: section ? section.slice(RECORD_HEADING.length).trim() : "",
       ...(item.updated !== undefined ? { updated: item.updated } : {}),

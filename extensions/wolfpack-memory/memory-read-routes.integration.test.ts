@@ -273,6 +273,7 @@ describe("memory read routes", { timeout: 30_000 }, () => {
     const rec = WorkRecordResponseSchema.parse(await res.json());
     expect(rec).toMatchObject({ id, title: "Cache sessions", kind: "task", domain: "wolfpack", dependsOn: [] });
     expect(rec.partOf).toMatch(/^work-wolfpack-/); // an unparented item sits under its domain Inbox
+    expect(rec.successCriteria).toBe("cached");
     expect(rec.plan).toContain("Do the caching.");
     expect(rec.plan).not.toContain("Cache five minutes");
     expect(rec.plan).not.toContain("generated");

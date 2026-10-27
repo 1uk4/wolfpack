@@ -28,7 +28,7 @@ import {
   type WolfEngine,
 } from "../engine/index.js";
 import { adaptToDurable } from "../adapters/durable.js";
-import { cardToolNames, createAskUserQuestionExtension } from "../extensions/ask-user-question.js";
+import { createAskUserQuestionExtension } from "../extensions/ask-user-question.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";
@@ -140,7 +140,7 @@ async function startConfigured(
   const askExt = createAskUserQuestionExtension();
   const ask = adaptToDurable(askExt, { wolfDen: config.den, wolfName: config.identity.name });
   // The card guard ends a whole round that contains a card-raising call (see engine/cards.ts).
-  const extensions = [...toolExtensions, objectsExtension, ask, createCardGuardExtension(cardToolNames(askExt)), ...loaded, ...extra];
+  const extensions = [...toolExtensions, objectsExtension, ask, createCardGuardExtension(), ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 

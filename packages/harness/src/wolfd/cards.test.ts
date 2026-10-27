@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { BusyError, HttpConsoleClient, NotFoundError, ProtocolError } from "@wolfpack/client";
 import type { Card } from "@wolfpack/protocol";
+import { Type } from "../extension-api.js";
+import { adaptToDurable } from "../adapters/durable.js";
 import { cardResult } from "../engine/cards.js";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { WolfServer } from "./server.js";
@@ -264,5 +266,33 @@ describe("ask card (tool-raised, two-turn)", () => {
     } finally {
       await second.close();
     }
+  });
+
+  it("a card tool in a loaded (adapted) extension is auto-detected by the guard", async () => {
+    const ext = adaptToDurable(
+      {
+        name: "loaded-ask",
+        tools: [{ name: "loaded_ask", description: "ask", raisesCard: true, parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "asked" }], card: { tool: "loaded_ask", fields: [{ id: "a", kind: "free-text", label: "a?" }] } }; } }],
+      },
+      { wolfDen: "/unused", wolfName: "testwolf" },
+    );
+    const plain = defineExtension({ name: "plain", tools: [defineTool({ name: "plain", description: "p", parameters: { type: "object" as const, properties: {}, required: [] }, async execute() { return { output: [{ type: "text" as const, text: "p" }] }; } })] });
+    tw = await startTestWolf({ script: [toolUse(fauxToolCall("loaded_ask", {}), fauxToolCall("plain", {})), fauxAssistantMessage("must not run")], hooks: { extensions: [ext, plain] } });
+    await tw.submit("go");
+    expect(tw.scripted.faux.state.callCount).toBe(1);
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
+  });
+
+  it("an erroring card tool does not terminate the round: the model sees the error and continues", async () => {
+    const ext = adaptToDurable(
+      { name: "bad-ask", tools: [{ name: "bad_ask", description: "ask", raisesCard: true, parameters: Type.Object({}), async execute() { return { content: [{ type: "text", text: "boom" }], isError: true }; } }] },
+      { wolfDen: "/unused", wolfName: "testwolf" },
+    );
+    tw = await startTestWolf({ script: [toolUse(fauxToolCall("bad_ask", {})), fauxAssistantMessage("recovered")], hooks: { extensions: [ext] } });
+    await tw.submit("go");
+    expect(tw.scripted.faux.state.callCount).toBe(2);
+    const d = await tw.client.getThread(tw.home);
+    expect(d.status).toBe("idle");
+    expect(d.messages.at(-1)!.text).toContain("recovered");
   });
 });

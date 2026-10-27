@@ -11,7 +11,7 @@
  * those cards show as pending again without their held answer.
  */
 import type { Card, CardAnswers, PendingCard } from "@wolfpack/protocol";
-import { CARD_ANSWER_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
@@ -43,7 +43,8 @@ export class CardTracker {
       for (const c of (entry.data as unknown as CardAnswerData | undefined)?.cards ?? []) this.drop(c.callId);
       return [];
     }
-    if (entry.kind === "pi.user") return this.dismissAll();
+    // NOTE: any future system writer of `pi.user` entries (reminders, injected context) would dismiss pending cards.
+    if (entry.kind === USER_ENTRY_KIND) return this.dismissAll();
     if (!entry.kind.startsWith("pi.tool")) return [];
     const msg = entry.model?.[0] as { toolCallId?: string; timestamp?: number } | undefined;
     const card = cardOfToolMessage(msg);

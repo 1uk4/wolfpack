@@ -43,11 +43,6 @@ export function askCard(args: AskArgs): Card {
   };
 }
 
-/** Names of an extension's card-raising tools (for the card guard). */
-export function cardToolNames(ext: Extension): string[] {
-  return (ext.tools ?? []).filter((t) => t.raisesCard).map((t) => t.name);
-}
-
 export function createAskUserQuestionExtension(): Extension {
   return defineExtension({
     name: "ask-user-question",

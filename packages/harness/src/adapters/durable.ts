@@ -14,7 +14,7 @@ import {
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
-import { cardResult } from "../engine/cards.js";
+import { cardResult, registerCardTool } from "../engine/cards.js";
 import { conversationReaderFor, onEngineCloseFor } from "../engine/conversation-reader.js";
 import type {
   Extension,
@@ -80,6 +80,7 @@ export function adaptToDurable(
   };
 
   // Adapt tools
+  for (const t of ext.tools ?? []) if (t.raisesCard) registerCardTool(t.name);
   const tools = (ext.tools ?? []).map((tool) =>
     piDefineTool({
       name: tool.name,

@@ -13,8 +13,8 @@
 import type { JsonValue } from "@earendil-works/chord";
 import {
   defineExtension,
-  GenerationTask,
   hook,
+  LiveDoc,
   ToolTask,
   type Extension,
   type ToolExecutionResult,
@@ -26,6 +26,8 @@ import { CardSchema } from "@wolfpack/protocol";
 export const CARD_DETAILS_KEY = "wolfpackCard";
 /** Entry kind an answer submission is placed as. `data` is {@link CardAnswerData}. */
 export const CARD_ANSWER_KIND = "wolfpack.card-answer";
+/** Entry kind of a plain user message (what supersedes pending cards). */
+export const USER_ENTRY_KIND = "pi.user";
 
 export interface CardAnswerData {
   cards: { callId: string; answers: CardAnswers }[];
@@ -51,29 +53,35 @@ export function cardAnswerEntry(data: CardAnswerData): { kind: string; data: Jso
   return { kind: CARD_ANSWER_KIND, data: JSON.parse(JSON.stringify(data)) };
 }
 
+/** Names of card-raising tools, recorded by `adaptToDurable` for every tool declaring `raisesCard`. */
+const registeredCardTools = new Set<string>();
+export function registerCardTool(name: string): void {
+  registeredCardTools.add(name);
+}
+
 /**
- * Forces the whole round to end when the model called a card-raising tool (`cardTools`) in it, alongside other tools:
- * every result of such a round gets `control.terminate`. The other tools still run (they were issued in parallel), and
- * their results are in the transcript when the answer starts the next turn.
+ * Ends the whole round when the model called a card-raising tool in it, alongside other tools: pi-durable terminates
+ * only when EVERY result of the round asks for it. Stateless and replay-safe: the round's calls are read from the
+ * durable LiveDoc in `afterTool`, nothing is kept in memory.
+ * - a card tool's result terminates only when it actually produced a card (not on isError / no card in details);
+ *   an erroring card tool therefore keeps the round going, so the model sees the error;
+ * - any other tool's result terminates when the round contains a card tool.
+ * Card tools are auto-detected (`registerCardTool`, fed by adaptToDurable); `extraCardTools` is for native pi-durable
+ * extensions that bypass the adapter.
  */
-export function createCardGuardExtension(cardTools: readonly string[]): Extension {
-  const names = new Set(cardTools);
-  const marked = new Set<string>(); // conversation ids whose current round raises a card
+export function createCardGuardExtension(extraCardTools: readonly string[] = []): Extension {
+  const isCardTool = (name: string) => registeredCardTools.has(name) || extraCardTools.includes(name);
   return defineExtension({
     name: "card-guard",
     hooks: [
-      hook(GenerationTask, {
-        afterResponse: (message, api) => {
-          const id = String(api.conversationId);
-          if (message.content.some((b) => b.type === "toolCall" && names.has(b.name))) marked.add(id);
-          else marked.delete(id);
-        },
-        afterTools: (_assistant, _results, api) => {
-          marked.delete(String(api.conversationId));
-        },
-      }),
       hook(ToolTask, {
-        afterTool: (_call, result, api) => (marked.has(String(api.conversationId)) ? { ...result, control: { ...result.control, terminate: true } } : undefined),
+        afterTool: async (call, result, api, context) => {
+          if (call.parent) return undefined;
+          if (isCardTool(call.name)) return undefined; // cardResult already terminates; an error/no-card result must not
+          const live = await api.snapshot(LiveDoc, api.conversationId, context);
+          const raises = (live?.tools ?? []).some((t) => isCardTool(t.name));
+          return raises ? { ...result, control: { ...result.control, terminate: true } } : undefined;
+        },
       }),
     ],
   });

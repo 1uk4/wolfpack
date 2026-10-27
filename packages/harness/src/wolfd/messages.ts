@@ -188,7 +188,10 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
   if (m) {
     // A plain user message supersedes every card still waiting: they are skipped, not answerable.
     if (m.role === "user") {
-      for (const msg of list) for (const call of msg.tools ?? []) if (call.card && !call.answer) call.dismissed = true;
+      // Only messages after the previous user message can hold cards still waiting (earlier ones were dismissed then).
+      for (let i = list.length - 1; i >= 0 && list[i].role !== "user"; i--) {
+        for (const call of list[i].tools ?? []) if (call.card && !call.answer) call.dismissed = true;
+      }
     }
     list.push(m);
   }

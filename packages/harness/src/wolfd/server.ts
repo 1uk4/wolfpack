@@ -227,7 +227,8 @@ export class WolfServer {
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
         applyEntry(this.messages, ev.entry);
-        this.cards.apply(ev.entry);
+        // A dismissal (plain submit superseding cards) changes thread status: wake waiters.
+        if (this.cards.apply(ev.entry).length > 0) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));

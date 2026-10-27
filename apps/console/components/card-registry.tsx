@@ -19,9 +19,8 @@ import { ToolCallCard } from "@/components/artifacts/tool-call-card";
  * output-available render the artifact itself from part.output. Job tools
  * register JobCard (components/artifacts/job-card.tsx) under their name.
  */
-export type CardKind = "tool" | "object";
-
-export interface CardEntry {
+export interface ToolCardEntry {
+	kind: "tool";
 	Renderer: ComponentType<ArtifactPartProps>;
 	/**
 	 * The card draws its own input-streaming state (the question tools
@@ -29,19 +28,59 @@ export interface CardEntry {
 	 * chat.tsx must not substitute the generic live card.
 	 */
 	ownsStreaming?: boolean;
+	/** thread-chat expands a tool row into this card (the filesystem set only). */
+	threadRow?: boolean;
 }
 
+/** Structured object cards (decision, graph, checklist) — props are theirs to define. */
+export interface ObjectCardEntry<P = never> {
+	kind: "object";
+	Renderer: ComponentType<P>;
+}
+
+export type CardEntry = ToolCardEntry | ObjectCardEntry;
+export type CardKind = CardEntry["kind"];
+type EntryOf<K extends CardKind> = Extract<CardEntry, { kind: K }>;
+
+// Every registration lives in this file (or a barrel it imports): bundlers
+// drop unreferenced self-registering modules, so a card registered from its
+// own module may silently never register.
 const cards = new Map<string, CardEntry>();
 
 const slot = (kind: CardKind, key: string) => `${kind}:${key}`;
 
-export function registerCard(kind: CardKind, key: string, entry: CardEntry): void {
-	cards.set(slot(kind, key), entry);
+export function registerCard<K extends CardKind>(kind: K, key: string, entry: Omit<EntryOf<K>, "kind">): void {
+	const id = slot(kind, key);
+	if (cards.has(id)) throw new Error(`card already registered: ${id}`);
+	cards.set(id, { ...entry, kind } as CardEntry);
+}
+
+/** Test-only: drop a registration so tests don't leak into the global map. */
+export function unregisterCard(kind: CardKind, key: string): void {
+	cards.delete(slot(kind, key));
 }
 
 /** The registered card, or undefined — callers keep their own fallback. */
-export function lookupCard(kind: CardKind, key: string): CardEntry | undefined {
-	return cards.get(slot(kind, key));
+export function lookupCard<K extends CardKind>(kind: K, key: string): EntryOf<K> | undefined {
+	const entry = cards.get(slot(kind, key));
+	return entry?.kind === kind ? (entry as EntryOf<K>) : undefined;
+}
+
+export type ToolPartResolution =
+	| { kind: "live" }
+	| { kind: "card"; Renderer: ComponentType<ArtifactPartProps> }
+	| { kind: "none" };
+
+/**
+ * What chat.tsx renders for a tool part: the live card while the call is
+ * being written (unless the card draws its own streaming state), else the
+ * registered card, else nothing.
+ */
+export function resolveToolPart(part: ArtifactPartProps["part"]): ToolPartResolution {
+	if (!part.type.startsWith("tool-")) return { kind: "none" };
+	const card = lookupCard("tool", part.type.slice("tool-".length));
+	if (part.state === "input-streaming" && !card?.ownsStreaming) return { kind: "live" };
+	return card ? { kind: "card", Renderer: card.Renderer } : { kind: "none" };
 }
 
 /**
@@ -61,5 +100,5 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 // collapsed one-liner (tool name + headline argument), full
 // input/output on expand.
 for (const name of ["read", "ls", "find", "grep"]) {
-	registerCard("tool", name, { Renderer: ToolCallCard });
+	registerCard("tool", name, { Renderer: ToolCallCard, threadRow: true });
 }

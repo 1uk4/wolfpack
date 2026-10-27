@@ -62,7 +62,8 @@ function ThreadReasoning({
 }
 
 function ToolItemRow({ item, open, onOpenChange }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void }) {
-	const Renderer = lookupCard("tool", item.entry.name)?.Renderer;
+	const card = lookupCard("tool", item.entry.name);
+	const Renderer = card?.threadRow ? card.Renderer : undefined;
 	return (
 		<ToolRow
 			entry={item.entry}

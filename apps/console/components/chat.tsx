@@ -19,7 +19,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { LiveToolCard } from "@/components/artifacts/live-tool-card";
 import { Separator } from "@/components/ui/separator";
-import { lookupCard } from "@/components/card-registry";
+import { resolveToolPart } from "@/components/card-registry";
 import { SubagentSteerCard } from "@/components/artifacts/steer-card";
 import { Composer } from "@/components/composer";
 import { dockStateKey } from "@/components/dock-state-key";
@@ -1190,22 +1190,13 @@ export function Chat({
 													case "step-start":
 														return pi > 0 ? <Separator key={pi} className="my-3" /> : null;
 													default: {
-														// Cards register in the card registry
-														// (components/card-registry.tsx) — add renderers
-														// there, not here. A tool call being WRITTEN (owner,
-														// streaming round 2026-10-01): input-streaming spans
-														// the whole execution, and the live card — spinner +
-														// shimmered activity label, the input watchable on
-														// expand — replaces the retired transcript bottom
-														// line. On settling, the registry's card takes over.
-														// Question tools draw their own streaming state.
-														if (part.type.startsWith("tool-")) {
-															const card = lookupCard("tool", part.type.slice("tool-".length));
-															if (part.state === "input-streaming" && !card?.ownsStreaming) {
-																return <LiveToolCard key={pi} part={part as ArtifactPartProps["part"]} />;
-															}
-															if (card) return <card.Renderer key={pi} part={part as ArtifactPartProps["part"]} />;
-														}
+														// Cards register in components/card-registry.tsx — add
+														// renderers there, not here. While a call is WRITTEN
+														// (input-streaming spans its whole execution) the live
+														// card shows; on settling the registry's card takes over.
+														const res = resolveToolPart(part as ArtifactPartProps["part"]);
+														if (res.kind === "live") return <LiveToolCard key={pi} part={part as ArtifactPartProps["part"]} />;
+														if (res.kind === "card") return <res.Renderer key={pi} part={part as ArtifactPartProps["part"]} />;
 														return null;
 													}
 												}

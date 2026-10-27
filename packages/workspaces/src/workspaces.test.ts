@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -25,6 +26,7 @@ describe("config", () => {
   it("honours workspaces.root (absolute or relative to wolf home)", () => {
     expect(resolveWorkspacesRoot("/home/w", { workspaces: { root: "/data/ws" } })).toBe("/data/ws");
     expect(resolveWorkspacesRoot("/home/w", { workspaces: { root: "trees" } })).toBe("/home/w/trees");
+    expect(resolveWorkspacesRoot("/home/w", { workspaces: { root: "~/trees" } })).toBe(join(homedir(), "trees"));
   });
 });
 

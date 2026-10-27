@@ -24,7 +24,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { discoverAgents, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
-import { WriterGuard, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
+import { WriterGuard, abandonChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
 import { HttpError } from "./http-error.js";
@@ -44,6 +44,8 @@ export interface SubagentOptions {
   wolfHome: string;
   /** The home thread's cwd: the default cwd of a spawn, and where `<cwd>/.pi/agents` is looked up. */
   workspace: string;
+  /** The home system prompt for a cwd (its "Your workspace is …" line): a feature thread that moves gets it from the next turn. */
+  instructionsFor?(cwd: string): string;
   /** Where worktrees go (wolf.yaml `workspaces.root`). Default `<wolfHome>/workspaces`. */
   workspacesRoot?: string;
   /** An existing conversation as it is stored (no reconciling with the home configuration: a child keeps its own). */
@@ -113,10 +115,13 @@ function insideGit(dir: string): boolean {
 }
 
 /** A branch-safe slug: lowercase letters, digits, "." "_" "-"; never empty. */
-function slugify(text: string): string {
-  const s = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/g, "");
+function slugify(text: string, max = 40): string {
+  const s = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, max).replace(/-+$/g, "");
   return s || "x";
 }
+
+/** Pinned by the mid-turn cwd test: tools called later in the same turn already run in the new cwd; the prompt names it from the next turn. */
+const CWD_MOVE_NOTE = "Tools you call later in this turn already run there; your system prompt names it from your next turn.";
 
 const WORKTREE_HINT = 'Use isolation: "worktree" for a writer that should not share the checkout.';
 
@@ -283,6 +288,7 @@ export class SubagentManager {
     } catch (e) {
       // (createOwned has already terminated the owner task if only the conversation failed)
       this.guard.releaseAll(id);
+      if (plan.workspace) await this.dropWorkspace(plan.workspace);
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -711,11 +717,17 @@ export class SubagentManager {
     this.retryTimers.set(parentId, t);
   }
 
+  /** Remove a child worktree and branch that never ran (errors are reported, not thrown). */
+  private async dropWorkspace(ws: Workspace): Promise<void> {
+    await abandonChild(ws).catch((e) => this.port.onError(e));
+  }
+
   /** Undo a spawn that did not get going: forget the child, close its thread, end its owner task. */
   private async discard(rec: ChildRecord): Promise<void> {
     this.records = this.records.filter((r) => r !== rec);
     this.guard.releaseAll(rec.id);
     this.persist();
+    if (rec.workspace) await this.dropWorkspace(rec.workspace);
     await this.port.detachChild(rec.id).catch((e) => this.port.onError(e));
     await this.opts.releaseOwner(rec.ownerTaskId).catch((e) => this.port.onError(e));
   }
@@ -748,7 +760,10 @@ export class SubagentManager {
     const notGit = want === "worktree" ? "Notice: the working directory is not in a git repository; the sub-agent runs there without a worktree." : "";
     if (!inGit) return inPlace(notGit);
     const repo = await repoOf(a.cwd).catch(() => null);
-    if (!repo) return inPlace(notGit);
+    if (!repo) {
+      if (!writer) return inPlace();
+      return { ok: false, error: `Refused: ${a.cwd} is inside a git checkout but git cannot read it (a repository without commits, or a safe.directory setting?), so a writer cannot be isolated or guarded there. Fix the repository, or spawn a read-only agent.` };
+    }
 
     if (want === "none") {
       if (!writer) return inPlace();
@@ -762,45 +777,59 @@ export class SubagentManager {
       return { ok: true, isolation: "none", cwd: a.cwd, note: "", guardDir: repo.toplevel };
     }
 
-    let ws: Workspace;
+    let made: { ws: Workspace; moved?: Workspace };
     try {
-      ws = await this.childWorkspace(a.parent, repo, a.cwd, a.name, a.id);
+      made = await this.childWorkspace(a.parent, repo, a.cwd, a.name, a.id);
     } catch (e) {
       return { ok: false, error: `Could not create the worktree: ${e instanceof Error ? e.message : String(e)}` };
     }
+    const { ws, moved } = made;
     const inner = relative(repo.toplevel, realpathOr(a.cwd));
     if (writer) this.guard.acquire(ws.path, a.id);
-    return { ok: true, isolation: "worktree", cwd: inner && !inner.startsWith("..") ? join(ws.path, inner) : ws.path, note: "", workspace: ws, ...(writer ? { guardDir: ws.path } : {}) };
+    const note = moved ? `This thread now works in ${moved.path} on ${moved.branch}; use paths there. ${CWD_MOVE_NOTE}` : "";
+    return { ok: true, isolation: "worktree", cwd: inner && !inner.startsWith("..") ? join(ws.path, inner) : ws.path, note, workspace: ws, ...(writer ? { guardDir: ws.path } : {}) };
   }
 
-  /** The child's worktree: off the feature branch for a feature thread in this repo, else off the cwd's HEAD. */
-  private async childWorkspace(parent: ThreadRuntime, repo: RepoInfo, cwd: string, name: string, id: string): Promise<Workspace> {
+  /** The child's worktree: off the feature branch for a feature thread in this repo, else off the cwd's HEAD. `moved` is set when this spawn created the feature workspace and moved the thread. */
+  private async childWorkspace(parent: ThreadRuntime, repo: RepoInfo, cwd: string, name: string, id: string): Promise<{ ws: Workspace; moved?: Workspace }> {
     const root = this.workspacesRoot();
     const parentCwd = this.parentCwd(parent);
+    // The id suffix makes every child branch fresh: a retry never reuses what a failed spawn left.
+    const childSlug = `${slugify(name)}-${id.split("sub-").pop()}`;
     if (parent.summary.kind === "feature" && insideGit(parentCwd)) {
       const parentRepo = await repoOf(parentCwd).catch(() => null);
       if (parentRepo && parentRepo.mainDir === repo.mainDir) {
-        const featureWs = await this.featureWorkspace(parent, parentRepo, parentCwd);
-        return createChildWorkspace({ root, featureWs, featureSlug: featureWs.branch.replace(/^feat\//, ""), childSlug: slugify(name) });
+        const { ws: featureWs, created } = await this.featureWorkspace(parent, parentRepo, parentCwd);
+        const ws = await createChildWorkspace({ root, featureWs, featureSlug: featureWs.branch.replace(/^feat\//, ""), childSlug });
+        return created ? { ws, moved: featureWs } : { ws };
       }
     }
-    return createHomeChildWorkspace({ root, repo, childSlug: `${slugify(name)}-${id.split("sub-").pop()}`, baseDir: cwd });
+    return { ws: await createHomeChildWorkspace({ root, repo, childSlug, baseDir: cwd }) };
   }
 
   /**
-   * The feature thread's workspace, created on the first worktree spawn: `feat/<slug>` cut from the thread's current
-   * HEAD, saved on the thread (threads.json), and the thread's cwd moved into it. Serialised per thread.
+   * The feature thread's workspace, created on the first worktree spawn: `feat/<id>-<title>` cut from the thread's
+   * current HEAD, the thread's cwd (and prompt) moved into it, then saved on the thread. Serialised per repo, so two
+   * threads never race for a branch. Refuses a branch or path that already exists and is not this thread's.
    */
-  private featureWorkspace(parent: ThreadRuntime, repo: RepoInfo, baseDir: string): Promise<Workspace> {
-    const key = parent.summary.id;
-    const run = async (): Promise<Workspace> => {
+  private featureWorkspace(parent: ThreadRuntime, repo: RepoInfo, baseDir: string): Promise<{ ws: Workspace; created: boolean }> {
+    const key = repo.mainDir;
+    const run = async (): Promise<{ ws: Workspace; created: boolean }> => {
       const saved = this.savedThread(parent);
-      if (saved?.workspace) return saved.workspace;
-      const ws = await ensureFeatureWorkspace({ root: this.workspacesRoot(), repo, featureSlug: this.featureSlug(parent, saved), baseDir });
-      // Saved before the move: after a crash in between, boot puts the thread's cwd there (run.ts, conversations.get).
-      setThreadWorkspace(this.port.den, key, ws, (e) => this.port.onError(e));
-      await parent.conv.configure({ cwd: ws.path });
-      return ws;
+      if (saved?.workspace) return { ws: saved.workspace, created: false };
+      const root = this.workspacesRoot();
+      const slug = this.featureSlug(parent, saved);
+      const taken = await workspaceConflict({ root, repo, branch: featureBranch(slug) });
+      if (taken) throw new Error(`the feature workspace for this thread would be ${featureBranch(slug)}, but ${taken} and it is not recorded as this thread's workspace. Move or delete it, then spawn again; nothing was changed.`);
+      const ws = await ensureFeatureWorkspace({ root, repo, featureSlug: slug, baseDir });
+      try {
+        await parent.conv.configure({ cwd: ws.path, ...(this.opts.instructionsFor ? { instructions: this.opts.instructionsFor(ws.path) } : {}) });
+        setThreadWorkspace(this.port.den, parent.summary.id, ws, (e) => this.port.onError(e));
+      } catch (e) {
+        await abandonChild(ws).catch((err) => this.port.onError(err)); // just created, nothing on it
+        throw e;
+      }
+      return { ws, created: true };
     };
     const next = (this.featureLocks.get(key) ?? Promise.resolve()).then(run, run);
     const tail = next.catch(() => undefined);
@@ -811,11 +840,12 @@ export class SubagentManager {
     return next;
   }
 
-  /** Slug of the feature's title; the work id's tail is added when another feature already took that branch. */
+  /** `<last 7 of the work id>-<title, 30 chars>`: stable, readable, and never a bare title that could adopt someone's own branch. */
   private featureSlug(parent: ThreadRuntime, saved: SavedThread | undefined): string {
-    const base = slugify(parent.summary.title ?? "") || "feature";
-    const taken = loadThreads(this.port.den).some((t) => t.id !== parent.summary.id && t.workspace?.branch === `feat/${base}`);
-    return taken ? `${base}-${slugify((saved?.workItemId ?? parent.summary.id).split("-").pop() ?? "")}` : base;
+    const id = (saved?.workItemId ?? parent.summary.boundWorkItem ?? parent.summary.id).split("-").pop() ?? "";
+    const tail = id.replace(/[^A-Za-z0-9]/g, "").slice(-7);
+    const title = slugify(parent.summary.title ?? "", 30);
+    return title && title !== "x" ? `${tail}-${title}` : tail;
   }
 
   private savedThread(parent: ThreadRuntime): SavedThread | undefined {
@@ -851,7 +881,7 @@ export class SubagentManager {
   }
 
   private resolveCwd(requested: string | undefined, def: AgentDefinition, parent: ThreadRuntime): string {
-    if (requested) return isAbsolute(requested) ? requested : resolve(this.opts.workspace, requested);
+    if (requested) return isAbsolute(requested) ? requested : resolve(this.parentCwd(parent), requested);
     if (def.cwd) return isAbsolute(def.cwd) ? def.cwd : resolve(this.opts.wolfHome, "agent", def.cwd);
     return this.parentCwd(parent);
   }

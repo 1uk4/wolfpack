@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { git, gitOk } from "./git.js";
 
@@ -29,7 +30,10 @@ export type MergeResult = { ok: true } | { ok: false; conflict: true; files: str
 /** workspaces.root from a parsed wolf.yaml, else <wolfHome>/workspaces. */
 export function resolveWorkspacesRoot(wolfHome: string, config?: WorkspacesConfig | null): string {
   const root = config?.workspaces?.root;
-  if (typeof root === "string" && root.trim() !== "") return resolve(wolfHome, root.trim());
+  if (typeof root === "string" && root.trim() !== "") {
+    const r = root.trim();
+    return r === "~" ? homedir() : r.startsWith("~/") ? join(homedir(), r.slice(2)) : resolve(wolfHome, r);
+  }
   return join(wolfHome, "workspaces");
 }
 
@@ -75,6 +79,14 @@ export async function repoOf(cwd: string): Promise<RepoInfo | null> {
   const commonDir = realpath(resolve(cwd, common));
   const mainDir = basename(commonDir) === ".git" ? dirname(commonDir) : toplevel;
   return { toplevel, name: basename(mainDir), mainDir };
+}
+
+/** Why `branch` cannot be created fresh under `root` (it, or its worktree path, already exists), or null when it is free. */
+export async function workspaceConflict(opts: { root: string; repo: RepoInfo; branch: string }): Promise<string | null> {
+  if (await branchExists(opts.repo.mainDir, opts.branch)) return `branch ${opts.branch} already exists in ${opts.repo.mainDir}`;
+  const path = workspacePath(opts.root, opts.repo.name, opts.branch);
+  if (await exists(path)) return `${path} already exists`;
+  return null;
 }
 
 async function branchExists(dir: string, branch: string): Promise<boolean> {

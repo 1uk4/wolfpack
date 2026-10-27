@@ -12,7 +12,7 @@
  * Agent state is only rewritten when it differs from what config + context say (configure appends a history entry).
  * Tier switching via configure is not wired yet (main tier only).
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
@@ -41,7 +41,7 @@ import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
-import { loadThreads } from "./threads.js";
+import { loadThreads, setThreadWorkspace } from "./threads.js";
 
 export interface StartWolfOptions {
   /** Path to wolf.yaml. */
@@ -156,7 +156,8 @@ async function startConfigured(
   const extensions = [...toolExtensions, objectsExtension, ask, cardGuard.extension, ...subagentExtensions, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   // `prompts?.` is defensive: a stale engine dist predates the field and would crash wolfd boot.
-  const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
+  const contextFor = (at: string) => composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd: at, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
+  const context = contextFor(cwd);
 
   // Refuse before touching the store: a second wolfd on a live wolf's den would double-open its sqlite.
   if (opts.socket) await prepareSocketPath(opts.socket);
@@ -192,8 +193,15 @@ async function startConfigured(
         get: async (id) => {
           const conv = await engine.conversations.get(id);
           // A feature thread whose workspace was created keeps its cwd there (home's would move it back).
-          const workspace = loadThreads(config.den).find((t) => t.conversationId === id)?.workspace;
-          if (conv) await reconcile(conv, workspace ? { ...desired, cwd: workspace.path } : desired);
+          const saved = loadThreads(config.den).find((t) => t.conversationId === id);
+          let workspace = saved?.workspace;
+          if (saved && workspace && !existsSync(workspace.path)) {
+            // The worktree was removed behind our back: back to the wolf's workspace, and say so.
+            log(`server error: thread ${saved.id}: feature workspace ${workspace.path} is gone; its cwd falls back to ${cwd}`);
+            setThreadWorkspace(config.den, saved.id, undefined);
+            workspace = undefined;
+          }
+          if (conv) await reconcile(conv, workspace ? { ...desired, cwd: workspace.path, instructions: contextFor(workspace.path).instructions } : desired);
           return conv;
         },
       },
@@ -202,6 +210,7 @@ async function startConfigured(
         bridge: subagentBridge,
         wolfHome: dirname(config.file),
         workspace: cwd,
+        instructionsFor: (at) => contextFor(at).instructions,
         workspacesRoot: resolveWorkspacesRoot(dirname(config.file), readWorkspacesConfig(config.file)),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),

@@ -70,11 +70,15 @@ export function saveThread(den: string, thread: SavedThread, onError?: (e: unkno
   writeThreads(den, [...loadThreads(den, onError).filter((t) => t.id !== thread.id), thread]);
 }
 
-/** Record the feature workspace of a saved thread (no-op when the thread is not saved). */
-export function setThreadWorkspace(den: string, id: string, workspace: Workspace, onError?: (e: unknown) => void): void {
+/** Record (or, with undefined, drop) the feature workspace of a saved thread (no-op when the thread is not saved). */
+export function setThreadWorkspace(den: string, id: string, workspace: Workspace | undefined, onError?: (e: unknown) => void): void {
   const threads = loadThreads(den, onError);
   if (!threads.some((t) => t.id === id)) return;
-  writeThreads(den, threads.map((t) => (t.id === id ? { ...t, workspace } : t)));
+  writeThreads(den, threads.map((t) => {
+    if (t.id !== id) return t;
+    const { workspace: _drop, ...rest } = t;
+    return workspace ? { ...rest, workspace } : rest;
+  }));
 }
 
 export function removeThread(den: string, id: string, onError?: (e: unknown) => void): void {

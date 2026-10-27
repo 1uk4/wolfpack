@@ -55,6 +55,8 @@ export interface SubagentPort {
   readonly name: string;
   readonly den: string;
   thread(id: string): ThreadRuntime | undefined;
+  /** Is this a thread wolfd knows (attached, or registered on disk)? */
+  knownThread(id: string): boolean;
   threadOfConversation(conversationId: string): ThreadRuntime | undefined;
   /** Register a thread for an existing or new child conversation and attach it. */
   attachChild(summary: ThreadSummary, conv: EngineConversation): Promise<ThreadRuntime>;
@@ -111,6 +113,8 @@ export class SubagentManager {
   private readonly ledgerSeq = new Map<string, number>();
   private deliverySeq = 0;
   private closed = false;
+  /** Owner releases in flight, per child: a resume waits for its child's. */
+  private readonly releasing = new Map<string, Promise<void>>();
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly retryDelay = new Map<string, number>();
 
@@ -354,6 +358,8 @@ export class SubagentManager {
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
     const live = thread.isRunning;
     if (live && whenBusy === "reject") throw new HttpError("busy", `thread ${rec.id} is busy`);
+    // An owner release still in flight must finish first: its abort could otherwise kill the turn started below.
+    await this.releasing.get(rec.id);
     if (!live) {
       // Not `running` until the submit has landed; `resuming` (persisted first) lets recover() tell whether it did.
       rec.resuming = { at: thread.messageCount() };
@@ -361,7 +367,8 @@ export class SubagentManager {
     }
     try {
       const ack = await thread.submit(text, whenBusy, refs);
-      if (!live) {
+      // If the turn already finished, settle() cleared `resuming` and set the final state: leave it.
+      if (!live && rec.resuming) {
         // The new run's clock starts now. (The turn-start event may already have set running.)
         rec.runStartedAt = new Date().toISOString();
         delete rec.finishedAt;
@@ -555,16 +562,23 @@ export class SubagentManager {
    * record, so nothing is lost, while parked tasks stay bounded by the number of ACTIVE children. A spawn that never got
    * going releases it too (discard), and so does releaseParent.
    */
-  private async releaseOwnerOf(rec: ChildRecord): Promise<void> {
+  // Relies on pi-durable: a conversation whose owner task ended still runs turns (pinned by the 'pi-durable contract' test).
+  private releaseOwnerOf(rec: ChildRecord): Promise<void> {
+    const pending = this.releasing.get(rec.id);
+    if (pending) return pending;
     const taskId = rec.ownerTaskId;
-    if (!taskId) return;
-    try {
-      await this.opts.releaseOwner(taskId);
-      rec.ownerTaskId = "";
-      this.persist();
-    } catch (e) {
-      this.port.onError(e);
-    }
+    if (!taskId) return Promise.resolve();
+    const p = (async () => {
+      try {
+        await this.opts.releaseOwner(taskId);
+        rec.ownerTaskId = "";
+        this.persist();
+      } catch (e) {
+        this.port.onError(e);
+      }
+    })().finally(() => this.releasing.delete(rec.id));
+    this.releasing.set(rec.id, p);
+    return p;
   }
 
   /** A parent thread is going away: stop its active children and end all their owner tasks. */
@@ -595,8 +609,10 @@ export class SubagentManager {
       }
       if (!next) return;
       const parent = this.port.thread(parentId);
+      // Registered but not attached (it failed at boot): keep the outbox, deliver once it attaches.
+      if (!parent && this.port.knownThread(parentId)) return;
       if (!parent) {
-        // The parent is gone: nobody can take these. Say so and drop them.
+        // The parent is unknown to wolfd: nobody can take these. Say so and drop them.
         for (const rec of this.records) {
           if (rec.parentThreadId !== parentId) continue;
           for (const d of rec.outbox) {
@@ -614,8 +630,6 @@ export class SubagentManager {
       // Exactly once: the id travels in the steer text. A crash after the submit but before the removal below leaves the
       // entry here; the parent already holds the id, so it is only removed.
       if (!parent.hasUserText(`[delivery ${d.id}]`)) {
-        d.sending = true;
-        this.persist();
         try {
           // Steer: into the parent's running turn, or, when it is idle, as the message that starts one.
           await parent.submit(`${d.text}\n\n[delivery ${d.id}]`, "steer");

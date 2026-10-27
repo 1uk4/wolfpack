@@ -15,8 +15,6 @@ export interface Delivery {
   /** Embedded in the steer text, so the parent side can tell it already took this one (exactly-once across a crash). */
   id: string;
   text: string;
-  /** Set (and persisted) just before the steer is submitted: a restart that finds it checks the parent before sending again. */
-  sending?: boolean;
 }
 
 export interface ChildRecord {

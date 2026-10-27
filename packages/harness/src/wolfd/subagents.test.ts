@@ -518,7 +518,7 @@ describe("delivery", () => {
     const reg = readReg(probe);
     // crash between the steer and the outbox removal: the entry is still there, and marked sending
     reg.children[0].outbox = [
-      { n: 50, id: marker, text: "duplicate of the delivered result", sending: true } as never,
+      { n: 50, id: marker, text: "duplicate of the delivered result" } as never,
       { n: 51, id: "fresh.51", text: 'Sub-agent "tester" completed (0s).\n\nsecond result' },
     ];
     writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
@@ -642,6 +642,69 @@ describe("resume crash window", () => {
     await probe.stop();
     tw = await boot(scriptedAgents(), root);
     await parentSaw(tw, 'Sub-agent "tester" completed', 3);
+  });
+});
+
+describe("races", () => {
+  it("a turn that finishes before the resume submit returns is not overwritten with running", async () => {
+    tw = await boot(scriptedAgents());
+    await say(tw, "spawn: first");
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    const [c] = await kids(tw);
+    const child = mgr(tw).port.thread(c.id)!;
+    const real = child.submit.bind(child);
+    child.submit = async (...a: never[]) => {
+      const ack = await real(...a);
+      await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+      return ack;
+    };
+    await tw.client.submit(c.id, "quick", { whenBusy: "reject" });
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+    expect((await kids(tw))[0].state).toBe("done");
+    expect(readReg(tw).children[0].resuming).toBeUndefined();
+  });
+
+  it("an operator resume right after done is not killed by the owner release", async () => {
+    tw = await boot(scriptedAgents());
+    await say(tw, "spawn: first");
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    const [c] = await kids(tw);
+    await tw.client.submit(c.id, "right away", { whenBusy: "reject" });
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+    expect((await texts(tw, c.id)).at(-1)).toBe("CHILD_RESULT(right away)");
+  });
+
+  it("a registered parent that is not attached keeps its outbox", async () => {
+    const root = newRoot();
+    await finishedChild(root);
+    const probe = await boot(scriptedAgents(), root);
+    const reg = readReg(probe);
+    reg.children[0].outbox = [{ n: 9, id: "k.9", text: "keep me" }];
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    writeFileSync(wolfdFile(probe, "threads.json"), JSON.stringify({ threads: [{ id: "testwolf/feature-work-x-1", conversationId: "999", kind: "feature", workItemId: "work-x-1", title: "f" }] }));
+    reg.children[0].parentThreadId = "testwolf/feature-work-x-1";
+    writeFileSync(wolfdFile(probe, "subagents.json"), JSON.stringify(reg));
+    await probe.stop();
+    tw = await boot(scriptedAgents(), root);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(readReg(tw).children[0].outbox).toHaveLength(1);
+  });
+});
+
+describe("pi-durable contract", () => {
+  it("a conversation whose owner task has ended still runs resumed turns (settle releases the owner on this)", async () => {
+    tw = await boot(scriptedAgents());
+    const m = tw.wolf.engine.conversations;
+    const owned = await m.createOwned("1", { tools: [] });
+    await m.releaseOwner(owned.taskId);
+    await new Promise((r) => setTimeout(r, 200));
+    await owned.conversation.submit({ input: "after release", whenBusy: "reject" });
+    await vi.waitFor(async () => {
+      const w = await owned.conversation.watch();
+      const n = w.snapshot.entries.length;
+      await w.stop();
+      expect(n).toBeGreaterThanOrEqual(2);
+    });
   });
 });
 

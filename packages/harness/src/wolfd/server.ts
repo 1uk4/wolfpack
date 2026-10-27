@@ -128,6 +128,7 @@ export class WolfServer {
           den: opts.den,
           settleMs: this.settleMs,
           thread: (id) => this.threads.get(id),
+          knownThread: (id) => this.threads.has(id) || (opts.den ? loadThreads(opts.den).some((t) => t.id === id) : false),
           threadOfConversation: (cid) => [...this.threads.values()].find((t) => t.conv.id === cid),
           attachChild: async (summary, conv) => {
             const t = this.makeThread(summary, conv);

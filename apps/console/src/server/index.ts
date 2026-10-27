@@ -47,3 +47,4 @@ export * from "./model-catalog.ts";
 export * from "./console-client.ts";
 export * from "./thread-api.ts";
 export * from "./memory-api.ts";
+export * from "./pipeline-api.ts";

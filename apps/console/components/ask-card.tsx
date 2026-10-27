@@ -302,7 +302,7 @@ export function CardTextInput({
 	multiline?: boolean;
 	testId: string;
 	className?: string;
-} & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "className" | "ref">) {
+} & Omit<InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>, "value" | "onChange" | "className" | "ref">) {
 	// Extra props (placeholder, onFocus, data-*, …) are spread so callers such as dictation can attach to the field.
 	const common = {
 		...rest,
@@ -312,7 +312,7 @@ export function CardTextInput({
 		ref: inputRef,
 		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
 	};
-	if (multiline) return <textarea {...(common as object)} onKeyDown={onKeyDown as never} />;
+	if (multiline) return <textarea {...(common as object)} onKeyDown={onKeyDown} />;
 	return (
 		<input
 			type="text"

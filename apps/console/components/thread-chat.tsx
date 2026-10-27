@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -145,7 +145,7 @@ function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; op
  * Deliberately lean next to the legacy Chat: no rename/settings/jobs/
  * questions/compaction — the console client has no such calls yet.
  */
-export function ThreadChat({
+function ThreadChatInner({
 	wolf,
 	slug,
 	threadId,
@@ -356,7 +356,6 @@ export function ThreadChat({
 	}, [transport]);
 
 	return (
-		<PanelHostProvider wolf={wolf} threadId={threadId}>
 		<div
 			className="flex h-dvh"
 			data-testid="thread-chat"
@@ -539,6 +538,14 @@ export function ThreadChat({
 			</div>
 			<RightPanelHost />
 		</div>
+	);
+}
+
+/** The thread view plus its right-panel host: the provider sits above the view so any child can call openPanel. */
+export function ThreadChat(props: ComponentProps<typeof ThreadChatInner>) {
+	return (
+		<PanelHostProvider wolf={props.wolf} threadId={props.threadId}>
+			<ThreadChatInner {...props} />
 		</PanelHostProvider>
 	);
 }

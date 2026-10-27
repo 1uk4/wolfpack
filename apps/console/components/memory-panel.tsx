@@ -64,9 +64,15 @@ interface Loaded {
  * this thread's events). Collapse and view state persist in
  * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
  */
-export function MemoryPanel({ wolf, threadId, embedded = false }: { wolf: string; threadId: string; /** Rendered inside the panel host: body only, the host owns the aside, header and collapse. */ embedded?: boolean }) {
+export function MemoryPanel({ wolf, threadId, embedded = false }: {
+	wolf: string;
+	threadId: string;
+	/** Inside the panel host: body only; the host owns the aside, header, collapse and open state. */
+	embedded?: boolean;
+}) {
 	const [open, setOpen] = useState(true);
 	useEffect(() => {
+		if (embedded) return;
 		try {
 			setOpen(parseOpen(localStorage.getItem(MEMORY_PANEL_OPEN_KEY)));
 		} catch {}
@@ -396,7 +402,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: { wolf: string
 					<ChevronsRightIcon />
 				</Button>
 			</div>
-		{content}
+			{content}
 		</aside>
 	);
 }

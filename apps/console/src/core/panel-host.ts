@@ -25,3 +25,16 @@ export function resolveSelected(stored: string | undefined, availableIds: readon
 	if (availableIds.includes(DEFAULT_PANEL_ID)) return DEFAULT_PANEL_ID;
 	return availableIds[0] ?? null;
 }
+
+export const MAX_SELECTIONS = 50;
+
+/**
+ * Record `id` as the thread's panel. Only non-default choices are kept (the default is what an absent entry
+ * resolves to), the touched thread moves to the end, and only the `cap` most recent threads survive.
+ */
+export function withSelection(stored: Record<string, string>, threadId: string, id: string, cap = MAX_SELECTIONS): Record<string, string> {
+	const { [threadId]: _drop, ...rest } = stored;
+	const next = id === DEFAULT_PANEL_ID ? rest : { ...rest, [threadId]: id };
+	const keys = Object.keys(next);
+	return keys.length <= cap ? next : Object.fromEntries(keys.slice(keys.length - cap).map((k) => [k, next[k]!]));
+}

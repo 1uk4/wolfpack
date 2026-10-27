@@ -13,7 +13,7 @@
  * the client replays events with id > from, then follows live.
  */
 
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { getConsoleClient } from "./console-client.ts";
@@ -196,6 +196,21 @@ export function createThreadApi(source: ClientSource) {
 						"Cache-Control": "private, max-age=31536000, immutable",
 					},
 				});
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Answer a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/answer`. */
+		async answerCard(ref: ThreadRef, callId: string, req: Request): Promise<Response> {
+			try {
+				const body = (await req.json().catch(() => null)) as { answers?: unknown } | null;
+				if (!body || typeof body.answers !== "object" || body.answers === null || Array.isArray(body.answers)) {
+					return json({ error: "answers is required" }, 400);
+				}
+				const client = source();
+				if (!client.answerCard) return json({ error: "this client has no cards" }, 501);
+				return json(await client.answerCard(await resolve(client, ref), callId, body.answers as CardAnswers));
 			} catch (err) {
 				return failure(err);
 			}

@@ -1,13 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
-import { lookupCard } from "@/components/card-registry";
+import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -15,9 +15,23 @@ import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { threadTransport } from "@/components/thread-transport";
+import { cardAnswerUrl, threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem, ATTACHMENTS_PART } from "@/src/core";
+import {
+	ASSISTANT_CONTENT_CLASS,
+	NO_CARDS,
+	PROSE_BLOCK_CLASS,
+	parseThreadCards,
+	renderItems,
+	runOpen,
+	withAnswer,
+	type ArtifactPartProps,
+	type LhMessage,
+	type ThreadCards,
+	type ToolItem,
+	ATTACHMENTS_PART,
+} from "@/src/core";
+import type { CardAnswers } from "@wolfpack/client";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -63,7 +77,38 @@ function ThreadReasoning({
 	);
 }
 
-function ToolItemRow({ item, open, onOpenChange }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void }) {
+/** What the rows need to render tool-raised cards inline (cards.calls keys the card-raising calls). */
+interface CardContext {
+	cards: ThreadCards;
+	answering: string | null;
+	onAnswer: (callId: string, answers: CardAnswers) => void;
+}
+
+/** A tool call that raised an interaction card renders as that card (its renderer comes from the card registry). */
+function InlineCard({ callId, ctx }: { callId: string; ctx: CardContext }) {
+	const call = ctx.cards.calls[callId];
+	const entry = call && lookupInteractionCard(call.card.tool);
+	if (!call || !entry) return null;
+	const { Renderer } = entry;
+	return (
+		<Renderer
+			callId={callId}
+			card={call.card}
+			answer={call.answer}
+			pending={ctx.cards.pending.some((p) => p.callId === callId)}
+			submitting={ctx.answering === callId}
+			onAnswer={(answers) => ctx.onAnswer(callId, answers)}
+		/>
+	);
+}
+
+const raisesCard = (ctx: CardContext, callId: string): boolean => {
+	const call = ctx.cards.calls[callId];
+	return call !== undefined && lookupInteractionCard(call.card.tool) !== undefined;
+};
+
+function ToolItemRow({ item, open, onOpenChange, cardCtx }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void; cardCtx: CardContext }) {
+	if (raisesCard(cardCtx, item.entry.callId)) return <InlineCard callId={item.entry.callId} ctx={cardCtx} />;
 	const card = lookupCard("tool", item.entry.name);
 	const Renderer = card?.threadRow ? card.Renderer : undefined;
 	return (
@@ -93,6 +138,7 @@ export function ThreadChat({
 	title,
 	initialMessages,
 	initiallyInFlight,
+	initialCards = NO_CARDS,
 }: {
 	wolf: string;
 	slug: string;
@@ -101,14 +147,67 @@ export function ThreadChat({
 	title: string;
 	initialMessages: LhMessage[];
 	initiallyInFlight?: boolean;
+	/** Interaction cards of the thread record (pending ones + the card-raising calls of the history). */
+	initialCards?: ThreadCards;
 }) {
 	const transport = useMemo(() => threadTransport(wolf, slug), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError } = useChatSession({
+	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
 		chatId: threadId,
 		initialMessages,
 		initiallyInFlight,
 		transport,
 	});
+	const [cards, setCards] = useState<ThreadCards>(initialCards);
+	const [answering, setAnswering] = useState<string | null>(null);
+	const [cardError, setCardError] = useState<string | null>(null);
+	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
+	// after an answer that did not start a turn (siblings still wait).
+	const refreshCards = useCallback(async () => {
+		try {
+			const res = await fetch(transport.recordUrl);
+			if (!res.ok) return;
+			const next = parseThreadCards(await res.json());
+			if (next) setCards(next);
+		} catch {
+			/* the next settle refetches */
+		}
+	}, [transport]);
+	const prevStatus = useRef(status);
+	useEffect(() => {
+		const was = prevStatus.current;
+		prevStatus.current = status;
+		const wasRunning = was === "submitted" || was === "streaming";
+		if (wasRunning && status === "ready") void refreshCards();
+	}, [status, refreshCards]);
+	const onAnswer = useCallback(
+		async (callId: string, answers: CardAnswers) => {
+			setAnswering(callId);
+			setCardError(null);
+			try {
+				const res = await fetch(cardAnswerUrl(wolf, slug, callId), {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ answers }),
+				});
+				if (!res.ok) {
+					const body = (await res.json().catch(() => null)) as { error?: string } | null;
+					setCardError(body?.error ?? `Could not send the answer (${res.status}).`);
+					return;
+				}
+				const ack = (await res.json()) as { disposition?: string };
+				setCards((c) => withAnswer(c, callId, answers));
+				// The answer starts the next turn: attach to it. Queued = sibling cards still wait.
+				if (ack.disposition === "queued") void refreshCards();
+				else resumeStream();
+			} catch (err) {
+				setCardError(err instanceof Error ? err.message : "Could not send the answer.");
+			} finally {
+				setAnswering(null);
+			}
+		},
+		[wolf, slug, resumeStream, refreshCards],
+	);
+	const cardCtx: CardContext = { cards, answering, onAnswer: (callId, answers) => void onAnswer(callId, answers) };
 	const { allOpen: allThinkingOpen, epoch: thinkingEpoch } = useAllThinkingToggle();
 	const [text, setText] = useState("");
 	// Expand state of tool rows/groups, keyed by row key (see runOpen): survives a row joining a group.
@@ -250,20 +349,30 @@ export function ThreadChat({
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":
-																return <ToolItemRow key={item.key} item={item} open={runOpen(openRows, item.key)} onOpenChange={setRowOpen(item.key)} />;
-															case "group":
+																return <ToolItemRow key={item.key} item={item} open={runOpen(openRows, item.key)} onOpenChange={setRowOpen(item.key)} cardCtx={cardCtx} />;
+															case "group": {
+																// A card never hides inside a collapsed group: it renders after the group's plain rows.
+																const plain = item.items.filter((t) => !raisesCard(cardCtx, t.entry.callId));
+																const raised = item.items.filter((t) => raisesCard(cardCtx, t.entry.callId));
 																return (
-																	<ToolGroup
-																		key={item.key}
-																		entries={item.entries}
-																		open={runOpen(openRows, item.key, item.items[0]!.key)}
-																		onOpenChange={setRowOpen(item.key)}
-																	>
-																		{item.items.map((t) => (
-																			<ToolItemRow key={t.key} item={t} open={runOpen(openRows, t.key)} onOpenChange={setRowOpen(t.key)} />
+																	<Fragment key={item.key}>
+																		{plain.length > 0 && (
+																			<ToolGroup
+																				entries={plain.map((t) => t.entry)}
+																				open={runOpen(openRows, item.key, item.items[0]!.key)}
+																				onOpenChange={setRowOpen(item.key)}
+																			>
+																				{plain.map((t) => (
+																					<ToolItemRow key={t.key} item={t} open={runOpen(openRows, t.key)} onOpenChange={setRowOpen(t.key)} cardCtx={cardCtx} />
+																				))}
+																			</ToolGroup>
+																		)}
+																		{raised.map((t) => (
+																			<InlineCard key={t.key} callId={t.entry.callId} ctx={cardCtx} />
 																		))}
-																	</ToolGroup>
+																	</Fragment>
 																);
+															}
 														}
 													})}
 												</MessageContent>
@@ -276,6 +385,17 @@ export function ThreadChat({
 										<BrailleSpinner label="Thinking" />
 										<Shimmer duration={1}>THINKING…</Shimmer>
 									</span>
+								)}
+								{cardError && (
+									<div
+										data-testid="card-error"
+										className="flex items-center justify-between rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm"
+									>
+										<span>{cardError}</span>
+										<button type="button" onClick={() => setCardError(null)} className="text-xs underline">
+											Dismiss
+										</button>
+									</div>
 								)}
 								{error && (
 									<div

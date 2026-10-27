@@ -45,6 +45,7 @@ export {
   type Extension,
   type ExtensionFactory,
   type ExtensionContext,
+  type HostCapabilities,
   type ExtensionLifecycle,
   type LifecycleContext,
   type Tool,

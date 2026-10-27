@@ -76,6 +76,7 @@ export function adaptToDurable(
         classify: () => reader.classify(conversationId),
         classifyOther: (id: number) => reader.classify(id),
         messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+        latestCard: (tool, matches) => reader.latestCard(conversationId, tool, matches),
         onEngineClose: (fn) => reader.onClose(fn),
         hostConsolidationTimer: reader.hostConsolidationTimer === true,
       },

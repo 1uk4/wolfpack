@@ -7,7 +7,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { Extension as PiDurableExtension } from "@earendil-works/pi-durable";
-import type { Extension, ExtensionLifecycle, Runtime, ExtensionContext, ExtensionFactory, TelegramSharedState, SweepManager } from "./extension-api.js";
+import type { Extension, ExtensionLifecycle, Runtime, ExtensionContext, ExtensionFactory, HostCapabilities, TelegramSharedState, SweepManager } from "./extension-api.js";
 import { supportsRuntime } from "./extension-api.js";
 import { adaptToDurable } from "./adapters/durable.js";
 
@@ -46,6 +46,8 @@ export interface LoaderConfig {
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+  /** Host capability signals handed to extension factories (see ExtensionContext.capabilities). */
+  capabilities?: HostCapabilities;
 }
 
 /**
@@ -117,6 +119,7 @@ export async function loadExtensions(
     ...(config.modelTable ? { modelTable: config.modelTable } : {}),
     telegram: config.telegram,
     sweep: config.sweep,
+    ...(config.capabilities ? { capabilities: config.capabilities } : {}),
   };
 
   for (const shortName of names) {

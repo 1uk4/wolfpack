@@ -6,10 +6,14 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { CompactionEntry, type Conversation, type Harness } from "@earendil-works/pi-durable";
-import type { ConversationClass, ConversationMessage } from "../extension-api.js";
+import type { CardAnswers } from "@wolfpack/protocol";
+import type { CardLookup, ConversationClass, ConversationMessage } from "../extension-api.js";
+import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData } from "./cards.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const PAGE = 200;
+/** How far back a card lookup reads (pages): a card older than this counts as never raised, so the caller re-asks. */
+const CARD_SCAN_PAGES = 20;
 
 export interface ConversationReader {
   /** Classify by the immutable ConversationRecord. `undefined` for an unknown id. Cached: records never change. */
@@ -19,6 +23,11 @@ export interface ConversationReader {
    * first. A fork's inherited history is excluded, so a fork reads only what happened after the fork point.
    */
   messagesSince(conversationId: number, afterEntryId?: number): Promise<ConversationMessage[]>;
+  /**
+   * The newest card raised by `tool` for which `matches(card)` holds, read from the structured entries (the card in the
+   * tool result's details, the answer entry keyed by its call id) and scanned newest-first, so it stops at the hit.
+   */
+  latestCard(conversationId: number, tool: string, matches: (card: import("@wolfpack/protocol").Card) => boolean): Promise<CardLookup | undefined>;
   /** The host owns the interval consolidation timer (createWolfHarness); extensions must not start another. */
   hostConsolidationTimer?: boolean;
   /** Run `fn` when the engine closes. */
@@ -71,9 +80,49 @@ export function createConversationReader(harness: Harness): ConversationReader {
     return out;
   }
 
+  async function latestCard(id: number, tool: string, matches: (card: import("@wolfpack/protocol").Card) => boolean): Promise<CardLookup | undefined> {
+    const conv: Conversation | undefined = await harness.conversation(id as never, ctx);
+    if (!conv) return undefined;
+    // Newest first: what is seen before the card is what happened after it.
+    const answers = new Map<string, CardAnswers>();
+    const later: ConversationMessage[] = [];
+    let userSince = false;
+    let cursor: Awaited<ReturnType<Conversation["entries"]>>["next"];
+    for (let pages = 0; pages < CARD_SCAN_PAGES; pages++) {
+      const page = await conv.entries({ order: "descending" }, PAGE, cursor, ctx);
+      for (const entry of page.items) {
+        if (Number(entry.conversationId) !== id) continue;
+        const kind = (entry as { kind?: string }).kind;
+        if (kind === CARD_ANSWER_KIND) {
+          for (const c of ((entry as { data?: unknown }).data as CardAnswerData | undefined)?.cards ?? []) answers.set(c.callId, c.answers);
+          continue;
+        }
+        if (kind === USER_ENTRY_KIND) {
+          userSince = true;
+          continue;
+        }
+        for (const message of entry.model ?? []) {
+          const m = message as { role?: string; toolName?: string; toolCallId?: string };
+          if (m.role !== "toolResult" || m.toolName !== tool) continue;
+          const card = cardOfToolMessage(message);
+          if (!card || !m.toolCallId || !matches(card)) {
+            later.push({ entryId: Number(entry.id), message });
+            continue;
+          }
+          const answered = answers.get(m.toolCallId);
+          return { callId: m.toolCallId, card, status: answered ? "answered" : userSince ? "dismissed" : "pending", ...(answered ? { answers: answered } : {}), laterResults: later };
+        }
+      }
+      if (!page.next) break;
+      cursor = page.next;
+    }
+    return undefined;
+  }
+
   return {
     classify,
     messagesSince,
+    latestCard,
     onClose: (fn) => void closers.add(fn),
     close: () => {
       for (const fn of closers) {

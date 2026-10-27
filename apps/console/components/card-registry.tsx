@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { CardAnswers, Card } from "@wolfpack/client";
+import type { CardAnswers, CardClosed, Card } from "@wolfpack/client";
 import type { ArtifactPartProps, QuestionAnswerData } from "@/src/core";
 import { AnsweredCard } from "@/components/answered-card";
 import { AskCard } from "@/components/ask-card";
@@ -65,8 +65,12 @@ export interface InteractionCardProps {
 	card: Card;
 	/** Set once answered: render the record, no controls. */
 	answer?: CardAnswers;
-	/** Superseded by a plain submit before it was answered: render as skipped, no controls. */
+	/** Closed without an answer (skipped, or superseded by a plain submit): render read-only with its badge, no controls. */
 	dismissed?: boolean;
+	/** How the card closed (answered / skipped / superseded); absent while pending. A bare `dismissed` reads as superseded. */
+	closed?: CardClosed;
+	/** The wolf holds the operator's skip until the turn's sibling cards are resolved. */
+	heldSkip?: boolean;
 	/** The wolf holds this answer until the turn's sibling cards are answered; the card can still change it. */
 	heldAnswer?: CardAnswers;
 	/** The card waits for the operator (server-confirmed); false = raised but not yet confirmed pending. */
@@ -74,6 +78,8 @@ export interface InteractionCardProps {
 	/** The answer is on its way to the server. */
 	submitting: boolean;
 	onAnswer(answers: CardAnswers): void;
+	/** Skip the card instead of answering it. */
+	onSkip?(): void;
 }
 
 /**

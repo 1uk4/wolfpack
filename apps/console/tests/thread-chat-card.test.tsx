@@ -76,6 +76,12 @@ class CardClient extends MockConsoleClient {
 	failNext?: string;
 	/** The card was superseded server-side: history shows it dismissed, nothing pends. */
 	superseded = false;
+	/** The card was skipped by the operator (server-side): history shows it closed:"skipped". */
+	skippedState = false;
+	skips: string[] = [];
+	/** The next skip is held (siblings wait). */
+	holdSkipNext = false;
+	heldSkip = false;
 	/** An answer is held (siblings wait): the card stays pending carrying it. */
 	held?: CardAnswers;
 	/** The next answer is held instead of starting a turn. */
@@ -93,11 +99,25 @@ class CardClient extends MockConsoleClient {
 			role: "assistant" as const,
 			text: "",
 			at: new Date().toISOString(),
-			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}), ...(this.superseded ? { dismissed: true } : {}) }],
+			tools: [{ callId: CALL, name: "ask_user_question", args: { question: "q" }, result, card: this.card, ...(this.answered ? { answer: this.answered } : {}), ...(this.superseded ? { dismissed: true, closed: "superseded" as const } : {}), ...(this.skippedState ? { dismissed: true, closed: "skipped" as const, result: "(skipped by the user)" } : {}) }],
 		};
-		const pending = !this.answered && !this.superseded;
-		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}) }];
+		const pending = !this.answered && !this.superseded && !this.skippedState;
+		const pendingCards = [{ callId: CALL, threadId: id, card: this.card, raisedAt: new Date().toISOString(), ...(this.held ? { heldAnswer: this.held } : {}), ...(this.heldSkip ? { heldSkip: true } : {}) }];
 		return { ...base, messages: [asked, ...base.messages], ...(pending ? { pendingCards } : {}) };
+	}
+	async skipCard(threadId: string, callId: string) {
+		if (this.notFoundNext) {
+			this.notFoundNext = false;
+			throw new NotFoundError(`card ${callId}`);
+		}
+		this.skips.push(callId);
+		if (this.holdSkipNext) {
+			this.holdSkipNext = false;
+			this.heldSkip = true;
+			return { messageId: `card-${callId}`, disposition: "queued" as const };
+		}
+		this.skippedState = true;
+		return this.submit(threadId, "skipped");
 	}
 	async answerCard(threadId: string, callId: string, answers: CardAnswers) {
 		if (this.failNext) {
@@ -129,6 +149,8 @@ function routeFetch(client: CardClient): typeof fetch {
 		const req = new Request(url, init);
 		const answer = url.pathname.match(/\/cards\/([^/]+)\/answer$/);
 		if (answer && req.method === "POST") return api.answerCard(ref, decodeURIComponent(answer[1]!), req);
+		const skip = url.pathname.match(/\/cards\/([^/]+)\/skip$/);
+		if (skip && req.method === "POST") return api.skipCard(ref, decodeURIComponent(skip[1]!));
 		if (url.pathname.endsWith("/stream")) return api.stream(ref, req);
 		if (url.pathname.endsWith("/threads/home")) return api.thread(ref);
 		return new Response("{}", { status: 404 });
@@ -176,6 +198,12 @@ const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 after(() => {
 	globalThis.fetch = realFetch;
 });
+async function unmount() {
+	await act(async () => root?.unmount());
+	root = null;
+	document.body.innerHTML = "";
+}
+
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	root = null;
@@ -268,13 +296,86 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.equal(q('[data-testid="answered-card"]'), null);
 	});
 
-	it("a superseded card renders as skipped with no controls", async () => {
+	it("a superseded card renders as Superseded with no controls", async () => {
 		const client = new CardClient(SINGLE);
 		client.superseded = true;
 		await mount(client);
-		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
+		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /Superseded/);
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.equal(q('[data-testid="pending-card"]'), null);
+	});
+
+	it("Skip posts a skip (no answer), the card shows Skipped read-only and the next turn streams in", async () => {
+		const client = new CardClient(SINGLE);
+		await mount(client);
+		await click(q('[data-testid="card-skip"]')!);
+		await settle();
+		assert.deepEqual(client.skips, [CALL]);
+		assert.deepEqual(client.answers, []);
+		const card = q('[data-testid="dismissed-card"]');
+		assert.ok(card, "the card closed");
+		assert.equal(q('[data-testid="card-closed-badge"]')?.textContent, "Skipped");
+		assert.equal(q('[data-testid="card-skip"]'), null);
+		assert.equal(q('[data-testid="card-submit"]'), null);
+		assert.ok(document.querySelectorAll('[data-testid="card-option"]').length > 0, "fields stay visible, read-only");
+		assert.ok([...document.querySelectorAll('[data-testid="card-option"]')].every((o) => o.hasAttribute("disabled")));
+		assert.match(document.body.textContent ?? "", /Shipping from the answer\./);
+	});
+
+	it("Skip works from any step of a stepped card", async () => {
+		const STEPPED: Card = {
+			tool: "ask_user_question",
+			fields: [
+				{ id: "one", kind: "free-text", label: "First?" },
+				{ id: "two", kind: "free-text", label: "Second?" },
+			],
+			steps: [{ title: "A", fields: ["one"] }, { title: "B", fields: ["two"] }],
+		};
+		const client = new CardClient(STEPPED);
+		await mount(client);
+		assert.ok(q('[data-testid="card-skip"]'), "skip on step 1");
+		await click(q('[data-testid="card-skip"]')!);
+		await settle();
+		assert.deepEqual(client.skips, [CALL]);
+		assert.equal(q('[data-testid="card-closed-badge"]')?.textContent, "Skipped");
+	});
+
+	it("a queued skip stays pending and shows as held", async () => {
+		const client = new CardClient(SINGLE);
+		client.holdSkipNext = true;
+		await mount(client);
+		await click(q('[data-testid="card-skip"]')!);
+		await settle();
+		assert.ok(q('[data-testid="pending-card"]'));
+		assert.ok(q('[data-testid="card-held-skip"]'));
+		assert.equal(q('[data-testid="card-closed-badge"]'), null);
+	});
+
+	it("reload: skipped and superseded history show distinct badges", async () => {
+		const skipped = new CardClient(SINGLE);
+		skipped.skippedState = true;
+		await mount(skipped);
+		const a = q('[data-testid="card-closed-badge"]')!;
+		assert.equal(a.textContent, "Skipped");
+		assert.equal(q('[data-testid="dismissed-card"]')?.getAttribute("data-closed"), "skipped");
+		const skippedClass = a.getAttribute("class");
+		await unmount();
+		const superseded = new CardClient(SINGLE);
+		superseded.superseded = true;
+		await mount(superseded);
+		const b = q('[data-testid="card-closed-badge"]')!;
+		assert.equal(b.textContent, "Superseded");
+		assert.equal(q('[data-testid="dismissed-card"]')?.getAttribute("data-closed"), "superseded");
+		assert.notEqual(b.getAttribute("class"), skippedClass, "distinct styling, not just text");
+	});
+
+	it("an answered card carries the Answered badge", async () => {
+		const client = new CardClient(SINGLE);
+		await mount(client);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.equal(q('[data-testid="card-closed-badge"]')?.textContent, "Answered");
 	});
 
 	it("a 404 on answer (superseded meanwhile) refreshes the thread: the card turns skipped", async () => {
@@ -333,7 +434,7 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		const skipped = new CardClient(CONFIRM);
 		skipped.superseded = true;
 		await mount(skipped);
-		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
+		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /Superseded/);
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.equal(q('[data-testid="card-confirm"]')!.hasAttribute("disabled"), true);
 	});

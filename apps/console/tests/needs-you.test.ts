@@ -182,6 +182,17 @@ describe("live card events in a thread (foldCardEvent)", () => {
 		assert.equal(dismissed.pending.length, 0);
 		assert.equal(dismissed.calls.c1?.dismissed, true);
 		assert.equal(foldCardEvent(c, { type: "card-settled", callId: "c1", outcome: "answered" }).pending.length, 0);
+		assert.equal(dismissed.calls.c1?.closed, "superseded", "a bare dismissal reads as superseded");
+	});
+
+	it("a skip settles the card as skipped; a held skip replaces a held answer", () => {
+		let c = foldCardEvent(NO_CARDS, { type: "card-pending", card: { ...pending, heldAnswer: { answer: { value: "x" } } } });
+		c = foldCardEvent(c, { type: "card-pending", card: { ...pending, heldSkip: true } });
+		assert.equal(c.calls.c1?.heldSkip, true);
+		assert.equal(c.calls.c1?.heldAnswer, undefined);
+		const skipped = foldCardEvent(c, { type: "card-settled", callId: "c1", outcome: "dismissed", closed: "skipped" });
+		assert.equal(skipped.pending.length, 0);
+		assert.equal(skipped.calls.c1?.closed, "skipped");
 	});
 });
 

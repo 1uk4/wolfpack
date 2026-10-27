@@ -35,7 +35,7 @@ export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
 export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
-export type { Card, CardAnswers, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
+export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
 export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 

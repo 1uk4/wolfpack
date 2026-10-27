@@ -216,6 +216,17 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** Skip a pending card: the console's side of `POST /v1/threads/:id/cards/:callId/skip`. */
+		async skipCard(ref: ThreadRef, callId: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.skipCard) return json({ error: "this client has no cards" }, 501);
+				return json(await client.skipCard(await resolve(client, ref), callId));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async abort(ref: ThreadRef): Promise<Response> {
 			try {
 				const client = source();

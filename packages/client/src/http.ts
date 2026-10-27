@@ -16,6 +16,7 @@ import {
   NotFoundError,
   ProtocolError,
   type Actor,
+  type CardAnswers,
   type ConsoleClient,
   type ConsolidateResponse,
   type KbEntryDetail,
@@ -24,6 +25,7 @@ import {
   type MemoryTopic,
   type WorkRecordResponse,
   type KbPipelineResponse,
+  type PendingCard,
   type PromoteResponse,
   type MemoryEvent,
   type Attachment,
@@ -112,6 +114,15 @@ export class HttpConsoleClient implements ConsoleClient {
   async getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
     const res = await this.request("getAttachment", { id: threadId, attachmentId }, {}, threadId);
     return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
+  }
+
+  async answerCard(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck> {
+    return (await this.json("answerCard", { id: threadId, callId }, ROUTES.answerCard.response.schema, { answers }, threadId)) as SubmitAck;
+  }
+
+  async listCards(wolf: string): Promise<PendingCard[]> {
+    const r = await this.json("listCards", { name: wolf }, ROUTES.listCards.response.schema, undefined, wolf);
+    return (r as { cards: PendingCard[] }).cards;
   }
 
   async abort(threadId: string): Promise<void> {

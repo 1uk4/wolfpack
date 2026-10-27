@@ -51,6 +51,75 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   kb_unavailable: 409,
 };
 
+// ---------------------------------------------------------------- cards
+
+/**
+ * Interaction cards: a wolf's question to the operator, raised by a tool (the model-facing `ask_user_question` or a
+ * tool such as `task_done`). A card holds one or more fields; the shape extends `ask_user_question`
+ * (question / options / free text). Additive: no version bump.
+ *
+ * Field kinds today: `free-text`, `single`. `multi` and `confirm` slot in as further members of CardFieldSchema.
+ * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
+ */
+export const CardOptionSchema = z.object({
+  label: z.string(),
+  /** Machine-readable value returned when picked. Defaults to the label. */
+  value: z.string(),
+  description: z.string().optional(),
+});
+export type CardOption = z.infer<typeof CardOptionSchema>;
+
+const cardFieldBase = z.object({
+  /** Unique within the card; keys the answer. */
+  id: z.string().min(1),
+  label: z.string(),
+  /** Extra context shown under the label. */
+  description: z.string().optional(),
+});
+export const FreeTextFieldSchema = cardFieldBase.extend({
+  kind: z.literal("free-text"),
+  default: z.string().optional(),
+});
+export const SingleFieldSchema = cardFieldBase.extend({
+  kind: z.literal("single"),
+  options: z.array(CardOptionSchema).min(1),
+  /** Offer an "Other" free-text entry beside the options (the `ask_user_question` behaviour). Default true. */
+  allowOther: z.boolean().optional(),
+  /** An option `value` to pre-select. */
+  default: z.string().optional(),
+});
+export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema, SingleFieldSchema]);
+export type CardField = z.infer<typeof CardFieldSchema>;
+export type CardFieldKind = CardField["kind"];
+
+export const CardSchema = z.object({
+  /** Tool that raised it, e.g. `ask_user_question`. Keys the console's card renderer. */
+  tool: z.string(),
+  title: z.string().optional(),
+  fields: z.array(CardFieldSchema).min(1),
+});
+export type Card = z.infer<typeof CardSchema>;
+
+/**
+ * One answered field. `value` is what the tool sees; `other` is true when the operator typed an answer instead of
+ * picking an option (`single` with allowOther).
+ */
+export const CardFieldAnswerSchema = z.object({ value: z.string(), other: z.boolean().optional() });
+export type CardFieldAnswer = z.infer<typeof CardFieldAnswerSchema>;
+/** Answers keyed by field id. */
+export const CardAnswersSchema = z.record(z.string(), CardFieldAnswerSchema);
+export type CardAnswers = z.infer<typeof CardAnswersSchema>;
+
+/** A card waiting for the operator. `callId` is the tool call that raised it and identifies it in the answer command. */
+export const PendingCardSchema = z.object({
+  callId: z.string(),
+  threadId: z.string(),
+  card: CardSchema,
+  /** ISO time the card was raised (the tool call's result time). */
+  raisedAt: z.iso.datetime({ offset: true }),
+});
+export type PendingCard = z.infer<typeof PendingCardSchema>;
+
 // ------------------------------------------------------------ resources
 
 export const WolfStatusSchema = z.enum(["online", "offline", "busy"]);
@@ -65,12 +134,17 @@ export const WolfSummarySchema = z.object({
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 
 export const ThreadKindSchema = z.enum(["home", "feature", "subagent", "process"]);
+/** `needs-you`: no turn is running and at least one card waits for the operator's answer. */
+export const ThreadStatusSchema = z.enum(["idle", "busy", "needs-you"]);
+export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
 export const ThreadSummarySchema = z.object({
   id: z.string(),
   wolf: z.string(),
   kind: ThreadKindSchema,
   title: z.string(),
   boundWorkItem: z.string().optional(),
+  /** Additive: absent on servers that predate cards (treat as idle/busy from `ThreadDetail.busy`). */
+  status: ThreadStatusSchema.optional(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -88,6 +162,10 @@ export const ThreadToolCallSchema = z.object({
   result: z.string().optional(),
   isError: z.boolean().optional(),
   resultTruncated: z.boolean().optional(),
+  /** A card-raising call: the card it raised. */
+  card: CardSchema.optional(),
+  /** The operator's answer to that card (absent while it is pending). The `result` then carries the answer text. */
+  answer: CardAnswersSchema.optional(),
   /** Length of the message's `text` when the call happened: interleaves tool rows with the merged text. */
   textOffset: z.number().int().nonnegative().optional(),
 });
@@ -207,6 +285,8 @@ export const ThreadDetailSchema = ThreadSummarySchema.extend({
   busy: z.boolean(),
   /** Id of the latest event emitted on this thread (0 if none). */
   lastEventId: z.number().int().nonnegative(),
+  /** Additive: cards waiting for the operator (survives reconnect and restart). Absent = none / older server. */
+  pendingCards: z.array(PendingCardSchema).optional(),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetailSchema>;
 
@@ -702,6 +782,18 @@ export const SubmitAckSchema = z.object({
   disposition: z.enum(["started", "steered", "queued"]),
 });
 export type SubmitAck = z.infer<typeof SubmitAckSchema>;
+
+/**
+ * Answer a pending card. The answer is a submission: the card's tool call is resolved with it and the next turn starts
+ * (when no sibling card of the same turn is still pending). `answers` must cover every field of the card.
+ * Wire: the thread id and `callId` ride the path.
+ */
+export const AnswerCardRequestSchema = z.object({
+  threadId: z.string(),
+  callId: z.string(),
+  answers: CardAnswersSchema,
+});
+export type AnswerCardRequest = z.infer<typeof AnswerCardRequestSchema>;
 
 /** Ends the running turn; the stream finishes with turn-end (reason "aborted"). */
 export const AbortRequestSchema = z.object({ threadId: z.string() });

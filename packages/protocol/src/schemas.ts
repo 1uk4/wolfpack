@@ -58,7 +58,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
  * tool such as `task_done`). A card holds one or more fields; the shape extends `ask_user_question`
  * (question / options / free text). Additive: no version bump.
  *
- * Field kinds today: `free-text`, `single`. `multi` and `confirm` slot in as further members of CardFieldSchema.
+ * Field kinds: `free-text`, `single`, `multi` (checkboxes, answer string[]) and `confirm` (yes/no, answer boolean).
  * `default` only pre-selects in the UI, it is never auto-submitted (cards wait indefinitely; there is no timeout).
  */
 export const CardOptionSchema = z.object({
@@ -88,7 +88,26 @@ export const SingleFieldSchema = cardFieldBase.extend({
   /** An option `value` to pre-select. */
   default: z.string().optional(),
 });
-export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema, SingleFieldSchema]);
+export const MultiFieldSchema = cardFieldBase.extend({
+  kind: z.literal("multi"),
+  options: z.array(CardOptionSchema).min(1),
+  /** Offer custom entries beside the options. Default false (unlike `single`): a multi answer is a subset of the options. */
+  allowOther: z.boolean().optional(),
+  /** Option values to pre-select. */
+  default: z.array(z.string()).optional(),
+  /** Bounds on the number of picked entries (options and custom ones together). */
+  min: z.number().int().min(0).optional(),
+  max: z.number().int().min(1).optional(),
+});
+export const ConfirmFieldSchema = cardFieldBase.extend({
+  kind: z.literal("confirm"),
+  /** Button labels; default "Yes" / "No". */
+  confirmLabel: z.string().optional(),
+  rejectLabel: z.string().optional(),
+  /** Pre-selects confirm (true) or reject (false); the operator still has to submit. */
+  default: z.boolean().optional(),
+});
+export const CardFieldSchema = z.discriminatedUnion("kind", [FreeTextFieldSchema, SingleFieldSchema, MultiFieldSchema, ConfirmFieldSchema]);
 export type CardField = z.infer<typeof CardFieldSchema>;
 export type CardFieldKind = CardField["kind"];
 
@@ -103,14 +122,32 @@ export const CardSchema = z
   .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
     message: "a single field's default must be one of its option values",
     path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || (f.default ?? []).every((d) => f.options.some((o) => o.value === d))), {
+    message: "a multi field's default must be a subset of its option values",
+    path: ["fields"],
+  })
+  .refine((c) => c.fields.every((f) => f.kind !== "multi" || ((f.min ?? 0) <= (f.max ?? Infinity) && (f.default === undefined || (f.default.length >= (f.min ?? 0) && f.default.length <= (f.max ?? Infinity))))), {
+    message: "a multi field needs min <= max, and its default must respect both",
+    path: ["fields"],
   });
 export type Card = z.infer<typeof CardSchema>;
 
 /**
- * One answered field. `value` is what the tool sees; `other` is true when the operator typed an answer instead of
- * picking an option (`single` with allowOther).
+ * One answered field; the `value` type follows the field kind.
+ * - free-text / single: `value` is the text or option value; `other` is true when the operator typed an answer instead
+ *   of picking an option (`single` with allowOther).
+ * - multi: `value` lists the picked option values plus any custom entries; `other` names the custom entries (a subset
+ *   of `value`).
+ * - confirm: `value` is true (confirm) or false (reject), with an optional `note`.
  */
-export const CardFieldAnswerSchema = z.object({ value: z.string(), other: z.boolean().optional() });
+export const TextFieldAnswerSchema = z.object({ value: z.string(), other: z.boolean().optional() });
+export const MultiFieldAnswerSchema = z.object({ value: z.array(z.string()), other: z.array(z.string()).optional() });
+export const ConfirmFieldAnswerSchema = z.object({ value: z.boolean(), note: z.string().optional() });
+export const CardFieldAnswerSchema = z.union([TextFieldAnswerSchema, MultiFieldAnswerSchema, ConfirmFieldAnswerSchema]);
+export type TextFieldAnswer = z.infer<typeof TextFieldAnswerSchema>;
+export type MultiFieldAnswer = z.infer<typeof MultiFieldAnswerSchema>;
+export type ConfirmFieldAnswer = z.infer<typeof ConfirmFieldAnswerSchema>;
 export type CardFieldAnswer = z.infer<typeof CardFieldAnswerSchema>;
 /** Answers keyed by field id. */
 export const CardAnswersSchema = z.record(z.string(), CardFieldAnswerSchema);

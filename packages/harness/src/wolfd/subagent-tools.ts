@@ -74,10 +74,14 @@ async function abandonGate(bridge: SubagentBridge, tool: string, ctx: ToolContex
   const info = await bridge.require().abandonInfo(String(ctx.conversationId), name);
   if (!info) return undefined;
   if (info.refusal) return { content: [{ type: "text", text: info.refusal }], isError: true };
-  if (info.unmerged === 0) return undefined;
+  if (info.unmerged === 0 && info.dirty === 0) return undefined;
   const text = (t: string, extra: Partial<ToolResult> = {}): ToolResult => ({ content: [{ type: "text", text: t }], ...extra });
-  if (!ctx.conversation?.latestCard) return text(`Not abandoned: ${info.branch} has unmerged commits and nobody can confirm here.`, { isError: true });
-  const n = info.unmerged === undefined ? "unknown unmerged commits" : `${info.unmerged} unmerged commit${info.unmerged === 1 ? "" : "s"}`;
+  if (!ctx.conversation?.latestCard) return text(`Not abandoned: ${info.branch} has unmerged or uncommitted work and nobody can confirm here.`, { isError: true });
+  const parts = [
+    info.unmerged === undefined ? "unknown unmerged commits" : info.unmerged > 0 ? `${info.unmerged} unmerged commit${info.unmerged === 1 ? "" : "s"}` : "",
+    info.dirty === undefined ? "unknown uncommitted files" : info.dirty > 0 ? `${info.dirty} uncommitted file${info.dirty === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  const n = parts.join(", ");
   const label = `Abandon ${info.branch} (${n})?`;
   const found = await ctx.conversation.latestCard(tool, (c) => c.fields.length === 1 && c.fields[0].label === label);
   if (found?.status === "pending") return text(`The user was already asked whether to abandon ${info.branch}; their answer is pending. Do not ask again: your turn ends here.`, { endTurn: true });

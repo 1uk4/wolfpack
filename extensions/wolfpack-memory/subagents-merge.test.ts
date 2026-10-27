@@ -26,6 +26,7 @@ let tw: TestWolf | undefined;
 let repo: TempRepo | undefined;
 let toolResults: string[] = [];
 /** Open gates hold a child (WAIT) or the conflict worker until the test releases them. */
+let failGets = false;
 let childGate: Promise<void> | undefined;
 let resolverGate: Promise<void> | undefined;
 let lastName = "";
@@ -55,6 +56,7 @@ beforeEach(async () => {
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(data));
       };
+      if (req.method === "GET" && id !== "" && failGets) return send({ error: "down" }, 500);
       if (req.method === "GET" && id === "") return send({ items: [...items.values()] });
       const it = items.get(id);
       if (!it) return send({ error: "not found" }, 404);
@@ -70,6 +72,7 @@ beforeEach(async () => {
   endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   childGate = undefined;
   resolverGate = undefined;
+  failGets = false;
 });
 afterEach(async () => {
   for (const open of gates.splice(0)) open();
@@ -109,6 +112,8 @@ function scripted(): FauxResponseStep {
       if (rebase && resolverGate) await held(resolverGate);
       if (brief.includes("WAIT") && childGate) await held(childGate);
       if (rebase) return tool("bash", { command: `git rebase ${rebase[1]}; printf resolved > README.md; git add README.md; GIT_EDITOR=true git rebase --continue` });
+      const touch = /^TOUCH (\S+)/.exec(brief);
+      if (touch) return tool("bash", { command: `echo x > ${touch[1]}` });
       const edit = /^EDIT (\S+) (\S+)( DIRTY)?/.exec(brief);
       if (edit) return tool("bash", { command: `printf ${edit[2]} > ${edit[1]} && git add ${edit[1]} && git commit -qm child-edit${edit[3] ? " && echo junk > junk.txt" : ""}` });
       return fauxAssistantMessage("CHILD_NOOP");
@@ -328,6 +333,41 @@ describe("merge on ship", () => {
     expect(toolResults.at(-1)).toContain(`Abandoned ${rec.workspace.branch}`);
     expect(existsSync(rec.workspace.path)).toBe(false);
     expect(branches(repo!)).not.toContain(rec.workspace.branch);
+  });
+
+  it("a 0-commit child with uncommitted changes asks first, then abandons on a yes", async () => {
+    const { w, feature, rec } = await withChild("TOUCH README.md");
+    await say(w, "merge kid abandon", feature);
+    const { p, answer } = await pendingConfirm(w, feature);
+    expect(p.card.fields[0]).toMatchObject({ label: `Abandon ${rec.workspace.branch} (1 uncommitted file)?` });
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    await answer(true);
+    await vi.waitFor(() => expect(existsSync(rec.workspace.path)).toBe(false), { timeout: 8000 });
+    expect(branches(repo!)).not.toContain(rec.workspace.branch);
+  });
+
+  it("an untracked-only file also asks", async () => {
+    const { w, feature, rec } = await withChild("TOUCH scratch.txt");
+    await say(w, "stop kid abandon", feature);
+    const { p } = await pendingConfirm(w, feature);
+    expect(p.card.fields[0]).toMatchObject({ label: `Abandon ${rec.workspace.branch} (1 uncommitted file)?` });
+    expect(existsSync(rec.workspace.path)).toBe(true);
+  });
+
+  it("a failed Work lookup at boot is retried by the next recover", async () => {
+    const { w, feature, rec, featureWs } = await withChild("EDIT a.txt one");
+    await w.stop();
+    items.get(TASK)!.stage = "shipped";
+    failGets = true;
+    await start();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(existsSync(rec.workspace.path)).toBe(true);
+    expect(regOf(tw!).children[0].mergeTried).toBeUndefined();
+    await tw!.stop();
+    failGets = false;
+    await start();
+    await parentSaid(tw!, feature, `Merged ${rec.workspace.branch} into ${featureWs.branch}`);
+    expect(existsSync(rec.workspace.path)).toBe(false);
   });
 
   it("recover merges a child whose task shipped while wolfd was down, once", async () => {

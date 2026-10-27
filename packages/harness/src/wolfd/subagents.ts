@@ -857,27 +857,31 @@ export class SubagentManager {
     try {
       const say = (text: string): string => (notify && this.tell(rec, text), text);
       const feature = this.featureWsOf(rec);
-      if (!feature) {
+      // (mergeTried is set only once an attempt has an outcome: a crash mid-merge is retried by recover)
+      const tried = (): void => {
         rec.mergeTried = true;
         this.persist();
+      };
+      if (!feature) {
+        tried();
         return say(homeText(rec, ws));
       }
       if (this.isActive(rec)) return say(`Not merged yet: sub-agent "${rec.name}" is still ${rec.state}. Its branch is merged when it finishes (the task has shipped); or stop it and call subagent_merge({ name: "${rec.name}", action: "retry" }).`);
       const held = this.heldBy(rec);
       if (held) return say(`Not merged: ${held}. When it finishes the branch is merged again.`);
-      rec.mergeTried = true;
-      this.persist();
       let n = 0;
       try {
         n = Number(await gitOk(feature.path, ["rev-list", "--count", `${feature.branch}..${ws.branch}`]));
         const res = await mergeChild(ws, feature);
         if (!res.ok) {
           this.ledger(rec, "system", "parent", "error", `merge conflict: ${res.files.join(", ")}`);
+          tried();
           return say(conflictText(rec, ws, feature, res.files));
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         this.ledger(rec, "system", "parent", "error", `merge refused: ${msg}`);
+        tried();
         return say(dirtyText(rec, ws, msg));
       }
       delete rec.workspace;
@@ -904,13 +908,23 @@ export class SubagentManager {
     }
   }
 
+  /** Files with uncommitted changes in the child's worktree (staged, unstaged and untracked); undefined when it cannot be read. */
+  private async dirtyCount(rec: ChildRecord): Promise<number | undefined> {
+    if (!rec.workspace) return undefined;
+    try {
+      return (await gitOk(rec.workspace.path, ["status", "--porcelain", "--untracked-files=all"])).split("\n").filter(Boolean).length;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** What the tool's gate needs to know before an abandon: the branch and its unmerged commits (undefined count: could not be counted, so ask). Undefined when there is nothing to abandon. */
-  async abandonInfo(callerConversationId: string, name: string): Promise<{ branch: string; unmerged: number | undefined; refusal?: string } | undefined> {
+  async abandonInfo(callerConversationId: string, name: string): Promise<{ branch: string; unmerged: number | undefined; dirty: number | undefined; refusal?: string } | undefined> {
     const parent = this.port.threadOfConversation(callerConversationId);
     const rec = parent && name?.trim() ? this.byName(parent.summary.id, name.trim()) : undefined;
     if (!rec?.workspace) return undefined;
     const held = this.heldBy(rec);
-    return { branch: rec.workspace.branch, unmerged: await this.unmergedCount(rec), ...(held ? { refusal: `Not abandoned: ${held}. Stop it first, or wait for it to finish.` } : {}) };
+    return { branch: rec.workspace.branch, unmerged: await this.unmergedCount(rec), dirty: await this.dirtyCount(rec), ...(held ? { refusal: `Not abandoned: ${held}. Stop it first, or wait for it to finish.` } : {}) };
   }
 
   /** Why an abandon must not go ahead (unconfirmed unmerged work, a conflict worker in the worktree), or undefined. */
@@ -918,7 +932,7 @@ export class SubagentManager {
     if (!rec.workspace) return undefined;
     const held = this.heldBy(rec);
     if (held) return `Not abandoned: ${held}. Stop it first, or wait for it to finish.`;
-    if (!confirmed && (await this.unmergedCount(rec)) !== 0) return `Not abandoned: ${rec.workspace.branch} has unmerged commits and the owner has not confirmed.`;
+    if (!confirmed && ((await this.unmergedCount(rec)) !== 0 || (await this.dirtyCount(rec)) !== 0)) return `Not abandoned: ${rec.workspace.branch} has unmerged commits or uncommitted files and the owner has not confirmed.`;
     return undefined;
   }
 

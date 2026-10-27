@@ -3,7 +3,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
@@ -31,12 +31,14 @@ const { createThreadApi } = await import("../src/server/thread-api.ts");
 const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
 const { PanelHostProvider, RightPanelHost, PANELS } = await import("../components/panel-host.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
+const { ActivitySection } = await import("../components/activity-dock.tsx");
 const { SubagentJobs } = await import("../components/subagent-jobs.tsx");
 const { SessionRow } = await import("../components/sidebar.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const core = await import("../src/core/index.ts");
 
+const DONE = 30_000;
 const NOW = Date.parse("2026-10-27T12:00:00.000Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 const PARENT = FIXTURE_THREAD.id;
@@ -60,6 +62,9 @@ const child = (n: number, over: Partial<ThreadSummary> = {}): ThreadSummary => (
 class SubClient extends MockConsoleClient {
 	kids: ThreadSummary[] = [];
 	aborted: string[] = [];
+	/** listChildren answers this many ms late, with the list as it was when asked. */
+	childrenDelay = 0;
+	abortFails = false;
 	constructor() {
 		super({ delayMs: 0 });
 	}
@@ -67,9 +72,12 @@ class SubClient extends MockConsoleClient {
 		return [...(await super.listThreads(wolf)), ...this.kids];
 	}
 	async listChildren(id: string) {
-		return this.kids.filter((k) => k.parentThreadId === id);
+		const snapshot = this.kids.filter((k) => k.parentThreadId === id);
+		if (this.childrenDelay) await new Promise((r) => setTimeout(r, this.childrenDelay));
+		return snapshot;
 	}
 	override async abort(id: string) {
+		if (this.abortFails) throw new Error("boom");
 		this.aborted.push(id);
 	}
 }
@@ -111,11 +119,12 @@ function routeFetch(client: SubClient): typeof fetch {
 /** No panels at all: like the shipped host while the Subagent panel is unavailable. */
 const NO_PANELS: typeof PANELS = [];
 
+let liveClock = false;
 function Harness() {
 	const items = useSubagentChildren("1uk4", "home", PARENT);
 	return (
 		<>
-			<SubagentStrip wolf="1uk4" slug="home" items={items} now={NOW} />
+			<SubagentStrip wolf="1uk4" slug="home" items={items} now={liveClock ? undefined : NOW} />
 			<RightPanelHost />
 		</>
 	);
@@ -342,5 +351,102 @@ describe("the activity bridge", () => {
 		bridge.stop();
 		assert.deepEqual(threads, [["1uk4", "1uk4/sub-1"]]);
 		assert.deepEqual(pokes, []);
+	});
+});
+
+describe("the fetch/event race", () => {
+	it("an event during the mount fetch is laid over the fetched list: siblings and the patch both survive", async () => {
+		const c = new SubClient();
+		c.kids = [child(1), child(2)];
+		c.childrenDelay = 80;
+		const pending = mount(c);
+		await new Promise((r) => setTimeout(r, 20));
+		await fire(child(3)); // a new child announced while the fetch (which cannot know it) is out
+		await fire(child(1, { step: "bash" }));
+		await pending;
+		await settle(120);
+		assert.deepEqual(qa('[data-testid="subagent-row"]').map((r) => r.dataset.child), ["1uk4/sub-1", "1uk4/sub-2", "1uk4/sub-3"]);
+		assert.equal(qa('[data-testid="subagent-step"]')[0]!.textContent, "bash");
+	});
+
+	it("the same after a reconnect, and on the wolf stream's needs-you baseline", async () => {
+		const c = new SubClient();
+		c.kids = [child(1)];
+		await mount(c);
+		c.kids = [child(1), child(2)];
+		c.childrenDelay = 80;
+		await act(async () => resync());
+		await new Promise((r) => setTimeout(r, 20));
+		await fire(child(3));
+		await settle(150);
+		assert.equal(qa('[data-testid="subagent-row"]').length, 3);
+		c.childrenDelay = 0;
+		c.kids = [child(1), child(2), child(3), child(4)];
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4" })));
+		await settle();
+		assert.equal(qa('[data-testid="subagent-row"]').length, 4);
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4", threadId: "1uk4/home", kind: "status" })));
+		c.kids = [];
+		await settle();
+		assert.equal(qa('[data-testid="subagent-row"]').length, 4); // a named thread's change is not a baseline
+	});
+});
+
+describe("the clock", () => {
+	it("elapsed ticks each second, a queued row does not, and a settled row folds when its linger passes", async () => {
+		mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
+		liveClock = true;
+		try {
+			const c = new SubClient();
+			c.kids = [
+				child(1, { startedAt: ago(0) }),
+				child(2, { state: "queued", queuePosition: 1, startedAt: undefined }),
+				child(3, { state: "done", startedAt: ago(60_000), finishedAt: ago(0) }),
+			];
+			await mount(c);
+			const text = (n: number, id: string) => qa('[data-testid="subagent-row"]')[n]!.querySelector(`[data-testid="${id}"]`)!.textContent;
+			assert.equal(text(0, "subagent-elapsed"), "0s");
+			await act(async () => mock.timers.tick(5_000));
+			assert.equal(text(0, "subagent-elapsed"), "5s");
+			assert.equal(text(1, "subagent-elapsed"), "—");
+			assert.equal(qa('[data-testid="subagent-row"]').length, 3);
+			await act(async () => mock.timers.tick(DONE + 1_000));
+			assert.equal(qa('[data-testid="subagent-row"]').length, 2); // the done row folded away
+			assert.match(q('[data-testid="subagent-done-toggle"]')!.textContent!, /1 done/);
+		} finally {
+			liveClock = false;
+			mock.timers.reset();
+		}
+	});
+});
+
+describe("Stop", () => {
+	it("a failed stop says so, and the message clears when the child's state changes", async () => {
+		const c = new SubClient();
+		c.kids = [child(1)];
+		c.abortFails = true;
+		await mount(c);
+		await click(q('[data-testid="subagent-stop"]')!);
+		await settle();
+		assert.match(q('[data-testid="subagent-stop-error"]')!.textContent!, /Could not stop worker/);
+		await fire(child(1, { state: "stopped", finishedAt: ago(0) }));
+		assert.ok(q('[data-testid="subagent-stop-error"]') === null);
+	});
+});
+
+describe("the legacy activity section", () => {
+	it("hideWhenEmpty draws nothing without jobs; without the flag the header stays", () => {
+		assert.equal(renderToStaticMarkup(<ActivitySection feed={{ jobs: [] }} hideWhenEmpty />), "");
+		assert.match(renderToStaticMarkup(<ActivitySection feed={{ jobs: [] }} />), /Background agents/);
+		const job = { id: "j", kind: "research", chatId: "c", toolCallId: "t", status: "running", activity: "x", createdAt: ago(1000), updatedAt: ago(0), title: "T", contextLimit: null };
+		assert.match(renderToStaticMarkup(<ActivitySection feed={{ jobs: [job] as never }} hideWhenEmpty />), /Background agents/);
+	});
+});
+
+describe("sidebarGroups is defensive", () => {
+	it("a child whose parent is itself a child, or missing from the list, is not lost or crashing", () => {
+		const rows = [{ id: "a" }, { id: "b", parentThreadId: "a" }, { id: "c", parentThreadId: "b" }, { id: "d", parentThreadId: "gone" }];
+		assert.deepEqual(core.sidebarGroups(rows, rows, false, new Set()).map((g) => g.top.id), ["a", "c", "d"]);
+		assert.doesNotThrow(() => core.sidebarGroups(rows, [{ id: "zzz", parentThreadId: "nope" }], true, new Set()));
 	});
 });

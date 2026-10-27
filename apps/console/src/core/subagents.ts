@@ -81,7 +81,8 @@ export function partitionChildren<T extends ChildThread>(children: readonly T[],
 
 /** Sidebar order: top-level rows keep their order, each followed by its children (oldest first). Orphans (parent unlisted) stay top level. */
 export function nestChildren<T extends { id: string; parentThreadId?: string }>(rows: readonly T[]): { top: T[]; children: Map<string, T[]> } {
-	const ids = new Set(rows.map((r) => r.id));
+	// Depth 1: only a row that is not itself a child can be a parent.
+	const ids = new Set(rows.filter((r) => r.parentThreadId === undefined).map((r) => r.id));
 	const children = new Map<string, T[]>();
 	const top: T[] = [];
 	for (const r of rows) {
@@ -113,8 +114,8 @@ export function sidebarGroups<T extends { id: string; parentThreadId?: string; s
 	const matched = new Set(ranked.map((r) => r.id));
 	const order: string[] = [];
 	for (const r of ranked) {
-		const key = topIds.has(r.id) ? r.id : r.parentThreadId!;
-		if (!order.includes(key)) order.push(key);
+		const key = topIds.has(r.id) ? r.id : r.parentThreadId;
+		if (key !== undefined && topIds.has(key) && !order.includes(key)) order.push(key);
 	}
 	const byId = new Map(top.map((t) => [t.id, t]));
 	return order.map((id): SidebarGroup<T> => {

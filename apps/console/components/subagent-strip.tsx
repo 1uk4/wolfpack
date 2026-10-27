@@ -9,22 +9,30 @@ import { usePanelHost } from "@/components/panel-host";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
 import { formatTokens } from "@/components/usage-format";
-import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isLive, isSettled, partitionChildren, stateLabel, threadHref, threadSlug, upsertChild, type ChildThread } from "@/src/core";
+import { DONE_LINGER_MS, canStop, elapsedMs, formatChildElapsed, isSettled, partitionChildren, stateLabel, threadHref, threadSlug, upsertChild, type ChildThread } from "@/src/core";
 
 /** A strip row's height, for the composer reserve (see ThreadChat). */
 export const STRIP_ROW_PX = 28;
 
-/** The thread's children, live: fetched on mount, patched by thread-updated, refetched after a reconnect. */
+/**
+ * The thread's children, live: fetched on mount, patched by thread-updated, refetched after a reconnect (and on the
+ * wolf stream's needs-you baseline, which the server sends on every reconnect of its own stream).
+ * A thread-updated that lands while a fetch is in flight is kept and laid over the fetched list (the patch is newer
+ * than the snapshot the fetch may have read), so neither a patch nor the fetched siblings are lost.
+ */
 export function useSubagentChildren(wolf: string, slug: string, threadId: string): ChildThread[] {
 	const [children, setChildren] = useState<ChildThread[]>([]);
 	const seq = useRef(0);
+	const patches = useRef<ChildThread[]>([]);
 	const refetch = useCallback(async () => {
 		const n = ++seq.current;
+		patches.current = []; // events before this fetch started are in what it reads
 		try {
 			const res = await fetch(`${threadBase(wolf, slug)}/children`);
 			if (!res.ok || n !== seq.current) return;
 			const body = (await res.json()) as { threads?: ChildThread[] };
-			if (Array.isArray(body.threads) && n === seq.current) setChildren(body.threads);
+			if (!Array.isArray(body.threads) || n !== seq.current) return;
+			setChildren(patches.current.reduce<ChildThread[]>(upsertChild, body.threads));
 		} catch {
 			/* the next event or resync refetches */
 		}
@@ -34,22 +42,30 @@ export function useSubagentChildren(wolf: string, slug: string, threadId: string
 	}, [refetch]);
 	useOptionalServerEvent("thread-updated", (p) => {
 		if (p.wolf !== wolf || p.thread.parentThreadId !== threadId) return;
-		seq.current++; // a fetch started before this event must not overwrite it
+		patches.current.push(p.thread);
 		setChildren((list) => upsertChild(list, p.thread));
+	});
+	// The wolf stream's baseline (no thread named) means events may have been missed.
+	useOptionalServerEvent("needs-you-changed", (p) => {
+		if (p.wolf === wolf && p.threadId === undefined) void refetch();
 	});
 	useOptionalServerResync(() => void refetch());
 	return children;
 }
 
-/** Re-render once a second while any child is live (the elapsed clock), and when a done row is due to fold. */
-function useNow(active: boolean, nowProp?: number): number {
+/**
+ * Re-render once a second while a child's clock runs (running or waiting) or a settled row is still due to fold.
+ * `ticking` is computed from the same `now` the rows are drawn with.
+ */
+function useNow(items: readonly ChildThread[], nowProp?: number): number {
 	const [now, setNow] = useState(() => nowProp ?? Date.now());
+	const ticking = nowProp === undefined && items.some((c) => c.state === "running" || c.state === "waiting" || (isSettled(c) && !!c.finishedAt && now - Date.parse(c.finishedAt) < DONE_LINGER_MS));
 	useEffect(() => {
-		if (nowProp !== undefined || !active) return;
+		if (!ticking) return;
 		setNow(Date.now());
 		const t = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(t);
-	}, [active, nowProp]);
+	}, [ticking]);
 	return nowProp ?? now;
 }
 
@@ -109,9 +125,7 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 	const router = useRouter();
 	const host = usePanelHost();
 	const [expanded, setExpanded] = useState(false);
-	// Tick while a child is live, or a settled one has yet to fold away (the strip hides it once its linger passes).
-	const ticking = items.some((c) => isLive(c) || (isSettled(c) && !!c.finishedAt && Date.now() - Date.parse(c.finishedAt) < DONE_LINGER_MS));
-	const now = useNow(ticking, nowProp);
+	const now = useNow(items, nowProp);
 	const open = useCallback(
 		(c: ChildThread) => {
 			if (!host.openPanel("subagent", { childThreadId: c.id })) router.push(threadHref(wolf, c.id));
@@ -119,6 +133,9 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 		[host, router, wolf],
 	);
 	const [stopError, setStopError] = useState<string | null>(null);
+	// A state change (the stop took, or the child moved on) makes the error stale.
+	const states = items.map((c) => `${c.id}:${c.state}`).join();
+	useEffect(() => setStopError(null), [states]);
 	const stop = useCallback(
 		async (c: ChildThread) => {
 			setStopError(null);

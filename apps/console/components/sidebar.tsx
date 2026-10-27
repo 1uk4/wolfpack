@@ -494,13 +494,18 @@ function SessionsSidebar() {
 	   round-trip. */
 	const refreshRef = useRef(refresh);
 	refreshRef.current = refresh;
+	/* Events keep coming while subagents work: a throttle, not a debounce (a debounce would never fire under a steady
+	   stream). The first event refreshes at once, then at most one refresh per second, the last event always landing. */
+	const lastRefreshRef = useRef(0);
 	const eventDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const scheduleEventRefresh = () => {
-		if (eventDebounceRef.current) clearTimeout(eventDebounceRef.current);
+		if (eventDebounceRef.current) return; // a trailing refresh is already due
+		const wait = Math.max(0, lastRefreshRef.current + 1000 - Date.now());
 		eventDebounceRef.current = setTimeout(() => {
 			eventDebounceRef.current = undefined;
+			lastRefreshRef.current = Date.now();
 			void refreshRef.current();
-		}, 250);
+		}, wait);
 	};
 	useServerEvent("chats-changed", scheduleEventRefresh);
 	useServerEvent("turn-started", scheduleEventRefresh);

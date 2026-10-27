@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { WorkBadges } from "@/components/work-badges";
+import { TaskGraph } from "@/components/task-graph";
 import { useMemoryEvents } from "@/components/memory-events";
 import {
 	BUSY_TEXT,
@@ -16,6 +17,8 @@ import {
 	actionBlock,
 	applyPromoteEvent,
 	bannerOf,
+	buildTaskGraph,
+	featureIdFor,
 	parseOpen,
 	parseView,
 	parentToFetch,
@@ -34,18 +37,27 @@ import {
 	type FeedItem,
 	type MemoryStatus,
 	type PanelView,
+	type RecordView,
+	type TaskGraphModel,
 	type PromoteState,
 	type WorkRecordResponse,
 } from "@/src/core";
 
 const REFRESH_DEBOUNCE_MS = 250;
 
+/** An item's own record plus the parent's when the Record is inherited. */
+interface Loaded {
+	own: WorkRecordResponse;
+	parent: WorkRecordResponse | null;
+}
+
 /**
- * The thread's memory panel (flex sibling of the conversation column):
+ * The thread's Status panel (flex sibling of the conversation column):
  * off/inert banner, pool gauge with its consolidate / promote actions,
- * and one section, running to the bottom of the panel, that toggles
- * between the bound item's Record and the live observation feed (live-only,
- * capped, this thread's events). Collapse and view state persist in
+ * and one section, running to the bottom of the panel, with three views:
+ * the feature's task graph, the item viewer (the bound item, or the task
+ * clicked in the graph) and the live observation feed (live-only, capped,
+ * this thread's events). Collapse and view state persist in
  * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
  */
 export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string }) {
@@ -63,16 +75,21 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		} catch {}
 	};
 
-	const [view, setView] = useState<PanelView>("record");
-	const viewRef = useRef<PanelView>("record");
+	const [view, setView] = useState<PanelView>("graph");
+	const viewRef = useRef<PanelView>("graph");
 	viewRef.current = view;
+	/** The view the feed toggle returns to. */
+	const lastView = useRef<"graph" | "item">("graph");
 	const [unread, setUnread] = useState(0);
 	useEffect(() => {
 		try {
-			setView(parseView(localStorage.getItem(MEMORY_PANEL_VIEW_KEY)));
+			const v = parseView(localStorage.getItem(MEMORY_PANEL_VIEW_KEY));
+			if (v !== "feed") lastView.current = v;
+			setView(v);
 		} catch {}
 	}, []);
 	const chooseView = (next: PanelView) => {
+		if (next !== "feed") lastView.current = next;
 		setView(next);
 		if (next === "feed") setUnread(0);
 		try {
@@ -82,8 +99,11 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 
 	const [status, setStatus] = useState<MemoryStatus | null>(null);
 	const [statusError, setStatusError] = useState<string | null>(null);
-	const [own, setOwn] = useState<WorkRecordResponse | null>(null);
-	const [parent, setParent] = useState<WorkRecordResponse | null>(null);
+	const [bound, setBound] = useState<Loaded | null>(null);
+	const [feature, setFeature] = useState<WorkRecordResponse | null>(null);
+	/** A task picked in the graph (not the bound item) and its record. */
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [selected, setSelected] = useState<Loaded | null>(null);
 	const [feed, setFeed] = useState<FeedItem[]>([]);
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
@@ -93,11 +113,15 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	const boundTitle = status?.bound?.title;
 	const boundRef = useRef<string | null>(null);
 	boundRef.current = boundId;
-	const parentRef = useRef<string | null>(null);
-	parentRef.current = own?.partOf ?? null;
+	const selectedRef = useRef<string | null>(null);
+	selectedRef.current = selectedId;
+	/** Work ids whose Record the panel shows: a record_written for any of them refetches. */
+	const shownRef = useRef<(string | null | undefined)[]>([]);
+	shownRef.current = [boundId, bound?.own.partOf, feature?.id, selectedId, selected?.own.partOf];
 
 	const statusReq = useRef(0);
 	const recordReq = useRef(0);
+	const selectedReq = useRef(0);
 	const feedSeq = useRef(0);
 
 	const refreshStatus = useCallback(async () => {
@@ -110,21 +134,49 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		} else setStatusError(r.message);
 	}, [wolf, threadId]);
 
-	const refreshRecord = useCallback(async (id: string | null) => {
-		const req = ++recordReq.current;
-		if (!id) {
-			setOwn(null);
-			setParent(null);
-			return;
-		}
-		const r = await fetchWorkRecord(wolf, id);
-		if (req !== recordReq.current || !r.ok) return;
-		const pid = parentToFetch(r.data);
-		const p = pid ? await fetchWorkRecord(wolf, pid) : null;
-		if (req !== recordReq.current) return;
-		setOwn(r.data);
-		setParent(p?.ok ? p.data : null);
-	}, [wolf]);
+	const loadItem = useCallback(
+		async (id: string): Promise<Loaded | null> => {
+			const r = await fetchWorkRecord(wolf, id);
+			if (!r.ok) return null;
+			const pid = parentToFetch(r.data);
+			const p = pid ? await fetchWorkRecord(wolf, pid) : null;
+			return { own: r.data, parent: p?.ok ? p.data : null };
+		},
+		[wolf],
+	);
+
+	/** The bound item and its feature (itself when it is a feature, else its parent, which carries `children`). */
+	const refreshRecord = useCallback(
+		async (id: string | null) => {
+			const req = ++recordReq.current;
+			if (!id) {
+				setBound(null);
+				setFeature(null);
+				return;
+			}
+			const l = await loadItem(id);
+			if (req !== recordReq.current || !l) return;
+			const fid = featureIdFor(l.own);
+			const f = l.own.kind === "feature" ? { ok: true as const, data: l.own } : fid ? await fetchWorkRecord(wolf, fid) : null;
+			if (req !== recordReq.current) return;
+			setBound(l);
+			setFeature(f?.ok ? f.data : null);
+		},
+		[wolf, loadItem],
+	);
+
+	const refreshSelected = useCallback(
+		async (id: string | null) => {
+			const req = ++selectedReq.current;
+			if (!id) {
+				setSelected(null);
+				return;
+			}
+			const l = await loadItem(id);
+			if (req === selectedReq.current && l) setSelected(l);
+		},
+		[loadItem],
+	);
 
 	// Trailing-debounced refetch shared by status + record: event bursts coalesce.
 	const dirty = useRef({ status: false, record: false });
@@ -135,8 +187,11 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		const d = dirty.current;
 		dirty.current = { status: false, record: false };
 		if (d.status) void refreshStatus();
-		if (d.record) void refreshRecord(boundRef.current);
-	}, [refreshStatus, refreshRecord]);
+		if (d.record) {
+			void refreshRecord(boundRef.current);
+			void refreshSelected(selectedRef.current);
+		}
+	}, [refreshStatus, refreshRecord, refreshSelected]);
 	const schedule = useCallback(
 		(plan: { status: boolean; record: boolean }) => {
 			if (!plan.status && !plan.record) return;
@@ -160,8 +215,22 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		void refreshStatus();
 	}, [refreshStatus]);
 	useEffect(() => {
+		setSelectedId(null);
 		void refreshRecord(boundId);
 	}, [boundId, refreshRecord]);
+	useEffect(() => {
+		setSelected(null);
+		void refreshSelected(selectedId);
+	}, [selectedId, refreshSelected]);
+	// Stage changes emit no event yet: refetch when the window regains focus.
+	useEffect(() => {
+		const onFocus = () => {
+			dirty.current = { status: true, record: true };
+			flush();
+		};
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, [flush]);
 
 	useMemoryEvents(
 		wolf,
@@ -170,10 +239,10 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 			const item = feedItemOf(e, threadId, `f${feedSeq.current++}`, titles);
 			if (item) {
 				setFeed((f) => pushFeed(f, item));
-				if (viewRef.current === "record" && boundRef.current) setUnread((n) => n + 1);
+				if (viewRef.current !== "feed" && boundRef.current) setUnread((n) => n + 1);
 			}
 			if (e.type.startsWith("promote_")) setPromote((s) => applyPromoteEvent(s, e));
-			schedule(refreshPlan(e, [boundRef.current, parentRef.current]));
+			schedule(refreshPlan(e, shownRef.current));
 		},
 		() => {
 			dirty.current = { status: true, record: true };
@@ -193,6 +262,7 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
 		void refreshStatus();
 		void refreshRecord(boundRef.current);
+		void refreshSelected(selectedRef.current);
 	};
 	const startPromote = async () => {
 		setNote(null);
@@ -207,13 +277,13 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
-	const showFeed = view === "feed" || !status?.bound;
-	const rec = own ? recordView(own, parent) : null;
+	const graph = buildTaskGraph(bound?.own ?? null, feature);
+	const showing = selectedId && selectedId !== boundId ? selected : bound;
 
 	if (!open) {
 		return (
 			<aside className="flex w-9 shrink-0 flex-col items-center border-l border-border py-2" data-testid="memory-panel" data-open="false">
-				<Button variant="ghost" size="icon" aria-label="Open memory panel" onClick={toggle}>
+				<Button variant="ghost" size="icon" aria-label="Open status panel" onClick={toggle}>
 					<ChevronsLeftIcon />
 				</Button>
 			</aside>
@@ -223,8 +293,8 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	return (
 		<aside className="relative flex w-80 shrink-0 flex-col border-l border-border text-sm" data-testid="memory-panel" data-open="true">
 			<div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
-				<span className="font-medium">Memory</span>
-				<Button variant="ghost" size="icon" aria-label="Collapse memory panel" onClick={toggle}>
+				<span className="font-medium">Status</span>
+				<Button variant="ghost" size="icon" aria-label="Collapse status panel" onClick={toggle}>
 					<ChevronsRightIcon />
 				</Button>
 			</div>
@@ -265,75 +335,135 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 					</div>
 				)}
 
-				<BoundOrFeed
+				<StatusSection
 					view={view}
 					bound={status?.bound ?? null}
-					rec={rec}
-					item={own}
+					graph={graph}
+					shown={showing ? { item: showing.own, rec: recordView(showing.own, showing.parent) } : null}
+					viewingOther={!!selectedId && selectedId !== boundId}
 					feed={feed}
 					unread={unread}
-					onToggle={() => chooseView(showFeed ? "record" : "feed")}
+					onView={chooseView}
+					onToggleFeed={() => chooseView(view === "feed" ? lastView.current : "feed")}
+					onSelect={(id) => {
+						setSelectedId(id === boundId ? null : id);
+						setView("item");
+						lastView.current = "item";
+					}}
+					onBack={() => setSelectedId(null)}
 				/>
 			</div>
 		</aside>
 	);
 }
 
-/** The bound item's Record (markdown) or the live observation feed, one at a time; no bound item → feed only. */
-export function BoundOrFeed({ view, bound, rec, item, feed, unread, onToggle }: {
+const MD = "text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold";
+
+/** The Status section: the feature graph, the item viewer or the live observation feed, one at a time; no bound item → feed only. */
+export function StatusSection({ view, bound, graph, shown, viewingOther = false, feed, unread, onView, onToggleFeed, onSelect, onBack }: {
 	view: PanelView;
 	bound: MemoryStatus["bound"] | null;
-	rec: ReturnType<typeof recordView> | null;
-	/** The bound item itself (for its kind/stage/domain badges); null until fetched. */
-	item?: WorkRecordResponse | null;
+	graph: TaskGraphModel;
+	/** The item the viewer shows (the bound one or a clicked task): its record (badges, plan) and the Record to display. */
+	shown: { item: WorkRecordResponse; rec: RecordView } | null;
+	/** The viewer shows a task other than the bound item: offer the way back. */
+	viewingOther?: boolean;
 	feed: FeedItem[];
 	unread: number;
-	onToggle: () => void;
+	onView: (v: "graph" | "item") => void;
+	onToggleFeed: () => void;
+	onSelect: (id: string) => void;
+	onBack: () => void;
 }) {
 	const showFeed = view === "feed" || !bound;
+	const tab = (v: "graph" | "item", label: string) => (
+		<Button size="xs" variant={view === v ? "secondary" : "ghost"} aria-pressed={view === v} data-testid={`memory-tab-${v}`} onClick={() => onView(v)}>
+			{label}
+		</Button>
+	);
 	return (
-	<section data-testid={showFeed ? "memory-feed" : "memory-record"}>
-		<div className="mb-1 flex items-center justify-between gap-2">
-			<h3 className="text-xs font-medium uppercase text-muted-foreground">{showFeed ? "Observations (live)" : "Bound item"}</h3>
-			{bound ? (
-				<Button size="xs" variant="ghost" data-testid="memory-view-toggle" onClick={onToggle}>
-					{showFeed ? "« Bound item" : "Live observations »"}
-					{!showFeed && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
-				</Button>
-			) : null}
-		</div>
-		{showFeed ? (
-			<>
-				{feed.length === 0 ? <p className="text-xs text-muted-foreground">Nothing captured yet.</p> : null}
-				<ul className="flex flex-col gap-1.5">
-					{feed.map((f) => (
-						<li key={f.key} className="text-xs">
-							<div>{f.summary || "(observation)"}{f.count > 1 ? ` ×${f.count}` : ""}</div>
-							<div className="text-muted-foreground">→ {f.destination}</div>
-						</li>
-					))}
-				</ul>
-			</>
-		) : bound ? (
-			<>
-				<Link className="underline-offset-2 hover:underline" href={workHref(bound.workId)}>
-					{bound.title ?? bound.workId}
-				</Link>
-				{item ? <WorkBadges kind={item.kind} stage={item.stage} domain={item.domain} className="mt-1.5" /> : null}
-				{rec ? (
-					<div className="mt-2">
-						{rec.inheritedFrom ? <p className="text-xs text-muted-foreground">Record from parent: {rec.inheritedFrom.title}</p> : null}
-						{rec.record.trim() ? (
-							<div className="mt-1 text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold" data-testid="memory-record-md">
-								<KbMarkdown>{rec.record}</KbMarkdown>
-							</div>
-						) : (
-							<p className="text-xs text-muted-foreground">No Record yet.</p>
-						)}
+		<section data-testid={showFeed ? "memory-feed" : view === "graph" ? "memory-graph" : "memory-record"} data-view={showFeed ? "feed" : view}>
+			<div className="mb-1 flex items-center justify-between gap-2">
+				{showFeed ? (
+					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations (live)</h3>
+				) : (
+					<div className="flex items-center gap-1" data-testid="memory-tabs">
+						{tab("graph", "Feature")}
+						{tab("item", "Item")}
 					</div>
+				)}
+				{bound ? (
+					<Button size="xs" variant="ghost" data-testid="memory-view-toggle" onClick={onToggleFeed}>
+						{showFeed ? "« Status" : "Live observations »"}
+						{!showFeed && unread > 0 ? <span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-unread">{unread}</span> : null}
+					</Button>
 				) : null}
-			</>
-		) : null}
-	</section>
+			</div>
+			{showFeed ? (
+				<>
+					{feed.length === 0 ? <p className="text-xs text-muted-foreground">Nothing captured yet.</p> : null}
+					<ul className="flex flex-col gap-1.5">
+						{feed.map((f) => (
+							<li key={f.key} className="text-xs">
+								<div>{f.summary || "(observation)"}{f.count > 1 ? ` ×${f.count}` : ""}</div>
+								<div className="text-muted-foreground">→ {f.destination}</div>
+							</li>
+						))}
+					</ul>
+				</>
+			) : view === "graph" ? (
+				graph.kind === "graph" ? (
+					<>
+						<div className="mb-1 flex items-baseline justify-between gap-2" data-testid="task-graph-header">
+							<Link className="min-w-0 truncate underline-offset-2 hover:underline" href={workHref(graph.featureId)}>
+								{graph.featureTitle}
+							</Link>
+							<span className="shrink-0 text-xs text-muted-foreground" data-testid="task-graph-progress">{graph.label}</span>
+						</div>
+						{graph.nodes.length > 0 ? <TaskGraph model={graph} onSelect={onSelect} /> : <p className="text-xs text-muted-foreground">No tasks yet.</p>}
+					</>
+				) : graph.kind === "inbox" ? (
+					<p className="text-xs text-muted-foreground" data-testid="task-graph-inbox">
+						<Link className="underline-offset-2 hover:underline" href={workHref(graph.featureId)}>{graph.title}</Link> · {graph.count} {graph.count === 1 ? "item" : "items"}
+					</p>
+				) : (
+					<p className="text-xs text-muted-foreground" data-testid="task-graph-none">No feature to graph.</p>
+				)
+			) : (
+				<>
+					{viewingOther ? (
+						<Button size="xs" variant="ghost" className="mb-1" data-testid="memory-back-bound" onClick={onBack}>
+							« Bound item
+						</Button>
+					) : null}
+					{shown || bound ? (
+						<Link className="block underline-offset-2 hover:underline" href={workHref(shown?.item.id ?? bound!.workId)}>
+							{shown?.item.title || (!viewingOther ? bound?.title : undefined) || shown?.item.id || bound?.workId}
+						</Link>
+					) : null}
+					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}
+					{shown ? (
+						<div className="mt-2">
+							{shown.rec.inheritedFrom ? <p className="text-xs text-muted-foreground">Record from parent: {shown.rec.inheritedFrom.title}</p> : null}
+							{shown.rec.record.trim() ? (
+								<div className={`mt-1 ${MD}`} data-testid="memory-record-md">
+									<KbMarkdown>{shown.rec.record}</KbMarkdown>
+								</div>
+							) : (
+								<p className="text-xs text-muted-foreground">No Record yet.</p>
+							)}
+							{shown.item.plan.trim() ? (
+								<div className="mt-3" data-testid="memory-plan">
+									<h4 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Plan</h4>
+									<div className={MD}>
+										<KbMarkdown>{shown.item.plan}</KbMarkdown>
+									</div>
+								</div>
+							) : null}
+						</div>
+					) : null}
+				</>
+			)}
+		</section>
 	);
 }

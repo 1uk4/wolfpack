@@ -29,13 +29,13 @@ export function parseOpen(raw: string | null | undefined): boolean {
 }
 export const serializeOpen = (open: boolean): string => (open ? "1" : "0");
 
-// ─── Persisted bound-item / feed view ────────────────────────────────────────
+// ─── Persisted graph / item / feed view ────────────────────────────────────────
 
-export type PanelView = "record" | "feed";
+export type PanelView = "graph" | "item" | "feed";
 
-/** SSR-safe: anything but "feed" (including no stored value) is the Record view. */
+/** SSR-safe: "feed" and "item" (the pre-graph "record" too) are kept, anything else (incl. no stored value) is the graph. */
 export function parseView(raw: string | null | undefined): PanelView {
-	return raw === "feed" ? "feed" : "record";
+	return raw === "feed" ? "feed" : raw === "item" || raw === "record" ? "item" : "graph";
 }
 export const serializeView = (view: PanelView): string => view;
 

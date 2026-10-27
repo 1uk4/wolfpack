@@ -3,12 +3,14 @@
 /** A work item page body (/kb/work/[id]): header facts, links to parent / dependencies, plan and Record. */
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { TaskGraph } from "@/components/task-graph";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchWolves, fetchWorkRecord } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
 import { WorkBadges } from "@/components/work-badges";
 import { useLibrarian } from "@/components/use-librarian";
-import { resolveWork, workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
+import { buildTaskGraph, resolveWork, workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =
 	| { kind: "loading" }
@@ -19,6 +21,7 @@ export type WorkPageState =
 
 export function WorkItemPage({ id }: { id: string }) {
 	const { librarian, loading } = useLibrarian();
+	const router = useRouter();
 	const [fetched, setFetched] = useState<{ id: string; state: WorkPageState } | null>(null);
 
 	useEffect(() => {
@@ -49,13 +52,13 @@ export function WorkItemPage({ id }: { id: string }) {
 	}, [librarian, loading, id]);
 
 	const state: WorkPageState = fetched?.id === id && !loading ? fetched.state : { kind: "loading" };
-	return <WorkItemView id={id} state={state} />;
+	return <WorkItemView id={id} state={state} onOpenTask={(taskId) => router.push(workHref(taskId))} />;
 }
 
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
 
 /** Presentational half (SSR-testable). */
-export function WorkItemView({ id, state }: { id: string; state: WorkPageState }) {
+export function WorkItemView({ id, state, onOpenTask }: { id: string; state: WorkPageState; onOpenTask?: (id: string) => void }) {
 	const item = state.kind === "ready" ? state.item : null;
 	return (
 		<div className="flex h-dvh flex-col" data-testid="work-item-page" data-work={id} data-state={state.kind}>
@@ -80,15 +83,16 @@ export function WorkItemView({ id, state }: { id: string; state: WorkPageState }
 							Could not load this work item: {state.message}
 						</p>
 					)}
-					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} />}
+					{state.kind === "ready" && <WorkBody item={state.item} parent={state.parent} onOpenTask={onOpenTask} />}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkRecordResponse | null }) {
+function WorkBody({ item, parent, onOpenTask }: { item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void }) {
 	const record = workRecordView(item, parent);
+	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
 	const deps = item.dependsOn ?? [];
 	return (
 		<article>
@@ -117,6 +121,15 @@ function WorkBody({ item, parent }: { item: WorkRecordResponse; parent: WorkReco
 					</div>
 				)}
 			</dl>
+			{graph?.kind === "graph" && graph.nodes.length > 0 && (
+				<section className="mb-8" data-section="tasks">
+					<h2 className={`${LABEL} mb-2 flex justify-between`}>
+						<span>Tasks</span>
+						<span data-testid="task-graph-progress">{graph.label}</span>
+					</h2>
+					<TaskGraph model={graph} onSelect={(taskId) => onOpenTask?.(taskId)} />
+				</section>
+			)}
 			{item.plan.trim() && (
 				<section className="mb-8" data-section="plan">
 					<h2 className={`${LABEL} mb-2`}>Plan</h2>

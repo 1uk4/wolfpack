@@ -17,12 +17,14 @@ describe("memory panel model", () => {
 		assert.equal(parseOpen(serializeOpen(false)), false);
 		assert.equal(parseOpen(serializeOpen(true)), true);
 	});
-	it("view key helper: defaults to record, round-trips feed", () => {
+	it("view key helper: defaults to graph, round-trips all three, reads the legacy record as item", () => {
 		assert.equal(MEMORY_PANEL_VIEW_KEY, "lh.memory-panel.view.v1");
-		assert.equal(parseView(null), "record");
-		assert.equal(parseView("junk"), "record");
+		assert.equal(parseView(null), "graph");
+		assert.equal(parseView("junk"), "graph");
 		assert.equal(parseView(serializeView("feed")), "feed");
-		assert.equal(parseView(serializeView("record")), "record");
+		assert.equal(parseView(serializeView("item")), "item");
+		assert.equal(parseView(serializeView("graph")), "graph");
+		assert.equal(parseView("record"), "item");
 	});
 	it("banner only for off/inert, none for live or sandbox", () => {
 		assert.equal(bannerOf(st("live")), null);

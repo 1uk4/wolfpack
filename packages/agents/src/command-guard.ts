@@ -216,7 +216,7 @@ const HARMLESS_WRAPPERS = new Set([
 const ALWAYS_BLOCKED: Record<string, string> = {
 	rm: "deletes files", rmdir: "deletes directories", unlink: "deletes files", shred: "destroys files",
 	mv: "moves/overwrites files", dd: "writes raw data", truncate: "truncates files", cp: "writes files",
-	install: "writes files", rsync: "writes files", scp: "copies files", wipefs: "destroys filesystems",
+	touch: "creates or touches files", ln: "creates links", mkfifo: "creates files", install: "writes files", rsync: "writes files", scp: "copies files", wipefs: "destroys filesystems",
 	chmod: "changes permissions", chown: "changes ownership", chgrp: "changes ownership",
 	setfacl: "changes ACLs", kill: "kills processes", pkill: "kills processes", killall: "kills processes",
 	reboot: "reboots the machine", shutdown: "shuts the machine down", halt: "halts the machine",

@@ -33,6 +33,7 @@ import {
 	settlePromotePost,
 	recordStale,
 	recordView,
+	composeItemDocument,
 	serializeOpen,
 	serializeView,
 	workHref,
@@ -395,8 +396,6 @@ export function MemoryPanel({ wolf, threadId }: { wolf: string; threadId: string
 	);
 }
 
-const MD = "text-xs [&_*]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h4]:font-semibold";
-
 /** The Status section: the feature graph, the item viewer or the live observation feed, one at a time; no bound item → feed only. */
 export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, feed, onGraph, onToggleFeed, onSelect, onBack }: {
 	view: PanelView;
@@ -420,6 +419,7 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	const featureTitle = graph.kind === "graph" ? graph.featureTitle : null;
 	/** The shown item sits under the graphed feature (a task, not the feature itself). */
 	const isChild = !!shown?.item.partOf && graph.kind === "graph" && shown.item.partOf === graph.featureId;
+	const doc = shown ? composeItemDocument(shown.item, shown.rec) : "";
 	return (
 		<section data-testid={showFeed ? "memory-feed" : view === "graph" ? "memory-graph" : "memory-record"} data-view={showFeed ? "feed" : view}>
 			<div className="mb-1 flex items-center justify-between gap-2">
@@ -513,23 +513,8 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 					) : null}
 					{shown ? <WorkBadges kind={shown.item.kind} stage={shown.item.stage} domain={shown.item.domain} className="mt-1.5" /> : null}
 					{shown ? (
-						<div className="mt-2">
-							{shown.rec.inheritedFrom ? <p className="text-xs text-muted-foreground">Record from parent: {shown.rec.inheritedFrom.title}</p> : null}
-							{shown.rec.record.trim() ? (
-								<div className={`mt-1 ${MD}`} data-testid="memory-record-md">
-									<KbMarkdown>{shown.rec.record}</KbMarkdown>
-								</div>
-							) : (
-								<p className="text-xs text-muted-foreground">No Record yet.</p>
-							)}
-							{shown.item.plan.trim() ? (
-								<div className="mt-3" data-testid="memory-plan">
-									<h4 className="mb-1 text-xs font-medium uppercase text-muted-foreground">Plan</h4>
-									<div className={MD}>
-										<KbMarkdown>{shown.item.plan}</KbMarkdown>
-									</div>
-								</div>
-							) : null}
+						<div className="mt-2" data-testid="memory-record-md">
+							{doc ? <KbMarkdown density="compact">{doc}</KbMarkdown> : <p className="text-xs text-muted-foreground">Nothing written yet.</p>}
 						</div>
 					) : null}
 				</>

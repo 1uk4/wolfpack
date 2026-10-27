@@ -26,7 +26,7 @@ describe("MemoryPanel SSR", () => {
 		assert.equal(html.match(/data-testid="memory-feed"/g)?.length, 1);
 	});
 	const bound = { workId: "work-1", title: "Item" } as never;
-	const item = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "## Plan\n\nDo it.", record: "" } as never;
+	const item = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "# Item\n\n## Plan\n\nDo it.\n\n## Notes\n", successCriteria: "- it works", record: "" } as never;
 	const shown = { item, rec: { record: "### Decisions\n\n- one", inheritedFrom: null } } as never;
 	const feed = [{ key: "f0", summary: "saw it", count: 1, destination: "den" }] as never;
 	const kid = (id: string, stage: string, dependsOn: string[] = []) => ({ id, title: `Task ${id}`, kind: "task", stage, dependsOn });
@@ -68,8 +68,12 @@ describe("MemoryPanel SSR", () => {
 		assert.match(html, /work-badges/);
 		assert.match(html, /<h3[^>]*>Decisions<\/h3>/);
 		assert.doesNotMatch(html, /### Decisions/);
-		assert.ok(html.indexOf("Decisions") < html.indexOf("Do it."));
-		assert.match(html, /memory-plan/);
+		// one document: Done when → plan → Record; no duplicate title heading, no empty Notes, no separate PLAN block
+		assert.match(html, /<h2[^>]*>Done when<\/h2>/);
+		assert.match(html, /<h2[^>]*>Record<\/h2>/);
+		assert.ok(html.indexOf("Done when") < html.indexOf("Do it."));
+		assert.ok(html.indexOf("Do it.") < html.indexOf("Decisions"));
+		assert.doesNotMatch(html, /<h1|>Notes<|memory-plan/);
 		// header: back to the feature graph by its title; child items get the ↳ arrow
 		assert.match(html, /aria-label="Back to feature graph"[^>]*>.*Feat<\/span><\/button>/);
 		assert.doesNotMatch(html, /memory-back-bound/);

@@ -10,7 +10,7 @@ import { fetchWolves, fetchWorkRecord } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
 import { WorkBadges } from "@/components/work-badges";
 import { useLibrarian } from "@/components/use-librarian";
-import { buildTaskGraph, resolveWork, workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
+import { buildTaskGraph, resolveWork, workHref, composeItemDocument, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =
 	| { kind: "loading" }
@@ -92,6 +92,7 @@ export function WorkItemView({ id, state, onOpenTask }: { id: string; state: Wor
 
 function WorkBody({ item, parent, onOpenTask }: { item: WorkRecordResponse; parent: WorkRecordResponse | null; onOpenTask?: (id: string) => void }) {
 	const record = workRecordView(item, parent);
+	const doc = composeItemDocument(item, { record: record.markdown, inheritedFrom: record.fromParent });
 	const graph = item.kind === "feature" ? buildTaskGraph(item, item) : null;
 	const deps = item.dependsOn ?? [];
 	return (
@@ -130,34 +131,11 @@ function WorkBody({ item, parent, onOpenTask }: { item: WorkRecordResponse; pare
 					<TaskGraph model={graph} onSelect={(taskId) => onOpenTask?.(taskId)} />
 				</section>
 			)}
-			{item.plan.trim() && (
-				<section className="mb-8" data-section="plan">
-					<h2 className={`${LABEL} mb-2`}>Plan</h2>
-					<div className="text-sm">
-						<KbMarkdown>{item.plan}</KbMarkdown>
-					</div>
-				</section>
-			)}
-			<section data-section="record">
-				<h2 className={`${LABEL} mb-2`}>
-					{record.fromParent ? (
-						<>
-							Record (from parent feature{" "}
-							<Link href={workHref(record.fromParent.id)} className="underline underline-offset-2">
-								{record.fromParent.title}
-							</Link>
-							)
-						</>
-					) : (
-						"Record"
-					)}
-				</h2>
-				{record.markdown ? (
-					<div className="text-sm">
-						<KbMarkdown>{record.markdown}</KbMarkdown>
-					</div>
+			<section data-section="document">
+				{doc ? (
+					<KbMarkdown density="normal">{doc}</KbMarkdown>
 				) : (
-					<p className="text-sm text-muted-foreground">No Record yet.</p>
+					<p className="text-sm text-muted-foreground">Nothing written yet.</p>
 				)}
 			</section>
 		</article>

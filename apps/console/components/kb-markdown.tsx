@@ -87,9 +87,20 @@ const kbComponents = {
 	h6: heading("h6"),
 };
 
-export function KbMarkdown({ children }: { children: string }) {
+/** Opt-in document styling (lists with markers, small section titles, inline code); "compact" is the panel's text-xs size. */
+const DOC_BASE =
+	"[&_ul]:list-outside [&_ol]:list-outside [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_li]:my-0.5 [&_p]:my-2 [&_ul_ul]:my-0.5 [&_ol_ol]:my-0.5 " +
+	"[&_h2]:mt-5 [&_h2]:mb-1.5 [&_h2]:font-semibold [&_h2]:tracking-normal [&_h2]:normal-case [&_h2]:text-foreground " +
+	"[&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_h4]:mt-2 [&_h4]:mb-1 [&_h4]:font-medium " +
+	"[&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-muted [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:font-mono";
+export const DOC_CLASS = {
+	compact: `${DOC_BASE} text-xs [&_*]:text-xs [&_h2]:text-[0.8125rem]`,
+	normal: `${DOC_BASE} text-sm [&_h2]:text-base [&_h3]:text-sm`,
+} as const;
+
+export function KbMarkdown({ children, density }: { children: string; density?: keyof typeof DOC_CLASS }) {
 	return (
-		<MessageResponse mode="static" components={kbComponents}>
+		<MessageResponse mode="static" components={kbComponents} className={density ? DOC_CLASS[density] : undefined}>
 			{children}
 		</MessageResponse>
 	);

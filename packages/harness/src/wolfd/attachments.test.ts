@@ -1,5 +1,5 @@
 /** Image attachments over /v1 on a real pi-durable wolf with a scripted model: upload -> submit with ref -> the model sees the image. */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol";
@@ -102,7 +102,7 @@ describe("attachments in history and the GET route", () => {
 
     const detail = await tw.client.getThread(tw.home);
     const user = detail.messages.find((m) => m.role === "user")!;
-    expect(user.attachments).toEqual([{ id: att.id, name: `${att.id}.png`, mimeType: "image/png", size: PNG.length }]);
+    expect(user.attachments).toEqual([{ id: att.id, name: "shot.png", mimeType: "image/png", size: PNG.length }]);
     expect(user.text).toContain("[Attached image:"); // model-facing text unchanged
     expect(detail.messages.find((m) => m.role === "assistant")!.attachments).toBeUndefined();
 
@@ -110,8 +110,51 @@ describe("attachments in history and the GET route", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
     expect(await tw.client.getAttachment(tw.home, att.id)).toEqual({ bytes: PNG, mimeType: "image/png" });
+  });
+
+  it("steering a running turn with an attachment: the steered history message carries it", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    tw = await startTestWolf({
+      script: [
+        async () => {
+          await gate;
+          return fauxAssistantMessage("first");
+        },
+        fauxAssistantMessage("second"),
+      ],
+    });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "steer.png" });
+    await tw.client.submit(tw.home, "start");
+    const ack = await tw.client.submit(tw.home, "look at this", { whenBusy: "steer", attachments: [{ id: att.id }] });
+    expect(ack.disposition).toBe("steered");
+    release();
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const users = (await tw.client.getThread(tw.home)).messages.filter((m) => m.role === "user");
+    const steered = users.find((m) => m.text.startsWith("look at this"))!;
+    expect(steered.attachments).toEqual([{ id: att.id, name: "steer.png", mimeType: "image/png", size: PNG.length }]);
+    expect(users.find((m) => m.text === "start")!.attachments).toBeUndefined();
+  });
+
+  it("durable refs: names survive a restart of the cache, the sidecar maps messageId, old threads fall back to the text lines", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("ok")] });
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "keep.png" });
+    const ack = await tw.client.submit(tw.home, "x", { attachments: [{ id: att.id }] });
+    for await (const _ of tw.client.watch(tw.home)) void _;
+    const refsFile = join(tw.wolf.config.den, "attachments", "testwolf", "home", "refs.json");
+    const refs = JSON.parse(readFileSync(refsFile, "utf8"));
+    expect(refs.byId[att.id].name).toBe("keep.png");
+    expect(refs.byMessage[ack.messageId]).toEqual([att.id]);
+    // Old thread: no sidecar, cache cold -> parse the line, name is the stored file name.
+    const { attachmentsInText, forgetRefsCache } = await import("./attachments.js");
+    rmSync(refsFile);
+    forgetRefsCache();
+    const den = tw.wolf.config.den;
+    const text = `x\n\n[Attached image: /moved/den/${att.id}.png]`;
+    expect(attachmentsInText(den, tw.home, text)).toEqual([{ id: att.id, name: `${att.id}.png`, mimeType: "image/png", size: PNG.length }]);
   });
 
   it("refuses a bad, unknown or traversal id and an unknown thread as 404 not_found", async () => {

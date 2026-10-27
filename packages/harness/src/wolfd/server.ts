@@ -68,7 +68,7 @@ import { readDenTopics } from "@wolfpack/memory";
 import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
-import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, storeAttachment } from "./attachments.js";
+import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -410,7 +410,7 @@ export class WolfServer {
           "Content-Length": file.bytes.length,
           "X-Content-Type-Options": "nosniff",
           "Cache-Control": "private, max-age=31536000, immutable",
-          "Content-Security-Policy": "default-src 'none'; sandbox",
+          "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         });
         res.end(file.bytes);
         return;
@@ -628,6 +628,13 @@ export class WolfServer {
     } catch (e) {
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
+    }
+    if (refs.length > 0 && this.opts.den) {
+      try {
+        recordSubmission(this.opts.den, this.summary.id, r.messageId, refs);
+      } catch {
+        /* the sidecar is best-effort: history falls back to the text lines */
+      }
     }
     if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
     return { messageId: r.messageId, disposition: r.disposition };

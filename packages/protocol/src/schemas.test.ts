@@ -21,7 +21,10 @@ import {
   ThreadDetailSchema,
   ThreadEventSchema,
   ThreadMessageSchema,
+  ThreadObjectSchema,
   ThreadSummarySchema,
+  ShowDecisionParamsSchema,
+  parseObjectData,
   WolfSummarySchema,
   parseThreadEvent,
 } from "./index.js";
@@ -295,5 +298,39 @@ describe("KbPipelineResponse", () => {
     expect(KbPipelineResponseSchema.parse(full)).toEqual(full);
     expect(KbPipelineResponseSchema.safeParse({ lanes: [], receipts: [], parked: [], sweep: {} }).success).toBe(true);
     expect(KbPipelineResponseSchema.safeParse({ ...full, receipts: [{ ...full.receipts[0], outcome: "created" }] }).success).toBe(false);
+  });
+});
+
+describe("structured objects", () => {
+  const decision = { options: [{ id: "a", label: "A" }, { id: "b", label: "B", detail: "d" }], chosen: "a", rationale: "r" };
+
+  it("ObjectUpsertEventSchema parses with and without textOffset, and rejects a bad rev / empty id", () => {
+    const e = { ...env(9), type: "object-upsert", turnId: "t1", objectId: "o1", objectType: "decision", rev: 2, data: decision };
+    expect(ThreadEventSchema.parse(e)).toMatchObject({ rev: 2, objectType: "decision" });
+    expect(ThreadEventSchema.parse({ ...e, textOffset: 7 })).toMatchObject({ textOffset: 7 });
+    expect(ThreadEventSchema.safeParse({ ...e, rev: 0 }).success).toBe(false);
+    expect(ThreadEventSchema.safeParse({ ...e, objectId: "" }).success).toBe(false);
+    expect(parseThreadEvent({ ...e, objectId: "" }).kind).toBe("invalid");
+  });
+
+  it("ThreadObjectSchema and ThreadMessage.objects (optional)", () => {
+    const o = { objectId: "o1", type: "decision", rev: 1, data: decision, textOffset: 0 };
+    expect(ThreadObjectSchema.parse(o)).toEqual(o);
+    expect(ThreadObjectSchema.safeParse({ ...o, rev: -1 }).success).toBe(false);
+    expect(ThreadMessageSchema.parse({ ...message, role: "assistant", objects: [o] }).objects).toHaveLength(1);
+    expect(ThreadMessageSchema.parse(message).objects).toBeUndefined();
+  });
+
+  it("parseObjectData validates per type and chosen against option ids", () => {
+    expect(parseObjectData("decision", decision)).toMatchObject({ chosen: "a" });
+    expect(parseObjectData("decision", { ...decision, chosen: "zzz" })).toBeUndefined();
+    expect(parseObjectData("decision", { ...decision, options: [] })).toBeUndefined();
+    expect(parseObjectData("graph", {})).toBeUndefined();
+  });
+
+  it("ShowDecisionParamsSchema requires objectId and a chosen id among the options", () => {
+    expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1" }).success).toBe(true);
+    expect(ShowDecisionParamsSchema.safeParse(decision).success).toBe(false);
+    expect(ShowDecisionParamsSchema.safeParse({ ...decision, objectId: "o1", chosen: "zzz" }).success).toBe(false);
   });
 });

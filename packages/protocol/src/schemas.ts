@@ -95,6 +95,9 @@ export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
 // -------------------------------------------------------- structured objects
 
+import { parseObjectData, type KnownObjectType, type ObjectToolName } from "./objects.js";
+export * from "./objects.js";
+
 /**
  * A structured object a wolf puts in a thread (decision now; checklist and graph later). Generic envelope: `type`
  * is an open string and `data` is validated per type by the consumer (see `parseObjectData`), so a new object type
@@ -116,48 +119,33 @@ export const DecisionOptionSchema = z.object({
   label: z.string().min(1).describe("The option, in a few words"),
   detail: z.string().optional().describe("Optional one-line elaboration"),
 });
-export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
 
-/** `data` of a `decision` object: the options weighed, the one chosen and why. */
+/** `data` of a `decision` object: the options weighed, the one chosen and why. Validate with `parseObjectData`. */
 export const DecisionDataSchema = z.object({
   title: z.string().optional().describe("What is being decided"),
   options: z.array(DecisionOptionSchema).min(1).describe("The options considered"),
-  chosen: z.string().describe("The id of the chosen option"),
+  chosen: z.string().describe("The id of the chosen option (one of the option ids)"),
   rationale: z.string().describe("Why the chosen option won"),
 });
-export type DecisionData = z.infer<typeof DecisionDataSchema>;
 
 /** Parameters of the `show_decision` tool: the decision plus the wolf-chosen id (reuse it to revise). */
 export const ShowDecisionParamsSchema = DecisionDataSchema.extend({
-  objectId: z.string().min(1).describe("Stable id for this decision; call again with the same id to revise it"),
-});
+  objectId: z.string().min(1).describe("Stable id for this decision; call again with the same id to revise it (resend the whole decision)"),
+}).refine((d) => parseObjectData("decision", d) !== undefined, { message: "chosen must be the id of one of the options" });
 export type ShowDecisionParams = z.infer<typeof ShowDecisionParamsSchema>;
 
 /**
  * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
- * registration hands the model). A new object type adds one entry here and one in `OBJECT_DATA_SCHEMAS`.
+ * registration hands the model). A new object type adds one entry here and one in objects.ts.
  */
 export const OBJECT_TOOL_PARAMS = {
   show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
-} as const satisfies Record<string, { type: string; schema: z.ZodObject }>;
+} as const satisfies Record<ObjectToolName, { type: KnownObjectType; schema: z.ZodType }>;
 
 /** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */
-export function objectToolJsonSchema(name: keyof typeof OBJECT_TOOL_PARAMS): Record<string, unknown> {
+export function objectToolJsonSchema(name: ObjectToolName): Record<string, unknown> {
   const { $schema: _omit, ...rest } = z.toJSONSchema(OBJECT_TOOL_PARAMS[name].schema, { io: "input" }) as Record<string, unknown>;
   return rest;
-}
-
-/** Per-type `data` schemas. Tickets for checklist and graph add an entry here. */
-export const OBJECT_DATA_SCHEMAS = { decision: DecisionDataSchema } as const;
-export type KnownObjectType = keyof typeof OBJECT_DATA_SCHEMAS;
-
-/** Validate `data` for a known type; undefined for an unknown type or invalid data (consumers skip the object). */
-export function parseObjectData<T extends KnownObjectType>(type: T, data: unknown): z.infer<(typeof OBJECT_DATA_SCHEMAS)[T]> | undefined;
-export function parseObjectData(type: string, data: unknown): unknown;
-export function parseObjectData(type: string, data: unknown): unknown {
-  const schema = (OBJECT_DATA_SCHEMAS as Record<string, z.ZodType>)[type];
-  const r = schema?.safeParse(data);
-  return r?.success ? r.data : undefined;
 }
 
 export const ThreadMessageSchema = z.object({
@@ -251,6 +239,8 @@ export const ObjectUpsertEventSchema = base.extend({
   objectType: z.string(),
   rev: z.number().int().positive(),
   data: z.unknown(),
+  /** Length of the turn's merged assistant text when the object appeared; same anchor as `ThreadObject.textOffset`. Absent for a mid-turn joiner. */
+  textOffset: z.number().int().nonnegative().optional(),
 });
 /**
  * Baseline thread state. A consumer that receives one discards everything it

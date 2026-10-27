@@ -576,6 +576,7 @@ export class WolfServer {
   private detail(): ThreadDetail {
     const messages = this.messages.map((m) => ({
       ...m,
+      // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
       ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
       ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
     }));

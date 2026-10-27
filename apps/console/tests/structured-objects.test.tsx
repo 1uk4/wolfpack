@@ -35,7 +35,7 @@ const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
-const { renderItems, threadMessagesToNative } = await import("../src/core/index.ts");
+const { renderItems, threadMessagesToNative, collapseObjects } = await import("../src/core/index.ts");
 
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 const realFetch = globalThis.fetch;
@@ -245,5 +245,53 @@ describe("live events and reload agree", () => {
 		assert.equal(parts.length, 1);
 		assert.equal((parts[0]!.data as { rationale: string }).rationale, longRationale);
 		assert.equal((parts[0]!.data as { options: Array<{ detail?: string }> }).options[0]!.detail, longDetail);
+	});
+});
+
+describe("hidden rows, empty shells, collapse", () => {
+	it("a revision-only later turn draws no assistant shell; the card stays in the first turn", async () => {
+		const later: ThreadMessage[] = [
+			...history,
+			{ id: "u2", role: "user", text: "again", at: base.at },
+			{
+				id: "entry-9",
+				role: "assistant",
+				text: "",
+				at: base.at,
+				tools: [{ callId: "c9", name: "show_decision", args: d2, result: "ok", isError: false, textOffset: 0 }],
+				objects: [],
+			},
+		];
+		await mount(threadMessagesToNative(later));
+		assert.equal(cards().length, 1);
+		assert.equal(document.querySelectorAll('[data-testid="decision-card"]').length, 1);
+		// the user message and the first assistant message only: no empty second shell
+		const view2 = seeded(later).getState().messages;
+		const last = view2.at(-1)!;
+		assert.equal(last.role, "assistant");
+		assert.equal(renderItems(last.parts, false).length, 0);
+	});
+
+	it("a failed show_decision call shows a compact error row; a successful one stays hidden", () => {
+		const mk = (isError: boolean): ThreadMessage[] => [
+			history[0]!,
+			{ id: "a", role: "assistant", text: "", at: base.at, tools: [{ callId: "c", name: "show_decision", args: d1, result: "bad", isError, textOffset: 0 }] },
+		];
+		const kindsOf = (h: ThreadMessage[]) => seeded(h).getState().messages.filter((m) => m.role === "assistant").flatMap((m) => renderItems(m.parts, false).map((i) => i.kind));
+		assert.deepEqual(kindsOf(mk(true)), ["tool"]);
+		assert.deepEqual(kindsOf(mk(false)), []);
+	});
+
+	it("collapseObjects mutates in place: highest rev wins at the first position", () => {
+		const obj = (rev: number) => ({ type: "object", objectId: "o", objectType: "decision", rev, data: { rev } });
+		const ms = [
+			{ id: "1", role: "assistant" as const, parts: [obj(1)] },
+			{ id: "2", role: "assistant" as const, parts: [obj(3), { type: "text", text: "t" }] },
+		];
+		const firstPart = ms[0]!.parts[0]!;
+		collapseObjects(ms);
+		assert.equal(ms[0]!.parts[0], firstPart);
+		assert.equal((firstPart as { rev?: number }).rev, 3);
+		assert.deepEqual(ms[1]!.parts.map((p) => p.type), ["text"]);
 	});
 });

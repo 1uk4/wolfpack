@@ -151,8 +151,8 @@ export function renderItems(parts: readonly LhViewPart[], streaming: boolean): R
 			// Cards come from object-upsert / history objects (components/card-registry, kind "object").
 			item = { kind: "object", part, index };
 		} else if (isToolPart(part)) {
-			// The object tools' own rows stay hidden: their card is the UX.
-			if (OBJECT_TOOL_NAMES.has(part.type.slice("tool-".length))) return;
+			// The object tools' own rows stay hidden (their card is the UX) unless the call failed: then a compact error row.
+			if (OBJECT_TOOL_NAMES.has(part.type.slice("tool-".length)) && part.state !== "output-error") return;
 			const entry = toolEntryOf(part);
 			// React key: the callId, made unique when a record repeats one.
 			const base = entry.callId || `tool-${index}`;

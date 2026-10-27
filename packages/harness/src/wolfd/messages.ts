@@ -17,7 +17,7 @@
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
-import type { ThreadMessage } from "@wolfpack/protocol";
+import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
 import type { EngineEvent } from "../engine/index.js";
 import { objectFromCall } from "../engine/index.js";
 
@@ -137,7 +137,8 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const call = { callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before };
         if (round !== undefined) callRound.set(call, round);
         (target.tools ??= []).push(call);
-        callFullArgs.set(call, b.arguments);
+        // Only object tools need their uncapped args (to build the object); don't pin every call's arguments.
+        if (objectFromCall(b.name, b.arguments)) callFullArgs.set(call, b.arguments);
       }
     }
     if (roundText !== "") target.text = target.text === "" ? roundText : `${target.text}\n\n${roundText}`;
@@ -160,7 +161,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
       if (obj) {
         // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
-        const prior = list.flatMap((m) => m.objects ?? []).find((o) => o.objectId === obj.objectId);
+        const prior = objectsById(list).get(obj.objectId);
         if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
         else (list[i].objects ??= []).push({ ...obj, rev: 1, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
@@ -170,6 +171,13 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
   }
   const m = messageFromEntry(entry, now);
   if (m) list.push(m);
+}
+
+/** Every object in the list by id (one entry per id by construction). */
+function objectsById(list: readonly ThreadMessage[]): Map<string, ThreadObject> {
+  const out = new Map<string, ThreadObject>();
+  for (const m of list) for (const o of m.objects ?? []) out.set(o.objectId, o);
+  return out;
 }
 
 export function messagesFromEntries(entries: readonly Entry[]): ThreadMessage[] {

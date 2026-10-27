@@ -25,6 +25,9 @@ import {
   ThreadSummarySchema,
   ShowDecisionParamsSchema,
   parseObjectData,
+  OBJECT_TYPES,
+  OBJECT_TOOL_TYPES,
+  OBJECT_TOOL_PARAMS,
   WolfSummarySchema,
   parseThreadEvent,
 } from "./index.js";
@@ -326,6 +329,12 @@ describe("structured objects", () => {
     expect(parseObjectData("decision", { ...decision, chosen: "zzz" })).toBeUndefined();
     expect(parseObjectData("decision", { ...decision, options: [] })).toBeUndefined();
     expect(parseObjectData("graph", {})).toBeUndefined();
+  });
+
+  it("the type list, tool-name map and tool params agree", () => {
+    expect(Object.keys(OBJECT_TOOL_TYPES).sort()).toEqual(Object.keys(OBJECT_TOOL_PARAMS).sort());
+    expect(Object.values(OBJECT_TOOL_TYPES).sort()).toEqual([...OBJECT_TYPES].sort());
+    for (const [name, v] of Object.entries(OBJECT_TOOL_PARAMS)) expect(OBJECT_TOOL_TYPES[name as keyof typeof OBJECT_TOOL_TYPES]).toBe(v.type);
   });
 
   it("ShowDecisionParamsSchema requires objectId and a chosen id among the options", () => {

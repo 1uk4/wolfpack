@@ -17,8 +17,8 @@
  *   result entry (absent entry = faulted tool = isError). Nested tool calls (parentToolCallId) are not surfaced.
  * - Object tools (`show_decision`) additionally yield an `object-upsert` just before their tool-end, for a SUCCESSFUL
  *   call only (rev = successful completed calls so far per objectId, seeded from the attach snapshot; the history fold
- *   in wolfd/messages.ts follows the same rule). `textOffset` = length of the turn's merged assistant text so far (the
- *   history anchor); absent for a mid-turn joiner, who does not know it.
+ *   in wolfd/messages.ts follows the same rule). `textOffset` = length of the turn's merged assistant text closed so far (the history anchor
+ *   base+before; equal when the call follows its round's text, approximate if text follows the call in one round); absent for a mid-turn joiner, who does not know it.
  * - An assistant message that ends with stopReason "error" yields an `error` event before turn-end(error).
  * - message_update changes of every kind (text_start/thinking_start/block/message as well as the deltas) update a
  *   per-block map; the aggregate is diffed against what has streamed: a suffix becomes a delta, anything else a

@@ -88,24 +88,37 @@ function questionField(q: AskQuestion, id: string): Card["fields"][number] {
   return q.multiSelect ? { ...base, kind: "multi", options, allowOther: true } : { ...base, kind: "single", options };
 }
 
-/** The card for one ask_user_question call: a single question (legacy field ids), or a batch with one field per question. */
+const fieldId = (q: AskQuestion, i: number): string => q.id?.trim().replace(/[^A-Za-z0-9_-]+/g, "-") || `q${i + 1}`;
+
+/** Why a call cannot become a card (model-facing), or undefined when it can. */
+export function askProblem(args: AskArgs): string | undefined {
+  const batch = args.questions ?? [];
+  if (batch.length > 0) {
+    if (args.question?.trim()) return "ask_user_question: pass either `question` or `questions`, not both.";
+    const blank = batch.findIndex((q) => !q.question?.trim());
+    if (blank >= 0) return `ask_user_question: questions[${blank}] has no question text.`;
+    const seen = new Set<string>();
+    for (const [i, q] of batch.entries()) {
+      const id = fieldId(q, i);
+      if (seen.has(id)) return `ask_user_question: duplicate question id "${id}" (ids must be unique within a card).`;
+      seen.add(id);
+    }
+    return undefined;
+  }
+  return args.question?.trim() ? undefined : "ask_user_question needs `question` or a non-empty `questions` list.";
+}
+
+/** The card for one ask_user_question call (validated with {@link askProblem}): a single question (legacy field ids), or a batch with one field per question. */
 export function askCard(args: AskArgs): Card {
-  const batch = args.questions?.filter((q) => q.question?.trim());
-  if (batch && batch.length > 0) {
-    const used = new Set<string>();
-    const fields = batch.map((q, i) => {
-      let id = q.id?.trim().replace(/[^A-Za-z0-9_-]+/g, "-") || `q${i + 1}`;
-      while (used.has(id)) id = `${id}-${i + 1}`;
-      used.add(id);
-      return questionField(q, id);
-    });
-    return { tool: "ask_user_question", ...(args.title?.trim() ? { title: args.title.trim() } : {}), fields };
+  const title = args.title?.trim() ? { title: args.title.trim() } : {};
+  if (args.questions && args.questions.length > 0) {
+    return { tool: "ask_user_question", ...title, fields: args.questions.map((q, i) => questionField(q, fieldId(q, i))) };
   }
   const q = args as AskQuestion;
   if (q.kind === "confirm") {
     return confirmCard({ tool: "ask_user_question", question: q.question, description: q.details?.trim() || undefined, confirmLabel: q.confirmLabel?.trim(), rejectLabel: q.rejectLabel?.trim() });
   }
-  return { tool: "ask_user_question", ...(args.title?.trim() ? { title: args.title.trim() } : {}), fields: [questionField(q, "answer")] };
+  return { tool: "ask_user_question", ...title, fields: [questionField(q, "answer")] };
 }
 
 export function createAskUserQuestionExtension(): Extension {
@@ -121,10 +134,9 @@ export function createAskUserQuestionExtension(): Extension {
         raisesCard: true,
         async execute(args) {
           const a = args as AskArgs;
-          const asked = a.questions?.filter((q) => q.question?.trim()).map((q) => q.question) ?? [];
-          if (asked.length === 0 && !a.question?.trim()) {
-            return { content: [{ type: "text", text: "ask_user_question needs `question` or a non-empty `questions` list." }], isError: true };
-          }
+          const problem = askProblem(a);
+          if (problem) return { content: [{ type: "text", text: problem }], isError: true };
+          const asked = a.questions?.length ? a.questions.map((q) => q.question) : [];
           const sent = asked.length > 0 ? asked.map((q) => `\n- ${q}`).join("") : ` ${a.question}`;
           return {
             content: [{ type: "text", text: `Question${asked.length > 1 ? "s" : ""} sent to the user:${sent}\nYour turn ends here; their answer arrives with your next turn.` }],

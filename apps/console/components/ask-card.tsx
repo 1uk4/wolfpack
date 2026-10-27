@@ -42,16 +42,19 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 		typedRef.current = { ...typedRef.current, [fieldId]: text };
 		setTyped(typedRef.current);
 	};
-	// Add (button or Enter) reads the ref mirrors, never a render's props: a dictated tail or a second Enter before the
-	// re-render must see the current text and picks, and a custom entry is added once and its pending text cleared once.
-	const addCustomFor = (field: Extract<CardField, { kind: "multi" }>) => {
-		const r = addCustomEntry(field, draftRef.current[field.id], typedRef.current[field.id] ?? "");
-		if ("error" in r) return; // shown live as the field's error
-		set(field.id, r.answer);
-		setTypedText(field.id, "");
-	};
 	const liveRef = useRef(false);
 	liveRef.current = pending && !closed;
+	// Add (button or Enter) finishes a live dictation first (as Submit does), then reads the ref mirrors, never a render's
+	// props: a late dictated chunk lands in the pending text before it is added, so it cannot become a second entry.
+	const addCustomFor = (field: Extract<CardField, { kind: "multi" }>) => {
+		void finishDictation().then(() => {
+			if (!liveRef.current) return;
+			const r = addCustomEntry(field, draftRef.current[field.id], typedRef.current[field.id] ?? "");
+			if ("error" in r) return; // shown live as the field's error
+			set(field.id, r.answer);
+			setTypedText(field.id, "");
+		});
+	};
 	// The fields in play now (hidden ones and other steps' fields never take dictation).
 	const inPlay = closed ? [] : shownIds(card, draft, stepIdx);
 	const { claimed, dictationProps } = useCardDictation(card, draftRef, set, typedRef, setTypedText, pending && !closed, inPlay);

@@ -35,13 +35,13 @@ const { visibleFields: protocolVisible } = await import("@wolfpack/protocol");
 
 let root: Root | null = null;
 const sent: CardAnswers[] = [];
-async function mount(c: Card) {
+async function mount(c: Card, answer?: CardAnswers) {
 	sent.length = 0;
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
 	await act(async () => {
-		root!.render(<AskCard callId="c1" card={c} pending submitting={false} onAnswer={(a) => void sent.push(a)} />);
+		root!.render(<AskCard callId="c1" card={c} {...(answer ? { answer } : {})} pending={!answer} submitting={false} onAnswer={(a) => void sent.push(a)} />);
 	});
 }
 afterEach(async () => {
@@ -75,14 +75,6 @@ const optionalCard = (extra: Partial<Card> = {}): Card => ({
 	],
 	...extra,
 });
-async function mount2(c: Card, answer: CardAnswers) {
-	const host = document.createElement("div");
-	document.body.appendChild(host);
-	root = createRoot(host);
-	await act(async () => {
-		root!.render(<AskCard callId="c1" card={c} answer={answer} pending={false} submitting={false} onAnswer={() => {}} />);
-	});
-}
 const submitBtn = () => q('[data-testid="card-submit"]');
 
 describe("optional fields", () => {
@@ -96,13 +88,13 @@ describe("optional fields", () => {
 	});
 
 	it("closed card: a skipped optional shows muted \"Skipped\", never empty quotes; answered ones show their answer", async () => {
-		await mount2(optionalCard(), { t: { value: "" }, s: { value: "" }, m: { value: [] } });
+		await mount(optionalCard(), { t: { value: "" }, s: { value: "" }, m: { value: [] } });
 		const skipped = [...document.querySelectorAll('[data-testid="card-skipped"]')].map((e) => e.closest("[data-field]")!.getAttribute("data-field"));
 		assert.deepEqual(skipped, ["t", "s", "m", "c"], "confirm omitted counts too");
 		assert.ok(!document.body.textContent!.includes("“”"));
 		await act(async () => root?.unmount());
 		document.body.innerHTML = "";
-		await mount2(optionalCard(), { t: { value: "hi" }, s: { value: "b" }, m: { value: ["a"] }, c: { value: false } });
+		await mount(optionalCard(), { t: { value: "hi" }, s: { value: "b" }, m: { value: ["a"] }, c: { value: false } });
 		assert.equal(document.querySelectorAll('[data-testid="card-skipped"]').length, 0);
 		assert.match(q('[data-testid="card-answer-text"]')!.textContent!, /hi/);
 	});

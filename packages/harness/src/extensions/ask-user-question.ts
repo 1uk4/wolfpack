@@ -35,7 +35,7 @@ const QuestionSchema = Type.Object({
   details: Type.Optional(Type.String({ description: "Optional extra context shown under the question." })),
   options: Type.Optional(Type.Array(OptionSchema, { description: "Multiple-choice options; omit for free-form text." })),
   multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
-  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed (a custom entry counts as a pick). Default 1, or 0 when optional." })),
+  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed, at most the number of options. A required question always needs at least 1 (minSelect 0 is treated as 1 unless optional: true)." })),
   maxSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the most picks allowed (at least 1; a custom entry counts as a pick)." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
@@ -65,7 +65,7 @@ const Params = Type.Object({
     }),
   ),
   multiSelect: Type.Optional(Type.Boolean({ description: "Let the user pick several options (requires options). Required unless optional: true: at least one pick." })),
-  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed (a custom entry counts as a pick). Default 1, or 0 when optional." })),
+  minSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the fewest picks allowed, at most the number of options. A required question always needs at least 1 (minSelect 0 is treated as 1 unless optional: true)." })),
   maxSelect: Type.Optional(Type.Integer({ description: "multiSelect only: the most picks allowed (at least 1; a custom entry counts as a pick)." })),
   kind: Type.Optional(Type.Literal("confirm", { description: 'Set to "confirm" for a yes/no question (options are ignored).' })),
   confirmLabel: Type.Optional(Type.String({ description: 'Confirm button label (kind "confirm"). Default "Yes".' })),
@@ -137,7 +137,8 @@ function selectProblem(q: AskQuestion, at: string): string | undefined {
   if (min !== undefined && (!Number.isInteger(min) || min < 0)) return `ask_user_question: ${at}minSelect must be a whole number, 0 or more.`;
   if (max !== undefined && (!Number.isInteger(max) || max < 1)) return `ask_user_question: ${at}maxSelect must be a whole number, 1 or more.`;
   if (min !== undefined && max !== undefined && min > max) return `ask_user_question: ${at}minSelect (${min}) cannot exceed maxSelect (${max}).`;
-  // The Other box is always offered on a multi, so a min above the option count is still reachable; a min of 0 on a required question is raised to 1 by the card.
+  const count = q.options.filter((o) => o.label?.trim()).length;
+  if (min !== undefined && min > count) return `ask_user_question: ${at}minSelect (${min}) cannot exceed the number of options (${count}); offer more options.`;
   return undefined;
 }
 

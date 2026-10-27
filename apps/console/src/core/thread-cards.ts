@@ -223,9 +223,10 @@ export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 		}
 		if (!a) continue;
 		if (Array.isArray(a.value)) {
-			const value = [...new Set(a.value)]; // a custom entry is one entry, however it got in
-			const other = "other" in a && Array.isArray(a.other) ? [...new Set(a.other)].filter((o) => value.includes(o)) : [];
-			out[f.id] = { value, ...(other.length > 0 ? { other } : {}) };
+			// No dedupe here: addCustomEntry refuses repeats, so the draft never holds one (and deduping after the
+			// completeness check would silently send fewer picks than min).
+			const other = "other" in a && Array.isArray(a.other) ? a.other.filter((o) => (a.value as string[]).includes(o)) : [];
+			out[f.id] = { value: a.value, ...(other.length > 0 ? { other } : {}) };
 		} else if (typeof a.value === "boolean") out[f.id] = { value: a.value, ...("note" in a && a.note?.trim() ? { note: a.note.trim() } : {}) };
 		else out[f.id] = { value: a.value.trim(), ...("other" in a && a.other ? { other: true } : {}) };
 	}

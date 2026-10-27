@@ -1,6 +1,6 @@
 /**
- * AskCard multi with allowOther: however a custom entry gets in (Add, Enter, Submit with pending text, dictation),
- * it appears exactly once in the answer, ticked options stay, and the model sees it once.
+ * AskCard multi with allowOther: however a custom entry gets in (Add, Enter, Submit with pending text), it appears
+ * exactly once in the answer and ticked options stay. Dictation into Other is covered in thread-chat-dictation.test.tsx.
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -29,7 +29,6 @@ Object.assign(globalThis, {
 type Card = import("@wolfpack/client").Card;
 type CardAnswers = import("@wolfpack/client").CardAnswers;
 const { AskCard } = await import("../components/ask-card.tsx");
-const { draftAnswers } = await import("../src/core/index.ts");
 
 const OPTS = [{ label: "Alpha", value: "a" }, { label: "Beta", value: "b" }];
 const card: Card = { tool: "t", fields: [{ id: "m", kind: "multi", label: "Pick", options: OPTS, allowOther: true }] as Card["fields"] };
@@ -133,12 +132,5 @@ describe("AskCard multi Other: one custom entry is one entry", () => {
 		await type("red, green");
 		await submit();
 		assert.deepEqual(sent, [{ m: { value: ["a", "red, green"], other: ["red, green"] } }]);
-	});
-});
-
-describe("draftAnswers", () => {
-	it("a custom entry that reached the draft twice is sent once, with the ticked options kept", () => {
-		const out = draftAnswers(card, { m: { value: ["a", "mine", "mine"], other: ["mine", "mine"] } });
-		assert.deepEqual(out, { m: { value: ["a", "mine"], other: ["mine"] } });
 	});
 });

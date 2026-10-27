@@ -123,8 +123,8 @@ describe("minSelect / maxSelect", () => {
     expect(askProblem({ question: "Q", multiSelect: true, maxSelect: 2 })).toMatch(/only apply to a multiSelect question with options/);
     expect(askProblem({ questions: [{ question: "A" }, { question: "B", options, multiSelect: true, minSelect: 4, maxSelect: 2 }] })).toMatch(/questions\[1\]\.minSelect \(4\)/);
   });
-  it("a min above the option count is allowed: the Other box is always offered", () => {
-    expect(askProblem({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 3 })).toBeUndefined();
-    expect(CardSchema.safeParse(askCard({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 3 })).success).toBe(true);
+  it("a min above the option count is rejected with a readable error", () => {
+    expect(askProblem({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 3 })).toMatch(/minSelect \(3\) cannot exceed the number of options \(2\)/);
+    expect(askProblem({ question: "Q", options: options.slice(0, 2), multiSelect: true, minSelect: 2 })).toBeUndefined();
   });
 });

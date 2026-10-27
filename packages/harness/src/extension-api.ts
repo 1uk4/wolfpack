@@ -11,6 +11,7 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import type { ModelTable } from "@wolfpack/engine";
+import type { Card } from "@wolfpack/protocol";
 
 // Re-export Type for extension authors
 export { Type };
@@ -36,6 +37,13 @@ export interface ToolContext {
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  /**
+   * Raise an interaction card. Implies `control.terminate`: the turn ends `complete`, the thread is marked needs-you,
+   * and the operator's answer starts the next turn. `content` is the model-facing placeholder for this call.
+   */
+  card?: Card;
+  /** Post-tools controls (durable runtime only). `terminate` ends the run when every result of the round asks for it. */
+  control?: { terminate?: boolean };
 }
 
 export interface Tool {

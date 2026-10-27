@@ -57,6 +57,7 @@ describe("startWolf", () => {
     await watch.stop();
     expect(agent.model).toMatchObject({ provider: "anthropic", modelId: "claude-haiku-5-5" });
     expect(agent.tools).toEqual([
+      "ask_user_question",
       "bash",
       "edit",
       "read",

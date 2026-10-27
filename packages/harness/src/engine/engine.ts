@@ -4,6 +4,7 @@
  * going forward (existing harness internals migrate later).
  */
 import { dirname } from "node:path";
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -65,6 +66,11 @@ export interface SubmitOptions {
   /** Plain text, or text + image parts (pi-ai content). */
   input: UserInput;
   whenBusy: WhenBusy;
+  /**
+   * Place the input as this entry kind instead of `pi.user` (the model still sees `input` as a user message).
+   * `kind` must not start with `pi.`. Used for card answers (see cards.ts).
+   */
+  entry?: { kind: string; data?: JsonValue };
 }
 
 export interface SubmitResult {
@@ -157,10 +163,10 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
   const wrap = (conv: Conversation): EngineConversation => ({
     id: String(conv.id),
 
-    async submit({ input, whenBusy }) {
+    async submit({ input, whenBusy, entry }) {
       let sub;
       try {
-        sub = await conv.submit({ type: "input", content: input, whenBusy }, ctx);
+        sub = await conv.submit({ type: "input", content: input, whenBusy, ...(entry ? { entry } : {}) }, ctx);
       } catch (err) {
         if (err instanceof ConversationBusy) throw new EngineBusyError();
         throw err;

@@ -135,13 +135,6 @@ function routeFetch(client: CardClient): typeof fetch {
 	}) as typeof fetch;
 }
 
-/** The same pending card, also listed by the wolf's cards route (the sidebar's needs-you source). */
-class ListingClient extends CardClient {
-	override async listCards() {
-		return (await this.getThread(FIXTURE_THREAD.id)).pendingCards ?? [];
-	}
-}
-
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
 

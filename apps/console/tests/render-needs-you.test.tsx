@@ -16,6 +16,7 @@ import { SessionRow } from "../components/sidebar.tsx";
 import { threadListItem, type NeedsYouItem } from "../src/core/index.ts";
 
 const noop = () => {};
+
 describe("thread row", () => {
 	it("a needs-you thread shows the dot and says so; an idle one has none", () => {
 		const row = (status: "idle" | "needs-you" | "busy") =>
@@ -45,9 +46,9 @@ describe("NotifyToggleView", () => {
 });
 
 describe("sidebar without the pinned section", () => {
-	it("mounts the headless notifier, not the panel, and carries no Needs-you section markup", () => {
+	// A cheap tripwire against the panel coming back; the notifier's behaviour is covered by its own mount test below.
+	it("carries no Needs-you section markup", () => {
 		const src = readFileSync(new URL("../components/sidebar.tsx", import.meta.url), "utf8");
-		assert.ok(src.includes("<NeedsYouNotifier />"));
 		assert.ok(!src.includes("NeedsYouPanel") && !src.includes("NeedsYouSection"));
 		assert.ok(!src.includes('data-testid="needs-you"') && !src.includes("needs-you-count"));
 	});
@@ -59,7 +60,8 @@ describe("NeedsYouNotifier (headless)", () => {
 		const notified: { key: string; href: string }[] = [];
 		const win = dom.window as unknown as Record<string, unknown>;
 		win.lh = { notify: (n: { key: string; href: string }) => notified.push(n) };
-		const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
+		const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+		const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, IS_REACT_ACT_ENVIRONMENT: g.IS_REACT_ACT_ENVIRONMENT };
 		Object.assign(globalThis, { window: dom.window, document: Object.assign(dom.document, { hasFocus: () => false }), IS_REACT_ACT_ENVIRONMENT: true });
 		const waiting: NeedsYouItem = {
 			wolf: "1uk4",

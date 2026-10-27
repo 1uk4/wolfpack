@@ -108,6 +108,15 @@ export class CardTracker {
 }
 
 const EMPTY = "(empty response)";
+const SKIPPED = "(skipped)";
+
+/** An optional field left blank: no answer, empty text (free-text/single, no custom entry), or no picks (multi). A confirm is skipped only when absent. */
+function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined): boolean {
+  if (a === undefined) return true;
+  if (field.kind === "confirm") return false;
+  if (field.kind === "multi") return Array.isArray(a.value) && a.value.length === 0;
+  return typeof a.value === "string" && a.value.trim() === "";
+}
 
 /** Quote an entry when it would blur the comma-separated list. */
 const listSafe = (text: string): string => (/[,"]/.test(text) ? JSON.stringify(text) : text);
@@ -122,6 +131,7 @@ function multiEntry(options: readonly CardOption[], value: string, custom: boole
 
 /** The model-facing text of one answer, by field kind (labels for confirm/reject, comma list for multi). */
 export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | undefined): string {
+  if (field.optional && isSkipped(field, a)) return SKIPPED;
   if (!a) return "(no answer)";
   if (field.kind === "confirm") {
     if (typeof a.value !== "boolean") return "(no answer)";
@@ -204,6 +214,7 @@ export function validateAnswers(card: Card, answers: CardAnswers): string | unde
   const shown = visibleFields(card, answers);
   for (const f of shown) {
     const a = answers[f.id];
+    if (f.optional && isSkipped(f, a)) continue;
     if (!a) return `missing answer for field "${f.id}"`;
     const problem = validateField(f, a);
     if (problem) return problem;

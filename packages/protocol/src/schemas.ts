@@ -92,6 +92,12 @@ const cardFieldBase = z.object({
   description: z.string().optional(),
   /** Conditional visibility (stepped/dependent cards); absent = always shown. */
   showIf: FieldShowIfSchema.optional(),
+  /**
+   * The operator may leave it blank. Default (absent) = required. A skipped optional field is submitted empty
+   * (free-text/single `{value: ""}`, multi `{value: []}`, confirm: no answer) and the wolf is told it was skipped;
+   * an answer that is given is validated normally (a multi's min/max still apply once something is picked).
+   */
+  optional: z.boolean().optional(),
 });
 export const FreeTextFieldSchema = cardFieldBase.extend({
   kind: z.literal("free-text"),

@@ -2,6 +2,38 @@ import { describe, expect, it } from "vitest";
 import { CardSchema } from "@wolfpack/protocol";
 import { askCard, askProblem, createAskUserQuestionExtension } from "./ask-user-question.js";
 
+describe("askCard optional", () => {
+  it("maps optional onto the field (batch and single question) and the card stays valid", () => {
+    const card = askCard({
+      questions: [
+        { question: "A?", optional: true },
+        { question: "B?" },
+        { id: "c", question: "C", options: [{ label: "x" }], multiSelect: true, optional: true },
+        { id: "d", question: "D?", kind: "confirm", optional: true },
+      ],
+    });
+    expect(card.fields.map((f) => f.optional)).toEqual([true, undefined, true, true]);
+    expect(CardSchema.safeParse(card).success).toBe(true);
+    expect(askCard({ question: "Q?", optional: true }).fields[0]).toMatchObject({ optional: true });
+    expect(askCard({ question: "Q?", kind: "confirm", optional: true }).fields[0]).toMatchObject({ kind: "confirm", optional: true });
+    expect(askCard({ question: "Q?" }).fields[0]).not.toHaveProperty("optional");
+  });
+
+  it("optional parses on every field kind in the protocol", () => {
+    const card = {
+      tool: "t",
+      fields: [
+        { id: "a", kind: "free-text", label: "a", optional: true },
+        { id: "b", kind: "single", label: "b", options: [{ label: "x", value: "x" }], optional: true },
+        { id: "c", kind: "multi", label: "c", options: [{ label: "x", value: "x" }], optional: true },
+        { id: "d", kind: "confirm", label: "d", optional: true },
+      ],
+    };
+    expect(CardSchema.parse(card).fields.every((f) => f.optional === true)).toBe(true);
+    expect(CardSchema.safeParse({ ...card, fields: [{ id: "a", kind: "free-text", label: "a", optional: "yes" }] }).success).toBe(false);
+  });
+});
+
 describe("askCard", () => {
   it("a single question keeps its legacy field ids", () => {
     expect(askCard({ question: "Q?" }).fields[0]).toMatchObject({ id: "answer", kind: "free-text" });

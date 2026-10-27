@@ -574,7 +574,12 @@ export class WolfServer {
   }
 
   private detail(): ThreadDetail {
-    return { ...this.summary, messages: this.messages.map((m) => ({ ...m, ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}), ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}) })), busy: this.running !== null, lastEventId: this.seq };
+    const messages = this.messages.map((m) => ({
+      ...m,
+      ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
+      ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
+    }));
+    return { ...this.summary, messages, busy: this.running !== null, lastEventId: this.seq };
   }
 
   private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {

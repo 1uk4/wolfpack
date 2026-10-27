@@ -18,6 +18,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
+  objectsExtension,
   openWolfEngine,
   resolveToolNames,
   type ConfigureOptions,
@@ -25,7 +26,6 @@ import {
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
-import { objectsExtension } from "../engine/objects.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
 import { buildWolfModels } from "./models.js";

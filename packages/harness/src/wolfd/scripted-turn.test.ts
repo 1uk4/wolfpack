@@ -98,6 +98,8 @@ describe("scripted model turns", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn-end", reason: "complete" });
     const upserts = events.filter((e) => e.type === "object-upsert");
     expect(upserts.map((e) => [e.objectId, e.objectType, e.rev])).toEqual([["db", "decision", 1], ["db", "decision", 2]]);
+    // The event anchors like the history object: merged text length when the call happened.
+    expect(upserts.map((e) => e.textOffset)).toEqual(["Weighing it".length, "Weighing it".length]);
     expect(upserts[1]).toMatchObject({ data: { chosen: "sq", rationale: "Single writer after all." } });
     expect(events.filter((e) => e.type === "tool-end").map((e) => e.result)).toEqual(['Shown decision "db".', 'Shown decision "db".']);
 
@@ -106,6 +108,51 @@ describe("scripted model turns", () => {
     expect(objects).toHaveLength(1);
     expect(objects[0]).toMatchObject({ objectId: "db", type: "decision", rev: 2, data: { chosen: "sq", title: "Datastore" } });
     expect(objects[0].textOffset).toBe("Weighing it".length);
+  });
+
+  it("a revision in a later turn bumps the rev and the history object stays in the first message; long data survives uncapped", async () => {
+    const long = "because ".repeat(1500); // well over the 1 KiB / 4 KiB caps on tool-call args
+    const d = (chosen: string, rationale: string) => ({
+      objectId: "db",
+      options: [{ id: "pg", label: "Postgres", detail: long }, { id: "sq", label: "SQLite" }],
+      chosen,
+      rationale,
+    });
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_decision", d("pg", long) as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("first"),
+        fauxAssistantMessage([fauxToolCall("show_decision", d("sq", "short") as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("second"),
+      ],
+    });
+    const first = await tw.submit("one");
+    expect(first.filter((e) => e.type === "object-upsert").map((e) => e.rev)).toEqual([1]);
+    // Full data on the object while the tool call's own args are capped (the reload bug this pins).
+    const afterFirst = await tw.client.getThread(tw.home);
+    expect((afterFirst.messages.flatMap((m) => m.objects ?? [])[0]!.data as { rationale: string }).rationale).toBe(long);
+    expect(afterFirst.messages.flatMap((m) => m.tools ?? []).some((t) => (t.args as { _truncated?: boolean })._truncated)).toBe(true);
+    const second = await tw.submit("two");
+    expect(second.filter((e) => e.type === "object-upsert").map((e) => e.rev)).toEqual([2]);
+
+    const detail = await tw.client.getThread(tw.home);
+    const withObjects = detail.messages.filter((m) => m.objects?.length);
+    expect(withObjects).toHaveLength(1);
+    expect(withObjects[0]!.id).toBe(detail.messages.find((m) => m.role === "assistant")!.id);
+    expect(withObjects[0]!.objects![0]).toMatchObject({ rev: 2, data: { chosen: "sq", rationale: "short" } });
+
+  });
+
+  it("a show_decision whose chosen id is not an option yields no object (and the model gets an error)", async () => {
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([fauxToolCall("show_decision", { objectId: "x", options: [{ id: "a", label: "A" }], chosen: "zzz", rationale: "r" } as never)], { stopReason: "toolUse" }),
+        fauxAssistantMessage("ok"),
+      ],
+    });
+    const events = await tw.submit("decide");
+    expect(events.filter((e) => e.type === "object-upsert")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "tool-end").map((e) => e.isError)).toEqual([true]);
   });
 
   it("a show_decision with invalid arguments yields no object", async () => {

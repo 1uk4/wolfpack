@@ -30,3 +30,4 @@ export { resolveToolNames, TOOL_REGISTRY_NAMES, type ResolvedTools } from "./too
 export { createConversationReader, conversationReaderFor, type ConversationReader } from "./conversation-reader.js";
 /** @internal the background Context the engine calls pi-durable with; for tests driving `WolfEngine.harness`. */
 export { BACKGROUND_CONTEXT as ENGINE_CONTEXT } from "@earendil-works/chord/context";
+export { objectsExtension, objectFromCall, type ObjectCall } from "./objects.js";

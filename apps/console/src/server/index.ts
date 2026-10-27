@@ -46,3 +46,4 @@ export * from "./model-catalog.ts";
 // Response handlers the /api/wolves routes and the wolf pages share.
 export * from "./console-client.ts";
 export * from "./thread-api.ts";
+export * from "./memory-api.ts";

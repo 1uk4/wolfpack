@@ -45,7 +45,8 @@ function fake(summary: Partial<ThreadSummary>) {
 	const live = { running: summary.state === undefined || summary.state === "running", submitError: false };
 	const running = () => live.running;
 	const client = {
-		listThreads: async () => [state.summary],
+		listThreads: async () => [{ id: "w/home", wolf: "w", kind: "home", title: "Home" }, state.summary],
+		listChildren: async () => [state.summary],
 		getThread: async () => ({
 			...state.summary,
 			busy: false,
@@ -82,7 +83,10 @@ const type = (ta: HTMLTextAreaElement, v: string) =>
 		const key = Object.keys(ta).find((k) => k.startsWith("__reactProps$"))!;
 		(ta as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: v } });
 	});
-const inert = () => ({ close() {}, onOpen() {}, onEvent() {} });
+const frames = new Map<string, (d: string) => void>();
+let resync: () => void = () => {};
+const inert = () => ({ close() {}, onOpen: (cb: () => void) => void (resync = cb), onEvent: (n: string, cb: (d: string) => void) => void frames.set(n, cb) });
+const fire = (thread: Partial<ThreadSummary>) => act(async () => frames.get("thread-updated")!(JSON.stringify({ wolf: "w", thread: { ...base, ...thread } })));
 async function mount(f: ReturnType<typeof fake>) {
 	(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
 	const host = document.createElement("div");
@@ -231,7 +235,7 @@ describe("subagent panel", () => {
 		f.client.getLedger = async (id: string) => (ledgerGets++, orig(id));
 		await send(f, "again");
 		assert.ok(ledgerGets >= 1);
-		f.client.getThread = async () => {
+		f.client.listChildren = async () => {
 			throw new Error("blip");
 		};
 		await send(f, "again");
@@ -258,5 +262,71 @@ describe("subagent panel", () => {
 		f.client.listThreads = async () => [];
 		await mount(f);
 		assert.match(q('[data-testid="subagent-failed"]')!.textContent!, /no longer exists/);
+	});
+
+	it("thread-updated patches the header in place without refetching; the ledger refetches only on a state change", async () => {
+		const f = fake({});
+		await mount(f);
+		let threadGets = 0;
+		let ledgerGets = 0;
+		const getThread = f.client.getThread;
+		const getLedger = f.client.getLedger!;
+		f.client.getThread = async (id: string) => (threadGets++, getThread(id));
+		f.client.getLedger = async (id: string) => (ledgerGets++, getLedger(id));
+		await fire({ tokens: 99_000 });
+		await settle();
+		assert.match(q('[data-testid="subagent-tokens"]')!.textContent!, /99k/);
+		assert.equal(ledgerGets, 0);
+		await fire({ id: "w/other", tokens: 1 }); // another thread: ignored
+		assert.match(q('[data-testid="subagent-tokens"]')!.textContent!, /99k/);
+		await fire({ state: "done", finishedAt: new Date().toISOString() });
+		await settle();
+		assert.equal(q('[data-testid="subagent-state"]')!.textContent, "done");
+		assert.equal(q('[data-testid="subagent-stop"]'), null);
+		assert.equal(ledgerGets, 1);
+		assert.equal(threadGets, 0);
+	});
+
+	it("the wolf baseline refetches the summary and ledger without the messages", async () => {
+		const f = fake({});
+		await mount(f);
+		f.state.summary = { ...f.state.summary, tokens: 500 };
+		let threadGets = 0;
+		const getThread = f.client.getThread;
+		f.client.getThread = async (id: string) => (threadGets++, getThread(id));
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "w" })));
+		await settle();
+		assert.match(q('[data-testid="subagent-tokens"]')!.textContent!, /^500 tokens/);
+		assert.equal(threadGets, 0);
+	});
+
+	it("a strip row opens the real Subagent panel instead of navigating", async () => {
+		const { SubagentStrip } = await import("../components/subagent-strip.tsx");
+		const { PanelHostProvider, RightPanelHost, PANELS: REAL } = await import("../components/panel-host.tsx");
+		const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
+		const f = fake({});
+		(globalThis as Record<string, unknown>).fetch = threadFetch(f.client);
+		const pushed: string[] = [];
+		(globalThis as Record<string, unknown>).localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={{ push: (h: string) => void pushed.push(h) } as never}>
+					<ServerEventsProvider connect={inert}>
+						<PanelHostProvider wolf="w" threadId="w/home" panels={REAL.filter((p) => p.id === "subagent")}>
+							<SubagentStrip wolf="w" slug="home" items={[f.state.summary as never]} now={Date.now()} />
+							<RightPanelHost />
+						</PanelHostProvider>
+					</ServerEventsProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		await act(async () => void q('[data-testid="subagent-open"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		await settle();
+		assert.deepEqual(pushed, []);
+		assert.equal(q('[data-testid="subagent-panel"]')!.getAttribute("data-child"), CHILD);
+		assert.equal(q('[data-testid="subagent-title"]') !== null, true);
 	});
 });

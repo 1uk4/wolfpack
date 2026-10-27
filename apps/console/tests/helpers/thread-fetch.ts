@@ -15,6 +15,7 @@ export function threadFetch(client: ConsoleClient): typeof fetch {
 		if (!action) return api.thread(ref);
 		if (action === "submit") return api.submit(ref, req);
 		if (action === "attachments") return attachmentId ? api.attachment(ref, attachmentId) : api.upload(ref, req);
+		if (action === "children") return api.children(ref);
 		if (action === "ledger") return api.ledger(ref);
 		if (action === "abort") return api.abort(ref);
 		if (action === "stream") return api.stream(ref, req);

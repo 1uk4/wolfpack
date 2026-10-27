@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
-import { useOptionalServerEvent } from "@/components/server-events";
+import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { useChatSession } from "@/components/session";
 import { threadBase, threadTransport } from "@/components/thread-transport";
 import { PROSE_BLOCK_CLASS, renderItems, threadSlug, workHref, type LhMessage } from "@/src/core";
@@ -282,37 +282,74 @@ export function SubagentPanel({ wolf, childThreadId }: { wolf: string; childThre
 	const loadedRef = useRef(false);
 	const [failed, setFailed] = useState<string | null>(null);
 	const seq = useRef(0);
-	const refresh = useCallback(async () => {
+	const summaryRef = useRef<ThreadSummary | null>(null);
+	const loadLedger = useCallback(async () => {
+		try {
+			const res = await fetch(`${base}/ledger`);
+			if (res.ok) setEntries(((await res.json()) as { entries?: LedgerEntry[] }).entries ?? []);
+			else if (res.status === 501) setEntries(null);
+		} catch {
+			/* the next change refetches */
+		}
+	}, [base]);
+	// The first load reads the whole thread once (the transcript seed); afterwards the summary arrives by event.
+	const load = useCallback(async () => {
 		const mine = ++seq.current;
 		try {
 			const [detail, ledger] = await Promise.all([fetch(base), fetch(`${base}/ledger`)]);
 			if (mine !== seq.current) return;
-			if (!detail.ok) {
-				const msg = detail.status === 404 ? "This subagent no longer exists." : `Could not load the subagent (${detail.status}).`;
-				// After the first load a transient error keeps the view; only a vanished child replaces it.
-				return void (loadedRef.current && detail.status !== 404 ? setNote(msg) : setFailed(msg));
-			}
+			if (!detail.ok) return void setFailed(detail.status === 404 ? "This subagent no longer exists." : `Could not load the subagent (${detail.status}).`);
 			const json = (await detail.json()) as ThreadSummary & { busy?: boolean; messages?: unknown };
 			const messages = threadTransport(wolf, slug).parseRecord?.(json) ?? [];
 			const led = ledger.ok ? ((await ledger.json()) as { entries?: LedgerEntry[] }).entries ?? [] : ledger.status === 501 ? null : undefined;
 			if (mine !== seq.current) return;
 			loadedRef.current = true;
+			summaryRef.current = json;
 			setFailed(null);
 			setNote(null);
-			// The transcript is owned by the live session once mounted; only the summary is replaced.
-			setLoaded((prev) => ({ summary: json, messages: prev?.messages ?? messages }));
+			setLoaded({ summary: json, messages });
 			if (led !== undefined) setEntries(led);
 		} catch {
-			if (loadedRef.current) setNote("Could not refresh the subagent; showing the last view.");
+			setFailed("Could not load the subagent.");
 		}
 	}, [base, wolf, slug]);
 	useEffect(() => {
-		void refresh();
-	}, [refresh]);
-	// thread-updated reaches the console as a needs-you-changed poke for the wolf (no thread id = anything changed).
+		void load();
+	}, [load]);
+	const applySummary = useCallback((next: ThreadSummary) => {
+		const prev = summaryRef.current;
+		summaryRef.current = { ...prev, ...next };
+		setLoaded((l) => (l ? { ...l, summary: { ...l.summary, ...next } } : l));
+		return prev?.state !== next.state;
+	}, []);
+	// A light refresh without the messages: the summary from the parent's children list, and the ledger.
+	// Used after our own send/settle/stop and on a reconnect; a transient error keeps the view with a note.
+	const refresh = useCallback(async () => {
+		const parent = summaryRef.current?.parentThreadId;
+		try {
+			if (parent) {
+				const res = await fetch(`${threadBase(wolf, threadSlug(wolf, parent))}/children`);
+				if (res.ok) {
+					const mine = ((await res.json()) as { threads?: ThreadSummary[] }).threads?.find((t) => t.id === childThreadId);
+					if (mine) applySummary(mine);
+					setNote(null);
+				} else setNote(`Could not refresh the subagent (${res.status}).`);
+			}
+		} catch {
+			setNote("Could not refresh the subagent; showing the last view.");
+		}
+		await loadLedger();
+	}, [wolf, childThreadId, applySummary, loadLedger]);
+	useOptionalServerEvent("thread-updated", (p) => {
+		if (p.wolf !== wolf || p.thread.id !== childThreadId || !loadedRef.current) return;
+		if (applySummary(p.thread as ThreadSummary)) void loadLedger(); // a state change is a hand-off (result, error, stop, resume)
+	});
+	// The wolf stream's baseline (no thread named): events may have been missed.
 	useOptionalServerEvent("needs-you-changed", (p) => {
-		if (p.wolf !== wolf || (p.threadId !== undefined && p.threadId !== childThreadId)) return;
-		void refresh();
+		if (p.wolf === wolf && p.threadId === undefined && loadedRef.current) void refresh();
+	});
+	useOptionalServerResync(() => {
+		if (loadedRef.current) void refresh();
 	});
 	const stop = useCallback(() => {
 		fetch(`${base}/abort`, { method: "POST" })

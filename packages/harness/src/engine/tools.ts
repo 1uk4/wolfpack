@@ -1,5 +1,6 @@
 /** Tool registry: wolf.yaml `tools:` names -> engine extensions + the tool names they provide. */
-import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { createCodingTools, type ImageProcessor } from "@earendil-works/pi-durable/tools";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import type { Extension } from "@earendil-works/pi-durable";
 
 interface RegistryEntry {
@@ -7,6 +8,18 @@ interface RegistryEntry {
   /** Tool names the extension registers (what `configure({tools})` selects). */
   tools: readonly string[];
 }
+
+/**
+ * Without a processor `read` rejects any image over 2000px a side or 4.5 MiB, which covers an ordinary retina
+ * screenshot, so the model gets an error instead of the picture. Photon (WASM, in a worker thread) shrinks and
+ * re-encodes to fit. Loaded on the first image so wolves that never read one do not pay for it.
+ */
+export function lazyImageProcessor(load: () => Promise<ImageProcessor> = createNodePhotonImages): ImageProcessor {
+  let loaded: Promise<ImageProcessor> | undefined;
+  return { prepare: async (bytes, mimeType, limits) => (await (loaded ??= load())).prepare(bytes, mimeType, limits) };
+}
+
+const CodingTools = createCodingTools({ images: lazyImageProcessor() });
 
 const REGISTRY: Record<string, RegistryEntry> = {
   coding: { extension: CodingTools as unknown as Extension<never>, tools: ["read", "write", "edit", "bash"] },

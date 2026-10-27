@@ -77,6 +77,8 @@ export interface ConsoleClient {
   submit(threadId: string, input: string, opts?: SubmitOptions): Promise<SubmitAck>;
   /** Stores one file on the thread's wolf and returns its reference for `submit`. Rejects with ProtocolError `invalid_request` for a type or size the wolf refuses. */
   uploadAttachment(threadId: string, data: Uint8Array | Blob, opts: UploadOptions): Promise<Attachment>;
+  /** Fetches an uploaded attachment's bytes and stored mime type. Rejects with NotFoundError for an id the thread does not have. */
+  getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */
   abort(threadId: string): Promise<void>;
   /** Replays from `from`, then continues live until turn-end (inclusive). */

@@ -6,7 +6,7 @@
  *   tools (bash, read) can reach the same file.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, type Attachment, type AttachmentRef } from "@wolfpack/protocol";
 
@@ -60,7 +60,36 @@ export function loadAttachment(den: string, threadId: string, id: string): { pat
   throw new AttachmentError(`unknown attachment ${id}`);
 }
 
-/** Cleanup hook for thread deletion (wolfd has none yet): drops the thread's whole attachments directory. */
+/**
+ * The attachments a user message was sent with, recovered from its `[Attached image: <path>]` lines (history is
+ * rebuilt from engine entries, which only carry the text). Only paths inside THIS thread's attachment directory whose
+ * file still exists count, so a forged or stale line yields nothing. The original file name is not kept: `name` is the
+ * stored file name.
+ */
+export function attachmentsInText(den: string, threadId: string, text: string): Attachment[] {
+  const dir = threadDir(den, threadId);
+  const out: Attachment[] = [];
+  for (const m of text.matchAll(/^\[Attached image: (.+)\]$/gm)) {
+    const path = m[1];
+    const file = basename(path);
+    const dot = file.lastIndexOf(".");
+    const id = file.slice(0, dot);
+    const mimeType = MIME_BY_EXT[file.slice(dot + 1)];
+    if (dot < 0 || !mimeType || !ID_RE.test(id) || path !== join(dir, file) || out.some((a) => a.id === id)) continue;
+    try {
+      out.push({ id, name: file, mimeType, size: statSync(path).size });
+    } catch {
+      /* file gone: skip */
+    }
+  }
+  return out;
+}
+
+/**
+ * THE CLEANUP SEAM. Thread deletion does not exist in wolfd yet; when it lands it must call this (exported from
+ * `@wolfpack/harness/wolfd`) so the thread's uploads go with it. Removes `<den>/attachments/<threadId>/` recursively;
+ * a no-op when the thread never had attachments. Nothing calls it today.
+ */
 export function removeThreadAttachments(den: string, threadId: string): void {
   rmSync(threadDir(den, threadId), { recursive: true, force: true });
 }

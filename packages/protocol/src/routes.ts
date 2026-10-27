@@ -48,7 +48,11 @@ export interface RouteDef {
   /** JSON request body schema, if any. */
   readonly body?: z.ZodType;
   /** Success response: a JSON body schema, or an SSE stream of events. */
-  readonly response: { readonly kind: "json"; readonly schema: z.ZodType } | { readonly kind: "sse"; readonly event: z.ZodType };
+  readonly response:
+    | { readonly kind: "json"; readonly schema: z.ZodType }
+    | { readonly kind: "sse"; readonly event: z.ZodType }
+    /** Raw bytes; `Content-Type` is the stored mime type. */
+    | { readonly kind: "bytes" };
   /** Success status(es). */
   readonly status: readonly number[];
   /** Every non-2xx response is an ErrorEnvelope. */
@@ -78,6 +82,12 @@ export const ROUTES = {
    * 400 `invalid_request`. Returns the stored attachment; reference it from `submit`.
    */
   uploadAttachment: { method: "POST", path: "/v1/threads/:id/attachments", response: { kind: "json", schema: AttachmentSchema }, status: [201], error: err },
+  /**
+   * Fetch one uploaded attachment's raw bytes. `:attachmentId` must be an id returned by `uploadAttachment` for THIS
+   * thread; anything else (malformed, traversal, another thread's) is 404 `not_found`. Answers with the stored mime
+   * type as `Content-Type`, plus `X-Content-Type-Options: nosniff`.
+   */
+  getAttachment: { method: "GET", path: "/v1/threads/:id/attachments/:attachmentId", response: { kind: "bytes" }, status: [200], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },
   /** SSE: `id: <eventId>` + `data: <ThreadEvent json>`; ends with `data: [DONE]` at the first turn-end. */
   streamThread: { method: "GET", path: "/v1/threads/:id/stream", response: { kind: "sse", event: ThreadEventSchema }, status: [200], error: err },

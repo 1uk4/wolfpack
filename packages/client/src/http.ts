@@ -109,6 +109,11 @@ export class HttpConsoleClient implements ConsoleClient {
     return parsed.data as Attachment;
   }
 
+  async getAttachment(threadId: string, attachmentId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const res = await this.request("getAttachment", { id: threadId, attachmentId }, {}, threadId);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mimeType: res.headers.get("content-type") ?? "application/octet-stream" };
+  }
+
   async abort(threadId: string): Promise<void> {
     await this.json("abort", { id: threadId }, ROUTES.abort.response.schema, undefined, threadId);
   }

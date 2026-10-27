@@ -14,11 +14,8 @@ import type {
 	ChatRecord,
 	ChatSettings,
 	ChatSummary,
-	GraphChain,
-	GraphNode,
 	JobKind,
 	JobRecord,
-	Position,
 	TurnUsage,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
@@ -50,46 +47,6 @@ export interface ChatStore {
 	/** Delete the session record entirely (session-deletion wave 6, owner
 	 *  2026-09-22). False when the id is unknown. The job cleanup is the caller's choreography (the DELETE route), not the store's. */
 	deleteChat(id: string): boolean;
-}
-
-// ─── GraphStore — the append-only evidence ledgers (data/graph) ──────────────
-// Chains are the stored truth (owner, 2026-09-30): nodes + reasoning
-// chains; edges are a DERIVED view (core/graph.ts) and never touch this
-// seam. Reads return the raw append-order lines; merging chain assertions
-// by (premises, conclusion) is DERIVED in core/graph.ts — the store never
-// decides. The graph is inert: nothing in the console writes the ledgers
-// today.
-
-export interface GraphStore {
-	/** Append one GraphNode (ids are unique — no merging needed). */
-	appendNode(node: GraphNode): void;
-	/** Raw node lines in append order. */
-	readNodes(): GraphNode[];
-
-	/** Append one chain ASSERTION (a second session asserting the same
-	 *  (premises, conclusion) appends another line; readers merge). */
-	appendChain(assertion: GraphChain): void;
-	readChains(): GraphChain[];
-
-	/** The layout ledger (config.POSITIONS_FILE): nodeId → resting {x,y}.
-	 *  Written by the incremental settle (core/layout.ts settleGraphLayout)
-	 *  and the live-physics drag commit. */
-	readPositions(): Record<string, Position>;
-	/** Replace the whole ledger (the settle is a full-graph computation). */
-	writePositions(positions: Record<string, Position>): void;
-
-	/** THE DESTRUCTIVE SEAM (session-deletion wave 6, owner 2026-09-22 —
-	 *  the first non-append operation on these ledgers): atomically
-	 *  replace the full contents of any subset of the rewritable
-	 *  ledgers. Each provided array is written to a temp file and renamed
-	 *  over the ledger (crash-safe: a torn write never replaces the
-	 *  original); absent keys leave their ledger untouched. The pure
-	 *  computation is core/graph-deletion.ts — the store only makes the
-	 *  replacement atomic. */
-	rewriteLedgers(next: {
-		nodes?: GraphNode[];
-		chains?: GraphChain[];
-	}): void;
 }
 
 // ─── JobStore — background sub-agent jobs (data/jobs) ─────────────────────────

@@ -41,19 +41,9 @@ export const PATHS = {
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/**
- * The LIVE graph store (src/store/graph.ts) — currently inert
- * pipeline. Line shapes: src/core/contracts.ts. CHAINS ARE THE STORED
- * TRUTH (owner, 2026-09-30): edges are a derived view, never stored.
- */
-export const LEDGER_FILES = {
-	nodes: path.join(PATHS.graph, "nodes.jsonl"),
-	chains: path.join(PATHS.graph, "chains.jsonl"),
-} as const;
-
-/** The layout ledger (read-modify-write like sources.json): nodeId →
- *  {x,y} resting positions from the incremental settle (core/layout.ts).
- *  Carries an updatedAt stamp for future live-physics conflict handling. */
+/** The graph's stored node positions: a plain JSON map nodeId → {x,y}
+ *  (src/core/graph-persistence.ts). The console's own store; the KB is
+ *  never written. */
 export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
 
 /**
@@ -62,12 +52,6 @@ export const POSITIONS_FILE = path.join(PATHS.graph, "positions.json");
  */
 export const RENDER_SETTINGS_FILE = path.join(PATHS.graph, "render-settings.json");
 
-/** The graph-family FORMAT STAMP sidecar (schema-versioning wave,
- *  2026-10-10): one version for the whole family — the four JSONL ledgers,
- *  sources.json, render-settings.json. LAZY v1: absent = v1; the first
- *  graph-family write creates it. positions.json is REBUILDABLE and rides
- *  along unversioned by design (owner ruling). */
-export const GRAPH_FORMAT_FILE = path.join(PATHS.graph, "format.json");
 
 /**
  * THE USER SETTINGS RECORD (settings-storage wave, 2026-09-19): one

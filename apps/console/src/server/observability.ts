@@ -12,7 +12,6 @@
  */
 
 import { chatStore } from "../store/chats.ts";
-import { graphRevision } from "./graph.ts";
 import { catalogContextLimits } from "./model-catalog.ts";
 import { listJobs } from "./jobs.ts";
 import type { JobRecord } from "../core/contracts.ts";
@@ -35,13 +34,8 @@ export interface ActivityJob extends JobRecord {
  *  the blob disappears when the process ends. Cost math is NOT done here:
  *  raw usage rides on the records and the client folds it with the pure
  *  helpers in core/prices.ts (transport stays thin). */
-/** The dock's whole world + the graph's version stamp: the payload carries
- *  graphRevision (max mtime across the graph data files — see
- *  server/graph.ts) so any view can detect "the graph changed underneath
- *  me" and refetch clusters/layout. Reads never move it. */
 export function activityFeed(): {
 	jobs: ActivityJob[];
-	graphRevision: number;
 } {
 	const chats = chatStore.listChats();
 	const limits = catalogContextLimits();
@@ -59,8 +53,5 @@ export function activityFeed(): {
 	}
 	// oldest-first on last activity: the stable blob order (ISO strings sort chronologically)
 	jobs.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-	return {
-		jobs,
-		graphRevision: graphRevision(),
-	};
+	return { jobs };
 }

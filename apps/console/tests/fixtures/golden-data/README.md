@@ -9,7 +9,7 @@ stamps land (Wave D), the stamping commit updates these files with it.
 `tests/golden-fixtures.test.ts` copies this dir to a temp dir, points the
 production stores at it via the `LH_DATA_DIR` seam, and reads EVERYTHING
 through the real read paths — chat records (contract folds + the LLM wire
-flattening), graph ledgers (shape guards + the full derivation), jobs,
+flattening), graph render settings, jobs,
 settings. It also pins marker COVERAGE: every custom-marker kind and the
 core tool surface must appear in real data here.
 
@@ -25,8 +25,7 @@ core tool surface must appear in real data here.
   2026-10-10): graph-context (the bracketed preamble), problem ×2,
   practice-thinking ×2, conclude ×2, practice-next, problem-dismissed — the
   full marker cycle of a practice session, including the dismissal.
-- `graph/` — the real ledgers: nodes (282 lines), chains (160), sessions (8),
-  coverage (93), sources (4), render-settings, positions.
+- `graph/` — render-settings (the pre-KB-graph shape; newer fields default in).
 - `jobs/` — five records covering kind × status: research done + aborted by
   learner, demo done, visual done, pdf error.
 - `settings.json` — the stamped settings record (version 1, model slots).
@@ -41,7 +40,6 @@ pruning, re-run the flow instead.
 
 These files are deliberately the UNSTAMPED legacy shape (schema-stamp wave,
 2026-10-10): lazy v1 means absence reads as current-valid, so this set pins
-the pre-stamp read path forever. Stamped writes (chat `version: 1`, the
-`graph/format.json` sidecar) are pinned by `tests/schema-stamps.test.ts`.
+the pre-stamp read path forever. Stamped writes (chat `version: 1`) are pinned by `tests/schema-stamps.test.ts`.
 New records copied in after their first post-stamp write will carry the
 stamps — that shape is equally current-valid.

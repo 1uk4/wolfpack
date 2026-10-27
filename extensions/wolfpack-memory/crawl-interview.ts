@@ -24,7 +24,8 @@ export function canInterview(g: InterviewGate): boolean {
 export interface DirectiveInput {
   /** Source directory when the user gave one. */
   src?: string;
-  cwd: string;
+  /** The wolf's workspace, offered as the default source; omitted from the card when unknown. */
+  cwd?: string;
   /** Declared KB domains, or null/empty when none are known. */
   domains: readonly string[] | null;
   defaultDomain: string;
@@ -77,7 +78,7 @@ function cardsDirective({ src, cwd }: DirectiveInput, domainList: string, hintLi
   const sourceQ = src
     ? `The source directory is \`${src}\` (do not ask for it).`
     : `The user did not specify a source directory: include a free-text question with id "source", ` +
-      `"Which directory should I crawl?", details "Absolute path; the current working directory is ${cwd}."`;
+      `"Which directory should I crawl?", details "Absolute path${cwd ? `; the wolf's workspace is ${cwd}` : ""}."`;
   const planPathNote = src ? `path=\`${src}\`` : `path = the "source" answer`;
 
   return (
@@ -98,7 +99,9 @@ function cardsDirective({ src, cwd }: DirectiveInput, domainList: string, hintLi
     `its topic and file count, plus the totals (batch count, files matched/skipped).\n\n` +
     `Finally raise an ask_user_question confirm question (kind "confirm", confirmLabel "Looks good — add to plan", ` +
     `rejectLabel "Edit it"): "Does this plan look good?".\n` +
-    `  • If they approve: call crawl_finalize to stamp the plan 'status: ready', then tell them to run /wolf:crawl-run.\n` +
+    `  • If they approve: call crawl_finalize to stamp the plan 'status: ready', then tell them the plan is ready ` +
+    `at the path crawl_finalize reports and that running a crawl from this host is not available yet ` +
+    `(there is no run command in this host; do not invent one).\n` +
     `  • If they reject: raise a card asking what to change (a free-text question, or the same \`questions\` batch for ` +
     `domain/strategy/depth/scope), re-run crawl_plan + crawl_preview, and ask for approval again. ` +
     `Do NOT run the crawl yourself.${hintLine}`

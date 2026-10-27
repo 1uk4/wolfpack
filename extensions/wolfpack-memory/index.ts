@@ -80,6 +80,7 @@ import {
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
+import { createCrawlCore, crawlPlanTools } from "./crawl-core.ts";
 import { buildCrawlDirective, canInterview as crawlCanInterview } from "./crawl-interview.ts";
 import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
 import { statSync as fsStatSync } from "node:fs";
@@ -1232,7 +1233,6 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // Crawl plan mode: while active, the live observer is PAUSED so that reading
   // source files during planning never pollutes this wolf's den (spec §3).
   let crawlPlanMode = false;
-  let lastPlanPath: string | null = null;
   let activityStartMs = 0;
   let activityTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1972,48 +1972,22 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     }
   }
 
-  // Plan tools — thin, read-only wrappers over the deterministic front-end, so
-  // the agent + user can iterate on batching during the plan conversation.
+  // Plan tools — thin wrappers over the shared core (crawl-core.ts, also used by the durable host), so the agent +
+  // user can iterate on batching during the plan conversation. pi throws where the core throws.
+  const crawl = createCrawlCore({ crawlHome, defaultDomain, declaredDomains });
+  const planTools = crawlPlanTools(Type, { scope: false });
+
   pi.registerTool(
     defineTool({
       name: "crawl_plan",
       label: "Crawl: draft plan",
-      description:
-        "Draft a crawl plan from a source directory (deterministic; no LLM). " +
-        "Groups files into topic batches and resolves dates. Writes crawl-plan.yaml.",
-      parameters: Type.Object({
-        path: Type.String({ description: "Absolute source directory to crawl" }),
-        domain: Type.Optional(Type.String({ description: "Target KB domain" })),
-        strategy: Type.Optional(
-          Type.String({ description: "by-folder | by-pattern" })
-        ),
-        depth: Type.Optional(
-          Type.Number({ description: "by-folder: cap grouping to N path segments" })
-        ),
-      }),
+      ...planTools.plan,
       async execute(_id, params) {
-        const { plan, sink } = planCrawl({
-          source: params.path,
-          domain: params.domain ?? defaultDomain,
-          strategy: (params.strategy as Strategy) ?? "by-folder",
-          folderDepth: params.depth,
-          sinkBase: crawlHome,
-        });
-        lastPlanPath = path.join(sink.dir, "plan.yaml");
+        const { plan, planPath } = crawl.draft(params);
         crawlPlanMode = true;
-        const files = discoverSources(params.path, {
-          include: plan.include,
-          exclude: plan.exclude,
-        });
-        const summary = renderPlanSummary(plan, files);
         return {
-          content: [
-            {
-              type: "text",
-              text: `Plan written: ${lastPlanPath} (status: draft)\n\n${summary}`,
-            },
-          ],
-          details: { planPath: lastPlanPath, batches: plan.batches.length },
+          content: [{ type: "text", text: `Plan written: ${planPath} (status: draft)\n\n${crawl.summarize(plan)}` }],
+          details: { planPath, batches: plan.batches.length },
         };
       },
     })
@@ -2023,22 +1997,10 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     defineTool({
       name: "crawl_preview",
       label: "Crawl: preview plan",
-      description: "Summarize a crawl plan (batch count, files, per-batch detail).",
-      parameters: Type.Object({
-        planPath: Type.Optional(Type.String({ description: "Plan path (defaults to last)" })),
-      }),
+      ...planTools.preview,
       async execute(_id, params) {
-        const p = params.planPath ?? lastPlanPath;
-        if (!p) throw new Error("no plan path (run crawl_plan first)");
-        const plan = readPlan(p);
-        const files = discoverSources(plan.source, {
-          include: plan.include,
-          exclude: plan.exclude,
-        });
-        return {
-          content: [{ type: "text", text: renderPlanSummary(plan, files) }],
-          details: { planPath: p },
-        };
+        const { p, plan } = crawl.load(params.planPath);
+        return { content: [{ type: "text", text: crawl.summarize(plan) }], details: { planPath: p } };
       },
     })
   );
@@ -2047,41 +2009,12 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     defineTool({
       name: "crawl_validate",
       label: "Crawl: validate plan (run gate)",
-      description:
-        "Run the crawl gate against a plan: status ready, domain declared, every " +
-        "batch resolves, no file in two batches. Returns pass or the failures.",
-      parameters: Type.Object({
-        planPath: Type.Optional(Type.String({ description: "Plan path (defaults to last)" })),
-      }),
+      ...planTools.validate,
       async execute(_id, params) {
-        const p = params.planPath ?? lastPlanPath;
-        if (!p) throw new Error("no plan path (run crawl_plan first)");
-        const plan = readPlan(p);
-        let sourceExists = false;
-        try {
-          sourceExists = fsStatSync(plan.source).isDirectory();
-        } catch {
-          /* false */
-        }
-        const files = discoverSources(plan.source, {
-          include: plan.include,
-          exclude: plan.exclude,
-        });
-        const failures = gatePlan(plan, {
-          files,
-          declared: declaredDomains(),
-          sourceExists,
-        });
+        const r = crawl.validate(params.planPath);
         return {
-          content: [
-            {
-              type: "text",
-              text: failures.length
-                ? `GATE FAILS:\n  ${failures.join("\n  ")}`
-                : "GATE PASSES — plan is ready to run.",
-            },
-          ],
-          details: { ok: failures.length === 0, failures },
+          content: [{ type: "text", text: r.ok ? "GATE PASSES — plan is ready to run." : `GATE FAILS:\n  ${r.failures.join("\n  ")}` }],
+          details: r,
         };
       },
     })
@@ -2094,57 +2027,25 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
     defineTool({
       name: "crawl_finalize",
       label: "Crawl: finalize plan (status: ready)",
-      description:
-        "Mark a reviewed plan as ready: run every gate check except status, then " +
-        "write 'status: ready' to the plan document. Call ONLY after the user " +
-        "approved the batch summary. Returns the failures if the plan is not sound.",
-      parameters: Type.Object({
-        planPath: Type.Optional(Type.String({ description: "Plan path (defaults to last)" })),
-      }),
+      ...planTools.finalize,
       async execute(_id, params) {
-        const p = params.planPath ?? lastPlanPath;
-        if (!p) throw new Error("no plan path (run crawl_plan first)");
-        const plan = readPlan(p);
-        let sourceExists = false;
-        try {
-          sourceExists = fsStatSync(plan.source).isDirectory();
-        } catch {
-          /* false */
-        }
-        const files = discoverSources(plan.source, {
-          include: plan.include,
-          exclude: plan.exclude,
-        });
-        // Gate a status:ready copy so only real problems (not the draft status)
-        // surface. If anything fails, refuse to finalize.
-        const ready = { ...plan, status: "ready" as const };
-        const failures = gatePlan(ready, {
-          files,
-          declared: declaredDomains(),
-          sourceExists,
-        });
-        if (failures.length) {
+        const r = crawl.finalize(params.planPath);
+        if (!r.ok) {
           return {
-            content: [
-              {
-                type: "text",
-                text: `CANNOT FINALIZE — fix these first:\n  ${failures.join("\n  ")}`,
-              },
-            ],
-            details: { ok: false, failures },
+            content: [{ type: "text", text: `CANNOT FINALIZE — fix these first:\n  ${r.failures.join("\n  ")}` }],
+            details: r,
           };
         }
-        writePlan(p, ready);
         return {
           content: [
             {
               type: "text",
               text:
-                `Plan finalized → status: ready (${ready.batches.length} batch(es)).\n` +
-                `   plan: ${p}\n\nRun it with:  /wolf:crawl-run`,
+                `Plan finalized → status: ready (${r.batches} batch(es)).\n` +
+                `   plan: ${r.planPath}\n\nRun it with:  /wolf:crawl-run`,
             },
           ],
-          details: { ok: true, planPath: p, batches: ready.batches.length },
+          details: r,
         };
       },
     })
@@ -2154,20 +2055,18 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   // escape hatch and the headless/busy fallback.
   function draftCrawlPlan(ctx: any, parts: string[]): void {
     try {
-      const { plan, sink } = planCrawl({
-        source: parts[0],
-        domain: parts[1] ?? defaultDomain,
-        strategy: (parts[2] as Strategy) ?? "by-folder",
-        folderDepth: parts[3] ? Number(parts[3]) : undefined,
-        sinkBase: crawlHome,
+      const { plan } = crawl.draft({
+        path: parts[0],
+        domain: parts[1],
+        strategy: parts[2],
+        depth: parts[3] ? Number(parts[3]) : undefined,
       });
-      lastPlanPath = path.join(sink.dir, "plan.yaml");
       crawlPlanMode = true;
       refreshStatus(ctx);
       if (ctx.hasUI)
         ctx.ui.notify(
           `🐺 crawl plan drafted — ${plan.batches.length} batch(es)\n` +
-            `   plan: ${lastPlanPath}\n\n` +
+            `   plan: ${crawl.state.lastPlanPath}\n\n` +
             `Plan mode ON (observation paused). Refine batches with the crawl_* tools, ` +
             `review the plan, set 'status: ready', then:\n` +
             `   /wolf:crawl-run\n` +
@@ -2469,9 +2368,9 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       }
 
       // Resolve the plan: explicit arg → in-memory last plan → newest ready
-      // plan on disk (survives a relaunch, when lastPlanPath is gone).
+      // plan on disk (survives a relaunch, when crawl.state.lastPlanPath is gone).
       const explicit = rest;
-      let planPath = explicit || lastPlanPath || null;
+      let planPath = explicit || crawl.state.lastPlanPath || null;
       let discovered = false;
       if (!planPath) {
         planPath = findLatestPlan(crawlBases);
@@ -2485,7 +2384,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
           );
         return;
       }
-      lastPlanPath = planPath;
+      crawl.state.lastPlanPath = planPath;
       const planFile: string = planPath;
       if (discovered && ctx.hasUI)
         ctx.ui.notify(`🐺 resuming latest plan on disk:\n   ${planFile}`, "info");

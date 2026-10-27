@@ -230,8 +230,20 @@ function publishUi() {
 		available: hookStates.size > 0,
 	};
 	if (next.phase === ui.phase && next.error === ui.error && next.targetKey === ui.targetKey && next.lastKey === ui.lastKey && next.available === ui.available) return;
-	ui = next;
-	for (const l of uiListeners) l();
+	ui = next; // stored synchronously so getSnapshot is always current; only the NOTIFICATION is deferred
+	scheduleUiNotify();
+}
+/* Listeners are useSyncExternalStore handlers of InlineMic fibers. publishUi runs from effects in the same commit that
+ * places/removes those fibers (route transitions), and a synchronous forced rerender can hit a fiber that hasn't
+ * mounted yet ("Can't perform a React state update on a component that hasn't mounted yet"). Defer + coalesce. */
+let uiNotifyPending = false;
+function scheduleUiNotify() {
+	if (uiNotifyPending) return;
+	uiNotifyPending = true;
+	queueMicrotask(() => {
+		uiNotifyPending = false;
+		for (const l of [...uiListeners]) l();
+	});
 }
 const subscribeUi = (l: () => void) => {
 	uiListeners.add(l);

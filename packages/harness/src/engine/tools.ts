@@ -2,7 +2,7 @@
 import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
-import { fenceWriteTool } from "./fence.js";
+import { bashViolation, fenceWriteTool } from "./fence.js";
 import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
 interface RegistryEntry {
@@ -116,7 +116,17 @@ export function lazyImageProcessor(load: () => Promise<ImageProcessor> = createN
 // (the same four tools as createCodingTools, with write and edit held to a worktree child's root: see fence.ts)
 const CodingTools = defineExtension({
   name: "coding-tools",
-  tools: [createReadTool({ images: lazyImageProcessor() }), fenceWriteTool(createWriteTool()), fenceWriteTool(createEditTool()), createBashTool()],
+  tools: [
+    createReadTool({ images: lazyImageProcessor() }),
+    fenceWriteTool(createWriteTool()),
+    fenceWriteTool(createEditTool()),
+    createBashTool({
+      prepare: (execution) => {
+        const refused = bashViolation(execution.cwd, execution.command);
+        if (refused) throw new Error(refused);
+      },
+    }),
+  ],
 });
 
 const REGISTRY: Record<string, RegistryEntry> = {

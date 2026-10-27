@@ -28,7 +28,7 @@
  * not those lingering processes (lowering idleTtlMs would be provider-wide, home included).
  *
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -38,7 +38,7 @@ import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
-import { fenceRoot } from "../engine/fence.js";
+import { fenceRoot, offLimitsRegex, unfenceRoot } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
@@ -153,6 +153,16 @@ function slugify(text: string, max = 40): string {
 /** Pinned by the mid-turn cwd test: tools called later in the same turn already run in the new cwd; the prompt names it from the next turn. */
 const CWD_MOVE_NOTE = "Tools you call later in this turn already run there; your system prompt names it from your next turn.";
 
+/** How long the main checkout may take to answer git before the check is skipped. */
+const MAIN_STATE_MS = 5000;
+
+interface MainState {
+  path: string;
+  head: string;
+  count: number;
+  hash: string;
+}
+
 const WORKTREE_HINT = 'Use isolation: "worktree" for a writer that should not share the checkout.';
 
 function realpathOr(p: string): string {
@@ -184,7 +194,7 @@ export class SubagentManager {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly lastError = new Map<string, string>();
   private readonly ledgerSeq = new Map<string, number>();
-  private readonly mainWarning = new Map<string, string>();
+  private readonly turnChain = new Map<string, Promise<void>>();
   private deliverySeq = 0;
   private closed = false;
   /** Owner releases in flight, per child: a resume waits for its child's. */
@@ -340,6 +350,8 @@ export class SubagentManager {
     // A worktree child is pointed at its own copy: paths of the main checkout in the brief are rewritten to it.
     const brief = plan.workspace ? rewriteBrief(params.task, plan.offLimits ?? [], plan.workspace.path) : params.task;
 
+    // The main checkout is read in the background from here: a worktree child is blamed only for what changes after.
+    const baselineP = plan.workspace ? this.mainState(plan.workspace.repo.mainDir) : Promise.resolve(undefined);
     const init: ConfigureOptions = {
       model: { provider: model.provider, modelId: model.modelId },
       ...(model.thinking ? { thinkingLevel: model.thinking as ThinkingLevel } : {}),
@@ -369,7 +381,8 @@ export class SubagentManager {
     const run = adm.run;
     // (the commit it was cut from: what a home child's unmerged commits are counted against)
     const base = plan.workspace ? await gitOk(plan.workspace.path, ["rev-parse", "HEAD"]).catch(() => undefined) : undefined;
-    const mainWatch = plan.workspace ? await this.mainState(plan.workspace.repo.mainDir) : undefined;
+    // (taken while the child was being set up, so only the wait for it, bounded by MAIN_STATE_MS, is added to a spawn)
+    const mainWatch = await baselineP;
     const rec: ChildRecord = {
       id,
       conversationId: owned.conversation.id,
@@ -385,6 +398,7 @@ export class SubagentManager {
       ...(plan.guardDir ? { guardDir: plan.guardDir } : {}),
       ...(base ? { base } : {}),
       ...(mainWatch ? { mainWatch } : {}),
+      ...(params.task !== brief ? { originalBrief: params.task } : {}),
       ...(extra.resolves ? { resolves: extra.resolves } : {}),
       state: run ? "running" : "queued",
       ...(adm.seq ? { queuedSeq: adm.seq } : {}),
@@ -610,7 +624,7 @@ export class SubagentManager {
             this.persist();
           } else {
             await this.hold(rec);
-            this.finishTurn(rec, thread, "complete"); // landed and finished: this is a NEW answer
+            await this.endTurn(rec, thread, "complete"); // landed and finished: this is a NEW answer
           }
         } else if (rec.state === "running") {
           if (!thread.hadHistory) {
@@ -620,7 +634,7 @@ export class SubagentManager {
             this.persist();
           } else if (!thread.isRunning) {
             // The turn ended but wolfd went down before the result was recorded.
-            this.finishTurn(rec, thread, "complete");
+            await this.endTurn(rec, thread, "complete");
           }
         }
       } catch (e) {
@@ -634,8 +648,16 @@ export class SubagentManager {
     for (const parentId of new Set(this.records.filter((r) => r.outbox.length > 0).map((r) => r.parentThreadId))) this.flush(parentId);
   }
 
+  /** The paths a worktree child may not touch: its repo's main checkout and the feature worktree it was cut from. */
+  private offLimitsOf(rec: ChildRecord): string[] {
+    const ws = rec.workspace;
+    if (!ws) return [];
+    const feature = this.featureWsOf(rec)?.path;
+    return [...new Set([ws.repo.mainDir, ws.repo.toplevel, ...(feature ? [feature] : [])].filter((p) => p !== ws.path))];
+  }
+
   private async attach(rec: ChildRecord, conv: EngineConversation): Promise<ThreadRuntime> {
-    if (rec.workspace) fenceRoot(rec.workspace.path); // (write and edit stay inside it; also after a restart)
+    if (rec.workspace) fenceRoot(rec.workspace.path, this.offLimitsOf(rec)); // (write and edit stay inside it, bash is checked; also after a restart)
     const thread = await this.port.attachChild(this.summaryOf(rec), conv);
     this.unobserve.set(rec.id, thread.observe((ev) => this.onChildEvent(rec, thread, ev)));
     this.watchParent(rec.parentThreadId);
@@ -682,12 +704,34 @@ export class SubagentManager {
         this.lastError.set(rec.id, ev.message);
         return;
       case "turn-end":
-        if (rec.mainWatch) void this.checkMain(rec).then(() => this.finishTurn(rec, thread, ev.reason));
+        if (rec.isolation === "worktree") void this.endTurn(rec, thread, ev.reason);
         else this.finishTurn(rec, thread, ev.reason);
         return;
       default:
         return;
     }
+  }
+
+  /**
+   * A worktree child's turn ended: check the main checkout, then finish the turn. Turn ends of one child run one after
+   * the other (a slow check never lets a later settle overtake an earlier one), and a failing check never stops the finish.
+   */
+  private endTurn(rec: ChildRecord, thread: ThreadRuntime, reason: "complete" | "aborted" | "error"): Promise<void> {
+    const prev = this.turnChain.get(rec.id) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      try {
+        await this.checkMain(rec);
+      } catch (e) {
+        this.port.onError(e);
+      }
+      try {
+        this.finishTurn(rec, thread, reason);
+      } catch (e) {
+        this.port.onError(e);
+      }
+    });
+    this.turnChain.set(rec.id, next);
+    return next;
   }
 
   /** A child's turn ended: record how, and tell the parent. */
@@ -754,12 +798,12 @@ export class SubagentManager {
   private settle(rec: ChildRecord, state: SubagentState, text?: string): void {
     delete rec.resuming;
     delete rec.step;
-    const warning = this.mainWarning.get(rec.id);
-    this.mainWarning.delete(rec.id);
-    if (warning) {
-      this.ledger(rec, "system", "parent", "error", warning);
-      this.port.onError(new Error(`subagent ${rec.id}: ${warning}`));
-      if (text !== undefined) text = `${warning}\n\n${text}`;
+    // A warning about the main checkout waits (persisted) for the next delivery, so a restart or a stop does not lose it.
+    if (rec.mainWarning && text !== undefined) {
+      text = `${rec.mainWarning}
+
+${text}`;
+      delete rec.mainWarning;
     }
     if (text !== undefined) {
       const n = ++this.deliverySeq;
@@ -777,30 +821,36 @@ export class SubagentManager {
     } else if (text !== undefined) this.flush(rec.parentThreadId);
   }
 
-  /** The main checkout's HEAD and uncommitted files (undefined when git cannot say). */
-  private async mainState(dir: string): Promise<{ path: string; head: string; status: string[] } | undefined> {
-    try {
-      const head = await gitOk(dir, ["rev-parse", "HEAD"]);
-      const status = (await gitOk(dir, ["status", "--porcelain", "--untracked-files=all"])).split("\n").map((l) => l.trim()).filter(Boolean);
-      return { path: dir, head, status };
-    } catch {
-      return undefined;
-    }
+  /** The main checkout's HEAD, and how many uncommitted files it has with a hash of them (undefined when git cannot say in time). */
+  private async mainState(dir: string): Promise<MainState | undefined> {
+    const read = async (): Promise<MainState | undefined> => {
+      try {
+        const head = await gitOk(dir, ["rev-parse", "HEAD"]);
+        const lines = (await gitOk(dir, ["status", "--porcelain", "--untracked-files=all"])).split("\n").map((l) => l.trim()).filter(Boolean).sort();
+        return { path: dir, head, count: lines.length, hash: createHash("sha1").update(lines.join("\n")).digest("hex") };
+      } catch {
+        return undefined;
+      }
+    };
+    return Promise.race([read(), new Promise<undefined>((r) => setTimeout(() => r(undefined), MAIN_STATE_MS).unref())]);
   }
 
   /**
-   * A worktree child's turn is over: did the main checkout change while it ran? If so the warning waits in
-   * `mainWarning` for settle() to put in front of the result. Never reverts anything. The baseline moves on, so a
-   * resumed child is only blamed for what happens after.
+   * A worktree child's turn is over: did the main checkout change since the last look? If so the warning is kept on the
+   * record for settle() to put in front of the result (it is not lost to a restart), with a ledger entry and onError.
+   * Never reverts anything. The baseline moves on, so a resumed child is only blamed for what happens after.
    */
   private async checkMain(rec: ChildRecord): Promise<void> {
     const before = rec.mainWatch;
     if (!before) return;
     const now = await this.mainState(before.path);
     if (!now) return;
-    const fresh = now.status.filter((l) => !before.status.includes(l));
-    if (now.head !== before.head || fresh.length > 0) {
-      this.mainWarning.set(rec.id, `WARNING: the main checkout ${before.path} changed while this child ran (HEAD ${before.head.slice(0, 9)} -> ${now.head.slice(0, 9)}; ${fresh.length} new uncommitted files). Its work may not be in its worktree.`);
+    const added = Math.max(0, now.count - before.count);
+    if (now.head !== before.head || added > 0 || (now.count === before.count && now.hash !== before.hash)) {
+      const warning = `WARNING: the main checkout ${before.path} changed while this child ran (HEAD ${before.head.slice(0, 9)} -> ${now.head.slice(0, 9)}; ${added} new uncommitted files). Its work may not be in its worktree.`;
+      rec.mainWarning = rec.mainWarning ? `${rec.mainWarning}\n${warning}` : warning;
+      this.ledger(rec, "system", "parent", "error", warning);
+      this.port.onError(new Error(`subagent ${rec.id}: ${warning}`));
     }
     rec.mainWatch = now;
     this.persist();
@@ -928,6 +978,7 @@ export class SubagentManager {
         tried();
         return say(dirtyText(rec, ws, msg));
       }
+      unfenceRoot(ws.path);
       delete rec.workspace;
       this.guard.releaseAll(rec.id);
       this.persist();
@@ -992,6 +1043,7 @@ export class SubagentManager {
     } catch (e) {
       return fail(`Could not abandon ${ws.branch}: ${e instanceof Error ? e.message : String(e)}`);
     }
+    unfenceRoot(ws.path);
     delete rec.workspace;
     this.guard.releaseAll(rec.id);
     this.persist();
@@ -1103,6 +1155,7 @@ export class SubagentManager {
 
   /** Remove a child worktree and branch that never ran (errors are reported, not thrown). */
   private async dropWorkspace(ws: Workspace): Promise<void> {
+    unfenceRoot(ws.path);
     await abandonChild(ws).catch((e) => this.port.onError(e));
   }
 
@@ -1512,23 +1565,10 @@ export class SubagentManager {
   }
 }
 
-/** `p` and its realpath, each also with the home directory as `~`. */
-function pathVariants(p: string): string[] {
-  const home = homedir();
-  const out = new Set<string>();
-  for (const v of [p, realpathOr(p)]) {
-    out.add(v);
-    if (v === home || v.startsWith(home + "/")) out.add(`~${v.slice(home.length)}`);
-  }
-  return [...out];
-}
-
-/** The brief with the off-limits paths (and their realpath and ~ forms) rewritten to the child's worktree, plus a note saying so. Unchanged when none occur. */
+/** The brief with the off-limits paths (realpath, `~`, `$HOME` forms too) rewritten to the child's worktree, plus a note saying so. Unchanged when none occur. */
 export function rewriteBrief(brief: string, offLimits: string[], to: string): string {
-  const froms = [...new Set(offLimits.flatMap(pathVariants))].filter((f) => f && f !== "/" && f !== to).sort((a, b) => b.length - a.length);
-  if (froms.length === 0) return brief;
-  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(^|[^\\w./~-])(${froms.map(esc).join("|")})(?![\\w-]|\\.\\w)/?`, "g");
+  const re = offLimitsRegex(offLimits, [to]);
+  if (!re) return brief;
   const used = new Set<string>();
   const out = brief.replace(re, (m, pre: string, hit: string) => {
     used.add(hit);

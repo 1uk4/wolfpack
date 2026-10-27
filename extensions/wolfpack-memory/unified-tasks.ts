@@ -297,20 +297,22 @@ export default function createTasksExtension(
     fetchedAt?: number;
   }
 
-  function cachePath(): string {
-    return join(wolfDen, "factory", "task-cache.json");
+  // One cache file per bound work item, not per wolf: conversations bound to different items (home, feature threads)
+  // each read and refresh their own.
+  function cachePath(workId: string): string {
+    return join(wolfDen, "factory", "task-cache", `${workId.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
   }
 
-  function readCache(): TaskCache | null {
+  function readCache(workId: string): TaskCache | null {
     try {
-      return JSON.parse(require("fs").readFileSync(cachePath(), "utf-8"));
+      return JSON.parse(require("fs").readFileSync(cachePath(workId), "utf-8"));
     } catch {
       return null;
     }
   }
 
   async function writeCache(task: WorkItem): Promise<void> {
-    const dir = dirname(cachePath());
+    const dir = dirname(cachePath(task.id as string));
     await mkdir(dir, { recursive: true });
     let parent: WorkItem | undefined;
     let siblings: WorkItem[] | undefined;
@@ -334,24 +336,25 @@ export default function createTasksExtension(
       const all = task.kind === "feature" ? [task, ...(await client.query({ domain: task.domain as string, partOf: task.id as string }))] : [task, ...(parent ? [parent] : [])];
       ready = readyToGraduate(task, all);
     } catch { /* advisory */ }
-    await writeFile(cachePath(), JSON.stringify({ task, parent, siblings, body, featureRecord, ready, fetchedAt: Date.now() } satisfies TaskCache));
+    await writeFile(cachePath(task.id as string), JSON.stringify({ task, parent, siblings, body, featureRecord, ready, fetchedAt: Date.now() } satisfies TaskCache));
   }
 
   /** Sections render synchronously from the cache. The Record changes behind
    *  our back (memory rewrites it), so each render schedules a refresh: the
    *  agent sees it one turn later at the latest. */
-  let refreshing = false;
-  function refreshCacheSoon(cached: TaskCache): void {
-    if (refreshing || Date.now() - (cached.fetchedAt ?? 0) < 10_000) return;
-    refreshing = true;
-    client.get(cached.task.id as string)
+  const refreshing = new Set<string>();
+  function refreshCacheSoon(cached: TaskCache | { task: { id: string }; fetchedAt?: undefined }): void {
+    const id = cached.task.id as string;
+    if (refreshing.has(id) || Date.now() - (cached.fetchedAt ?? 0) < 10_000) return;
+    refreshing.add(id);
+    client.get(id)
       .then((task) => writeCache(task))
       .catch(() => {})
-      .finally(() => { refreshing = false; });
+      .finally(() => { refreshing.delete(id); });
   }
 
-  function clearCache(): void {
-    try { require("fs").unlinkSync(cachePath()); } catch { /* ok */ }
+  function clearCache(workId: string): void {
+    try { require("fs").unlinkSync(cachePath(workId)); } catch { /* ok */ }
   }
 
   // ── API helpers ─────────────────────────────────────────────────────────
@@ -384,7 +387,7 @@ export default function createTasksExtension(
   /** The bound item as the heads-up line names it. */
   function boundRef(binding: ActiveBinding | null): { id: string; title?: string } | null {
     if (!binding) return null;
-    const cached = readCache();
+    const cached = readCache(binding.taskId);
     return { id: binding.taskId, title: cached?.task.id === binding.taskId ? cached.task.title : undefined };
   }
 
@@ -442,9 +445,11 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
 
-          // The cache is one file per wolf: use it only when it is for THIS conversation's item.
-          const cached = readCache();
+          // The cache holds one file per work item: read THIS conversation's.
+          const cached = readCache(binding.taskId);
           if (!cached || cached.task.id !== binding.taskId) {
+            // Bound without a tool call here (a feature thread is bound when it is created): fill the cache for the next render.
+            refreshCacheSoon({ task: { id: binding.taskId } });
             return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
           }
 
@@ -549,7 +554,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
           }
 
           await clearBinding(ctx);
-          clearCache();
+          clearCache(binding.taskId);
           return {
             content: [{ type: "text", text: `Unbound from ${binding.taskId}.` }],
           };
@@ -982,7 +987,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                 result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
                 result.push(readyBoundReply(shippedItem));
               } else {
-                if (await clearBinding(ctx)) clearCache();
+                if (await clearBinding(ctx)) clearCache(binding.taskId);
                 else result.push(STAYS_BOUND);
               }
             } else {
@@ -993,7 +998,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                 if (refused) {
                   // Nothing was written: don't leave the binding on the finished item.
                   if (await clearBinding(ctx)) {
-                    clearCache();
+                    clearCache(binding.taskId);
                     result.push(`Not bound to next [${next.id}]: ${refused} Unbound.`);
                   } else result.push(`Not bound to next [${next.id}]: ${refused} ${STAYS_BOUND}`);
                 } else {
@@ -1004,7 +1009,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
               } else if (readyToGraduate(realFeature, all)) {
                 const refused = await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
                 if (refused) {
-                  if (await clearBinding(ctx)) clearCache();
+                  if (await clearBinding(ctx)) clearCache(binding.taskId);
                   result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
                   result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
                 } else {
@@ -1013,7 +1018,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
                   result.push(readyBoundReply(realFeature));
                 }
               } else if (await clearBinding(ctx)) {
-                clearCache();
+                clearCache(binding.taskId);
                 result.push("No more tasks in this feature. Unbound.");
               } else {
                 result.push(`No more tasks in this feature. ${STAYS_BOUND}`);
@@ -1283,7 +1288,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             const binding = await readBinding(ctx);
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
             if (binding && done.archived.includes(binding.taskId)) {
-              if (await clearBinding(ctx)) clearCache();
+              if (await clearBinding(ctx)) clearCache(binding.taskId);
               else result.push(STAYS_BOUND);
             }
             try {

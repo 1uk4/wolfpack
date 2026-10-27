@@ -216,7 +216,7 @@ function ThreadChatInner({
 		if (p.threadId !== undefined && p.threadId !== threadId) return; // another thread of the wolf
 		const running = status === "submitted" || status === "streaming";
 		if (p.kind === "status" && p.status === "busy") {
-			if (!running) resumeStream();
+			if (!running) resumeStream(true);
 			else if (status === "streaming") busyMissed.current = true;
 			return;
 		}

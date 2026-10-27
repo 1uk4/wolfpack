@@ -516,7 +516,7 @@ export class SessionModel {
 	 * lands on top. The stream then replays the turn from its first event
 	 * through the SAME consume path.
 	 */
-	async resumeStream(refetchRecordFirst = true): Promise<void> {
+	async resumeStream(refetchRecordFirst = true, skipIfRecordIdle = false): Promise<void> {
 		this.consumeAbort?.abort();
 		const controller = new AbortController();
 		this.consumeAbort = controller;
@@ -557,7 +557,7 @@ export class SessionModel {
 							this.tail = [];
 						});
 						// A turn that ended before we attached is already in the record: replaying it would double its messages.
-						if (this.transport.recordIdle?.(json)) {
+						if (skipIfRecordIdle && this.transport.recordIdle?.(json)) {
 							this.setStatus("ready");
 							return;
 						}

@@ -117,7 +117,8 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, tra
 	const adoptRecord = useCallback((record: LhMessage[]) => model.adoptRecord(record), [model]);
 	const stop = useCallback(() => model.stop(), [model]);
 	const clearError = useCallback(() => model.clearError(), [model]);
-	const resumeStream = useCallback(() => void model.resumeStream(), [model]);
+	// skipIfRecordIdle: attaching on a hint (a busy event) that may be late — a finished turn is already in the record.
+	const resumeStream = useCallback((skipIfRecordIdle = false) => void model.resumeStream(true, skipIfRecordIdle), [model]);
 
 	return {
 		messages: state.messages,

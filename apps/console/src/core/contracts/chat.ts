@@ -148,14 +148,13 @@ export interface ChatListItem extends ChatSummary {
 	compacting: boolean;
 }
 
-// ─── Artifact renderer registry (client extension point) ────────────────────
+// ─── Card registry (client extension point) ─────────────────────────────────
 
 /**
- * components/chat.tsx renders any tool part it doesn't specially handle via
- * components/artifacts/index.ts's registry, keyed by tool name ("research",
- * "demo", "visual", …). Workers add renderers there — chat.tsx is off-limits
- * to artifact work. Renderer receives the raw tool part; it typically renders
- * an activity card while state is input-available (poll /api/jobs) and the
+ * Tool parts render via components/card-registry.tsx, keyed by tool name
+ * ("research", "demo", "visual", …). Workers add renderers there — chat.tsx
+ * is off-limits to artifact work. A renderer receives the raw tool part: an
+ * activity card while state is input-available (poll /api/jobs), the
  * artifact (iframe / svg) when output-available.
  */
 export interface ArtifactPartProps {

@@ -7,7 +7,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
-import { artifactRenderers } from "@/components/artifacts";
+import { lookupCard } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { Composer } from "@/components/composer";
@@ -62,7 +62,8 @@ function ThreadReasoning({
 }
 
 function ToolItemRow({ item, open, onOpenChange }: { item: ToolItem; open: boolean; onOpenChange: (open: boolean) => void }) {
-	const Renderer = artifactRenderers[item.entry.name];
+	const card = lookupCard("tool", item.entry.name);
+	const Renderer = card?.threadRow ? card.Renderer : undefined;
 	return (
 		<ToolRow
 			entry={item.entry}

@@ -58,6 +58,8 @@ export * from "./session-markdown.ts";
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
 export * from "./thread-adapter.ts";
 export * from "./objects.ts";
+// needs-you.ts: the cross-wolf pending-card list + the notification trigger logic. Pure.
+export * from "./needs-you.ts";
 export * from "./graph-layout.ts";
 export * from "./thread-cards.ts";
 export * from "./tool-rows.ts";

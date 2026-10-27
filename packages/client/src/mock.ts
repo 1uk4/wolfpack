@@ -6,7 +6,9 @@ import {
   ProtocolError,
   type Attachment,
   type AttachmentRef,
+  type Card,
   type CardAnswers,
+  type WolfEvent,
   type PendingCard,
   type ConsoleClient,
   type SubmitAck,
@@ -26,7 +28,7 @@ export interface MockOptions {
   script?: ScriptStep[];
 }
 
-type Distribute<T> = T extends unknown ? Omit<T, "id" | "threadId" | "at" | "actor"> : never;
+type Distribute<T, K extends string = "id" | "threadId" | "at" | "actor"> = T extends unknown ? Omit<T, K> : never;
 type EventInput = Distribute<ThreadEvent>;
 
 interface ThreadState {
@@ -47,6 +49,12 @@ export class MockConsoleClient implements ConsoleClient {
   /** Attachments uploaded so far (bytes dropped), and the submits that referenced them: for tests. */
   readonly uploads: (Attachment & { threadId: string })[] = [];
   private readonly uploadBytes = new Map<string, Uint8Array>();
+  /** Card answers received, for tests. */
+  readonly cardAnswers: { threadId: string; callId: string; answers: CardAnswers }[] = [];
+  /** Cards raised through {@link raiseCard} and not yet answered (the scripted turns raise none themselves). */
+  private readonly pendingCards: PendingCard[] = [];
+  private readonly activitySubs = new Set<(ev: WolfEvent) => void>();
+  private activitySeq = 0;
   readonly submits: { threadId: string; input: string; attachments: AttachmentRef[] }[] = [];
 
   constructor(opts: MockOptions = {}) {
@@ -69,16 +77,60 @@ export class MockConsoleClient implements ConsoleClient {
 
   async listThreads(wolf: string): Promise<ThreadSummary[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
-    return [...this.threads.values()].map((t) => ({ ...t.summary }));
+    return [...this.threads.values()].map((t) => ({ ...t.summary, status: this.statusOf(t) }));
+  }
+
+  private statusOf(t: ThreadState): NonNullable<ThreadSummary["status"]> {
+    return t.running ? "busy" : this.pendingCards.some((p) => p.threadId === t.summary.id) ? "needs-you" : "idle";
+  }
+
+  /** Test seam: the wolf asks the operator `card` on `threadId`. The thread turns needs-you and activity watchers hear it. */
+  raiseCard(threadId: string, card: Card, callId = `call-${++this.counter}`, raisedAt = new Date().toISOString()): PendingCard {
+    const t = this.get(threadId);
+    const pending: PendingCard = { callId, threadId, card, raisedAt };
+    this.pendingCards.push(pending);
+    this.emitActivity({ type: "card-pending", card: pending });
+    this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
+    return pending;
+  }
+
+  private emitActivity(draft: Distribute<WolfEvent, "id" | "wolf" | "at">): void {
+    const ev = { ...draft, id: ++this.activitySeq, wolf: FIXTURE_WOLF.id, at: new Date().toISOString() } as WolfEvent;
+    for (const s of [...this.activitySubs]) s(ev);
+  }
+
+  async *watchActivity(wolf: string, opts: { signal?: AbortSignal } = {}): AsyncIterable<WolfEvent> {
+    if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
+    const queue: WolfEvent[] = [];
+    let wake: (() => void) | undefined;
+    const sub = (ev: WolfEvent) => {
+      queue.push(ev);
+      wake?.();
+    };
+    this.activitySubs.add(sub);
+    const onAbort = () => wake?.();
+    opts.signal?.addEventListener("abort", onAbort);
+    try {
+      while (!opts.signal?.aborted) {
+        const next = queue.shift();
+        if (next) yield next;
+        else await new Promise<void>((r) => (wake = r));
+      }
+    } finally {
+      this.activitySubs.delete(sub);
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async getThread(threadId: string): Promise<ThreadDetail> {
     const t = this.get(threadId);
     return {
       ...t.summary,
+      status: this.statusOf(t),
       messages: t.messages.map((m) => ({ ...m })),
       busy: t.running !== null,
       lastEventId: t.seq,
+      ...(this.pendingCards.some((p) => p.threadId === threadId) ? { pendingCards: this.pendingCards.filter((p) => p.threadId === threadId) } : {}),
     };
   }
 
@@ -126,15 +178,21 @@ export class MockConsoleClient implements ConsoleClient {
     return { bytes, mimeType: up.mimeType };
   }
 
-  /** The mock's scripted turns raise no cards: every card is unknown. */
-  async answerCard(threadId: string, callId: string, _answers: CardAnswers): Promise<SubmitAck> {
-    this.get(threadId);
-    throw new NotFoundError(`card ${callId}`);
+  /** Answers a card raised through `raiseCard` (no next turn is started); any other card is unknown. */
+  async answerCard(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck> {
+    const t = this.get(threadId);
+    const at = this.pendingCards.findIndex((p) => p.threadId === threadId && p.callId === callId);
+    if (at < 0) throw new NotFoundError(`card ${callId}`);
+    this.cardAnswers.push({ threadId, callId, answers });
+    this.pendingCards.splice(at, 1);
+    this.emitActivity({ type: "card-settled", threadId, callId, outcome: "answered" });
+    this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
+    return { messageId: `card-${callId}`, disposition: "started" };
   }
 
   async listCards(wolf: string): Promise<PendingCard[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);
-    return [];
+    return this.pendingCards.map((p) => ({ ...p }));
   }
 
   async abort(threadId: string): Promise<void> {

@@ -18,6 +18,7 @@
  *   (plus a text-delta carrying the partial text) so a console reattaching sees a coherent turn.
  * Limits: one wolf, home thread only; a queued follow-up cannot be dropped by abort (the engine owns the queue).
  */
+import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -45,6 +46,7 @@ import {
   type SubmitAck,
   type ThreadDetail,
   type ThreadEvent,
+  type WolfEvent,
   type ThreadMessage,
   type ThreadSummary,
   type WolfSummary,
@@ -113,6 +115,7 @@ const SYSTEM: Actor = { id: "wolfd", kind: "system" };
 
 type Sub = (ev: ThreadEvent) => void;
 
+const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
 
@@ -138,6 +141,20 @@ export class WolfServer {
   private readonly waiters = new Set<() => void>();
   private homeCreated = false;
   private readonly memoryBus?: MemoryEventBus;
+  // wolf-scoped activity stream (thread-status, card events): own id space, bounded replay buffer
+  /** Starts at 1: a baseline carries the current cursor as its id, and ids are positive. */
+  private wolfSeq = 1;
+  /** Per-process epoch in the SSE id (`<boot>:<seq>`): a cursor from another process is stale, whatever its number. */
+  private readonly boot = randomUUID().slice(0, 8);
+  /** Answers being submitted: the thread reads busy from the claim until the next turn starts (never idle in between). */
+  private answering = 0;
+  /** > 0 while a batch is being applied: thread-status is announced when it ends. */
+  private holdStatus = 0;
+  private wolfBuffer: WolfEvent[] = [];
+  private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
+  private lastStatus: ThreadStatus = "idle";
+  /** Cards announced as pending (card-pending sent, card-settled not yet): the diff base for card events. */
+  private readonly announced = new Set<string>();
 
   private watch?: EngineWatch;
   private mapper?: EventMapper;
@@ -173,6 +190,8 @@ export class WolfServer {
     const w = await this.conv.watch();
     this.watch = w;
     this.rebase(w.snapshot, true);
+    this.attached = true;
+    this.lastStatus = this.status();
     // A store with history already has its home thread: createThread then answers 200, not 201.
     this.homeCreated = w.snapshot.entries.length > 0;
     this.mapper = createEventMapper(w.snapshot);
@@ -222,13 +241,27 @@ export class WolfServer {
   }
 
   private applyBatch(batch: readonly EngineEvent[]): void {
+    // Status is announced once, after the whole batch is mapped: a dismissal and the turn-start it precedes must not
+    // surface as needs-you -> idle -> busy.
+    this.holdStatus++;
+    try {
+      this.applyBatchInner(batch);
+    } finally {
+      this.holdStatus--;
+      this.syncStatus();
+    }
+  }
+
+  private applyBatchInner(batch: readonly EngineEvent[]): void {
     for (const ev of batch) {
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
         applyEntry(this.messages, ev.entry);
         // A dismissal (plain submit superseding cards) changes thread status: wake waiters.
-        if (this.cards.apply(ev.entry).length > 0) this.notify();
+        const dismissed = this.cards.apply(ev.entry);
+        this.syncCards(dismissed);
+        if (dismissed.length > 0) this.notify();
       }
     }
     this.applyMapped(this.mapper!.push(batch));
@@ -255,6 +288,57 @@ export class WolfServer {
     this.messages = messagesFromEntries(entries);
     this.seenEntries = new Set(entries.map((e) => e.id));
     this.cards.reset(entries);
+    // The first baseline (attach) announces nothing: a connection's baseline carries the pending cards.
+    if (this.attached) this.syncCards();
+    else for (const p of this.cards.raisedCards()) this.announced.add(p.callId);
+  }
+
+  private attached = false;
+
+  /**
+   * Announce card changes as thread events (so an open thread shows the card without waiting for the turn to settle)
+   * and wolf events (so the needs-you list sees every thread). Diffs the tracker against what was announced, so each
+   * raise and each settle is announced exactly once whichever path (pump entry, answer ack) sees it first.
+   */
+  private syncCards(dismissed: readonly string[] = []): void {
+    const live = new Map(this.cards.raisedCards().map((p) => [p.callId, p]));
+    for (const callId of [...this.announced]) {
+      if (live.has(callId)) continue;
+      this.announced.delete(callId);
+      const outcome = dismissed.includes(callId) ? "dismissed" : "answered";
+      this.emitWolf({ type: "card-settled", threadId: this.summary.id, callId, outcome });
+      this.emit({ type: "card-settled", callId, outcome });
+    }
+    for (const [callId, card] of live) {
+      if (this.announced.has(callId)) continue;
+      this.announced.add(callId);
+      this.emitWolf({ type: "card-pending", card });
+      this.emit({ type: "card-pending", card });
+    }
+  }
+
+  /** A held answer changed: the card is still pending, with the new answer. */
+  private announceHeld(callId: string): void {
+    const card = this.cards.get(callId);
+    if (!card) return;
+    this.emit({ type: "card-pending", card });
+    this.emitWolf({ type: "card-pending", card });
+  }
+
+  private emitWolf(draft: WolfEventDraft): void {
+    const full = { ...draft, id: ++this.wolfSeq, wolf: this.name, at: new Date().toISOString() } as WolfEvent;
+    this.wolfBuffer.push(full);
+    if (this.wolfBuffer.length > WOLF_EVENT_BUFFER) this.wolfBuffer.shift();
+    for (const s of [...this.wolfSubs]) s(full);
+  }
+
+  /** Thread status is derived; announce it whenever the derivation changes. */
+  private syncStatus(): void {
+    if (this.holdStatus > 0) return;
+    const status = this.status();
+    if (status === this.lastStatus) return;
+    this.lastStatus = status;
+    this.emitWolf({ type: "thread-status", threadId: this.summary.id, status });
   }
 
   private applyMapped(events: MappedEvent[]): void {
@@ -311,6 +395,7 @@ export class WolfServer {
   }
 
   private notify(): void {
+    this.syncStatus();
     for (const w of [...this.waiters]) w();
   }
 
@@ -443,6 +528,9 @@ export class WolfServer {
       case "streamThread":
         this.checkThread(params.id);
         return this.stream(req, res, url);
+      case "streamWolfActivity":
+        this.checkWolf(params.name);
+        return this.activityStream(req, res, url);
       case "streamWolfEvents":
         this.checkWolf(params.name);
         return this.memoryStream(req, res);
@@ -613,7 +701,9 @@ export class WolfServer {
   }
 
   private status(): ThreadStatus {
-    return this.running ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
+    // While an answer is submitted the thread is busy (needs-you never blips through idle); the dot and the
+    // list/baseline agree because both read pending().
+    return this.running || this.answering > 0 ? "busy" : this.cards.pending().length > 0 ? "needs-you" : "idle";
   }
 
   private threadSummary(): ThreadSummary {
@@ -681,11 +771,23 @@ export class WolfServer {
     // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
     const ready = this.cards.answer(callId, answers);
     if (!ready) {
+      this.announceHeld(callId);
       this.notify();
       return { messageId: `card-${callId}`, disposition: "queued" };
     }
     const ids = ready.map((r) => r.callId);
     const before = this.turnStarts;
+    this.answering++;
+    this.syncStatus();
+    try {
+      return await this.submitAnswers(ready, ids, before);
+    } finally {
+      this.answering--;
+      this.syncStatus();
+    }
+  }
+
+  private async submitAnswers(ready: ReturnType<CardTracker["answer"]> & object, ids: string[], before: number): Promise<SubmitAck> {
     let r;
     try {
       r = await this.conv.submit({
@@ -699,6 +801,7 @@ export class WolfServer {
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
     this.cards.settle(ids);
+    this.syncCards();
     if (r.disposition === "started") await this.waitFor(() => this.turnStarts > before);
     return { messageId: r.messageId, disposition: r.disposition };
   }
@@ -753,11 +856,64 @@ export class WolfServer {
     res.on("close", gone);
   }
 
-  private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  /**
+   * Wolf activity (thread status + card changes). Fresh connection: a baseline of the current state, then live. With a
+   * cursor: the buffered events after it, or `resync` + baseline when the buffer cannot cover it. Open until the client goes.
+   */
+  private activityStream(req: IncomingMessage, res: ServerResponse, url: URL): void {
     const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
-    const rawStr = Array.isArray(raw) ? raw[0] : raw;
-    const n = rawStr == null || rawStr.trim() === "" ? NaN : Number(rawStr);
-    const from = Number.isInteger(n) && n >= 0 ? n : undefined;
+    const rawStr = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+    // A cursor is `<boot>:<seq>`. Absent: fresh. Anything else (other boot, malformed) is stale.
+    let from: number | "stale" | undefined;
+    if (rawStr) {
+      const m = /^([0-9a-f]+):(\d+)$/.exec(rawStr);
+      from = m && m[1] === this.boot ? Number(m[2]) : "stale";
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    const frame = (ev: WolfEvent) => {
+      if (res.destroyed || res.writableEnded) return;
+      if (res.writableLength > MEMORY_STREAM_MAX_BUFFER) return void res.destroy();
+      res.write(`id: ${this.boot}:${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+    };
+    // Baseline events carry the current cursor as their id: resuming from one is gap-free.
+    const baseline = (): WolfEvent[] => {
+      const id = this.wolfSeq;
+      const at = new Date().toISOString();
+      return [
+        { type: "thread-status", id, wolf: this.name, at, threadId: this.summary.id, status: this.status() },
+        ...this.cards.pending().map((card): WolfEvent => ({ type: "card-pending", id, wolf: this.name, at, card })),
+      ];
+    };
+    const firstId = this.wolfBuffer[0]?.id;
+    let replay: WolfEvent[];
+    if (from === undefined) replay = baseline();
+    else {
+      const cursor = from === "stale" ? undefined : from;
+      const stale = cursor === undefined || cursor > this.wolfSeq || (firstId === undefined ? cursor < this.wolfSeq : cursor < firstId - 1);
+      replay = stale
+        ? [{ type: "resync", id: this.wolfSeq, wolf: this.name, at: new Date().toISOString() }, ...baseline()]
+        : this.wolfBuffer.filter((e) => e.id > cursor);
+    }
+    for (const ev of replay) frame(ev);
+    // Subscribed in the same tick as the replay was written: no event falls between.
+    this.wolfSubs.add(frame);
+    res.write(": connected\n\n");
+    const gone = () => {
+      clearInterval(ka);
+      this.wolfSubs.delete(frame);
+    };
+    const ka = setInterval(() => (res.destroyed || res.writableEnded ? gone() : res.write(": ka\n\n")), MEMORY_KEEPALIVE_MS);
+    ka.unref();
+    req.on("close", gone);
+    res.on("close", gone);
+  }
+
+  private stream(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const from = resumeCursor(req, url);
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -804,6 +960,16 @@ export class WolfServer {
     res.on("close", () => this.subs.delete(sub));
   }
 }
+
+/** `Last-Event-ID` header, else `?from=`; anything non-numeric is no cursor. */
+function resumeCursor(req: IncomingMessage, url: URL): number | undefined {
+  const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
+  const rawStr = Array.isArray(raw) ? raw[0] : raw;
+  const n = rawStr == null || rawStr.trim() === "" ? NaN : Number(rawStr);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+type WolfEventDraft = WolfEvent extends infer E ? (E extends unknown ? Omit<E, "id" | "wolf" | "at"> : never) : never;
 
 function firstLine(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 200);

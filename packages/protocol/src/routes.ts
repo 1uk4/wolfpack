@@ -9,6 +9,7 @@ import {
   KbEntryDetailSchema,
   KbGraphSchema,
   MemoryEventSchema,
+  WolfEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
   PendingCardSchema,
@@ -119,6 +120,13 @@ export const ROUTES = {
    * unlike a thread stream it never ends with `[DONE]`, it stays open until the client disconnects.
    */
   streamWolfEvents: { method: "GET", path: "/v1/wolves/:name/events", response: { kind: "sse", event: MemoryEventSchema }, status: [200], error: err },
+  /**
+   * SSE: wolf-scoped WolfEvents (`thread-status`, `card-pending`, `card-settled`, `resync`) with `id: <eventId>` per
+   * frame. A fresh connection (no cursor) starts with a baseline: a `thread-status` per thread and a `card-pending`
+   * per pending card. `Last-Event-ID` / `?from=` replays what was missed from a bounded buffer, or answers `resync`
+   * (then the baseline) when the cursor is stale. Never ends with `[DONE]`: open until the client disconnects.
+   */
+  streamWolfActivity: { method: "GET", path: "/v1/wolves/:name/activity", response: { kind: "sse", event: WolfEventSchema }, status: [200], error: err },
   /**
    * Fold the observation pool into session topics; answers with the counts. 409 `memory_unavailable` when the wolf's
    * memory is inert or not loaded; 409 `memory_busy` (retryable) while a promote runs.

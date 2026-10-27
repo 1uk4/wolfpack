@@ -35,6 +35,16 @@ const { SettingsDialogProvider } = await import("../components/settings/settings
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { ServerEventsProvider } = await import("../components/server-events.tsx");
+/** The notification channel's source: tests fire named frames through `frames`. */
+const frames = new Map<string, (data: string) => void>();
+const eventsSource = () => ({
+	close() {},
+	onOpen() {},
+	onEvent(name: string, cb: (data: string) => void) {
+		frames.set(name, cb);
+	},
+});
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 
 const CALL = "call-1";
@@ -125,6 +135,13 @@ function routeFetch(client: CardClient): typeof fetch {
 	}) as typeof fetch;
 }
 
+/** The same pending card, also listed by the wolf's cards route (the sidebar's needs-you source). */
+class ListingClient extends CardClient {
+	override async listCards() {
+		return (await this.getThread(FIXTURE_THREAD.id)).pendingCards ?? [];
+	}
+}
+
 const realFetch = globalThis.fetch;
 let root: Root | null = null;
 
@@ -138,6 +155,7 @@ async function mount(client: CardClient) {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
 				<SettingsDialogProvider>
+					<ServerEventsProvider connect={eventsSource}>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat
 							wolf="1uk4"
@@ -148,6 +166,7 @@ async function mount(client: CardClient) {
 							initialCards={cardsOfThread(detail)}
 						/>
 					</MemoryEventsProvider>
+					</ServerEventsProvider>
 				</SettingsDialogProvider>
 			</AppRouterContext.Provider>,
 		);
@@ -196,6 +215,16 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		// The record refetched at settle keeps the answered card (card + answer ride the history).
 		await settle();
 		assert.ok(q('[data-testid="answered-card"]'));
+	});
+
+	it("an idle open thread follows the wolf's activity: a held answer given elsewhere appears", async () => {
+		const client = new CardClient(FREE);
+		await mount(client);
+		assert.equal(q('[data-testid="card-held"]'), null);
+		client.held = { answer: { value: "from the sidebar" } };
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4" })));
+		await settle();
+		assert.ok(q('[data-testid="card-held"]'), "the held answer shows without a settle");
 	});
 
 	it("shows the server's rejection and keeps the card pending", async () => {
@@ -314,5 +343,55 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.match(q('[data-testid="dismissed-card"]')?.textContent ?? "", /skipped/);
 		assert.equal(q('[data-testid="card-submit"]'), null);
 		assert.equal(q('[data-testid="card-confirm"]')!.hasAttribute("disabled"), true);
+	});
+
+	it("two live copies of one card (sidebar Needs-you + inline): answering from one submits exactly once, then both close", async () => {
+		const { createNeedsYouApi } = await import("../src/server/needs-you-api.ts");
+		const { NeedsYouPanel } = await import("../components/needs-you.tsx");
+		const client = new ListingClient(SINGLE);
+		const posts: string[] = [];
+		const base = routeFetch(client);
+		const ny = createNeedsYouApi(() => client);
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = new URL(String(input), "http://t");
+			if (url.pathname === "/api/needs-you") return ny.list(url.searchParams.get("wolf") ?? undefined);
+			if (init?.method === "POST" && /\/answer$/.test(url.pathname)) posts.push(url.pathname);
+			return base(input, init);
+		}) as typeof fetch;
+		const detail = await client.getThread(FIXTURE_THREAD.id);
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<AppRouterContext.Provider value={{ push() {} } as never}>
+					<SettingsDialogProvider>
+						<ServerEventsProvider connect={eventsSource}>
+							<MemoryEventsProvider connect={inertSource}>
+								<NeedsYouPanel />
+								<ThreadChat wolf="1uk4" slug="home" threadId={FIXTURE_THREAD.id} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+							</MemoryEventsProvider>
+						</ServerEventsProvider>
+					</SettingsDialogProvider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		await settle();
+		await click(q('[data-testid="needs-you-row"]')!);
+		assert.equal(document.querySelectorAll('[data-testid="pending-card"]').length, 2, "sidebar copy + inline copy");
+		const [side, inline] = [...document.querySelectorAll('[data-testid="pending-card"]')];
+		await click(side!.querySelector('[data-testid="card-option"][data-value="develop"]')!);
+		// A double click on Submit and a click on the other copy's Submit (nothing picked: disabled) send ONE answer.
+		const submitSide = side!.querySelector('[data-testid="card-submit"]')!;
+		await click(submitSide);
+		await click(submitSide);
+		await click(inline!.querySelector('[data-testid="card-submit"]')!);
+		await settle(150);
+		assert.equal(posts.length, 1, "exactly one answer POST");
+		assert.equal(client.answers.length, 1);
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4" })));
+		await settle(300);
+		assert.equal(document.querySelectorAll('[data-testid="pending-card"]').length, 0, "both copies closed");
+		assert.ok(q('[data-testid="answered-card"]'), "the inline copy shows the answer");
 	});
 });

@@ -9,6 +9,7 @@ import {
   buildPath,
   parseMemoryEvent,
   parseThreadEvent,
+  parseWolfEvent,
   type RouteName,
 } from "@wolfpack/protocol";
 import {
@@ -28,6 +29,7 @@ import {
   type PendingCard,
   type PromoteResponse,
   type MemoryEvent,
+  type WolfEvent,
   type Attachment,
   type SubmitAck,
   type SubmitOptions,
@@ -180,6 +182,64 @@ export class HttpConsoleClient implements ConsoleClient {
     }
   }
 
+  /**
+   * A wolf's activity (thread status + card changes). Reconnects on a dropped stream, resuming with Last-Event-ID;
+   * the server answers a stale cursor with `resync` + a baseline, which are yielded like any event (the consumer refetches).
+   */
+  async *watchActivity(wolf: string, opts: { from?: string; signal?: AbortSignal; idleMs?: number } = {}): AsyncGenerator<WolfEvent> {
+    const { signal } = opts;
+    const idleMs = opts.idleMs ?? 60_000; // the server sends a keepalive every 20s
+    let cursor = opts.from;
+    let failures = 0;
+    while (!signal?.aborted) {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener("abort", stop);
+      try {
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = cursor;
+        const res = await this.request("streamWolfActivity", { name: wolf }, { headers, signal: ctl.signal }, wolf);
+        if (!res.body) throw new TypeError("stream response has no body");
+        // Half-open guard: any bytes (frame or keepalive) re-arm it; silence aborts the request and we reconnect.
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        const arm = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => ctl.abort(), idleMs);
+        };
+        arm();
+        try {
+        for await (const frame of sseFrames(res.body, arm)) {
+          failures = 0;
+          let json: unknown;
+          try {
+            json = JSON.parse(frame.data);
+          } catch {
+            throw new ProtocolError("invalid_request", "stream frame is not JSON", false);
+          }
+          const parsed = parseWolfEvent(json);
+          if (parsed.kind === "unknown") continue;
+          if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
+          if (frame.id) cursor = frame.id; // opaque `<boot>:<seq>`
+          yield parsed.event;
+        }
+        } finally {
+          clearTimeout(idle);
+        }
+        throw new TypeError("stream ended");
+      } catch (e) {
+        if (signal?.aborted) return;
+        if (e instanceof ProtocolError || e instanceof BusyError || e instanceof NotFoundError) throw e;
+        if (++failures > this.maxRetries) {
+          throw new ProtocolError("engine_error", `stream lost: ${e instanceof Error ? e.message : String(e)}`, true);
+        }
+        await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
+      } finally {
+        signal?.removeEventListener("abort", stop);
+        ctl.abort();
+      }
+    }
+  }
+
   async consolidateMemory(wolf: string): Promise<ConsolidateResponse> {
     return (await this.json("consolidateMemory", { name: wolf }, ROUTES.consolidateMemory.response.schema, undefined, wolf)) as ConsolidateResponse;
   }
@@ -321,7 +381,7 @@ export class HttpConsoleClient implements ConsoleClient {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Minimal SSE parser: frames separated by blank lines; `id:`/`data:` fields, comments ignored. */
-async function* sseFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<Frame> {
+async function* sseFrames(body: ReadableStream<Uint8Array>, onChunk?: () => void): AsyncGenerator<Frame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -329,6 +389,7 @@ async function* sseFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<Fram
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      onChunk?.();
       buf += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
       let i: number;
       while ((i = buf.indexOf("\n\n")) >= 0) {

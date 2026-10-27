@@ -209,6 +209,21 @@ describe("scripted model turns", () => {
     expect(objects[0]).toMatchObject({ objectId: "cl", type: "checklist", rev: 2, data: { items: items("done", "doing") } });
   });
 
+  it("history objects carry seq: the thread-wide ordinal of each object's latest upsert (A, B, A revised → A last)", async () => {
+    const cl = (objectId: string, state: string) => fauxToolCall("show_checklist", { objectId, items: [{ id: "a", label: "A", state }] } as never);
+    tw = await startTestWolf({
+      script: [
+        fauxAssistantMessage([cl("A", "todo")], { stopReason: "toolUse" }),
+        fauxAssistantMessage([cl("B", "todo")], { stopReason: "toolUse" }),
+        fauxAssistantMessage([cl("A", "done")], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done"),
+      ],
+    });
+    await tw.submit("do it");
+    const objects = (await tw.client.getThread(tw.home)).messages.flatMap((m) => m.objects ?? []);
+    expect(objects.map((o) => [o.objectId, o.rev, o.seq])).toEqual([["A", 2, 3], ["B", 1, 2]]);
+  });
+
   it("show_graph revised: statuses update, history holds one object at the latest rev", async () => {
     const nodes = (s: string[]) => ["design", "build", "ship"].map((id, i) => ({ id, label: id, kind: "step", status: s[i] }));
     const edges = [{ from: "build", to: "design" }, { from: "ship", to: "build" }];

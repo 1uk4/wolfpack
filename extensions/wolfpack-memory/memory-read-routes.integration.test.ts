@@ -15,6 +15,7 @@ import { ErrorEnvelopeSchema, MemoryStatusSchema, MemoryTopicSchema, PROTOCOL_VE
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
+import { memoryState } from "../../packages/harness/src/wolfd/memory-read.js";
 import createMemoryExtension from "./unified.js";
 
 const dirs: string[] = [];
@@ -239,6 +240,22 @@ describe("memory read routes", { timeout: 30_000 }, () => {
     expect(off).toMatchObject({ state: "off", pool: null, bound: null });
     expect(off.reason).toMatch(/not loaded/);
     expect((await errorOf(await get(tw, "/v1/wolves/testwolf/memory/topics/x"))).code).toBe("memory_unavailable");
+  });
+
+  it("memory.enabled: false is off; gated or not initialised stays inert", () => {
+    const base = { den: "/d", extensionInstalled: true, running: false, config: { sandbox: false, consolidation: { threshold: 1, poolTarget: 1, trigger: "hybrid" as const } } };
+    expect(memoryState({ ...base, config: { ...base.config, disabled: true } })).toMatchObject({ state: "off", reason: expect.stringMatching(/enabled: false/) });
+    expect(memoryState(base).state).toBe("inert");
+  });
+
+  it("a topic id with a space is served when it matches a listed topic", async () => {
+    const t = await startMemoryWolf();
+    await get(t, "/v1/wolves/testwolf/memory");
+    const dir = join(t.wolf.config.den, ".memory", "sessions", "durable");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "my topic.md"), "---\nid: my topic\ntitle: Spacey\nsummary: s\nupdated: 2026-10-26\n---\nbody here\n");
+    const topic = MemoryTopicSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory/topics/my%20topic")).json());
+    expect(topic).toMatchObject({ id: "my topic", scope: "session", body: "body here" });
   });
 
   it("memory.live reports state live", async () => {

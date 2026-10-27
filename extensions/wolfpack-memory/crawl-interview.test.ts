@@ -88,7 +88,8 @@ describe("crawl directive", () => {
     expect(d).toContain("domain=snapjack");
     expect(d).not.toContain('id "source"');
     expect(d).not.toContain("/wolf:crawl-run"); // no dead end: the durable host has no run command
-    expect(d).toContain("not available yet");
+    expect(d).toContain("crawl_run"); // points at the durable run tool
+    expect(d).toContain("showIf");
   });
 
   it("cards wording uses the wolf workspace for the source hint, and omits it when unknown", () => {

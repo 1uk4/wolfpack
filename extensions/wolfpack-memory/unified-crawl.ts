@@ -6,7 +6,8 @@
  * crawl-interview.ts); without it, or with `draft`, the plan is drafted deterministically. The planning logic itself is
  * shared with pi (crawl-core.ts).
  * While a conversation is planning, the durable observer skips it (crawl-mode.ts); crawl_finalize / crawl_cancel end it.
- * Follow-up: a `crawl_run` tool (running and releasing a plan is still pi-only: /wolf:crawl-run).
+ * Running and releasing a finalized plan (crawl_run / crawl_status / crawl_stop / crawl_release, the stepped-card port of
+ * /wolf:crawl-run and /wolf:crawl-release) lives in unified-crawl-run.ts.
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -16,9 +17,12 @@ import { resolveDefaultDomain } from "@wolfpack/engine";
 import { createCrawlCore, crawlPlanTools, type DraftOptions } from "./crawl-core.js";
 import { buildCrawlDirective, canInterview } from "./crawl-interview.js";
 import { crawlMode } from "./crawl-mode.js";
+import { createCrawlRunTools, type CrawlRunner } from "./unified-crawl-run.js";
 
 export interface CrawlConfig {
   defaultDomain?: string;
+  /** Replace the run / emit entry points (tests: a real run needs an LLM, a real release the KB inbox). */
+  runner?: Partial<CrawlRunner>;
 }
 
 const text = (t: string, extra: Partial<ToolResult> = {}): ToolResult => ({ content: [{ type: "text", text: t }], ...extra });
@@ -48,6 +52,18 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
     mkdirSync(crawlHome, { recursive: true });
     return core.draft(o);
   };
+
+  const runTools = createCrawlRunTools({
+    core,
+    context,
+    env,
+    crawlHome,
+    askCards,
+    declaredDomains,
+    runner: config.runner,
+    // Whatever planning window is open ends when a run starts: a run must never leave observation paused.
+    onRunStart: (ctx) => crawlMode.end(ctx.wolfDen, ctx.conversationId),
+  });
 
   return defineExtension({
     name: "wolfpack-crawl",
@@ -144,7 +160,7 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
             crawlMode.end(ctx.wolfDen, ctx.conversationId);
             return text(
               `Plan finalized → status: ready (${r.batches} batch(es)).\n   plan: ${r.planPath}\n\n` +
-                `The plan is ready at that path. Running a crawl from this host is not available yet.`,
+                `The plan is ready at that path. Run it with crawl_run when the user asks (it asks them about resume and concurrency itself and runs in the background).`,
               { details: r },
             );
           } catch (e) {
@@ -162,6 +178,8 @@ export default function createCrawlExtension(config: CrawlConfig, context: Exten
           return text("Crawl planning cancelled; memory observation resumes. Any drafted plan stays on disk.");
         },
       }),
+
+      ...runTools,
     ],
   });
 }

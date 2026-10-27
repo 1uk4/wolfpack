@@ -25,6 +25,8 @@ export const ErrorCodeSchema = z.enum([
   "promote_unavailable",
   /** A promote is running; consolidate would queue behind it, so it is refused. Retry later. */
   "memory_busy",
+  /** The KB routes (graph, entries, pipeline) are served by the librarian wolf: this one is not, or has no KB roots. */
+  "kb_unavailable",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -46,6 +48,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   memory_unavailable: 409,
   promote_unavailable: 409,
   memory_busy: 409,
+  kb_unavailable: 409,
 };
 
 // ------------------------------------------------------------ resources
@@ -56,6 +59,8 @@ export const WolfSummarySchema = z.object({
   name: z.string(),
   host: z.string(),
   status: WolfStatusSchema,
+  /** Additive: this wolf is the pack's librarian (serves the KB). Absent = false / not known (offline, older server). */
+  librarian: z.boolean().optional(),
 });
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 
@@ -342,6 +347,96 @@ export const PromoteResponseSchema = z.object({
   status: z.enum(["started", "already_running"]),
 });
 export type PromoteResponse = z.infer<typeof PromoteResponseSchema>;
+
+// -------------------------------------------------- memory read resources
+
+/** `live`/`sandbox`: running (against the live roots / a dev-root snapshot). `inert`: loaded but gated off. `off`: not loaded or disabled. */
+export const MemoryStateSchema = z.enum(["live", "sandbox", "inert", "off"]);
+export type MemoryState = z.infer<typeof MemoryStateSchema>;
+
+/** A den or session topic in a listing: metadata only (the body comes from the topic resource). */
+export const MemoryTopicRefSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  /** Frontmatter `updated` as written ("" when the file has none). */
+  updated: z.string(),
+  domain: z.string().optional(),
+});
+export type MemoryTopicRef = z.infer<typeof MemoryTopicRefSchema>;
+
+export const MemoryPoolStatusSchema = z.object({
+  /** Observations waiting in the pool. */
+  count: z.number().int().nonnegative(),
+  tokens: z.number().int().nonnegative(),
+  /** Pool tokens at which consolidation runs. */
+  consolidateAtTokens: z.number().int().nonnegative(),
+  /** Pool tokens a consolidation leaves behind. */
+  poolTarget: z.number().int().nonnegative(),
+  trigger: z.enum(["threshold", "timer", "hybrid", "manual"]),
+});
+export type MemoryPoolStatus = z.infer<typeof MemoryPoolStatusSchema>;
+
+/** The last promote this wolfd saw finish or fail (tracked in memory from its event bus: null after a restart). */
+export const LastPromoteSchema = z.object({
+  jobId: z.string(),
+  at: IsoSchema,
+  result: z.enum(["finished", "failed"]),
+  consolidated: z.number().int().nonnegative().optional(),
+  contributions: z.number().int().nonnegative().optional(),
+  /** One line; present when `result` is failed. */
+  message: z.string().optional(),
+});
+export type LastPromote = z.infer<typeof LastPromoteSchema>;
+
+/** The work item a thread (its conversation family) is bound to. Title and kind are best effort (the Work API may be down). */
+export const BoundWorkSchema = z.object({ workId: z.string(), title: z.string().optional(), kind: z.string().optional() });
+export type BoundWork = z.infer<typeof BoundWorkSchema>;
+
+/** `GET /v1/wolves/:name/memory`. When state is `inert`/`off` the pool is null and the lists are empty. */
+export const MemoryStatusSchema = z.object({
+  state: MemoryStateSchema,
+  /** One line saying why memory is in this state. */
+  reason: z.string(),
+  pool: MemoryPoolStatusSchema.nullable(),
+  sessionTopics: z.array(MemoryTopicRefSchema),
+  denTopics: z.array(MemoryTopicRefSchema),
+  lastPromote: LastPromoteSchema.nullable(),
+  /** `?thread=<id>`: that thread's bound work item; without it the home thread's. null = unbound. Absent on older servers. */
+  bound: BoundWorkSchema.nullable().optional(),
+});
+export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;
+
+/** `GET /v1/wolves/:name/memory/topics/:id`: one topic with its body. `scope` says which store it came from. */
+export const MemoryTopicSchema = MemoryTopicRefSchema.extend({
+  scope: z.enum(["den", "session"]),
+  body: z.string(),
+  /** Den topics only. */
+  related: z.array(z.string()).optional(),
+  /** Den topics only: false = held back as private working memory, never emitted to the KB. */
+  promotable: z.boolean().optional(),
+});
+export type MemoryTopic = z.infer<typeof MemoryTopicSchema>;
+
+/**
+ * `GET /v1/wolves/:name/work/:id/record`: a work item's page data through the wolf's Work API client.
+ * `plan` is the working document without its `## Record` section and the generated `## Log`; `record` is the
+ * Record section's text (heading stripped), "" when the item has none.
+ */
+export const WorkRecordResponseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  stage: z.string(),
+  domain: z.string().optional(),
+  partOf: z.string().nullable().optional(),
+  dependsOn: z.array(z.string()).optional(),
+  plan: z.string(),
+  record: z.string(),
+  /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */
+  updated: z.string().optional(),
+});
+export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 
 // ------------------------------------------------------------- commands
 

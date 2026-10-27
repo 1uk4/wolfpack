@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, ConsolidateResponse, ErrorCode, MemoryEvent, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary } from "@wolfpack/protocol";
+import type { Actor, ConsolidateResponse, ErrorCode, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -31,7 +31,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
 export type ThreadKind = ThreadSummary["kind"];
@@ -83,6 +83,15 @@ export interface ConsoleClient {
    * `promote_unavailable` (no KB roots). Optional like watchMemory.
    */
   promoteMemory?(wolf: string): Promise<PromoteResponse>;
+  /**
+   * Read-only memory status of a wolf (`thread`: report that thread's bound work item): state with reason, pool vs thresholds, session/den topic lists, last promote.
+   * Resolves (does not reject) when memory is inert or off: that is the state. Optional like watchMemory.
+   */
+  getMemoryStatus?(wolf: string, opts?: { thread?: string }): Promise<MemoryStatus>;
+  /** One den or session topic with its body (`scope` picks the store; default den, then session). Rejects NotFoundError for an unknown topic. */
+  getMemoryTopic?(wolf: string, topicId: string, opts?: { scope?: "den" | "session" }): Promise<MemoryTopic>;
+  /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
+  getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
 }
 
 export class BusyError extends Error {

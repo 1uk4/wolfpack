@@ -17,6 +17,9 @@ import {
   type Actor,
   type ConsoleClient,
   type ConsolidateResponse,
+  type MemoryStatus,
+  type MemoryTopic,
+  type WorkRecordResponse,
   type PromoteResponse,
   type MemoryEvent,
   type SubmitAck,
@@ -145,6 +148,20 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("promoteMemory", { name: wolf }, ROUTES.promoteMemory.response.schema, undefined, wolf)) as PromoteResponse;
   }
 
+  async getMemoryStatus(wolf: string, opts: { thread?: string } = {}): Promise<MemoryStatus> {
+    const query = opts.thread ? `?thread=${encodeURIComponent(opts.thread)}` : "";
+    return (await this.json("getMemoryStatus", { name: wolf }, ROUTES.getMemoryStatus.response.schema, undefined, wolf, query)) as MemoryStatus;
+  }
+
+  async getMemoryTopic(wolf: string, topicId: string, opts: { scope?: "den" | "session" } = {}): Promise<MemoryTopic> {
+    const query = opts.scope ? `?scope=${opts.scope}` : "";
+    return (await this.json("getMemoryTopic", { name: wolf, id: topicId }, ROUTES.getMemoryTopic.response.schema, undefined, wolf, query)) as MemoryTopic;
+  }
+
+  async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
+    return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
   /** Live, metadata-only MemoryEvents of a wolf. Reconnects on a dropped stream (no replay: events in the gap are lost). */
   async *watchMemory(wolf: string, opts: { signal?: AbortSignal } = {}): AsyncGenerator<MemoryEvent> {
     const { signal } = opts;
@@ -187,9 +204,9 @@ export class HttpConsoleClient implements ConsoleClient {
 
   // ------------------------------------------------------------ plumbing
 
-  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string): Promise<Response> {
+  private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
     const route = ROUTES[name];
-    const res = await this.fetchFn(this.base + buildPath(name, params), {
+    const res = await this.fetchFn(this.base + buildPath(name, params) + query, {
       ...init,
       method: route.method,
       headers: { ...init.headers, [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
@@ -198,14 +215,14 @@ export class HttpConsoleClient implements ConsoleClient {
     throw await this.toError(res, threadId);
   }
 
-  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string): Promise<unknown> {
+  private async json(name: RouteName, params: Record<string, string>, schema: { parse(x: unknown): unknown }, body?: unknown, threadId?: string, query = ""): Promise<unknown> {
     const headers: Record<string, string> = {};
     const init: RequestInit & { headers: Record<string, string> } = { headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const res = await this.request(name, params, init, threadId);
+    const res = await this.request(name, params, init, threadId, query);
     let data: unknown;
     try {
       data = await res.json();

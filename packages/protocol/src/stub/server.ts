@@ -11,6 +11,7 @@ import {
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   type Actor,
+  type MemoryStatus,
   type ErrorCode,
   type InFlightPartial,
   type SubmitAck,
@@ -191,6 +192,18 @@ export class StubServer {
         this.wolf(params.name);
         // The stub has no memory system: its wolves are the inert case.
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
+      case "getMemoryStatus": {
+        this.wolf(params.name);
+        // Same inert case: the status resource still answers, saying why there is nothing to show.
+        const status: MemoryStatus = { state: "off", reason: "memory is not loaded on this wolf", pool: null, sessionTopics: [], denTopics: [], lastPromote: null, bound: null };
+        return this.json(res, 200, status);
+      }
+      case "getMemoryTopic":
+        this.wolf(params.name);
+        throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
+      case "getWorkRecord":
+        this.wolf(params.name);
+        throw new HttpError("not_found", `work item ${params.id}`);
       case "streamWolfEvents": {
         this.wolf(params.name);
         // The stub emits no memory events: an open, empty stream.

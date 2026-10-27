@@ -40,8 +40,21 @@ Event `id`s are per-thread monotonic positive integers minted by the *serving pr
 | memory inert / not loaded | 409 | envelope `memory_unavailable` |
 | no KB roots (promote only) | 409 | envelope `promote_unavailable` |
 | unknown wolf | 404 | envelope `not_found` |
+| KB route on a wolf that is not the librarian / has no KB roots | 409 | envelope `kb_unavailable` (non-retryable) |
 
-The new codes (`memory_unavailable`, `promote_unavailable`, `memory_busy`) are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running` (a 202), rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
+The new codes (`memory_unavailable`, `promote_unavailable`, `memory_busy`, `kb_unavailable`) are in `ERROR_HTTP_STATUS` (409). Client: `consolidateMemory(wolf)` / `promoteMemory(wolf)` (optional on `ConsoleClient`; `promoteMemory` resolves `already_running` (a 202), rejects with `ProtocolError` for the envelopes). No job-status route: events are the source of truth.
+
+## Memory read resources
+
+Additive and read-only, served by any wolf for its own den (a wolf never serves another's); no version bump.
+
+| Route | Response | Notes |
+| --- | --- | --- |
+| `GET /v1/wolves/:name/memory[?thread=<id>]` | `MemoryStatus` | `state` live\|sandbox\|inert\|off + `reason`; `pool` (count, tokens, `consolidateAtTokens`, `poolTarget`, `trigger`) is null unless running; `sessionTopics` / `denTopics` (`MemoryTopicRef`); `lastPromote` (tracked in memory, null after a restart); `bound` (`BoundWork`, the thread's or the home thread's bound item, null if unbound). Always 200 when the wolf exists; unknown `thread` is 404 |
+| `GET /v1/wolves/:name/memory/topics/:id[?scope=den\|session]` | `MemoryTopic` | body + metadata. 400 malformed id/scope, 404 unknown, 409 `memory_unavailable` when inert/off |
+| `GET /v1/wolves/:name/work/:id/record` | `WorkRecordResponse` | title, kind, stage, domain, partOf, dependsOn, `plan`, `record`, `updated`, via the wolf's Work API client. 404 unknown, 409 `memory_unavailable` (no Work API), 502 `engine_error` |
+
+`WolfSummary.librarian?: boolean` marks the wolf that serves the KB (`memory.librarian` in wolf.yaml); absent when unknown (offline wolf, older server). Client: `getMemoryStatus(wolf, {thread?})`, `getMemoryTopic(wolf, id, {scope?})`, `getWorkRecord(wolf, id)` (optional on `ConsoleClient`).
 
 ## Tool calls in history
 

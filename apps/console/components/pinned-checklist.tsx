@@ -22,36 +22,62 @@ const expandedThreads = new Set<string>();
 const DISMISSED_KEY = "wp.pinned-checklist.dismissed.v1";
 const DISMISSED_MAX = 200;
 const dismissKey = (threadId: string, objectId: string) => JSON.stringify([threadId, objectId]);
-/** Fallback when localStorage is unavailable (private mode, quota): dismissal then lasts for the page's lifetime. */
-const memoryDismissed = new Set<string>();
+/** Fallback when localStorage is unavailable (private mode, quota): dismissal then lasts for the page's lifetime. Capped like the stored list. */
+let memoryDismissed: string[] = [];
 const dismissListeners = new Set<() => void>();
+/** Parsed stored list, so getSnapshot never parses JSON per render; invalidated on dismiss and on a cross-tab storage event. */
+let cache: string[] | null = null;
 
-function readDismissed(): string[] {
+function readDismissed(fresh = false): string[] {
+	if (cache && !fresh) return cache;
 	try {
 		const v: unknown = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]");
-		return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+		cache = Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 	} catch {
-		return [];
+		cache = [];
 	}
+	return cache;
 }
 
 function isDismissed(key: string): boolean {
-	return memoryDismissed.has(key) || readDismissed().includes(key);
+	return memoryDismissed.includes(key) || readDismissed().includes(key);
+}
+
+function notify() {
+	for (const l of dismissListeners) l();
 }
 
 function dismiss(key: string) {
-	memoryDismissed.add(key);
+	memoryDismissed = [...memoryDismissed.filter((k) => k !== key), key].slice(-DISMISSED_MAX);
 	try {
-		localStorage.setItem(DISMISSED_KEY, JSON.stringify([...readDismissed().filter((k) => k !== key), key].slice(-DISMISSED_MAX)));
+		// Re-read fresh storage first: another tab may have dismissed something since this tab's cache was filled.
+		const next = [...readDismissed(true).filter((k) => k !== key), key].slice(-DISMISSED_MAX);
+		localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
+		cache = next;
 	} catch {
-		/* memory fallback above */
+		cache = null; /* memory fallback above */
 	}
-	for (const l of dismissListeners) l();
+	notify();
 }
 
 function subscribeDismissed(l: () => void) {
 	dismissListeners.add(l);
-	return () => void dismissListeners.delete(l);
+	const onStorage = (e: StorageEvent) => {
+		if (e.key !== null && e.key !== DISMISSED_KEY) return;
+		cache = null;
+		notify();
+	};
+	window.addEventListener("storage", onStorage);
+	return () => {
+		dismissListeners.delete(l);
+		window.removeEventListener("storage", onStorage);
+	};
+}
+
+/** Test hook: forget the module-scope caches (the stub storage was reset). */
+export function resetDismissedCache() {
+	cache = null;
+	memoryDismissed = [];
 }
 
 /** Whether the user dismissed this thread's checklist `objectId`. SSR-safe: the server snapshot is "not dismissed", the client reads localStorage after hydration. */
@@ -83,7 +109,7 @@ export const PINNED_CHECKLIST_RESERVE = "pt-24";
  * composer, or with a popover open, is left to its owner. Live revisions and the history seed both arrive through
  * `active`, so the card refreshes in either state.
  */
-export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist | undefined; threadId: string }) {
+export function PinnedChecklist({ active, threadId, onDismiss }: { active: ActiveChecklist | undefined; threadId: string; onDismiss?: () => void }) {
 	const [open, setOpen] = useState(() => expandedThreads.has(threadId));
 	const panelId = useId();
 	const set = useCallback(
@@ -110,6 +136,7 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 	const close = () => {
 		expandedThreads.delete(threadId);
 		dismiss(dismissKey(threadId, active.objectId));
+		onDismiss?.(); // the focused × is about to unmount: hand focus on (the composer)
 	};
 	return (
 		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="pinned-checklist" data-object-id={active.objectId} data-expanded={open}>
@@ -121,7 +148,7 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 						aria-controls={open ? panelId : undefined}
 						onClick={() => set(!open)}
 						data-testid="pinned-checklist-button"
-						className="flex w-full flex-col gap-0.5 py-0 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+						className="flex w-full flex-col gap-0.5 pl-3 pr-9 pt-2 text-left text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
 					>
 						<span className="flex min-w-0 items-center gap-2">
 							<span className="min-w-0 flex-1 truncate font-medium" data-testid="pinned-checklist-summary">
@@ -141,9 +168,10 @@ export function PinnedChecklist({ active, threadId }: { active: ActiveChecklist 
 					<button
 						type="button"
 						aria-label="Dismiss checklist"
+						title="Dismiss checklist"
 						onClick={close}
 						data-testid="pinned-checklist-close"
-						className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+						className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
 					>
 						<span aria-hidden>×</span>
 					</button>

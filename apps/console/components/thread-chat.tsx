@@ -533,7 +533,7 @@ export function ThreadChat({
 							</div>
 						</div>
 					</Conversation>
-					<PinnedChecklist active={pinned} threadId={threadId} />
+					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 				</div>
 			</div>
 			<MemoryPanel wolf={wolf} threadId={threadId} />

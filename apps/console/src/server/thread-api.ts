@@ -13,7 +13,7 @@
  * the client replays events with id > from, then follows live.
  */
 
-import { NotFoundError, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
+import { NotFoundError, type AttachmentRef, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { resolveThreadId } from "../core/thread-adapter.ts";
 import { getConsoleClient } from "./console-client.ts";
 
@@ -38,6 +38,8 @@ export const isBusy = (err: unknown): err is Error => isError(err, "BusyError");
 function failure(err: unknown): Response {
 	if (isNotFound(err)) return json({ error: err.message }, 404);
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
+	// A refusal the user can act on (unsupported type, too large, unknown attachment).
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
 
@@ -93,13 +95,37 @@ export function createThreadApi(source: ClientSource) {
 
 		async submit(ref: ThreadRef, req: Request): Promise<Response> {
 			try {
-				const body = (await req.json().catch(() => null)) as { input?: unknown; whenBusy?: WhenBusy } | null;
-				if (typeof body?.input !== "string" || body.input.trim() === "") {
+				const body = (await req.json().catch(() => null)) as { input?: unknown; whenBusy?: WhenBusy; attachments?: unknown } | null;
+				const attachments = Array.isArray(body?.attachments)
+					? (body.attachments as unknown[]).flatMap((a): AttachmentRef[] =>
+							typeof (a as AttachmentRef | null)?.id === "string" ? [{ id: (a as AttachmentRef).id }] : [],
+						)
+					: [];
+				if (typeof body?.input !== "string" || (body.input.trim() === "" && attachments.length === 0)) {
 					return json({ error: "input is required" }, 400);
 				}
 				const client = source();
-				const ack = await client.submit(await resolve(client, ref), body.input, { whenBusy: body.whenBusy });
+				const ack = await client.submit(await resolve(client, ref), body.input, { whenBusy: body.whenBusy, attachments });
 				return json(ack);
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** The raw bytes are relayed to the thread's wolf (never stored here): the wolf the thread lives on keeps the file. */
+		async upload(ref: ThreadRef, req: Request): Promise<Response> {
+			try {
+				const mimeType = req.headers.get("content-type") ?? "";
+				const raw = req.headers.get("x-attachment-name");
+				let name: string | undefined;
+				try {
+					name = raw ? decodeURIComponent(raw) : undefined;
+				} catch {
+					name = undefined;
+				}
+				const bytes = new Uint8Array(await req.arrayBuffer());
+				const client = source();
+				return json(await client.uploadAttachment(await resolve(client, ref), bytes, { mimeType, name }), 201);
 			} catch (err) {
 				return failure(err);
 			}

@@ -1,7 +1,8 @@
 "use client";
 
-import { CornerDownLeftIcon, SquareIcon } from "lucide-react";
+import { CornerDownLeftIcon, ImageIcon, SquareIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pastedImages, type PendingAttachment } from "@/components/attachments";
 
 /**
  * The chat composer — content row ONLY (the persistent rounded shell lives in
@@ -24,6 +25,34 @@ export function enterAction(state: { busy: boolean; canSend: boolean }): "stop" 
 	return "none";
 }
 
+/** The pending-attachment chips above the composer row. */
+export function AttachmentChips({ items, onRemove }: { items: readonly PendingAttachment[]; onRemove: (key: string) => void }) {
+	if (items.length === 0) return null;
+	return (
+		<div data-testid="attachment-chips" className="flex flex-wrap gap-1.5 px-2 pt-2">
+			{items.map((a) => (
+				<span
+					key={a.key}
+					data-testid="attachment-chip"
+					data-status={a.status}
+					title={a.error}
+					className={cn(
+						"flex max-w-48 items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 font-ui text-xs",
+						a.status === "error" && "border-destructive/50 text-destructive",
+						a.status === "uploading" && "opacity-60",
+					)}
+				>
+					<ImageIcon className="size-3 shrink-0" />
+					<span className="truncate">{a.status === "error" ? `${a.name} — failed` : a.status === "uploading" ? `${a.name}…` : a.name}</span>
+					<button type="button" aria-label={`Remove ${a.name}`} onClick={() => onRemove(a.key)} className="shrink-0 hover:text-foreground">
+						<XIcon className="size-3" />
+					</button>
+				</span>
+			))}
+		</div>
+	);
+}
+
 export function Composer({
 	busy,
 	value,
@@ -35,6 +64,8 @@ export function Composer({
 	inputRef,
 	onEscape,
 	placeholder = "Ask, answer, or steer…",
+	onPasteImages,
+	chips,
 }: {
 	busy: boolean;
 	value: string;
@@ -52,6 +83,10 @@ export function Composer({
 	/** The textarea's placeholder (owner refinement round, 2026-09-24):
 	 *  active sessions read "Ask, answer, or steer…". */
 	placeholder?: string;
+	/** Images pasted into the textarea (the paste is swallowed only when it held images). */
+	onPasteImages?: (files: File[]) => void;
+	/** Pending attachment chips, rendered above the row. */
+	chips?: React.ReactNode;
 }) {
 	const act = () => {
 		const action = enterAction({ busy, canSend });
@@ -59,6 +94,8 @@ export function Composer({
 		else if (action === "send") onSend();
 	};
 	return (
+		<>
+		{chips}
 		<form
 			data-testid="composer"
 			className="flex items-end gap-1.5 p-1.5"
@@ -71,6 +108,13 @@ export function Composer({
 				ref={inputRef}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
+				onPaste={(e) => {
+					if (!onPasteImages) return;
+					const files = pastedImages(e.clipboardData);
+					if (files.length === 0) return;
+					e.preventDefault();
+					onPasteImages(files);
+				}}
 				onKeyDown={(e) => {
 					// Esc ends dictation before anything else Esc might someday mean
 					// here (the dictate decisions: click-again or Esc to stop).
@@ -116,5 +160,6 @@ export function Composer({
 				{busy && !canSend ? <SquareIcon className="size-4" /> : <CornerDownLeftIcon className="size-5" />}
 			</button>
 		</form>
+		</>
 	);
 }

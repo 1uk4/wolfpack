@@ -150,8 +150,35 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(list.threads.map((t) => t.id)).toContain(threadId);
     });
 
-    it("create rejects non-home kinds and unknown wolves", async () => {
+    it("POST threads {feature, workItemId} opens a feature thread, idempotently, listed beside home", async () => {
+      const path = buildPath("createThread", { name: wolf });
+      const first = await expectJson(await post(path, { kind: "feature", workItemId: "work-contract-feat1" }), ROUTES.createThread.response.schema, [201]);
+      expect(first.kind).toBe("feature");
+      expect(first.boundWorkItem).toBe("work-contract-feat1");
+      expect(first.id).not.toBe(threadId);
+      const again = await expectJson(await post(path, { kind: "feature", workItemId: "work-contract-feat1" }), ROUTES.createThread.response.schema, [200]);
+      expect(again.id).toBe(first.id);
+      const other = await expectJson(await post(path, { kind: "feature", workItemId: "work-contract-feat2" }), ROUTES.createThread.response.schema, [201]);
+      expect(other.id).not.toBe(first.id);
+      const list = await expectJson(await call(buildPath("listThreads", { name: wolf })), ROUTES.listThreads.response.schema);
+      expect(list.threads.filter((t) => t.kind === "home")).toHaveLength(1);
+      expect(list.threads.filter((t) => t.kind === "feature").map((t) => t.id).sort()).toEqual([first.id, other.id].sort());
+      expect((await getThread(first.id)).kind).toBe("feature");
+    });
+
+    it("a feature thread runs turns on its own, apart from home", async () => {
+      const f = await expectJson(await post(buildPath("createThread", { name: wolf }), { kind: "feature", workItemId: "work-contract-feat1" }), ROUTES.createThread.response.schema, [200]);
+      const events = await runTurn(f.id, "from the feature");
+      expect(events.every((e) => e.threadId === f.id)).toBe(true);
+      expect(events.at(-1)?.type).toBe("turn-end");
+      const detail = await getThread(f.id);
+      expect(detail.messages.some((m) => m.role === "user" && m.text.includes("from the feature"))).toBe(true);
+      expect((await getThread(threadId)).messages.some((m) => m.text.includes("from the feature"))).toBe(false);
+    });
+
+    it("create rejects bad bodies, a feature without a work item, subagents and unknown wolves", async () => {
       await expectError(await post(buildPath("createThread", { name: wolf }), { kind: "feature" }), "invalid_request");
+      await expectError(await post(buildPath("createThread", { name: wolf }), { kind: "subagent", workItemId: "w" }), "invalid_request");
       await expectError(await post(buildPath("createThread", { name: wolf }), "not json"), "invalid_request");
       await expectError(await post(buildPath("createThread", { name: "no-such-wolf" }), { kind: "home" }), "not_found");
       await expectError(await call(buildPath("listThreads", { name: "no-such-wolf" })), "not_found");

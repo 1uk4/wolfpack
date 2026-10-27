@@ -196,9 +196,11 @@ describe("commands", () => {
     expect(AbortRequestSchema.parse({ threadId: "t" })).toEqual({ threadId: "t" });
     expect(AbortRequestSchema.safeParse({}).success).toBe(false);
   });
-  it("CreateThreadRequest allows only home; response is a ThreadSummary", () => {
+  it("CreateThreadRequest allows home and feature (with a work item id); response is a ThreadSummary", () => {
     expect(CreateThreadRequestSchema.parse({ wolf: "1uk4", kind: "home" })).toEqual({ wolf: "1uk4", kind: "home" });
     expect(CreateThreadRequestSchema.safeParse({ wolf: "1uk4", kind: "feature" }).success).toBe(false);
+    expect(CreateThreadRequestSchema.parse({ wolf: "1uk4", kind: "feature", workItemId: "work-x-1" })).toEqual({ wolf: "1uk4", kind: "feature", workItemId: "work-x-1" });
+    expect(CreateThreadRequestSchema.safeParse({ wolf: "1uk4", kind: "subagent", workItemId: "w" }).success).toBe(false);
     expect(CreateThreadResponseSchema.parse(summary)).toEqual(summary);
   });
 });

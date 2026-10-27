@@ -1066,10 +1066,15 @@ export const AbortRequestSchema = z.object({ threadId: z.string() });
 export type AbortRequest = z.infer<typeof AbortRequestSchema>;
 
 /**
- * Create a thread. Idempotent for "home": if the wolf already has a home
- * thread it is returned unchanged (never a second one). v1 supports only "home".
+ * Create a thread. Idempotent for "home": if the wolf already has a home thread it is returned unchanged (never a
+ * second one). "feature" opens an ownerless thread bound to the feature `workItemId` (idempotent per feature: asking
+ * again returns the existing thread). Subagent threads are created only by spawn, never here.
  */
-export const CreateThreadRequestSchema = z.object({ wolf: z.string(), kind: z.literal("home") });
+export const CreateThreadBodyVariantsSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("home") }),
+  z.object({ kind: z.literal("feature"), workItemId: z.string().min(1) }),
+]);
+export const CreateThreadRequestSchema = z.intersection(z.object({ wolf: z.string() }), CreateThreadBodyVariantsSchema);
 export type CreateThreadRequest = z.infer<typeof CreateThreadRequestSchema>;
 /** Response of create thread. */
 export const CreateThreadResponseSchema = ThreadSummarySchema;

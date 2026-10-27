@@ -170,7 +170,15 @@ export class StubServer {
       case "createThread": {
         const wolf = this.wolf(params.name);
         const body = CreateThreadBodySchema.safeParse(await readJson(req));
-        if (!body.success) throw new HttpError("invalid_request", "body must be {kind:\"home\"}");
+        if (!body.success) throw new HttpError("invalid_request", 'body must be {kind:"home"} or {kind:"feature", workItemId}');
+        if (body.data.kind === "feature") {
+          const id = `${wolf.id}/feature-${body.data.workItemId}`;
+          const have = this.threads.get(id);
+          if (have) return this.json(res, 200, have.summary);
+          const summary: ThreadSummary = { id, wolf: wolf.id, kind: "feature", title: body.data.workItemId, boundWorkItem: body.data.workItemId };
+          this.addThread(summary);
+          return this.json(res, 201, summary);
+        }
         const existing = [...this.threads.values()].find((t) => t.summary.wolf === wolf.id && t.summary.kind === "home");
         if (existing) return this.json(res, 200, existing.summary);
         const summary: ThreadSummary = { id: `${wolf.id}/home`, wolf: wolf.id, kind: "home", title: "Home" };

@@ -3,7 +3,7 @@ import {
   AttachmentSchema,
   AnswerCardRequestSchema,
   ConsolidateResponseSchema,
-  CreateThreadRequestSchema,
+  CreateThreadBodyVariantsSchema,
   CreateThreadResponseSchema,
   ErrorEnvelopeSchema,
   KbEntryDetailSchema,
@@ -37,7 +37,7 @@ export type HttpMethod = "GET" | "POST";
 /** Wire bodies: the path carries the identifier, so it is dropped from the body. */
 export const SubmitBodySchema = SubmitRequestSchema.omit({ threadId: true });
 export type SubmitBody = z.infer<typeof SubmitBodySchema>;
-export const CreateThreadBodySchema = CreateThreadRequestSchema.omit({ wolf: true });
+export const CreateThreadBodySchema = CreateThreadBodyVariantsSchema;
 export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
 
 export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });

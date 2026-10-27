@@ -53,6 +53,7 @@ export function threadTransport(
 			const messages = (json as { messages?: Parameters<typeof threadMessagesToNative>[0] }).messages;
 			return Array.isArray(messages) ? withHistoryAttachments(threadMessagesToNative(messages), messages) : null;
 		},
+		recordIdle: (json) => (json as { busy?: unknown }).busy === false,
 		streamUrl: `${base}/stream`,
 		abortUrl: `${base}/abort`,
 		retryOnBusy: false,

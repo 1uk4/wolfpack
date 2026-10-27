@@ -53,6 +53,8 @@ export interface SessionTransport {
 	recordUrl: string;
 	/** Raw record JSON → native messages (null: shape not recognized). */
 	parseRecord(json: unknown): LhMessage[] | null;
+	/** The record says no turn is running: it already holds everything a replay would add (a late attach to a finished turn). */
+	recordIdle?(json: unknown): boolean;
 	streamUrl: string;
 	/** Attachment upload route (POST raw bytes); absent: this transport takes no attachments. */
 	uploadUrl?: string;
@@ -547,12 +549,18 @@ export class SessionModel {
 					signal: controller.signal,
 				});
 				if (recordRes.ok) {
-					const record = this.transport.parseRecord(await recordRes.json());
+					const json = await recordRes.json();
+					const record = this.transport.parseRecord(json);
 					if (record) {
 						this.mutate(() => {
 							this.base = record;
 							this.tail = [];
 						});
+						// A turn that ended before we attached is already in the record: replaying it would double its messages.
+						if (this.transport.recordIdle?.(json)) {
+							this.setStatus("ready");
+							return;
+						}
 					}
 				} else {
 					// The record did not land — restore the clean-slate guard

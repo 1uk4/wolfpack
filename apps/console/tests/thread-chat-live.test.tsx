@@ -90,7 +90,7 @@ class ServerTurnClient extends MockConsoleClient {
 	override async getThread(id: string): Promise<ThreadDetail> {
 		const base = await super.getThread(id);
 		const card = this.events.find((e) => e.type === "card-pending") as { card: NonNullable<ThreadDetail["pendingCards"]>[number] } | undefined;
-		return card ? { ...base, pendingCards: [card.card] } : base;
+		return { ...base, busy: this.running, ...(card ? { pendingCards: [card.card] } : {}) };
 	}
 }
 
@@ -191,6 +191,20 @@ describe("ThreadChat follows a server-started turn", () => {
 		assert.equal(text().split("Subagent one finished.").length - 1, 1, "no duplicate message");
 		assert.match(text(), /Waiting on you\./);
 		assert.ok(q('[data-testid="pending-card"]'), "card still pending after the turn settles");
+	});
+
+	it("a turn that finished before the late busy arrived is in the refetched record: no replay, no duplicate", async () => {
+		const client = new ServerTurnClient();
+		await mount(client);
+		client.push({ type: "turn-start" });
+		client.push({ type: "text-delta", text: "Already recorded." });
+		client.push({ type: "turn-end", reason: "complete" });
+		// the record (refetched on attach) already carries the finished turn
+		const detail = await client.getThread(FIXTURE_THREAD.id);
+		client.getThread = async () => ({ ...detail, busy: false, messages: [...detail.messages, { id: "srv-1", role: "assistant", text: "Already recorded.", at: new Date().toISOString() }] });
+		await busy();
+		await settle();
+		assert.equal(text().split("Already recorded.").length - 1, 1, "shown once");
 	});
 
 	it("a busy event for another thread does not attach", async () => {

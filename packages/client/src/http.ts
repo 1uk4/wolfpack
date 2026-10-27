@@ -1,4 +1,5 @@
 import {
+  ATTACHMENT_NAME_HEADER,
   ErrorEnvelopeSchema,
   LAST_EVENT_ID_HEADER,
   PROTOCOL_VERSION,
@@ -25,8 +26,10 @@ import {
   type KbPipelineResponse,
   type PromoteResponse,
   type MemoryEvent,
+  type Attachment,
   type SubmitAck,
   type SubmitOptions,
+  type UploadOptions,
   type ThreadDetail,
   type ThreadEvent,
   type ThreadSummary,
@@ -83,8 +86,23 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {
-    const body = { input, whenBusy: opts.whenBusy ?? "reject" };
+    const body = { input, whenBusy: opts.whenBusy ?? "reject", ...(opts.attachments?.length ? { attachments: opts.attachments } : {}) };
     return (await this.json("submit", { id: threadId }, ROUTES.submit.response.schema, body, threadId)) as SubmitAck;
+  }
+
+  async uploadAttachment(threadId: string, data: Uint8Array | Blob, opts: UploadOptions): Promise<Attachment> {
+    const headers: Record<string, string> = { "Content-Type": opts.mimeType };
+    if (opts.name) headers[ATTACHMENT_NAME_HEADER] = encodeURIComponent(opts.name);
+    const res = await this.request("uploadAttachment", { id: threadId }, { headers, body: data as BodyInit }, threadId);
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      throw new ProtocolError("engine_error", "response is not JSON", false);
+    }
+    const parsed = ROUTES.uploadAttachment.response.schema.safeParse(json);
+    if (!parsed.success) throw new ProtocolError("engine_error", `unexpected response shape: ${parsed.error.message}`, false);
+    return parsed.data as Attachment;
   }
 
   async abort(threadId: string): Promise<void> {

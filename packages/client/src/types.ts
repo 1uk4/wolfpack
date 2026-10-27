@@ -2,10 +2,12 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
+  Attachment,
+  AttachmentRef,
   SubmitAck,
   ThreadDetail,
   ThreadMessage,
@@ -40,6 +42,15 @@ export type ThreadKind = ThreadSummary["kind"];
 export interface SubmitOptions {
   /** What to do if a turn is already running. Default: "reject". */
   whenBusy?: WhenBusy;
+  /** Uploaded attachments (see `uploadAttachment`) to send with the input; the input may then be empty. */
+  attachments?: AttachmentRef[];
+}
+
+export interface UploadOptions {
+  /** MIME type of the bytes (the wolf decides what it accepts). */
+  mimeType: string;
+  /** Original file name, kept for display. */
+  name?: string;
 }
 
 export interface WatchOptions {
@@ -63,6 +74,8 @@ export interface ConsoleClient {
   getThread(threadId: string): Promise<ThreadDetail>;
   /** Acknowledges and returns; does NOT wait for the turn. Rejects with BusyError when whenBusy=reject and a turn is running. */
   submit(threadId: string, input: string, opts?: SubmitOptions): Promise<SubmitAck>;
+  /** Stores one file on the thread's wolf and returns its reference for `submit`. Rejects with ProtocolError `invalid_request` for a type or size the wolf refuses. */
+  uploadAttachment(threadId: string, data: Uint8Array | Blob, opts: UploadOptions): Promise<Attachment>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */
   abort(threadId: string): Promise<void>;
   /** Replays from `from`, then continues live until turn-end (inclusive). */

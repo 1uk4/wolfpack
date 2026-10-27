@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AttachmentSchema,
   ConsolidateResponseSchema,
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
@@ -21,6 +22,8 @@ import {
 } from "./schemas.js";
 
 /** Request header carrying the client's protocol version (single integer). */
+/** Optional upload header: the URL-encoded original file name. */
+export const ATTACHMENT_NAME_HEADER = "X-Attachment-Name";
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
 /** SSE resume: standard header, or the `?from=` query fallback. */
 export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
@@ -69,6 +72,13 @@ export const ROUTES = {
   },
   getThread: { method: "GET", path: "/v1/threads/:id", response: { kind: "json", schema: ThreadDetailSchema }, status: [200], error: err },
   submit: { method: "POST", path: "/v1/threads/:id/submit", body: SubmitBodySchema, response: { kind: "json", schema: SubmitAckSchema }, status: [200], error: err },
+  /**
+   * Upload one attachment to the thread's wolf. The body is the RAW BYTES (not JSON); `Content-Type` carries the mime
+   * type and the optional `X-Attachment-Name` header the URL-encoded file name. Type-agnostic route; the wolf accepts
+   * images only for now (png, jpeg, gif, webp, up to `ATTACHMENT_MAX_BYTES`, content sniffed) and answers anything else
+   * 400 `invalid_request`. Returns the stored attachment; reference it from `submit`.
+   */
+  uploadAttachment: { method: "POST", path: "/v1/threads/:id/attachments", response: { kind: "json", schema: AttachmentSchema }, status: [201], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },
   /** SSE: `id: <eventId>` + `data: <ThreadEvent json>`; ends with `data: [DONE]` at the first turn-end. */
   streamThread: { method: "GET", path: "/v1/threads/:id/stream", response: { kind: "sse", event: ThreadEventSchema }, status: [200], error: err },

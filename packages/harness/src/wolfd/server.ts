@@ -22,6 +22,8 @@ import { rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_NAME_HEADER,
   CreateThreadBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -30,6 +32,7 @@ import {
   SubmitBodySchema,
   matchRoute,
   type Actor,
+  type AttachmentRef,
   type ConsolidateResponse,
   type ErrorCode,
   type InFlightPartial,
@@ -48,6 +51,7 @@ import {
   createEventMapper,
   stampEvent,
   type EngineConversation,
+  type SubmitOptions,
   type EngineEvent,
   type EngineSnapshot,
   type EngineWatch,
@@ -64,6 +68,7 @@ import { readDenTopics } from "@wolfpack/memory";
 import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
+import { AttachmentError, inlineAttachments, storeAttachment } from "./attachments.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -354,8 +359,32 @@ export class WolfServer {
         this.checkThread(params.id);
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
-        if (body.data.input.trim() === "") throw new HttpError("invalid_request", "input is required");
-        return this.json(res, 200, await this.submit(body.data.input, body.data.whenBusy));
+        const refs = body.data.attachments ?? [];
+        if (body.data.input.trim() === "" && refs.length === 0) throw new HttpError("invalid_request", "input is required");
+        return this.json(res, 200, await this.submit(body.data.input, body.data.whenBusy, refs));
+      }
+      case "uploadAttachment": {
+        this.checkThread(params.id);
+        if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to store attachments in");
+        const declared = Number(req.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > ATTACHMENT_MAX_BYTES) {
+          req.resume();
+          throw new HttpError("invalid_request", `attachment too large (limit ${ATTACHMENT_MAX_BYTES} bytes)`);
+        }
+        const bytes = await readBytes(req, ATTACHMENT_MAX_BYTES);
+        const rawName = req.headers[ATTACHMENT_NAME_HEADER.toLowerCase()];
+        let name: string | undefined;
+        try {
+          name = typeof rawName === "string" ? decodeURIComponent(rawName) : undefined;
+        } catch {
+          name = undefined;
+        }
+        try {
+          return this.json(res, 201, storeAttachment(this.opts.den, params.id, bytes, String(req.headers["content-type"] ?? ""), name));
+        } catch (e) {
+          if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
+          throw e;
+        }
       }
       case "abort": {
         this.checkThread(params.id);
@@ -539,8 +568,18 @@ export class WolfServer {
     return { ...this.summary, messages: this.messages.map((m) => ({ ...m, ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}) })), busy: this.running !== null, lastEventId: this.seq };
   }
 
-  private async submit(input: string, whenBusy: "steer" | "followUp" | "reject"): Promise<SubmitAck> {
+  private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
     const before = this.turnStarts;
+    let input: SubmitOptions["input"] = text;
+    if (refs.length > 0) {
+      if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
+      try {
+        input = inlineAttachments(this.opts.den, this.summary.id, text, refs);
+      } catch (e) {
+        if (e instanceof AttachmentError) throw new HttpError("invalid_request", e.message);
+        throw e;
+      }
+    }
     let r;
     try {
       r = await this.conv.submit({ input, whenBusy });
@@ -666,6 +705,21 @@ function textOf(message: unknown): string {
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("");
+}
+
+/** Read a raw body, failing (after draining) once it exceeds `max` bytes. */
+async function readBytes(req: IncomingMessage, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let n = 0;
+  for await (const c of req) {
+    n += (c as Buffer).length;
+    if (n > max) {
+      req.resume();
+      throw new HttpError("invalid_request", `attachment too large (limit ${max} bytes)`);
+    }
+    chunks.push(c as Buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

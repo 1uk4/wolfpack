@@ -464,6 +464,16 @@ export const SnapshotEventSchema = base.extend({
   inFlight: InFlightPartialSchema.optional(),
 });
 
+/**
+ * A card is waiting for the operator: raised, or its held answer changed (fold by `callId`, the latest wins). Additive:
+ * older clients skip it and read `ThreadDetail.pendingCards` instead.
+ */
+export const CardPendingEventSchema = base.extend({ type: z.literal("card-pending"), card: PendingCardSchema });
+/** How a pending card left the pending list: answered (the answer was submitted) or dismissed (a plain submit superseded it). */
+export const CardOutcomeSchema = z.enum(["answered", "dismissed"]);
+export type CardOutcome = z.infer<typeof CardOutcomeSchema>;
+export const CardSettledEventSchema = base.extend({ type: z.literal("card-settled"), callId: z.string(), outcome: CardOutcomeSchema });
+
 export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnStartEventSchema,
   TextDeltaEventSchema,
@@ -474,6 +484,8 @@ export const ThreadEventSchema = z.discriminatedUnion("type", [
   TurnEndEventSchema,
   ErrorEventSchema,
   ObjectUpsertEventSchema,
+  CardPendingEventSchema,
+  CardSettledEventSchema,
   SnapshotEventSchema,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
@@ -502,6 +514,43 @@ export function parseThreadEvent(input: unknown): ParsedThreadEvent {
   if (!env.success) return { kind: "invalid", error: env.error };
   if (!KNOWN_TYPES.has(env.data.type)) return { kind: "unknown", event: { envelope: env.data, raw: input } };
   const ev = ThreadEventSchema.safeParse(input);
+  return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
+}
+
+// ------------------------------------------------------- wolf events
+
+/**
+ * Wolf-scoped activity: what the sidebar and notifications need without opening every thread. `id` is minted per wolf
+ * process (monotonic, positive) and is the SSE `id:` so a reconnect can resume with Last-Event-ID.
+ */
+const wolfBase = z.object({ id: EventIdSchema, wolf: z.string(), at: IsoSchema });
+/** A thread's status changed (also sent once per thread as the baseline of a fresh connection). */
+export const WolfThreadStatusEventSchema = wolfBase.extend({ type: z.literal("thread-status"), threadId: z.string(), status: ThreadStatusSchema });
+/** A card was raised (or its held answer changed). Same payload as the thread event. */
+export const WolfCardPendingEventSchema = wolfBase.extend({ type: z.literal("card-pending"), card: PendingCardSchema });
+export const WolfCardSettledEventSchema = wolfBase.extend({ type: z.literal("card-settled"), threadId: z.string(), callId: z.string(), outcome: CardOutcomeSchema });
+/** The server cannot replay from the client's cursor: refetch threads and cards. */
+export const WolfResyncEventSchema = wolfBase.extend({ type: z.literal("resync") });
+
+export const WolfEventSchema = z.discriminatedUnion("type", [
+  WolfThreadStatusEventSchema,
+  WolfCardPendingEventSchema,
+  WolfCardSettledEventSchema,
+  WolfResyncEventSchema,
+]);
+export type WolfEvent = z.infer<typeof WolfEventSchema>;
+export type WolfEventType = WolfEvent["type"];
+
+const WOLF_EVENT_TYPES: ReadonlySet<string> = new Set(WolfEventSchema.options.map((o) => o.shape.type.value));
+
+export type ParsedWolfEvent = { kind: "event"; event: WolfEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
+
+/** Same ignore-unknown contract as parseThreadEvent. */
+export function parseWolfEvent(input: unknown): ParsedWolfEvent {
+  const env = wolfBase.extend({ type: z.string() }).safeParse(input);
+  if (!env.success) return { kind: "invalid", error: env.error };
+  if (!WOLF_EVENT_TYPES.has(env.data.type)) return { kind: "unknown" };
+  const ev = WolfEventSchema.safeParse(input);
   return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
 }
 

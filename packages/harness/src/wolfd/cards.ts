@@ -67,12 +67,15 @@ export class CardTracker {
 
   /** Cards waiting for the operator, oldest first; a held one carries its answer. */
   pending(): PendingCard[] {
-    return [...this.raised]
-      .filter(([callId]) => !this.claimed.has(callId))
-      .map(([callId, r]) => {
-        const heldAnswer = this.held.get(callId);
-        return { callId, threadId: this.threadId, card: r.card, raisedAt: r.raisedAt, ...(heldAnswer ? { heldAnswer } : {}) };
-      });
+    return this.raisedCards().filter((p) => !this.claimed.has(p.callId));
+  }
+
+  /** Every raised, not yet settled card, claimed ones included (an answer being submitted is still not settled). */
+  raisedCards(): PendingCard[] {
+    return [...this.raised].map(([callId, r]) => {
+      const heldAnswer = this.held.get(callId);
+      return { callId, threadId: this.threadId, card: r.card, raisedAt: r.raisedAt, ...(heldAnswer ? { heldAnswer } : {}) };
+    });
   }
 
   get(callId: string): PendingCard | undefined {

@@ -9,6 +9,7 @@ import {
   buildPath,
   parseMemoryEvent,
   parseThreadEvent,
+  parseWolfEvent,
   type RouteName,
 } from "@wolfpack/protocol";
 import {
@@ -28,6 +29,7 @@ import {
   type PendingCard,
   type PromoteResponse,
   type MemoryEvent,
+  type WolfEvent,
   type Attachment,
   type SubmitAck,
   type SubmitOptions,
@@ -175,6 +177,52 @@ export class HttpConsoleClient implements ConsoleClient {
         }
         await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
       } finally {
+        ctl.abort();
+      }
+    }
+  }
+
+  /**
+   * A wolf's activity (thread status + card changes). Reconnects on a dropped stream, resuming with Last-Event-ID;
+   * the server answers a stale cursor with `resync` + a baseline, which are yielded like any event (the consumer refetches).
+   */
+  async *watchActivity(wolf: string, opts: { from?: number; signal?: AbortSignal } = {}): AsyncGenerator<WolfEvent> {
+    const { signal } = opts;
+    let cursor = opts.from;
+    let failures = 0;
+    while (!signal?.aborted) {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener("abort", stop);
+      try {
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = String(cursor);
+        const res = await this.request("streamWolfActivity", { name: wolf }, { headers, signal: ctl.signal }, wolf);
+        if (!res.body) throw new TypeError("stream response has no body");
+        for await (const frame of sseFrames(res.body)) {
+          failures = 0;
+          let json: unknown;
+          try {
+            json = JSON.parse(frame.data);
+          } catch {
+            throw new ProtocolError("invalid_request", "stream frame is not JSON", false);
+          }
+          const parsed = parseWolfEvent(json);
+          if (parsed.kind === "unknown") continue;
+          if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
+          cursor = Math.max(cursor ?? 0, parsed.event.id);
+          yield parsed.event;
+        }
+        throw new TypeError("stream ended");
+      } catch (e) {
+        if (signal?.aborted) return;
+        if (e instanceof ProtocolError || e instanceof BusyError || e instanceof NotFoundError) throw e;
+        if (++failures > this.maxRetries) {
+          throw new ProtocolError("engine_error", `stream lost: ${e instanceof Error ? e.message : String(e)}`, true);
+        }
+        await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
+      } finally {
+        signal?.removeEventListener("abort", stop);
         ctl.abort();
       }
     }

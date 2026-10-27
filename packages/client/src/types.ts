@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -34,6 +34,7 @@ export type ThreadEvent = ProtocolThreadEvent extends infer E
 export type SnapshotEvent = Extract<ProtocolThreadEvent, { type: "snapshot" }>;
 export type ThreadEventType = ThreadEvent["type"];
 
+export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
 export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
@@ -97,6 +98,11 @@ export interface ConsoleClient {
    * `signal`. Optional: not every client (e.g. the mock) has a wolf stream.
    */
   watchMemory?(wolf: string, opts?: { signal?: AbortSignal }): AsyncIterable<MemoryEvent>;
+  /**
+   * Live status/card changes of a wolf (thread-status, card-pending, card-settled; `resync` = refetch). Starts with a
+   * baseline of the current state, resumes across reconnects. Never ends on its own: stop with `signal`. Optional like watchMemory.
+   */
+  watchActivity?(wolf: string, opts?: { from?: number; signal?: AbortSignal }): AsyncIterable<WolfEvent>;
   /**
    * Fold the wolf's observation pool into session topics; resolves with counts and topic ids. Rejects with a
    * ProtocolError `memory_unavailable` when the wolf's memory is inert or not loaded. Optional like watchMemory.

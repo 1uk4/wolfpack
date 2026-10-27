@@ -164,3 +164,33 @@ describe("whole-row clicks", () => {
 		assert.equal(c.getAttribute("aria-pressed"), "true");
 	});
 });
+
+describe("un-picking optional single / confirm", () => {
+	const card2 = (optional: boolean): Card => ({
+		tool: "x",
+		fields: [
+			{ id: "s", kind: "single", label: "S?", options: opt, allowOther: false, default: "a", ...(optional ? { optional } : {}) },
+			{ id: "c", kind: "confirm", label: "C?", default: true, ...(optional ? { optional } : {}) },
+		],
+	});
+	it("clicking the selected option clears it, even a default; an optional confirm skipped while others are answered", async () => {
+		await mount(card2(true));
+		const s = document.querySelector('[data-field="s"] [data-value="a"]') as HTMLElement;
+		assert.equal(s.getAttribute("aria-pressed"), "true");
+		await click(s);
+		assert.equal(s.getAttribute("aria-pressed"), "false");
+		await click(q('[data-testid="card-confirm"]')!);
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "false");
+		await click(document.querySelector('[data-field="s"] [data-value="b"]')!);
+		await click(submitBtn()!);
+		assert.deepEqual(sent, [{ s: { value: "b" } }]);
+	});
+	it("required fields keep their selection on a second click", async () => {
+		await mount(card2(false));
+		const s = document.querySelector('[data-field="s"] [data-value="a"]') as HTMLElement;
+		await click(s);
+		assert.equal(s.getAttribute("aria-pressed"), "true");
+		await click(q('[data-testid="card-confirm"]')!);
+		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "true");
+	});
+});

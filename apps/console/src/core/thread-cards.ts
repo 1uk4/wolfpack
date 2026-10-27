@@ -135,7 +135,10 @@ export function visibleSteps(card: Card, draft: CardDraft): VisibleStep[] {
 	return out;
 }
 
-/** An optional field with nothing entered (no answer, blank text, no picks); a confirm is blank only while unpicked. */
+/**
+ * An optional field with nothing entered (no answer, blank text, no picks). A confirm is blank only while unpicked; the
+ * server (isSkipped) counts a confirm skipped only when ABSENT, so a present-but-malformed confirm is validated and rejected there.
+ */
 const fieldBlank = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
 	if (a === undefined) return true;
 	if (f.kind === "confirm") return typeof a.value !== "boolean";

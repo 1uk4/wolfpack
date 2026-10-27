@@ -54,3 +54,12 @@ describe("optional fields (server)", () => {
     }
   });
 });
+
+describe("optional confirm", () => {
+  it("skipped while the other fields are answered is accepted; a malformed one is rejected, not skipped", () => {
+    const answers: CardAnswers = { ...skipped, pick: { value: "a" }, note: { value: "hi" } };
+    expect(validateAnswers(card(), answers)).toBeUndefined();
+    expect(answerText([{ callId: "c", card: card(), answers }])).toContain("- OK?: (skipped)");
+    expect(validateAnswers(card(), { ...answers, ok: { value: "" as unknown as boolean } })).toMatch(/true or false/);
+  });
+});

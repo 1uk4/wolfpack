@@ -110,7 +110,7 @@ export class CardTracker {
 const EMPTY = "(empty response)";
 const SKIPPED = "(skipped)";
 
-/** An optional field left blank: no answer, empty text (free-text/single, no custom entry), or no picks (multi). A confirm is skipped only when absent. */
+/** An optional field left blank: no answer, empty text (free-text/single, no custom entry), or no picks (multi). A confirm is skipped only when absent: a present but malformed one (non-boolean) falls through to validateField and is rejected. */
 function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined): boolean {
   if (a === undefined) return true;
   if (field.kind === "confirm") return false;

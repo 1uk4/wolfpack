@@ -133,7 +133,7 @@ A skipped optional field is submitted **empty**, by kind:
 | --- | --- |
 | `free-text`, `single` | `{ "value": "" }` |
 | `multi` | `{ "value": [] }` (the multi's `min` does not apply to a blank one; once something is picked, `min`/`max` apply) |
-| `confirm` | no entry for the field (there is no empty boolean); `answers[id]` is absent |
+| `confirm` | no entry for the field (there is no empty boolean); `answers[id]` is absent. The model still sees `- <label>: (skipped)` |
 
 wolfd accepts all of these for an optional visible field (a missing answer too, for any kind) and validates a non-empty
 answer normally. The model-facing answer text reads `- <label>: (skipped)` for a skipped optional field. A required

@@ -26,6 +26,12 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 		draftRef.current = { ...draftRef.current, [fieldId]: a };
 		setDraft(draftRef.current);
 	};
+	// Un-pick an optional single/confirm (clicking the selected option again): the entry leaves the draft, so a default does not come back.
+	const clear = (fieldId: string) => {
+		const { [fieldId]: _gone, ...rest } = draftRef.current;
+		draftRef.current = rest;
+		setDraft(rest);
+	};
 	const answered = answer !== undefined;
 	const closed = answered || dismissed === true;
 	// Text typed into a multi "Other…" box but not yet added still counts on Submit (folded in, never lost).
@@ -129,6 +135,7 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 					value={answered ? answer[f.id] : draft[f.id]}
 					readOnly={closed || !pending || submitting}
 					onChange={(a) => set(f.id, a)}
+					onClear={() => clear(f.id)}
 					typed={typed[f.id] ?? ""}
 					onType={(text) => setTypedText(f.id, text)}
 					dictation={dictationProps.field(f.id)}
@@ -237,6 +244,7 @@ function FieldView({
 	value,
 	readOnly,
 	onChange,
+	onClear,
 	typed,
 	onType,
 	pendingError,
@@ -246,6 +254,7 @@ function FieldView({
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	onClear: () => void;
 	typed: string;
 	onType: (text: string) => void;
 	pendingError?: string;
@@ -268,7 +277,7 @@ function FieldView({
 				</div>
 			)}
 			{field.kind === "confirm" ? (
-				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} />
+				<ConfirmView field={field} value={value} readOnly={readOnly} onChange={onChange} onClear={onClear} labelledBy={labelId} />
 			) : field.kind === "multi" ? (
 				<MultiView field={field} value={value} readOnly={readOnly} onChange={onChange} labelledBy={labelId} typed={typed} onType={onType} error={pendingError} dictation={dictation} />
 			) : field.kind === "free-text" ? (
@@ -300,7 +309,7 @@ function FieldView({
 								disabled={readOnly}
 								data-testid="card-option"
 								data-value={o.value}
-								onClick={() => onChange({ value: o.value })}
+								onClick={() => (sel && field.optional ? onClear() : onChange({ value: o.value }))}
 								className={cn(
 									OPTION_ROW,
 									sel ? "border-primary bg-accent" : "enabled:hover:bg-accent/50",
@@ -339,6 +348,7 @@ function FieldView({
 }
 
 /** One option row: the whole button (indicator + label) is the click target. */
+// Confirm rows add "w-auto": cn() (tailwind-merge) lets the later w-auto replace this w-full.
 const OPTION_ROW = "flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 /**
@@ -467,6 +477,7 @@ function ConfirmView({
 	value,
 	readOnly,
 	onChange,
+	onClear,
 	labelledBy,
 }: {
 	labelledBy: string;
@@ -474,6 +485,7 @@ function ConfirmView({
 	value: CardFieldAnswer | undefined;
 	readOnly: boolean;
 	onChange: (a: CardFieldAnswer) => void;
+	onClear: () => void;
 }) {
 	const picked = typeof value?.value === "boolean" ? value.value : undefined;
 	const note = value && "note" in value ? value.note : undefined;
@@ -483,7 +495,7 @@ function ConfirmView({
 			aria-pressed={picked === which}
 			disabled={readOnly}
 			data-testid={testid}
-			onClick={() => onChange({ value: which, ...(note ? { note } : {}) })}
+			onClick={() => (picked === which && field.optional ? onClear() : onChange({ value: which, ...(note ? { note } : {}) }))}
 			className={cn(
 				OPTION_ROW,
 				"w-auto items-center pr-4",

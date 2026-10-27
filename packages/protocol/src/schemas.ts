@@ -1026,7 +1026,7 @@ export type SubmitAck = z.infer<typeof SubmitAckSchema>;
 
 /**
  * Answer a pending card. The answer is a submission: the card's tool call is resolved with it and the next turn starts
- * (when no sibling card of the same turn is still pending). `answers` must cover every field of the card.
+ * (when no sibling card of the same turn is still pending). `answers` must cover every VISIBLE REQUIRED field; optional and showIf-hidden fields may be omitted.
  * Wire: the thread id and `callId` ride the path.
  */
 export const AnswerCardRequestSchema = z.object({

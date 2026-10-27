@@ -116,6 +116,11 @@ export function ThreadChat({
 		(key: string) => (open: boolean) => setOpenRows((prev) => (prev[key] === open ? prev : { ...prev, [key]: open })),
 		[],
 	);
+	// Per assistant message, its render items; a message with none (e.g. a revision-only turn whose tool row is hidden) draws no shell.
+	const itemsByMessage = useMemo(
+		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
+		[messages, status],
+	);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
@@ -192,10 +197,10 @@ export function ThreadChat({
 														.join("\n")}
 												</div>
 											</div>
-										) : (
+										) : itemsByMessage[mi]!.length === 0 && !(status === "streaming" && mi === messages.length - 1) ? null : (
 											<Message from="assistant" className="max-w-full">
 												<MessageContent className={ASSISTANT_CONTENT_CLASS}>
-													{renderItems(m.parts, status === "streaming" && mi === messages.length - 1).map((item) => {
+													{itemsByMessage[mi]!.map((item) => {
 														switch (item.kind) {
 															case "text":
 																return (
@@ -213,6 +218,12 @@ export function ThreadChat({
 																		text={item.part.text ?? ""}
 																	/>
 																);
+															case "object": {
+																// One part per object (projectView folds revisions): latest data, first position.
+																const { objectId, objectType, rev, data } = item.part as unknown as { objectId: string; objectType: string; rev: number; data: unknown };
+																const Card = lookupCard("object", objectType)?.Renderer;
+																return Card ? <Card key={`obj-${objectId}`} objectId={objectId} type={objectType} rev={rev} data={data} /> : null;
+															}
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":

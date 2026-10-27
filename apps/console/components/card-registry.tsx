@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { ArtifactPartProps, QuestionAnswerData } from "@/src/core";
 import { AnsweredCard } from "@/components/answered-card";
 import { ToolCallCard } from "@/components/artifacts/tool-call-card";
+import { DecisionCard } from "@/components/decision-card";
 
 /**
  * Card registry — the extension point for transcript cards.
@@ -32,10 +33,22 @@ export interface ToolCardEntry {
 	threadRow?: boolean;
 }
 
-/** Structured object cards (decision, graph, checklist) — props are theirs to define. */
-export interface ObjectCardEntry<P = never> {
+/** Structured object cards (decision, graph, checklist). */
+export interface ObjectCardEntry<P = ObjectCardProps> {
 	kind: "object";
 	Renderer: ComponentType<P>;
+}
+
+/**
+ * What thread-chat hands an object card: the folded object (latest `data`,
+ * `rev` = revisions so far + 1). `data` is the type's payload; each card
+ * narrows it itself (see parseObjectData).
+ */
+export interface ObjectCardProps {
+	objectId: string;
+	type: string;
+	rev: number;
+	data: unknown;
 }
 
 export type CardEntry = ToolCardEntry | ObjectCardEntry;
@@ -109,3 +122,7 @@ for (const name of ["quiz", "ask_user_question", "explain"]) {
 for (const name of ["read", "ls", "find", "grep"]) {
 	registerCard("tool", name, { Renderer: ToolCallCard, threadRow: true });
 }
+
+// Structured objects, keyed by object type (src/core/objects.ts folds the
+// object-upsert / history objects into one part per object).
+registerCard("object", "decision", { Renderer: DecisionCard });

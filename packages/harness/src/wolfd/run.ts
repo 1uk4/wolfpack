@@ -18,6 +18,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import type { Extension } from "@earendil-works/pi-durable";
 import { applyWolfTierOverrides, assertSandboxed, loadModelTable, type ModelTable, loadWolfConfig, resolveWolfModel, type WolfConfig } from "@wolfpack/engine";
 import {
+  objectsExtension,
   openWolfEngine,
   resolveToolNames,
   type ConfigureOptions,
@@ -133,7 +134,7 @@ async function startConfigured(
   const kbRoots = kbRootsFor(config, env);
   const sweep = config.memory.librarian ? librarianSweepFor(config, env, table, log, opts.sweepTick) : undefined;
   const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
-  const extensions = [...toolExtensions, ...loaded, ...extra];
+  const extensions = [...toolExtensions, objectsExtension, ...loaded, ...extra];
   const cwd = config.capability.workspace;
   const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
 

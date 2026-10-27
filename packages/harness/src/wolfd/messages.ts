@@ -10,11 +10,16 @@
  *   joined by a blank line, so the thread shows one assistant message per turn; a steer's user message splits them.
  * - Ids are `entry-<engine entry id>` (of the first merged entry; a turn that starts with a tool-only round uses that
  *   entry's id, since such rounds now yield a message) (NOT the submit ack's messageId, which is the engine submission id).
+ * - Object tool calls (`show_decision`) become `objects` on the assistant message of their first call: one entry per
+ *   objectId, holding the latest rev's data. Objects are created when the call's RESULT lands, and only for a
+ *   successful one (rev = successful completed calls with that id: the same rule as the live events). The full
+ *   (uncapped) args are kept aside for it, since the call's own `args` are capped.
  * - Only entries present in the engine's snapshot/stream are visible; after compaction the older history is gone.
  * - `at` is the message's own timestamp (ms epoch) when present, else the time we first saw the entry.
  */
-import type { ThreadMessage } from "@wolfpack/protocol";
+import type { ThreadMessage, ThreadObject } from "@wolfpack/protocol";
 import type { EngineEvent } from "../engine/index.js";
+import { objectFromCall } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
@@ -99,6 +104,8 @@ function blocksOf(entry: Entry): Array<{ type: string; text?: string; id?: strin
  * `call_0`) yield a different round (timestamp) each time and must keep every call.
  */
 const callRound = new WeakMap<object, number>();
+/** The uncapped arguments of each folded call (the capped `args` on the message cannot rebuild an object). */
+const callFullArgs = new WeakMap<object, unknown>();
 
 /** Fold one engine entry into the list: user/assistant messages (rounds merged), tool results onto their call. */
 export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date = () => new Date()): void {
@@ -130,6 +137,8 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
         const call = { callId: b.id, name: b.name ?? "tool", args: capArgs(b.arguments ?? {}), textOffset: base + before };
         if (round !== undefined) callRound.set(call, round);
         (target.tools ??= []).push(call);
+        // Only object tools need their uncapped args (to build the object); don't pin every call's arguments.
+        if (objectFromCall(b.name, b.arguments)) callFullArgs.set(call, b.arguments);
       }
     }
     if (roundText !== "") target.text = target.text === "" ? roundText : `${target.text}\n\n${roundText}`;
@@ -144,16 +153,31 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const matches = (list[i].tools ?? []).filter((c) => c.callId === msg.toolCallId);
       const call = [...matches].reverse().find((c) => c.result === undefined) ?? matches.at(-1);
       if (!call) continue;
+      const first = call.result === undefined; // a replayed result must not count twice
       const text = blocksOf(entry).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
       call.result = sliceSafe(text, TOOL_CAP);
       if (text.length > TOOL_CAP) call.resultTruncated = true;
       call.isError = msg.isError === true;
+      const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
+      if (obj) {
+        // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
+        const prior = objectsById(list).get(obj.objectId);
+        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
+        else (list[i].objects ??= []).push({ ...obj, rev: 1, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
+      }
       return;
     }
     return;
   }
   const m = messageFromEntry(entry, now);
   if (m) list.push(m);
+}
+
+/** Every object in the list by id (one entry per id by construction). */
+function objectsById(list: readonly ThreadMessage[]): Map<string, ThreadObject> {
+  const out = new Map<string, ThreadObject>();
+  for (const m of list) for (const o of m.objects ?? []) out.set(o.objectId, o);
+  return out;
 }
 
 export function messagesFromEntries(entries: readonly Entry[]): ThreadMessage[] {

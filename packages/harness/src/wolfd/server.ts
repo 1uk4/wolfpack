@@ -574,7 +574,13 @@ export class WolfServer {
   }
 
   private detail(): ThreadDetail {
-    return { ...this.summary, messages: this.messages.map((m) => ({ ...m, ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}) })), busy: this.running !== null, lastEventId: this.seq };
+    const messages = this.messages.map((m) => ({
+      ...m,
+      // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
+      ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
+      ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
+    }));
+    return { ...this.summary, messages, busy: this.running !== null, lastEventId: this.seq };
   }
 
   private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {

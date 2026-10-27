@@ -31,6 +31,7 @@
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
+import { collapseObjects, isObjectBlock, objectPartOf, type ObjectBlock } from "./objects.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
 
@@ -216,6 +217,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 			const reasoning: LhViewPart[] = [];
 			let textN = 0;
 			let reasoningN = 0;
+			let objectN = 0;
 			// LIVE IS POSITIVE EVIDENCE (owner, 2026-10-05): a call renders
 			// live ONLY when its own message is streaming THIS turn — session
 			// busyness alone can never resurrect a settled call (the practice
@@ -231,6 +233,9 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					rest.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
 				} else if (block.type === "thinking") {
 					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
+				} else if (isObjectBlock(block as { type: string })) {
+					const obj = objectPartOf(block as unknown as ObjectBlock, `${m.id}-o${objectN++}`);
+					if (obj) rest.push(obj);
 				} else if (block.type === "toolCall") {
 					const part = toolPartOf(block, live, streamingMessage);
 					if (foldRepeat(block, part, group, local)) folded++;
@@ -264,6 +269,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		}
 	}
 
+	collapseObjects(out);
 	return out;
 }
 

@@ -57,6 +57,7 @@ export * from "./session-markdown.ts";
 // thread-adapter.ts: the ConsoleClient (@wolfpack/client) ↔ session-model
 // seam — ThreadEvent → wire events, ThreadMessage → native record. Pure.
 export * from "./thread-adapter.ts";
+export * from "./objects.ts";
 export * from "./tool-rows.ts";
 export * from "./kb.ts";
 export * from "./graph-activity.ts";

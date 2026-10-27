@@ -11,6 +11,7 @@ export type {
   SubmitAck,
   ThreadDetail,
   ThreadMessage,
+  ThreadObject,
   ThreadToolCall,
   ThreadSummary,
   WhenBusy,

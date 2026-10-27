@@ -209,3 +209,54 @@ describe("restreamed blocks (text_start / block / message)", () => {
     expect(out.filter((e) => e.type === "thinking-delta").map((e: any) => e.text).join("")).toBe("head rest");
   });
 });
+
+describe("object-upsert (show_decision)", () => {
+  const dec = (chosen = "a", objectId = "d1") => ({ objectId, options: [{ id: "a", label: "A" }, { id: "b", label: "B" }], chosen, rationale: "r" });
+  const call = (id: string, args: unknown) => ({ type: "toolCall", id, name: "show_decision", arguments: args });
+  const toolStart = (id: string, args: unknown) => ev({ type: "tool_execution_start", toolCallId: id, toolName: "show_decision", args });
+  const toolEnd = (id: string, isError = false) =>
+    ev({ type: "tool_execution_end", toolCallId: id, toolName: "show_decision", entry: { kind: "pi.tool_result", id: 9, conversationId: 1, model: [{ role: "toolResult", toolCallId: id, content: [{ type: "text", text: "ok" }], isError }] } });
+  const snap = (entries: unknown[], extra: object = {}) =>
+    ({ type: "snapshot", entries, tools: [], nestedTools: [], compactions: [], inbox: [], agent: {}, usage: { models: {}, tools: {} }, ...extra }) as unknown as EngineSnapshot;
+  const asstEntry = (calls: unknown[]) => ({ kind: "pi.assistant", id: 3, conversationId: 1, model: [{ role: "assistant", content: calls, stopReason: "toolUse" }] });
+  const resultEntry = (id: string, isError = false) => ({ kind: "pi.tool_result", id: 4, conversationId: 1, model: [{ role: "toolResult", toolCallId: id, content: [], isError }] });
+  const upserts = (out: Array<{ type: string }>) => out.filter((e) => e.type === "object-upsert") as unknown as Array<{ rev: number; objectId: string; textOffset?: number }>;
+
+  it("upserts just before tool-end, with the merged text length as textOffset", () => {
+    const out = map(
+      start(), asstStart([]), asstEnd([{ type: "text", text: "Weighing" }]), toolStart("c1", dec()), toolEnd("c1"),
+      asstStart([]), asstEnd([{ type: "text", text: "More" }]), toolStart("c2", dec("b")), toolEnd("c2"), end(), sub(1, "done"),
+    );
+    expect(out.map((e) => e.type).filter((t) => t === "object-upsert" || t === "tool-end")).toEqual(["object-upsert", "tool-end", "object-upsert", "tool-end"]);
+    expect(upserts(out).map((u) => [u.rev, u.textOffset])).toEqual([[1, 8], [2, 8 + 2 + 4]]);
+  });
+
+  it("failed calls and invalid args (unknown chosen) yield nothing and do not count", () => {
+    const out = map(start(), toolStart("c1", dec()), toolEnd("c1", true), toolStart("c2", dec("zzz")), toolEnd("c2"), toolStart("c3", dec()), toolEnd("c3"), end(), sub(1, "done"));
+    expect(upserts(out).map((u) => u.rev)).toEqual([1]);
+  });
+
+  it("seedObjects: a snapshot with one completed call makes the next upsert rev 2 (no textOffset for a mid-turn joiner)", () => {
+    const m = createEventMapper(snap([asstEntry([call("c0", dec())]), resultEntry("c0")], { run: { inputs: [1] } }));
+    const out = m.push([toolStart("c1", dec("b")), toolEnd("c1")]);
+    expect(upserts(out)).toEqual([expect.objectContaining({ rev: 2 })]);
+    expect(upserts(out)[0]!.textOffset).toBeUndefined();
+  });
+
+  it("seedObjects: an errored earlier call does not count; an in-flight call (no result yet) upserts at its end as the next rev", () => {
+    const m = createEventMapper(
+      snap([asstEntry([call("c0", dec()), call("c1", dec("b"))]), resultEntry("c0", true)], { run: { inputs: [1] } }),
+    );
+    // c1 has no result entry: still in flight; it completes now.
+    expect(upserts(m.push([toolEnd("c1")])).map((u) => u.rev)).toEqual([1]);
+  });
+
+  it("the resync path (mid-stream engine snapshot) re-seeds revs from the snapshot", () => {
+    const m = createEventMapper();
+    const first = m.push([start(), toolStart("c1", dec()), toolEnd("c1")]);
+    expect(upserts(first).map((u) => u.rev)).toEqual([1]);
+    const resync = m.push([snap([asstEntry([call("c1", dec())]), resultEntry("c1")], { run: { inputs: [1] } })]);
+    expect(resync.map((e) => e.type)).toContain("resync");
+    expect(upserts(m.push([toolStart("c2", dec("b")), toolEnd("c2")])).map((u) => u.rev)).toEqual([2]);
+  });
+});

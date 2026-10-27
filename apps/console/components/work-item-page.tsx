@@ -4,10 +4,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { KbMarkdown } from "@/components/kb-markdown";
-import { fetchWolves, fetchWorkRecord, type KbResult } from "@/components/kb-client";
+import { fetchWolves, fetchWorkRecord } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
 import { useLibrarian } from "@/components/use-librarian";
-import { workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
+import { resolveWork, workHref, workRecordView, workWolfCandidates, type WorkRecordResponse } from "@/src/core";
 
 export type WorkPageState =
 	| { kind: "loading" }
@@ -15,15 +15,6 @@ export type WorkPageState =
 	| { kind: "not_found" }
 	| { kind: "error"; message: string }
 	| { kind: "ready"; item: WorkRecordResponse; parent: WorkRecordResponse | null };
-
-/** Ask each candidate wolf in turn; the first that is not "unavailable" decides. */
-async function loadWork(candidates: string[], id: string): Promise<{ wolf: string; res: KbResult<WorkRecordResponse> } | null> {
-	for (const wolf of candidates) {
-		const res = await fetchWorkRecord(wolf, id);
-		if (res.ok || res.reason !== "unavailable") return { wolf, res };
-	}
-	return null;
-}
 
 export function WorkItemPage({ id }: { id: string }) {
 	const { librarian, loading } = useLibrarian();
@@ -36,17 +27,14 @@ export function WorkItemPage({ id }: { id: string }) {
 			if (!cancelled) setFetched({ id, state });
 		};
 		void (async () => {
-			let wolves: { name: string; status: string }[] = [];
-			if (!librarian) {
-				const w = await fetchWolves();
-				if (w.ok) wolves = w.data.wolves;
+			// candidates: [librarian, ...other online wolves]; the hook does not expose its wolves list, so fetch it once here
+			const w = await fetchWolves();
+			const hit = await resolveWork(workWolfCandidates(librarian, w.ok ? w.data.wolves : []), id, fetchWorkRecord);
+			if (hit.kind === "none") return done({ kind: "unavailable" });
+			if (!hit.result.ok) {
+				return done(hit.result.reason === "not_found" ? { kind: "not_found" } : { kind: "error", message: hit.result.message });
 			}
-			const hit = await loadWork(workWolfCandidates(librarian, wolves), id);
-			if (!hit) return done({ kind: "unavailable" });
-			if (!hit.res.ok) {
-				return done(hit.res.reason === "not_found" ? { kind: "not_found" } : { kind: "error", message: hit.res.message });
-			}
-			const item = hit.res.data;
+			const item = hit.result.data;
 			let parent: WorkRecordResponse | null = null;
 			if (!item.record.trim() && item.partOf) {
 				const p = await fetchWorkRecord(hit.wolf, item.partOf);

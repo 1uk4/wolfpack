@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EntryReaderView, entryReaderState } from "../components/entry-reader.tsx";
+import { KbMarkdown } from "../components/kb-markdown.tsx";
 import { WorkItemView } from "../components/work-item-page.tsx";
 
 const ENTRY = {
@@ -36,6 +37,20 @@ describe("EntryReader (SSR)", () => {
 		assert.match(r(entryReaderState({ ok: false, reason: "unavailable", message: "" })), /unavailable/);
 		assert.match(r(entryReaderState({ ok: false, reason: "not_found", message: "" })), /No entry/);
 		assert.match(r({ kind: "loading" }), /Loading/);
+	});
+});
+
+describe("KbMarkdown (SSR)", () => {
+	it("stamps heading ids, keeps # anchors in-tab, renders relative links as text", () => {
+		const html = renderToStaticMarkup(
+			<KbMarkdown>{"## My_Head, ok\n\n## ?!\n\n[up](#my_head-ok) [rel](./x.md) [ext](https://e.com)"}</KbMarkdown>,
+		);
+		assert.match(html, /<h2[^>]*id="my_head-ok"/);
+		assert.doesNotMatch(html, /<h2[^>]*id=""/);
+		assert.match(html, /<a href="#my_head-ok"(?![^>]*target)/);
+		// streamdown resolves ./x.md to /x.md; it must not open a new tab
+		assert.doesNotMatch(html, /target="_blank"[^>]*href="\/x\.md"|href="\/x\.md"[^>]*target/);
+		assert.match(html, /href="https:\/\/e\.com\/" target="_blank"/);
 	});
 });
 

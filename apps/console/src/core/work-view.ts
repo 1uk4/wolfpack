@@ -34,3 +34,27 @@ export function workRecordView(
 	if (parent?.record.trim()) return { markdown: parent.record, fromParent: { id: parent.id, title: parent.title } };
 	return { markdown: "", fromParent: null };
 }
+
+export type WorkLookup =
+	| { ok: true; data: WorkRecordResponse }
+	| { ok: false; reason: "unavailable" | "not_found" | "error"; message: string };
+
+export type WorkResolution =
+	| { kind: "none" }
+	| { kind: "hit"; wolf: string; result: WorkLookup };
+
+/**
+ * Ask each candidate in order. Only "unavailable" moves on to the next wolf;
+ * a hit, a 404 or any other error is final. No candidate answering → "none".
+ */
+export async function resolveWork(
+	candidates: readonly string[],
+	id: string,
+	fetchRecord: (wolf: string, id: string) => Promise<WorkLookup>,
+): Promise<WorkResolution> {
+	for (const wolf of candidates) {
+		const result = await fetchRecord(wolf, id);
+		if (result.ok || result.reason !== "unavailable") return { kind: "hit", wolf, result };
+	}
+	return { kind: "none" };
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { workRecordView, workWolfCandidates } from "../src/core/work-view.ts";
+import { resolveWork, workRecordView, workWolfCandidates, type WorkLookup } from "../src/core/work-view.ts";
 
 describe("workWolfCandidates", () => {
 	const wolves = [
@@ -27,5 +27,31 @@ describe("workRecordView", () => {
 	});
 	it("empty when neither", () => {
 		assert.deepEqual(workRecordView({ record: "" }, null), { markdown: "", fromParent: null });
+	});
+});
+
+describe("resolveWork", () => {
+	const item = { id: "t", title: "T", kind: "task", stage: "plan", partOf: null, dependsOn: [], plan: "", record: "" };
+	const unavailable: WorkLookup = { ok: false, reason: "unavailable", message: "" };
+	const run = (table: Record<string, WorkLookup>, candidates: string[]) => {
+		const asked: string[] = [];
+		return resolveWork(candidates, "t", async (w) => (asked.push(w), table[w] ?? unavailable)).then((r) => ({ r, asked }));
+	};
+	it("all unavailable (or no candidates) → none, each asked once", async () => {
+		const { r, asked } = await run({}, ["a", "b"]);
+		assert.deepEqual(r, { kind: "none" });
+		assert.deepEqual(asked, ["a", "b"]);
+		assert.deepEqual((await run({}, [])).r, { kind: "none" });
+	});
+	it("first hit wins and stops the loop", async () => {
+		const { r, asked } = await run({ b: { ok: true, data: item }, c: { ok: true, data: item } }, ["a", "b", "c"]);
+		assert.equal(r.kind === "hit" && r.wolf, "b");
+		assert.deepEqual(asked, ["a", "b"]);
+	});
+	it("404 is final", async () => {
+		const nf: WorkLookup = { ok: false, reason: "not_found", message: "" };
+		const { r, asked } = await run({ a: nf, b: { ok: true, data: item } }, ["a", "b"]);
+		assert.deepEqual(r, { kind: "hit", wolf: "a", result: nf });
+		assert.deepEqual(asked, ["a"]);
 	});
 });

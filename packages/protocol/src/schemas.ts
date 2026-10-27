@@ -99,7 +99,11 @@ export const CardSchema = z
     title: z.string().optional(),
     fields: z.array(CardFieldSchema).min(1),
   })
-  .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] });
+  .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, { message: "field ids must be unique within a card", path: ["fields"] })
+  .refine((c) => c.fields.every((f) => f.kind !== "single" || f.default === undefined || f.options.some((o) => o.value === f.default)), {
+    message: "a single field's default must be one of its option values",
+    path: ["fields"],
+  });
 export type Card = z.infer<typeof CardSchema>;
 
 /**

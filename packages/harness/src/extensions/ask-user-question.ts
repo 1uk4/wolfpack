@@ -43,6 +43,11 @@ export function askCard(args: AskArgs): Card {
   };
 }
 
+/** Names of an extension's card-raising tools (for the card guard). */
+export function cardToolNames(ext: Extension): string[] {
+  return (ext.tools ?? []).filter((t) => t.raisesCard).map((t) => t.name);
+}
+
 export function createAskUserQuestionExtension(): Extension {
   return defineExtension({
     name: "ask-user-question",
@@ -53,6 +58,7 @@ export function createAskUserQuestionExtension(): Extension {
         description:
           "Ask the user a single question. Your turn ends and the question is shown to them as a card; their answer arrives at the start of your next turn. Use when requirements are ambiguous, a preference or decision is theirs to make, or you need confirmation before proceeding. Ask exactly one question per call.",
         parameters: Params,
+        raisesCard: true,
         async execute(args) {
           const a = args as AskArgs;
           return {

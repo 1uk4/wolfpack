@@ -38,18 +38,18 @@ export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
   /**
-   * Raise an interaction card. Implies `control.terminate`: the turn ends `complete`, the thread is marked needs-you,
-   * and the operator's answer starts the next turn. `content` is the model-facing placeholder for this call.
+   * Ask the operator a question: the card ends the turn and waits for an answer, which starts the next turn.
+   * `content` is the model-facing placeholder for this call. A tool that sets `card` should declare `raisesCard`.
    */
   card?: Card;
-  /** Post-tools controls (durable runtime only). `terminate` ends the run when every result of the round asks for it. */
-  control?: { terminate?: boolean };
 }
 
 export interface Tool {
   name: string;
   description: string;
   parameters: TObject;
+  /** The tool can return a `card`; the runtime then ends the whole round, even when it ran beside other tools. */
+  raisesCard?: boolean;
   execute: (args: unknown, context: ToolContext) => Promise<ToolResult>;
 }
 

@@ -4,7 +4,6 @@
  * going forward (existing harness internals migrate later).
  */
 import { dirname } from "node:path";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -21,6 +20,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { cardAnswerEntry, type CardAnswerData } from "./cards.js";
 import { attachConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
 import type { EngineEvent, EngineSnapshot } from "./events.js";
@@ -67,10 +67,10 @@ export interface SubmitOptions {
   input: UserInput;
   whenBusy: WhenBusy;
   /**
-   * Place the input as this entry kind instead of `pi.user` (the model still sees `input` as a user message).
-   * `kind` must not start with `pi.`. Used for card answers (see cards.ts).
+   * The input answers pending cards: it is placed as a card-answer entry instead of a plain user message (the model
+   * still sees `input` as a user message). See cards.ts.
    */
-  entry?: { kind: string; data?: JsonValue };
+  cardAnswers?: CardAnswerData;
 }
 
 export interface SubmitResult {
@@ -163,10 +163,10 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
   const wrap = (conv: Conversation): EngineConversation => ({
     id: String(conv.id),
 
-    async submit({ input, whenBusy, entry }) {
+    async submit({ input, whenBusy, cardAnswers }) {
       let sub;
       try {
-        sub = await conv.submit({ type: "input", content: input, whenBusy, ...(entry ? { entry } : {}) }, ctx);
+        sub = await conv.submit({ type: "input", content: input, whenBusy, ...(cardAnswers ? { entry: cardAnswerEntry(cardAnswers) } : {}) }, ctx);
       } catch (err) {
         if (err instanceof ConversationBusy) throw new EngineBusyError();
         throw err;

@@ -34,7 +34,6 @@ import {
   matchRoute,
   type Actor,
   type AttachmentRef,
-  type Card,
   type CardAnswers,
   type ConsolidateResponse,
   type ThreadStatus,
@@ -73,7 +72,6 @@ import { isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemo
 import { prepareSocketPath } from "./socket.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, loadAttachment, recordSubmission, storeAttachment } from "./attachments.js";
-import { CARD_ANSWER_KIND } from "../engine/index.js";
 import { CardTracker, answerText, validateAnswers } from "./cards.js";
 
 export interface WolfServerOptions {
@@ -674,19 +672,26 @@ export class WolfServer {
    * the answer is held and the ack is `queued`.
    */
   private async answerCard(callId: string, answers: CardAnswers): Promise<SubmitAck> {
+    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
     const pending = this.cards.get(callId);
     if (!pending) throw new HttpError("not_found", `card ${callId}`);
     const bad = validateAnswers(pending.card, answers);
     if (bad) throw new HttpError("invalid_request", bad);
-    if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
+    // Synchronous from here to the claim: a concurrent answer for the same call finds it claimed (404).
     const ready = this.cards.answer(callId, answers);
-    if (!ready) return { messageId: `card-${callId}`, disposition: "queued" };
+    if (!ready) {
+      this.notify();
+      return { messageId: `card-${callId}`, disposition: "queued" };
+    }
     const ids = ready.map((r) => r.callId);
-    const input = answerText(ready.map((r) => ({ ...r, card: this.cards.cardOf(r.callId) as Card })));
     const before = this.turnStarts;
     let r;
     try {
-      r = await this.conv.submit({ input, whenBusy: "reject", entry: { kind: CARD_ANSWER_KIND, data: { cards: ready } as never } });
+      r = await this.conv.submit({
+        input: answerText(ready),
+        whenBusy: "reject",
+        cardAnswers: { cards: ready.map(({ callId: id, answers: a }) => ({ callId: id, answers: a })) },
+      });
     } catch (e) {
       this.cards.release(ids);
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);

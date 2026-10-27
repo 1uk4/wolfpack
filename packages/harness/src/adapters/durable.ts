@@ -11,6 +11,7 @@ import {
   GenerationTask,
   CompactionTask,
   type Extension as PiDurableExtension,
+  type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage as PiAssistantMessage } from "@earendil-works/pi-ai";
 import { cardResult } from "../engine/cards.js";
@@ -33,12 +34,7 @@ import type {
  * API ("content cannot be empty if is_error is true"), wedging the
  * conversation. An error always carries text.
  */
-export function toDurableResult(result: ToolResult): {
-  output: ToolResult["content"];
-  isError?: boolean;
-  details?: never;
-  control?: { terminate?: boolean };
-} {
+export function toDurableResult(result: ToolResult): Omit<ToolExecutionResult, "output"> & { output: ToolResult["content"] } {
   const content = (result.content ?? []).filter((c) => c.type !== "text" || c.text.trim() !== "");
   if (result.isError) {
     return {
@@ -49,9 +45,9 @@ export function toDurableResult(result: ToolResult): {
   // A card result carries the card in details (see engine/cards.ts) and always terminates the run.
   if (result.card) {
     const raised = cardResult(result.card, content.map((c) => c.text).join("\n") || undefined);
-    return { output: raised.output, details: raised.details, control: raised.control };
+    return raised;
   }
-  return { output: content, ...(result.control ? { control: result.control } : {}) };
+  return { output: content };
 }
 
 interface AdapterConfig {

@@ -185,7 +185,13 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     return;
   }
   const m = messageFromEntry(entry, now);
-  if (m) list.push(m);
+  if (m) {
+    // A plain user message supersedes every card still waiting: they are skipped, not answerable.
+    if (m.role === "user") {
+      for (const msg of list) for (const call of msg.tools ?? []) if (call.card && !call.answer) call.dismissed = true;
+    }
+    list.push(m);
+  }
 }
 
 /** Every object in the list by id (one entry per id by construction). */

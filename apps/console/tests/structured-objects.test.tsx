@@ -33,6 +33,7 @@ const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
 const { lookupCard } = await import("../components/card-registry.tsx");
 const { DecisionCard } = await import("../components/decision-card.tsx");
+const { ChecklistCard } = await import("../components/checklist-card.tsx");
 const { SessionModel } = await import("../components/session-core.ts");
 const { threadTransport } = await import("../components/thread-transport.ts");
 const { renderItems, threadMessagesToNative, collapseObjects } = await import("../src/core/index.ts");
@@ -293,5 +294,56 @@ describe("hidden rows, empty shells, collapse", () => {
 		assert.equal(ms[0]!.parts[0], firstPart);
 		assert.equal((firstPart as { rev?: number }).rev, 3);
 		assert.deepEqual(ms[1]!.parts.map((p) => p.type), ["text"]);
+	});
+});
+
+describe("checklist card", () => {
+	const items = (a: string, b: string, c: string) => [
+		{ id: "a", label: "Write", state: a },
+		{ id: "b", label: "Test", state: b, note: "vitest" },
+		{ id: "c", label: "Ship", state: c },
+	];
+	const c1 = { title: "Plan", items: items("doing", "todo", "todo") };
+	const c2 = { title: "Plan", items: items("done", "doing", "skipped") };
+	const clCards = () => [...document.querySelectorAll('[data-testid="checklist-card"]')];
+	const states = (card: Element) => [...card.querySelectorAll('[data-testid="checklist-item"]')].map((i) => i.getAttribute("data-state"));
+
+	it("is registered under kind object", () => {
+		assert.equal(lookupCard("object", "checklist")?.Renderer, ChecklistCard);
+	});
+
+	it("renders items, state icons, derived progress; no marker at rev 1; marker on revision", () => {
+		const html1 = renderToStaticMarkup(<ChecklistCard objectId="cl" type="checklist" rev={1} data={c1} />);
+		assert.match(html1, /0\/3/);
+		assert.match(html1, /aria-valuenow="0"/);
+		assert.match(html1, /vitest/);
+		assert.doesNotMatch(html1, /updated/);
+		const html2 = renderToStaticMarkup(<ChecklistCard objectId="cl" type="checklist" rev={3} data={c2} />);
+		assert.match(html2, /1\/3/);
+		assert.match(html2, /updated 2 times/);
+		assert.equal(renderToStaticMarkup(<ChecklistCard objectId="x" type="checklist" rev={1} data={{ items: [] }} />), "");
+	});
+
+	const upsert = (rev: number, data: unknown, id = "cl") => ev({ type: "object-upsert", objectId: id, objectType: "checklist", rev, data, textOffset: 0 });
+
+	it("live revision ticks the same card in place (one card, rev 2, hidden tool rows)", async () => {
+		const model = liveModel([ev({ type: "turn-start" }), ev({ type: "tool-start", callId: "k1", name: "show_checklist", args: { objectId: "cl", ...c1 } }), upsert(1, c1), ev({ type: "tool-end", callId: "k1", result: "ok", isError: false }), ev({ type: "tool-start", callId: "k2", name: "show_checklist", args: { objectId: "cl", ...c2 } }), upsert(2, c2), ev({ type: "tool-end", callId: "k2", result: "ok", isError: false }), ev({ type: "turn-end", reason: "complete" })]);
+		const ms = view(model);
+		assert.deepEqual(objectParts(ms).map((p) => [p.objectId, p.rev]), [["cl", 2]]);
+		assert.ok(!kinds(ms).includes("tool"));
+	});
+
+	it("reload: history object renders the latest rev with progress and marker", async () => {
+		const h: ThreadMessage[] = [history[0]!, { id: "a", role: "assistant", text: "", at: base.at, objects: [{ objectId: "cl", type: "checklist", rev: 2, data: c2, textOffset: 0 }] }];
+		await mount(threadMessagesToNative(h));
+		assert.equal(clCards().length, 1);
+		assert.deepEqual(states(clCards()[0]!), ["done", "doing", "skipped"]);
+		assert.match(clCards()[0]!.textContent ?? "", /1\/3/);
+		assert.match(clCards()[0]!.querySelector('[data-testid="object-updated"]')?.textContent ?? "", /updated 1 time/);
+	});
+
+	it("invalid checklist data (duplicate ids) yields no object", () => {
+		const dup = { items: [{ id: "a", label: "A", state: "todo" }, { id: "a", label: "B", state: "done" }] };
+		assert.equal(objectParts(view(liveModel([ev({ type: "turn-start" }), upsert(1, dup), ev({ type: "turn-end", reason: "complete" })]))).length, 0);
 	});
 });

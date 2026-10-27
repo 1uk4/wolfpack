@@ -47,6 +47,7 @@ export function toDurableResult(result: ToolResult): Omit<ToolExecutionResult, "
     const raised = cardResult(result.card, content.map((c) => c.text).join("\n") || undefined);
     return raised;
   }
+  if (result.endTurn) return { output: content, control: { terminate: true } };
   return { output: content };
 }
 

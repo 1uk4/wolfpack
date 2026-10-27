@@ -42,6 +42,11 @@ export interface ToolResult {
    * `content` is the model-facing placeholder for this call. A tool that sets `card` should declare `raisesCard`.
    */
   card?: Card;
+  /**
+   * End the round after this result without raising a card (e.g. a card tool pointing at the card already pending, so a
+   * duplicate call does not let the model run on). A card result always ends the turn; this is for the card-less ones.
+   */
+  endTurn?: boolean;
 }
 
 export interface Tool {

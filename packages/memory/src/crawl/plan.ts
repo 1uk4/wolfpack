@@ -159,13 +159,19 @@ export function planCrawl(opts: PlanCrawlOptions): PlanCrawlResult {
   for (const f of dated) hist[f.dateInfo.basis] = (hist[f.dateInfo.basis] ?? 0) + 1;
   sink.log(`date basis: ${JSON.stringify(hist)}`);
 
-  const plan = buildPlan(dated, {
+  const built = buildPlan(dated, {
     strategy: opts.strategy,
     domain: opts.domain,
     source: opts.source,
     currency: opts.currency,
     folderDepth: opts.folderDepth,
   });
+  // Persist the scope the plan was drawn from, so a later re-discovery (preview, validate, run) sees the same files.
+  const plan: CrawlPlan = {
+    ...built,
+    ...(opts.include?.length ? { include: opts.include } : {}),
+    ...(opts.exclude?.length ? { exclude: opts.exclude } : {}),
+  };
 
   writePlan(join(sink.dir, "plan.yaml"), plan);
   const summary = renderPlanSummary(plan, files);

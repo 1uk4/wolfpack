@@ -80,6 +80,7 @@ import {
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, Key, matchesKey } from "@earendil-works/pi-tui";
+import { buildCrawlDirective, canInterview as crawlCanInterview } from "./crawl-interview.ts";
 import { wizardSingleChoice, type WizardOption } from "./crawl-wizard.ts";
 import { statSync as fsStatSync } from "node:fs";
 import * as path from "node:path";
@@ -2190,8 +2191,13 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // A questionnaire can ask for the source directory itself, so a bare
       // `/wolf:crawl` is fine when we can interview. Only the deterministic
       // draft path (explicit --draft, or headless/busy) needs a path up front.
-      const canInterview =
-        !draftOnly && ctx.hasUI && (ctx.isIdle ? ctx.isIdle() : true);
+      // pi has no card-raising ask_user_question (askCards: false): it needs an idle TUI. See crawl-interview.ts.
+      const canInterview = crawlCanInterview({
+        draftOnly,
+        hasUI: !!ctx.hasUI,
+        idle: ctx.isIdle ? ctx.isIdle() : true,
+        askCards: false,
+      });
       if (!src && !canInterview) {
         if (ctx.hasUI)
           ctx.ui.notify(
@@ -2224,48 +2230,18 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       // Questionnaire: hand the agent a directive so it interviews the user with
       // the ask_user_question tool, then drafts the plan from their answers.
       const declared = declaredDomains();
-      const domainList =
-        declared && declared.size
-          ? [...declared].join(", ")
-          : `(none declared; default "${defaultDomain}")`;
       const hints: string[] = [];
       if (parts[1]) hints.push(`domain=${parts[1]}`);
       if (parts[2]) hints.push(`strategy=${parts[2]}`);
       if (parts[3]) hints.push(`depth=${parts[3]}`);
-      const hintLine = hints.length
-        ? `\nThe user pre-filled some defaults (treat as suggested answers, still confirm): ${hints.join(", ")}.`
-        : "";
-
-      const cwd = process.cwd();
-      const srcLine = src
-        ? `The source directory is \`${src}\`.`
-        : `The user did not specify a source directory. Make question 0 ` +
-          `"Which directory should I crawl?" a single-select whose first option is ` +
-          `the current working directory, labelled "${cwd} (Recommended)"; the user ` +
-          `can pick "Other" to type a different path. Confirm the chosen path exists ` +
-          `before continuing.`;
-      const planPathNote = src ? `path=\`${src}\`` : `path set to the directory from question 0`;
-
-      const directive =
-        `Run a short crawl-planning questionnaire. ${srcLine}\n\n` +
-        `Use the ask_user_question tool to gather the plan parameters. Ask exactly ONE ` +
-        `question per tool call, in this order, skipping any the user already pinned:\n` +
-        `1. Target KB domain. Offer options: ${domainList}.\n` +
-        `2. Grouping strategy — options: "by-folder" (Recommended), "by-pattern".\n` +
-        `3. If by-folder: folder depth (how many path segments to group on) — ` +
-        `offer 1, 2, 3; let them pick "Other" for a custom number.\n` +
-        `4. Scope confirmation: anything to include/exclude, or crawl the whole tree.\n\n` +
-        `Then call crawl_plan with ${planPathNote} plus the chosen domain/strategy/depth, ` +
-        `and call crawl_preview. Show the user a clear summary of the resulting batches — ` +
-        `one line per batch with its topic and file count, plus the totals (batch count, ` +
-        `files matched/skipped).\n\n` +
-        `Finally, use ask_user_question to ask "Does this plan look good?" with options ` +
-        `"Looks good — add to plan" (Recommended) and "Edit it".\n` +
-        `  • If they approve: call crawl_finalize to stamp the plan 'status: ready', then ` +
-        `tell them to run /wolf:crawl-run.\n` +
-        `  • If they want to edit: ask what to change, adjust (re-ask a question or change ` +
-        `domain/strategy/depth/scope), re-run crawl_plan + crawl_preview, and ask for ` +
-        `approval again. Do NOT run the crawl yourself.${hintLine}`;
+      const directive = buildCrawlDirective({
+        src,
+        cwd: process.cwd(),
+        domains: declared ? [...declared] : null,
+        defaultDomain,
+        hints,
+        cards: false,
+      });
 
       if (ctx.hasUI)
         ctx.ui.notify(

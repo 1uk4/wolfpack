@@ -351,6 +351,8 @@ export const ThreadObjectSchema = z.object({
   /** 1 for the first upsert of `objectId` in the thread, +1 per revision. */
   rev: z.number().int().positive(),
   data: z.unknown(),
+  /** History only: ordinal (1-based, per thread) of this object's LATEST upsert; orders objects by recency across reloads. */
+  seq: z.number().int().positive().optional(),
   /** History only: length of the message's `text` when the object first appeared (interleaves it with the text). */
   textOffset: z.number().int().nonnegative().optional(),
 });

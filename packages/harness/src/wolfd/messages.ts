@@ -161,9 +161,11 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       const obj = first && !call.isError ? objectFromCall(call.name, callFullArgs.get(call)) : undefined;
       if (obj) {
         // A revision replaces the object where it first appeared (latest rev wins); a new id lands with its call.
-        const prior = objectsById(list).get(obj.objectId);
-        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1 });
-        else (list[i].objects ??= []).push({ ...obj, rev: 1, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
+        const byId = objectsById(list);
+        const seq = Math.max(0, ...[...byId.values()].map((o) => o.seq ?? 0)) + 1; // this upsert's thread-wide ordinal
+        const prior = byId.get(obj.objectId);
+        if (prior) Object.assign(prior, { type: obj.type, data: obj.data, rev: prior.rev + 1, seq });
+        else (list[i].objects ??= []).push({ ...obj, rev: 1, seq, ...(call.textOffset !== undefined ? { textOffset: call.textOffset } : {}) });
       }
       const card = cardOfToolMessage(entry.model?.[0]);
       if (card) call.card = card;

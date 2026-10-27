@@ -8,6 +8,7 @@
  * round (empty thinking + an unregistered tool call) was a bare divider.
  */
 
+import { isObjectPart } from "./objects.ts";
 import type { LhViewPart } from "./view.ts";
 
 export type ToolStatus = "running" | "done" | "error" | "pending";
@@ -99,6 +100,7 @@ export type RenderItem =
 	| { kind: "reasoning"; part: LhViewPart; index: number }
 	| { kind: "tool"; entry: ToolEntry; part: LhViewPart; index: number; key: string }
 	| { kind: "group"; entries: ToolEntry[]; items: ToolItem[]; index: number; key: string }
+	| { kind: "object"; part: LhViewPart; index: number }
 	| { kind: "separator"; index: number };
 
 export type ToolItem = Extract<RenderItem, { kind: "tool" }>;
@@ -145,6 +147,9 @@ export function renderItems(parts: readonly LhViewPart[], streaming: boolean): R
 		else if (part.type === "reasoning") {
 			const placeholder = streaming && index === parts.length - 1;
 			if (!isEmptyThinking(part) || placeholder) item = { kind: "reasoning", part, index };
+		} else if (isObjectPart(part)) {
+			// Object tools render as cards (components/card-registry, kind "object"), never as tool rows.
+			item = { kind: "object", part, index };
 		} else if (isToolPart(part)) {
 			const entry = toolEntryOf(part);
 			// React key: the callId, made unique when a record repeats one.

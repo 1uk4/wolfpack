@@ -147,6 +147,10 @@ export class ThreadEventAdapter {
 				return []; // the call stays input-streaming; output lands with tool-end
 			case "tool-end":
 				return this.endTool(ev, at);
+			case "object-upsert":
+				// Objects render from their tool call (src/core/objects.ts folds it to the same rev); the event
+				// stays in the log and needs no wire event of its own.
+				return [];
 			case "turn-end":
 				return this.endTurn(ev.reason, at);
 			case "error":

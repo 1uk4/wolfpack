@@ -1,13 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState, type ComponentType } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
-import { lookupCard } from "@/components/card-registry";
+import { lookupCard, type ObjectCardProps } from "@/components/card-registry";
 import { Separator } from "@/components/ui/separator";
 import { MemoryPanel } from "@/components/memory-panel";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -16,7 +16,7 @@ import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { threadTransport } from "@/components/thread-transport";
 import { TopBar } from "@/components/top-bar";
-import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
+import { ASSISTANT_CONTENT_CLASS, PROSE_BLOCK_CLASS, foldObjects, objectOfPart, renderItems, runOpen, type ArtifactPartProps, type LhMessage, type ToolItem } from "@/src/core";
 
 const COLUMN = "mx-auto w-full max-w-none px-6";
 const DOCK = "mx-auto w-full max-w-[46rem] px-4";
@@ -116,6 +116,8 @@ export function ThreadChat({
 		(key: string) => (open: boolean) => setOpenRows((prev) => (prev[key] === open ? prev : { ...prev, [key]: open })),
 		[],
 	);
+	// Structured objects fold across the whole thread: latest rev, rendered at the first call's position.
+	const objects = useMemo(() => foldObjects(messages), [messages]);
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 
@@ -213,6 +215,13 @@ export function ThreadChat({
 																		text={item.part.text ?? ""}
 																	/>
 																);
+															case "object": {
+																const o = objectOfPart(item.part);
+																const folded = o && objects.get(o.objectId);
+																if (!folded || folded.at !== `${mi}:${item.index}`) return null;
+																const Card = lookupCard("object", folded.type)?.Renderer as ComponentType<ObjectCardProps> | undefined;
+																return Card ? <Card key={`obj-${folded.objectId}`} objectId={folded.objectId} type={folded.type} rev={folded.rev} data={folded.data} /> : null;
+															}
 															case "separator":
 																return <Separator key={`sep-${item.index}`} className="my-3" />;
 															case "tool":

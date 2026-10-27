@@ -39,7 +39,11 @@ const lastUser = (c: Ctx): string => {
   return typeof u?.content === "string" ? u.content : JSON.stringify(u?.content);
 };
 /** The answer to field `label` in the submission text ("- Label: value"). */
-const answerTo = (submission: string, label: string): string | undefined => new RegExp(`^- ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "m").exec(submission)?.[1];
+/** The answer text for a question; a single-choice answer renders `Label (value)` / `other: "text"`, unwrapped to the value. */
+const answerTo = (submission: string, label: string): string | undefined => {
+  const raw = new RegExp(`^- ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "m").exec(submission)?.[1];
+  return raw?.replace(/^other: "(.*)"$/, "$1").replace(/^.* \((.*)\)$/, "$1");
+};
 const lastToolResult = (c: Ctx): string => JSON.stringify(c.messages.filter((m) => m.role === "toolResult").at(-1)?.content);
 
 async function boot(script: Parameters<typeof createScriptedModel>[0]) {

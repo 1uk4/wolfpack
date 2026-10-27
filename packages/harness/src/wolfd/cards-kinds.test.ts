@@ -65,7 +65,7 @@ describe("card field kind validation (pure)", () => {
     bad(MULTI, { m: { value: true } }, /list of strings/);
     bad(MULTI, { m: { value: ["a", "x"], other: ["x"] } }, /does not accept custom/); // allowOther unset
     ok(MULTI_OTHER, { m: { value: ["a", "x"], other: ["x"] } });
-    ok(MULTI_OTHER, { m: { value: [] } });
+    bad(MULTI_OTHER, { m: { value: [] } }, /at least 1/); // a required multi needs a pick, with or without min
     bad(MULTI_OTHER, { m: { value: ["x"] } }, /not an option/); // custom entry not declared in `other`
     bad(MULTI_OTHER, { m: { value: ["a"], other: ["x"] } }, /not among the picked/);
     bad(MULTI_OTHER, { m: { value: ["  "], other: ["  "] } }, /cannot be empty/);

@@ -194,3 +194,14 @@ describe("un-picking optional single / confirm", () => {
 		assert.equal(q('[data-testid="card-confirm"]')!.getAttribute("aria-pressed"), "true");
 	});
 });
+
+describe("required multi", () => {
+	it("needs at least one pick without a min; optional may stay blank", async () => {
+		await mount({ tool: "x", fields: [{ id: "m", kind: "multi", label: "M?", options: opt }] });
+		assert.ok(isDisabled(submitBtn()));
+		await pick("a");
+		assert.ok(!isDisabled(submitBtn()));
+		await pick("a");
+		assert.ok(isDisabled(submitBtn()));
+	});
+});

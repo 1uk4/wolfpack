@@ -63,3 +63,20 @@ describe("optional confirm", () => {
     expect(validateAnswers(card(), { ...answers, ok: { value: "" as unknown as boolean } })).toMatch(/true or false/);
   });
 });
+
+describe("single answer format and required multi", () => {
+  const single = CardSchema.parse({ tool: "t", fields: [{ id: "s", kind: "single", label: "S?", options: [{ label: "Alpha", value: "a" }, { label: "same", value: "same" }, { label: "C, d", value: "c" }] }] });
+  const text = (a: CardAnswers) => answerText([{ callId: "c", card: single, answers: a }]);
+  it("renders Label (value), bare when equal, quoted when ambiguous, other: for a custom entry", () => {
+    expect(text({ s: { value: "a" } })).toContain("- S?: Alpha (a)");
+    expect(text({ s: { value: "same" } })).toContain("- S?: same");
+    expect(text({ s: { value: "c" } })).toContain('- S?: "C, d (c)"');
+    expect(text({ s: { value: "my own", other: true } })).toContain('- S?: other: "my own"');
+  });
+  it("a required multi without min needs one pick; an optional one may be blank", () => {
+    const m = (optional: boolean) => CardSchema.parse({ tool: "t", fields: [{ id: "m", kind: "multi", label: "M?", options: opts, ...(optional ? { optional } : {}) }] });
+    expect(validateAnswers(m(false), { m: { value: [] } })).toMatch(/at least 1/);
+    expect(validateAnswers(m(false), { m: { value: ["a"] } })).toBeUndefined();
+    expect(validateAnswers(m(true), { m: { value: [] } })).toBeUndefined();
+  });
+});

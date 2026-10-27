@@ -121,7 +121,7 @@ function isSkipped(field: Card["fields"][number], a: CardFieldAnswer | undefined
 /** Quote an entry when it would blur the comma-separated list. */
 const listSafe = (text: string): string => (/[,"]/.test(text) ? JSON.stringify(text) : text);
 
-/** One picked entry of a multi answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
+/** One picked entry of a multi or single answer: `Label (value)` (just `Label` when equal), or `other: "text"` for a custom one. */
 function multiEntry(options: readonly CardOption[], value: string, custom: boolean): string {
   if (custom) return `other: ${JSON.stringify(value)}`;
   const o = options.find((x) => x.value === value);
@@ -146,7 +146,12 @@ export function answerValue(field: Card["fields"][number], a: CardFieldAnswer | 
     return a.value.map((v) => multiEntry(field.options, v, custom.includes(v))).join(", ");
   }
   if (typeof a.value !== "string") return "(no answer)";
-  return a.value.trim() === "" ? EMPTY : a.value;
+  if (a.value.trim() === "") return EMPTY;
+  if (field.kind === "single") {
+    if ("other" in a && a.other === true) return `other: ${JSON.stringify(a.value)}`;
+    return multiEntry(field.options, a.value, false);
+  }
+  return a.value;
 }
 
 /** The model-facing user message for an answer submission: every card's questions with their answers, in raise order. */
@@ -187,7 +192,9 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
       for (const v of a.value) {
         if (!other.includes(v) && !f.options.some((o) => o.value === v)) return `"${v}" is not an option of field "${id}"`;
       }
-      if (f.min !== undefined && a.value.length < f.min) return `field "${id}": pick at least ${f.min}`;
+      // A required multi needs at least one pick, whatever its min (an optional one may be blank, which never reaches here).
+      const min = Math.max(f.min ?? 0, f.optional ? 0 : 1);
+      if (min > 0 && a.value.length < min) return `field "${id}": pick at least ${min}`;
       if (f.max !== undefined && a.value.length > f.max) return `field "${id}": pick at most ${f.max}`;
       return undefined;
     }

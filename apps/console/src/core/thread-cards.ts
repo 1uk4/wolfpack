@@ -89,9 +89,13 @@ export function initialDraft(card: Card, held?: CardAnswers): CardDraft {
 	return draft;
 }
 
-/** Whether a multi field's pick count is within its bounds. */
+/**
+ * Whether a multi field's pick count is within its bounds. A required multi needs at least one pick (an explicit `min`
+ * applies on top; `min: 0` counts as 1); an optional one may be blank, and once something is picked min/max apply.
+ */
 export function multiInBounds(f: Extract<Card["fields"][number], { kind: "multi" }>, count: number): boolean {
-	return count >= (f.min ?? 0) && count <= (f.max ?? Infinity);
+	if (f.optional && count === 0) return true;
+	return count >= Math.max(f.min ?? 0, f.optional ? 0 : 1) && count <= (f.max ?? Infinity);
 }
 
 /**

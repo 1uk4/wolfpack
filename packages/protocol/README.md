@@ -124,6 +124,11 @@ or a `confirm` with a boolean `equals`). Both are optional; consoles that ignore
 (with a debug log) any answer sent for a field its `showIf` hides, so an older console that renders every field still
 works. The model sees only visible fields' answers; the stored answer holds only those too.
 
+## Required means non-blank
+
+A required field must be non-blank, whatever its kind: free-text/single non-empty, confirm answered, and a `multi` needs
+at least one pick (`min` applies on top; `min: 0` on a required multi counts as 1). An optional field may be blank.
+
 ## Optional fields
 
 A field may set `optional: true` (additive; absent = required). The operator can leave it blank and still submit.

@@ -45,7 +45,8 @@ second pillar of input).
 | Action | Binding | Seam |
 |---|---|---|
 | Toggle dictation | ⌘D | `lh:kbd-toggle-dictation` (dictation.tsx) |
-| Model selector | ⌘K | `lh:kbd-open-model-picker` (model-picker.tsx) |
+| Command palette | ⌘K | `lh:kbd-open-palette` (command-palette.tsx) |
+| Model selector | ⌘⇧M | `lh:kbd-open-model-picker` (model-picker.tsx); also the palette's "Switch model" command |
 | Cycle thinking level | Shift+Tab | `lh:kbd-cycle-thinking` (model-picker.tsx) |
 | Toggle sidebar | ⌘B | `lh:toggle-sidebar` (sidebar.tsx) |
 | Sessions search | ⌘⇧F | `lh:kbd-sessions-search` (sidebar.tsx) |

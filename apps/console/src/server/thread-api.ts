@@ -253,6 +253,17 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** A subagent thread's ledger (`{entries}`), oldest first. */
+		async ledger(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getLedger) return json({ error: "this wolf has no subagent ledger" }, 501);
+				return json({ entries: await client.getLedger(await resolve(client, ref)) });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async abort(ref: ThreadRef): Promise<Response> {
 			try {
 				const client = source();

@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, BotIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryPanel } from "@/components/memory-panel";
+import { SubagentPanel } from "@/components/subagent-panel";
 import { MEMORY_PANEL_OPEN_KEY, RIGHT_PANEL_KEY, parseOpen, parseSelections, resolveSelected, serializeOpen, serializeSelections, withSelection } from "@/src/core";
 
 export type PanelProps = Record<string, unknown>;
@@ -27,15 +28,6 @@ export interface PanelDef {
 	testId?: string;
 }
 
-/** Placeholder until ticket 3 brings the child transcript; unavailable (hidden) for now. */
-export function SubagentPanel({ childThreadId }: { childThreadId: string }) {
-	return (
-		<div className="p-3 text-xs text-muted-foreground" data-testid="subagent-panel" data-child={childThreadId}>
-			Subagent {childThreadId}
-		</div>
-	);
-}
-
 export const PANELS: readonly PanelDef[] = [
 	{
 		id: "memory",
@@ -49,8 +41,8 @@ export const PANELS: readonly PanelDef[] = [
 		id: "subagent",
 		label: "Subagent",
 		icon: BotIcon,
-		available: () => false,
-		render: ({ props }) => <SubagentPanel childThreadId={String(props.childThreadId ?? "")} />,
+		available: ({ props }) => typeof props.childThreadId === "string" && props.childThreadId !== "",
+		render: ({ wolf, props }) => <SubagentPanel key={String(props.childThreadId)} wolf={wolf} childThreadId={String(props.childThreadId)} />,
 	},
 ];
 

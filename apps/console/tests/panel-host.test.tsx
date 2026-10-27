@@ -100,12 +100,13 @@ const click = (el: Element) => act(async () => void el.dispatchEvent(new dom.win
 const tabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
 
 describe("panel host", () => {
-	it("the default registry puts Memory first and keeps Subagent hidden", async () => {
+	it("the default registry puts Memory first and hides Subagent until a child is chosen", async () => {
 		assert.deepEqual(PANELS.map((p) => p.id), ["memory", "subagent"]);
 		await mount(PANELS);
 		assert.deepEqual(tabs(), ["Status"]);
 		assert.equal(q('[data-testid="panel-host"]')!.getAttribute("data-panel"), "memory");
-		assert.equal(api.openPanel("subagent", { childThreadId: "c1" }), false);
+		assert.equal(api.openPanel("subagent"), false);
+		assert.equal(api.openPanel("subagent", { childThreadId: "" }), false);
 		assert.equal(q('[data-testid="subagent-panel"]'), null);
 		assert.equal(state.selected, "memory");
 	});

@@ -98,7 +98,7 @@ export function threadMessagesToNative(messages: readonly ThreadMessage[]): LhMe
 				...group.map((g) =>
 					"tool" in g
 						? ({ type: "toolCall", id: g.tool.callId, name: g.tool.name, arguments: g.tool.args ?? {} } as Block)
-						: ({ type: "object", objectId: g.object.objectId, objectType: g.object.type, rev: g.object.rev, data: g.object.data } as unknown as Block),
+						: ({ type: "object", objectId: g.object.objectId, objectType: g.object.type, rev: g.object.rev, data: g.object.data, upsertSeq: g.object.seq } as unknown as Block),
 				),
 			];
 			out.push({ id: step === 0 ? m.id : `${m.id}-s${step}`, ...assistantShell(content, timestamp, "toolUse") } as LhMessage);

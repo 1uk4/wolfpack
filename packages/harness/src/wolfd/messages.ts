@@ -19,7 +19,8 @@
  */
 import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
-import { answerValue, stripSupersededNotes } from "./cards.js";
+import { answerValue } from "./cards.js";
+import { stripSupersededNotes, type SupersededCard } from "../superseded-note.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
 
@@ -39,7 +40,6 @@ export function messageFromEntry(entry: Entry, now: () => Date = () => new Date(
       .join("");
   }
   if (role === "assistant" && text === "") return undefined;
-  if (role === "user") text = stripSupersededNotes(text);
   const at = typeof msg.timestamp === "number" ? new Date(msg.timestamp) : now();
   return { id: `entry-${entry.id}`, role, text, at: at.toISOString() };
 }
@@ -206,9 +206,16 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
     // A plain user message supersedes every card still waiting: they are skipped, not answerable.
     if (m.role === "user") {
       // Only messages after the previous user message can hold cards still waiting (earlier ones were dismissed then).
+      const replaced: SupersededCard[] = [];
       for (let i = list.length - 1; i >= 0 && list[i].role !== "user"; i--) {
-        for (const call of list[i].tools ?? []) if (call.card && !call.answer && !call.closed) Object.assign(call, { dismissed: true, closed: "superseded" });
+        for (const call of list[i].tools ?? []) {
+          if (!call.card || call.answer || call.closed) continue;
+          Object.assign(call, { dismissed: true, closed: "superseded" });
+          replaced.push({ tool: call.card.tool, callId: call.callId });
+        }
       }
+      // wolfd put a note for exactly these cards at the head of the message (server.ts submit): the operator sees what they typed.
+      if (replaced.length) m.text = stripSupersededNotes(m.text, replaced);
     }
     list.push(m);
   }

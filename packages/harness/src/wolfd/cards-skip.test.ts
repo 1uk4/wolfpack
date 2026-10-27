@@ -1,4 +1,5 @@
 /** Skip / supersede over /v1: real pi-durable turns, scripted model (no LLM). */
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NotFoundError } from "@wolfpack/client";
 import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
@@ -137,12 +138,49 @@ describe("superseded by a plain message", () => {
   });
 });
 
+describe("superseding message with an attachment", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 1, 2, 3, 4]);
+
+  it("the model sees note + text + [Attached image]; history strips only the note", async () => {
+    let parts: { type: string; text?: string }[] = [];
+    tw = await wolf([
+      toolUse(fauxToolCall("ask_user_question", { question: "Q" })),
+      (context) => {
+        const u = (context as { messages: { role: string; content: unknown }[] }).messages.filter((m) => m.role === "user").at(-1)!;
+        parts = u.content as typeof parts;
+        return fauxAssistantMessage("seen");
+      },
+    ]);
+    await tw.submit("go");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    const att = await tw.client.uploadAttachment(tw.home, PNG, { mimeType: "image/png", name: "shot.png" });
+    await tw.client.submit(tw.home, "look at this", { whenBusy: "reject", attachments: [{ id: att.id }] });
+    await drain(tw);
+    const path = join(tw.wolf.config.den, "attachments", "testwolf", "home", `${att.id}.png`);
+    const note = `(Your pending ask_user_question question (call ${p.callId}) was superseded by this message.)`;
+    expect(parts[0]).toEqual({ type: "text", text: `${note}\n\nlook at this\n\n[Attached image: ${path}]` });
+    const d = await tw.client.getThread(tw.home);
+    expect(d.messages.filter((m) => m.role === "user").map((m) => m.text)).toEqual(["go", `look at this\n\n[Attached image: ${path}]`]);
+    expect(d.messages.filter((m) => m.role === "user").at(-1)!.attachments).toHaveLength(1);
+  });
+
+  it("a user who types a note-like line with no card superseded keeps it", async () => {
+    tw = await wolf([fauxAssistantMessage("ok")]);
+    const typed = "(Your pending ask_user_question question (call x) was superseded by this message.)\n\nhi";
+    await tw.submit(typed);
+    expect((await tw.client.getThread(tw.home)).messages[0].text).toBe(typed);
+  });
+});
+
 describe("unit", () => {
   it("answerText / superseded notes round-trip", () => {
     const card = { tool: "t", fields: [{ id: "a", kind: "free-text" as const, label: "A" }] };
     expect(answerText([{ callId: "c1", card, answers: {}, skipped: true }])).toBe("The user skipped your t question (call c1).");
-    const notes = supersededNotes([{ callId: "c1", threadId: "x", card, raisedAt: "now" }, { callId: "c2", threadId: "x", card, raisedAt: "now" }]);
+    const notes = supersededNotes([{ callId: "c1", tool: "t" }, { callId: "c2", tool: "t" }]);
     expect(stripSupersededNotes(`${notes}hello\n\nworld`)).toBe("hello\n\nworld");
+    expect(stripSupersededNotes(`${notes}hello`, [{ callId: "c1", tool: "t" }, { callId: "c2", tool: "t" }])).toBe("hello");
+    // exact: a note for a card that was not superseded (typed by the user) stays
+    expect(stripSupersededNotes(`${notes}hello`, [{ callId: "c9", tool: "t" }])).toBe(`${notes}hello`);
     expect(stripSupersededNotes("plain")).toBe("plain");
     expect(supersededNotes([])).toBe("");
   });

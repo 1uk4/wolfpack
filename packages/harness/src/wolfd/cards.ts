@@ -199,20 +199,7 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
   return lines.join("\n");
 }
 
-/**
- * A note per pending card a plain message replaced, for the head of that message. Marked so the history strips it
- * again (`stripSupersededNotes`): the operator sees only what they typed.
- */
-export function supersededNotes(pending: readonly PendingCard[]): string {
-  return pending.map((p) => `(Your pending ${p.card.tool} question (call ${p.callId}) was superseded by this message.)\n`).join("") + (pending.length ? "\n" : "");
-}
-
-const SUPERSEDED_NOTE = /^(?:\(Your pending [^\n]*? question \(call [^\n]*?\) was superseded by this message\.\)\n)+\n/;
-
-/** The user's message without the superseded notes `supersededNotes` put at its head. */
-export function stripSupersededNotes(text: string): string {
-  return text.replace(SUPERSEDED_NOTE, "");
-}
+export { stripSupersededNotes, supersededNotes } from "../superseded-note.js";
 
 function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | undefined {
   const id = f.id;

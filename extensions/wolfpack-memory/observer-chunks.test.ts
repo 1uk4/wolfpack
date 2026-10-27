@@ -75,4 +75,10 @@ describe("seedWatermark", () => {
     expect(text).toContain("hello");
     expect(text).not.toMatch(/crawl_status|How many batches/);
   });
+
+  it("a superseded-card note at the head of a user message is not recorded", () => {
+    const note = "(Your pending ask_user_question question (call c1) was superseded by this message.)\n\n";
+    const out = newObserverChunks([m(5, "user", `${note}do X instead`)], { content: [] }, { lastEntryId: 4 }, true)!;
+    expect(textOf(out)).toBe("[user] do X instead");
+  });
 });

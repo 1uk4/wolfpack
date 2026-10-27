@@ -736,7 +736,8 @@ export class WolfServer {
   private async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
     const before = this.turnStarts;
     // The model is told which pending cards this message replaces (the history strips the note again).
-    text = supersededNotes(this.cards.pending()) + text;
+    // (Only when idle: a steer/followUp during a run finds nothing pending, the run's first message superseded them.)
+    if (!this.running) text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + text;
     let input: SubmitOptions["input"] = text;
     if (refs.length > 0) {
       if (!this.opts.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
@@ -784,7 +785,10 @@ export class WolfServer {
   /** Skip a pending card: the agent is told, and a skip counts as the card's resolution among its siblings. */
   private async skipCard(callId: string): Promise<SubmitAck> {
     if (this.running) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
-    if (!this.cards.get(callId)) throw new HttpError("not_found", `card ${callId}`);
+    const pending = this.cards.get(callId);
+    if (!pending) throw new HttpError("not_found", `card ${callId}`);
+    // A repeated skip of an already held-skipped card changes nothing: no second announcement.
+    if (pending.heldSkip) return { messageId: `card-${callId}`, disposition: "queued" };
     return this.resolveCard(callId, this.cards.skip(callId));
   }
 

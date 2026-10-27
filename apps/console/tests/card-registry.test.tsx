@@ -36,8 +36,10 @@ describe("card registry", () => {
 		for (const name of ["quiz", "ask_user_question", "explain"]) assert.notEqual(lookupCard("tool", name)?.threadRow, true, name);
 	});
 
-	it("duplicate registration throws", () => {
-		assert.throws(() => registerCard("tool", "read", { Renderer: ToolCallCard }), /already registered/);
+	it("re-registering the same renderer is a no-op; a different one throws", () => {
+		registerCard("tool", "read", { Renderer: ToolCallCard });
+		assert.equal(lookupCard("tool", "read")?.threadRow, true);
+		assert.throws(() => registerCard("tool", "read", { Renderer: () => null }), /already registered/);
 	});
 
 	it("kinds are separate namespaces", () => {

@@ -42,7 +42,7 @@ export type CardEntry = ToolCardEntry | ObjectCardEntry;
 export type CardKind = CardEntry["kind"];
 type EntryOf<K extends CardKind> = Extract<CardEntry, { kind: K }>;
 
-// Every registration lives in this file (or a barrel it imports): bundlers
+// Every registration lives in this file (or a barrel that imports it): bundlers
 // drop unreferenced self-registering modules, so a card registered from its
 // own module may silently never register.
 const cards = new Map<string, CardEntry>();
@@ -51,11 +51,18 @@ const slot = (kind: CardKind, key: string) => `${kind}:${key}`;
 
 export function registerCard<K extends CardKind>(kind: K, key: string, entry: Omit<EntryOf<K>, "kind">): void {
 	const id = slot(kind, key);
-	if (cards.has(id)) throw new Error(`card already registered: ${id}`);
+	const existing = cards.get(id);
+	if (existing?.Renderer === entry.Renderer) return;
+	if (existing) {
+		// Fast Refresh re-runs a registering module against the cached map with a
+		// fresh Renderer identity: newest wins in dev, a real clash throws elsewhere.
+		if (process.env.NODE_ENV !== "development") throw new Error(`card already registered: ${id}`);
+		console.warn(`card re-registered: ${id}`);
+	}
 	cards.set(id, { ...entry, kind } as CardEntry);
 }
 
-/** Test-only: drop a registration so tests don't leak into the global map. */
+/** @internal Test-only: drop a registration so tests don't leak into the global map. */
 export function unregisterCard(kind: CardKind, key: string): void {
 	cards.delete(slot(kind, key));
 }

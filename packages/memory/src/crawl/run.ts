@@ -50,8 +50,8 @@ export function datedByPath(plan: CrawlPlan, files: SourceFile[]): Map<string, D
 }
 
 /** The domain's published KB digest ("PACK ALREADY KNOWS"), if the KB has one. */
-export function loadPublishedDigest(domain: string): ContextDigest | undefined {
-  const kbBase = process.env.KB_BASE;
+export function loadPublishedDigest(domain: string, kbBaseOverride?: string): ContextDigest | undefined {
+  const kbBase = kbBaseOverride ?? process.env.KB_BASE;
   if (!kbBase) return undefined;
   const path = join(kbBase, "domains", domain, "_digest.json");
   if (!existsSync(path)) return undefined;
@@ -150,6 +150,12 @@ export interface RunCrawlOptions {
    * `emit` picks up everything. plan.yaml is left untouched in this mode.
    */
   runDir?: string;
+  /** Engine + model names to use instead of loading the table from process.env (hosts that resolved their own). */
+  engine?: { engine: Engine; fastModel: string; smartModel: string };
+  /** The published-digest / domain-context KB base, instead of process.env.KB_BASE. */
+  kbBase?: string;
+  /** Called once with the run dir as soon as it exists (before any batch work), so a caller can report where the run lives. */
+  onSink?: (dir: string) => void;
 }
 
 /**
@@ -196,6 +202,7 @@ export async function runCrawl(
   const sink = opts.runDir
     ? createSink("", opts.runDir)
     : createSink(`run-${Date.now()}`, opts.sinkBase);
+  opts.onSink?.(sink.dir);
   const onlyCount = opts.only?.length ?? 0;
   sink.log(
     `run start: plan=${planPath} domain=${plan.domain}` +
@@ -228,7 +235,7 @@ export async function runCrawl(
     `gate passed (declared-domain check ${declared ? "on" : "skipped (unconstrained)"})`
   );
 
-  const { engine, fastModel, smartModel } = createCrawlEngine();
+  const { engine, fastModel, smartModel } = opts.engine ?? createCrawlEngine();
   const byPath = datedByPath(plan, files);
 
   const limited =
@@ -252,9 +259,9 @@ export async function runCrawl(
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CRAWL_CONCURRENCY);
   const onProgress = opts.onProgress;
   const total = batchesToRun.length;
-  const published = loadPublishedDigest(limited.domain);
+  const published = loadPublishedDigest(limited.domain, opts.kbBase);
   const digest = createRunningDigest(limited.domain, published);
-  const domainContext = buildCrawlDomainContext(limited.domain, process.env.KB_BASE);
+  const domainContext = buildCrawlDomainContext(limited.domain, opts.kbBase ?? process.env.KB_BASE);
   sink.log(
     `run: ${total} batch(es), up to ${concurrency} at once ` +
       `(extract ${fastModel} → consolidate ${smartModel})` +

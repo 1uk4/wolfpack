@@ -52,5 +52,9 @@ export default function createWolfpackMemoryExtension(
     ],
 
     hooks: memoryExt.hooks, // Only memory has hooks (afterResponse)
+
+    // Only the crawl runs' teardown is forwarded (aborts in-flight crawl runs); the memory extension's own stop is not
+    // wired through this combiner today and is left as it was.
+    lifecycle: crawlExt.lifecycle,
   });
 }

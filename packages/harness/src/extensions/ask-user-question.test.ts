@@ -36,3 +36,34 @@ describe("askCard", () => {
     expect(r.card).toBeUndefined();
   });
 });
+
+describe("steps / showIf", () => {
+  const qs = [
+    { id: "src", question: "Source?" },
+    { id: "strat", question: "Strategy?", options: [{ label: "By folder", value: "by-folder" }, { label: "By pattern", value: "by-pattern" }] },
+    { id: "depth", question: "Depth?", options: [{ label: "1" }], showIf: { field: "strat", equals: "by-folder" } },
+  ];
+
+  it("builds a valid stepped card with a conditional field", () => {
+    const card = askCard({ questions: qs, steps: [{ title: "A", questions: ["src"] }, { questions: ["strat", "depth"] }] });
+    expect(CardSchema.safeParse(card).success).toBe(true);
+    expect(card.steps).toEqual([{ title: "A", fields: ["src"] }, { fields: ["strat", "depth"] }]);
+    expect(card.fields[2].showIf).toEqual({ field: "strat", equals: "by-folder" });
+  });
+
+  it("rejects bad showIf and step groupings with model-facing errors", () => {
+    expect(askProblem({ questions: [{ id: "a", question: "A", showIf: { field: "b", equals: "x" } }, { id: "b", question: "B" }] })).toMatch(/earlier question/);
+    expect(askProblem({ questions: [{ id: "a", question: "A" }, { id: "b", question: "B", showIf: { field: "a" } }] })).toMatch(/exactly one of/);
+    expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat"] }] })).toMatch(/exactly once/);
+    expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat", "depth", "nope"] }] })).toMatch(/unknown question id "nope"/);
+    expect(askProblem({ questions: qs, steps: [{ questions: ["strat", "src", "depth"] }] })).toMatch(/in their order/);
+    expect(askProblem({ questions: qs, steps: [{ questions: ["src", "strat", "depth"] }] })).toBeUndefined();
+    // showIf against the controller's kind
+    const opts = [{ label: "x" }];
+    expect(askProblem({ questions: [{ id: "c", question: "C", options: opts }, { id: "d", question: "D", showIf: { field: "c", equals: "nope" } }] })).toMatch(/not an option/);
+    expect(askProblem({ questions: [{ id: "c", question: "C" }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/cannot control/);
+    expect(askProblem({ questions: [{ id: "c", question: "C", kind: "confirm" }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/boolean/);
+    expect(askProblem({ questions: [{ id: "c", question: "C", kind: "confirm" }, { id: "d", question: "D", showIf: { field: "c", equals: true } }] })).toBeUndefined();
+    expect(askProblem({ questions: [{ id: "c", question: "C", options: opts, multiSelect: true }, { id: "d", question: "D", showIf: { field: "c", equals: "x" } }] })).toMatch(/cannot control/);
+  });
+});

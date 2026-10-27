@@ -3,7 +3,7 @@
  * ThreadChat renders — which calls raised a card, whether it was answered, and which cards still wait. PURE.
  */
 
-import type { Card, CardAnswers, CardFieldAnswer, PendingCard, ThreadDetail } from "@wolfpack/client";
+import type { Card, CardAnswers, CardField, CardFieldAnswer, PendingCard, ThreadDetail } from "@wolfpack/client";
 
 /** A tool call that raised a card: the card, and the operator's answer once given. */
 export interface CardCall {
@@ -94,21 +94,68 @@ export function multiInBounds(f: Extract<Card["fields"][number], { kind: "multi"
 	return count >= (f.min ?? 0) && count <= (f.max ?? Infinity);
 }
 
-/** Every field answered (text non-empty; a multi within min/max; a confirm picked). */
+/**
+ * The fields in play for these answers (mirror of the protocol's `visibleFields`; the console core stays free of runtime
+ * protocol imports): a field is hidden when its `showIf` fails or its controlling field is itself hidden.
+ */
+export function visibleFields(card: Card, answers: Readonly<Record<string, { value: unknown } | undefined>>): CardField[] {
+	const shown = new Set<string>();
+	const out: CardField[] = [];
+	for (const f of card.fields) {
+		const s = f.showIf;
+		if (s) {
+			if (!shown.has(s.field)) continue;
+			const v = answers[s.field]?.value;
+			if (s.equals !== undefined ? v !== s.equals : !(typeof v === "string" && (s.oneOf ?? []).includes(v))) continue;
+		}
+		shown.add(f.id);
+		out.push(f);
+	}
+	return out;
+}
+
+/** One page of a stepped card with the fields currently visible on it. */
+export interface VisibleStep {
+	title?: string;
+	fields: CardField[];
+}
+
+/**
+ * The steps to walk for this draft: the card's steps with their hidden fields removed and empty steps skipped (so a
+ * dependent step vanishes while its controlling answer is unset). A card without `steps` is one step of every visible field.
+ */
+export function visibleSteps(card: Card, draft: CardDraft): VisibleStep[] {
+	const shown = visibleFields(card, draft);
+	if (!card.steps) return [{ fields: shown }];
+	const out: VisibleStep[] = [];
+	for (const s of card.steps) {
+		const fields = shown.filter((f) => s.fields.includes(f.id));
+		if (fields.length > 0) out.push({ ...(s.title ? { title: s.title } : {}), fields });
+	}
+	return out;
+}
+
+const fieldDone = (f: CardField, a: CardFieldAnswer | undefined): boolean => {
+	if (a === undefined) return false;
+	if (f.kind === "confirm") return typeof a.value === "boolean";
+	if (f.kind === "multi") return Array.isArray(a.value) && multiInBounds(f, a.value.length);
+	return typeof a.value === "string" && a.value.trim() !== "";
+};
+
+/** Every given field answered. */
+export function fieldsComplete(fields: readonly CardField[], draft: CardDraft): boolean {
+	return fields.every((f) => fieldDone(f, draft[f.id]));
+}
+
+/** Every visible field answered (text non-empty; a multi within min/max; a confirm picked). A hidden field is not required. */
 export function draftComplete(card: Card, draft: CardDraft): boolean {
-	return card.fields.every((f) => {
-		const a = draft[f.id];
-		if (a === undefined) return false;
-		if (f.kind === "confirm") return typeof a.value === "boolean";
-		if (f.kind === "multi") return Array.isArray(a.value) && multiInBounds(f, a.value.length);
-		return typeof a.value === "string" && a.value.trim() !== "";
-	});
+	return fieldsComplete(visibleFields(card, draft), draft);
 }
 
 /** The answers to send: text trimmed, `other` only when set. */
 export function draftAnswers(card: Card, draft: CardDraft): CardAnswers {
 	const out: CardAnswers = {};
-	for (const f of card.fields) {
+	for (const f of visibleFields(card, draft)) {
 		const a = draft[f.id];
 		if (!a) continue;
 		if (Array.isArray(a.value)) {

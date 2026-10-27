@@ -84,11 +84,14 @@ function cardsDirective({ src, cwd }: DirectiveInput, domainList: string, hintLi
   return (
     `Run a short crawl-planning questionnaire with ask cards. ${sourceQ}\n\n` +
     `Raise ONE ask_user_question call whose \`questions\` list holds all of these (they are shown as a single ` +
-    `card and answered together; do not ask them one at a time), skipping any the user already pinned:\n` +
+    `card and answered together; do not ask them one at a time), skipping any the user already pinned. Present it as a ` +
+    `stepped card with \`steps\`: step "Where" = ${src ? "domain" : "source, domain"}; step "Shape" = strategy, depth, scope ` +
+    `(use the ids below; every question on exactly one step):\n` +
     `- id "domain": single choice, "Target KB domain". Options: ${domainList}.\n` +
     `- id "strategy": single choice, "Grouping strategy". Options: "by-folder" (Recommended), "by-pattern".\n` +
-    `- id "depth": single choice, "Folder depth (how many path segments to group on; only used by by-folder)". ` +
-    `Options 1, 2, 3; the user can type another number.\n` +
+    `- id "depth": single choice, "Folder depth (how many path segments to group on)". ` +
+    `Options 1, 2, 3; the user can type another number. Give it \`showIf: { field: "strategy", equals: "by-folder" }\` ` +
+    `so it is only asked for by-folder (there is then no depth answer for by-pattern).\n` +
     `- id "scope": single choice, "Scope". Options: "Whole tree" (Recommended), "Only some files"; the user can ` +
     `type include/exclude globs instead (e.g. "include: **/*.md; exclude: drafts/**").\n` +
     `Your turn ends when you raise the card; the answers arrive as the next message.\n\n` +
@@ -100,10 +103,11 @@ function cardsDirective({ src, cwd }: DirectiveInput, domainList: string, hintLi
     `Finally raise an ask_user_question confirm question (kind "confirm", confirmLabel "Looks good — add to plan", ` +
     `rejectLabel "Edit it"): "Does this plan look good?".\n` +
     `  • If they approve: call crawl_finalize to stamp the plan 'status: ready', then tell them the plan is ready ` +
-    `at the path crawl_finalize reports and that running a crawl from this host is not available yet ` +
-    `(there is no run command in this host; do not invent one).\n` +
+    `at the path crawl_finalize reports, and that you can run it with crawl_run when they ask (it asks them about ` +
+    `resume and concurrency itself and runs in the background; follow it with crawl_status). Do not call crawl_run ` +
+    `until they ask.\n` +
     `  • If they reject: raise a card asking what to change (a free-text question, or the same \`questions\` batch for ` +
     `domain/strategy/depth/scope), re-run crawl_plan + crawl_preview, and ask for approval again. ` +
-    `Do NOT run the crawl yourself.${hintLine}`
+    `Do NOT run the crawl as part of planning.${hintLine}`
   );
 }

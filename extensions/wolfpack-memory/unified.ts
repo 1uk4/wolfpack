@@ -205,6 +205,22 @@ function fingerprint(content: unknown): string {
  * twin: a user message in between means the observed response never committed (aborted), and a later identical reply
  * is new.
  */
+/** Crawl run chatter (progress, release previews, stop notes) is operational, not memory: kept out of observer chunks. */
+const CRAWL_CHATTER = new Set(["crawl_run", "crawl_status", "crawl_stop", "crawl_release"]);
+
+/** The message without crawl run/status/stop/release calls and results; undefined when nothing is left of it. */
+function withoutCrawlChatter(m: ConversationMessage["message"]): ConversationMessage["message"] | undefined {
+  const msg = m as { role: string; toolName?: string; content?: unknown };
+  if (msg.role === "user" && typeof msg.content === "string" && /^The user answered your (crawl_run|crawl_release) question/.test(msg.content)) return undefined;
+  if (msg.role === "toolResult" && msg.toolName && CRAWL_CHATTER.has(msg.toolName)) return undefined;
+  if (msg.role === "assistant" && Array.isArray(msg.content)) {
+    const kept = (msg.content as { type?: string; name?: string }[]).filter((b) => !(b.type === "toolCall" && b.name && CRAWL_CHATTER.has(b.name)));
+    if (kept.length === msg.content.length) return m;
+    return kept.length ? ({ ...m, content: kept } as ConversationMessage["message"]) : undefined;
+  }
+  return m;
+}
+
 export function newObserverChunks(
   committed: ConversationMessage[],
   current: AssistantMessage,
@@ -219,7 +235,10 @@ export function newObserverChunks(
     }
   }
   const lastEntryId = committed.length ? committed[committed.length - 1].entryId : watermark.lastEntryId;
-  const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.map((m) => ({ type: "message", id: String(m.entryId), message: m.message }));
+  const entries: Array<{ type: string; id: string; message: ConversationMessage["message"] }> = rest.flatMap((m) => {
+    const message = withoutCrawlChatter(m.message);
+    return message ? [{ type: "message", id: String(m.entryId), message }] : [];
+  });
   const chunk = () => chunkSerialized(serializeBranchEntries(entries, { tools: true }));
 
   const fp = fingerprint(current.content);
@@ -229,7 +248,8 @@ export function newObserverChunks(
   const isCommitted = fp === "" || rest.some((m) => m.message.role === "assistant" && fingerprint(m.message.content) === fp);
   if (isCommitted) return { chunks: chunk(), next: { lastEntryId } };
   if (!settled) return undefined;
-  entries.push({ type: "message", id: `${lastEntryId}:current`, message: { role: "assistant", content: current.content } });
+  const unsettled = withoutCrawlChatter({ role: "assistant", content: current.content } as ConversationMessage["message"]);
+  if (unsettled) entries.push({ type: "message", id: `${lastEntryId}:current`, message: unsettled });
   return { chunks: chunk(), next: { lastEntryId, tail: fp, tailAfter: lastEntryId } };
 }
 

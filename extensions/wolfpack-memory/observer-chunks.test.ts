@@ -47,4 +47,32 @@ describe("seedWatermark", () => {
     // a fork whose own entries have no user message keeps its first assistant entry
     expect(seedWatermark([m(20, "assistant", "continuing"), m(21, "toolResult", "ok")])).toEqual({ lastEntryId: 0 });
   });
+
+  it("crawl run/status/stop/release calls and results stay out of the chunks; other tools and text remain", () => {
+    const call = (name: string) => ({ entryId: 6, message: { role: "assistant", content: [{ type: "text", text: "the reply" }, { type: "toolCall", id: "t", name, arguments: {} }] } });
+    const res = (id: number, toolName: string, text: string) => ({ entryId: id, message: { role: "toolResult", toolName, toolCallId: "t", content: [{ type: "text", text }] } });
+    const out = newObserverChunks(
+      [m(5, "user", "run it"), call("crawl_run"), res(7, "crawl_run", "RUNNING run-1 docs [extract]"), res(8, "crawl_status", "batches: 1/2"), res(9, "crawl_release", "preview"), res(10, "crawl_stop", "Stopping"), res(11, "read", "file contents")],
+      current,
+      { lastEntryId: 4 },
+      true,
+    )!;
+    const text = textOf(out)!;
+    expect(text).toContain("the reply");
+    expect(text).not.toMatch(/crawl_run|RUNNING|batches: 1\/2|preview|Stopping/);
+    expect(text).toContain("file contents");
+    expect(out.next.lastEntryId).toBe(11); // the watermark still advances past the filtered entries
+    // a call-only assistant message disappears entirely
+    const only = newObserverChunks([m(5, "user", "q"), { entryId: 6, message: { role: "assistant", content: [{ type: "toolCall", id: "t", name: "crawl_status", arguments: {} }] } }], { content: [] }, { lastEntryId: 4 }, true)!;
+    expect(textOf(only)).toBe("[user] q");
+  });
+
+  it("the unsettled current message and crawl_run/crawl_release card answers are filtered too", () => {
+    const cur = { content: [{ type: "toolCall" as const, name: "crawl_status", arguments: {} }, { type: "text" as const, text: "checking" }] };
+    const out = newObserverChunks([m(5, "user", "The user answered your crawl_run question (call c):\n- How many batches to run at once?: 8"), m(6, "user", "hello")], cur, { lastEntryId: 4 }, true)!;
+    const text = textOf(out)!;
+    expect(text).toContain("checking");
+    expect(text).toContain("hello");
+    expect(text).not.toMatch(/crawl_status|How many batches/);
+  });
 });

@@ -10,7 +10,7 @@
  * last card is answered, then one submission carries them all. Held answers live in memory only; after a restart
  * those cards show as pending again without their held answer.
  */
-import type { Card, CardAnswers, CardFieldAnswer, CardOption, PendingCard } from "@wolfpack/protocol";
+import { visibleFields, type Card, type CardAnswers, type CardFieldAnswer, type CardOption, type PendingCard } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -144,7 +144,7 @@ export function answerText(cards: readonly ReadyAnswer[]): string {
   const lines: string[] = [];
   for (const { callId, card, answers } of cards) {
     lines.push(`The user answered your ${card.tool} question (call ${callId}):`);
-    for (const f of card.fields) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
+    for (const f of visibleFields(card, answers)) lines.push(`- ${f.label}: ${answerValue(f, answers[f.id])}`);
   }
   return lines.join("\n");
 }
@@ -187,9 +187,22 @@ function validateField(f: Card["fields"][number], a: CardFieldAnswer): string | 
   }
 }
 
+/**
+ * The answers without those of hidden fields. An older console renders every field and may send an answer for one the
+ * showIf hides; it is dropped (not an error) so such a client still works. Returns the same object when nothing drops.
+ */
+export function dropHiddenAnswers(card: Card, answers: CardAnswers): CardAnswers {
+  const shown = new Set(visibleFields(card, answers).map((f) => f.id));
+  const dropped = Object.keys(answers).filter((k) => !shown.has(k));
+  if (dropped.length === 0) return answers;
+  console.debug(`[cards] dropped answer(s) for hidden field(s): ${dropped.join(", ")}`);
+  return Object.fromEntries(Object.entries(answers).filter(([k]) => shown.has(k)));
+}
+
 /** Check answers against the card; returns the problem, or undefined when valid. */
 export function validateAnswers(card: Card, answers: CardAnswers): string | undefined {
-  for (const f of card.fields) {
+  const shown = visibleFields(card, answers);
+  for (const f of shown) {
     const a = answers[f.id];
     if (!a) return `missing answer for field "${f.id}"`;
     const problem = validateField(f, a);

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
-import { addCustomEntry, draftAnswers, draftComplete, foldPendingOther, initialDraft, multiInBounds, type CardDraft } from "@/src/core";
+import { addCustomEntry, draftAnswers, draftComplete, fieldsComplete, foldPendingOther, initialDraft, multiInBounds, visibleFields, visibleSteps, type CardDraft } from "@/src/core";
 import type { CardField, CardFieldAnswer } from "@wolfpack/client";
 import type { InteractionCardProps } from "@/components/card-registry";
 
@@ -17,6 +17,8 @@ import type { InteractionCardProps } from "@/components/card-registry";
  */
 export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitting, onAnswer }: InteractionCardProps) {
 	const [draft, setDraft] = useState<CardDraft>(() => initialDraft(card, heldAnswer));
+	const [stepIdx, setStepIdx] = useState(0);
+	const rootRef = useRef<HTMLDivElement | null>(null);
 	// Ref mirrors of the draft and the typed Other text: a dictation flush (or a submit resuming after finishDictation)
 	// must read the tail, which has not rendered yet.
 	const draftRef = useRef(draft);
@@ -35,7 +37,9 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	};
 	const liveRef = useRef(false);
 	liveRef.current = pending && !closed;
-	const { claimed, dictationProps } = useCardDictation(card, draftRef, set, typedRef, setTypedText, pending && !closed);
+	// The fields in play now (hidden ones and other steps' fields never take dictation).
+	const inPlay = closed ? [] : shownIds(card, draft, stepIdx);
+	const { claimed, dictationProps } = useCardDictation(card, draftRef, set, typedRef, setTypedText, pending && !closed, inPlay);
 	// Submit finishes a live dictation first, then reads the mirrors. `finishing` blocks re-entry (and disables Submit)
 	// while the finish is pending; afterwards the card is re-checked (liveRef) so one answered/skipped meanwhile is not answered again.
 	const [finishing, setFinishing] = useState(false);
@@ -60,6 +64,31 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 	};
 	const folded = foldPendingOther(card, draft, typed);
 	const canSubmit = pending && !submitting && Object.keys(folded.errors).length === 0 && draftComplete(card, folded.draft);
+	// Stepped card: one step at a time with Back/Next; the answers stay in the draft until the single Submit on the last step.
+	// The step list follows the draft (a dependent step appears/vanishes with its controlling answer); `step` is clamped.
+	const stepped = card.steps !== undefined && !closed;
+	const steps = visibleSteps(card, folded.draft);
+	const step = Math.min(stepIdx, steps.length - 1);
+	const lastStep = step >= steps.length - 1;
+	const stepOk = Object.keys(folded.errors).length === 0 && fieldsComplete(steps[step]?.fields ?? [], folded.draft);
+	// Moving between steps finishes any live dictation (its text belongs to the step it was said on), drops the claim, and
+	// puts focus on the new step's first control.
+	// The step changes only after the flush (as Submit does), so a dictation tail lands in the field it was said in.
+	const focusStep = useRef(false);
+	const goTo = (n: number) => {
+		void finishDictation().then(() => {
+			if (!liveRef.current) return;
+			dictationProps.release();
+			focusStep.current = true;
+			setStepIdx(n);
+		});
+	};
+	useEffect(() => {
+		if (!focusStep.current) return; // only a Back/Next/Enter move focuses, not the step list shrinking
+		focusStep.current = false;
+		(rootRef.current?.querySelector("[data-field] textarea, [data-field] input, [data-field] button") as HTMLElement | null)?.focus?.();
+	}, [step]);
+	const shownFields = closed ? visibleFields(card, answered ? answer : draft) : stepped ? (steps[step]?.fields ?? []) : visibleFields(card, folded.draft);
 
 	return (
 		<div
@@ -68,6 +97,18 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 			data-card-tool={card.tool}
 			data-dictation-claimed={claimed || undefined}
 			{...dictationProps.root}
+			ref={(el) => {
+				rootRef.current = el;
+				(dictationProps.root.ref as { current: HTMLDivElement | null }).current = el;
+			}}
+			onKeyDown={(e) => {
+				// Enter in a single-line input advances a stepped card (the multi "Other" box claims its own Enter).
+				const t = e.target as HTMLElement;
+				if (e.key === "Enter" && !e.defaultPrevented && stepped && !lastStep && stepOk && t.tagName === "INPUT" && (!(t as HTMLInputElement).type || (t as HTMLInputElement).type === "text")) {
+					e.preventDefault();
+					goTo(step + 1);
+				}
+			}}
 		>
 			<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 				{card.title ?? "Question"}
@@ -75,7 +116,13 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 				{!closed && !pending && <span className="ml-2 rounded bg-muted px-1.5 py-0.5">waiting</span>}
 				{!closed && heldAnswer && <span data-testid="card-held" className="ml-2 rounded bg-muted px-1.5 py-0.5">answer saved · waiting for the other questions</span>}
 			</div>
-			{card.fields.map((f) => (
+			{stepped && steps.length > 1 && (
+				<div className="mb-2 text-xs text-muted-foreground" data-testid="card-step-indicator" aria-live="polite">
+					Step {step + 1} of {steps.length}
+					{steps[step]?.title ? ` · ${steps[step]?.title}` : ""}
+				</div>
+			)}
+			{shownFields.map((f) => (
 				<FieldView
 					key={f.id}
 					field={f}
@@ -89,14 +136,32 @@ export function AskCard({ card, answer, dismissed, heldAnswer, pending, submitti
 				/>
 			))}
 			{!closed && (
-				<div className="mt-3 flex justify-end">
-					<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
-						{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
-					</Button>
+				<div className="mt-3 flex justify-end gap-2">
+					{stepped && step > 0 && (
+						<Button type="button" size="sm" variant="outline" disabled={submitting} onClick={() => goTo(step - 1)} data-testid="card-back">
+							Back
+						</Button>
+					)}
+					{stepped && !lastStep ? (
+						<Button type="button" size="sm" disabled={!pending || submitting || !stepOk} onClick={() => goTo(step + 1)} data-testid="card-next">
+							Next
+						</Button>
+					) : (
+						<Button type="button" size="sm" disabled={!canSubmit || finishing} onClick={submit} data-testid="card-submit">
+							{submitting ? "Sending…" : heldAnswer ? "Update answer" : "Submit"}
+						</Button>
+					)}
 				</div>
 			)}
 		</div>
 	);
+}
+
+/** Ids of the fields currently shown: the visible ones, on the current step when the card is stepped. */
+function shownIds(card: InteractionCardProps["card"], draft: CardDraft, stepIdx: number): string[] {
+	if (!card.steps) return visibleFields(card, draft).map((f) => f.id);
+	const steps = visibleSteps(card, draft);
+	return (steps[Math.min(stepIdx, steps.length - 1)]?.fields ?? []).map((f) => f.id);
 }
 
 /** Props spread onto a text input that is a dictation target. */
@@ -125,9 +190,15 @@ function useCardDictation(
 	typedRef: { current: Record<string, string> },
 	setTypedText: (fieldId: string, text: string) => void,
 	live: boolean,
+	inPlay: string[],
 ) {
 	const rootRef = useRef<HTMLDivElement>(null);
 	const [dictField, setDictField] = useState<string | null>(null);
+	// The targeted field became hidden (or left the step): the claim goes with it.
+	const inPlayKey = inPlay.join("\0");
+	useEffect(() => {
+		if (dictField !== null && !inPlay.includes(dictField)) setDictField(null);
+	}, [inPlayKey, dictField]);
 	useEffect(() => {
 		if (dictField === null) return;
 		const onFocusIn = (e: FocusEvent) => {
@@ -140,14 +211,14 @@ function useCardDictation(
 	const append = useCallback(
 		(t: string) => {
 			const f = card.fields.find((x) => x.id === dictField);
-			if (!f) return;
+			if (!f || !inPlay.includes(f.id)) return;
 			const cur = draftRef.current[f.id];
 			if (f.kind === "free-text") set(f.id, { value: joinDictation(typeof cur?.value === "string" ? cur.value : "", t) });
 			else if (f.kind === "single") set(f.id, { value: joinDictation(otherText(cur) ?? "", t), other: true });
 			else if (f.kind === "multi") setTypedText(f.id, joinDictation(typedRef.current[f.id] ?? "", t));
 		},
 		// Deps are ref-backed: draftRef/typedRef are stable and `set`/`setTypedText` only write refs + state.
-		[card, dictField],
+		[card, dictField, inPlayKey],
 	);
 	const claimed = live && dictField !== null;
 	useDictationTarget(append, claimed);
@@ -156,6 +227,7 @@ function useCardDictation(
 		dictationProps: {
 			root: { ref: rootRef },
 			field: (id: string): FieldDictation => ({ onFocus: () => setDictField(id), onKeyDown: stopDictationOnEscape }),
+			release: () => setDictField(null),
 		},
 	};
 }

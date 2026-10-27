@@ -78,10 +78,12 @@ const questionnaire = () =>
   toolUse(
     fauxToolCall("ask_user_question", {
       title: "Crawl plan",
+      // the stepped form the directive asks for: depth is only asked for by-folder
+      steps: [{ title: "Where", questions: ["domain"] }, { title: "Shape", questions: ["strategy", "depth", "scope"] }],
       questions: [
         { id: "domain", question: "Target KB domain", options: [{ label: "wolfpack" }] },
         { id: "strategy", question: "Grouping strategy", options: [{ label: "by-folder (Recommended)", value: "by-folder" }, { label: "by-pattern", value: "by-pattern" }] },
-        { id: "depth", question: "Folder depth", options: [{ label: "1" }, { label: "2" }, { label: "3" }] },
+        { id: "depth", question: "Folder depth", options: [{ label: "1" }, { label: "2" }, { label: "3" }], showIf: { field: "strategy", equals: "by-folder" } },
         { id: "scope", question: "Scope", options: [{ label: "Whole tree", value: "whole" }, { label: "Only some files", value: "some" }] },
       ],
     }),
@@ -98,7 +100,7 @@ function planCallFrom(submission: string, path: string) {
       path,
       domain: answerTo(submission, "Target KB domain"),
       strategy: answerTo(submission, "Grouping strategy"),
-      depth: Number(answerTo(submission, "Folder depth")),
+      ...(answerTo(submission, "Folder depth") ? { depth: Number(answerTo(submission, "Folder depth")) } : {}),
       ...(include ? { include } : {}),
       ...(exclude ? { exclude } : {}),
     }),
@@ -162,6 +164,9 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect(p1.card).toMatchObject({ tool: "ask_user_question", title: "Crawl plan" });
     expect(p1.card.fields.map((f) => [f.id, f.kind])).toEqual(COMMON.map((id) => [id, "single"]));
     expect(scripted.faux.state.callCount).toBe(2);
+    // one stepped card: depth depends on the strategy answer
+    expect(p1.card.steps).toEqual([{ title: "Where", fields: ["domain"] }, { title: "Shape", fields: ["strategy", "depth", "scope"] }]);
+    expect(p1.card.fields.find((f) => f.id === "depth")?.showIf).toEqual({ field: "strategy", equals: "by-folder" });
 
     await client.answerCard!(home, p1.callId, {
       domain: { value: "wolfpack" },
@@ -183,7 +188,7 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
 
     expect(finalized).toContain("status: ready");
     expect(finalized).not.toContain("/wolf:crawl-run");
-    expect(finalized).toContain("not available yet");
+    expect(finalized).toContain("crawl_run"); // points at the durable run tool
     const planPath = planPathOf(finalized);
     expect(planPath.startsWith(join(root, "crawls"))).toBe(true);
     const plan = readPlan(planPath);
@@ -192,6 +197,29 @@ describe("crawl questionnaire via ask cards (/v1, scripted model)", { timeout: 6
     expect(plan.batches.map((b) => b.topic).sort()).toEqual(["docs", "docs-guides"]);
     expect(readFileSync(planPath, "utf8")).toContain("status: ready");
     expect((await client.getThread(home)).status).toBe("idle");
+  });
+
+  it("stepped crawl card: by-pattern skips the dependent depth field (not required, and dropped if sent)", async () => {
+    const src = makeSource();
+    let planArgs: unknown;
+    const { client, home, drain } = await boot([
+      questionnaire(),
+      (c) => {
+        const call = planCallFrom(lastUser(c as never), src);
+        planArgs = (call as unknown as { content: { arguments: unknown }[] }).content[0].arguments;
+        return call;
+      },
+      fauxAssistantMessage("planned"),
+    ]);
+    await client.submit(home, "plan a crawl", { whenBusy: "reject" });
+    await drain();
+    const [p] = (await client.getThread(home)).pendingCards!;
+    const base = { domain: { value: "wolfpack" }, strategy: { value: "by-pattern" }, scope: { value: "whole" } };
+    // an older console that renders every field also sends depth: wolfd drops the hidden answer instead of rejecting
+    await client.answerCard!(home, p.callId, { ...base, depth: { value: "2" } });
+    await drain();
+    expect(planArgs).toEqual({ path: src, domain: "wolfpack", strategy: "by-pattern" });
+    expect((await client.getThread(home)).messages.flatMap((m) => m.tools ?? []).find((t) => t.name === "ask_user_question")?.answer).toEqual(base);
   });
 
   it("a bad path is reported by crawl_plan and the model re-asks", async () => {

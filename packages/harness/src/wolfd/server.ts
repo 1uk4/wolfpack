@@ -46,7 +46,7 @@ import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
-import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, saveThread } from "./threads.js";
+import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, removeThread, saveThread, unbindConversation } from "./threads.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -144,14 +144,26 @@ export class WolfServer {
     this.homeCreated = this.home.hadHistory;
     const { den, conversations } = this.opts;
     if (!den || !conversations) return;
-    for (const saved of loadThreads(den)) {
-      const conv = await conversations.get(saved.conversationId);
-      if (!conv) {
-        this.opts.onError?.(new Error(`thread ${saved.id}: conversation ${saved.conversationId} is gone`));
-        continue;
+    for (const saved of loadThreads(den, (e) => this.opts.onError?.(e))) {
+      // One bad thread must not keep the wolf from starting: report it, leave it unregistered, carry on.
+      try {
+        const conv = await conversations.get(saved.conversationId);
+        if (!conv) {
+          this.opts.onError?.(new Error(`thread ${saved.id}: conversation ${saved.conversationId} is gone`));
+          continue;
+        }
+        const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId };
+        const t = this.makeThread(summary, conv);
+        try {
+          await t.attach();
+        } catch (e) {
+          this.threads.delete(saved.id);
+          await t.close().catch(() => {});
+          throw e;
+        }
+      } catch (e) {
+        this.opts.onError?.(new Error(`thread ${saved.id} not attached: ${e instanceof Error ? e.message : String(e)}`));
       }
-      const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId };
-      await this.makeThread(summary, conv).attach();
     }
   }
 
@@ -219,14 +231,31 @@ export class WolfServer {
       if (!host || !this.opts.den) throw new HttpError("invalid_request", "this wolf cannot host feature threads");
       if (!isWorkId(workItemId)) throw new HttpError("invalid_request", "malformed work item id");
       const info = await featureInfo(workItemId, this.opts.work ?? {});
-      const holder = findBindingHolder(this.opts.den, workItemId);
-      if (holder !== undefined) throw new HttpError("invalid_request", `${workItemId} is already bound in conversation ${holder}; release it there first`);
+      const den = this.opts.den;
+      const onError = (e: unknown) => this.opts.onError?.(e);
+      // A holder that is neither home nor a known feature thread is an orphan (a crash or failure mid-create): take over.
+      const holder = findBindingHolder(den, workItemId);
+      if (holder !== undefined) {
+        const known = new Set([this.home.conv.id, ...loadThreads(den, onError).map((t) => t.conversationId)]);
+        if (known.has(String(holder))) throw new HttpError("invalid_request", `${workItemId} is already bound in conversation ${holder}; release it there first`);
+        unbindConversation(den, holder);
+      }
       const conv = await host.create();
-      bindFeature(this.opts.den, conv.id, { workId: workItemId, domain: info.domain });
       const summary: ThreadSummary = { id, wolf: this.name, kind: "feature", title: info.title, boundWorkItem: workItemId };
-      saveThread(this.opts.den, { id, conversationId: conv.id, kind: "feature", workItemId, title: info.title });
-      const t = this.makeThread(summary, conv);
-      await t.attach();
+      // Registry first: a crash after this leaves a thread wolfd re-attaches, never a binding nobody owns.
+      saveThread(den, { id, conversationId: conv.id, kind: "feature", workItemId, title: info.title }, onError);
+      let t: ThreadRuntime | undefined;
+      try {
+        bindFeature(den, conv.id, { workId: workItemId, domain: info.domain });
+        t = this.makeThread(summary, conv);
+        await t.attach();
+      } catch (e) {
+        this.threads.delete(id);
+        await t?.close().catch(() => {});
+        try { unbindConversation(den, Number(conv.id)); } catch { /* best effort */ }
+        try { removeThread(den, id, onError); } catch { /* best effort */ }
+        throw e;
+      }
       this.emitWolf({ type: "thread-status", threadId: id, status: t.status() });
       return { summary: t.threadSummary(), created: true };
     })().finally(() => this.opening.delete(workItemId));

@@ -28,6 +28,16 @@ describe(`ConsoleClient (${label})`, () => {
     expect(threads[0].kind).toBe("home");
   });
 
+  it("createThread opens a feature thread, idempotently, listed beside home", async () => {
+    const c = make();
+    if (!c.createThread) return;
+    const [wolf] = await c.listWolves();
+    const a = await c.createThread(wolf.id, { kind: "feature", workItemId: "work-x-feat" });
+    expect(a).toMatchObject({ kind: "feature", boundWorkItem: "work-x-feat" });
+    expect((await c.createThread(wolf.id, { kind: "feature", workItemId: "work-x-feat" })).id).toBe(a.id);
+    expect((await c.listThreads(wolf.id)).map((t) => t.kind)).toEqual(["home", "feature"]);
+  });
+
   it("submit returns without waiting for the turn", async () => {
     const c = make();
     const id = await homeThread(c);

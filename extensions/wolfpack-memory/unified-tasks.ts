@@ -311,7 +311,15 @@ export default function createTasksExtension(
     }
   }
 
+  // The pre-per-item cache was one file per wolf: nothing reads it any more, remove it once.
+  try { require("fs").unlinkSync(join(wolfDen, "factory", "task-cache.json")); } catch { /* none */ }
+
+  // Bumped by clearCache: a writeCache that started before an unbind must not leave its file behind.
+  const cacheGeneration = new Map<string, number>();
+  const generationOf = (id: string) => cacheGeneration.get(id) ?? 0;
+
   async function writeCache(task: WorkItem): Promise<void> {
+    const generation = generationOf(task.id as string);
     const dir = dirname(cachePath(task.id as string));
     await mkdir(dir, { recursive: true });
     let parent: WorkItem | undefined;
@@ -336,25 +344,35 @@ export default function createTasksExtension(
       const all = task.kind === "feature" ? [task, ...(await client.query({ domain: task.domain as string, partOf: task.id as string }))] : [task, ...(parent ? [parent] : [])];
       ready = readyToGraduate(task, all);
     } catch { /* advisory */ }
+    if (generationOf(task.id as string) !== generation) return; // unbound while we were fetching
     await writeFile(cachePath(task.id as string), JSON.stringify({ task, parent, siblings, body, featureRecord, ready, fetchedAt: Date.now() } satisfies TaskCache));
+    // clearCache can land between the check above and the write finishing: remove what that left behind.
+    if (generationOf(task.id as string) !== generation) clearFile(task.id as string);
   }
 
   /** Sections render synchronously from the cache. The Record changes behind
    *  our back (memory rewrites it), so each render schedules a refresh: the
    *  agent sees it one turn later at the latest. */
   const refreshing = new Set<string>();
+  /** Items whose fetch failed (deleted, 404, offline): not retried before this time. */
+  const refreshBackoff = new Map<string, number>();
+  const REFRESH_BACKOFF_MS = 60_000;
   function refreshCacheSoon(cached: TaskCache | { task: { id: string }; fetchedAt?: undefined }): void {
     const id = cached.task.id as string;
-    if (refreshing.has(id) || Date.now() - (cached.fetchedAt ?? 0) < 10_000) return;
+    if (refreshing.has(id) || Date.now() - (cached.fetchedAt ?? 0) < 10_000 || (refreshBackoff.get(id) ?? 0) > Date.now()) return;
     refreshing.add(id);
     client.get(id)
-      .then((task) => writeCache(task))
-      .catch(() => {})
+      .then((task) => { refreshBackoff.delete(id); return writeCache(task); })
+      .catch(() => { refreshBackoff.set(id, Date.now() + REFRESH_BACKOFF_MS); })
       .finally(() => { refreshing.delete(id); });
   }
 
-  function clearCache(workId: string): void {
+  function clearFile(workId: string): void {
     try { require("fs").unlinkSync(cachePath(workId)); } catch { /* ok */ }
+  }
+  function clearCache(workId: string): void {
+    cacheGeneration.set(workId, generationOf(workId) + 1);
+    clearFile(workId);
   }
 
   // ── API helpers ─────────────────────────────────────────────────────────

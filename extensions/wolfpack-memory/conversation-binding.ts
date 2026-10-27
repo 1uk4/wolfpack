@@ -6,16 +6,11 @@
  * binding. A task-owned conversation (subagent) resolves through its owner's lineage and is read-only: it sees the
  * binding but never writes it. Always read from disk, never cached.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { bindingFile, findHolder, readBindingFile, writeBindingFile, type StoredBinding } from "@wolfpack/memory";
+export { bindingFile, findHolder, readBindingFile, writeBindingFile, type StoredBinding };
 import type { ConversationClass, ConversationReads } from "@wolfpack/harness/extension";
-
-export interface StoredBinding {
-  workId: string;
-  domain: string;
-  boundAt: string;
-  featureId?: string;
-}
 
 /** What binding code needs from a tool / hook / section context. */
 export interface BindingScope {
@@ -23,9 +18,6 @@ export interface BindingScope {
   conversationId: number;
   conversation?: Pick<ConversationReads, "classify" | "classifyOther">;
 }
-
-const conversationsDir = (den: string) => join(den, "factory", "conversations");
-export const bindingFile = (den: string, cid: number) => join(conversationsDir(den), String(cid), "active-task.json");
 
 /** Where this conversation's binding lives, and whether it may write it. */
 export async function resolveBindingRoot(scope: BindingScope): Promise<{ root: number; readOnly: boolean }> {
@@ -46,15 +38,6 @@ export async function resolveBindingRoot(scope: BindingScope): Promise<{ root: n
   return { root: owner, readOnly: true };
 }
 
-export function readBindingFile(den: string, cid: number): StoredBinding | null {
-  try {
-    const parsed = JSON.parse(readFileSync(bindingFile(den, cid), "utf-8")) as StoredBinding | null;
-    return parsed?.workId ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 /** The binding for this conversation (through its lineage), read fresh. Null when unbound. */
 export async function readConversationBinding(scope: BindingScope): Promise<{ binding: StoredBinding | null; root: number; readOnly: boolean }> {
   const { root, readOnly } = await resolveBindingRoot(scope);
@@ -62,33 +45,10 @@ export async function readConversationBinding(scope: BindingScope): Promise<{ bi
   return { binding: readBindingFile(scope.wolfDen, root), root, readOnly };
 }
 
-export function writeBindingFile(den: string, cid: number, b: StoredBinding | null): void {
-  const file = bindingFile(den, cid);
-  mkdirSync(join(conversationsDir(den), String(cid)), { recursive: true });
-  // Temp file + rename: a concurrent reader sees the old or the new binding, never a half-written one.
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    writeFileSync(tmp, b ? JSON.stringify(b, null, 2) : "null");
-    renameSync(tmp, file);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* already gone */ }
-    throw err;
-  }
-}
-
-/** Another lineage root on this wolf that holds `workId`, or undefined. */
-export function findHolder(den: string, workId: string, exceptRoot: number): number | undefined {
-  let dirs: string[] = [];
-  try { dirs = readdirSync(conversationsDir(den)); } catch { return undefined; }
-  for (const d of dirs) {
-    const cid = Number(d);
-    if (!Number.isInteger(cid) || cid === exceptRoot) continue;
-    if (readBindingFile(den, cid)?.workId === workId) return cid;
-  }
-  return undefined;
-}
-
 export const heldMessage = (holder: number) => `bound in thread ${holder} (release it there with task_unbind)`;
+
+/** The store's reserved root conversation: wolfd's home thread. */
+export const HOME_CONVERSATION_ID = 1;
 
 /**
  * The durable runtime used to keep one per-wolf `<den>/tasks/active.json` ({taskId,...}). Migrate it once to the root
@@ -96,6 +56,8 @@ export const heldMessage = (holder: number) => `bound in thread ${holder} (relea
  * `active.json.migrated` (kept, never re-read). If that root already has a binding the legacy one is dropped, logged.
  */
 export function migrateLegacyBinding(den: string, root: number): void {
+  // Only the home conversation (the store's reserved root): a feature thread is also a root, but never inherits it.
+  if (root !== HOME_CONVERSATION_ID) return;
   const legacy = join(den, "tasks", "active.json");
   if (!existsSync(legacy)) return;
   try {

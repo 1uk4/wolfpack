@@ -148,6 +148,21 @@ const pool = (den: string): Array<{ content: string; work?: string; feature?: st
   return existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 };
 
+describe("legacy binding migration", () => {
+  it("goes only to the home conversation, never to a feature thread's root", async () => {
+    const { migrateLegacyBinding } = await import("./conversation-binding.js");
+    const den = tmp("legacy");
+    mkdirSync(join(den, "tasks"), { recursive: true });
+    writeFileSync(join(den, "tasks", "active.json"), JSON.stringify({ taskId: "work-w-1", domain: "w", boundAt: "2026-10-01T00:00:00Z" }));
+    migrateLegacyBinding(den, 7);
+    expect(existsSync(join(den, "tasks", "active.json"))).toBe(true);
+    expect(readBindingFile(den, 7)).toBeNull();
+    migrateLegacyBinding(den, 1);
+    expect(readBindingFile(den, 1)).toMatchObject({ workId: "work-w-1" });
+    expect(existsSync(join(den, "tasks", "active.json.migrated"))).toBe(true);
+  });
+});
+
 describe("per-conversation binding", () => {
   it("(a,b,c,d,e,g) lineage, exclusivity, read-only tasks, no caching, live untouched", async () => {
     const s = await setup();

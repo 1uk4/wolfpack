@@ -181,3 +181,6 @@ export { scanSecrets, type SecretScan } from "./work/secrets.js";
 
 // Resend (Dewey rebuild from scratch)
 export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";
+
+// Per-conversation binding files (memory extension + wolfd)
+export { bindingFile, readBindingFile, writeBindingFile, findHolder, type StoredBinding } from "./binding-file.js";

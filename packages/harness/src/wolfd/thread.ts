@@ -75,6 +75,7 @@ export class ThreadRuntime {
   private lastStatus: ThreadStatus = "idle";
   /** Cards announced as pending (card-pending sent, card-settled not yet): the diff base for card events. */
   private readonly announced = new Set<string>();
+  private attached = false;
   private watch?: EngineWatch;
   private mapper?: EventMapper;
   private pump?: Promise<void>;
@@ -124,7 +125,7 @@ export class ThreadRuntime {
       for await (const batch of w.batches) this.applyBatch(batch);
       this.applyMapped(this.mapper!.flush());
     } catch (e) {
-      if (!this.host.closing()) this.host.onError?.(e);
+      if (!this.host.closing()) this.host.onError(e);
     }
   }
 
@@ -181,7 +182,6 @@ export class ThreadRuntime {
     else for (const p of this.cards.raisedCards()) this.announced.add(p.callId);
   }
 
-  private attached = false;
 
   /**
    * Announce card changes as thread events (so an open thread shows the card without waiting for the turn to settle)

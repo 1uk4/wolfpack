@@ -8,7 +8,8 @@ import { fauxAssistantMessage, type FauxResponseStep } from "./scripted-model.js
 import { ScriptedEngine } from "./scripted-engine.js";
 import { WolfServer } from "./server.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { bindFeature } from "./threads.js";
 
 let tw: TestWolf | undefined;
 afterEach(async () => {
@@ -129,5 +130,123 @@ describe("feature threads survive a restart", () => {
     } finally {
       rmSync(den, { recursive: true, force: true });
     }
+  });
+});
+
+describe("feature thread robustness", () => {
+  const withDen = async (fn: (den: string) => Promise<void>) => {
+    const den = mkdtempSync(join(tmpdir(), "wolfd-robust-"));
+    try {
+      await fn(den);
+    } finally {
+      rmSync(den, { recursive: true, force: true });
+    }
+  };
+  const factory = (den: string, opts: { get?: (id: string) => Promise<ScriptedEngine | undefined>; failAttach?: boolean } = {}) => {
+    const engines = new Map<string, ScriptedEngine>();
+    let n = 0;
+    const errors: string[] = [];
+    const conversations = {
+      create: async () => {
+        const e = new ScriptedEngine({ delayMs: 1, id: `${100 + ++n}` });
+        if (opts.failAttach) e.watch = async () => { throw new Error("watch failed"); };
+        engines.set(e.id, e);
+        return e;
+      },
+      get: opts.get ?? (async (id: string) => engines.get(id)),
+    };
+    const server = () => new WolfServer({ name: "w", den, conversation: new ScriptedEngine({ delayMs: 1 }), conversations, onError: (e) => errors.push(String(e)) });
+    return { server, errors, engines };
+  };
+  const post = (url: string, workItemId: string) => fetch(`${url}/v1/wolves/w/threads`, { method: "POST", body: JSON.stringify({ kind: "feature", workItemId }) });
+
+  it("a corrupt registry is moved aside and reported; earlier threads are not lost to the next save", async () => {
+    await withDen(async (den) => {
+      const f = factory(den);
+      mkdirSync(join(den, "wolfd"), { recursive: true });
+      writeFileSync(join(den, "wolfd", "threads.json"), "{ not json");
+      const s = f.server();
+      await s.attach();
+      const url = await s.listen();
+      try {
+        expect(f.errors.join("\n")).toMatch(/moved to .*threads\.json\.corrupt-/);
+        const aside = readdirSync(join(den, "wolfd")).filter((n) => n.includes(".corrupt-"));
+        expect(aside).toHaveLength(1);
+        expect(readFileSync(join(den, "wolfd", aside[0]), "utf8")).toBe("{ not json");
+        expect((await post(url, "work-wolfpack-feat0001")).status).toBe(201);
+        expect(JSON.parse(readFileSync(join(den, "wolfd", "threads.json"), "utf8")).threads).toHaveLength(1);
+        expect(readFileSync(join(den, "wolfd", aside[0]), "utf8")).toBe("{ not json"); // untouched
+      } finally {
+        await s.close();
+      }
+    });
+  });
+
+  it("a persisted thread that fails to attach is skipped; wolfd still starts with the others", async () => {
+    await withDen(async (den) => {
+      const f = factory(den);
+      const first = f.server();
+      await first.attach();
+      const url1 = await first.listen();
+      await post(url1, "work-wolfpack-feat0001");
+      await post(url1, "work-wolfpack-feat0002");
+      await first.close();
+
+      const bad = [...f.engines.values()][0];
+      const f2 = factory(den, {
+        get: async (id) => {
+          if (id === bad.id) throw new Error("reconcile blew up");
+          return f.engines.get(id);
+        },
+      });
+      const s = f2.server();
+      await s.attach();
+      const url = await s.listen();
+      try {
+        const list = await (await fetch(`${url}/v1/wolves/w/threads`)).json();
+        expect(list.threads.map((t: { id: string }) => t.id)).toEqual(["w/home", "w/feature-work-wolfpack-feat0002"]);
+        expect(f2.errors.join("\n")).toMatch(/feature-work-wolfpack-feat0001 not attached: reconcile blew up/);
+      } finally {
+        await s.close();
+      }
+    });
+  });
+
+  it("a create that fails after binding rolls the binding and registry entry back, so a retry works", async () => {
+    await withDen(async (den) => {
+      const f = factory(den, { failAttach: true });
+      const s = f.server();
+      await s.attach();
+      const url = await s.listen();
+      try {
+        const res = await post(url, "work-wolfpack-feat0001");
+        expect(res.status).toBe(502);
+        expect(existsSync(join(den, "wolfd", "threads.json")) ? JSON.parse(readFileSync(join(den, "wolfd", "threads.json"), "utf8")).threads : []).toEqual([]);
+        const cid = [...f.engines.keys()][0];
+        expect(existsSync(join(den, "factory", "conversations", cid, "active-task.json")) ? readFileSync(join(den, "factory", "conversations", cid, "active-task.json"), "utf8") : "null").toBe("null");
+        expect((await (await fetch(`${url}/v1/wolves/w/threads`)).json()).threads).toHaveLength(1); // home only
+      } finally {
+        await s.close();
+      }
+    });
+  });
+
+  it("an orphan binding (not home, not in the registry) is taken over; a non-numeric directory is ignored", async () => {
+    await withDen(async (den) => {
+      const f = factory(den);
+      bindFeature(den, "55", { workId: "work-wolfpack-orph0001", domain: "wolfpack" }); // a crash left this behind
+      bindFeature(den, "scripted", { workId: "work-wolfpack-home0001", domain: "wolfpack" }); // not an integer dir: ignored
+      const s = f.server();
+      await s.attach();
+      const url = await s.listen();
+      try {
+        expect((await post(url, "work-wolfpack-orph0001")).status).toBe(201);
+        expect(readFileSync(join(den, "factory", "conversations", "55", "active-task.json"), "utf8")).toBe("null");
+        const id = [...f.engines.keys()][0];
+        expect(JSON.parse(readFileSync(join(den, "factory", "conversations", id, "active-task.json"), "utf8")).workId).toBe("work-wolfpack-orph0001");
+      } finally {
+        await s.close();
+      }
+    });
   });
 });

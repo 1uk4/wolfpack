@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { composeProjectContext, findUp, loadSkills } from "./context.js";
+import { DEFAULT_STRUCTURED_OUTPUT_GUIDANCE, composeProjectContext, findUp, loadSkills } from "./context.js";
 
 let home: string;
 beforeEach(() => {
@@ -62,6 +62,26 @@ describe("composeProjectContext", () => {
     expect(ctx.agents).toBeUndefined();
     expect(ctx.skills).toEqual([]);
     expect(ctx.instructions).toMatch(/^You are bare/);
+  });
+
+  describe("structured output guidance", () => {
+    const base = () => ({ name: "w", cwd: home, den: join(home, "den"), home });
+    it("is in the default instructions as a named section", () => {
+      const ins = composeProjectContext(base()).instructions;
+      expect(ins).toContain("# Structured output");
+      for (const t of ["show_graph", "show_checklist", "show_decision", "objectId"]) expect(ins).toContain(t);
+      expect(DEFAULT_STRUCTURED_OUTPUT_GUIDANCE.split("\n").length).toBeLessThan(15);
+    });
+    it("a per-wolf string replaces the default", () => {
+      const ins = composeProjectContext({ ...base(), structuredOutput: "Only use show_graph." }).instructions;
+      expect(ins).toContain("# Structured output\n\nOnly use show_graph.");
+      expect(ins).not.toContain("show_checklist");
+    });
+    it("false removes the section", () => {
+      const ins = composeProjectContext({ ...base(), structuredOutput: false }).instructions;
+      expect(ins).not.toContain("Structured output");
+      expect(ins).not.toContain("show_graph");
+    });
   });
 
   it("loadSkills tolerates a missing skills dir", () => {

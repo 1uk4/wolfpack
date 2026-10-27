@@ -24,7 +24,20 @@ export interface ProjectContextInput {
   den: string;
   /** Upper bound of the walk. Default: os.homedir(). */
   home?: string;
+  /** wolf.yaml `prompts.structuredOutput`: a string replaces the default guidance, `false` removes it. */
+  structuredOutput?: string | false;
 }
+
+/**
+ * Default "Structured output" section: when to emit show_decision / show_graph / show_checklist. Overridable per wolf
+ * (wolf.yaml `prompts.structuredOutput`); a settings UI would read/write that field (with versioning/reset on top).
+ */
+export const DEFAULT_STRUCTURED_OUTPUT_GUIDANCE = `Besides prose you can show the user live structured objects. Prose stays the primary channel.
+- show_graph: a multi-step plan or task dependencies (3+ steps with ordering). Revise it as work progresses (statuses).
+- show_checklist: tracking progress through a list of steps within a turn or task; tick items off in place.
+- show_decision: choosing between real alternatives; give the options and the rationale.
+- To revise an object reuse its objectId and resend the full object, not a diff.
+- Don't emit objects for trivial answers or one-step tasks.`;
 
 export interface FoundFile {
   path: string;
@@ -111,5 +124,7 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
     const list = skills.map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""} (${s.path})`).join("\n");
     parts.push(`# Skills\n\nRead a skill's SKILL.md with the read tool when its description matches the task.\n\n${list}`);
   }
+  const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
+  if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
   return { agents, claude, skills, instructions: parts.join("\n\n") };
 }

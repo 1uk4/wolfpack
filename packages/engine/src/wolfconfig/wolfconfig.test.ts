@@ -21,6 +21,15 @@ function wolf(name: string, yaml: string): string {
 }
 
 describe("loadWolfConfig", () => {
+  it("reads prompts.structuredOutput (string, false, or unset) without an unknown-field warning", () => {
+    const load = (y: string) => loadWolfConfig(wolf("p", y), { home: "/h" });
+    expect(load("name: p\n").config.prompts).toEqual({});
+    expect(load("name: p\nprompts:\n  structuredOutput: custom\n").config.prompts.structuredOutput).toBe("custom");
+    const off = load("name: p\nprompts:\n  structuredOutput: false\n");
+    expect(off.config.prompts.structuredOutput).toBe(false);
+    expect(off.warnings.filter((w) => w.includes("prompts"))).toEqual([]);
+  });
+
   it("warns when memory settings exist but the memory extension is not listed", () => {
     const warn = (yaml: string) => loadWolfConfig(wolf("w", yaml), { home: "/h" }).warnings.filter((w) => w.includes("memory configured but not in extensions: memory is off"));
     expect(warn("name: w\nmemory:\n  defaultDomain: x\ndomains: [x]\n")).toHaveLength(1);

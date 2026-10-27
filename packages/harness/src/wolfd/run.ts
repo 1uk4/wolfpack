@@ -136,7 +136,7 @@ async function startConfigured(
   const loaded = await loadConfiguredExtensions(config, env, table, extra, log, sweep);
   const extensions = [...toolExtensions, objectsExtension, ...loaded, ...extra];
   const cwd = config.capability.workspace;
-  const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home });
+  const context = composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd, den: config.den, home: opts.home, ...(config.prompts.structuredOutput !== undefined ? { structuredOutput: config.prompts.structuredOutput } : {}) });
 
   // Refuse before touching the store: a second wolfd on a live wolf's den would double-open its sqlite.
   if (opts.socket) await prepareSocketPath(opts.socket);

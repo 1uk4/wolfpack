@@ -53,6 +53,8 @@ export interface ChildRecord {
   pending?: string[];
   /** The commit a worktree was cut from (unmerged commits of a home child are counted against it). */
   base?: string;
+  /** The main checkout's HEAD and uncommitted files when a worktree child last started or finished: a change since is reported. */
+  mainWatch?: { path: string; head: string; status: string[] };
   /** A merge into the feature branch has been tried since the child last ran: a restart or a late finish does not repeat it. */
   mergeTried?: true;
   /** A conflict-resolving worker: the child (record id) whose branch it rebases; when it finishes that branch is merged again. */

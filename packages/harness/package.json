@@ -50,6 +50,7 @@
     "@wolfpack/agents": "*",
     "@wolfpack/workspaces": "*",
     "@wolfpack/engine": "*",
+    "@wolfpack/memory": "*",
     "@wolfpack/protocol": "*",
     "grammy": "^1.21.0",
     "pi-claude-bridge": "github:1uk4/pi-claude-bridge#durable-core",

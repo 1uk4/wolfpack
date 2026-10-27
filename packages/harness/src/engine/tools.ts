@@ -1,7 +1,8 @@
 /** Tool registry: wolf.yaml `tools:` names -> engine extensions + the tool names they provide. */
-import { createCodingTools, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
+import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
-import type { Extension } from "@earendil-works/pi-durable";
+import { defineExtension, type Extension } from "@earendil-works/pi-durable";
+import { fenceWriteTool } from "./fence.js";
 import { READONLY_TOOL_NAMES, ReadOnlyTools } from "./readonly-tools.js";
 
 interface RegistryEntry {
@@ -112,7 +113,11 @@ export function lazyImageProcessor(load: () => Promise<ImageProcessor> = createN
   };
 }
 
-const CodingTools = createCodingTools({ images: lazyImageProcessor() });
+// (the same four tools as createCodingTools, with write and edit held to a worktree child's root: see fence.ts)
+const CodingTools = defineExtension({
+  name: "coding-tools",
+  tools: [createReadTool({ images: lazyImageProcessor() }), fenceWriteTool(createWriteTool()), fenceWriteTool(createEditTool()), createBashTool()],
+});
 
 const REGISTRY: Record<string, RegistryEntry> = {
   coding: { extension: CodingTools as unknown as Extension<never>, tools: ["read", "write", "edit", "bash"] },

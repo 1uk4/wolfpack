@@ -38,6 +38,7 @@ import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
 import type { LedgerEntry, LedgerKind, LedgerParty, SubagentState, SubmitAck, ThreadEvent, ThreadSummary } from "@wolfpack/protocol";
 import type { ConfigureOptions, EngineConversation, ThinkingLevel, WhenBusy } from "../engine/index.js";
+import { fenceRoot } from "../engine/fence.js";
 import { HttpError } from "./http-error.js";
 import { DEFAULT_HOST_MAX, SlotPool } from "./subagent-slots.js";
 import { conflictBrief, conflictText, dirtyText, homeText, manualText, mergedText, ShipEvents } from "./subagent-merge.js";
@@ -183,6 +184,7 @@ export class SubagentManager {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly lastError = new Map<string, string>();
   private readonly ledgerSeq = new Map<string, number>();
+  private readonly mainWarning = new Map<string, string>();
   private deliverySeq = 0;
   private closed = false;
   /** Owner releases in flight, per child: a resume waits for its child's. */
@@ -335,13 +337,15 @@ export class SubagentManager {
     const { isolation, cwd, note: isolationNote } = plan;
     const now = new Date().toISOString();
     const taskId = WORK_ID.exec(params.task)?.[0] ?? this.boundTask(parent);
+    // A worktree child is pointed at its own copy: paths of the main checkout in the brief are rewritten to it.
+    const brief = plan.workspace ? rewriteBrief(params.task, plan.offLimits ?? [], plan.workspace.path) : params.task;
 
     const init: ConfigureOptions = {
       model: { provider: model.provider, modelId: model.modelId },
       ...(model.thinking ? { thinkingLevel: model.thinking as ThinkingLevel } : {}),
       tools,
       cwd,
-      instructions: childInstructions(def, name),
+      instructions: childInstructions(def, name, plan.workspace ? { ws: plan.workspace, offLimits: plan.offLimits ?? [] } : undefined),
     };
     let owned: Awaited<ReturnType<SubagentOptions["createOwned"]>>;
     try {
@@ -365,6 +369,7 @@ export class SubagentManager {
     const run = adm.run;
     // (the commit it was cut from: what a home child's unmerged commits are counted against)
     const base = plan.workspace ? await gitOk(plan.workspace.path, ["rev-parse", "HEAD"]).catch(() => undefined) : undefined;
+    const mainWatch = plan.workspace ? await this.mainState(plan.workspace.repo.mainDir) : undefined;
     const rec: ChildRecord = {
       id,
       conversationId: owned.conversation.id,
@@ -372,13 +377,14 @@ export class SubagentManager {
       parentThreadId: parent.summary.id,
       agent: def.name,
       name,
-      brief: params.task,
+      brief,
       tier,
       cwd,
       isolation,
       ...(plan.workspace ? { workspace: plan.workspace } : {}),
       ...(plan.guardDir ? { guardDir: plan.guardDir } : {}),
       ...(base ? { base } : {}),
+      ...(mainWatch ? { mainWatch } : {}),
       ...(extra.resolves ? { resolves: extra.resolves } : {}),
       state: run ? "running" : "queued",
       ...(adm.seq ? { queuedSeq: adm.seq } : {}),
@@ -400,13 +406,13 @@ export class SubagentManager {
     }
     if (run) {
       try {
-        await owned.conversation.submit({ input: params.task, whenBusy: "reject" });
+        await owned.conversation.submit({ input: brief, whenBusy: "reject" });
       } catch (e) {
         await this.discard(rec);
         return fail(`Sub-agent "${name}" could not start: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    this.ledger(rec, "parent", "child", "brief", params.task);
+    this.ledger(rec, "parent", "child", "brief", brief);
     this.announce(rec);
     if (!run) {
       this.shownPosition.set(id, this.positionOf(rec)); // (announced just above)
@@ -629,6 +635,7 @@ export class SubagentManager {
   }
 
   private async attach(rec: ChildRecord, conv: EngineConversation): Promise<ThreadRuntime> {
+    if (rec.workspace) fenceRoot(rec.workspace.path); // (write and edit stay inside it; also after a restart)
     const thread = await this.port.attachChild(this.summaryOf(rec), conv);
     this.unobserve.set(rec.id, thread.observe((ev) => this.onChildEvent(rec, thread, ev)));
     this.watchParent(rec.parentThreadId);
@@ -675,7 +682,8 @@ export class SubagentManager {
         this.lastError.set(rec.id, ev.message);
         return;
       case "turn-end":
-        this.finishTurn(rec, thread, ev.reason);
+        if (rec.mainWatch) void this.checkMain(rec).then(() => this.finishTurn(rec, thread, ev.reason));
+        else this.finishTurn(rec, thread, ev.reason);
         return;
       default:
         return;
@@ -746,6 +754,13 @@ export class SubagentManager {
   private settle(rec: ChildRecord, state: SubagentState, text?: string): void {
     delete rec.resuming;
     delete rec.step;
+    const warning = this.mainWarning.get(rec.id);
+    this.mainWarning.delete(rec.id);
+    if (warning) {
+      this.ledger(rec, "system", "parent", "error", warning);
+      this.port.onError(new Error(`subagent ${rec.id}: ${warning}`));
+      if (text !== undefined) text = `${warning}\n\n${text}`;
+    }
     if (text !== undefined) {
       const n = ++this.deliverySeq;
       // The id must be unique across restarts (the counter restarts from the outbox): the parent-side check is by id.
@@ -760,6 +775,35 @@ export class SubagentManager {
     if (target?.workspace) {
       this.tell(rec, `Conflict worker "${rec.name}" ${state === "failed" ? "failed" : "was stopped"} before ${target.workspace.branch} was merged. Nothing was merged; the worktree ${target.workspace.path} is left as it is. Choose again with subagent_merge({ name: "${target.name}", action: "resolve" | "manual" | "abandon" }).`);
     } else if (text !== undefined) this.flush(rec.parentThreadId);
+  }
+
+  /** The main checkout's HEAD and uncommitted files (undefined when git cannot say). */
+  private async mainState(dir: string): Promise<{ path: string; head: string; status: string[] } | undefined> {
+    try {
+      const head = await gitOk(dir, ["rev-parse", "HEAD"]);
+      const status = (await gitOk(dir, ["status", "--porcelain", "--untracked-files=all"])).split("\n").map((l) => l.trim()).filter(Boolean);
+      return { path: dir, head, status };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * A worktree child's turn is over: did the main checkout change while it ran? If so the warning waits in
+   * `mainWarning` for settle() to put in front of the result. Never reverts anything. The baseline moves on, so a
+   * resumed child is only blamed for what happens after.
+   */
+  private async checkMain(rec: ChildRecord): Promise<void> {
+    const before = rec.mainWatch;
+    if (!before) return;
+    const now = await this.mainState(before.path);
+    if (!now) return;
+    const fresh = now.status.filter((l) => !before.status.includes(l));
+    if (now.head !== before.head || fresh.length > 0) {
+      this.mainWarning.set(rec.id, `WARNING: the main checkout ${before.path} changed while this child ran (HEAD ${before.head.slice(0, 9)} -> ${now.head.slice(0, 9)}; ${fresh.length} new uncommitted files). Its work may not be in its worktree.`);
+    }
+    rec.mainWatch = now;
+    this.persist();
   }
 
   /**
@@ -1247,7 +1291,7 @@ export class SubagentManager {
    * holds it: a running child, or another home/feature thread mid-turn there (the calling thread does not count).
    */
   private async planIsolation(a: { parent: ThreadRuntime; def: AgentDefinition; requested: AgentIsolation | undefined; cwd: string; name: string; id: string }): Promise<
-    { ok: true; isolation: AgentIsolation; cwd: string; note: string; workspace?: Workspace; guardDir?: string } | { ok: false; error: string }
+    { ok: true; isolation: AgentIsolation; cwd: string; note: string; workspace?: Workspace; guardDir?: string; offLimits?: string[] } | { ok: false; error: string }
   > {
     const tools = parseCommaList(a.def.tools);
     const writer = isWriter(tools);
@@ -1283,8 +1327,12 @@ export class SubagentManager {
     const { ws, moved } = made;
     const inner = relative(repo.toplevel, realpathOr(a.cwd));
     if (writer) this.guard.acquire(ws.path, a.id);
-    const note = moved ? `This thread now works in ${moved.path} on ${moved.branch}; use paths there. ${CWD_MOVE_NOTE}` : "";
-    return { ok: true, isolation: "worktree", cwd: inner && !inner.startsWith("..") ? join(ws.path, inner) : ws.path, note, workspace: ws, ...(writer ? { guardDir: ws.path } : {}) };
+    const featurePath = this.savedThread(a.parent)?.workspace?.path;
+    const offLimits = [...new Set([repo.mainDir, repo.toplevel, ws.repo.mainDir, ws.repo.toplevel, ...(featurePath ? [featurePath] : [])].filter((p) => p !== ws.path))];
+    const note =
+      (moved ? `This thread now works in ${moved.path} on ${moved.branch}; use paths there. ${CWD_MOVE_NOTE} ` : "") +
+      `Give sub-agents paths relative to the repo, never the main checkout's absolute path (${repo.mainDir}): a worktree sub-agent works in its own copy, and a brief that names the main checkout sends its work there.`;
+    return { ok: true, isolation: "worktree", cwd: inner && !inner.startsWith("..") ? join(ws.path, inner) : ws.path, note, workspace: ws, offLimits, ...(writer ? { guardDir: ws.path } : {}) };
   }
 
   /** The child's worktree: off the feature branch for a feature thread in this repo, else off the cwd's HEAD. `moved` is set when this spawn created the feature workspace and moved the thread. */
@@ -1464,10 +1512,41 @@ export class SubagentManager {
   }
 }
 
+/** `p` and its realpath, each also with the home directory as `~`. */
+function pathVariants(p: string): string[] {
+  const home = homedir();
+  const out = new Set<string>();
+  for (const v of [p, realpathOr(p)]) {
+    out.add(v);
+    if (v === home || v.startsWith(home + "/")) out.add(`~${v.slice(home.length)}`);
+  }
+  return [...out];
+}
+
+/** The brief with the off-limits paths (and their realpath and ~ forms) rewritten to the child's worktree, plus a note saying so. Unchanged when none occur. */
+export function rewriteBrief(brief: string, offLimits: string[], to: string): string {
+  const froms = [...new Set(offLimits.flatMap(pathVariants))].filter((f) => f && f !== "/" && f !== to).sort((a, b) => b.length - a.length);
+  if (froms.length === 0) return brief;
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(^|[^\\w./~-])(${froms.map(esc).join("|")})(?![\\w-]|\\.\\w)/?`, "g");
+  const used = new Set<string>();
+  const out = brief.replace(re, (m, pre: string, hit: string) => {
+    used.add(hit);
+    return `${pre}${to}${m.endsWith("/") ? "/" : ""}`;
+  });
+  if (used.size === 0) return brief;
+  return `Note: paths in this brief were rewritten to your worktree ${to} (from ${[...used].join(", ")}).\n\n${out}`;
+}
+
 /** The child's instructions: its profile's prompt, then what it needs to know about running under a parent. */
-function childInstructions(def: AgentDefinition, name: string): string {
+function childInstructions(def: AgentDefinition, name: string, worktree?: { ws: Workspace; offLimits: string[] }): string {
+  const off = worktree?.offLimits ?? [];
+  const featurePath = off.find((p) => p !== worktree?.ws.repo.mainDir && p !== worktree?.ws.repo.toplevel);
   return [
     def.body ?? "",
+    worktree
+      ? `Your working copy is ${worktree.ws.path} on branch ${worktree.ws.branch}. Do all reads, edits, tests and commits there. The repository's main checkout at ${worktree.ws.repo.mainDir}${featurePath ? ` and the feature worktree at ${featurePath}` : ""} are off-limits; never edit or commit there. If your brief names a path in them, use the same path under ${worktree.ws.path} instead.`
+      : "",
     `You are the sub-agent "${name}", spawned by another agent (your parent), not by the user. Your final message is delivered to your parent as your result, so make it complete and self-contained. If you are blocked and need a decision only your parent can give, call ask_user_question: your parent receives the question and replies, and you continue.`,
   ]
     .filter(Boolean)

@@ -152,8 +152,8 @@ export function AskCard({ card, answer, dismissed, closed: closedProp, heldAnswe
 			{!closed && (
 				<div className="mt-3 flex justify-end gap-2">
 					{onSkip && (
-						<Button type="button" size="sm" variant="ghost" disabled={!pending || submitting} onClick={onSkip} data-testid="card-skip" aria-label="Skip this question">
-							Skip
+						<Button type="button" size="sm" variant="ghost" disabled={!pending || submitting} onClick={onSkip} data-testid="card-skip">
+							{heldAnswer && !heldSkip ? "Skip (discard saved answer)" : "Skip question"}
 						</Button>
 					)}
 					{stepped && step > 0 && (

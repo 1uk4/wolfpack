@@ -201,7 +201,8 @@ export function ThreadChat({
 		cardEventRef.current = (ev) => {
 			cardEpoch.current++;
 			setCards((c) => foldCardEvent(c, ev));
-			if (ev.type === "card-settled" && ev.outcome === "answered") void refreshCards();
+			// Answered or skipped: the record carries the result text.
+			if (ev.type === "card-settled" && (ev.outcome === "answered" || ev.closed === "skipped")) void refreshCards();
 		};
 	});
 	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).

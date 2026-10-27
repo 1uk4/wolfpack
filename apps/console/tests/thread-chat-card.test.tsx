@@ -114,6 +114,7 @@ class CardClient extends MockConsoleClient {
 		if (this.holdSkipNext) {
 			this.holdSkipNext = false;
 			this.heldSkip = true;
+			this.held = undefined;
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.skippedState = true;
@@ -133,6 +134,7 @@ class CardClient extends MockConsoleClient {
 		if (this.holdNext) {
 			this.holdNext = false;
 			this.held = answers;
+			this.heldSkip = false;
 			return { messageId: `card-${callId}`, disposition: "queued" as const };
 		}
 		this.answered = answers;
@@ -349,6 +351,39 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		assert.ok(q('[data-testid="pending-card"]'));
 		assert.ok(q('[data-testid="card-held-skip"]'));
 		assert.equal(q('[data-testid="card-closed-badge"]'), null);
+	});
+
+	it("answer -> skip -> answer on the same held card: each replaces the other, the final answer starts the turn", async () => {
+		const client = new CardClient(SINGLE);
+		client.holdNext = true;
+		await mount(client);
+		await click(document.querySelectorAll('[data-testid="card-option"]')[0]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.ok(q('[data-testid="card-held"]'));
+		assert.equal(q('[data-testid="card-skip"]')?.textContent, "Skip (discard saved answer)");
+		client.holdSkipNext = true;
+		await click(q('[data-testid="card-skip"]')!);
+		await settle();
+		assert.ok(q('[data-testid="card-held-skip"]'), "the held skip replaced the held answer");
+		assert.equal(q('[data-testid="card-held"]'), null);
+		assert.equal(q('[data-testid="card-skip"]')?.textContent, "Skip question");
+		await click(document.querySelectorAll('[data-testid="card-option"]')[1]!);
+		await click(q('[data-testid="card-submit"]')!);
+		await settle();
+		assert.deepEqual(client.skips, [CALL]);
+		assert.equal(q('[data-testid="card-closed-badge"]')?.textContent, "Answered");
+		assert.deepEqual(client.answers.at(-1)?.answers, { answer: { value: "develop" } });
+	});
+
+	it("a held skip survives a refetch", async () => {
+		const client = new CardClient(SINGLE);
+		client.heldSkip = true;
+		await mount(client);
+		assert.ok(q('[data-testid="card-held-skip"]'));
+		const detail = await client.getThread(FIXTURE_THREAD.id);
+		assert.equal(cardsOfThread(detail).calls[CALL]?.heldSkip, true);
+		assert.equal(cardsOfThread(detail).pending[0]?.heldSkip, true);
 	});
 
 	it("reload: skipped and superseded history show distinct badges", async () => {

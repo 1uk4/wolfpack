@@ -11,7 +11,7 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import type { ModelTable } from "@wolfpack/engine";
-import type { Card } from "@wolfpack/protocol";
+import type { Card, CardAnswers } from "@wolfpack/protocol";
 
 // Re-export Type for extension authors
 export { Type };
@@ -39,9 +39,15 @@ export interface ToolResult {
   isError?: boolean;
   /**
    * Ask the operator a question: the card ends the turn and waits for an answer, which starts the next turn.
-   * `content` is the model-facing placeholder for this call. A tool that sets `card` should declare `raisesCard`.
+   * `content` is the model-facing placeholder for this call. A tool that sets `card` must declare `raisesCard`.
    */
   card?: Card;
+  /**
+   * End the round after this result without raising a card (e.g. a duplicate call pointing at the card already
+   * pending). For tools that declare `raisesCard`: the card guard then ends the mixed round around it. A card result
+   * always ends the turn by itself.
+   */
+  endTurn?: boolean;
 }
 
 export interface Tool {
@@ -98,6 +104,14 @@ export interface ConversationMessage {
   message: { role: string; content?: unknown };
 }
 
+export interface CardLookup {
+  callId: string;
+  card: Card;
+  status: "pending" | "answered" | "dismissed";
+  answers?: CardAnswers;
+  laterResults: ConversationMessage[];
+}
+
 /** The hook's conversation, read from the durable store. */
 export interface ConversationReads {
   classify(): Promise<ConversationClass | undefined>;
@@ -105,6 +119,13 @@ export interface ConversationReads {
   classifyOther?(conversationId: number): Promise<ConversationClass | undefined>;
   /** Own messages with entry id > `afterEntryId`, oldest first (a fork's inherited history is excluded). */
   messagesSince(afterEntryId?: number): Promise<ConversationMessage[]>;
+  /**
+   * The newest card raised by `tool` that `matches`, read from the structured transcript (not model text). `status`:
+   * pending (raised, nothing since), answered (with the stored answers), dismissed (a plain user message came first).
+   * `laterResults` are this tool's other results after the card, newest first (e.g. to see the answer was acted on).
+   * Scans newest-first and stops at the hit; a card beyond a bounded history counts as never raised.
+   */
+  latestCard?(tool: string, matches: (card: Card) => boolean): Promise<CardLookup | undefined>;
   /** Run `fn` once when the engine closes (to clear timers). */
   onEngineClose?(fn: () => void): void;
   /** The host runs its own interval consolidation timer: don't start another. */
@@ -224,6 +245,17 @@ export interface ExtensionContext {
   telegram?: TelegramSharedState;
   /** Sweep manager (if librarian mode is enabled) */
   sweep?: SweepManager;
+  /** What the host offers the model beside this extension; absent means nothing beyond the plain tools. */
+  capabilities?: HostCapabilities;
+}
+
+/** Explicit host capability signals (never inferred from a UI flag). */
+export interface HostCapabilities {
+  /**
+   * The host installs a card-raising `ask_user_question` (wolfd: single/multi/confirm/free-text fields, batched via
+   * `questions`; the answers arrive as the next submission). Interactive flows may interview the user through it.
+   */
+  askCards?: boolean;
 }
 
 /**

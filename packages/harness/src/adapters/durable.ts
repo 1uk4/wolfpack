@@ -47,6 +47,7 @@ export function toDurableResult(result: ToolResult): Omit<ToolExecutionResult, "
     const raised = cardResult(result.card, content.map((c) => c.text).join("\n") || undefined);
     return raised;
   }
+  if (result.endTurn) return { output: content, control: { terminate: true } };
   return { output: content };
 }
 
@@ -75,6 +76,7 @@ export function adaptToDurable(
         classify: () => reader.classify(conversationId),
         classifyOther: (id: number) => reader.classify(id),
         messagesSince: (after?: number) => reader.messagesSince(conversationId, after),
+        latestCard: (tool, matches) => reader.latestCard(conversationId, tool, matches),
         onEngineClose: (fn) => reader.onClose(fn),
         hostConsolidationTimer: reader.hostConsolidationTimer === true,
       },

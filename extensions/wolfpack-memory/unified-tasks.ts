@@ -18,6 +18,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "@wolfpack/harness/extension";
+import { confirmCard } from "@wolfpack/harness/engine";
 import {
   type WorkItem,
   type CreateWorkInput,
@@ -38,6 +39,7 @@ import {
   renderGraduationPreview,
   initiativeOf,
   type GraduationPreview,
+  resolveShipPolicy,
   rollupToParent,
   recordFeatureId,
   renderFeatureRecord,
@@ -67,7 +69,11 @@ type WorkItemStage = typeof STAGE_ORDER[number];
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export interface TasksConfig {
-  /** Auto-ship tasks without confirmation (default: true for agent-managed) */
+  /**
+   * Ship policy. `true`: task_done ships without asking. `false`: it always asks (when someone can answer).
+   * Unset: from WOLFPACK_TASK_SHIP (`auto`, else confirm). A confirm policy raises a confirm card in an interactive
+   * thread and ships on the user's yes; it ships at once when headless (see `canAsk`).
+   */
   autoShip?: boolean;
   /** Engine for graduation's distill (default: the wolf's model table). Test seam. */
   engine?: () => Engine;
@@ -200,10 +206,82 @@ export default function createTasksExtension(
   context: ExtensionContext
 ): ReturnType<typeof defineExtension> {
   const { wolfDen, wolfName, domains } = context;
-  const autoShip = config.autoShip ?? true;
 
   const env = context.env ?? process.env;
+  const autoShip = config.autoShip ?? resolveShipPolicy(env) === "auto";
   const client = makeClient(context.env);
+
+  // ── Ship confirmation ───────────────────────────────────────────────────
+  // task_done in a confirm policy raises a one-field confirm card (see engine/cards.ts) instead of shipping. The
+  // user's answer starts the next turn; the model then calls task_done again with confirm: false, which ships only if
+  // the structured card-answer for THAT card says yes (never the model's say-so, never parsed text).
+
+  /**
+   * Confirm only when someone can answer: the host serves the card protocol (capabilities.askCards: wolfd, not a pi or
+   * Telegram-only host), the tool runs inside a durable conversation, and that is not a task-owned one (a subagent:
+   * nobody reads its cards). Otherwise task_done ships at once.
+   */
+  const cardCapable = context.capabilities?.askCards === true;
+  async function canAsk(ctx: ToolContext): Promise<boolean> {
+    if (!cardCapable || !ctx.conversation?.latestCard) return false;
+    return (await ctx.conversation.classify())?.kind !== "task";
+  }
+
+  /** First line of a successful ship result; the spent-yes check reads it back. */
+  const shippedLine = (id: string) => `Shipped: ${id}`;
+
+  /** The card's one field label is the exact key: it carries the id and the title at ask time. */
+  const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
+  const shipCard = (title: string, id: string) =>
+    confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
+  const firstLine = (m: { message: { content?: unknown } }): string => {
+    const c = m.message.content;
+    const block = Array.isArray(c) ? (c as { type?: string; text?: string }[]).find((x) => x?.type === "text" && typeof x.text === "string") : undefined;
+    const text = typeof c === "string" ? c : (block?.text ?? "");
+    return text.split("\n")[0];
+  };
+
+  /** Raised in this round, before the card reaches the transcript (parallel calls of one round): conversation:item -> label. */
+  const raisedThisRound = new Map<string, { label: string; at: number }>();
+  /** Parallel calls of one round land within milliseconds; an older entry whose card never reached the transcript is stale. */
+  const ROUND_MS = 30_000;
+
+  /** The newest ship card for `id` at this title, from the structured transcript. */
+  const shipCardFor = (ctx: ToolContext, id: string, title: string) => ctx.conversation!.latestCard!("task_done", (c) => c.fields.length === 1 && c.fields[0].label === shipLabel(title, id));
+
+  /**
+   * Decide a task_done on `id`: undefined = ship now, else the result to return instead.
+   * Ship now when the policy is auto or nobody can answer (an explicit confirm: true keeps the legacy "call again"
+   * text). Otherwise ship only on confirm: false backed by a yes on the newest matching card that no ship has used
+   * yet; anything else raises (or re-points at) the card.
+   */
+  async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, id: string, titleOf: () => Promise<string>): Promise<ToolResult | undefined> {
+    if (autoShip || !(await canAsk(ctx))) {
+      return args.confirm === true
+        ? { content: [{ type: "text", text: `Confirmation required to ship ${id}. Call task_done again with confirm: false to ship.` }] }
+        : undefined;
+    }
+    const title = await titleOf();
+    const found = await shipCardFor(ctx, id, title);
+    const round = `${ctx.conversationId}:${id}`;
+    const marker = raisedThisRound.get(round);
+    // The transcript has the card now (any status), or the marker aged out without one: drop it.
+    if (found || (marker && Date.now() - marker.at > ROUND_MS)) raisedThisRound.delete(round);
+    if (found?.status === "answered" && args.confirm === false) {
+      const yes = (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
+      // A yes is spent once a ship of this id followed it.
+      const spent = found.laterResults.some((m) => firstLine(m) === shippedLine(id));
+      if (yes && !spent) return undefined;
+    }
+    if (found?.status === "pending" || (!found && raisedThisRound.get(round)?.label === shipLabel(title, id))) {
+      return { content: [{ type: "text", text: `The user was already asked whether to ship ${id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
+    }
+    raisedThisRound.set(round, { label: shipLabel(title, id), at: Date.now() });
+    return {
+      content: [{ type: "text", text: `Asked the user to confirm shipping ${id}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.` }],
+      card: shipCard(title, id),
+    };
+  }
 
   // ── Cache: sections read sync, tools write async ────────────────────────
   interface TaskCache {
@@ -843,6 +921,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
       // ─── task_done ───────────────────────────────────────────────────────
       defineTool({
         name: "task_done",
+        raisesCard: true,
         description: "Ship the active task and optionally bind to the next unfinished sibling." + ID_NOTE + " Shipping another item leaves your binding as it is.",
         parameters: Type.Object({
           confirm: Type.Optional(Type.Boolean({ description: "Override auto-ship policy" })),
@@ -852,13 +931,12 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
         async execute(args: { confirm?: boolean; bindNext?: boolean; id?: string }, ctx: ToolContext): Promise<ToolResult> {
           const binding = await readBinding(ctx);
           if (args.id && args.id !== binding?.taskId) {
-            if (args.confirm ?? !autoShip) {
-              return { content: [{ type: "text", text: `Confirmation required to ship ${args.id}. Call task_done again with confirm: false to ship.` }] };
-            }
+            const held = await shipGate(ctx, args, args.id, async () => (await findItem(args.id!))?.item.title ?? args.id!);
+            if (held) return held;
             try {
               const shippedOther = await ship(args.id);
               return {
-                content: [{ type: "text", text: heads(`Shipped: ${args.id}`, { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
+                content: [{ type: "text", text: heads(shippedLine(args.id!), { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
               };
             } catch (err) {
               return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
@@ -879,17 +957,8 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             };
           }
 
-          const shouldConfirm = args.confirm ?? !autoShip;
-          
-          // If confirmation needed, return message
-          if (shouldConfirm) {
-            return {
-              content: [{
-                type: "text",
-                text: `Confirmation required to ship ${binding.taskId}. Call task_done again with confirm: false to ship.`,
-              }],
-            };
-          }
+          const held = await shipGate(ctx, args, binding.taskId, async () => (await findItem(binding.taskId))?.item.title ?? binding.taskId);
+          if (held) return held;
 
           
           
@@ -898,7 +967,7 @@ Domains: ${domainList}${isSubagent() ? "" : `\n\n${BINDING_RULES}`}`;
             await ship(binding.taskId);
             
             const found = await findItem(binding.taskId);
-            const result: string[] = [`Shipped: ${binding.taskId}`];
+            const result: string[] = [shippedLine(binding.taskId)];
 
             // Find next sibling if requested; with none left, stay on the finished
             // feature (or on the finished loose task) until it is graduated.

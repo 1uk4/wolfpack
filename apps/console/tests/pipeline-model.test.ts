@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { KbPipelineResponse } from "../src/core/pipeline-model.ts";
-import { applySweepEvent, formatAge, initialState, lanes, normalizeOutcome, relativeTime, sweepSummary } from "../src/core/pipeline-model.ts";
+import { applySweepEvent, showsDetail, formatAge, initialState, lanes, normalizeOutcome, relativeTime, sweepSummary } from "../src/core/pipeline-model.ts";
 
 const base = (): KbPipelineResponse => ({
 	lanes: [
@@ -72,5 +72,26 @@ describe("time", () => {
 		assert.equal(formatAge(5 * 60_000), "5m");
 		assert.equal(relativeTime("2026-10-26T10:00:00Z", Date.parse("2026-10-26T10:03:00Z")), "3m ago");
 		assert.equal(relativeTime("2026-10-26T10:00:00Z", Date.parse("2026-10-26T10:00:01Z")), "just now");
+	});
+});
+
+describe("review fixes", () => {
+	it("unclassified shows detail", () => assert.equal(showsDetail("unclassified"), true));
+	it("sweep_item clears current", () => {
+		const s = initialState({ ...base(), sweep: { current: { from: "a", denTopicId: "t", startedAt: "z" } } });
+		assert.equal(applySweepEvent(s, ev({ type: "sweep_item", from: "a", denTopicId: "t", outcome: "merge" })).data.sweep.current, undefined);
+	});
+	it("unknown wolf leaves lanes; pending floors at 0", () => {
+		let s = initialState(base());
+		s = applySweepEvent(s, ev({ type: "sweep_item", from: "zzz", denTopicId: "t", outcome: "merge" }));
+		assert.deepEqual(s.data.lanes, base().lanes);
+		s = applySweepEvent(s, ev({ type: "sweep_item", from: "b", denTopicId: "t", outcome: "merge" }));
+		assert.equal(s.data.lanes.find((l) => l.wolf === "b")?.pending, 0);
+	});
+	it("live parked keeps list and total consistent", () => {
+		const s = applySweepEvent(initialState(base()), ev({ type: "sweep_item", from: "a", denTopicId: "t9", outcome: "parked" }));
+		assert.equal(s.data.parked.length, 1);
+		assert.equal(s.data.parkedTotal, 1);
+		assert.equal(s.data.parked[0]?.denTopicId, "t9");
 	});
 });

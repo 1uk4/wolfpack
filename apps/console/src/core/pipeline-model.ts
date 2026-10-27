@@ -42,7 +42,7 @@ export const OUTCOME_LABEL: Record<NormalOutcome, string> = {
 
 /** Outcomes whose receipt line explains a decision worth showing. */
 export function showsDetail(outcome: NormalOutcome): boolean {
-	return outcome === "reject" || outcome === "parked";
+	return outcome === "reject" || outcome === "parked" || outcome === "unclassified";
 }
 
 /** The live view state: the fetched response plus the sweep in flight (from sweep_started). */
@@ -93,7 +93,8 @@ export function sweepSummary(state: PipelineState): SweepSummary {
 export function relativeTime(iso: string, now: number = Date.now()): string {
 	const t = Date.parse(iso);
 	if (Number.isNaN(t)) return iso;
-	return `${formatAge(Math.max(0, now - t))} ago`.replace(/^just now ago$/, "just now");
+	const age = formatAge(Math.max(0, now - t));
+	return age === "just now" ? age : `${age} ago`;
 }
 
 export function formatAge(ms: number): string {
@@ -140,12 +141,17 @@ export function applySweepEvent(state: PipelineState, e: MemoryEventFrame): Pipe
 				const { oldestAgeMs: _o, ...rest } = l;
 				return { ...rest, pending };
 			});
+			const { current: _cur, ...sweep } = state.data.sweep;
 			const data: KbPipelineResponse = {
 				...state.data,
 				lanes: lanesNext,
 				receipts: [receipt, ...state.data.receipts].slice(0, RECEIPT_CAP),
+				sweep,
 			};
-			if (outcome === "parked") data.parkedTotal = (state.data.parkedTotal ?? state.data.parked.length) + 1;
+			if (outcome === "parked") {
+				data.parked = [{ wolf: e.from, file: "", denTopicId: e.denTopicId }, ...state.data.parked];
+				data.parkedTotal = (state.data.parkedTotal ?? state.data.parked.length) + 1;
+			}
 			return { data, running: state.running ?? { startedAt: at, pending: 0 } };
 		}
 		case "sweep_finished": {

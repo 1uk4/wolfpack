@@ -127,10 +127,10 @@ export function PipelineBody({ state, now }: { state: PipelineState; now: number
 					<p className="text-sm text-muted-foreground">Nothing processed yet.</p>
 				) : (
 					<ul className="space-y-1.5" data-testid="pipeline-receipts">
-						{data.receipts.map((r, i) => {
+						{data.receipts.map((r) => {
 							const outcome = normalizeOutcome(r.outcome);
 							return (
-								<li key={`${r.wolf}/${r.denTopicId}/${r.processed}/${i}`} className="text-sm" data-outcome={outcome}>
+								<li key={`${r.wolf}/${r.denTopicId}/${r.processed}`} className="text-sm" data-outcome={outcome}>
 									<div className="flex items-baseline gap-3">
 										<span className="w-20 shrink-0 text-muted-foreground">{OUTCOME_LABEL[outcome]}</span>
 										<span className="truncate text-foreground">
@@ -159,9 +159,9 @@ export function PipelineBody({ state, now }: { state: PipelineState; now: number
 				) : (
 					<ul className="space-y-1.5" data-testid="pipeline-parked">
 						{data.parked.map((p) => (
-							<li key={`${p.wolf}/${p.file}`} className="text-sm">
+							<li key={`${p.wolf}/${p.file}/${p.denTopicId ?? ""}`} className="text-sm">
 								<span className="text-foreground">
-									{p.wolf} / {p.denTopicId ?? p.file}
+									{p.wolf}{p.denTopicId || p.file ? ` / ${p.denTopicId || p.file}` : ""}
 								</span>
 								{p.reason ? <div className="text-[12px] text-muted-foreground/70">{p.reason}</div> : null}
 							</li>
@@ -182,8 +182,8 @@ export function PipelineView() {
 	const { librarian, loading } = useLibrarian();
 	const [load, setLoad] = useState<Load>({ kind: "loading" });
 	const [state, dispatch] = useReducer(
-		(s: PipelineState | null, a: { type: "set"; data: KbPipelineResponse } | { type: "event"; e: Parameters<typeof applySweepEvent>[1] }) =>
-			a.type === "set" ? initialState(a.data) : s ? applySweepEvent(s, a.e) : s,
+		(s: PipelineState | null, a: { type: "reset" } | { type: "set"; data: KbPipelineResponse } | { type: "event"; e: Parameters<typeof applySweepEvent>[1] }) =>
+			a.type === "reset" ? null : a.type === "set" ? initialState(a.data) : s ? applySweepEvent(s, a.e) : s,
 		null,
 	);
 	const [now, setNow] = useState(() => Date.now());
@@ -202,7 +202,12 @@ export function PipelineView() {
 	}, [librarian]);
 
 	useEffect(() => {
+		setLoad({ kind: "loading" });
+		dispatch({ type: "reset" });
 		refetch();
+		return () => {
+			seq.current++;
+		};
 	}, [refetch]);
 
 	useEffect(() => {

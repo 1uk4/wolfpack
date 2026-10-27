@@ -7,6 +7,7 @@
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
+// Mirrors STATUS_BY_CODE / failure() in memory-api.ts (scaffold-owned, so not imported or edited here).
 const STATUS_BY_CODE: Record<string, number> = {
 	busy: 409,
 	not_found: 404,

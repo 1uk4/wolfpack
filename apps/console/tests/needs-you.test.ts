@@ -1,5 +1,6 @@
 /** Needs-you: the cross-wolf list from the client's status, answering from the list, the activity bridge, the notification trigger. */
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 import { MockConsoleClient, type Card, type PendingCard } from "@wolfpack/client";
 import {
@@ -8,6 +9,7 @@ import {
 	cardHeadline,
 	foldCardEvent,
 	itemKey,
+	mergeReport,
 	NO_CARDS,
 	planNotifications,
 	subscribe,
@@ -36,10 +38,10 @@ const item = (over: Partial<NeedsYouItem> & { callId: string }): NeedsYouItem =>
 describe("needs-you list", () => {
 	it("is built from the client's status: wolf, thread title, headline, oldest first", async () => {
 		const client = new MockConsoleClient({ delayMs: 0 });
-		assert.deepEqual(await collectNeedsYou(client).then(buildNeedsYou), []);
+		assert.deepEqual(await collectNeedsYou(client).then((c) => buildNeedsYou(c.reports)), []);
 		const late = client.raiseCard(HOME, ask("Later?"), "c-late", "2026-10-26T11:00:00.000Z");
 		client.raiseCard(HOME, ask("Which branch?", "Release"), "c-early", "2026-10-26T10:00:00.000Z");
-		const [first, second] = buildNeedsYou(await collectNeedsYou(client));
+		const [first, second] = buildNeedsYou((await collectNeedsYou(client)).reports);
 		assert.deepEqual([first?.callId, second?.callId], ["c-early", late.callId]);
 		assert.equal(first?.wolf, "1uk4");
 		assert.equal(first?.threadTitle, "Home");
@@ -74,11 +76,11 @@ describe("needs-you list", () => {
 	it("answering from the list goes through the thread answer route and clears it", async () => {
 		const client = new MockConsoleClient({ delayMs: 0 });
 		client.raiseCard(HOME, ask("Which branch?"), "c1");
-		const it1 = buildNeedsYou(await collectNeedsYou(client))[0]!;
+		const it1 = buildNeedsYou((await collectNeedsYou(client)).reports)[0]!;
 		const res = await createThreadApi(() => client).answerCard({ wolf: it1.wolf, slug: it1.slug }, it1.callId, answerReq({ answer: { value: "main" } }));
 		assert.equal(res.status, 200);
 		assert.deepEqual(client.cardAnswers, [{ threadId: HOME, callId: "c1", answers: { answer: { value: "main" } } }]);
-		assert.deepEqual(await collectNeedsYou(client), [{ wolf: "1uk4", cards: [], threads: await client.listThreads("1uk4") }]);
+		assert.deepEqual((await collectNeedsYou(client)).reports, [{ wolf: "1uk4", cards: [], threads: await client.listThreads("1uk4") }]);
 		assert.equal((await client.listThreads("1uk4"))[0]?.status, "idle");
 		// answered elsewhere / superseded: 404
 		const again = await createThreadApi(() => client).answerCard({ wolf: it1.wolf, slug: it1.slug }, it1.callId, answerReq({ answer: { value: "x" } }));
@@ -97,7 +99,7 @@ describe("activity bridge", () => {
 		assert.deepEqual([...bridge.following], ["1uk4"]);
 		client.raiseCard(HOME, ask("Q"), "c1"); // card-pending + thread-status
 		await new Promise((r) => setTimeout(r, 20));
-		assert.deepEqual(poked, ["1uk4", "1uk4"]);
+		assert.deepEqual(poked, ["1uk4", "1uk4", "1uk4"]); // connect + card-pending + thread-status
 		bridge.stop();
 	});
 
@@ -193,5 +195,142 @@ describe("thread transport", () => {
 		assert.deepEqual(wire({ ...base, type: "card-pending", card: pending }), []);
 		assert.deepEqual(wire({ ...base, id: 2, type: "card-settled", callId: "c1", outcome: "answered" }), []);
 		assert.deepEqual(heard, ["card-pending", "card-settled"]);
+	});
+});
+
+describe("wolf outage", () => {
+	const A = item({ callId: "a", card: ask("Which branch?") });
+	const away = item({ callId: "z", wolf: "other", threadId: "other/home", href: "/wolf/other/thread/home" });
+
+	it("collectNeedsYou reports which wolves responded; a failing wolf is absent from both", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		client.listWolves = async () => [{ id: "1uk4", name: "1uk4", host: "local", status: "online" }, { id: "gone", name: "gone", host: "x", status: "offline" }];
+		const { reports, responded } = await collectNeedsYou(client);
+		assert.deepEqual(responded, ["1uk4"]);
+		assert.deepEqual(reports.map((r) => r.wolf), ["1uk4"]);
+		assert.deepEqual((await collectNeedsYou(client, "1uk4")).responded, ["1uk4"]);
+	});
+
+	it("a wolf that drops out and returns does not re-notify; only responding wolves are pruned", () => {
+		let s = planNotifications(INITIAL_NOTIFY_STATE, [], { focused: false }).state;
+		s = planNotifications(s, [A, away], { focused: false, responded: ["1uk4", "other"] }).state;
+		// "other" is down: its card vanishes from the fetch, but its key stays seen
+		s = planNotifications(s, [A], { focused: false, responded: ["1uk4"] }).state;
+		assert.ok(s.seen.has(itemKey(away)));
+		const back = planNotifications(s, [A, away], { focused: false, responded: ["1uk4", "other"] });
+		assert.deepEqual(back.notifications, []);
+		// once it DID respond without the card, the key is forgotten (a new card of the same id would be new)
+		const gone = planNotifications(back.state, [A], { focused: false, responded: ["1uk4", "other"] });
+		assert.ok(!gone.state.seen.has(itemKey(away)));
+	});
+
+	it("mergeReport keeps a down wolf's items and replaces the responders'", () => {
+		const a2 = item({ callId: "a2", raisedAt: "2026-10-26T09:00:00.000Z" });
+		const merged = mergeReport([A, away], ["1uk4"], [a2]);
+		assert.deepEqual(merged.map((i) => i.callId), ["a2", "z"]);
+	});
+});
+
+describe("activity bridge recovery", () => {
+	it("retries a dropped stream with backoff and pokes on every reconnect", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		let opens = 0;
+		client.watchActivity = async function* () {
+			opens++;
+			if (opens < 3) throw new Error("connection lost");
+			await new Promise(() => {}); // stays open
+		};
+		const poked: string[] = [];
+		const bridge = createActivityBridge((w) => poked.push(w), { backoffMs: [5, 5], wolvesTtlMs: 60_000 });
+		bridge.ensure(client);
+		await new Promise((r) => setTimeout(r, 120));
+		bridge.stop();
+		assert.equal(opens, 3);
+		assert.equal(poked.length, 3, "one poke per (re)connect");
+	});
+
+	it("caches the wolf list between ensure calls", async () => {
+		const client = new MockConsoleClient({ delayMs: 0 });
+		let listed = 0;
+		const real = client.listWolves.bind(client);
+		client.listWolves = async () => (listed++, real());
+		const bridge = createActivityBridge(() => {}, { wolvesTtlMs: 60_000 });
+		bridge.ensure(client);
+		await new Promise((r) => setTimeout(r, 20));
+		bridge.ensure(client);
+		bridge.ensure(client);
+		await new Promise((r) => setTimeout(r, 20));
+		bridge.stop();
+		assert.equal(listed, 1);
+	});
+});
+
+describe("electron notify guards", () => {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	const { safeNotifyHref, isMainFrameSender, createNeedsYouNotifier } = createRequire(import.meta.url)("../../desktop/electron/notify.cjs") as {
+		safeNotifyHref(h: unknown, o: string): string | null;
+		isMainFrameSender(e: unknown, w: unknown): boolean;
+		createNeedsYouNotifier(o: { Notification: unknown; appOrigin: string }): (e: unknown, w: unknown, n: unknown) => boolean;
+	};
+	const ORIGIN = "http://127.0.0.1:3000";
+
+	it("accepts in-app paths and rejects anything that leaves the origin", () => {
+		assert.equal(safeNotifyHref("/wolf/1uk4/thread/home", ORIGIN), "/wolf/1uk4/thread/home");
+		assert.equal(safeNotifyHref("/wolf/a?x=1#h", ORIGIN), "/wolf/a?x=1#h");
+		for (const bad of ["https://evil.com/x", "//evil.com", "/\\evil.com", "\\\\evil.com", "javascript:alert(1)", "http://127.0.0.1:3001/", "", 5, null]) {
+			assert.equal(safeNotifyHref(bad, ORIGIN), null, String(bad));
+		}
+	});
+
+	function fakes(focused = false) {
+		const shown: { title: string; body: string }[] = [];
+		const sent: string[] = [];
+		const clicks: (() => void)[] = [];
+		class Notification {
+			static isSupported = () => true;
+			constructor(public opts: { title: string; body: string }) {}
+			on(_e: string, cb: () => void) {
+				clicks.push(cb);
+			}
+			show() {
+				shown.push(this.opts);
+			}
+		}
+		const mainFrame = {};
+		const win = {
+			isDestroyed: () => false,
+			isFocused: () => focused,
+			isMinimized: () => false,
+			show() {},
+			focus() {},
+			restore() {},
+			webContents: { mainFrame, send: (_c: string, href: string) => sent.push(href) },
+		};
+		return { Notification, shown, sent, clicks, win, mainFrame };
+	}
+	const note = { key: "k1", title: "1uk4 · Home", body: "Which branch?", href: "/wolf/1uk4/thread/home" };
+
+	it("only the app window's main frame may notify", () => {
+		const f = fakes();
+		assert.equal(isMainFrameSender({ senderFrame: f.mainFrame }, f.win), true);
+		assert.equal(isMainFrameSender({ senderFrame: {} }, f.win), false, "a subframe");
+		assert.equal(isMainFrameSender({ senderFrame: null }, f.win), false);
+		const notify = createNeedsYouNotifier({ Notification: f.Notification, appOrigin: ORIGIN });
+		assert.equal(notify({ senderFrame: {} }, f.win, note), false);
+		assert.equal(f.shown.length, 0);
+	});
+
+	it("shows once per key while unfocused, never while focused or for a foreign href; click navigates", () => {
+		const f = fakes();
+		const notify = createNeedsYouNotifier({ Notification: f.Notification, appOrigin: ORIGIN });
+		const ev = { senderFrame: f.mainFrame };
+		assert.equal(notify(ev, f.win, note), true);
+		assert.equal(notify(ev, f.win, note), false, "deduped by key");
+		assert.equal(notify(ev, f.win, { ...note, key: "k2", href: "/\\evil.com" }), false);
+		assert.deepEqual(f.shown, [{ title: "1uk4 · Home", body: "Which branch?" }]);
+		f.clicks[0]!();
+		assert.deepEqual(f.sent, ["/wolf/1uk4/thread/home"]);
+		const focused = fakes(true);
+		assert.equal(createNeedsYouNotifier({ Notification: focused.Notification, appOrigin: ORIGIN })({ senderFrame: focused.mainFrame }, focused.win, note), false);
 	});
 });

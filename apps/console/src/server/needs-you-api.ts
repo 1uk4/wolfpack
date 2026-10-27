@@ -15,30 +15,36 @@ import { emit } from "../core/events.ts";
 import { getConsoleClient } from "./console-client.ts";
 import type { ClientSource } from "./thread-api.ts";
 
-/** Every wolf's pending cards and thread titles. */
-export async function collectNeedsYou(client: ConsoleClient): Promise<WolfNeedsYou[]> {
-	if (!client.listCards) return [];
-	const wolves = await client.listWolves();
+/**
+ * Pending cards and thread titles of every wolf (or just `only`). `responded` names the wolves that answered: an
+ * unreachable wolf is absent from both, and the caller must not conclude its cards are gone.
+ */
+export async function collectNeedsYou(client: ConsoleClient, only?: string): Promise<{ reports: WolfNeedsYou[]; responded: string[] }> {
+	if (!client.listCards) return { reports: [], responded: [] };
+	const names = only ? [only] : (await client.listWolves()).map((w) => w.name);
 	const reports = await Promise.all(
-		wolves.map(async (w): Promise<WolfNeedsYou | null> => {
+		names.map(async (wolf): Promise<WolfNeedsYou | null> => {
 			try {
-				const [cards, threads] = await Promise.all([client.listCards!(w.name), client.listThreads(w.name)]);
-				return { wolf: w.name, cards, threads };
+				const [cards, threads] = await Promise.all([client.listCards!(wolf), client.listThreads(wolf)]);
+				return { wolf, cards, threads };
 			} catch {
 				return null;
 			}
 		}),
 	);
-	return reports.filter((r): r is WolfNeedsYou => r !== null);
+	const ok = reports.filter((r): r is WolfNeedsYou => r !== null);
+	return { reports: ok, responded: ok.map((r) => r.wolf) };
 }
 
 export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client: ConsoleClient) => void } = {}) {
 	return {
-		async list(): Promise<Response> {
+		/** `wolf`: only that wolf (the poked-wolf refetch). Answers `{items, responded}`. */
+		async list(wolf?: string): Promise<Response> {
 			try {
 				const client = source();
 				opts.onList?.(client);
-				return Response.json({ items: buildNeedsYou(await collectNeedsYou(client)) });
+				const { reports, responded } = await collectNeedsYou(client, wolf);
+				return Response.json({ items: buildNeedsYou(reports), responded });
 			} catch (err) {
 				return Response.json({ error: err instanceof Error ? err.message : "Unexpected error" }, { status: 500 });
 			}
@@ -46,32 +52,79 @@ export function createNeedsYouApi(source: ClientSource, opts: { onList?: (client
 	};
 }
 
+export interface BridgeOptions {
+	/** Retry delays for a dropped wolf stream, last one repeats. */
+	backoffMs?: readonly number[];
+	/** How long the wolf list is cached before `ensure` re-reads it. */
+	wolvesTtlMs?: number;
+	/** No bytes (frames or keepalives) for this long = half-open; the client reconnects. */
+	idleMs?: number;
+}
+
 /**
- * Follow every wolf's activity stream and poke the bus on each change. Idempotent per wolf (a wolf already followed is
- * not followed twice) and safe to call on every list request, which is how newly listed wolves get picked up. A stream
- * that gives up is dropped from the set so the next call restarts it. Returns a stop function.
+ * Follow every wolf's activity stream and poke the bus on each change. `ensure` is cheap and idempotent (the wolf list is
+ * cached; a followed wolf is not followed twice). A stream that ends or gives up is retried with backoff, and every
+ * (re)start pokes once: events in the gap may have been missed (or resynced), so consumers refetch.
  */
-export function createActivityBridge(poke: (wolf: string) => void = (wolf) => emit("needs-you-changed", { wolf })) {
+export function createActivityBridge(poke: (wolf: string) => void = (wolf) => emit("needs-you-changed", { wolf }), opts: BridgeOptions = {}) {
+	const backoff = opts.backoffMs ?? [1_000, 2_000, 5_000, 15_000, 30_000];
+	const ttl = opts.wolvesTtlMs ?? 30_000;
 	const following = new Set<string>();
 	const ctl = new AbortController();
+	let wolves: string[] = [];
+	let wolvesAt = 0;
+	let wolvesPending: Promise<void> | undefined;
+
+	const sleep = (ms: number) =>
+		new Promise<void>((resolve) => {
+			const t = setTimeout(resolve, ms);
+			ctl.signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+		});
+
+	async function follow(client: ConsoleClient, wolf: string): Promise<void> {
+		let attempt = 0;
+		while (!ctl.signal.aborted) {
+			try {
+				poke(wolf); // (re)connected: refetch truth, the gap may hold changes
+				for await (const _ev of client.watchActivity!(wolf, { signal: ctl.signal, ...(opts.idleMs ? { idleMs: opts.idleMs } : {}) })) {
+					attempt = 0;
+					poke(wolf);
+				}
+			} catch {
+				/* retry below */
+			}
+			if (ctl.signal.aborted) break;
+			await sleep(backoff[Math.min(attempt++, backoff.length - 1)]!);
+		}
+		following.delete(wolf);
+	}
+
+	function refreshWolves(client: ConsoleClient): Promise<void> {
+		wolvesPending ??= client
+			.listWolves()
+			.then((list) => {
+				wolves = list.map((w) => w.name);
+				wolvesAt = Date.now();
+			})
+			.catch(() => {})
+			.finally(() => {
+				wolvesPending = undefined;
+			});
+		return wolvesPending;
+	}
+
 	return {
 		ensure(client: ConsoleClient): void {
-			const watch = client.watchActivity?.bind(client);
-			if (!watch || ctl.signal.aborted) return;
-			void client
-				.listWolves()
-				.then((wolves) => {
-					for (const w of wolves) {
-						if (following.has(w.name)) continue;
-						following.add(w.name);
-						void (async () => {
-							for await (const _ev of watch(w.name, { signal: ctl.signal })) poke(w.name);
-						})()
-							.catch(() => {})
-							.finally(() => following.delete(w.name));
-					}
-				})
-				.catch(() => {});
+			if (!client.watchActivity || ctl.signal.aborted) return;
+			const start = () => {
+				for (const wolf of wolves) {
+					if (following.has(wolf)) continue;
+					following.add(wolf);
+					void follow(client, wolf);
+				}
+			};
+			if (Date.now() - wolvesAt < ttl) return start();
+			void refreshWolves(client).then(start);
 		},
 		stop: () => ctl.abort(),
 		get following(): ReadonlySet<string> {

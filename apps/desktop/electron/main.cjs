@@ -30,6 +30,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { createNeedsYouNotifier } = require("./notify.cjs");
 
 // Mirrors SIDEBAR_AUTOCLOSE in components/sidebar.tsx — keep in sync (the
 // renderer owns the number; this is the IPC widen target).
@@ -357,32 +358,6 @@ const ZOOM_LADDER = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let autoUpdater = null; // electron-updater's, packaged builds only
 
-/**
- * Needs-you notifications (ticket 4). The renderer decides when a card is new; this only guards and delivers:
- * unfocused window only (the operator is not looking at it), once per key (a bounded set), same-origin paths only
- * (the href comes from the renderer; never navigate anywhere else). Clicking restores + focuses the window and sends
- * the href back ("lh:navigate") so the renderer routes to the thread.
- */
-const NOTIFIED_MAX = 200;
-const notified = new Set();
-function showNeedsYouNotification(win, n) {
-	if (!win || win.isDestroyed() || win.isFocused()) return;
-	if (!n || typeof n.key !== "string" || typeof n.title !== "string" || typeof n.body !== "string") return;
-	if (typeof n.href !== "string" || !n.href.startsWith("/") || n.href.startsWith("//")) return;
-	if (!Notification.isSupported() || notified.has(n.key)) return;
-	notified.add(n.key);
-	if (notified.size > NOTIFIED_MAX) notified.delete(notified.values().next().value);
-	const note = new Notification({ title: n.title.slice(0, 120), body: n.body.slice(0, 300) });
-	note.on("click", () => {
-		if (win.isDestroyed()) return;
-		if (win.isMinimized()) win.restore();
-		win.show();
-		win.focus();
-		win.webContents.send("lh:navigate", n.href);
-	});
-	note.show();
-}
-
 function broadcastUpdateStatus(status) {
 	for (const win of BrowserWindow.getAllWindows()) {
 		try {
@@ -557,7 +532,9 @@ async function main() {
 	// are log lines — this can never block boot.
 	setupAutoUpdater();
 	ipcMain.on("lh:update-install", () => installUpdateNow());
-	ipcMain.on("lh:notify", (event, n) => showNeedsYouNotification(BrowserWindow.fromWebContents(event.sender), n));
+	// Needs-you notifications: validation + delivery live in notify.cjs (tested without Electron).
+	const notifyNeedsYou = createNeedsYouNotifier({ Notification, appOrigin: new URL(url).origin });
+	ipcMain.on("lh:notify", (event, n) => notifyNeedsYou(event, BrowserWindow.fromWebContents(event.sender), n));
 
 	// Sidebar-at-narrow-window (owner, 2026-09-17): the renderer auto-closes
 	// the sidebar below SIDEBAR_AUTOCLOSE (928px); opening it again at that

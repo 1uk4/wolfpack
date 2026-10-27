@@ -16,7 +16,8 @@ import { AttachmentThumbs } from "@/components/attachment-thumbs";
 import { canSendWith, chipFor, dragHasFiles, droppedFiles, readyInfos, uploadFile, type AttachmentInfo, type PendingAttachment } from "@/components/attachments";
 import { useChatSession } from "@/components/session";
 import { useAllThinkingToggle } from "@/components/thinking-toggle";
-import { cardAnswerUrl, threadTransport } from "@/components/thread-transport";
+import { cardAnswerUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
+import { useServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import {
 	ASSISTANT_CONTENT_CLASS,
@@ -156,7 +157,7 @@ export function ThreadChat({
 	initialCards?: ThreadCards;
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
-	const cardEventRef = useRef<(ev: Parameters<NonNullable<Parameters<typeof threadTransport>[2]>>[0]) => void>(() => {});
+	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev)), [wolf, slug]);
 	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
 		chatId: threadId,
@@ -169,21 +170,36 @@ export function ThreadChat({
 	const [cardError, setCardError] = useState<string | null>(null);
 	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
 	// after an answer that did not start a turn (siblings still wait).
+	// Sequenced: only the newest response applies, and a response that a card event overtook is refetched, so a slow
+	// record can never undo a newer live event.
+	const refreshSeq = useRef(0);
+	const cardEpoch = useRef(0);
 	const refreshCards = useCallback(async () => {
+		const seq = ++refreshSeq.current;
+		const epoch = cardEpoch.current;
 		try {
 			const res = await fetch(transport.recordUrl);
-			if (!res.ok) return;
+			if (!res.ok || seq !== refreshSeq.current) return;
 			const next = parseThreadCards(await res.json());
+			if (seq !== refreshSeq.current) return;
+			if (epoch !== cardEpoch.current) return void refreshCards(); // a card event landed meanwhile: fetch again
 			if (next) setCards(next);
 		} catch {
 			/* the next settle refetches */
 		}
 	}, [transport]);
 	// A card raised mid-stream shows at once (no wait for the turn to settle); an answer's text comes with the record.
-	cardEventRef.current = (ev) => {
-		setCards((c) => foldCardEvent(c, ev));
-		if (ev.type === "card-settled" && ev.outcome === "answered") void refreshCards();
-	};
+	useEffect(() => {
+		cardEventRef.current = (ev) => {
+			cardEpoch.current++;
+			setCards((c) => foldCardEvent(c, ev));
+			if (ev.type === "card-settled" && ev.outcome === "answered") void refreshCards();
+		};
+	});
+	// An idle open thread follows the wolf's activity too (a held answer given from the sidebar, a card answered elsewhere).
+	useServerEvent("needs-you-changed", (p) => {
+		if (p.wolf === wolf && status !== "submitted" && status !== "streaming") void refreshCards();
+	});
 	const prevStatus = useRef(status);
 	useEffect(() => {
 		const was = prevStatus.current;

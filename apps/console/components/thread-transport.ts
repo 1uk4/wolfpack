@@ -23,10 +23,13 @@ export function cardAnswerUrl(wolf: string, slug: string, callId: string): strin
  * `onCardEvent` hears the thread's live card events (card-pending / card-settled): the cards are not part of the
  * message stream, so the chat folds them itself (see foldCardEvent).
  */
+/** The thread events that change a thread's cards (not part of the message stream). */
+export type ThreadCardEvent = Extract<ThreadEvent, { type: "card-pending" | "card-settled" }>;
+
 export function threadTransport(
 	wolf: string,
 	slug: string,
-	onCardEvent?: (ev: Extract<ThreadEvent, { type: "card-pending" | "card-settled" }>) => void,
+	onCardEvent?: (ev: ThreadCardEvent) => void,
 ): SessionTransport {
 	const base = threadBase(wolf, slug);
 	return {

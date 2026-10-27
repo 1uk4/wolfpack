@@ -51,6 +51,10 @@ export function buildNeedsYou(wolves: readonly WolfNeedsYou[]): NeedsYouItem[] {
 			});
 		}
 	}
+	return sortOldestFirst(items);
+}
+
+function sortOldestFirst(items: readonly NeedsYouItem[]): NeedsYouItem[] {
 	return items
 		.map((item, i) => ({ item, i }))
 		.sort((a, b) => Date.parse(a.item.raisedAt) - Date.parse(b.item.raisedAt) || a.i - b.i)
@@ -64,6 +68,14 @@ export function cardHeadline(card: Card): string {
 
 /** Stable key of an item across wolves (call ids are only unique per thread). */
 export const itemKey = (i: Pick<NeedsYouItem, "wolf" | "threadId" | "callId">): string => `${i.wolf}\n${i.threadId}\n${i.callId}`;
+
+/**
+ * Fold a fetch into the list: every wolf that `responded` is replaced by `fresh`; a wolf that did not respond keeps
+ * its previous items (it is down, not empty).
+ */
+export function mergeReport(prev: readonly NeedsYouItem[], responded: readonly string[], fresh: readonly NeedsYouItem[]): NeedsYouItem[] {
+	return sortOldestFirst([...prev.filter((i) => !responded.includes(i.wolf)), ...fresh]);
+}
 
 /** Drop an answered card from the list (before the refetch confirms it). */
 export function withoutItem(items: readonly NeedsYouItem[], key: string): NeedsYouItem[] {
@@ -100,7 +112,7 @@ export const INITIAL_NOTIFY_STATE: NotifyState = { seen: new Set(), primed: fals
 export function planNotifications(
 	state: NotifyState,
 	items: readonly NeedsYouItem[],
-	opts: { focused: boolean },
+	opts: { focused: boolean; /** Wolves that answered this snapshot: only their settled cards are forgotten. Omitted: all. */ responded?: readonly string[] },
 ): { notifications: NeedsYouNotification[]; state: NotifyState } {
 	const seen = new Set(state.seen);
 	const byThread = new Map<string, NeedsYouItem>();
@@ -111,9 +123,11 @@ export function planNotifications(
 		const thread = `${item.wolf}\n${item.threadId}`;
 		if (!byThread.has(thread)) byThread.set(thread, item);
 	}
-	// Forget cards that left the list so the set stays bounded (a card never comes back once settled).
+	// Forget cards that left the list so the set stays bounded (a card never comes back once settled), but only for
+	// wolves that actually reported: a wolf that is down keeps its keys, so its returning cards do not re-notify.
 	const live = new Set(items.map(itemKey));
-	for (const k of seen) if (!live.has(k)) seen.delete(k);
+	const reported = opts.responded ? new Set(opts.responded) : undefined;
+	for (const k of seen) if (!live.has(k) && (!reported || reported.has(k.split("\n")[0]!))) seen.delete(k);
 	const notifications: NeedsYouNotification[] = [];
 	if (state.primed && !opts.focused) {
 		for (const item of byThread.values()) {

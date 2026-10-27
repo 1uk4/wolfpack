@@ -35,6 +35,16 @@ const { SettingsDialogProvider } = await import("../components/settings/settings
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
 const { ThreadChat } = await import("../components/thread-chat.tsx");
 const { MemoryEventsProvider } = await import("../components/memory-events.tsx");
+const { ServerEventsProvider } = await import("../components/server-events.tsx");
+/** The notification channel's source: tests fire named frames through `frames`. */
+const frames = new Map<string, (data: string) => void>();
+const eventsSource = () => ({
+	close() {},
+	onOpen() {},
+	onEvent(name: string, cb: (data: string) => void) {
+		frames.set(name, cb);
+	},
+});
 const inertSource = () => ({ close() {}, onOpen() {}, onMessage() {}, onError() {} });
 
 const CALL = "call-1";
@@ -138,6 +148,7 @@ async function mount(client: CardClient) {
 		root!.render(
 			<AppRouterContext.Provider value={{ push() {} } as never}>
 				<SettingsDialogProvider>
+					<ServerEventsProvider connect={eventsSource}>
 					<MemoryEventsProvider connect={inertSource}>
 						<ThreadChat
 							wolf="1uk4"
@@ -148,6 +159,7 @@ async function mount(client: CardClient) {
 							initialCards={cardsOfThread(detail)}
 						/>
 					</MemoryEventsProvider>
+					</ServerEventsProvider>
 				</SettingsDialogProvider>
 			</AppRouterContext.Provider>,
 		);
@@ -196,6 +208,16 @@ describe("ThreadChat answers a card (real mount, server layer over a mock client
 		// The record refetched at settle keeps the answered card (card + answer ride the history).
 		await settle();
 		assert.ok(q('[data-testid="answered-card"]'));
+	});
+
+	it("an idle open thread follows the wolf's activity: a held answer given elsewhere appears", async () => {
+		const client = new CardClient(FREE);
+		await mount(client);
+		assert.equal(q('[data-testid="card-held"]'), null);
+		client.held = { answer: { value: "from the sidebar" } };
+		await act(async () => frames.get("needs-you-changed")!(JSON.stringify({ wolf: "1uk4" })));
+		await settle();
+		assert.ok(q('[data-testid="card-held"]'), "the held answer shows without a settle");
 	});
 
 	it("shows the server's rejection and keeps the card pending", async () => {

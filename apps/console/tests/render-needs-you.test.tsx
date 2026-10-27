@@ -5,7 +5,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { NeedsYouSection, waitingFor } from "../components/needs-you.tsx";
+import { NeedsYouSection, NotifyToggleView, waitingFor } from "../components/needs-you.tsx";
 import { SessionRow } from "../components/sidebar.tsx";
 import { itemKey, threadListItem, type NeedsYouItem } from "../src/core/index.ts";
 
@@ -57,9 +57,8 @@ describe("NeedsYouSection", () => {
 		assert.ok(html.includes('data-testid="card-held"'));
 	});
 
-	it("offers the browser notification bell only when a toggle state is given", () => {
+	it("no longer carries the notification toggle (it lives in the sidebar footer)", () => {
 		assert.ok(!render([item("c1")]).includes("needs-you-notify-toggle"));
-		assert.match(render([item("c1")], { notifyToggle: true }), /needs-you-notify-toggle[^>]*aria-pressed="true"/);
 	});
 });
 
@@ -82,5 +81,21 @@ describe("thread row", () => {
 		assert.ok(needs.includes("needs you"));
 		assert.ok(!row("idle").includes("needs-you-dot"));
 		assert.ok(!row("busy").includes("needs-you-dot"), "busy shows the spinner instead");
+	});
+});
+
+describe("NotifyToggleView", () => {
+	const view = (state: "unsupported" | "off" | "on" | "denied") => renderToStaticMarkup(<NotifyToggleView state={state} onToggle={noop} />);
+	it("is hidden where notifications are unsupported (Electron has its own)", () => {
+		assert.equal(view("unsupported"), "");
+	});
+	it("offers 'Notify me' when off and shows on-state when on", () => {
+		assert.ok(view("off").includes("Notify me") && !view("off").includes("disabled"));
+		assert.match(view("on"), /aria-pressed="true"/);
+	});
+	it("explains a blocked permission and disables the button", () => {
+		const html = view("denied");
+		assert.ok(html.includes('data-testid="needs-you-notify-denied"') && html.includes("blocked in your browser"));
+		assert.match(html, /disabled/);
 	});
 });

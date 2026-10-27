@@ -19,6 +19,15 @@ export const isDesktopNotify = (): boolean => typeof window !== "undefined" && t
 /** The toggle is only offered in a browser that can show notifications. */
 export const canToggleBrowserNotify = (): boolean => !isDesktopNotify() && webSupported();
 
+/** The browser toggle's state: unsupported (hidden), off, on, or blocked by the browser's permission. */
+export type BrowserNotifyState = "unsupported" | "off" | "on" | "denied";
+
+export function browserNotifyState(): BrowserNotifyState {
+	if (!canToggleBrowserNotify()) return "unsupported";
+	if (Notification.permission === "denied") return "denied";
+	return browserNotifyEnabled() ? "on" : "off";
+}
+
 export function browserNotifyEnabled(): boolean {
 	if (!webSupported()) return false;
 	try {
@@ -60,6 +69,5 @@ export function deliverNotification(n: NeedsYouNotification, navigate: (href: st
 	note.onclick = () => {
 		window.focus();
 		navigate(n.href);
-		note.close();
 	};
 }

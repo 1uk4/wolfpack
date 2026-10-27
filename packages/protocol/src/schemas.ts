@@ -93,6 +93,73 @@ export const ThreadToolCallSchema = z.object({
 });
 export type ThreadToolCall = z.infer<typeof ThreadToolCallSchema>;
 
+// -------------------------------------------------------- structured objects
+
+/**
+ * A structured object a wolf puts in a thread (decision now; checklist and graph later). Generic envelope: `type`
+ * is an open string and `data` is validated per type by the consumer (see `parseObjectData`), so a new object type
+ * is one more entry in `OBJECT_DATA_SCHEMAS` and never a protocol change. Additive (no version bump).
+ */
+export const ThreadObjectSchema = z.object({
+  objectId: z.string().min(1),
+  type: z.string(),
+  /** 1 for the first upsert of `objectId` in the thread, +1 per revision. */
+  rev: z.number().int().positive(),
+  data: z.unknown(),
+  /** History only: length of the message's `text` when the object first appeared (interleaves it with the text). */
+  textOffset: z.number().int().nonnegative().optional(),
+});
+export type ThreadObject = z.infer<typeof ThreadObjectSchema>;
+
+export const DecisionOptionSchema = z.object({
+  id: z.string().min(1).describe("Short stable id of the option"),
+  label: z.string().min(1).describe("The option, in a few words"),
+  detail: z.string().optional().describe("Optional one-line elaboration"),
+});
+export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
+
+/** `data` of a `decision` object: the options weighed, the one chosen and why. */
+export const DecisionDataSchema = z.object({
+  title: z.string().optional().describe("What is being decided"),
+  options: z.array(DecisionOptionSchema).min(1).describe("The options considered"),
+  chosen: z.string().describe("The id of the chosen option"),
+  rationale: z.string().describe("Why the chosen option won"),
+});
+export type DecisionData = z.infer<typeof DecisionDataSchema>;
+
+/** Parameters of the `show_decision` tool: the decision plus the wolf-chosen id (reuse it to revise). */
+export const ShowDecisionParamsSchema = DecisionDataSchema.extend({
+  objectId: z.string().min(1).describe("Stable id for this decision; call again with the same id to revise it"),
+});
+export type ShowDecisionParams = z.infer<typeof ShowDecisionParamsSchema>;
+
+/**
+ * Object tools by tool name: the object type each shows and its parameter schema (zod, plus the JSON Schema a tool
+ * registration hands the model). A new object type adds one entry here and one in `OBJECT_DATA_SCHEMAS`.
+ */
+export const OBJECT_TOOL_PARAMS = {
+  show_decision: { type: "decision", schema: ShowDecisionParamsSchema },
+} as const satisfies Record<string, { type: string; schema: z.ZodObject }>;
+
+/** JSON Schema of an object tool's parameters (draft 2020-12 minus `$schema`). */
+export function objectToolJsonSchema(name: keyof typeof OBJECT_TOOL_PARAMS): Record<string, unknown> {
+  const { $schema: _omit, ...rest } = z.toJSONSchema(OBJECT_TOOL_PARAMS[name].schema, { io: "input" }) as Record<string, unknown>;
+  return rest;
+}
+
+/** Per-type `data` schemas. Tickets for checklist and graph add an entry here. */
+export const OBJECT_DATA_SCHEMAS = { decision: DecisionDataSchema } as const;
+export type KnownObjectType = keyof typeof OBJECT_DATA_SCHEMAS;
+
+/** Validate `data` for a known type; undefined for an unknown type or invalid data (consumers skip the object). */
+export function parseObjectData<T extends KnownObjectType>(type: T, data: unknown): z.infer<(typeof OBJECT_DATA_SCHEMAS)[T]> | undefined;
+export function parseObjectData(type: string, data: unknown): unknown;
+export function parseObjectData(type: string, data: unknown): unknown {
+  const schema = (OBJECT_DATA_SCHEMAS as Record<string, z.ZodType>)[type];
+  const r = schema?.safeParse(data);
+  return r?.success ? r.data : undefined;
+}
+
 export const ThreadMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),
@@ -101,6 +168,8 @@ export const ThreadMessageSchema = z.object({
   at: IsoSchema,
   /** Assistant messages only: the tool calls of the (merged) rounds, in call order. Optional: old servers omit it. */
   tools: z.array(ThreadToolCallSchema).optional(),
+  /** Assistant messages only: structured objects first shown in this message, latest rev per objectId. Optional: old servers omit it. */
+  objects: z.array(ThreadObjectSchema).optional(),
 });
 export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
 
@@ -174,6 +243,15 @@ export const ErrorEventSchema = base.extend({
   turnId: turnId.optional(),
   message: z.string(),
 });
+/** A structured object was shown or revised. Fold by `objectId`: the highest `rev` wins, shown at its first position. */
+export const ObjectUpsertEventSchema = base.extend({
+  type: z.literal("object-upsert"),
+  turnId,
+  objectId: z.string().min(1),
+  objectType: z.string(),
+  rev: z.number().int().positive(),
+  data: z.unknown(),
+});
 /**
  * Baseline thread state. A consumer that receives one discards everything it
  * holds for the thread and rebuilds from `thread` (+ `inFlight`); events with
@@ -195,6 +273,7 @@ export const ThreadEventSchema = z.discriminatedUnion("type", [
   ToolEndEventSchema,
   TurnEndEventSchema,
   ErrorEventSchema,
+  ObjectUpsertEventSchema,
   SnapshotEventSchema,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;

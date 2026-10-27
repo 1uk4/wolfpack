@@ -349,6 +349,8 @@ export class SubagentManager {
       adm = await this.admit(id);
     } catch (e) {
       await this.opts.releaseOwner(owned.taskId).catch((err) => this.port.onError(err));
+      this.guard.releaseAll(id);
+      if (plan.workspace) await this.dropWorkspace(plan.workspace);
       return fail(`Could not start the sub-agent: ${e instanceof Error ? e.message : String(e)}`);
     }
     const run = adm.run;

@@ -197,6 +197,7 @@ async function startConfigured(
         bridge: subagentBridge,
         wolfHome: dirname(config.file),
         workspace: cwd,
+        getConversation: (id) => engine.conversations.get(id),
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
         resolveTier: (tier) => {
           const m = resolveWolfModel(config, tier, table);

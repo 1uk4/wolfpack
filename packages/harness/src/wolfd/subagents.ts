@@ -36,6 +36,8 @@ export interface SubagentOptions {
   wolfHome: string;
   /** The home thread's cwd: the default cwd of a spawn, and where `<cwd>/.pi/agents` is looked up. */
   workspace: string;
+  /** An existing conversation as it is stored (no reconciling with the home configuration: a child keeps its own). */
+  getConversation(id: string): Promise<EngineConversation | undefined>;
   /** A conversation owned by a parked task of `ownerId`. */
   createOwned(ownerId: string, init: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
   /** A tier resolved through the wolf's model table. Throws for a tier it cannot resolve. */
@@ -389,10 +391,10 @@ export class SubagentManager {
   // ----------------------------------------------------------- lifecycle
 
   /** Re-attach every persisted child (call after the feature threads, before the engine resumes). */
-  async recover(getConversation: (id: string) => Promise<EngineConversation | undefined>): Promise<void> {
+  async recover(): Promise<void> {
     for (const rec of [...this.records]) {
       try {
-        const conv = await getConversation(rec.conversationId);
+        const conv = await this.opts.getConversation(rec.conversationId);
         if (!conv) {
           this.port.onError(new Error(`subagent ${rec.id}: conversation ${rec.conversationId} is gone`));
           continue;

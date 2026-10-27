@@ -381,6 +381,10 @@ describe("restart", () => {
     expect(after.map((c) => [c.id, c.state, c.parentThreadId])).toEqual([[child.id, "done", tw.home]]);
     expect((await texts(tw, tw.home)).join("\n")).toContain("child slow done");
     expect((await tw.client.getLedger!(child.id)).map((e) => e.kind)).toEqual(["brief", "result"]);
+    // it kept its own configuration (not home's): still no spawn tools, still its profile's prompt
+    const childCall = second.calls.find((c) => c.child)!;
+    expect(childCall.request).not.toContain("subagent_message");
+    expect(childCall.request).toContain("You are a test agent");
 
     // and it can still be resumed afterwards
     await say(tw, "message[tester]: after the restart");

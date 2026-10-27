@@ -64,6 +64,10 @@ describe("startWolf", () => {
       "show_checklist",
       "show_decision",
       "show_graph",
+      "subagent",
+      "subagent_message",
+      "subagent_stop",
+      "subagents_list",
       "write",
     ]);
     expect(agent.cwd).toBe(join(root, "work"));

@@ -197,10 +197,7 @@ export class WolfServer {
       }
     }
     // Children last: their parents are attached now, so a result nobody took yet can be delivered.
-    await this.subagents?.recover(async (id) => {
-      const conv = await conversations.get(id);
-      return conv;
-    });
+    await this.subagents?.recover();
   }
 
   async listen(port = 0): Promise<string> {

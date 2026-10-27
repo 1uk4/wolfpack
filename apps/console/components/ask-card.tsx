@@ -454,7 +454,7 @@ function MultiView({
 			})}
 			{field.allowOther === true && !readOnly && (
 				<div className="flex gap-2">
-					<CardTextInput testId="card-other" className="flex-1 px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} {...dictation} />
+					<CardTextInput testId="card-other" className="px-3 py-1.5" placeholder="Other…" value={typed} onChange={onType} onEnter={addCustom} {...dictation} />
 					<Button type="button" size="sm" variant="outline" data-testid="card-other-add" disabled={typed.trim() === "" || error !== undefined} onClick={addCustom}>
 						Add
 					</Button>
@@ -553,7 +553,7 @@ export function CardTextInput({
 		onChange: (e: { target: { value: string } }) => onChange(e.target.value),
 	};
 	const field = multiline ? (
-		<textarea {...(common as object)} className={cn(common.className, mic && "pr-9")} onKeyDown={onKeyDown} />
+		<textarea {...(common as object)} className={cn(common.className, mic && "pr-10")} onKeyDown={onKeyDown} />
 	) : (
 		<input
 			type="text"
@@ -572,7 +572,7 @@ export function CardTextInput({
 	return (
 		<div className={cn("relative", !multiline && "min-w-0 flex-1")}>
 			{field}
-			<InlineMic {...mic} className={cn("absolute right-1.5", multiline ? "top-1.5" : "top-1/2 -translate-y-1/2")} />
+			<InlineMic {...mic} className={cn("absolute", !multiline && "right-1.5", multiline ? "right-4 top-1.5" : "top-1/2 -translate-y-1/2")} />
 		</div>
 	);
 }

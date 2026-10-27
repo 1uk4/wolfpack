@@ -226,7 +226,7 @@ describe("inline mic in card text fields", () => {
 describe("inline mic in the prompt-override editor", () => {
 	function Editor() {
 		const [v, setV] = React.useState("");
-		return <OverrideTextarea value={v} onChange={setV} micKey="prompt-override:test" />;
+		return <OverrideTextarea value={v} onChange={setV} onAppend={(t) => setV((c) => joinDictation(c, t))} micKey="prompt-override:test" />;
 	}
 	it("appends with joinDictation spacing, then releases the claim to the page composer", async () => {
 		await mount(<Editor />);
@@ -253,5 +253,150 @@ describe("inline mic in the prompt-override editor", () => {
 		await closeSocket(ws);
 		await settle();
 		assert.equal(ta.value, "be terse and brief");
+	});
+});
+
+describe("standalone claim lifecycle", () => {
+	function Editor({ micKey = "prompt-override:test" }: { micKey?: string }) {
+		const [v, setV] = React.useState("");
+		return <OverrideTextarea value={v} onChange={setV} onAppend={(t) => setV((c) => joinDictation(c, t))} micKey={micKey} />;
+	}
+	const composerText = () => q('[data-testid="composer-text"]')!.textContent;
+
+	it("a token failure releases the claim; ⌘D then dictates to the composer", async () => {
+		tokenStatus = 503;
+		await mount(<Editor />);
+		await click(mics()[0]!);
+		await settle();
+		assert.equal(mics()[0]!.getAttribute("aria-pressed"), "false");
+		tokenStatus = 200;
+		await kbdToggle();
+		const ws = await live("to composer");
+		await kbdToggle();
+		await closeSocket(ws);
+		await settle();
+		assert.equal(composerText(), "to composer");
+		assert.equal((q("textarea") as HTMLTextAreaElement).value, "");
+	});
+
+	it("a permission denial releases the claim; ⌘D then dictates to the composer", async () => {
+		const real = (globalThis.navigator as any).mediaDevices.getUserMedia;
+		(globalThis.navigator as any).mediaDevices.getUserMedia = async () => {
+			throw new dom.window.DOMException("no", "NotAllowedError");
+		};
+		await mount(<Editor />);
+		await click(mics()[0]!);
+		await settle();
+		(globalThis.navigator as any).mediaDevices.getUserMedia = real;
+		await kbdToggle();
+		const ws = await live("after denial");
+		await kbdToggle();
+		await closeSocket(ws);
+		await settle();
+		assert.equal(composerText(), "after denial");
+		assert.equal((q("textarea") as HTMLTextAreaElement).value, "");
+	});
+
+	it("a still-mounted focused card field re-asserts its claim after a standalone run ends", async () => {
+		await mount(
+			<>
+				<AskCard card={CARD} callId="c1" pending submitting={false} onAnswer={() => {}} />
+				<Editor />
+			</>,
+		);
+		const text = q('[data-testid="card-text"]') as HTMLTextAreaElement;
+		await act(async () => void text.dispatchEvent(new dom.window.Event("focusin", { bubbles: true })));
+		const editorMic = mics()[mics().length - 1]!;
+		await click(editorMic);
+		let ws = await live("to editor");
+		await click(editorMic);
+		await closeSocket(ws);
+		await settle();
+		assert.equal((q("textarea[aria-label]") as HTMLTextAreaElement).value, "to editor");
+		await kbdToggle();
+		ws = await live("to card");
+		await kbdToggle();
+		await closeSocket(ws);
+		await settle();
+		assert.equal(text.value, "to card");
+	});
+
+	it("the field unmounting mid-run releases its claim; the transcript falls back to the composer", async () => {
+		function Host() {
+			const [on, setOn] = React.useState(true);
+			return (
+				<>
+					<button data-testid="hide" onClick={() => setOn(false)} />
+					{on && <Editor />}
+				</>
+			);
+		}
+		await mount(<Host />);
+		await click(mics()[0]!);
+		const ws = await live("orphan");
+		await click(q('[data-testid="hide"]')!);
+		assert.equal(mics().length, 0);
+		await kbdToggle();
+		await closeSocket(ws);
+		await settle();
+		assert.equal(composerText(), "orphan");
+	});
+
+	it("another field's mic reads \"Dictate here\" while a run is live elsewhere", async () => {
+		await mountCard();
+		await click(mics()[0]!);
+		await live();
+		assert.equal(mics()[1]!.getAttribute("aria-label"), "Dictate here");
+	});
+});
+
+describe("module singletons", () => {
+	it("the mic hides when no dictation hook is mounted", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<SettingsDialogProvider>
+					<OverrideTextarea value="" onChange={() => {}} onAppend={() => {}} micKey="k" />
+				</SettingsDialogProvider>,
+			);
+		});
+		assert.equal(mics().length, 0);
+	});
+
+	it("availability and the phase mirror survive two overlapping hooks (route transition)", async () => {
+		function Old() {
+			useDictation({ append: () => {} });
+			return null;
+		}
+		function Swap() {
+			const [old, setOld] = React.useState(true);
+			return (
+				<>
+					<button data-testid="drop" onClick={() => setOld(false)} />
+					{old && <Old />}
+					<Page>
+						<OverrideTextarea value="" onChange={() => {}} onAppend={() => {}} micKey="k" />
+					</Page>
+				</>
+			);
+		}
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => {
+			root!.render(
+				<SettingsDialogProvider>
+					<Swap />
+				</SettingsDialogProvider>,
+			);
+		});
+		assert.equal(mics().length, 1);
+		await click(mics()[0]!);
+		await live();
+		await click(q('[data-testid="drop"]')!); // the old hook unmounts mid-run
+		assert.equal(mics().length, 1, "still available");
+		assert.equal(mics()[0]!.getAttribute("aria-pressed"), "true", "the live hook's phase still shows");
 	});
 });

@@ -395,7 +395,11 @@ export function AgentSection({
 						</div>
 						<div>
 							<p className="mb-1 text-xs uppercase tracking-widest text-muted-foreground/70">Override</p>
-							<OverrideTextarea value={draft} onChange={(v) => setSegmentDraft({ ...segmentDraft, [info.path]: v })} micKey={`prompt-override:${info.path}`} />
+							<OverrideTextarea
+								value={draft}
+								onChange={(v) => setSegmentDraft((d) => ({ ...d, [info.path]: v }))}
+								onAppend={(t) => setSegmentDraft((d) => ({ ...d, [info.path]: joinDictation(d[info.path] ?? info.overrideText ?? "", t) }))}
+								micKey={`prompt-override:${info.path}`} />
 						</div>
 						<div className="flex items-center gap-3">
 							<button
@@ -612,13 +616,8 @@ export function AgentSection({
 }
 
 /** The prompt-override editor: prose, so it carries an inline dictation mic (dictated text appends with joinDictation spacing). */
-export function OverrideTextarea({ value, onChange, micKey }: { value: string; onChange: (v: string) => void; micKey: string }) {
-	const valueRef = useRef(value);
-	valueRef.current = value;
-	const mic = useFieldMic(micKey, (t) => {
-		valueRef.current = joinDictation(valueRef.current, t);
-		onChange(valueRef.current);
-	});
+export function OverrideTextarea({ value, onChange, onAppend, micKey }: { value: string; onChange: (v: string) => void; onAppend: (t: string) => void; micKey: string }) {
+	const mic = useFieldMic(micKey, onAppend);
 	return (
 		<div className="relative">
 			<textarea
@@ -626,9 +625,9 @@ export function OverrideTextarea({ value, onChange, micKey }: { value: string; o
 				onChange={(e) => onChange(e.target.value)}
 				aria-label="Your version of the instructions"
 				placeholder="Add your own instructions…"
-				className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 pr-9 font-ui text-xs text-foreground outline-none"
+				className="h-24 w-full resize-y rounded-sm border border-border bg-background p-2 pr-10 font-ui text-xs text-foreground outline-none"
 			/>
-			<InlineMic {...mic} className="absolute right-1.5 top-1.5" />
+			<InlineMic {...mic} className="absolute right-4 top-1.5" />
 		</div>
 	);
 }

@@ -8,7 +8,7 @@
 import type { DepRouteSelection } from "./dep-draw-list.ts";
 import type { KbGraph } from "./kb.ts";
 import { buildTaskGraph, type TaskGraphModel } from "./task-graph.ts";
-import { computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute } from "./work-route.ts";
+import { ROUTE_PARENT_MODE, computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute, type RouteParentMode as WorkRouteParentMode } from "./work-route.ts";
 
 const WORK = "work:";
 export const rawWorkId = (graphId: string): string | null =>
@@ -33,13 +33,16 @@ export function workNodesFromGraph(graph: Pick<KbGraph, "nodes" | "edges">): Wor
 }
 
 /** The route for a selected graph node, or null when it has none (not a
- *  work node, an initiative, or the Factory itself: the Factory selects no
- *  route). */
-export function routeForNode(graph: KbGraph, graphId: string, opts: { expanded?: ReadonlySet<string> } = {}): WorkRoute | null {
+ *  work node, an initiative outside "exit" mode, or the Factory itself: the
+ *  Factory selects no route). */
+export function routeForNode(
+	graph: KbGraph, graphId: string, opts: { expanded?: ReadonlySet<string>; parentMode?: WorkRouteParentMode } = {},
+): WorkRoute | null {
 	const id = rawWorkId(graphId);
 	const node = graph.nodes.find((n) => n.id === graphId);
-	if (!id || node?.kind !== "work" || node.workKind === "initiative") return null;
-	const route = computeWorkRoute(workNodesFromGraph(graph), id, { collapseDoneFeatures: true, expanded: opts.expanded });
+	const parentMode = opts.parentMode ?? ROUTE_PARENT_MODE;
+	if (!id || node?.kind !== "work" || (node.workKind === "initiative" && parentMode !== "exit")) return null;
+	const route = computeWorkRoute(workNodesFromGraph(graph), id, { collapseDoneFeatures: true, expanded: opts.expanded, parentMode });
 	return route.steps.length > 0 ? route : null;
 }
 

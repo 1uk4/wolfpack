@@ -25,7 +25,7 @@ Object.assign(globalThis, {
 });
 
 const { reconcileCursor, routeForNode, toRouteSelection, workNodesFromGraph, featureTaskModel } = await import("../src/core/dep-route-adapter.ts");
-const { startCursor } = await import("../src/core/work-route.ts");
+const { startCursor, cursorNext } = await import("../src/core/work-route.ts");
 const { RouteNav } = await import("../components/graph-route-nav.tsx");
 const { FeatureTaskOverlay, opensTaskOverlay } = await import("../components/graph-view.tsx");
 import type { KbGraph } from "../src/core/kb.ts";
@@ -76,6 +76,22 @@ describe("route adapter", () => {
 		assert.deepEqual([...sel.parallel].sort(), ["work:b", "work:c"]);
 		assert.deepEqual([...sel.done], ["work:a"]);
 		assert.equal(sel.cursor, "work:b"); // first unfinished step, first unfinished node
+	});
+
+	it("an initiative selects a route only in exit mode, and its stepper walks it", () => {
+		const g: KbGraph = {
+			...graph,
+			nodes: [...graph.nodes, n("I", "initiative", "plan")],
+			edges: [...graph.edges, { source: "work:F", target: "work:I", kind: "partOf" as const }],
+		};
+		assert.equal(routeForNode(g, "work:I", { parentMode: "entry" }), null);
+		assert.equal(routeForNode(g, "work:I", { parentMode: "none" }), null);
+		const r = routeForNode(g, "work:I")!;
+		assert.equal(r.steps.at(-1)!.nodes.join(), "I");
+		assert.ok(r.steps.flatMap((s) => s.nodes).includes("F"));
+		const c = startCursor(r);
+		assert.ok(c.node && c.node !== "I");
+		assert.equal(cursorNext(r, r.steps.length > 1 ? { step: r.steps.length - 2, node: null } : c).node, "I");
 	});
 
 	it("a feature selects its tasks; the Factory, entries and nothing select no route", () => {

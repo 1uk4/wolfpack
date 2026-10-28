@@ -141,7 +141,7 @@ export function PlanGraphView({
 									data-highlight={hi ? "true" : "false"}
 									data-sliver={sliver ? "true" : undefined}
 									title={n.detail ? `${n.label} — ${n.detail}` : n.label}
-									aria-label={sliver ? name : undefined}
+									aria-label={sliver && !onNodeClick ? name : undefined}
 									className={cn(
 										sliver ? (n.status === "done" ? "absolute rounded-full bg-emerald-500/70" : "absolute rounded-full bg-muted-foreground/40") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
 										!sliver && CARD[n.status],
@@ -149,6 +149,7 @@ export function PlanGraphView({
 									)}
 									style={{ left: p.x, top: p.y, width: p.width, height: p.height }}
 								>
+									{sliver && dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
 									{!sliver && (
 										<>
 											<div className="flex items-center gap-1.5 text-[10px] leading-none">
@@ -169,7 +170,7 @@ export function PlanGraphView({
 											aria-label={name}
 											title={sliver ? n.label : undefined}
 											onClick={() => clickNode(n.id)}
-											className={cn("absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring", sliver ? "-inset-x-0.5 -inset-y-1 rounded-full" : "inset-0 rounded-lg")}
+											className={cn("absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring", sliver ? "-inset-x-0.5 -inset-y-0.5 rounded-full" : "inset-0 rounded-lg")}
 										/>
 									)}
 								</li>

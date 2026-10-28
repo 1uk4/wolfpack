@@ -111,7 +111,7 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 			const isSlim = slim.has(id);
 			if (i > 0) y += isSlim || prevSlim ? slimGap : gapY;
 			const h = isSlim ? slimHeight : nodeHeight;
-			placed.push({ id, rank, x: colX[rank]!, y, width: isSlim && colWidth[rank] === nodeWidth ? nodeWidth : colWidth[rank]!, height: h });
+			placed.push({ id, rank, x: colX[rank]!, y, width: colWidth[rank]!, height: h });
 			y += h;
 			prevSlim = isSlim;
 		});
@@ -131,7 +131,7 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 	return {
 		nodes: placed,
 		edges: out,
-		width: cols ? cursorX - gapX : 0,
+		width: cols ? (colX[cols - 1] ?? 0) + (colWidth[cols - 1] ?? nodeWidth) : 0,
 		height: totalHeight,
 		nodeWidth,
 		nodeHeight,

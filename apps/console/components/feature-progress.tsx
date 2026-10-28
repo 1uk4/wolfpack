@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
 import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
@@ -189,7 +190,8 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 	};
 	const openTask = (id: string) => {
 		setFull(false); // the modal covers the page: close it so the Status panel is visible
-		void panels.openPanel("memory", { taskId: id, nonce: Date.now() });
+		// next tick: the shell's focus restore (to the full-screen button) runs on unmount and must not steal the panel's focus
+		setTimeout(() => void panels.openPanel("memory", { taskId: id, nonce: Date.now() }), 0);
 	};
 	const titleId = `${panelId}-full`;
 	return (
@@ -247,7 +249,8 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 					)}
 				</div>
 			</div>
-			{full && open && (
+			{full && open && typeof document !== "undefined" &&
+				createPortal(
 				<OverlayShell
 					labelledBy={titleId}
 					testId="feature-progress-modal"
@@ -265,7 +268,8 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 					<div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border" data-testid="feature-progress-modal-body">
 						<PlanGraphView draggable collapseDone fill graph={model.graph} highlightId={model.boundId} label={`Task graph: ${model.title}`} onNodeClick={openTask} />
 					</div>
-				</OverlayShell>
+				</OverlayShell>,
+				document.body,
 			)}
 		</div>
 	);

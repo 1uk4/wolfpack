@@ -199,13 +199,30 @@ describe("canvas mode: slivers, free pan, re-center", () => {
 			assert.equal(li.getAttribute("data-sliver"), "true");
 			assert.equal((li.textContent ?? "").trim(), "", "no visible text");
 			assert.ok((li.getAttribute("title") ?? "").length > 0);
-			assert.ok((li.getAttribute("aria-label") ?? "").includes(id === "a" ? "Alpha done" : "Beta skipped"));
+			assert.ok((li.querySelector('[data-testid="graph-node-hit"]')!.getAttribute("aria-label") ?? "").includes(id === "a" ? "Alpha done" : "Beta skipped"));
 		}
 		assert.ok(q('[data-node-id="c"]')!.getAttribute("data-sliver") === null);
 		assert.ok((q('[data-node-id="c"]')!.textContent ?? "").includes("Gamma todo"));
 		assert.equal(document.querySelectorAll('[data-testid="graph-edge"]').length, 2);
 		await click(q('[data-node-id="a"] [data-testid="graph-node-hit"]')!);
 		assert.deepEqual(clicked, ["a"]);
+	});
+	it("slivers keep the sr-only dependency text; the name is on the hit button only when clickable", async () => {
+		const dep = { nodes: g.nodes, edges: [{ from: "a", to: "b" }] };
+		await mount(<PlanGraphView draggable collapseDone graph={dep} onNodeClick={() => {}} />);
+		assert.equal((q('[data-node-id="a"]')!.textContent ?? "").includes("depends on: Beta skipped"), true);
+		assert.equal(q('[data-node-id="a"]')!.getAttribute("aria-label"), null);
+		assert.equal((q('[data-node-id="a"] [data-testid="graph-node-hit"]')!.getAttribute("aria-label") ?? "").includes("Alpha done"), true);
+	});
+	it("a refetch with a changed graph does not move the view", async () => {
+		await mount(<PlanGraphView draggable collapseDone graph={g} />);
+		const box = q('[data-testid="graph-scroll"]')!;
+		await ptr(box, "pointerdown", 100, 50);
+		await ptr(box, "pointermove", 60, 50);
+		await ptr(box, "pointerup", 60, 50);
+		const x = panX();
+		await act(async () => root!.render(<PlanGraphView draggable collapseDone graph={{ ...g, nodes: g.nodes.map((n) => (n.id === "c" ? { ...n, status: "doing" as const } : n)) }} />));
+		assert.equal(panX(), x);
 	});
 	it("the chat card (no collapseDone) still renders done nodes with their labels", async () => {
 		await mount(<PlanGraphView graph={g} />);

@@ -173,10 +173,12 @@ describe("FeatureProgressPanel", () => {
 		await mountPanel({}, "w/feature-F-click");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		await click(q('[data-node-id="c"] [data-testid="graph-node-hit"]')!);
+		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
 		const stub = q('[data-testid="stub-status"]')!;
 		assert.ok(stub, "the Status panel opened");
 		assert.equal(stub.getAttribute("data-task"), "c");
 		await click(q('[data-node-id="d"] [data-testid="graph-node-hit"]')!);
+		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
 		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "d");
 	});
 
@@ -204,12 +206,15 @@ describe("FeatureProgressPanel", () => {
 		await click(q('[data-testid="feature-progress-fullscreen"]')!);
 		const modal = q('[data-testid="feature-progress-modal"]');
 		assert.ok(modal, "modal open");
+		assert.equal(modal!.closest('[data-testid="feature-progress"]') === null, true, "portalled out of the pointer-events-none panel");
+		assert.equal(modal!.parentElement === document.body, true);
 		assert.equal(modal!.querySelectorAll('[data-testid="graph-node"]').length, 4);
 		assert.equal(modal!.querySelector('[data-testid="graph-scroll"]')!.getAttribute("data-draggable"), "true");
 		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
 		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "Esc closed it");
 		await click(q('[data-testid="feature-progress-fullscreen"]')!);
 		await click(q('[data-testid="feature-progress-modal"] [data-node-id="c"] [data-testid="graph-node-hit"]')!);
+		await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
 		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "c");
 		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "modal closed so the panel is visible");
 	});

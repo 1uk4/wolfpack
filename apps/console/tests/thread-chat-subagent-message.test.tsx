@@ -126,6 +126,12 @@ describe("ThreadChat subagent deliveries", () => {
 		assert.equal(document.querySelectorAll('[data-testid="user-message"]').length, 1); // only the owner's "go"
 		assert.ok(!card.textContent!.toLowerCase().includes("you"));
 	});
+	it("uses the shared Child speaker colour", async () => {
+		const { SPEAKER } = await import("../components/speaker-colors.ts");
+		await mount([msg("2", "user", RESULT)]);
+		assert.ok(q('[data-testid="subagent-message"]')!.className.includes(SPEAKER.child.bar));
+		assert.ok(q('[data-testid="subagent-message-status"]')!.className.includes(SPEAKER.child.text));
+	});
 	it("expands on click, and the title opens the child's modal", async () => {
 		await mount([msg("2", "user", RESULT)]);
 		await act(async () => q('[data-testid="subagent-message-toggle"]')!.dispatchEvent(new dom.window.CustomEvent("click", { bubbles: true })));

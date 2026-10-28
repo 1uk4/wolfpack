@@ -212,6 +212,17 @@ describe("feature threads", () => {
     expect(threadsOf(w).threads[0].workspace).toEqual(ws);
   });
 
+  it("a worktree child's spawn result says the merge is automatic; a shared-checkout child's does not", async () => {
+    const { w, s } = await boot();
+    await say(w, "spawn writer name=wt iso=worktree: do it");
+    const wt = s.toolResults.at(-1)!;
+    expect(wt).toContain("its branch is merged into the feature branch automatically");
+    expect(wt).toContain("Don't merge by hand; use subagent_merge only after a merge conflict or when asked.");
+    await settled(w, 1);
+    await say(w, "spawn reader name=ro iso=none: look");
+    expect(s.toolResults.at(-1)).not.toContain("merged into the feature branch");
+  });
+
   it("restart keeps the workspaces, the thread's cwd and the guard state", async () => {
     const root = mkdtempSync(join(tmpdir(), "iso-restart-"));
     cleanups.push(() => rmSync(root, { recursive: true, force: true }));

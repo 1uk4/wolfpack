@@ -111,7 +111,8 @@ export function createSubagentExtension(bridge: SubagentBridge, config: { wolfDe
         "Delegate a task to a specialist sub-agent (see `subagents_list` for the roster and tiers). " +
         "Delegate anything that needs more than a couple of reads or commands, so your context stays small; spawn independent pieces in parallel. " +
         "Fire-and-forget: returns immediately; the result arrives automatically as a steer message. " +
-        "Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work.",
+        "Do not poll, sleep, tail logs or check status, and never fabricate or assume results: end your turn or do other independent work. " +
+        "When the child's task is shipped (task_done), its branch is merged into the feature branch automatically. Don't merge by hand; use subagent_merge only after a merge conflict or when asked.",
       parameters: SpawnParams,
       execute: async (args, ctx) => {
         const a = args as { agent: string; task: string; name?: string; model?: string; cwd?: string; isolation?: string };
@@ -162,7 +163,7 @@ export function createSubagentExtension(bridge: SubagentBridge, config: { wolfDe
       name: "subagent_merge",
       raisesCard: true,
       description:
-        "Act on a worktree sub-agent's branch after its task shipped (the merge into the feature branch runs by itself on ship). " +
+        "Act on a worktree sub-agent's branch. When the child's task is shipped (task_done), its branch is merged into the feature branch automatically. Don't merge by hand; use subagent_merge only after a merge conflict or when asked. " +
         'action "retry": merge now (after committing or stashing a dirty tree, or fixing a conflict by hand). "resolve": a worker subagent rebases the branch onto the feature branch and resolves the conflict, then it is merged again. ' +
         '"manual": the steps for the owner to resolve it by hand (the worktree and branch stay). "abandon": discard the worktree and branch (unmerged commits first ask the user to confirm with a card; the conflict card\'s Abandon branch answer counts).',
       parameters: Type.Object({

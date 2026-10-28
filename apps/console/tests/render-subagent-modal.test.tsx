@@ -34,7 +34,7 @@ type ThreadSummary = import("@wolfpack/client").ThreadSummary;
 type LedgerEntry = import("@wolfpack/client").LedgerEntry;
 const { BusyError } = await import("@wolfpack/client");
 const { threadFetch } = await import("./helpers/thread-fetch.ts");
-const { SubagentModal, SubagentModalProvider, useSubagentModal, ledgerSender, messageHint, formatElapsed, formatTokens } = await import("../components/subagent-modal.tsx");
+const { SubagentModal, SubagentModalProvider, useSubagentModal, ledgerSender, userMessageSenders, messageHint, formatElapsed, formatTokens } = await import("../components/subagent-modal.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
 const { PANELS } = await import("../components/panel-host.tsx");
 
@@ -122,6 +122,11 @@ describe("subagent modal", () => {
 
 	it("pure helpers", () => {
 		assert.equal(ledgerSender({ from: "owner", to: "child" }), "you → child");
+		assert.deepEqual(userMessageSenders(["a", "b", "a"], [
+			{ id: 1, at: "", from: "parent", to: "child", kind: "brief", text: "a" },
+			{ id: 2, at: "", from: "owner", to: "child", kind: "steer", text: "b" },
+			{ id: 3, at: "", from: "child", to: "parent", kind: "result", text: "a" },
+		]), ["parent", "owner", "parent"]);
 		assert.equal(messageHint("running").mode, "steer");
 		assert.equal(messageHint("done").mode, "resume");
 		assert.equal(formatElapsed(65_000), "1m 5s");
@@ -141,8 +146,8 @@ describe("subagent modal", () => {
 		assert.equal(q('[data-testid="subagent-transcript"] textarea'), null);
 		const rows = qa('[data-testid="ledger-entry"]');
 		assert.deepEqual(rows.map((r) => r.getAttribute("data-kind")), ["brief", "steer"]);
-		assert.match(rows[0]!.textContent!, /parent → child · brief/);
-		assert.match(rows[1]!.textContent!, /you → child · steer/);
+		assert.match(rows[0]!.textContent!, /Parentbrief/);
+		assert.match(rows[1]!.textContent!, /Yousteer/);
 		await act(async () => void q('[data-testid="subagent-stop"]')!.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		await settle();
 		assert.equal(f.calls.aborts, 1);
@@ -369,6 +374,48 @@ describe("subagent modal", () => {
 		await act(async () => void t.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
 		assert.doesNotMatch(q('[data-testid="ledger-entry-text"]')!.className, /line-clamp/);
 		assert.equal(q('[data-testid="ledger-entry-text"]')!.getAttribute("aria-expanded"), "true");
+	});
+
+	it("ledger entries are titled by sender and coloured per speaker; no Expand tooltip", async () => {
+		const g = fake({});
+		g.state.ledger = [
+			...LEDGER,
+			{ id: 3, at: "2026-10-27T10:02:00.000Z", from: "child", to: "parent", kind: "result", text: "done" },
+			{ id: 4, at: "2026-10-27T10:03:00.000Z", from: "system", to: "parent", kind: "stop", text: "stopped" },
+		];
+		await mount(g);
+		const rows = qa('[data-testid="ledger-entry"]');
+		assert.deepEqual(rows.map((r) => r.querySelector('[data-testid="ledger-entry-sender"]')!.textContent), ["Parent", "You", "Child", "System"]);
+		assert.deepEqual(rows.map((r) => r.querySelector('[data-testid="ledger-entry-kind"]')!.textContent), ["brief", "steer", "result", "stop"]);
+		for (const [i, c] of ["violet", "emerald", "sky"].entries()) assert.match(rows[i]!.className, new RegExp(`border-l-${c}-500.*bg-${c}-500/10`));
+		assert.match(rows[3]!.className, /bg-muted/);
+		assert.equal(new Set(rows.map((r) => r.className)).size, 4);
+		assert.equal(q('[data-testid="ledger-entry-text"]')!.getAttribute("title"), null);
+	});
+
+	it("transcript messages are highlighted by speaker: parent brief, owner steer, child output", async () => {
+		const g = fake({});
+		g.state.ledger = LEDGER;
+		const client = g.client as unknown as { getThread: () => Promise<Record<string, unknown>> };
+		const orig = client.getThread;
+		client.getThread = async () => ({
+			...(await orig()),
+			messages: [
+				{ id: "m1", role: "user", text: "audit it", at: "2026-10-27T10:00:00.000Z" },
+				{ id: "m2", role: "assistant", text: "Found two routes.", at: "2026-10-27T10:00:05.000Z" },
+				{ id: "m3", role: "user", text: "look at /v1 too", at: "2026-10-27T10:01:00.000Z" },
+				{ id: "m4", role: "user", text: "unmatched steer", at: "2026-10-27T10:02:00.000Z" },
+			],
+		});
+		await mount(g);
+		const users = qa('[data-testid="subagent-user-message"]');
+		assert.deepEqual(users.map((u) => u.getAttribute("data-speaker")), ["parent", "owner", "parent"]); // unmatched defaults to parent
+		assert.deepEqual(users.map((u) => u.querySelector("div")!.textContent), ["Parent", "You", "Parent"]);
+		assert.match(users[0]!.className, /bg-violet-500\/10/);
+		assert.match(users[1]!.className, /bg-emerald-500\/10/);
+		const child = q('[data-testid="subagent-child-text"]')!;
+		assert.match(child.className, /border-l-sky-500.*bg-sky-500\/10/);
+		assert.match(child.textContent!, /Child/);
 	});
 
 	it("Tab wraps within the dialog, focus starts on close", async () => {

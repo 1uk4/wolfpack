@@ -4,21 +4,22 @@ import { useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useSubagentModal } from "@/components/subagent-modal";
+import { SPEAKER } from "@/components/speaker-colors";
 import { cn } from "@/lib/utils";
 import { EVENT_LABEL, resolveChild, type SubagentOrigin } from "@/src/core/subagent-message";
 import type { ChildThread } from "@/src/core/subagents";
 
 const ACCENT: Record<SubagentOrigin["event"], string> = {
-	result: "border-l-sky-500/70",
-	question: "border-l-sky-500/70",
-	merge: "border-l-sky-500/70",
+	result: SPEAKER.child.bar,
+	question: SPEAKER.child.bar,
+	merge: SPEAKER.child.bar,
 	warning: "border-l-amber-500/70 bg-amber-500/5",
 	error: "border-l-destructive/70 bg-destructive/5",
 };
 const LABEL: Record<SubagentOrigin["event"], string> = {
-	result: "text-sky-600 dark:text-sky-400",
-	question: "text-sky-600 dark:text-sky-400",
-	merge: "text-sky-600 dark:text-sky-400",
+	result: SPEAKER.child.text,
+	question: SPEAKER.child.text,
+	merge: SPEAKER.child.text,
 	warning: "text-amber-600 dark:text-amber-400",
 	error: "text-destructive",
 };

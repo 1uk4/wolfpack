@@ -446,7 +446,7 @@ export class SubagentManager {
         `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
         `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
         `Until then, move on to other work or tell the user you're waiting.` +
-        (plan.workspace ? ` Briefs are rewritten automatically; don't send path corrections.` : ""),
+        (plan.workspace ? ` Briefs are rewritten automatically; don't send path corrections. When the child's task is shipped (task_done), its branch is merged into the feature branch automatically. Don't merge by hand; use subagent_merge only after a merge conflict or when asked.` : ""),
     };
   }
 

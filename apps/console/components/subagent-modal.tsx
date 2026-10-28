@@ -9,6 +9,7 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { useOptionalServerEvent, useOptionalServerResync } from "@/components/server-events";
 import { useChatSession } from "@/components/session";
 import { threadBase, threadTransport } from "@/components/thread-transport";
+import { SPEAKER, speakerBlock, type Speaker } from "@/components/speaker-colors";
 import { PROSE_BLOCK_CLASS, renderItems, threadSlug, workHref, type LhMessage } from "@/src/core";
 
 const STATE_CLASS: Record<SubagentState, string> = {
@@ -31,6 +32,19 @@ export const formatTokens = (n: number): string => (n < 1000 ? String(n) : `${(n
 const PARTY: Record<LedgerEntry["from"], string> = { parent: "parent", child: "child", owner: "you", system: "system" };
 /** Who spoke, to whom, in the ledger's words ("parent → child"). */
 export const ledgerSender = (e: Pick<LedgerEntry, "from" | "to">): string => `${PARTY[e.from]} → ${PARTY[e.to]}`;
+
+/**
+ * Who sent each user-role message of the child thread. The child's ledger records every hand-off to it with its sender
+ * (parent: brief/steer, owner: steer); a message is matched to the first unused entry with the same text. A message with
+ * no match (e.g. a brief rewritten for the worktree) defaults to the parent.
+ */
+export const userMessageSenders = (texts: readonly string[], entries: readonly LedgerEntry[] | null): Speaker[] => {
+	const pool = [...(entries ?? [])].filter((e) => e.to === "child" && (e.from === "parent" || e.from === "owner")).sort((a, b) => a.id - b.id);
+	return texts.map((t) => {
+		const i = pool.findIndex((e) => e.text.trim() === t.trim());
+		return i < 0 ? "parent" : pool.splice(i, 1)[0]!.from;
+	});
+};
 
 /** The hint under the message field: what sending does right now. */
 export const messageHint = (state: SubagentState | undefined): { mode: "steer" | "resume"; text: string } =>
@@ -78,16 +92,20 @@ function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSumma
 function LedgerEntryRow({ e }: { e: LedgerEntry }) {
 	const [open, setOpen] = useState(false);
 	return (
-		<li data-testid="ledger-entry" data-kind={e.kind} data-from={e.from} className="flex flex-col gap-0.5">
-			<div className="font-mono text-[11px] text-muted-foreground">
-				{ledgerSender(e)} · {e.kind}
+		<li data-testid="ledger-entry" data-kind={e.kind} data-from={e.from} className={`flex flex-col gap-0.5 rounded-r py-1 pl-2 pr-1.5 ${speakerBlock(e.from)}`}>
+			<div className="flex items-baseline gap-1.5 text-[11px]">
+				<span data-testid="ledger-entry-sender" className={`font-medium ${SPEAKER[e.from].text}`}>
+					{SPEAKER[e.from].label}
+				</span>
+				<span data-testid="ledger-entry-kind" className="font-mono text-muted-foreground">
+					{e.kind}
+				</span>
 			</div>
 			<button
 				type="button"
 				data-testid="ledger-entry-text"
 				aria-expanded={open}
-				title={open ? "Collapse" : "Expand"}
-				className={`w-full whitespace-pre-wrap break-words text-left ${open ? "" : "line-clamp-3"}`}
+				className={`w-full cursor-pointer whitespace-pre-wrap break-words text-left ${open ? "" : "line-clamp-3"}`}
 				onClick={() => setOpen((v) => !v)}
 			>
 				{e.text}
@@ -129,25 +147,35 @@ function Ledger({ entries }: { entries: readonly LedgerEntry[] | null }) {
 }
 
 /** The child's transcript, read-only: text and tool rows (no cards, no composer). */
-function Transcript({ messages, streaming }: { messages: ReturnType<typeof useChatSession>["messages"]; streaming: boolean }) {
+function Transcript({ messages, streaming, entries }: { messages: ReturnType<typeof useChatSession>["messages"]; streaming: boolean; entries: readonly LedgerEntry[] | null }) {
+	const userText = (m: (typeof messages)[number]) => m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+	const senders = userMessageSenders(messages.filter((m) => m.role === "user").map(userText), entries);
+	let userIndex = 0;
 	const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
 	const setOpen = (key: string) => (open: boolean) => setOpenRows((p) => ({ ...p, [key]: open }));
 	return (
 		<div className="flex flex-col gap-3" data-testid="subagent-transcript">
-			{messages.map((m, mi) =>
-				m.role === "user" ? (
-					<div key={m.id || mi} data-testid="subagent-user-message" className="border-l-2 border-muted-foreground/30 pl-2 text-xs">
-						<div className="font-medium uppercase tracking-wide text-muted-foreground">Brief / message</div>
-						<div className="whitespace-pre-wrap">{m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")}</div>
-					</div>
-				) : (
-					<div key={m.id || mi} data-testid="subagent-assistant-message" className="flex flex-col gap-2">
+			{messages.map((m, mi) => {
+				if (m.role === "user") {
+					const who = senders[userIndex++]!;
+					return (
+						<div key={m.id || mi} data-testid="subagent-user-message" data-speaker={who} className={`rounded-r py-1 pl-2 pr-2 text-xs ${speakerBlock(who)}`}>
+							<div className={`font-medium uppercase tracking-wide ${SPEAKER[who].text}`}>{SPEAKER[who].label}</div>
+							<div className="whitespace-pre-wrap">{userText(m)}</div>
+						</div>
+					);
+				}
+				return (
+					<div key={m.id || mi} data-testid="subagent-assistant-message" data-speaker="child" className="flex flex-col gap-2">
 						{renderItems(m.parts, streaming && mi === messages.length - 1).map((item) => {
 							switch (item.kind) {
 								case "text":
 									return (
-										<div key={item.part.id || item.index} className={PROSE_BLOCK_CLASS}>
-											<MessageResponse>{item.part.text}</MessageResponse>
+										<div key={item.part.id || item.index} data-testid="subagent-child-text" data-speaker="child" className={`rounded-r py-1 pl-2 pr-2 ${speakerBlock("child")}`}>
+											<div className={`text-xs font-medium uppercase tracking-wide ${SPEAKER.child.text}`}>{SPEAKER.child.label}</div>
+											<div className={PROSE_BLOCK_CLASS}>
+												<MessageResponse>{item.part.text}</MessageResponse>
+											</div>
 										</div>
 									);
 								case "tool":
@@ -165,8 +193,8 @@ function Transcript({ messages, streaming }: { messages: ReturnType<typeof useCh
 							}
 						})}
 					</div>
-				),
-			)}
+				);
+			})}
 		</div>
 	);
 }
@@ -236,7 +264,7 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 			<Ledger entries={entries} />
 			<section className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="subagent-transcript-column" aria-label="Transcript">
 				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="subagent-transcript-scroll">
-					<Transcript messages={messages} streaming={status === "streaming"} />
+					<Transcript messages={messages} streaming={status === "streaming"} entries={entries} />
 					{error && (
 						<div data-testid="subagent-error" className="mt-2 flex justify-between rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs">
 							<span>{error.message}</span>

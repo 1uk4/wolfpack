@@ -510,7 +510,11 @@ export class SubagentManager {
     await this.stop(threadId, "owner");
   }
 
+  /** Children whose current input already got its result (a run after that is a continuation, not new work). */
+  private readonly resultDelivered = new Set<string>();
+
   private async send(rec: ChildRecord, text: string, from: "parent" | "owner", whenBusy: WhenBusy, refs: Parameters<ThreadRuntime["submit"]>[2] = []): Promise<SubmitAck> {
+    if (!this.port.thread(rec.id)?.isRunning || this.resultDelivered.has(rec.id)) this.resultDelivered.delete(rec.id); // new input from outside
     const thread = this.port.thread(rec.id);
     if (!thread) throw new HttpError("not_found", `thread ${rec.id}`);
     if (rec.resolves && !existsSync(rec.cwd)) throw new HttpError("invalid_request", `"${rec.name}" cannot be resumed: the worktree it worked in (${rec.cwd}) was merged or abandoned. Spawn a new sub-agent.`);
@@ -752,6 +756,14 @@ export class SubagentManager {
       this.finishStopped(rec, rec.stopping);
       return;
     }
+    if (reason === "aborted" && this.resultDelivered.has(rec.id)) {
+      // A continuation after a delivered result (no new input from the parent or owner): the work is done, keep it so.
+      const message = "an unrequested abort hit a run that continued after the result was delivered";
+      this.ledger(rec, "system", "parent", "error", message);
+      this.port.onError(new Error(`subagent ${rec.id}: ${message}`));
+      this.settle(rec, "done");
+      return;
+    }
     if (reason === "aborted") {
       // Nobody asked for this stop (Stop button, subagent_stop, parent release): it is a fault, not an operator decision.
       const message = "the turn was aborted without a stop request";
@@ -788,6 +800,7 @@ export class SubagentManager {
     }
     const summary = thread.lastAssistantText() || "(no output)";
     this.ledger(rec, "child", "parent", "result", summary);
+    this.resultDelivered.add(rec.id);
     this.settle(rec, "done", `Sub-agent "${name}" completed (${elapsed}).\n\n${summary}${followUp}`);
     const resolved = rec.resolves ? this.records.find((r) => r.id === rec.resolves) : undefined;
     if (resolved) void this.mergeRec(resolved).catch((e) => this.port.onError(e));
@@ -1329,6 +1342,7 @@ ${text}`;
 
   /** A queued child got its slot: submit what it was waiting to do. */
   private async start(rec: ChildRecord): Promise<void> {
+    this.resultDelivered.delete(rec.id);
     const thread = this.port.thread(rec.id);
     if (!thread) {
       this.ledger(rec, "system", "parent", "error", "could not start: the child's thread is not attached");

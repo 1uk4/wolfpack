@@ -122,6 +122,21 @@ describe("what counts as a stop", () => {
     expect(e.some((x) => x.endsWith(":stop"))).toBe(false);
   });
 
+  it("an abort of a continuation after a delivered result keeps the child done (error entry, no stop)", async () => {
+    const { w, childId, open } = await bootToolChild();
+    open();
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("done"), { timeout: 5000 });
+    // a run that starts after the result, with no new input from the parent or owner
+    const m = mgr(w) as unknown as { port: { thread(id: string): { conv: { submit(o: unknown): Promise<unknown> } } } };
+    await m.port.thread(childId).conv.submit({ input: "continue", whenBusy: "steer" });
+    await mgr(w).port.thread(childId)!.abort();
+    await new Promise((r) => setTimeout(r, 400));
+    expect((await w.client.listChildren!(w.home))[0]!.state).toBe("done");
+    const e = await entries(w, childId);
+    expect(e).toContain("system:error");
+    expect(e.some((x) => x.endsWith(":stop"))).toBe(false);
+  });
+
   it("an explicit operator stop still stops the child", async () => {
     const { w, childId } = await bootToolChild();
     await new Promise((r) => setTimeout(r, 150));

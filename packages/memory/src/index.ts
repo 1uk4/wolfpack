@@ -154,7 +154,7 @@ export {
   type DistillRecord,
   type DistilledContribution,
 } from "./distill.js";
-export { TOPIC_SOFT_CAP } from "./consolidate.js";
+export { TOPIC_SOFT_CAP, refuseTagged } from "./consolidate.js";
 
 // Work Record — curated per-item knowledge kept in the work item itself
 export {

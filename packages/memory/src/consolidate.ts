@@ -38,6 +38,16 @@ import { isAbsorbed, reconcileDen } from "./den-reconcile.js";
 /** Den topics are working memory: past this size the consolidator is asked to split, and we log (no rejection). */
 export const TOPIC_SOFT_CAP = 8000;
 
+/**
+ * Promote guard: drops anything that still carries a work/feature tag. Work knowledge reaches the KB only through
+ * graduation, so promote refuses it even if an upstream stage let it through.
+ */
+export function refuseTagged<T extends { work?: string; feature?: string }>(items: readonly T[], onProgress?: (msg: string) => void): T[] {
+  const kept = items.filter((o) => !o.work && !o.feature);
+  if (kept.length < items.length) onProgress?.(`refused ${items.length - kept.length} work-tagged item(s): work knowledge reaches the KB only through graduation`);
+  return kept;
+}
+
 export interface ConsolidateOptions {
   /** The engine instance (with provider + model config) */
   engine: Engine;
@@ -121,7 +131,7 @@ export async function consolidateSession(
 
   // Step 1: Read session memory
   const sessionDir = join(memoryRoot, sessionId);
-  const sessionTopics = readTopics(sessionDir);
+  const sessionTopics = refuseTagged(readTopics(sessionDir), onProgress);
   const sessionJourney = readJourney(sessionDir);
   if (sessionTopics.length === 0) {
     onProgress?.("no session topics to promote — nothing to do");

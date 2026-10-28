@@ -19,6 +19,7 @@ import {
 	bannerOf,
 	buildTaskGraph,
 	featureIdFor,
+	BLOCKED_LABEL,
 	groupLabel,
 	groupObservations,
 	observationsInGroup,
@@ -566,6 +567,7 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 										>
 											<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
 											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+												{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABEL}</span> : null}
 												{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
 												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
 											</span>

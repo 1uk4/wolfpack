@@ -12,7 +12,7 @@
  *   1. Read the pool; 2. archive absorbed den topics (reconcileDen) and read the rest for context;
  *   3. LLM consolidation; 4. write $WOLF_DEN/memory/topics/; 5. emit deltas to the KB inbox; 6. archive observations.
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -45,6 +45,7 @@ import {
   HttpWorkRecordStore,
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
+  refuseTagged,
 } from "@wolfpack/memory";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 
@@ -225,6 +226,15 @@ async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<
   await writeFile(poolFile, kept.map((l) => l + "\n").join(""));
 }
 
+/** Append discarded tagged observations, with the reason, to `.memory/pool/discarded.jsonl` (nothing is lost silently). */
+async function logDiscarded(wolfDen: string, items: Array<{ obs: PoolObservation; reason: string }>): Promise<void> {
+  if (items.length === 0) return;
+  const dir = join(wolfDen, ".memory", "pool");
+  await mkdir(dir, { recursive: true });
+  const at = new Date().toISOString();
+  await appendFile(join(dir, "discarded.jsonl"), items.map(({ obs, reason }) => JSON.stringify({ ...obs, discardedAt: at, reason }) + "\n").join(""));
+}
+
 /**
  * Consolidate pool observations directly to den topics.
  * 
@@ -289,10 +299,11 @@ async function consolidatePoolInner(
   const engine = config.engine ?? createConsolidationEngine(config.table ?? loadModelTable().table, config.apiKey);
 
   // Observations tagged with a work item feed that item's Record, not the den.
-  // written → consumed; fallback (item archived/deleted, no Work API) → den;
+  // written → consumed; discarded (item archived/deleted) → logged and consumed, never the den;
   // pending (Work API or model unavailable) → stays in the pool for the next run.
   const handled: PoolObservation[] = [];
   const denObs = observations.filter((o) => !o.work);
+  const discarded: Array<{ obs: PoolObservation; reason: string }> = [];
   let recordsWritten = 0;
   let pending = 0;
   const workObs = observations.filter((o) => o.work);
@@ -305,13 +316,17 @@ async function consolidatePoolInner(
       onProgress,
     });
     for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
-    const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o.status] as const)));
+    const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     for (const o of workObs) {
-      const st = status.get(poolKey(o));
-      if (st === "written") handled.push(o);
-      else if (st === "pending") pending++;
-      else denObs.push(o);
+      const out = status.get(poolKey(o));
+      if (out?.status === "written") handled.push(o);
+      else if (out?.status === "discarded") {
+        handled.push(o);
+        discarded.push({ obs: o, reason: out.reason });
+      } else pending++; // pending, or no outcome: stays in the pool, never the den
     }
+    await logDiscarded(wolfDen, discarded);
+    if (discarded.length > 0) onProgress?.(`${discarded.length} work observation(s) discarded (item archived or deleted)`);
     recordsWritten = outcomes.filter((o) => o.status === "written").length;
     if (pending > 0) onProgress?.(`${pending} work observation(s) stay pending`);
   }
@@ -513,7 +528,7 @@ function createConsolidationEngine(table: ModelTable, apiKey: string | undefined
   });
 }
 
-/** The Work API from the environment; undefined when it is not configured (tagged observations then go to the den). */
+/** The Work API from the environment; undefined when it is not configured (tagged observations then stay pending). */
 function defaultWorkStore(): WorkRecordStore | undefined {
   const store = new HttpWorkRecordStore();
   return store.configured ? store : undefined;
@@ -527,6 +542,8 @@ async function consolidateToSessionTopics(
   domainCtx: string,
 ): Promise<{ created: number; merged: number; skipped: number }> {
   const { onProgress } = config;
+  // Defense in depth: anything still tied to a work item never becomes a session topic (promote would carry it to the KB).
+  observations = refuseTagged(observations, onProgress);
   const root = join(config.sessionTopics.memoryRoot, config.sessionTopics.sessionId);
   const obsLines = observations
     .map((o) => `${o.timestamp}${o.domain ? ` [${o.domain}]` : ""}  ${o.content}`)

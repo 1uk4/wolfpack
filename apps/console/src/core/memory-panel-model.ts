@@ -279,6 +279,8 @@ export interface PoolObservation {
 	tokenCount: number;
 	work?: string;
 	feature?: string;
+	/** Pending because the Work API is unavailable (consolidation never sends tagged observations to the den). */
+	blocked?: "work-api-unavailable";
 }
 
 /** One row of the grouped list: the den, or a work item (id = its key). */
@@ -286,6 +288,8 @@ export interface ObservationGroup {
 	key: string;
 	kind: "den" | "work";
 	count: number;
+	/** Waiting for the Work API: some of the group's observations are blocked on it. */
+	blocked?: "work-api-unavailable";
 	/** Sort stamp of the group's newest observation. */
 	latest: string;
 }
@@ -314,8 +318,9 @@ export function groupObservations(obs: readonly PoolObservation[]): ObservationG
 	for (const o of obs) {
 		const key = groupKeyOf(o);
 		const g = groups.get(key);
-		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o) });
+		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o), ...(o.blocked ? { blocked: o.blocked } : {}) });
 		else {
+			if (o.blocked) g.blocked = o.blocked;
 			g.count++;
 			if (stampOf(o) > g.latest) g.latest = stampOf(o);
 		}
@@ -327,6 +332,9 @@ export function groupObservations(obs: readonly PoolObservation[]): ObservationG
 
 /** One group's observations, newest first. */
 export const observationsInGroup = (obs: readonly PoolObservation[], key: string): PoolObservation[] => newestFirst(obs.filter((o) => groupKeyOf(o) === key));
+
+/** The note a blocked group shows. */
+export const BLOCKED_LABEL = "waiting for Work API";
 
 /** What the list shows for a work item: its title and stage, or just the id when the lookup failed. */
 export interface GroupInfo {

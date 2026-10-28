@@ -201,17 +201,17 @@ describe("consolidateWorkRecords", () => {
     }
   });
 
-  it("archived and deleted items fall back to the den; so does having no store", async () => {
+  it("archived and deleted items are discarded; having no store leaves them pending", async () => {
     const { store } = fakeStore({ arch: { stage: "archived" } });
     const lines: string[] = [];
     const out = await consolidateWorkRecords({ engine: fakeEngine([]), store, observations: [...obs("arch", "x"), ...obs("gone", "y")], onProgress: (m) => lines.push(m) });
     expect(out).toEqual([
-      { work: "arch", ids: ["arch-0"], status: "fallback", reason: "archived" },
-      { work: "gone", ids: ["gone-0"], status: "fallback", reason: "deleted" },
+      { work: "arch", ids: ["arch-0"], status: "discarded", reason: "archived" },
+      { work: "gone", ids: ["gone-0"], status: "discarded", reason: "deleted" },
     ]);
     expect(lines.join("\n")).toContain("archived");
     const none = await consolidateWorkRecords({ engine: fakeEngine([]), observations: obs("a", "x") });
-    expect(none[0].status).toBe("fallback");
+    expect(none[0]).toMatchObject({ status: "pending", reason: "work-api-unavailable" });
   });
 
   it("an over-long answer is asked to fold once, then hard-trimmed to the cap", async () => {

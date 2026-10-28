@@ -11,6 +11,8 @@
  * The orchestrator is stateful per-session but never imports any
  * agent-specific code. The runtime feeds it events and content.
  */
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
 import { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
@@ -262,8 +264,8 @@ export function createOrchestrator(
 
     // Observations tagged with a work item feed that item's Record, not the
     // den. Their outcome decides what the den pass sees: written → consumed;
-    // fallback (item archived/deleted, no Work API) → den like any other;
-    // pending (infra error) → left in the pool for the next run.
+    // discarded (item archived/deleted) → logged and dropped, never the den;
+    // pending (Work API down or not configured, infra error) → left in the pool for the next run.
     const consumedWork = new Set<string>();
     const heldWork = new Set<string>();
     const tagged = promote.filter((o) => o.work);
@@ -275,11 +277,20 @@ export function createOrchestrator(
         observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
-      const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o.status] as const)));
+      const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+      const discarded: string[] = [];
       for (const o of tagged) {
-        const st = status.get(o.timestamp);
-        if (st === "written") consumedWork.add(o.timestamp);
-        else if (st === "pending") heldWork.add(o.timestamp);
+        const out = status.get(o.timestamp);
+        if (out?.status === "written") consumedWork.add(o.timestamp);
+        else if (out?.status === "discarded") {
+          consumedWork.add(o.timestamp);
+          discarded.push(JSON.stringify({ ...o, discardedAt: new Date().toISOString(), reason: out.reason }) + "\n");
+        } else heldWork.add(o.timestamp); // pending or no outcome: never the den
+      }
+      if (discarded.length > 0) {
+        mkdirSync(memRoot, { recursive: true });
+        appendFileSync(join(memRoot, "discarded.jsonl"), discarded.join(""));
+        runtime.notify?.(`memory: ${discarded.length} work observation(s) discarded (item archived or deleted)`, "info");
       }
       if (consumedWork.size > 0) {
         appendEvent({
@@ -289,8 +300,8 @@ export function createOrchestrator(
         });
       }
     }
-    // Fallback observations are consolidated as plain den observations.
-    promote = promote.filter((o) => !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
+    // Defense in depth: nothing tagged reaches the den pass.
+    promote = promote.filter((o) => !o.work && !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
     if (promote.length === 0) return;
 
     runtime.notify?.(

@@ -84,8 +84,15 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
  * the later append. Ids hash the entry (an ordinal tells identical entries apart), so the same entry keeps its id
  * from read to read until consolidation archives it.
  */
-export async function readMemoryObservations(den: string, limit?: number): Promise<MemoryObservations> {
+export async function readMemoryObservations(den: string, limit?: number, work?: { endpoint?: string; token?: string }): Promise<MemoryObservations> {
   const pool = await readPool(den);
+  // Tagged observations wait for the Work API (consolidation never sends them to the den): probe it once.
+  const probe = pool.find((o) => o.work || o.feature);
+  let blocked = false;
+  if (probe && work) {
+    const r = await fetchWorkItem((probe.work || probe.feature)!, work);
+    blocked = r.kind === "unconfigured" || r.kind === "error";
+  }
   const seen = new Map<string, number>();
   const all = pool.map((o, i): MemoryObservation & { _i: number } => {
     const h = createHash("sha1").update(`${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`).digest("hex").slice(0, 16);
@@ -100,12 +107,13 @@ export async function readMemoryObservations(den: string, limit?: number): Promi
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
+      ...(blocked && (o.work || o.feature) ? { blocked: "work-api-unavailable" as const } : {}),
       _i: i,
     };
   });
   all.sort((a, b) => (b.recordedAt ?? b.timestamp).localeCompare(a.recordedAt ?? a.timestamp) || b._i - a._i);
   const kept = limit === undefined ? all : all.slice(0, limit);
-  return { observations: kept.map(({ _i, ...o }) => o), total: all.length };
+  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}) };
 }
 
 /** One topic by id. `scope` restricts the store; otherwise den first, then session. Undefined: no such topic. */

@@ -9,7 +9,7 @@ import { parseHTML } from "linkedom";
 
 const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
-interface Obs { id: string; timestamp: string; recordedAt: string; content: string; tokenCount: number; work?: string; feature?: string }
+interface Obs { id: string; timestamp: string; recordedAt: string; content: string; tokenCount: number; work?: string; feature?: string; blocked?: string }
 let pool: Obs[] = [];
 let poolStatus = 200;
 let poolFetches = 0;
@@ -98,6 +98,16 @@ describe("observation pool in the Memory panel", () => {
 		assert.match(rows[1]!.textContent!, /approved/);
 		assert.match(rows[2]!.textContent!, /Fix the login/);
 		assert.match(rows[2]!.textContent!, /in build/);
+	});
+
+	it("shows \"waiting for Work API\" on a group whose observations are blocked, and only on that group", async () => {
+		pool = [
+			ob("1", "2026-10-26T09:00:00Z", "den one"),
+			{ ...ob("2", "2026-10-26T10:00:00Z", "task early", { work: "work-a" }), blocked: "work-api-unavailable" },
+		];
+		await mount();
+		assert.match(q('[data-testid="memory-obs-group-work-a"]')!.textContent!, /waiting for Work API/);
+		assert.equal(q('[data-testid="memory-obs-group-den"]')!.querySelector('[data-testid="memory-obs-blocked"]'), null);
 	});
 
 	it("falls back to the id when the work lookup fails", async () => {

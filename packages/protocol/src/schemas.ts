@@ -955,6 +955,8 @@ export const MemoryObservationSchema = z.object({
   domain: z.string().optional(),
   work: z.string().optional(),
   feature: z.string().optional(),
+  /** Set on a tagged observation that stays pending because the Work API is unreachable or not configured. */
+  blocked: z.literal("work-api-unavailable").optional(),
 });
 export type MemoryObservation = z.infer<typeof MemoryObservationSchema>;
 
@@ -963,6 +965,8 @@ export const MemoryObservationsSchema = z.object({
   observations: z.array(MemoryObservationSchema),
   /** The pool's size, before `limit`. */
   total: z.number().int().nonnegative(),
+  /** Pool-level: tagged observations are waiting because the Work API is unavailable. */
+  blocked: z.literal("work-api-unavailable").optional(),
 });
 export type MemoryObservations = z.infer<typeof MemoryObservationsSchema>;
 

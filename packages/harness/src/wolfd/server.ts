@@ -491,7 +491,7 @@ export class WolfServer {
         if (rawLimit !== null && !/^[1-9]\d{0,6}$/.test(rawLimit)) throw new HttpError("invalid_request", "limit must be a positive integer");
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
-        return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit)));
+        return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
       }
       case "getWorkRecord": {
         this.checkWolf(params.name);

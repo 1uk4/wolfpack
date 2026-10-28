@@ -139,15 +139,44 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(readdirSync(join(den, ".memory", "archive"))).toHaveLength(1);
   });
 
-  it("tagged observations for a deleted item are consolidated into the den; few tagged observations still get their Record", async () => {
+  it("tagged observations for a deleted item are discarded and logged, never the den; few tagged observations still get their Record", async () => {
     poolWith([o(0, { work: "gone" }), o(1, { work: "work-t1" })]);
     const m = mocks();
     const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(r.recordsWritten).toBe(1);
     expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
-    // the den share (1 observation, below the minimum) waits in the pool
-    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(poolLines()).toEqual([]);
     expect(m.prompts.consolidate).toEqual([]);
+    const logged = readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ content: "observation 0", work: "gone", reason: "deleted" });
+  });
+
+  it("an archived item's observations are discarded and logged", async () => {
+    poolWith([o(0, { work: "work-arch" })]);
+    const m = mocks();
+    const get = m.workStore.get;
+    m.workStore.get = async (id: string) => (id === "work-arch" ? { id, title: "A", kind: "task", stage: "archived", body: "" } : get(id));
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    expect(poolLines()).toEqual([]);
+    expect(m.prompts.consolidate).toEqual([]);
+    expect(readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8")).toContain('"reason":"archived"');
+  });
+
+  it("with no Work API, or one that is down, tagged observations stay pending and never reach the den", async () => {
+    poolWith([o(0, { work: "work-t1" }), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, minObservations: 1 });
+    expect(r.observationsPending).toBe(1);
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(m.prompts.consolidate.join("\n")).not.toContain("observation 0");
+
+    const down = mocks();
+    down.workStore.get = async () => { throw new Error("ECONNREFUSED"); };
+    const r2 = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: down.engine, workStore: down.workStore, minObservations: 1 });
+    expect(r2.observationsPending).toBe(1);
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
   });
 
   it("tasks of one feature share one Record on the feature; a legacy line with only `work` keeps its item", async () => {
@@ -183,14 +212,15 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(poolLines()).toEqual([]);
     });
 
-    it("a tagged observation whose item is gone falls back to session topics, as in pi", async () => {
+    it("a tagged observation whose item is gone is discarded, never a session topic", async () => {
       poolWith([o(0, { work: "gone" })]);
       const m = mocks();
       const prompts: string[] = [];
       await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), workStore: m.workStore, sessionTopics: durableSessionTopics(den), minObservations: 1 });
-      expect(prompts[0]).toContain("observation 0");
-      expect(readdirSync(sessions())).toContain("t.md");
-      expect(existsSync(join(den, "memory", "topics"))).toBe(false);
+      expect(prompts).toEqual([]);
+      expect(existsSync(sessions())).toBe(false);
+      expect(poolLines()).toEqual([]);
+      expect(readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8")).toContain("observation 0");
     });
   });
 });

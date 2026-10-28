@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
-import { readTopics } from "./session/memory.js";
+import { readTopics, sessionMemoryRoot } from "./session/memory.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
 
@@ -286,7 +286,7 @@ describe("orchestrator work tagging and Records", () => {
     expect(s.writes).toEqual([]);
   });
 
-  it("observations of an archived or deleted item fall back to den consolidation", async () => {
+  it("observations of an archived item are discarded (logged), never sent to the den", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0], OBS[1]]]);
     const s = store({ "work-t1": { title: "T", kind: "task", stage: "archived", body: "" } });
     const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
@@ -294,8 +294,20 @@ describe("orchestrator work tagging and Records", () => {
     await orch.consolidateNow();
 
     expect(prompts.record).toEqual([]);
-    expect(prompts.consolidate[0]).toContain("TTL cache");
+    expect(prompts.consolidate).toEqual([]);
     expect(orch.getActiveObservations()).toEqual([]);
+    const log = readFileSync(join(sessionMemoryRoot(cwd, "sess-1"), "discarded.jsonl"), "utf-8");
+    expect(log).toContain("TTL cache");
+    expect(log).toContain('"reason":"archived"');
+  });
+
+  it("with no Work API the tagged observations stay pending in the pool, never the den", async () => {
+    const { engine, prompts } = engineWithRecord([[OBS[0], OBS[1]]]);
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }) });
+    await orch.processChunks([chunk("c1")]);
+    await orch.consolidateNow();
+    expect(prompts.consolidate).toEqual([]);
+    expect(orch.getActiveObservations().length).toBe(2);
   });
 
   it("observations of two tasks of one feature fold into one Record on the feature; an Inbox task keeps its own", async () => {

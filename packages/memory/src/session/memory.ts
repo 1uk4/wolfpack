@@ -19,6 +19,9 @@ export interface TopicFile {
   updated: string;
   body: string;
   domain?: string;
+  /** Work tags (frontmatter). A topic carrying one is work knowledge and never promotes. */
+  work?: string;
+  feature?: string;
   filename: string;
 }
 
@@ -52,6 +55,8 @@ export function readTopics(root: string): TopicFile[] {
       updated: String(fields.updated ?? ""),
       body: body.trim(),
       domain: fields.domain ? String(fields.domain) : undefined,
+      ...(fields.work ? { work: String(fields.work) } : {}),
+      ...(fields.feature ? { feature: String(fields.feature) } : {}),
       filename,
     };
   });

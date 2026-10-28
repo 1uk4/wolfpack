@@ -256,14 +256,17 @@ export const isRecordFeature = (it: WorkRecordItem | null): it is WorkRecordItem
 export type WorkRecordOutcome =
   /** Record written: the observations are consumed. */
   | { work: string; ids: string[]; status: "written"; chars: number }
-  /** Item archived, deleted or no store: the observations go to den consolidation. */
-  | { work: string; ids: string[]; status: "fallback"; reason: string }
-  /** Infra error: the observations stay pending for the next run. */
+  /** Item archived or deleted: the observations are discarded (logged by the caller), never sent to the den. */
+  | { work: string; ids: string[]; status: "discarded"; reason: string }
+  /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
   | { work: string; ids: string[]; status: "pending"; reason: string };
+
+/** The reason a pending outcome carries when the Work API is missing or unreachable. */
+export const WORK_API_UNAVAILABLE = "work-api-unavailable";
 
 export interface ConsolidateWorkOptions {
   engine: Engine;
-  /** Absent → every group falls back to den consolidation. */
+  /** Absent (Work API not configured) → every group stays pending; tagged observations never go to the den. */
   store?: WorkRecordStore;
   observations: WorkObservation[];
   onProgress?: (msg: string) => void;
@@ -317,16 +320,16 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
   const outcomes: WorkRecordOutcome[] = [];
   for (const [work, obs] of groups) {
     if (!store) {
-      onProgress?.(`  work ${work}: no Work API configured, ${obs.length} observation(s) go to the den`);
-      outcomes.push({ work, ids: obs.map((o) => o.id), status: "fallback", reason: "no Work API configured" });
+      onProgress?.(`  work ${work}: no Work API configured, ${obs.length} observation(s) stay pending`);
+      outcomes.push({ work, ids: obs.map((o) => o.id), status: "pending", reason: WORK_API_UNAVAILABLE });
       continue;
     }
     try {
       const item = await store.get(work);
       if (!item || item.stage === "archived") {
         const reason = item ? "archived" : "deleted";
-        onProgress?.(`  work ${work}: item is ${reason}, ${obs.length} observation(s) go to the den`);
-        outcomes.push({ work, ids: obs.map((o) => o.id), status: "fallback", reason });
+        onProgress?.(`  work ${work}: item is ${reason}, ${obs.length} observation(s) are discarded`);
+        outcomes.push({ work, ids: obs.map((o) => o.id), status: "discarded", reason });
         continue;
       }
 

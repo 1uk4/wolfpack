@@ -37,6 +37,7 @@ import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
 	describeNode,
+	workRouteView,
 	parseCamera,
 	resolvePositions,
 	sanitizePositions,
@@ -49,7 +50,7 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
-import { WorkButton } from "./work-view-entry.tsx";
+import { WorkButton, useWorkView } from "./work-view-entry.tsx";
 import { Hint } from "@/components/ui/hint";
 
 /** The default node look when a node carries no colour of its own. */
@@ -491,6 +492,52 @@ export function GraphView({
 		return () => cancelAnimationFrame(raf);
 	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
+	// ---- The Work view's split --------------------------------------------
+	// The table (a left column over this page) selects THROUGH the graph's own selection: a request becomes
+	// setSelected, so the route, the physics and the pane follow exactly as for a click on the map. The route the
+	// table lights is published back from this same computation.
+	const work = useWorkView();
+	const workSel = work.selection;
+	const workSelRef = useRef(workSel);
+	workSelRef.current = workSel;
+	const handledSeq = useRef<number | null>(null);
+	useEffect(() => {
+		if (!workSel) {
+			// The table is back to full screen: the graph's selection goes with it.
+			if (handledSeq.current !== null) setSelected(null);
+			handledSeq.current = null;
+			return;
+		}
+		if (handledSeq.current === workSel.seq || isEmpty || !storedLoaded) return;
+		const gid = `work:${workSel.id}`;
+		if (!graph.nodes.some((n) => n.id === gid)) return;
+		handledSeq.current = workSel.seq;
+		setSelected({ id: gid });
+		// The column narrows the canvas first; pan once the renderer has re-fitted.
+		requestAnimationFrame(() => requestAnimationFrame(() => rendererRef.current?.focusOn([gid], 3)));
+	}, [workSel, graph, isEmpty, storedLoaded]);
+	// Closing the pane (X or Esc) while the table is split returns the table to full screen.
+	const hadSelected = useRef(false);
+	useEffect(() => {
+		if (hadSelected.current && selectedId === null && workSelRef.current) work.clearSelection();
+		hadSelected.current = selectedId !== null;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [selectedId]);
+	const publishRoute = work.publishRoute;
+	useEffect(() => {
+		const raw = selectedId ? rawWorkId(selectedId) : null;
+		publishRoute(raw ? workRouteView(selectedRoute, raw, cursor?.node ?? null) : null);
+	}, [publishRoute, selectedId, selectedRoute, cursor?.node]);
+	useEffect(() => () => publishRoute(null), [publishRoute]);
+	// The column covers the page's left edge: inset the graph past it so the canvas (and its fit) is the visible part.
+	const rootRef = useRef<HTMLDivElement | null>(null);
+	const [inset, setInset] = useState(0);
+	const splitWidth = workSel ? work.colWidth : 0;
+	useEffect(() => {
+		const left = rootRef.current?.getBoundingClientRect().left ?? 0;
+		setInset(Math.max(0, splitWidth - left));
+	}, [splitWidth]);
+
 	// The pane's details follow the route cursor's node (when a route is selected).
 	const card = useMemo(
 		() => (selected ? (describeNode(graph, cursorNodeId ?? selected.id) ?? describeNode(graph, selected.id)) : null),
@@ -510,7 +557,7 @@ export function GraphView({
 	shownNodeRef.current = card?.id ?? null;
 
 	return (
-		<div className="flex h-full w-full">
+		<div ref={rootRef} className="flex h-full w-full" style={inset > 0 ? { paddingLeft: inset } : undefined}>
 			<div className="relative h-full min-w-0 flex-1">
 				{isEmpty ? (
 					<div className="flex h-full w-full items-center justify-center px-4">

@@ -4,6 +4,13 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+/** Typing in a field: Esc belongs to the field then. */
+const isTextField = (t: EventTarget | null): boolean => {
+	const el = t as { tagName?: string; isContentEditable?: boolean } | null;
+	const tag = el?.tagName?.toUpperCase();
+	return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable === true;
+};
+
 const FOCUSABLE = 'button, a[href], textarea, input, select, summary, [tabindex="0"]';
 
 /** Focusable and reachable: not disabled, and not hidden inside a closed <details> (its summary stays reachable). */
@@ -42,6 +49,7 @@ export function OverlayShell({
 	onClose,
 	header,
 	bleed = false,
+	column,
 	children,
 }: {
 	/** aria-label, when there is no visible title element to point at. */
@@ -55,6 +63,11 @@ export function OverlayShell({
 	header?: (close: ReactNode) => ReactNode;
 	/** Full-bleed: no page padding, so the body's own TopBar spans the window edge to edge. */
 	bleed?: boolean;
+	/**
+	 * A left column of this width (px) instead of the full screen: the page beside it stays live, so it is not modal
+	 * (no Tab trap) and Esc leaves a field's own Esc alone. Esc and the close button still call `onClose`.
+	 */
+	column?: number;
 	children: ReactNode | ((close: ReactNode) => ReactNode);
 }) {
 	const dialogRef = useRef<HTMLDivElement>(null);
@@ -72,11 +85,12 @@ export function OverlayShell({
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
+				if (column !== undefined && isTextField(e.target)) return;
 				// THE ONE-ESC LAW: claim at the document level, the window chain must not also act.
 				e.preventDefault();
 				e.stopPropagation();
 				onClose();
-			} else if (e.key === "Tab") {
+			} else if (e.key === "Tab" && column === undefined) {
 				const els = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter(reachable);
 				if (els.length === 0) return;
 				const first = els[0]!;
@@ -96,7 +110,7 @@ export function OverlayShell({
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose]);
+	}, [onClose, column]);
 	const close = (
 		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
 			<XIcon />
@@ -105,9 +119,10 @@ export function OverlayShell({
 	return (
 		<div
 			ref={dialogRef}
-			className={`fixed inset-0 z-50 flex flex-col bg-background${bleed ? "" : " p-4"}`}
+			className={column !== undefined ? "fixed inset-y-0 left-0 z-50 flex flex-col border-r bg-background" : `fixed inset-0 z-50 flex flex-col bg-background${bleed ? "" : " p-4"}`}
+			style={column !== undefined ? { width: column } : undefined}
 			role="dialog"
-			aria-modal="true"
+			aria-modal={column === undefined}
 			aria-label={labelledBy ? undefined : label}
 			aria-labelledby={labelledBy}
 			data-testid={testId}

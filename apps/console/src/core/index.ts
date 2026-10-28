@@ -85,3 +85,4 @@ export * from "./feature-progress.ts";
 export { coalescedRefresh } from "./coalesced-refresh.ts";
 export * from "./thread-lists.ts";
 export * from "./work-table.ts";
+export * from "./work-select.ts";

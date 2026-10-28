@@ -1167,6 +1167,8 @@ export const GraduationResultSchema = z.object({
   unbound: z.number().int(),
   /** Feature threads closed to read-only history. */
   closedThreads: z.array(z.string()),
+  /** Non-blocking things that went wrong after the graduation happened (e.g. a feature thread that could not be closed). */
+  warnings: z.array(z.string()).optional(),
 });
 export type GraduationResult = z.infer<typeof GraduationResultSchema>;
 

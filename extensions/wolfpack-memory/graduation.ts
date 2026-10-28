@@ -20,10 +20,10 @@ import {
   type GraduationClient,
   type GraduationPreview,
 } from "@wolfpack/memory";
-import { GraduationError, readPool, type GraduationConfirmResult, type GraduationObservationCount, type GraduationPreviewResult } from "./memory-actions.js";
+import { GRADUATION_PREVIEW_TTL_MS, GraduationError, readPool, type GraduationConfirmResult, type GraduationObservationCount, type GraduationPreviewResult } from "./memory-actions.js";
 
 /** A graduation preview waits this long for the owner's answer. */
-export const PREVIEW_TTL_MS = 6 * 60 * 60 * 1000;
+export const PREVIEW_TTL_MS = GRADUATION_PREVIEW_TTL_MS;
 
 export interface GraduationDeps {
   client: GraduationClient;
@@ -143,7 +143,10 @@ export function createGraduation(deps: GraduationDeps) {
     readiness: { ready: true },
   });
 
-  /** The newest unexpired stored preview of this item (token files outlive a wolfd restart). */
+  /**
+   * The newest unexpired stored preview of this item (token files outlive a wolfd restart). Expired token files found on
+   * the way are deleted. Readiness is not rechecked here: confirm rechecks it (and the token) before anything is sent.
+   */
   async function pendingPreview(id: string): Promise<GraduationPreviewResult | undefined> {
     let names: string[] = [];
     try {
@@ -154,8 +157,13 @@ export function createGraduation(deps: GraduationDeps) {
     let best: GraduationPreview | undefined;
     for (const n of names.filter((f) => f.endsWith(".json"))) {
       try {
-        const p = JSON.parse(await readFile(join(previewDir(), n), "utf-8")) as GraduationPreview;
-        if (p.itemId !== id || Date.now() - Date.parse(p.createdAt) > PREVIEW_TTL_MS) continue;
+        const file = join(previewDir(), n);
+        const p = JSON.parse(await readFile(file, "utf-8")) as GraduationPreview;
+        if (Date.now() - Date.parse(p.createdAt) > PREVIEW_TTL_MS) {
+          await unlink(file).catch(() => { /* already gone */ });
+          continue;
+        }
+        if (p.itemId !== id) continue;
         if (!best || Date.parse(p.createdAt) > Date.parse(best.createdAt)) best = p;
       } catch {
         // an unreadable token file is not a preview

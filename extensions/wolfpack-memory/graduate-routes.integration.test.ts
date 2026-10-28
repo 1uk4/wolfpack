@@ -141,6 +141,8 @@ async function confirm(id: string, token: string) {
   await tw!.client.startGraduationConfirm!("testwolf", id, token);
   const s = await pollUntil(id);
   if (s.state === "error") throw failed(s);
+  // A confirm that failed leaves the preview valid, so the status offers it again instead of the error.
+  if (s.state === "preview_ready") throw Object.assign(new Error("the confirm failed, nothing archived; the preview is still valid"), { code: "engine_error" });
   if (s.state !== "graduated") throw new Error(`unexpected status ${s.state}`);
   return s.result;
 }
@@ -211,6 +213,49 @@ describe("graduate routes", () => {
     expect(s).toMatchObject({ state: "error", jobId: job.jobId, kind: "preview", code: "not_ready", message: expect.stringContaining("1 task open") });
     const again = await tw.client.startGraduationPreview!("testwolf", feature);
     expect(again.jobId).not.toBe(job.jobId);
+  });
+
+  it("a feature thread that cannot be closed does not turn a done graduation into an error: graduated, with a warning", async () => {
+    tw = await boot(await devRoot());
+    const { feature, tasks } = await makeFeature(tw);
+    const p = await preview(feature);
+    vi.spyOn(tw.wolf.server, "closeFeatureThreads").mockImplementation(() => { throw new Error("thread store locked"); });
+    const r = await confirm(feature, p.token);
+    expect(r).toMatchObject({ graduated: true, closedThreads: [], warnings: [expect.stringContaining("thread store locked")] });
+    for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).toBe("archived");
+  });
+
+  it("a confirm that failed (not stale) falls back to preview_ready from the token file; a stale one stays an error", async () => {
+    tw = await boot(await devRoot());
+    const den = tw.wolf.config.den;
+    const { feature, tasks } = await makeFeature(tw);
+    const p = await preview(feature);
+    tag(den, tasks[0]!, "a late observation");
+    behave.workRecordFails = true;
+    await tw.client.startGraduationConfirm!("testwolf", feature, p.token);
+    // the job's own state is the error, but the preview is still valid: status offers it again
+    const s = await pollUntil(feature);
+    expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token } });
+    behave.workRecordFails = false;
+    expect(await confirm(feature, p.token)).toMatchObject({ graduated: true });
+    // a stale token: the token file is gone, so the error stays
+    const { feature: f2 } = await makeFeature(tw);
+    await tw.client.startGraduationConfirm!("testwolf", f2, "deadbeef0000");
+    expect(await pollUntil(f2)).toMatchObject({ state: "error", code: "preview_stale" });
+  });
+
+  it("a start of the other kind while a job runs is refused with 409 busy; the same kind returns the running job", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    let release!: () => void;
+    behave.hold = new Promise<void>((r) => (release = r));
+    const a = await tw.client.startGraduationPreview!("testwolf", feature);
+    const res = await fetch(`${tw.url}/v1/wolves/testwolf/work/${feature}/graduate/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "deadbeef0000" }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "busy", message: expect.stringContaining("preview") });
+    expect((await tw.client.startGraduationPreview!("testwolf", feature)).jobId).toBe(a.jobId);
+    release();
+    expect(await pollUntil(feature)).toMatchObject({ state: "preview_ready", jobId: a.jobId });
   });
 
   it("counts the pending observations a graduation would fold, per task, from this wolf's pool only", async () => {

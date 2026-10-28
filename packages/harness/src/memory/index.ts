@@ -23,6 +23,7 @@ export {
   registerGraduationActions,
   unregisterGraduationActions,
   GraduationError,
+  GRADUATION_PREVIEW_TTL_MS,
   type GraduationActions,
   type GraduationObservationCount,
   type GraduationConfirmResult,

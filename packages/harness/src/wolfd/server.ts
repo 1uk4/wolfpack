@@ -675,9 +675,9 @@ export class WolfServer {
       }
       case "previewGraduation": {
         const actions = this.graduationFor(params);
-        const key = `${params.name}:${params.id}`;
         const job = this.graduationJobs.start(
-          key,
+          params.name,
+          params.id,
           "preview",
           async () => ({ kind: "preview", preview: await actions.preview(params.id) }),
           (e) => this.graduationFailure(e),
@@ -691,19 +691,28 @@ export class WolfServer {
         });
         if (!parsed.success) throw new HttpError("invalid_request", "body must be {token}");
         const token = parsed.data.token;
-        const key = `${params.name}:${params.id}`;
         const job = this.graduationJobs.start(
-          key,
+          params.name,
+          params.id,
           "confirm",
           async () => {
             const done = await actions.confirm(params.id, token);
+            // The graduation has happened (all or nothing, archived): a thread that cannot be closed is a warning, never an error.
+            let closedThreads: string[] = [];
+            const warnings: string[] = [];
+            try {
+              closedThreads = this.closeFeatureThreads([params.id, ...done.archived]);
+            } catch (e) {
+              warnings.push(`graduated, but closing the feature thread failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
             const result: GraduationResult = {
               graduated: true,
               entries: done.entries,
               archived: done.archived,
               lateFolded: done.lateFolded,
               unbound: done.unbound,
-              closedThreads: this.closeFeatureThreads([params.id, ...done.archived]),
+              closedThreads,
+              ...(warnings.length ? { warnings } : {}),
             };
             return { kind: "confirm", result };
           },
@@ -713,10 +722,13 @@ export class WolfServer {
       }
       case "graduationStatus": {
         const actions = this.graduationFor(params);
-        const known = this.graduationJobs.get(`${params.name}:${params.id}`);
-        if (known) return this.json(res, 200, known);
-        // No job in memory (wolfd restarted): a preview whose token file is still fresh is ready to confirm.
+        const known = this.graduationJobs.get(params.name, params.id);
+        // A confirm that failed for another reason than a stale token left the preview valid: it is ready to confirm again.
+        const retryable = known?.state === "error" && known.kind === "confirm" && known.code !== "preview_stale";
+        if (known && !retryable) return this.json(res, 200, known);
+        // No job in memory (wolfd restarted), or a failed confirm: a preview whose token file is still fresh is ready to confirm.
         const preview = await actions.pendingPreview(params.id).catch(() => undefined);
+        if (!preview && known) return this.json(res, 200, known);
         return this.json(res, 200, preview ? { state: "preview_ready", preview } : { state: "none" });
       }
       case "graduationObservations": {

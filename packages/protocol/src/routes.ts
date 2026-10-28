@@ -251,7 +251,7 @@ export const ROUTES = {
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start
-   * while a job for the item is running returns that job. Nothing is sent or archived (the wolf folds the item's pending
+   * while a preview for the item is running returns that job (409 `busy` while a confirm runs). Nothing is sent or archived (the wolf folds the item's pending
    * tagged observations into its Record first, on its own model and pool). No body. Poll `graduationStatus`.
    * 404 `not_found` for an unknown wolf, 400 `invalid_request` for a malformed id, 409 `memory_unavailable` when the wolf has no
    * Work API / KB / graduation support. A not-ready item, a failed drain or distill is reported by the status as an error.
@@ -260,8 +260,8 @@ export const ROUTES = {
   /**
    * Graduation, step 2: start a background job that sends a previewed graduation. All or nothing: the contributions go
    * to the librarian's inbox, then the item is marked graduated and archived with its tasks, every conversation bound
-   * to it unbinds and its feature thread closes. Answers at once with the job (the running one when a job for the item
-   * runs). 400 `invalid_request` for a bad body. A stale token, a not-ready item or a failed write shows in the status as an error
+   * to it unbinds and its feature thread closes. Answers at once with the job (the running one when a confirm for the item
+   * runs; 409 `busy` while a preview of it runs). 400 `invalid_request` for a bad body. A stale token, a not-ready item or a failed write shows in the status as an error
    * (`preview_stale`, `not_ready`, `engine_error`) with nothing archived.
    */
   confirmGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/confirm", body: GraduationConfirmBodySchema, response: { kind: "json", schema: GraduationJobSchema }, status: [200], error: err },

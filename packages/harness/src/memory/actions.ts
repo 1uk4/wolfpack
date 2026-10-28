@@ -51,6 +51,9 @@ export function unregisterMemoryActions(wolfDen: string, actions: MemoryActions)
   if (registry.get(wolfDen) === actions) registry.delete(wolfDen);
 }
 
+/** A graduation preview waits this long for the owner's answer (its token file and wolfd's in-memory copy both expire). */
+export const GRADUATION_PREVIEW_TTL_MS = 6 * 60 * 60 * 1000;
+
 // ─── Graduation ──────────────────────────────────────────────────────────────
 // The wolf's tasks extension owns the Work client, the KB roots and the model for graduation; wolfd's routes reach them
 // through this registry (same globalThis trick as the memory actions).

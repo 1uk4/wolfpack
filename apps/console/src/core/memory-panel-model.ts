@@ -29,15 +29,26 @@ export function parseOpen(raw: string | null | undefined): boolean {
 }
 export const serializeOpen = (open: boolean): string => (open ? "1" : "0");
 
-// ─── Persisted graph / item / feed view ────────────────────────────────────────
+// ─── Persisted item / feed view ────────────────────────────────────────
 
-export type PanelView = "graph" | "item" | "feed";
+export type PanelView = "item" | "feed";
 
-/** SSR-safe: "feed" and "item" (the pre-graph "record" too) are kept, anything else (incl. no stored value) is the graph. */
+/** SSR-safe: "feed" is kept; anything else (incl. no stored value and the retired "graph" view) is the item view. */
 export function parseView(raw: string | null | undefined): PanelView {
-	return raw === "feed" ? "feed" : raw === "item" || raw === "record" ? "item" : "graph";
+	return raw === "feed" ? "feed" : "item";
 }
 export const serializeView = (view: PanelView): string => view;
+
+// ─── Bind this thread to the shown task ───────────────────────────────────────
+
+/**
+ * Whether the viewer offers "Bind this thread to this task" for the item it shows: never for the thread's bound item, a
+ * feature (a workspace), an archived item or a container, and not without the thread's slug (the bind route's key).
+ * A graduated item or one held by another conversation is only known to the bind route; its refusal is shown.
+ */
+export function bindOffered(item: Pick<WorkRecordResponse, "id" | "kind" | "stage" | "container"> | null, boundId: string | null, hasSlug: boolean): boolean {
+	return hasSlug && !!item && item.id !== boundId && item.kind !== "feature" && item.stage !== "archived" && !item.container;
+}
 
 // ─── Banner (memory off / inert) ─────────────────────────────────────────────
 

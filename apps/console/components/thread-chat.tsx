@@ -588,15 +588,7 @@ function ThreadChatInner({
 						</div>
 					</Conversation>
 					{featureProgress.state.phase === "ready" && (
-						<FeatureProgressPanel
-							wolf={wolf}
-							slug={slug}
-							threadId={threadId}
-							progress={featureProgress.state.progress}
-							busy={busy}
-							closed={closedReason !== undefined}
-							onBound={featureProgress.refresh}
-						/>
+						<FeatureProgressPanel threadId={threadId} model={featureProgress.state.model} busy={busy} />
 					)}
 					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 				</div>
@@ -609,7 +601,7 @@ function ThreadChatInner({
 /** The thread view plus its right-panel host: the provider sits above the view so any child can call openPanel. */
 export function ThreadChat(props: ComponentProps<typeof ThreadChatInner>) {
 	return (
-		<PanelHostProvider wolf={props.wolf} threadId={props.threadId}>
+		<PanelHostProvider wolf={props.wolf} slug={props.slug} threadId={props.threadId}>
 			<ThreadChatInner {...props} />
 		</PanelHostProvider>
 	);

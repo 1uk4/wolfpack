@@ -278,7 +278,7 @@ const ZOOM_EASE_MS = 45; // wheel-zoom glide: exponential-ease time constant (~2
 const PICKING_PAD = 10;
 
 /** Click vs drag threshold: pointer travel under this many px is a click. */
-const CLICK_SLOP = 4;
+export const CLICK_SLOP = 4;
 /** Live-sim tuning — see the class doc comment. */
 const LIVE_ALPHA_DECAY = 0.05; // snappier anneal than the settle's 0.0228
 const DRAG_ALPHA_TARGET = 0.3; // d3-drag's own reheat constant

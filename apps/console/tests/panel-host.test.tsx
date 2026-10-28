@@ -11,6 +11,7 @@ const dom = parseHTML("<html><body></body></html>");
 const store = new Map<string, string>();
 Object.assign(globalThis, {
 	window: dom.window,
+	self: globalThis, // next/link (the Status panel's item link) reads `self` when it mounts
 	document: dom.document,
 	Element: dom.window.Element,
 	HTMLElement: dom.window.HTMLElement,

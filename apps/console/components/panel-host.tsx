@@ -12,6 +12,8 @@ export type PanelProps = Record<string, unknown>;
 export interface PanelContext {
 	wolf: string;
 	threadId: string;
+	/** The thread's route slug (the id the console's thread routes take), when the host knows it. */
+	slug?: string;
 	/** The props given to the last openPanel(id, props) for this panel on this thread. */
 	props: PanelProps;
 }
@@ -34,7 +36,9 @@ export const PANELS: readonly PanelDef[] = [
 		icon: ActivityIcon,
 		testId: "memory-panel",
 		available: () => true,
-		render: ({ wolf, threadId }) => <MemoryPanel embedded wolf={wolf} threadId={threadId} />,
+		render: ({ wolf, threadId, slug, props }) => (
+			<MemoryPanel embedded wolf={wolf} threadId={threadId} slug={slug} selectTaskId={typeof props.taskId === "string" ? props.taskId : undefined} selectNonce={typeof props.nonce === "number" ? props.nonce : undefined} />
+		),
 	},
 ];
 
@@ -107,7 +111,7 @@ const persistSelection = (threadId: string, id: string) => {
  * `lh.right-panel.v1`, non-default entries only); open/closed is global (the Memory panel's existing
  * `lh.memory-panel.open.v1`).
  */
-export function PanelHostProvider({ wolf, threadId, panels = PANELS, children }: { wolf: string; threadId: string; panels?: readonly PanelDef[]; children: ReactNode }) {
+export function PanelHostProvider({ wolf, slug, threadId, panels = PANELS, children }: { wolf: string; slug?: string; threadId: string; panels?: readonly PanelDef[]; children: ReactNode }) {
 	const [st, setSt] = useState<HostState>({ selections: {}, props: {}, open: true });
 	useEffect(() => {
 		try {
@@ -120,8 +124,8 @@ export function PanelHostProvider({ wolf, threadId, panels = PANELS, children }:
 	stRef.current = st;
 
 	const ctxOf = useCallback(
-		(p: PanelDef): PanelContext => ({ wolf, threadId, props: st.props[threadId]?.[p.id] ?? {} }),
-		[wolf, threadId, st.props],
+		(p: PanelDef): PanelContext => ({ wolf, threadId, slug, props: st.props[threadId]?.[p.id] ?? {} }),
+		[wolf, slug, threadId, st.props],
 	);
 
 	const choose = useCallback(
@@ -139,7 +143,7 @@ export function PanelHostProvider({ wolf, threadId, panels = PANELS, children }:
 	const openPanel = useCallback(
 		(id: string, props: PanelProps = {}) => {
 			const def = panels.find((p) => p.id === id);
-			if (!def || !def.available({ wolf, threadId, props })) return false;
+			if (!def || !def.available({ wolf, threadId, slug, props })) return false;
 			choose(id, props);
 			return true;
 		},

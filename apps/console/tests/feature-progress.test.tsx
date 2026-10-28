@@ -1,7 +1,8 @@
 /**
- * The feature progress panel: the pure model (diamond layering, blocked, bound), the panel (title/count/loader, greyed
- * shipped, highlighted bound, blocked marker, graph columns, bind + confirm, collapse persistence) and ThreadChat
- * (the floating checklist stays in unbound threads and gives way to the panel in bound ones).
+ * The pinned feature graph: the pure model (children → show_graph nodes/edges, buildTaskGraph's status mapping, the bound
+ * highlight), the panel (the folded strip and its per-thread persistence, the graph, the node click → Status panel
+ * selection, the drag-to-pan view), the live refetch on events, and ThreadChat (the floating checklist stays in unbound
+ * threads and gives way to the panel in bound ones).
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -27,9 +28,11 @@ Object.assign(globalThis, {
 	localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k), clear: () => store.clear() },
 });
 
-const { buildFeatureProgress, layoutStrip } = await import("../src/core/index.ts");
+const { buildFeatureGraph, featureStrip, GRAPH_STATUS_OF, isWorkItemId, isWorkEvent } = await import("../src/core/index.ts");
 type WorkRecordResponse = import("../src/core/index.ts").WorkRecordResponse;
-const { FeatureProgressPanel } = await import("../components/feature-progress.tsx");
+const { FeatureProgressPanel, useFeatureProgress } = await import("../components/feature-progress.tsx");
+const { PanelHostProvider, RightPanelHost } = await import("../components/panel-host.tsx");
+const { ActivityIcon } = await import("lucide-react");
 const { FIXTURE_THREAD } = await import("@wolfpack/client");
 const { SettingsDialogProvider } = await import("../components/settings/settings-dialog.tsx");
 const { AppRouterContext } = await import("next/dist/shared/lib/app-router-context.shared-runtime.js");
@@ -50,38 +53,47 @@ const feature = (stages: Record<string, string> = {}): WorkRecordResponse =>
 		children: [kid("a", stages.a ?? "shipped"), kid("b", stages.b ?? "in_build", ["a"]), kid("c", stages.c ?? "plan", ["a"]), kid("d", stages.d ?? "plan", ["b", "c"])],
 	}) as WorkRecordResponse;
 const task = (id: string): WorkRecordResponse => ({ id, kind: "task", title: `Task ${id}`, stage: "in_build", plan: "", record: "", partOf: "F" }) as WorkRecordResponse;
-const progressOf = (bound: WorkRecordResponse = task("b"), f = feature()) => {
-	const p = buildFeatureProgress(bound, f);
-	assert.equal(p.kind, "progress");
-	return p as Extract<typeof p, { kind: "progress" }>;
+const modelOf = (bound: WorkRecordResponse = task("b"), f = feature()) => {
+	const m = buildFeatureGraph(bound, f);
+	assert.equal(m.kind, "graph");
+	return m as Extract<typeof m, { kind: "graph" }>;
 };
 
-describe("buildFeatureProgress", () => {
-	it("a diamond layers into three columns; blocked, bound, counts and order follow", () => {
-		const p = progressOf();
-		assert.equal(p.title, "Feat");
-		assert.equal(p.label, "1/4 shipped");
-		assert.equal(p.layers, 3);
-		assert.equal(p.rows, 2);
-		assert.deepEqual(p.tasks.map((t) => [t.id, t.layer, t.index]), [["a", 0, 1], ["b", 1, 2], ["c", 1, 3], ["d", 2, 4]]);
-		assert.deepEqual(p.tasks.filter((t) => t.blocked).map((t) => t.id), ["d"]);
-		assert.deepEqual(p.tasks.filter((t) => t.bound).map((t) => t.id), ["b"]);
-		assert.deepEqual(p.tasks.filter((t) => t.shipped).map((t) => t.id), ["a"]);
-		assert.deepEqual(p.edges.map((e) => `${e.from}>${e.to}`).sort(), ["a>b", "a>c", "b>d", "c>d"]);
-		const s = layoutStrip(p);
-		const x = (id: string) => s.nodes.find((n) => n.id === id)!.x;
-		assert.ok(x("a") < x("b") && x("b") === x("c") && x("c") < x("d"), "left to right by step");
-		assert.equal(s.edges.length, 4);
+describe("buildFeatureGraph", () => {
+	it("children become nodes and dependsOn links edges (dependent -> prerequisite); statuses follow buildTaskGraph; the bound task is named", () => {
+		const m = modelOf();
+		assert.equal(m.title, "Feat");
+		assert.equal(m.label, "1/4 done");
+		assert.equal(featureStrip(m), "Feat · 1/4 done");
+		assert.deepEqual(m.graph.nodes.map((n) => [n.id, n.label, n.status]), [["a", "Task a", "done"], ["b", "Task b", "doing"], ["c", "Task c", "todo"], ["d", "Task d", "blocked"]]);
+		assert.deepEqual(m.graph.edges.map((e) => `${e.from}>${e.to}`).sort(), ["b>a", "c>a", "d>b", "d>c"]);
+		assert.equal(m.boundId, "b");
 	});
-	it("a thread bound to the feature itself has no bound task; shipping the prerequisite unblocks", () => {
-		const p = progressOf(feature(), feature({ b: "shipped", c: "shipped" }));
-		assert.equal(p.boundIsFeature, true);
-		assert.equal(p.tasks.some((t) => t.bound), false);
-		assert.equal(p.tasks.find((t) => t.id === "d")!.blocked, false);
-		assert.equal(p.label, "3/4 shipped");
+	it("ready, building, shipped (live too), blocked and archived map to todo, doing, done, blocked, skipped", () => {
+		assert.deepEqual(GRAPH_STATUS_OF, { shipped: "done", building: "doing", ready: "todo", blocked: "blocked", archived: "skipped" });
+		const f = { ...feature({ a: "shipped", b: "live", c: "plan" }), stage: "archived" } as WorkRecordResponse;
+		(f.children as unknown[]).push(kid("e", "archived"));
+		const m = modelOf(task("c"), f);
+		const st = Object.fromEntries(m.graph.nodes.map((n) => [n.id, n.status]));
+		assert.deepEqual(st, { a: "done", b: "done", c: "todo", d: "blocked", e: "skipped" });
+	});
+	it("a thread bound to the feature itself highlights no node; shipping the prerequisites unblocks", () => {
+		const m = modelOf(feature(), feature({ b: "shipped", c: "shipped" }));
+		assert.equal(m.boundId, null);
+		assert.equal(m.graph.nodes.find((n) => n.id === "d")!.status, "todo");
+		assert.equal(m.label, "3/4 done");
 	});
 	it("nothing to show without a feature (an unparented task)", () => {
-		assert.equal(buildFeatureProgress(task("b"), null).kind, "none");
+		assert.equal(buildFeatureGraph(task("b"), null).kind, "none");
+	});
+	it("work item ids and work memory events are recognised", () => {
+		assert.equal(isWorkItemId("work-wolfpack-ASNQgEf"), true);
+		assert.equal(isWorkItemId("step-1"), false);
+		assert.equal(isWorkItemId("work-my-domain-ASNQgEf"), true, "a domain may contain a hyphen");
+		assert.equal(isWorkItemId("work-wolfpack-short"), false);
+		assert.equal(isWorkEvent({ type: "record_written", target: { kind: "work", workId: "x" } }), true);
+		assert.equal(isWorkEvent({ type: "observation_captured", target: { kind: "den" } }), false);
+		assert.equal(isWorkEvent({ type: "topic_archived", target: { kind: "work" } }), false);
 	});
 });
 
@@ -100,96 +112,96 @@ afterEach(async () => {
 });
 after(() => void (globalThis.fetch = realFetch));
 
+const stubPanel = {
+	id: "memory",
+	label: "Status",
+	icon: ActivityIcon,
+	available: () => true,
+	render: ({ props }: { props: Record<string, unknown> }) => <div data-testid="stub-status" data-task={String(props.taskId ?? "")} />,
+};
+
 async function mountPanel(over: Partial<React.ComponentProps<typeof FeatureProgressPanel>> = {}, threadId = "w/feature-F") {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
 	root = createRoot(host);
-	await act(async () => root!.render(<FeatureProgressPanel wolf="w" slug="feature-F" threadId={threadId} progress={progressOf()} busy={false} {...over} />));
+	await act(async () =>
+		root!.render(
+			<PanelHostProvider wolf="w" threadId={threadId} panels={[stubPanel as never]}>
+				<FeatureProgressPanel threadId={threadId} model={modelOf()} busy={false} {...over} />
+				<RightPanelHost />
+			</PanelHostProvider>,
+		),
+	);
 }
+const ptr = (el: Element, type: string, x: number, y: number) =>
+	act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), { clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 1 })));
 
 describe("FeatureProgressPanel", () => {
-	it("shows '<feature> · n/m shipped' and the small loader only while busy", async () => {
+	it("is folded by default to the strip '<feature> · n/m done'; the loader shows only while busy", async () => {
 		await mountPanel({ busy: false });
-		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent?.replace(/\s+/g, " "), "Feat · 1/4 shipped");
-		assert.equal(q('[data-testid="feature-progress-loader"]'), null);
+		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent?.replace(/\s+/g, " "), "Feat · 1/4 done");
+		assert.ok(q('[data-testid="feature-progress-panel"]') === null);
+		assert.ok(q('[data-testid="feature-progress-loader"]') === null);
 		await act(async () => root!.unmount());
 		root = null;
 		await mountPanel({ busy: true });
 		assert.ok(q('[data-testid="feature-progress-loader"]'));
 	});
 
-	it("is collapsed by default; open shows the graph (columns per step) and the task list: shipped greyed, bound highlighted, blocked marked", async () => {
+	it("open shows the shared graph: statuses on the nodes, the bound task highlighted; no task list, strip graph or bind icon", async () => {
 		await mountPanel();
-		assert.equal(q('[data-testid="feature-progress-panel"]'), null);
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		assert.ok(q('[data-testid="feature-progress-graph"]'));
-		assert.deepEqual(
-			["a", "b", "c", "d"].map((id) => q(`[data-testid="feature-progress-node-${id}"]`)!.getAttribute("data-layer")),
-			["0", "1", "1", "2"],
-		);
-		const a = q('[data-testid="feature-progress-task-a"]')!;
-		assert.equal(a.getAttribute("data-shipped"), "true");
-		assert.match(a.innerHTML, /opacity-60/, "shipped is greyed");
-		const b = q('[data-testid="feature-progress-task-b"]')!;
-		assert.equal(b.getAttribute("data-bound"), "true");
-		assert.match(b.className, /ring-yellow-400/, "bound is highlighted");
-		assert.ok(q('[data-testid="feature-progress-glow"]'), "bound node glows in the graph");
-		assert.equal(q('[data-testid="feature-progress-node-b"]')!.getAttribute("data-bound"), "true");
-		assert.ok(q('[data-testid="feature-progress-blocked-d"]'), "d waits on b and c");
-		assert.equal(q('[data-testid="feature-progress-blocked-c"]'), null);
-		assert.equal(q('[data-testid="feature-progress-blocked-a"]'), null);
+		assert.equal(q('[data-testid="feature-progress"]')!.getAttribute("data-expanded"), "true");
+		const node = (id: string) => q(`[data-node-id="${id}"]`)!;
+		assert.deepEqual(["a", "b", "c", "d"].map((id) => node(id).getAttribute("data-status")), ["done", "doing", "todo", "blocked"]);
+		assert.deepEqual(["a", "b", "c", "d"].map((id) => node(id).getAttribute("data-highlight")), ["false", "true", "false", "false"]);
+		assert.equal(qa('[data-testid="graph-edge"]').length, 4);
+		assert.match(q('[data-testid="feature-progress-panel"]')!.className, /max-h-\[40vh\]/);
+		assert.ok(q('[data-testid^="feature-progress-task-"]') === null);
+		assert.ok(q('[data-testid^="feature-progress-bind-"]') === null);
+		assert.ok(q('[data-testid="feature-progress-graph"]') === null);
 	});
 
-	it("clicking a task focuses it in the graph and offers 'open'; clicking a graph node focuses its row", async () => {
+	it("a thread bound to the feature itself highlights no node and the strip says so", async () => {
+		await mountPanel({ model: modelOf(feature(), feature()) }, "w/feature-F-own");
+		assert.ok(q('[data-testid="feature-progress-bound-feature"]'));
+		await click(q('[data-testid="feature-progress-toggle"]')!);
+		assert.equal(qa('[data-highlight="true"]').length, 0);
+	});
+
+	it("a node click opens the Status panel on that task", async () => {
 		await mountPanel({}, "w/feature-F-click");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		await click(q('[data-testid="feature-progress-task-c"] button')!);
-		assert.equal(q('[data-testid="feature-progress-node-c"]')!.getAttribute("data-focused"), "true");
-		assert.equal(q('[data-testid="feature-progress-open"]')!.getAttribute("href"), "/kb/work/c");
-		await click(q('[data-testid="feature-progress-node-d"]')!);
-		assert.equal(q('[data-testid="feature-progress-task-d"]')!.getAttribute("data-focused"), "true");
-		assert.equal(q('[data-testid="feature-progress-task-c"]')!.getAttribute("data-focused"), "false");
+		await click(q('[data-node-id="c"] [data-testid="graph-node-hit"]')!);
+		const stub = q('[data-testid="stub-status"]')!;
+		assert.ok(stub, "the Status panel opened");
+		assert.equal(stub.getAttribute("data-task"), "c");
+		await click(q('[data-node-id="d"] [data-testid="graph-node-hit"]')!);
+		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "d");
 	});
 
-	it("the bind icon confirms, then POSTs {workItemId} to the thread's bind route and refreshes; the bound and shipped rows cannot bind", async () => {
-		const calls: { url: string; body: unknown }[] = [];
-		globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
-			calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
-			return Response.json({ threadId: "w/feature-F", workItemId: "c" });
-		}) as typeof fetch;
-		let bound = 0;
-		await mountPanel({ onBound: () => bound++ }, "w/feature-F-bind");
+	it("the graph pans by dragging; folding and reopening resets the view", async () => {
+		const wide = modelOf(task("b"), { ...feature(), children: [kid("a", "shipped"), kid("b", "plan", ["a"]), kid("c", "plan", ["b"]), kid("d", "plan", ["c"]), kid("e", "plan", ["d"])] } as WorkRecordResponse);
+		await mountPanel({ model: wide }, "w/feature-F-drag");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		assert.equal(q('[data-testid="feature-progress-bind-b"]')!.hasAttribute("disabled"), true);
-		assert.equal(q('[data-testid="feature-progress-bind-a"]')!.hasAttribute("disabled"), true);
-		await click(q('[data-testid="feature-progress-bind-c"]')!);
-		assert.equal(calls.length, 0, "confirm first");
-		assert.match(q('[data-testid="feature-progress-confirm"]')!.textContent ?? "", /Rebind this thread from "Task b" to "Task c"\?/);
-		await click(q('[data-testid="feature-progress-confirm-no"]')!);
-		assert.equal(q('[data-testid="feature-progress-confirm"]'), null);
-		assert.equal(calls.length, 0);
-		await click(q('[data-testid="feature-progress-bind-c"]')!);
-		await click(q('[data-testid="feature-progress-confirm-yes"]')!);
-		await settle();
-		assert.deepEqual(calls, [{ url: "/api/wolves/w/threads/feature-F/bind", body: { workItemId: "c" } }]);
-		assert.equal(bound, 1);
-		assert.equal(q('[data-testid="feature-progress-confirm"]'), null);
-	});
-
-	it("a refused bind shows the server's message and keeps the confirm", async () => {
-		globalThis.fetch = (async () => Response.json({ error: "work-x is already bound in conversation 7; release it there first" }, { status: 400 })) as typeof fetch;
-		await mountPanel({}, "w/feature-F-refuse");
+		const box = q('[data-testid="graph-scroll"]')!;
+		assert.equal(box.getAttribute("data-draggable"), "true");
+		assert.equal(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"), "0");
+		await ptr(box, "pointerdown", 100, 100);
+		await ptr(box, "pointermove", 60, 100);
+		await ptr(box, "pointerup", 60, 100);
+		const x = Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"));
+		assert.ok(x < 0, `panned left (${x})`);
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		await click(q('[data-testid="feature-progress-bind-c"]')!);
-		await click(q('[data-testid="feature-progress-confirm-yes"]')!);
-		await settle();
-		assert.match(q('[data-testid="feature-progress-error"]')!.textContent ?? "", /already bound in conversation 7/);
+		await click(q('[data-testid="feature-progress-toggle"]')!);
+		assert.equal(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"), "0");
 	});
 
 	it("collapse state is remembered per thread (across a remount), not shared between threads", async () => {
 		await mountPanel({}, "w/feature-F-mem");
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		assert.ok(q('[data-testid="feature-progress-panel"]'));
+		assert.equal(JSON.parse(store.get("wp.feature-progress.open.v1")!).includes("w/feature-F-mem"), true, "kept in localStorage by thread id");
 		await act(async () => root!.unmount());
 		root = null;
 		document.body.innerHTML = "";
@@ -199,7 +211,99 @@ describe("FeatureProgressPanel", () => {
 		root = null;
 		document.body.innerHTML = "";
 		await mountPanel({}, "w/feature-F-other");
-		assert.equal(q('[data-testid="feature-progress-panel"]'), null, "another thread: collapsed");
+		assert.ok(q('[data-testid="feature-progress-panel"]') === null, "another thread: folded");
+	});
+});
+
+// ---------------------------------------------------------------- live data
+
+describe("useFeatureProgress: events refetch", () => {
+	/** A fake events channel: `fire(name, payload)` reaches the hub like an SSE frame. */
+	function channel() {
+		const on = new Map<string, (d: string) => void>();
+		let open: () => void = () => {};
+		return {
+			connect: () => ({ close() {}, onOpen: (cb: () => void) => void (open = cb), onEvent: (n: string, cb: (d: string) => void) => void on.set(n, cb) }),
+			fire: (name: string, payload: unknown) => on.get(name)?.(JSON.stringify(payload)),
+			reopen: () => open(),
+		};
+	}
+	function Probe({ threadId }: { threadId: string }) {
+		const { state } = useFeatureProgress("w", threadId, 0);
+		return state.phase === "ready" ? <FeatureProgressPanel threadId={threadId} model={state.model} busy={false} /> : <i data-testid="no-graph" />;
+	}
+	let stages: Record<string, string> = {};
+	let recordFetches = 0;
+	const fetchFor = (): typeof fetch =>
+		(async (input: RequestInfo | URL) => {
+			const url = new URL(String(input), "http://t");
+			if (url.pathname === "/api/wolves/w/threads") return Response.json({ threads: [{ id: "w/t", boundWorkItem: "b" }] });
+			const rec = url.pathname.match(/\/work\/([^/]+)\/record$/);
+			if (rec) {
+				recordFetches++;
+				return Response.json(rec[1] === "F" ? feature(stages) : task(rec[1]!));
+			}
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+	async function mountProbe(ch: ReturnType<typeof channel>) {
+		stages = {};
+		recordFetches = 0;
+		globalThis.fetch = fetchFor();
+		store.set("wp.feature-progress.open.v1", JSON.stringify(["w/t"]));
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () =>
+			root!.render(
+				<ServerEventsProvider connect={ch.connect}>
+					<MemoryEventsProvider connect={() => memSource}>
+						<Probe threadId="w/t" />
+					</MemoryEventsProvider>
+				</ServerEventsProvider>,
+			),
+		);
+		await settle(60);
+	}
+	let emitMem: (f: unknown) => void = () => {};
+	const memSource = { close() {}, onOpen() {}, onMessage: (cb: (d: string) => void) => void (emitMem = (f) => cb(JSON.stringify(f))), onError() {} };
+	const status = (id: string) => q(`[data-node-id="${id}"]`)!.getAttribute("data-status");
+
+	it("a stage change event refetches (debounced, once for a burst) and the node's status updates", async () => {
+		const ch = channel();
+		await mountProbe(ch);
+		assert.equal(status("c"), "todo");
+		assert.equal(status("d"), "blocked");
+		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent, "Feat · 1/4 done");
+		const before = recordFetches;
+		stages = { b: "shipped", c: "shipped", d: "in_build" };
+		await act(async () => {
+			ch.fire("thread-updated", { wolf: "w", thread: { id: "w/other", boundWorkItem: "x" } });
+			ch.fire("thread-updated", { wolf: "w", thread: { id: "w/t" } });
+			ch.fire("needs-you-changed", { wolf: "w" });
+		});
+		assert.equal(recordFetches, before, "debounced: nothing yet");
+		await settle(450);
+		assert.equal(recordFetches - before, 2, "one refetch for the burst (bound record + feature)");
+		assert.equal(status("b"), "done");
+		assert.equal(status("c"), "done");
+		assert.equal(status("d"), "doing");
+		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent, "Feat · 3/4 done");
+	});
+
+	it("a memory event about a work item, a reconnect and window focus each refetch; a den event and another wolf's thread do not", async () => {
+		const ch = channel();
+		await mountProbe(ch);
+		const count = async (fn: () => Promise<void> | void) => {
+			const n = recordFetches;
+			await act(async () => void (await fn()));
+			await settle(450);
+			return recordFetches - n;
+		};
+		assert.equal(await count(() => emitMem({ type: "record_written", wolf: "w", target: { kind: "work", workId: "zzz" }, observationCount: 1 })), 2);
+		assert.equal(await count(() => ch.reopen()), 2);
+		assert.equal(await count(() => void window.dispatchEvent(new dom.window.Event("focus"))), 2);
+		assert.equal(await count(() => emitMem({ type: "observation_captured", wolf: "w", target: { kind: "den", topicId: "t" } })), 0);
+		assert.equal(await count(() => ch.fire("thread-updated", { wolf: "other", thread: { id: "w/t" } })), 0);
 	});
 });
 
@@ -264,23 +368,23 @@ describe("ThreadChat pinned area", () => {
 		globalThis.fetch = serverFetch(undefined);
 		await mountChat();
 		assert.ok(q('[data-testid="pinned-checklist"]'));
-		assert.equal(q('[data-testid="feature-progress"]'), null);
+		assert.ok(q('[data-testid="feature-progress"]') === null);
 	});
 
 	it("a thread bound to a feature pins its progress panel instead of the checklist (also for a bound task of it)", async () => {
 		globalThis.fetch = serverFetch("F");
 		await mountChat({ initialBound: "F" });
 		assert.ok(q('[data-testid="feature-progress"]'));
-		assert.equal(q('[data-testid="pinned-checklist"]'), null);
-		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent?.replace(/\s+/g, " "), "Feat · 1/4 shipped");
+		assert.ok(q('[data-testid="pinned-checklist"]') === null);
+		assert.equal(q('[data-testid="feature-progress-title"]')!.textContent?.replace(/\s+/g, " "), "Feat · 1/4 done");
 		await act(async () => root!.unmount());
 		root = null;
 		document.body.innerHTML = "";
 		globalThis.fetch = serverFetch("F", "b");
 		await mountChat({ initialBound: "b" });
 		assert.ok(q('[data-testid="feature-progress"]'));
-		assert.equal(q('[data-testid="pinned-checklist"]'), null);
+		assert.ok(q('[data-testid="pinned-checklist"]') === null);
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		assert.equal(q('[data-testid="feature-progress-task-b"]')!.getAttribute("data-bound"), "true");
+		assert.equal(q('[data-node-id="b"]')!.getAttribute("data-highlight"), "true");
 	});
 });

@@ -21,6 +21,11 @@ export const DEP_COLORS: DepColors = {
 	blockedRing: "#ef476f",
 };
 
+/** Route / parallel edges whose BOTH ends are done: the same hues, much
+ *  darker (lower lightness), drawn slightly thinner (DEP_STYLE.doneWidth). */
+export const ROUTE_DONE_COLOR = "#7a6330";
+export const PARALLEL_DONE_COLOR = "#1f6b57";
+
 /**
  * Dependency arrows draw only at a camera ratio at or below this (ratio =
  * kFit / k: 1 at fit zoom, smaller zoomed in). Tuned a little before the node
@@ -34,6 +39,8 @@ export const DEP_STYLE = {
 	/** Arrow shaft width, screen px. */
 	faintWidth: 1,
 	routeWidth: 2.25,
+	/** Completed route edge shaft width, screen px. */
+	doneWidth: 1.75,
 	/** Opacity of faint arrows and of dimmed (shipped) route nodes. */
 	faintAlpha: 0.45,
 	doneAlpha: 0.4,

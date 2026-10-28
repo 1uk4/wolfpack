@@ -212,3 +212,32 @@ describe("route drops member-to-member dependency shortcuts", () => {
 		assert.ok(draw(null).includes("gt>fe2"));
 	});
 });
+
+describe("completed route edges draw darker", () => {
+	const ids = ["a", "b", "c", "p", "q"];
+	const positions = new Map(ids.map((id, i) => [id, { x: i * 10, y: 0 }]));
+	const route = {
+		nodes: new Set(ids),
+		edges: new Set(["a|b", "b|c", "p|q"]),
+		parallel: new Set(["p", "q"]),
+		done: new Set(["a", "b", "p", "q"]),
+	};
+	const arrows = buildDepDrawList({
+		edges: [],
+		factories: [{ members: ids }],
+		positions,
+		viewport: { minX: -9, minY: -9, maxX: 99, maxY: 9 },
+		ratio: 0.3,
+		route,
+	}).arrows;
+	const get = (from: string, to: string) => arrows.find((a) => a.from === from && a.to === to)!;
+	it("done→done is flagged done, done→unfinished stays bright", () => {
+		assert.equal(get("a", "b").done, true);
+		assert.equal(get("b", "c").done, undefined);
+		assert.equal(get("b", "c").bright, true);
+	});
+	it("parallel done→done is flagged parallel", () => {
+		assert.equal(get("p", "q").done, true);
+		assert.equal(get("p", "q").parallel, true);
+	});
+});

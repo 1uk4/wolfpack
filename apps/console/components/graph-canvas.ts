@@ -55,7 +55,7 @@
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "../src/core/dep-draw-list.ts";
-import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH } from "../src/core/dep-palette.ts";
+import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, PARALLEL_DONE_COLOR, ROUTE_DONE_COLOR } from "../src/core/dep-palette.ts";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import {
@@ -1406,11 +1406,17 @@ export class GraphCanvasRenderer {
 			if (!from || !to) return;
 			const g = edgeGeometry(from, to, this.radiusOf(from), this.radiusOf(to));
 			if (!g) return;
-			const color = a.bright ? DEP_COLORS.route : DEP_COLORS.faintDep;
+			const color = !a.bright
+				? DEP_COLORS.faintDep
+				: a.done
+					? a.parallel
+						? PARALLEL_DONE_COLOR
+						: ROUTE_DONE_COLOR
+					: DEP_COLORS.route;
 			ctx.globalAlpha = a.bright ? 1 : DEP_STYLE.faintAlpha;
 			ctx.strokeStyle = color;
 			ctx.fillStyle = color;
-			ctx.lineWidth = (a.bright ? DEP_STYLE.routeWidth : DEP_STYLE.faintWidth) / k;
+			ctx.lineWidth = (a.done ? DEP_STYLE.doneWidth : a.bright ? DEP_STYLE.routeWidth : DEP_STYLE.faintWidth) / k;
 			ctx.beginPath();
 			ctx.moveTo(g.from.x, g.from.y);
 			ctx.lineTo(g.to.x, g.to.y);

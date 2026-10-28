@@ -45,6 +45,11 @@ export interface DepArrow {
 	from: string;
 	to: string;
 	bright: boolean;
+	/** A route edge whose both ends are done: drawn darker (route or, when
+	 *  both ends are parallel, parallel hue). */
+	done?: boolean;
+	/** Both ends sit at a parallel step of the route. */
+	parallel?: boolean;
 }
 
 export interface DepDrawInput {
@@ -107,7 +112,12 @@ export function buildDepDrawList(input: DepDrawInput): DepDrawList {
 		if (visible && (!visible.has(from) || !visible.has(to))) return;
 		if (!positions.has(from) || !positions.has(to)) return;
 		if (!regions.some((r) => r.has(from) && r.has(to))) return;
-		if (route?.edges.has(key)) bright.push({ from, to, bright: true });
+		if (route?.edges.has(key)) {
+			const arrow: DepArrow = { from, to, bright: true };
+			if (route.done.has(from) && route.done.has(to)) arrow.done = true;
+			if (route.parallel.has(from) && route.parallel.has(to)) arrow.parallel = true;
+			bright.push(arrow);
+		}
 		else faint.push({ from, to, bright: false });
 	};
 	for (const e of input.edges) consider(e.from, e.to);

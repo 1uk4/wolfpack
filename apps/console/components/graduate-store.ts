@@ -21,9 +21,16 @@ export interface GraduateTarget {
 	assignee?: string;
 }
 
+/** A send that failed and left its preview valid: Review shows it so the fallback never looks like a fresh preview. */
+export interface LastError {
+	kind: string;
+	code?: string;
+	message: string;
+}
+
 export type GraduateJobState =
 	| { phase: "previewing"; wolf: string; title: string; note?: string }
-	| { phase: "ready"; wolf: string; title: string; preview: GraduationPreview }
+	| { phase: "ready"; wolf: string; title: string; preview: GraduationPreview; lastError?: LastError }
 	| { phase: "graduating"; wolf: string; title: string; preview?: GraduationPreview; note?: string }
 	| { phase: "error"; wolf: string; title: string; during: "preview" | "confirm"; message: string; code?: string; preview?: GraduationPreview };
 
@@ -159,7 +166,7 @@ export class GraduateStore {
 	retry(id: string): "graduate" | "review" {
 		const cur = this.jobs.get(id);
 		if (cur?.phase === "error" && cur.during === "confirm" && cur.preview && cur.code !== "preview_stale") {
-			this.set(id, { phase: "ready", wolf: cur.wolf, title: cur.title, preview: cur.preview });
+			this.set(id, { phase: "ready", wolf: cur.wolf, title: cur.title, preview: cur.preview, lastError: { kind: "confirm", ...(cur.code ? { code: cur.code } : {}), message: cur.message } });
 			return "review";
 		}
 		this.set(id, undefined);
@@ -184,7 +191,7 @@ export class GraduateStore {
 			const s = res.data;
 			// Only a ready preview and a running job are picked up. `graduated` (the list refresh shows the archived feature) and
 			// `error` (the owner never saw this attempt) are deliberately ignored: showing a stale error or toast on page load would confuse.
-			if (s.state === "preview_ready") this.set(id, { phase: "ready", wolf: choice.wolf, title: target.title, preview: s.preview });
+			if (s.state === "preview_ready") this.set(id, { phase: "ready", wolf: choice.wolf, title: target.title, preview: s.preview, ...(s.lastError ? { lastError: s.lastError } : {}) });
 			else if (s.state === "running") {
 				const g = this.set(id, s.kind === "preview" ? { phase: "previewing", wolf: choice.wolf, title: target.title } : { phase: "graduating", wolf: choice.wolf, title: target.title });
 				void this.poll(client, id, choice.wolf, g);
@@ -234,7 +241,7 @@ export class GraduateStore {
 				const s = res.data;
 				if (s.state === "preview_ready") {
 					// While previewing, the job we waited for; while graduating, a confirm that failed and left its preview valid.
-					this.set(id, { phase: "ready", wolf, title: cur.title, preview: s.preview });
+					this.set(id, { phase: "ready", wolf, title: cur.title, preview: s.preview, ...(s.lastError ? { lastError: s.lastError } : {}) });
 					return;
 				}
 				if (s.state === "graduated") {

@@ -1200,7 +1200,13 @@ export type GraduationJob = z.infer<typeof GraduationJobSchema>;
 export const GraduationStatusSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("none") }),
   GraduationJobSchema,
-  z.object({ state: z.literal("preview_ready"), jobId: z.string().optional(), preview: GraduationPreviewSchema }),
+  z.object({
+    state: z.literal("preview_ready"),
+    jobId: z.string().optional(),
+    preview: GraduationPreviewSchema,
+    /** Set when this is the fallback after a failed confirm: the preview is still valid, but the send failed and must not look like a fresh preview. */
+    lastError: z.object({ kind: GraduationJobKindSchema, code: ErrorCodeSchema, message: z.string() }).optional(),
+  }),
   z.object({ state: z.literal("graduated"), jobId: z.string(), result: GraduationResultSchema }),
   z.object({ state: z.literal("error"), jobId: z.string(), kind: GraduationJobKindSchema, code: ErrorCodeSchema, message: z.string() }),
 ]);

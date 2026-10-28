@@ -496,6 +496,22 @@ describe("graduate flow from the Work list", () => {
 		await settle();
 		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "confirm");
 	});
+	it("a failed confirm that comes back as Review says so on the button and at the top of the modal", async () => {
+		const g = fakeGraduate({ confirmOutcome: { state: "preview_ready", jobId: "j", preview: PREVIEW, lastError: { kind: "confirm", code: "engine_error", message: "model exploded" } } });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		assert.equal(q("work-graduate-ready")!.getAttribute("data-last-error"), null, "a fresh Review carries no error");
+		await click(q("work-graduate-ready")!);
+		assert.equal(q("graduate-last-error"), null);
+		await click(q("graduate-confirm")!);
+		await until("Review again", () => q("work-graduate-ready")?.getAttribute("data-last-error") === "true");
+		assert.match(q("work-graduate-ready")!.getAttribute("title")!, /Last confirm failed: model exploded/);
+		await click(q("work-graduate-ready")!);
+		assert.match(q("graduate-last-error")!.textContent!, /Last confirm failed: model exploded/);
+	});
 	it("another failure at confirm goes back to Review: the preview is still good", async () => {
 		const g = fakeGraduate({ confirmOutcome: { state: "error", jobId: "j", kind: "confirm", code: "engine_error", message: "graduation stopped, nothing archived" } });
 		await openList(g);
@@ -508,6 +524,7 @@ describe("graduate flow from the Work list", () => {
 		await until("the error", () => phase("work-graduate-ready") === "error");
 		await click(q("work-graduate-ready")!);
 		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "review");
+		assert.match(q("graduate-last-error")!.textContent!, /Last confirm failed: graduation stopped/);
 		assert.equal(g.starts.filter((s) => s.kind === "preview").length, 1);
 	});
 });

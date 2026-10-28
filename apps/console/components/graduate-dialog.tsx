@@ -101,7 +101,8 @@ export function GraduateControl({ target, state, client, testid, showReason = fa
 				type="button"
 				data-testid={testid}
 				data-phase="ready"
-				title="Review the proposed entries before they are sent to the librarian"
+				title={job.lastError ? `Last ${job.lastError.kind} failed: ${job.lastError.message}` : "Review the proposed entries before they are sent to the librarian"}
+				data-last-error={job.lastError ? "true" : undefined}
 				onClick={(e) => {
 					e.stopPropagation();
 					setDialog("review");
@@ -139,7 +140,7 @@ export function GraduateControl({ target, state, client, testid, showReason = fa
 		<>
 			{button}
 			{dialog === "start" && <GraduateStartDialog target={target} client={client} onClose={close} />}
-			{dialog === "review" && job?.phase === "ready" && <GraduateReviewDialog target={target} wolf={job.wolf} preview={job.preview} onConfirm={() => void graduateStore.confirm(client, target.id)} onClose={close} />}
+			{dialog === "review" && job?.phase === "ready" && <GraduateReviewDialog target={target} wolf={job.wolf} preview={job.preview} lastError={job.lastError} onConfirm={() => void graduateStore.confirm(client, target.id)} onClose={close} />}
 		</>
 	);
 }
@@ -291,7 +292,7 @@ export function GraduateStartDialog({ target, client, onClose }: { target: Gradu
 }
 
 /** The Review modal: the proposed entries, the folded observations and the warnings. Confirm starts the background send. */
-export function GraduateReviewDialog({ target, wolf, preview, onConfirm, onClose }: { target: GraduateTarget; wolf: string; preview: GraduationPreview; onConfirm: () => void; onClose: () => void }) {
+export function GraduateReviewDialog({ target, wolf, preview, lastError, onConfirm, onClose }: { target: GraduateTarget; wolf: string; preview: GraduationPreview; lastError?: { kind: string; message: string }; onConfirm: () => void; onClose: () => void }) {
 	const backdropDismiss = useBackdropDismiss(onClose);
 	useEscape(onClose);
 	return createPortal(
@@ -299,6 +300,11 @@ export function GraduateReviewDialog({ target, wolf, preview, onConfirm, onClose
 			<div role="dialog" aria-modal="true" aria-label="Review graduation" data-testid="graduate-dialog" data-step="review" onClick={(e) => e.stopPropagation()} className="flex max-h-[85vh] w-[44rem] max-w-[calc(100vw-2rem)] flex-col rounded-xl border bg-card p-5 shadow-xl">
 				<h2 className="text-sm font-semibold">Send “{target.title}” to the librarian?</h2>
 				<div className="mt-3 min-h-0 flex-1 overflow-y-auto" data-testid="graduate-body">
+					{lastError && (
+						<div role="alert" data-testid="graduate-last-error" className="mb-3 rounded-sm border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+							Last {lastError.kind} failed: {lastError.message} Nothing was archived; you can confirm again.
+						</div>
+					)}
 					<PreviewBody wolf={wolf} preview={preview} />
 				</div>
 				<div className="mt-4 flex justify-end gap-2">

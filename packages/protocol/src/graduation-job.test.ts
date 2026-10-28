@@ -29,10 +29,16 @@ describe("graduation job schemas", () => {
       { state: "running", jobId: "j", kind: "confirm", startedAt: "2026-10-28T10:00:00.000Z" },
       { state: "preview_ready", preview },
       { state: "preview_ready", jobId: "j", preview },
+      { state: "preview_ready", preview, lastError: { kind: "confirm", code: "engine_error", message: "model exploded" } },
       { state: "graduated", jobId: "j", result: { graduated: true, entries: ["a"], archived: ["x"], lateFolded: 0, unbound: 1, closedThreads: [] } },
       { state: "error", jobId: "j", kind: "preview", code: "preview_stale", message: "gone" },
     ];
     for (const s of ok) expect(GraduationStatusSchema.parse(s)).toEqual(s);
+  });
+
+  it("a preview_ready lastError needs a kind, a known code and a message", () => {
+    expect(GraduationStatusSchema.safeParse({ state: "preview_ready", preview, lastError: { kind: "confirm", code: "weird", message: "m" } }).success).toBe(false);
+    expect(GraduationStatusSchema.safeParse({ state: "preview_ready", preview, lastError: { kind: "confirm" } }).success).toBe(false);
   });
 
   it("refuses an unknown state, a preview_ready without the preview and an error with an unknown code", () => {

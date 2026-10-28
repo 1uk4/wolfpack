@@ -235,7 +235,7 @@ describe("graduate routes", () => {
     await tw.client.startGraduationConfirm!("testwolf", feature, p.token);
     // the job's own state is the error, but the preview is still valid: status offers it again
     const s = await pollUntil(feature);
-    expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token } });
+    expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token }, lastError: { kind: "confirm", code: "engine_error", message: expect.stringContaining("nothing archived") } });
     behave.workRecordFails = false;
     expect(await confirm(feature, p.token)).toMatchObject({ graduated: true });
     // a stale token: the token file is gone, so the error stays

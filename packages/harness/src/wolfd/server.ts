@@ -729,6 +729,7 @@ export class WolfServer {
         // No job in memory (wolfd restarted), or a failed confirm: a preview whose token file is still fresh is ready to confirm.
         const preview = await actions.pendingPreview(params.id).catch(() => undefined);
         if (!preview && known) return this.json(res, 200, known);
+        if (preview && known?.state === "error") return this.json(res, 200, { state: "preview_ready", preview, lastError: { kind: known.kind, code: known.code, message: known.message } });
         return this.json(res, 200, preview ? { state: "preview_ready", preview } : { state: "none" });
       }
       case "graduationObservations": {

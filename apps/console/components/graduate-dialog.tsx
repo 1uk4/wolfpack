@@ -56,8 +56,8 @@ export function GraduateButton({ state, onClick, showReason = false, testid = "g
 
 
 /** The button while a job runs: disabled, with a spinner over the label (the UI around it stays usable). */
-function BusyButton({ job, testid }: { job: { phase: "previewing" | "graduating"; wolf: string }; testid: string }) {
-	const what = job.phase === "previewing" ? `${job.wolf} is folding the observations and distilling the entries` : `${job.wolf} is sending the contributions to the librarian`;
+function BusyButton({ job, testid }: { job: { phase: "previewing" | "graduating"; wolf: string; note?: string }; testid: string }) {
+	const what = (job.phase === "previewing" ? `${job.wolf} is folding the observations and distilling the entries` : `${job.wolf} is sending the contributions to the librarian`) + (job.note ? ` (${job.note})` : "");
 	return (
 		<button
 			type="button"
@@ -69,7 +69,7 @@ function BusyButton({ job, testid }: { job: { phase: "previewing" | "graduating"
 			onClick={(e) => e.stopPropagation()}
 			className="relative inline-flex shrink-0 cursor-progress items-center justify-center rounded-md border border-emerald-400/40 px-2 py-0.5 text-[11px] font-medium text-emerald-300"
 		>
-			<span className="opacity-30">{job.phase === "previewing" ? "Graduate" : "Confirm"}</span>
+			<span className="opacity-30">{job.phase === "previewing" ? "Graduate" : "Sending…"}</span>
 			<span data-testid={`${testid}-loader`} className="absolute inset-0 flex items-center justify-center" role="status" aria-label={job.phase === "previewing" ? "Previewing" : "Graduating"}>
 				<span className="size-3 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-300" />
 			</span>
@@ -88,7 +88,7 @@ export function GraduateControl({ target, state, client, testid, showReason = fa
 	// A job the wolf already holds (a reload, a view never opened): a finished preview shows as Review.
 	useEffect(() => {
 		if (ready) void graduateStore.recover(client, target);
-	}, [ready, client, target.id, target.assignee]);
+	}, [ready, client, target.id, target.title, target.assignee]);
 
 	if (!state.show && !job) return null;
 	const close = () => setDialog(null);
@@ -167,7 +167,8 @@ type Count = { state: "loading" } | { state: "ok"; data: GraduationObservations 
  * fold. The count is read from THAT wolf's pool: work items have a single assignee, so its pool holds the observations.
  */
 export function GraduateStartDialog({ target, client, onClose }: { target: GraduateTarget; client: GraduateClient; onClose: () => void }) {
-	const [wolves, setWolves] = useState<{ kind: "loading" } | { kind: "assignee"; wolf: string } | { kind: "pick"; online: string[] }>({ kind: "loading" });
+	const [wolves, setWolves] = useState<{ kind: "loading" } | { kind: "failed" } | { kind: "assignee"; wolf: string } | { kind: "pick"; online: string[] }>({ kind: "loading" });
+	const [attempt, setAttempt] = useState(0);
 	const [picked, setPicked] = useState("");
 	const [count, setCount] = useState<Count>({ state: "loading" });
 	const backdropDismiss = useBackdropDismiss(onClose);
@@ -176,11 +177,12 @@ export function GraduateStartDialog({ target, client, onClose }: { target: Gradu
 	useEffect(() => {
 		let live = true;
 		void (async () => {
-			let list: Awaited<ReturnType<GraduateClient["wolves"]>> = [];
+			let list: Awaited<ReturnType<GraduateClient["wolves"]>>;
 			try {
 				list = await client.wolves();
 			} catch {
-				// no wolf list: the owner is told below
+				if (live) setWolves({ kind: "failed" });
+				return;
 			}
 			if (!live) return;
 			const choice = graduationWolf(target.assignee, list);
@@ -191,7 +193,7 @@ export function GraduateStartDialog({ target, client, onClose }: { target: Gradu
 			}
 		})();
 		return () => void (live = false);
-	}, [client, target.assignee]);
+	}, [client, target.assignee, attempt]);
 
 	const wolf = wolves.kind === "assignee" ? wolves.wolf : wolves.kind === "pick" ? picked : "";
 	useEffect(() => {
@@ -215,6 +217,22 @@ export function GraduateStartDialog({ target, client, onClose }: { target: Gradu
 				<h2 className="text-sm font-semibold">Graduate “{target.title}”?</h2>
 				<div className="mt-3 min-h-0 flex-1 overflow-y-auto text-xs" data-testid="graduate-body">
 					{wolves.kind === "loading" && <p className="text-muted-foreground">Looking for a wolf to run it…</p>}
+					{wolves.kind === "failed" && (
+						<p data-testid="graduate-wolves-failed" className="text-muted-foreground">
+							Couldn’t load the wolves.{" "}
+							<button
+								type="button"
+								data-testid="graduate-wolves-retry"
+								onClick={() => {
+									setWolves({ kind: "loading" });
+									setAttempt((n) => n + 1);
+								}}
+								className="underline"
+							>
+								Retry
+							</button>
+						</p>
+					)}
 					{wolves.kind === "pick" && wolves.online.length === 0 && (
 						<p data-testid="graduate-no-wolf" className="text-muted-foreground">
 							No wolf is online to run the graduation. Start one and try again.

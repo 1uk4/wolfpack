@@ -26,7 +26,8 @@ export function createGraduateClient(): GraduateClient {
 	return {
 		async wolves() {
 			const res = await fetchWolves();
-			return res.ok ? res.data.wolves : [];
+			if (!res.ok) throw new Error(res.message);
+			return res.data.wolves;
 		},
 		startPreview: postGraduatePreview,
 		startConfirm: postGraduateConfirm,

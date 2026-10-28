@@ -634,3 +634,173 @@ describe("GraduateStartDialog on its own", () => {
 		assert.equal(g.starts.length, 0);
 	});
 });
+
+// ---- the store under bad weather ---------------------------------------------------------
+
+describe("graduate store: jobs that cannot advance", () => {
+	const T = { id: "ready", title: "Ready feature", assignee: "hal" };
+	const runningStatus = (kind: "preview" | "confirm"): KbResult<GraduationStatus> => ({ ok: true, data: { state: "running", jobId: "j", kind, startedAt: "2026-10-28T12:00:00.000Z" } });
+	const wait = async (what: string, cond: () => boolean) => {
+		for (let i = 0; i < 400; i++) {
+			if (cond()) return;
+			await new Promise((r) => setTimeout(r, 5));
+		}
+		assert.fail(`timed out waiting for ${what}`);
+	};
+	const phaseOf = () => graduateStore.get("ready")?.phase;
+	/** Drive the store to Review on a client that previews fine. */
+	const toReview = async (g: GraduateClient) => {
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("Review", () => phaseOf() === "ready");
+	};
+	afterEach(() => {
+		graduateStore.deadlineMs = 10 * 60 * 1000;
+	});
+
+	it("a confirm refused as busy while a preview runs keeps polling that preview instead of hanging, and ends in Review", async () => {
+		const base = fakeGraduate();
+		await toReview(base);
+		let reads = 0;
+		const g = fakeGraduate({
+			startConfirm: async () => ({ ok: false, reason: "unavailable", code: "busy", message: "a preview of this feature is already running; wait for it to finish" }),
+			status: async () => (++reads < 3 ? runningStatus("preview") : { ok: true, data: { state: "preview_ready", jobId: "j", preview: PREVIEW } }),
+		});
+		await graduateStore.confirm(g, "ready");
+		const cur = graduateStore.get("ready");
+		assert.equal(cur?.phase, "previewing");
+		assert.match((cur as { note?: string }).note ?? "", /a preview is already running/);
+		await wait("Review again", () => phaseOf() === "ready");
+		assert.ok(reads >= 3);
+	});
+	it("a preview refused as busy while a confirm runs follows the confirm to the graduation", async () => {
+		let reads = 0;
+		const g = fakeGraduate({
+			startPreview: async () => ({ ok: false, reason: "unavailable", code: "busy", message: "a confirm of this feature is already running; wait for it to finish" }),
+			status: async () => (++reads < 2 ? runningStatus("confirm") : { ok: true, data: { state: "graduated", jobId: "j", result: RESULT } }),
+		});
+		await graduateStore.startPreview(g, T, "hal");
+		assert.equal(phaseOf(), "graduating");
+		await wait("done", () => graduateStore.getDone().length === 1);
+		assert.equal(phaseOf(), undefined);
+	});
+	it("a start that answers a job of the other kind is not polled as its own: it is followed as what it is", async () => {
+		const g = fakeGraduate({
+			startPreview: async () => ({ ok: true, data: job("confirm") }),
+			status: async () => ({ ok: true, data: { state: "graduated", jobId: "j-confirm", result: RESULT } }),
+		});
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("done", () => graduateStore.getDone().length === 1);
+	});
+	it("preview_ready while graduating (a failed confirm left its preview valid) goes back to Review", async () => {
+		const base = fakeGraduate();
+		await toReview(base);
+		const g = fakeGraduate({
+			startConfirm: async () => ({ ok: true, data: job("confirm") }),
+			status: async () => ({ ok: true, data: { state: "preview_ready", jobId: "j", preview: PREVIEW } }),
+		});
+		await graduateStore.confirm(g, "ready");
+		await wait("Review", () => phaseOf() === "ready");
+	});
+	it("stops polling after 5 failed status reads in a row, with the error", async () => {
+		let reads = 0;
+		const g = fakeGraduate({ status: async () => (reads++, { ok: false, reason: "error", message: "network down" }) });
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("the error", () => phaseOf() === "error");
+		const calls = reads;
+		await new Promise((r) => setTimeout(r, 40));
+		assert.equal(calls, 5);
+		assert.equal(reads, 5, "no further reads");
+		assert.equal((graduateStore.get("ready") as { message: string }).message, "network down");
+	});
+	it("a status read that throws counts as a failed read, never as an unhandled rejection", async () => {
+		const g = fakeGraduate({ status: async () => { throw new Error("socket hang up"); } });
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("the error", () => phaseOf() === "error");
+		assert.match((graduateStore.get("ready") as { message: string }).message, /socket hang up/);
+	});
+	it("a start that throws is an error on the button", async () => {
+		const g = fakeGraduate({ startPreview: async () => { throw new Error("fetch failed"); } });
+		await graduateStore.startPreview(g, T, "hal");
+		assert.equal(phaseOf(), "error");
+		assert.match((graduateStore.get("ready") as { message: string }).message, /fetch failed/);
+	});
+	it("a lost job (the wolf answers none) is an error with Retry, not an endless loader", async () => {
+		const g = fakeGraduate({ status: async () => ({ ok: true, data: { state: "none" } }) });
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("the error", () => phaseOf() === "error");
+		assert.match((graduateStore.get("ready") as { message: string }).message, /lost the graduation job/);
+		assert.equal(graduateStore.retry("ready"), "graduate");
+	});
+	it("a job that never finishes ends in an error at the deadline", async () => {
+		graduateStore.deadlineMs = 40;
+		let reads = 0;
+		const g = fakeGraduate({ status: async () => (reads++, runningStatus("preview")) });
+		await graduateStore.startPreview(g, T, "hal");
+		await wait("the deadline", () => phaseOf() === "error");
+		assert.match((graduateStore.get("ready") as { message: string }).message, /did not finish/);
+		const calls = reads;
+		await new Promise((r) => setTimeout(r, 30));
+		assert.equal(reads, calls, "the poll stopped");
+	});
+});
+
+describe("graduate store: recover", () => {
+	const T = { id: "ready", title: "Ready feature", assignee: "hal" };
+	it("ignores a graduated or error status on purpose: nothing shows on page load", async () => {
+		for (const initial of [{ state: "graduated", jobId: "j", result: RESULT }, { state: "error", jobId: "j", kind: "preview", code: "engine_error", message: "x" }] as GraduationStatus[]) {
+			graduateStore.reset();
+			await graduateStore.recover(fakeGraduate({ initial }), T);
+			assert.equal(graduateStore.get("ready"), undefined, initial.state);
+			assert.equal(graduateStore.getDone().length, 0);
+		}
+	});
+	it("bails when the store was reset while it was waiting", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const g = fakeGraduate({ initial: { state: "preview_ready", preview: PREVIEW }, wolves: async () => (await gate, WOLVES) });
+		const p = graduateStore.recover(g, T);
+		graduateStore.reset();
+		release();
+		await p;
+		assert.equal(graduateStore.get("ready"), undefined);
+		// and a recover after the reset works again
+		await graduateStore.recover(fakeGraduate({ initial: { state: "preview_ready", preview: PREVIEW } }), T);
+		assert.equal(graduateStore.get("ready")?.phase, "ready");
+	});
+	it("picks up a running confirm and follows it", async () => {
+		const g = fakeGraduate({ initial: { state: "running", jobId: "j", kind: "confirm", startedAt: "2026-10-28T12:00:00.000Z" } });
+		await graduateStore.recover(g, T);
+		assert.equal(graduateStore.get("ready")?.phase, "graduating");
+	});
+});
+
+describe("GraduateStartDialog: wolves that cannot be loaded", () => {
+	it("says it could not load them (not 'no wolf online') and Retry loads again", async () => {
+		let calls = 0;
+		const g = fakeGraduate({ wolves: async () => { if (calls++ === 0) throw new Error("down"); return WOLVES; } });
+		await mountEl(<GraduateStartDialog target={{ id: "ready", title: "Ready feature", assignee: "hal" }} client={g} onClose={() => {}} />);
+		await settle();
+		assert.ok(q("graduate-wolves-failed"));
+		assert.equal(q("graduate-no-wolf"), null);
+		assert.equal((q("graduate-go") as HTMLButtonElement).disabled, true);
+		await click(q("graduate-wolves-retry")!);
+		await settle();
+		assert.equal(q("graduate-wolves-failed"), null);
+		assert.match(q("graduate-summary")!.textContent!, /on hal/);
+	});
+});
+
+describe("BusyButton while confirming", () => {
+	it("reads Sending… and keeps the loader", async () => {
+		const g = fakeGraduate({ runningPolls: 0 });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
+		g.runningPolls = 1000;
+		await click(q("graduate-confirm")!);
+		assert.match(q("work-graduate-ready")!.textContent!, /Sending…/);
+	});
+});

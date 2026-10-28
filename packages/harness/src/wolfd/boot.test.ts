@@ -42,6 +42,32 @@ const start = async (port?: number, socket?: string) => {
 };
 
 describe("startWolf", () => {
+  it("config den and name win over an inherited stale WOLF_DEN / WOLF_NAME, in the wolf env and process.env", async () => {
+    const saved = { den: process.env.WOLF_DEN, name: process.env.WOLF_NAME };
+    process.env.WOLF_DEN = "/stale/den";
+    process.env.WOLF_NAME = "stale";
+    try {
+      // inherited env (opts.env unset): process.env is patched while running and restored on close
+      const w = await startWolf({ configPath: join(root, "wolf.yaml"), home: root });
+      expect(process.env.WOLF_DEN).toBe(w.config.den);
+      expect(process.env.WOLF_NAME).toBe("bootwolf");
+      await w.close();
+      expect(process.env.WOLF_DEN).toBe("/stale/den");
+      expect(process.env.WOLF_NAME).toBe("stale");
+      // explicit env: wolf env carries the config den, process.env untouched
+      env = { ...env, WOLF_DEN: "/stale/den", WOLF_NAME: "stale" };
+      let seen: NodeJS.ProcessEnv | undefined;
+      const w2 = await startWolf({ configPath: join(root, "wolf.yaml"), env, home: root, extraExtensions: (c) => { seen = c.env; return []; } });
+      running.push(w2);
+      expect(seen?.WOLF_DEN).toBe(w2.config.den);
+      expect(seen?.WOLF_NAME).toBe("bootwolf");
+      expect(process.env.WOLF_DEN).toBe("/stale/den");
+    } finally {
+      if (saved.den === undefined) delete process.env.WOLF_DEN; else process.env.WOLF_DEN = saved.den;
+      if (saved.name === undefined) delete process.env.WOLF_NAME; else process.env.WOLF_NAME = saved.name;
+    }
+  });
+
   it("serves /v1, applies project context + tools to the home conversation, persists across restarts", async () => {
     const w = await start();
     expect(w.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);

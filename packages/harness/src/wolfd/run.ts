@@ -114,9 +114,12 @@ export async function startWolf(opts: StartWolfOptions): Promise<RunningWolf> {
   // Extensions get the sandbox env through ExtensionRuntime/context.env. Only when the caller uses the process's
   // own env is process.env also patched, as a fallback for code that reads it directly (restored on close).
   // One sandboxed wolf per process (startSandbox enforces it).
-  const restoreEnv = sandbox && !opts.env ? patchProcessEnv(sandbox.env) : () => {};
+  // The den env always comes from the config: a sandbox's redirect, else the wolf's own den. An inherited WOLF_DEN
+  // (a stale launcher env) must never win: engine usage logs and memory pools read it.
+  const denEnv: Record<string, string> = { ...(sandbox ? sandbox.env : {}), WOLF_DEN: config.den, WOLF_NAME: config.identity.name };
+  const restoreEnv = !opts.env ? patchProcessEnv(denEnv) : () => {};
   try {
-    return await startConfigured(opts, config, sandbox ? { ...env, ...sandbox.env } : env, log, sandbox, restoreEnv);
+    return await startConfigured(opts, config, { ...env, ...denEnv }, log, sandbox, restoreEnv);
   } catch (e) {
     restoreEnv();
     await sandbox?.close().catch(() => {});

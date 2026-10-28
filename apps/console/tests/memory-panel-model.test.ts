@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	FEED_CAP, PROMOTE_IDLE, latestOnly, focusRefetchDue, actionBlock, feedItemOf, pushFeed, refreshPlan, settlePromotePost, applyPromoteEvent, bannerOf, destinationLabel, parentToFetch, parseOpen, parseView, serializeView, MEMORY_PANEL_VIEW_KEY, poolSummary,
-	promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
+	bindOffered, promoteBusy, promoteLine, recordStale, recordView, serializeOpen, type MemoryEventFrame, type MemoryStatus, type WorkRecordResponse,
 } from "../src/core/index.ts";
 
 const base = { wolf: "w", timestamp: "2026-10-26T00:00:00Z", domain: "d" };
@@ -12,23 +12,33 @@ const st = (state: MemoryStatus["state"]): MemoryStatus => ({ state, reason: "wh
 const rec = (o: Partial<WorkRecordResponse>): WorkRecordResponse => ({ id: "a", title: "A", kind: "task", stage: "plan", plan: "", record: "", ...o });
 
 describe("memory panel model", () => {
+	it("bindOffered: shown for another live task; hidden for the bound item, a feature, an archived item, a container, and without a slug", () => {
+		const t = rec({ id: "t" });
+		assert.equal(bindOffered(t, "other", true), true);
+		assert.equal(bindOffered(t, "t", true), false);
+		assert.equal(bindOffered(rec({ id: "f", kind: "feature" }), "other", true), false);
+		assert.equal(bindOffered(rec({ id: "x", stage: "archived" }), "other", true), false);
+		assert.equal(bindOffered(rec({ id: "c", container: true }), "other", true), false);
+		assert.equal(bindOffered(t, "other", false), false);
+		assert.equal(bindOffered(null, "other", true), false);
+	});
 	it("open flag persists, default open", () => {
 		assert.equal(parseOpen(null), true);
 		assert.equal(parseOpen(serializeOpen(false)), false);
 		assert.equal(parseOpen(serializeOpen(true)), true);
 	});
-	it("view key helper: defaults to graph, round-trips all three, reads the legacy record as item", () => {
+	it("view key helper: defaults to item, round-trips both, reads the legacy record and the retired graph as item", () => {
 		assert.equal(MEMORY_PANEL_VIEW_KEY, "lh.memory-panel.view.v1");
-		assert.equal(parseView(null), "graph");
-		assert.equal(parseView("junk"), "graph");
+		assert.equal(parseView(null), "item");
+		assert.equal(parseView("junk"), "item");
 		assert.equal(parseView(serializeView("feed")), "feed");
 		assert.equal(parseView(serializeView("item")), "item");
-		assert.equal(parseView(serializeView("graph")), "graph");
+		assert.equal(parseView("graph"), "item");
 		assert.equal(parseView("record"), "item");
 	});
 	it("view persistence: chosen view survives a serialize/parse round-trip through storage-shaped strings", () => {
-		for (const v of ["graph", "item", "feed"] as const) assert.equal(parseView(serializeView(v)), v);
-		assert.equal(parseView(undefined), "graph");
+		for (const v of ["item", "feed"] as const) assert.equal(parseView(serializeView(v)), v);
+		assert.equal(parseView(undefined), "item");
 	});
 	it("latestOnly: a stale (earlier-started) response is never current", () => {
 		const g = latestOnly();

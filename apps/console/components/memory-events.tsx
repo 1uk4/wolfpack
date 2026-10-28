@@ -171,8 +171,17 @@ export function MemoryEventsProvider({ children, connect }: { children: ReactNod
  * fine. `onResync` fires after a reconnect (refetch truth there).
  */
 export function useMemoryEvents(wolf: string | null, cb: (e: MemoryEventFrame) => void, onResync?: () => void): void {
+	useMemoryEventsImpl(wolf, cb, onResync, true);
+}
+
+/** Like {@link useMemoryEvents}, but a no-op without a provider (components that also render standalone, e.g. in tests). */
+export function useOptionalMemoryEvents(wolf: string | null, cb: (e: MemoryEventFrame) => void, onResync?: () => void): void {
+	useMemoryEventsImpl(wolf, cb, onResync, false);
+}
+
+function useMemoryEventsImpl(wolf: string | null, cb: (e: MemoryEventFrame) => void, onResync: (() => void) | undefined, required: boolean): void {
 	const hub = useContext(MemoryEventsContext);
-	if (!hub) throw new Error("useMemoryEvents requires <MemoryEventsProvider>");
+	if (!hub && required) throw new Error("useMemoryEvents requires <MemoryEventsProvider>");
 	const cbRef = useRef(cb);
 	const resyncRef = useRef(onResync);
 	useLayoutEffect(() => {
@@ -180,7 +189,7 @@ export function useMemoryEvents(wolf: string | null, cb: (e: MemoryEventFrame) =
 		resyncRef.current = onResync;
 	});
 	useEffect(() => {
-		if (!wolf) return;
+		if (!wolf || !hub) return;
 		return hub.subscribe(
 			wolf,
 			(e) => cbRef.current(e),

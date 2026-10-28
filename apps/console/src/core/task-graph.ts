@@ -6,9 +6,13 @@
  * layout and drawing live in components/task-graph.tsx.
  */
 
+import type { GraphNodeStatus } from "@wolfpack/protocol/objects";
 import type { WorkRecordResponse } from "./kb.ts";
 
 export type TaskStatus = "shipped" | "building" | "ready" | "blocked" | "archived";
+
+/** The show_graph vocabulary for each task status (the pinned feature graph and the chat card share it). */
+export const GRAPH_STATUS_OF: Record<TaskStatus, GraphNodeStatus> = { shipped: "done", building: "doing", ready: "todo", blocked: "blocked", archived: "skipped" };
 
 export interface TaskNode {
 	id: string;

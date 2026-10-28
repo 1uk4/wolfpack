@@ -461,25 +461,35 @@ export function createOrchestrator(
   function drainBody(workIds: string[], cancelled: () => boolean): Promise<{ folded: number; discarded: number }> {
     return (async () => {
       const ids = new Set(workIds);
-      const mine = foldLedger(ledgerEvents).activeObservations.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
+      const active = foldLedger(ledgerEvents).activeObservations;
+      const activeIds = observationIds(active);
+      const idOf = new Map(active.map((o, i) => [o, activeIds[i]!] as const));
+      const mine = active.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
       if (mine.length === 0) return { folded: 0, discarded: 0 };
       runtime.notify?.(`memory: folding ${mine.length} pending observation(s) into the Record for graduation`, "info");
       // No retry state: graduation tries now, and a 404 here is not a grace-period question.
       const outcomes = await consolidateWorkRecords({
         engine,
         store: cfg.workRecordStore,
-        observations: mine.map((o) => ({ id: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+        observations: mine.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
       const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+      const statusOf = (o: (typeof mine)[number]) => status.get(idOf.get(o)!);
       if (cancelled()) throw new Error("cancelled");
-      const done = mine.filter((o) => status.get(o.timestamp)?.status === "written" || status.get(o.timestamp)?.status === "discarded").map((o) => o.timestamp);
+      const done = mine.filter((o) => statusOf(o)?.status === "written" || statusOf(o)?.status === "discarded").map((o) => o.timestamp);
       if (done.length > 0) {
         appendEvent({ type: "observations_dropped", observationTimestamps: done, coversUpToId: foldLedger(ledgerEvents).latestCoverageId ?? "" });
       }
-      const discarded = mine.filter((o) => status.get(o.timestamp)?.status === "discarded").map((o) => ({ obs: o, reason: (status.get(o.timestamp) as { reason: string }).reason }));
+      const archived: ArchiveItem[] = mine.flatMap((o): ArchiveItem[] => {
+        const out = statusOf(o);
+        if (out?.status === "written") return [{ obs: o, id: idOf.get(o), outcome: "written", target: out.work }];
+        if (out?.status === "discarded") return [{ obs: o, id: idOf.get(o), outcome: "discarded", target: out.reason }];
+        return [];
+      });
+      const discarded = archived.filter((a) => a.outcome === "discarded");
       const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
-      if (discarded.length > 0 && poolRoot) appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+      if (poolRoot) appendArchive(poolRoot, archived, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
       const stuck = outcomes.find((o) => o.status === "pending");
       if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
       runtime.notify?.(`memory: graduation drain: ${done.length - discarded.length} folded, ${discarded.length} discarded`, "info");

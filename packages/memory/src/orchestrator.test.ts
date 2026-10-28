@@ -7,6 +7,7 @@ import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
 import { readTopics } from "./session/memory.js";
 import { stripSources } from "./record-sources.js";
+import { readArchive } from "./work-pending.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
 
@@ -323,6 +324,23 @@ describe("orchestrator work tagging and Records", () => {
     expect(s.writes.map((w) => w.id)).toEqual(["work-f1"]);
     expect(prompts.record[0]).toContain("TTL cache");
     expect(orch.getActiveObservations().map((o) => o.content)).toEqual(["unrelated chatter", "other feature note"]);
+  });
+
+  it("drainWork and consolidation archive what they fold (written, with the Record's item), den observations as den", async () => {
+    const { engine } = engineWithRecord([[OBS[0]], [OBS[1]]]);
+    const s = store({ "work-f1": { title: "F", kind: "feature", stage: "in_build", body: "" } });
+    let bound: { taskId: string; featureId?: string } | null = { taskId: "work-t1", featureId: "work-f1" };
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, denRoot: cwd, getBoundWork: () => bound, workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]);
+    await orch.drainWork(["work-f1"]);
+    bound = null;
+    await orch.processChunks([chunk("c2")]);
+    await orch.consolidateNow();
+    const arch = readArchive(cwd);
+    expect(arch.map((e) => [e.content, e.outcome])).toEqual([["chose a TTL cache because invalidation is hard", "written"], ["unrelated chatter", "den"]]);
+    expect(arch[0]).toMatchObject({ target: "work-f1", work: "work-t1", feature: "work-f1" });
+    expect(arch[0].id).toMatch(/^[0-9a-f]{16}$/);
+    expect(arch[0].timestamp).toMatch(/^2026-10-19/);
   });
 
   it("drainWork rejects when a Record cannot be written and keeps the observations", async () => {

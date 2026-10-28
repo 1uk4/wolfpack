@@ -344,6 +344,18 @@ describe("drainWorkObservations (graduation)", () => {
     expect(poolLines()).toEqual(["observation 0", "observation 3"]);
   });
 
+  it("the drain archives what it folded (written, target = the Record's item) under the ids the Record cites", async () => {
+    const m = setup();
+    await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] });
+    const arch = readArchive(den);
+    expect(arch.map((e) => [e.content, e.outcome, e.target]).sort()).toEqual([
+      ["observation 1", "written", "f1"],
+      ["observation 2", "written", "f1"],
+      ["observation 4", "written", "f1"],
+    ]);
+    expect(arch.every((e) => /^[0-9a-f]{16}$/.test(e.id))).toBe(true);
+  });
+
   it("a Record write failure throws and leaves the observations in the pool", async () => {
     const m = setup(true);
     await expect(drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] })).rejects.toThrow(/HTTP 502/);

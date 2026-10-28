@@ -307,34 +307,36 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
   });
   async function drainInner(cancelled: () => boolean): Promise<{ folded: number; discarded: number }> {
     const ids = new Set(workIds);
-    const mine = (await readPool(wolfDen)).filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
+    const pool = await readPool(wolfDen);
+    const idList = observationIds(pool);
+    const idOf = new Map(pool.map((o, i) => [o, idList[i]!] as const));
+    const mine = pool.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
     if (mine.length === 0) return { folded: 0, discarded: 0 };
     onProgress?.(`Folding ${mine.length} pending observation(s) into the Record for graduation`);
     const outcomes = await consolidateWorkRecords({
       engine,
       store: config.workStore ?? defaultWorkStore(),
-      observations: mine.map((o) => ({ id: poolKey(o), content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      observations: mine.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
     for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
-    const handled: PoolObservation[] = [];
-    const discarded: Array<{ obs: PoolObservation; reason: string }> = [];
+    const handled: Handled[] = [];
+    let discarded = 0;
     for (const o of mine) {
-      const out = status.get(poolKey(o));
-      if (out?.status === "written") handled.push(o);
+      const out = status.get(idOf.get(o)!);
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
       else if (out?.status === "discarded") {
-        handled.push(o);
-        discarded.push({ obs: o, reason: out.reason });
+        handled.push({ obs: o, outcome: "discarded", target: out.reason });
+        discarded++;
       }
     }
     if (cancelled()) throw new Error("cancelled");
-    await settlePool(wolfDen, handled);
-    appendDiscarded(wolfDen, discarded, onProgress);
-    onProgress?.(`Graduation drain: ${handled.length - discarded.length} folded, ${discarded.length} discarded, ${mine.length - handled.length} pending`);
+    await settlePool(wolfDen, handled, onProgress);
+    onProgress?.(`Graduation drain: ${handled.length - discarded} folded, ${discarded} discarded, ${mine.length - handled.length} pending`);
     const stuck = outcomes.find((o) => o.status === "pending");
     if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
-    return { folded: handled.length - discarded.length, discarded: discarded.length };
+    return { folded: handled.length - discarded, discarded };
   }
 }
 

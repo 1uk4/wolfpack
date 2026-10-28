@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { sweep } from "./sweep.js";
+import { Entry } from "../schema/knowledge.js";
+import { lintKnowledge } from "../shared/knowledgeLint.js";
 import { writeEntrySection } from "./reorg.js";
 import { foldRegistry, readLedger } from "./ledger.js";
 import { flushWorkLinks, pendingWorkLinks, workIdOfTopic, parseKbNotes } from "./work-links.js";
@@ -88,6 +90,41 @@ describe("sweep: graduated work", () => {
     drop("work-wp-FEAT002", "Sweep pacing");
     expect(await run({ "kb-wp-GRAD001": 0.95, "kb-wp-AAAAAAA": 0.5 })).toMatchObject({ created: 0, merged: 1 });
     expect(aliasOf("work-wp-FEAT002")).toBe("kb-wp-GRAD001");
+  });
+
+  describe("graduation provenance", () => {
+    const dropSrc = (topic: string, src: string, f: { anchor?: string; verbatim?: boolean } = {}) =>
+      writeFileSync(
+        join(inbox(), `${topic.replace(/~/g, "_")}-${++n}.md`),
+        `---\nfrom: w1\nden_topic_id: ${topic}\ncontent_hash: c0de${n.toString(16)}\nprev_hash: null\ndomain_hint: wp\n${f.anchor ? `anchor: ${f.anchor}\n` : ""}${f.verbatim ? "verbatim: true\n" : ""}${src}---\n\n# A rule\n\nbody ${n}\n`
+      );
+    const props = (md: string) => Object.fromEntries([...md.matchAll(/^  (source-[a-z-]+): "(.*)"$/gm)].map((m) => [m[1], m[2]]));
+    // the entry the sweep wrote (the two seeded ones are older)
+    const only = () => readFileSync(join(entries(), readdirSync(entries()).find((f) => !f.startsWith("kb-wp-AAAAAAA") && !f.startsWith("kb-wp-BBBBBBB"))!), "utf8");
+
+    it("a produced entry carries source-feature / source-tasks / source-record-lines, and they pass the schema and the lint", async () => {
+      dropSrc("work-wp-FEAT001", "source_feature: work-wp-FEAT001\nsource_tasks: work-wp-TASK001, work-wp-TASK002\nsource_record_lines: a1b2c3d4, 0a0b0c0d\n");
+      await run({});
+      expect(props(only())).toEqual({ "source-feature": "work-wp-FEAT001", "source-tasks": "work-wp-TASK001, work-wp-TASK002", "source-record-lines": "a1b2c3d4, 0a0b0c0d" });
+      const properties = Object.fromEntries(Object.entries(props(only())));
+      expect(Entry.shape.properties.parse(properties)).toEqual(properties);
+      expect(lintKnowledge({ title: "t", summary: "s", body: "b", properties }).filter((f) => f.code === "forbidden-property")).toEqual([]);
+    });
+
+    it("a verbatim anchored entry carries them too, and a later graduation to it adds its own", async () => {
+      dropSrc("work-wp-FEAT001", "source_feature: work-wp-FEAT001\nsource_record_lines: a1b2c3d4\n", { anchor: "work-wp-FEAT001", verbatim: true });
+      await run({});
+      expect(props(only())).toEqual({ "source-feature": "work-wp-FEAT001", "source-record-lines": "a1b2c3d4" });
+      dropSrc("work-wp-FEAT001", "source_feature: work-wp-FEAT001\nsource_record_lines: a1b2c3d4, 99998888\n", { anchor: "work-wp-FEAT001", verbatim: true });
+      await run({});
+      expect(props(only())).toEqual({ "source-feature": "work-wp-FEAT001", "source-record-lines": "a1b2c3d4, 99998888" });
+    });
+
+    it("a contribution without source leaves the entry's properties alone; unsafe values are dropped at intake", async () => {
+      dropSrc("work-wp-FEAT001", "source_feature: not a valid id!\nsource_tasks: ../../x\n");
+      await run({});
+      expect(only()).not.toContain("source-");
+    });
   });
 
   describe("anchored subjects", () => {

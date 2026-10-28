@@ -471,13 +471,16 @@ export default function createTasksExtension(
   }
 
   /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
-  const drain = (workIds: string[]) =>
-    drainWorkObservations({
+  const drain = (workIds: string[]) => {
+    // Unconfigured → no store, so the drain reports "no Work API" instead of a per-call failure.
+    const explicit = context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT, context.env.WORK_TOKEN) : undefined;
+    return drainWorkObservations({
       wolfDen,
       engine: graduationEngine(),
-      workStore: config.workStore ?? (context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "") : undefined),
+      workStore: config.workStore ?? (explicit?.configured ? explicit : undefined),
       workIds,
     });
+  };
 
   /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
   const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
@@ -1390,13 +1393,14 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             if (Date.now() - Date.parse(preview.createdAt) > PREVIEW_TTL_MS) {
               return fail("That preview is too old. Call task_graduate(id) again for a fresh one and ask the owner again.");
             }
-            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship, drain });
+            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship, drain, engine: graduationEngine() });
             await unlink(file).catch(() => { /* used once */ });
 
             // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.
             const stored = isSubagent() ? null : (await readConversationBinding(ctx)).binding;
             const binding = stored ? { taskId: stored.workId, featureId: stored.featureId } : null;
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
+            if (done.lateFolded) result.push(`${done.lateFolded} late observation(s) were folded in and included.`);
             // Nothing more goes to a graduated feature: every conversation bound to it or to one of its tasks unbinds.
             unbindOnGraduation(wolfDen, { id: args.id, title: preview.title, archived: done.archived, exceptRoot: (await resolveBindingRoot(ctx)).root });
             forgetCompletion(args.id);

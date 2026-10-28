@@ -332,6 +332,27 @@ describe("orchestrator work tagging and Records", () => {
     expect(orch.getActiveObservations()).toHaveLength(1);
   });
 
+  it("drainWork times out on a hung model and does not stall later work", async () => {
+    let hang = true;
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+        if (step === "classify") return schema.parse({ observations: [OBS[0]] });
+        if (step === "workRecord") {
+          if (hang) return new Promise(() => {});
+          return schema.parse({ decisions: [], changes: ["ok"], findings: [], problems: [] });
+        }
+        return schema.parse({ actions: [] });
+      },
+    } as never;
+    const s = store({ "work-t1": { title: "T", kind: "task", stage: "in_build", body: "" } });
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]);
+    await expect(orch.drainWork(["work-t1"], { timeoutMs: 20 })).rejects.toThrow(/timed out/);
+    expect(orch.getActiveObservations()).toHaveLength(1);
+    hang = false;
+    expect((await orch.drainWork(["work-t1"])).folded).toBe(1);
+  });
+
   it("pending tagged observations never reach the den and do not starve the untagged overflow", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]]]);
     const s = store({ "work-f1": { title: "F", kind: "feature", stage: "in_build", body: "" } }, true);

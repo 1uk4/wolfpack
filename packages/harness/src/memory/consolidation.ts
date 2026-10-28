@@ -265,6 +265,8 @@ export interface DrainWorkConfig {
   workIds: string[];
   onProgress?: (msg: string) => void;
   onRecord?: ConsolidationConfig["onRecord"];
+  /** Gives up (and frees the pool lock) after this long; default 3 minutes. */
+  timeoutMs?: number;
 }
 
 /**
@@ -273,12 +275,20 @@ export interface DrainWorkConfig {
  * from the pool. Other observations stay. Throws when any of them stays pending (Work API or model error), so
  * graduation stops with nothing archived. Reaches only this wolf's pool.
  */
-export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ folded: number }> {
+export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ folded: number; discarded: number }> {
   const { wolfDen, engine, workIds, onProgress } = config;
-  return withPoolLock(wolfDen, async () => {
+  const ms = config.timeoutMs ?? 3 * 60 * 1000;
+  return withPoolLock(wolfDen, () => {
+    // A hung model or Work API must not hold the lock: after the timeout the late result is ignored.
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(new Error(`timed out after ${Math.round(ms / 1000)}s`)); }, ms); });
+    return Promise.race([drainInner(() => timedOut), timeout]).finally(() => clearTimeout(timer));
+  });
+  async function drainInner(cancelled: () => boolean): Promise<{ folded: number; discarded: number }> {
     const ids = new Set(workIds);
     const mine = (await readPool(wolfDen)).filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
-    if (mine.length === 0) return { folded: 0 };
+    if (mine.length === 0) return { folded: 0, discarded: 0 };
     onProgress?.(`Folding ${mine.length} pending observation(s) into the Record for graduation`);
     const outcomes = await consolidateWorkRecords({
       engine,
@@ -298,12 +308,14 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
         discarded.push({ obs: o, reason: out.reason });
       }
     }
+    if (cancelled()) throw new Error("cancelled");
     await settlePool(wolfDen, handled);
     appendDiscarded(wolfDen, discarded, onProgress);
+    onProgress?.(`Graduation drain: ${handled.length - discarded.length} folded, ${discarded.length} discarded, ${mine.length - handled.length} pending`);
     const stuck = outcomes.find((o) => o.status === "pending");
     if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
-    return { folded: handled.length - discarded.length };
-  });
+    return { folded: handled.length - discarded.length, discarded: discarded.length };
+  }
 }
 
 async function consolidatePoolInner(

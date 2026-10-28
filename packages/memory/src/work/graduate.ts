@@ -19,6 +19,13 @@
  * (see renderFeatureEntry), grouped under the initiative's entry. The model
  * contributes the entry's summary and any lasting decisions/findings only.
  *
+ * Before the preview (and again at confirm) the pending observations tagged to
+ * the feature or its tasks are folded into its Record (see DrainWork). This
+ * reaches only the graduating wolf's own pool (the durable pool, or on pi the
+ * current session's ledger). Other wolves' pools and unconsolidated ledgers of
+ * earlier pi sessions are NOT drained: their tagged observations are discarded
+ * and logged at their next consolidation, once the item is archived.
+ *
  * Den topic ids: `work-<domain>-<id>` (the item), `…~<slug>` (splits) and the
  * initiative's own `work-<domain>-<initiativeId>` (a stable alias key).
  */
@@ -248,7 +255,10 @@ export interface PreviewContribution {
  * is archived. Each path supplies its own: the durable pool (harness drainWorkObservations) or pi's ledger
  * (orchestrator.drainWork). It can only reach the pool of the wolf that runs the graduation.
  */
-export type DrainWork = (workIds: string[]) => Promise<{ folded: number }>;
+export type DrainWork = (workIds: string[]) => Promise<{ folded: number; /** Observations of an archived/deleted item, logged and dropped (not counted in folded). */ discarded?: number }>;
+
+/** The longest a graduation waits for the drain (the model and the Work API are involved). */
+export const DRAIN_TIMEOUT_MS = 3 * 60 * 1000;
 
 /** The ids a graduation drains: the item and everything under it (its tasks; an initiative's features and their tasks). */
 export function drainScope(item: WorkItem, all: WorkItem[]): string[] {
@@ -261,13 +271,17 @@ export function drainScope(item: WorkItem, all: WorkItem[]): string[] {
   return out;
 }
 
-async function drainFor(drain: DrainWork | undefined, item: WorkItem, all: WorkItem[], onProgress?: (m: string) => void): Promise<number> {
+async function drainFor(drain: DrainWork | undefined, item: WorkItem, all: WorkItem[], onProgress?: (m: string) => void, timeoutMs = DRAIN_TIMEOUT_MS): Promise<number> {
   if (!drain) return 0;
   onProgress?.("folding pending observations into the Record…");
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return (await drain(drainScope(item, all))).folded;
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs); });
+    return (await Promise.race([drain(drainScope(item, all)), timeout])).folded;
   } catch (err) {
     throw new Error(`graduation stopped, nothing archived: pending observations could not be folded into the Record (${err instanceof Error ? err.message : String(err)}). Try again.`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -333,14 +347,28 @@ export async function previewGraduation(opts: {
   roots?: KbRoots;
   /** Folds the pending observations first (every graduation entry point passes one). */
   drain?: DrainWork;
+  /** Drain time limit (default DRAIN_TIMEOUT_MS); tests shorten it. */
+  drainTimeoutMs?: number;
   onProgress?: (msg: string) => void;
 }): Promise<GraduationPreview> {
-  const { client, engine, id } = opts;
+  const { client, id } = opts;
   const all = (await client.query({})) ?? [];
   const item = all.find((i) => i.id === id);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
-  const folded = await drainFor(opts.drain, item, all, opts.onProgress);
+  const folded = await drainFor(opts.drain, item, all, opts.onProgress, opts.drainTimeoutMs);
+  return distillPreview(opts, item, all, folded);
+}
+
+async function distillPreview(opts: {
+  client: GraduationClient;
+  engine: Engine;
+  id: string;
+  today?: string;
+  roots?: KbRoots;
+  onProgress?: (msg: string) => void;
+}, item: WorkItem, all: WorkItem[], folded: number): Promise<GraduationPreview> {
+  const { client, engine, id } = opts;
   const { body } = await client.getWithBody(id);
   const input = buildGraduationInput({ item, all, body: body ?? "", roots: opts.roots });
   const isInitiative = item.kind === "initiative";
@@ -458,6 +486,8 @@ export interface ConfirmedGraduation {
   sent: string[];
   /** Items archived. */
   archived: string[];
+  /** Observations that arrived after the preview, folded into the Record and included in what was sent. */
+  lateFolded?: number;
 }
 
 /**
@@ -475,16 +505,27 @@ export async function confirmGraduation(opts: {
   ship: (id: string) => Promise<unknown>;
   /** Folds what was observed since the preview, before anything is sent or archived. */
   drain?: DrainWork;
+  drainTimeoutMs?: number;
+  /** Needed when the drain folds anything: the entry is distilled again from the updated Record. */
+  engine?: Engine;
+  today?: string;
   session?: string;
 }): Promise<ConfirmedGraduation> {
-  const { client, roots, wolf, preview } = opts;
+  const { client, roots, wolf } = opts;
+  let preview = opts.preview;
   if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
   const all = (await client.query({})) ?? [];
   const item = all.find((i) => i.id === preview.itemId);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? preview.itemId} is no longer ready to graduate`);
 
   // Anything observed since the preview is folded now; a failure stops here, before anything is shipped or archived.
-  await drainFor(opts.drain, item, all);
+  const late = await drainFor(opts.drain, item, all, undefined, opts.drainTimeoutMs);
+  if (late > 0) {
+    // The approved text predates those observations: distill again so the entry matches the Record that gets archived.
+    if (!opts.engine) throw new Error(`graduation stopped, nothing archived: ${late} observation(s) arrived after the preview and no model is available to include them. Run it again.`);
+    preview = await distillPreview({ client, engine: opts.engine, id: preview.itemId, roots, today: opts.today }, item, all, late);
+    if (preview.blocked) throw new Error(`cannot send: ${preview.blocked}`);
+  }
 
   if (!isComplete(item)) {
     await opts.ship(item.id as string);
@@ -530,5 +571,5 @@ export async function confirmGraduation(opts: {
   }
   const rest = archived.length - 1;
   await client.note(item.id as string, `Archived on graduation${rest > 0 ? ` with ${rest} item(s)` : ""}.`);
-  return { sent, archived };
+  return { sent, archived, ...(late > 0 ? { lateFolded: late } : {}) };
 }

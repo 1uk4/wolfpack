@@ -187,6 +187,36 @@ describe("graduation: preview then confirm", () => {
     expect(sentTopics()).toEqual([]);
   });
 
+  it("a drain that hangs times out with the same stop error, nothing distilled", async () => {
+    const { client, calls } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const hang = () => new Promise<{ folded: number }>(() => {});
+    const { engine, call } = engineOf(answer(f.id));
+    await expect(previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22", drain: hang, drainTimeoutMs: 20 })).rejects.toThrow(/nothing archived.*timed out.*Try again/);
+    expect(call).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("a drain at confirm that folds late observations distills again from the updated Record and reports them", async () => {
+    const bodies: Record<string, string> = { [f.id as string]: PLAN + RECORD };
+    const { client } = fakeClient([init, f, t1, t2], bodies);
+    const first = engineOf(answer(f.id));
+    const p = await previewGraduation({ client, engine: first.engine, id: f.id as string, today: "2026-10-22" });
+    const drain = vi.fn(async () => { bodies[f.id as string] = PLAN + RECORD + "\n- Late finding\n"; return { folded: 2 }; });
+    const redo = { contributions: [{ slug: "redo", title: "Redone", summary: "Includes the late finding.", body: `## How\n\nLate finding included.\n\n## History\n\n- 2026-10-22: redone (${f.id})` }] };
+    const second = engineOf(redo);
+    const done = await confirmGraduation({ client, roots, wolf: "owner", preview: p, ship: async () => {}, drain, engine: second.engine, today: "2026-10-22" });
+    expect((second.call.mock.calls[0] as any)[2].prompt).toContain("Late finding");
+    expect(done.lateFolded).toBe(2);
+    expect(sentTopics()).toEqual([f.id]); // the new distill, not the approved one (which also had the initiative's entry)
+  });
+
+  it("a late fold at confirm without a model stops with nothing archived", async () => {
+    const { client, calls } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const p = await previewGraduation({ client, engine: engineOf(answer(f.id)).engine, id: f.id as string, today: "2026-10-22" });
+    await expect(confirmGraduation({ client, roots, wolf: "owner", preview: p, ship: async () => {}, drain: async () => ({ folded: 1 }) })).rejects.toThrow(/nothing archived/);
+    expect(calls).toEqual([]);
+  });
+
   it("confirm writes the contributions under work-<d>-<id>, the initiative's topic and splits, then graduates and archives", async () => {
     const items = [init, f, t1, t2];
     const { client, calls } = fakeClient(items, { [f.id]: PLAN + RECORD });

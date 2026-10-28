@@ -118,7 +118,7 @@ export interface MemoryOrchestrator {
    * consolidation. Rejects when any stays pending, so graduation can stop before anything is archived. Only this
    * session's ledger is reachable.
    */
-  drainWork(workIds: string[]): Promise<{ folded: number }>;
+  drainWork(workIds: string[], opts?: { timeoutMs?: number }): Promise<{ folded: number; discarded: number }>;
 }
 
 /**
@@ -435,11 +435,22 @@ export function createOrchestrator(
     return result;
   }
 
-  function drainWork(workIds: string[]): Promise<{ folded: number }> {
-    return serialized(async () => {
+  function drainWork(workIds: string[], o: { timeoutMs?: number } = {}): Promise<{ folded: number; discarded: number }> {
+    const ms = o.timeoutMs ?? 3 * 60 * 1000;
+    // A hung model or Work API must not stall the memory queue: after the timeout the late result is ignored.
+    return serialized(() => {
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(new Error(`timed out after ${Math.round(ms / 1000)}s`)); }, ms); });
+      return Promise.race([drainBody(workIds, () => timedOut), timeout]).finally(() => clearTimeout(timer));
+    });
+  }
+
+  function drainBody(workIds: string[], cancelled: () => boolean): Promise<{ folded: number; discarded: number }> {
+    return (async () => {
       const ids = new Set(workIds);
       const mine = foldLedger(ledgerEvents).activeObservations.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
-      if (mine.length === 0) return { folded: 0 };
+      if (mine.length === 0) return { folded: 0, discarded: 0 };
       runtime.notify?.(`memory: folding ${mine.length} pending observation(s) into the Record for graduation`, "info");
       // No retry state: graduation tries now, and a 404 here is not a grace-period question.
       const outcomes = await consolidateWorkRecords({
@@ -449,6 +460,7 @@ export function createOrchestrator(
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
       const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+      if (cancelled()) throw new Error("cancelled");
       const done = mine.filter((o) => status.get(o.timestamp)?.status === "written" || status.get(o.timestamp)?.status === "discarded").map((o) => o.timestamp);
       if (done.length > 0) {
         appendEvent({ type: "observations_dropped", observationTimestamps: done, coversUpToId: foldLedger(ledgerEvents).latestCoverageId ?? "" });
@@ -458,8 +470,9 @@ export function createOrchestrator(
       if (discarded.length > 0 && poolRoot) appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
       const stuck = outcomes.find((o) => o.status === "pending");
       if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
-      return { folded: done.length - discarded.length };
-    });
+      runtime.notify?.(`memory: graduation drain: ${done.length - discarded.length} folded, ${discarded.length} discarded`, "info");
+      return { folded: done.length - discarded.length, discarded: discarded.length };
+    })();
   }
 
   function getActiveObservations(): Observation[] {

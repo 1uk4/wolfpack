@@ -745,6 +745,7 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
       await refreshActiveItem();
       updateWidget(ctx);
       ctx.ui.notify(`🎓 ${item.title} graduated and archived (${done.sent.length} contribution${done.sent.length === 1 ? "" : "s"} sent to Dewey).`, "info");
+      if (done.lateFolded) ctx.ui.notify(`${done.lateFolded} late observation(s) were folded in and included.`, "info");
       // Its last feature delivered → the initiative can be completed (never automatic).
       const after = await client.query({}) ?? [];
       const parent = initiative ? after.find((i) => i.id === initiative.id) : undefined;

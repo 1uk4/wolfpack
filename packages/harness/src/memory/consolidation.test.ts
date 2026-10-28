@@ -335,4 +335,46 @@ describe("drainWorkObservations (graduation)", () => {
     expect((await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["zzz"] })).folded).toBe(0);
     expect(poolLines()).toHaveLength(5);
   });
+
+  it("a hung model times out, frees the pool lock and leaves the observations; a later consolidation runs", async () => {
+    const m = setup();
+    const hang = { call: () => new Promise(() => {}) } as unknown as Engine;
+    await expect(drainWorkObservations({ wolfDen: den, engine: hang, workStore: m.workStore, workIds: ["f1"], timeoutMs: 30 })).rejects.toThrow(/timed out/);
+    expect(poolLines()).toHaveLength(5);
+    const r = await Promise.race([
+      drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("lock stuck")), 2000)),
+    ]);
+    expect((r as { folded: number }).folded).toBe(3);
+  });
+
+  it("partial failure: one group written, one pending; the pending one stays and a retry finishes it", async () => {
+    mkdirSync(dir(), { recursive: true });
+    writeFileSync(join(dir(), "observations.jsonl"), [o(1, { work: "fa" }), o(2, { work: "fb" })].map((l) => JSON.stringify(l)).join("\n") + "\n");
+    let failB = true;
+    const writes: string[] = [];
+    const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }) => schema.parse({ decisions: [], changes: ["x"], findings: [], problems: [] }) } as unknown as Engine;
+    const workStore = {
+      get: async (id: string) => ({ id, title: "T", kind: "task", stage: "in_build", body: "" }),
+      setBody: async (id: string) => { if (id === "fb" && failB) throw new Error("HTTP 502"); writes.push(id); },
+    };
+    await expect(drainWorkObservations({ wolfDen: den, engine, workStore, workIds: ["fa", "fb"] })).rejects.toThrow(/HTTP 502/);
+    expect(writes).toEqual(["fa"]);
+    expect(poolLines()).toEqual(["observation 2"]);
+    failB = false;
+    expect((await drainWorkObservations({ wolfDen: den, engine, workStore, workIds: ["fa", "fb"] })).folded).toBe(1);
+    expect(poolLines()).toEqual([]);
+  });
+
+  it("a consolidatePool running at the same time and a drain take turns on the pool file", async () => {
+    const m = setup();
+    const [a, b] = await Promise.all([
+      consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore }),
+      drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] }),
+    ]);
+    // every tagged observation was folded exactly once, between the two of them
+    expect(a.observationsProcessed + b.folded).toBeGreaterThanOrEqual(4);
+    expect(m.writes.length).toBeGreaterThanOrEqual(2);
+    expect(poolLines().filter((c: string) => c !== "observation 0")).toEqual([]);
+  });
 });

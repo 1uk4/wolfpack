@@ -75,8 +75,8 @@ const many = (step: FauxResponseStep): FauxResponseStep[] => Array.from({ length
 const profile = (tools: string) => `---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: ${tools}\n---\n\nYou are a test agent. Do what the brief says.\n`;
 const PROFILE = "---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: read, grep\n---\n\nYou are a test agent. Do what the brief says.\n";
 
-async function boot(agents: { step: FauxResponseStep }, root?: string): Promise<TestWolf> {
-  const w = await startTestWolf({ script: many(agents.step), ...(root ? { root } : {}) });
+async function boot(agents: { step: FauxResponseStep }, root?: string, modelRelease?: (sessionId: string) => void): Promise<TestWolf> {
+  const w = await startTestWolf({ script: many(agents.step), ...(root ? { root } : {}), ...(modelRelease ? { modelRelease } : {}) });
   // The wolf's own roster layer: <wolf-home>/agent/agents.
   const dir = join(w.root, "agent", "agents");
   mkdirSync(dir, { recursive: true });
@@ -868,5 +868,29 @@ describe("isolation of the tool set", () => {
     await parentSaw(tw, 'Sub-agent "tester" completed');
     const childCall = agents.calls.find((c) => c.child)!;
     for (const t of ["subagent_message", "subagents_list", "subagent_stop", '"subagent"']) expect(childCall.request).not.toContain(t);
+  });
+});
+
+describe("model release", () => {
+  const sessionIdOf = async (w: TestWolf, conversationId: string) => (await w.wolf.engine.conversations.providerSessionId(conversationId))!;
+
+  it("a child settling releases its conversation's provider session; home never does; a resume works and releases again", async () => {
+    const released: string[] = [];
+    const agents = scriptedAgents();
+    tw = await boot(agents, undefined, (id) => released.push(id));
+    await say(tw, "spawn: first job");
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    const [child] = await kids(tw);
+    const homeSession = await sessionIdOf(tw, (await tw.wolf.engine.conversations.root()).id);
+    expect(homeSession).toBeTruthy();
+    await vi.waitFor(() => expect(released).toHaveLength(1), { timeout: 4000 });
+    const childSession = released[0];
+    expect(childSession).not.toBe(homeSession);
+
+    await say(tw, "message[tester]: second job");
+    await parentSaw(tw, 'Sub-agent "tester" completed', 2);
+    await vi.waitFor(() => expect(released).toEqual([childSession, childSession]), { timeout: 4000 });
+    expect(released).not.toContain(homeSession);
+    expect((await texts(tw, child.id)).filter((t) => t.startsWith("CHILD_RESULT"))).toHaveLength(2);
   });
 });

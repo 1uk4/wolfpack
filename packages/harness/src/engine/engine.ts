@@ -12,6 +12,7 @@ import {
   ConversationBusy,
   createRegistry,
   Harness,
+  ProviderDoc,
   watchEvents,
   type AgentChange,
   type Conversation,
@@ -115,6 +116,8 @@ export interface WolfEngine {
     createOwned(ownerId: string, init?: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
     /** Terminate a subagent's owner task (it is abort-marked and ends `aborted`); the owned conversation's work is aborted with it. */
     releaseOwner(taskId: string): Promise<void>;
+    /** The id the model provider sees as the conversation's stream `sessionId` (undefined until its first request). */
+    providerSessionId(id: string): Promise<string | undefined>;
   };
   /**
    * @internal test seam: the opened pi-durable Harness, for tests that must create forks and task-owned
@@ -253,6 +256,9 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
       },
       async releaseOwner(taskId) {
         await harness.abortTask(Number(taskId) as never, ctx);
+      },
+      async providerSessionId(id) {
+        return (await harness.snapshot(ProviderDoc, Number(id) as never, ctx))?.sessionId;
       },
     },
     harness,

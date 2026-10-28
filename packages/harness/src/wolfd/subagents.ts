@@ -66,6 +66,8 @@ export interface SubagentOptions {
   getConversation(id: string): Promise<EngineConversation | undefined>;
   /** Terminate a child's owner task (the parked task its conversation hangs under). */
   releaseOwner(taskId: string): Promise<void>;
+  /** Free what the model provider holds for a settled child's conversation (the subscription transport's parked claude process). A resume starts cold. */
+  releaseModel?(conversationId: string): Promise<void>;
   /** A conversation owned by a parked task of `ownerId`. */
   createOwned(ownerId: string, init: ConfigureOptions): Promise<{ conversation: EngineConversation; taskId: string }>;
   /** A tier resolved through the wolf's model table. Throws for a tier it cannot resolve. */
@@ -909,6 +911,15 @@ ${text}`;
     return p;
   }
 
+  /** The child's conversation is at rest for good (until a resume): let the model provider drop its warm state. Never throws. */
+  private async releaseModelOf(rec: ChildRecord): Promise<void> {
+    try {
+      await this.opts.releaseModel?.(rec.conversationId);
+    } catch (e) {
+      this.port.onError(e);
+    }
+  }
+
   /** Terminal children whose owner task waits for the conversation to go idle. */
   private readonly releaseWaiting = new Set<string>();
   private static readonly IDLE_GRACE_MS = 200;
@@ -929,6 +940,7 @@ ${text}`;
       if (rec.state !== "done" && rec.state !== "failed" && rec.state !== "stopped") return; // resumed meanwhile: its own end releases
       if (busy()) return; // the next turn end comes back here
       this.releaseWaiting.delete(rec.id);
+      void this.releaseModelOf(rec);
       void this.releaseOwnerOf(rec);
     }, SubagentManager.IDLE_GRACE_MS);
     t.unref?.();
@@ -938,6 +950,7 @@ ${text}`;
   async releaseParent(parentThreadId: string): Promise<void> {
     for (const rec of this.records.filter((r) => r.parentThreadId === parentThreadId)) {
       if (rec.state === "running" || rec.state === "queued" || rec.state === "waiting") await this.stop(rec.id, "parent");
+      await this.releaseModelOf(rec);
       await this.releaseOwnerOf(rec);
       this.guard.releaseAll(rec.id);
     }

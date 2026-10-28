@@ -8,7 +8,7 @@ import { buildWolfModels } from "./models.js";
 
 const fakeProvider = () => {
   const base = createProvider({ id: "claude-bridge", auth: { check: async () => "test" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
-  return Object.assign(base, { shutdown: vi.fn(), liveQueries: 0 }) as unknown as ClaudeBridgeProvider;
+  return Object.assign(base, { shutdown: vi.fn(), release: vi.fn(() => 0), liveQueries: 0 }) as unknown as ClaudeBridgeProvider;
 };
 
 describe("buildWolfModels", () => {
@@ -31,6 +31,14 @@ describe("buildWolfModels", () => {
     expect(m.models!.getProvider("anthropic")).toBeUndefined();
     m.shutdown();
     expect(provider.shutdown).toHaveBeenCalledOnce();
+  });
+
+  it("release reaches the bridge provider with the session id; on the API transport it is a no-op", () => {
+    const provider = fakeProvider();
+    const sub = buildWolfModels({ transport: "subscription", provider: "claude-bridge" }, { cwd: "/w", createProvider: () => provider });
+    sub.release("sess-1");
+    expect(provider.release).toHaveBeenCalledWith("sess-1");
+    expect(() => buildWolfModels({ transport: "api", provider: "anthropic" }, { cwd: "/w" }).release("sess-1")).not.toThrow();
   });
 
   it("subscription transport with a mismatched provider id is refused", () => {

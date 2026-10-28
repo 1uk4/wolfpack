@@ -12,6 +12,8 @@ export interface WolfModels {
   models?: WolfEngineOptions["models"];
   /** Kills any parked SDK queries. Call on wolf shutdown. */
   shutdown(): void;
+  /** Close the claude children parked for one conversation (its provider session id). No-op on the metered API transport. */
+  release(sessionId: string): void;
 }
 
 export interface BuildWolfModelsOptions {
@@ -24,7 +26,7 @@ export interface BuildWolfModelsOptions {
 export const NO_TOOL_SEARCH = { ENABLE_TOOL_SEARCH: "false" } as const;
 
 export function buildWolfModels(model: Pick<ResolvedWolfModel, "transport" | "provider">, opts: BuildWolfModelsOptions): WolfModels {
-  if (model.transport !== "subscription") return { shutdown: () => {} };
+  if (model.transport !== "subscription") return { shutdown: () => {}, release: () => {} };
   if (model.provider !== PROVIDER_ID) {
     throw new Error(`subscription transport resolved provider "${model.provider}", expected "${PROVIDER_ID}"`);
   }
@@ -35,5 +37,5 @@ export function buildWolfModels(model: Pick<ResolvedWolfModel, "transport" | "pr
   const provider = (opts.createProvider ?? createClaudeBridgeProvider)({ cwd: opts.cwd, env: { ...(opts.env ?? process.env), ...NO_TOOL_SEARCH } });
   const models = createModels();
   models.setProvider(provider);
-  return { models, shutdown: () => provider.shutdown() };
+  return { models, shutdown: () => provider.shutdown(), release: (sessionId) => void provider.release(sessionId) };
 }

@@ -59,6 +59,8 @@ export interface StartWolfOptions {
   log?: (line: string) => void;
   /** @internal test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
   models?: Models;
+  /** @internal test seam: replaces the model provider's per-conversation release (default: the bridge's, or a no-op on the API). */
+  modelRelease?: (sessionId: string) => void;
   /**
    * @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks).
    * Additive, except that one named like a configured wolf.yaml extension (`wolfpack-memory`) replaces it.
@@ -174,7 +176,7 @@ async function startConfigured(
   if (opts.socket) await prepareSocketPath(opts.socket);
 
   mkdirSync(config.den, { recursive: true });
-  const wolfModels = opts.models ? { models: opts.models, shutdown: () => {} } : buildWolfModels(model, { cwd, env });
+  const wolfModels = opts.models ? { models: opts.models, shutdown: () => {}, release: () => {} } : buildWolfModels(model, { cwd, env });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
     ...(wolfModels.models ? { models: wolfModels.models } : {}),
     extensions,
@@ -230,6 +232,10 @@ async function startConfigured(
         slotDir: env.WOLFPACK_SUBAGENT_SLOTS || join(opts.home ?? homedir(), ".wolfpack", "run", "subagent-slots"),
         getConversation: (id) => engine.conversations.get(id),
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
+        releaseModel: async (conversationId) => {
+          const sessionId = await engine.conversations.providerSessionId(conversationId);
+          if (sessionId) (opts.modelRelease ?? wolfModels.release)(sessionId);
+        },
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
         resolveTier: (tier) => {
           const m = resolveWolfModel(config, tier, table);

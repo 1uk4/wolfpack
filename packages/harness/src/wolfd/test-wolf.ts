@@ -34,6 +34,8 @@ export interface TestWolfOptions {
   root?: string;
   /** Extra env for the wolf (e.g. WOLFPACK_SUBAGENT_SLOTS / WOLFPACK_SUBAGENT_HOST_MAX to share a slot dir between test wolves). */
   env?: Record<string, string>;
+  /** Spy for the model provider's per-conversation release (called with the conversation's provider session id). */
+  modelRelease?: (sessionId: string) => void;
   /** Replaces the librarian sweep's tick (a librarian wolf only). */
   sweepTick?: StartWolfOptions["sweepTick"];
 }
@@ -87,6 +89,7 @@ export async function startTestWolf(opts: TestWolfOptions): Promise<TestWolf> {
       env: { WOLFPACK_MODELS_FILE: join(root, "models.json"), ...(opts.env ?? {}) },
       home: root,
       models: scripted.models,
+      ...(opts.modelRelease ? { modelRelease: opts.modelRelease } : {}),
       ...(opts.sweepTick ? { sweepTick: opts.sweepTick } : {}),
       extraExtensions: (rt) => {
         const extra = opts.hooks?.extensions;

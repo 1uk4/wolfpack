@@ -377,22 +377,17 @@ describe("finishing the last task: stay bound until graduated", () => {
     expect(lastStatus()).toContain("⛓ unbound");
   });
 
-  it("a lone Inbox task stays bound to itself, ready to graduate, until graduated", async () => {
+  it("a lone Inbox task is complete when shipped: unbound and told; graduating stays the owner's call", async () => {
     const inbox = api.add({ kind: "feature", title: "Inbox", container: true });
     const t = task({ partOf: inbox.id, title: "Stray fix" });
-    const other = task({ partOf: inbox.id, title: "Another stray" });
-    const { handle, call, confirm } = await system();
+    task({ partOf: inbox.id, title: "Another stray" });
+    const { handle, call } = await system();
     await call("task_bind", { id: t.id });
     const r = text(await call("task_done"));
-    expect(r.split("\n").at(-1)).toBe("Bound to Stray fix (shipped — ready to graduate)");
+    expect(r).toContain(`Stray fix (${t.id}) is complete; you are no longer bound to it.`);
+    expect(r).toContain("ready to graduate on its own");
     expect(r).not.toContain("→ Next"); // the Inbox's other tasks are not a sequence
-    expect(handle.getBoundWork()).toEqual({ taskId: t.id });
-    expect(lastStatus()).toContain("⛓ Stray fix · ready to graduate");
-
-    confirm.mockImplementation(async () => ({ sent: ["x"], archived: [t.id as string] }));
-    await handle.graduate(ctx, t.id as string);
     expect(handle.getBoundWork()).toBeNull();
-    expect(other.stage).not.toBe("archived");
   });
 });
 

@@ -70,6 +70,7 @@ import {
   bindingLabel,
   readyBoundContext,
   readyBoundReply,
+  completeLine,
   withHeadsUp,
   shouldBindOnCreate,
   createSerial,
@@ -1602,15 +1603,12 @@ export function initWorkSystem(pi: ExtensionAPI, config: WorkSystemConfig = {}):
           const parent = shipped.partOf ? all.find((i) => i.id === shipped.partOf) : undefined;
           const realFeature = parent && parent.kind === "feature" && !parent.container ? parent : undefined;
           if (!realFeature) {
-            // A loose task (Inbox or no parent) graduates on its own: stay bound to it.
+            // A shipped loose task (Inbox or no parent) is complete: unbound. Graduating it stays the owner's call.
             if (readyToGraduate(shipped, all)) {
-              await refreshActiveItem();
-              updateWidget(ctx);
               resultText += `\n🎓 "${shipped.title}" is done and ready to graduate on its own: press g on it in /task.`;
-              resultText += `\n${readyBoundReply(shipped)}`;
-            } else {
-              unbindTask(ctx);
             }
+            unbindTask(ctx);
+            resultText += `\n${completeLine(shipped.title, shipped.id as string)}`;
           } else {
             // Same pick as the selector: first open, unblocked task, in progress first.
             const nextItem = firstTask(rightRows(all, realFeature.id as string), all) ?? null;

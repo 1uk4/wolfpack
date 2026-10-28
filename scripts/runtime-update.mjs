@@ -36,7 +36,14 @@ export function worktrees(cwd) {
 	return map;
 }
 
-const isDirty = (wt) => git(wt, "status", "--porcelain", "--untracked-files=no") !== "";
+/** Tracked-or-not files that build/dev tooling rewrites; they never make a tree "dirty". */
+export const GENERATED = ["apps/console/next-env.d.ts"];
+
+export const isDirty = (wt) =>
+	execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: wt, encoding: "utf8" }) // not git(): trim() would eat the first status column
+		.split("\n")
+		.filter(Boolean)
+		.some((l) => !GENERATED.includes(l.slice(3)));
 
 const isDoc = (f) => /^docs\//.test(f) || /\.mdx?$/.test(f);
 const isTest = (f) => /\.test\.[cm]?[tj]sx?$/.test(f) || /(^|\/)(__tests__|fixtures)\//.test(f);

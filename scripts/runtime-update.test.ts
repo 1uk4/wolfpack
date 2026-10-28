@@ -107,6 +107,16 @@ describe("runtime-update", () => {
 		expect(g(intWt, "rev-parse", "HEAD")).not.toBe(g(featWt, "rev-parse", "HEAD"));
 	});
 
+	it("ignores generated files when checking for a dirty tree", async () => {
+		commit(intWt, "apps/console/next-env.d.ts", "a");
+		g(rtWt, "merge", "-q", "--ff-only", "wolf/1uk4");
+		fs.writeFileSync(path.join(rtWt, "apps/console/next-env.d.ts"), "regenerated");
+		const { r } = await run([]);
+		expect(r.exitCode).toBe(0);
+		fs.writeFileSync(path.join(rtWt, "README.md"), "dirty");
+		expect((await run([])).r.exitCode).toBe(1);
+	});
+
 	it("fails clearly when a branch is not checked out", async () => {
 		const logs: string[] = [];
 		const r = await runUpdate({ argv: [], env: { RUNTIME_BRANCH: "nope" }, cwd: intWt, steps: steps(), log: () => {}, warn: (m: string) => logs.push(m) });

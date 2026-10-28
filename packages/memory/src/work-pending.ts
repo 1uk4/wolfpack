@@ -48,9 +48,10 @@ export class WorkPendingState {
   private dirty = false;
   private file: string;
 
-  constructor(root: string, private now: () => number = Date.now) {
-    this.file = join(poolDir(root), "work-state.json");
-    try { this.data = JSON.parse(readFileSync(this.file, "utf-8")) as StateFile; } catch { this.data = {}; }
+  /** `root` undefined: in-memory only (nothing read or written). */
+  constructor(root: string | undefined, private now: () => number = Date.now) {
+    this.file = root ? join(poolDir(root), "work-state.json") : "";
+    if (root) try { this.data = JSON.parse(readFileSync(this.file, "utf-8")) as StateFile; } catch { this.data = {}; }
   }
 
   /** False while the group waits out its backoff. */
@@ -86,7 +87,7 @@ export class WorkPendingState {
   }
 
   save(): void {
-    if (!this.dirty) return;
+    if (!this.dirty || !this.file) return;
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       const tmp = `${this.file}.tmp`;

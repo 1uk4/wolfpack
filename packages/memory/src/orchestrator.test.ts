@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -263,7 +263,7 @@ describe("orchestrator work tagging and Records", () => {
   it("an infra failure keeps the tagged observations pending for the next run", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0]]]);
     const s = store({ "work-t1": { title: "T", kind: "task", stage: "in_build", body: "" } }, true);
-    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, denRoot: cwd, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
     await orch.processChunks([chunk("c1")]);
     await orch.consolidateNow();
 
@@ -293,7 +293,7 @@ describe("orchestrator work tagging and Records", () => {
   it("observations of an archived item are discarded (logged), never sent to the den", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0], OBS[1]]]);
     const s = store({ "work-t1": { title: "T", kind: "task", stage: "archived", body: "" } });
-    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, denRoot: cwd, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
     await orch.processChunks([chunk("c1")]);
     await orch.consolidateNow();
 
@@ -317,6 +317,25 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.consolidate.join("\n")).not.toContain(OBS[0].content);
     expect(prompts.consolidate.join("\n")).toContain(OBS[1].content);
     expect(orch.getActiveObservations().filter((o) => o.work)).toHaveLength(1);
+  });
+
+  it("without a den (no denRoot, no WOLF_DEN) nothing is written to the cwd; the drop is still recorded, with one warning", async () => {
+    const saved = process.env.WOLF_DEN;
+    delete process.env.WOLF_DEN;
+    try {
+      const { engine } = engineWithRecord([[OBS[0]]]);
+      const s = store({ "work-t1": { title: "T", kind: "task", stage: "archived", body: "" } });
+      const warnings: string[] = [];
+      const rt = { ...makeRuntime(cwd), notify: (m: string, l?: string) => { if (l === "warning") warnings.push(m); } };
+      const orch = createOrchestrator(engine, rt as typeof rt, { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
+      await orch.processChunks([chunk("c1")]);
+      await orch.consolidateNow();
+      expect(orch.getActiveObservations()).toEqual([]);
+      expect(existsSync(join(cwd, ".memory", "pool"))).toBe(false);
+      expect(warnings.filter((w) => w.includes("no den configured"))).toHaveLength(1);
+    } finally {
+      if (saved !== undefined) process.env.WOLF_DEN = saved;
+    }
   });
 
   it("with no Work API the tagged observations stay pending in the pool, never the den", async () => {

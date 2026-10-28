@@ -65,7 +65,7 @@ export interface OrchestratorConfig {
   getBoundWork?: () => BoundWork | null | undefined;
   /** Where Records are written (the Work API). Absent: tagged observations fall back to the den. */
   workRecordStore?: WorkRecordStore;
-  /** The wolf's den root: the discard log and retry state live in `<denRoot>/.memory/pool/` (default: the runtime's cwd). */
+  /** The wolf's den root: the discard log and retry state live in `<denRoot>/.memory/pool/` (default: WOLF_DEN; none: not persisted). */
   denRoot?: string;
 }
 
@@ -242,6 +242,8 @@ export function createOrchestrator(
     return run;
   }
 
+  let warnedNoDen = false;
+
   function runConsolidation(forceAll: boolean = false): Promise<void> {
     return serialized(() => consolidatePool(forceAll));
   }
@@ -274,8 +276,13 @@ export function createOrchestrator(
     const heldWork = new Set<string>();
     const tagged = promote.filter(isTagged);
     if (tagged.length > 0) {
-      const poolRoot = cfg.denRoot ?? runtime.cwd;
-      const state = new WorkPendingState(poolRoot);
+      // Never the cwd: on the pi path that is the project being coded in, not the den.
+      const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
+      if (!poolRoot && !warnedNoDen) {
+        warnedNoDen = true;
+        runtime.notify?.("memory: no den configured (denRoot / WOLF_DEN): discarded work observations are not logged to a file", "warning");
+      }
+      const state = new WorkPendingState(poolRoot, undefined);
       runtime.notify?.(`memory: updating Records from ${tagged.length} work observation(s)`, "info");
       const outcomes = await consolidateWorkRecords({
         engine,
@@ -303,7 +310,7 @@ export function createOrchestrator(
       }
       // After the drop is recorded, so a failed drop does not log the same discards twice.
       if (discarded.length > 0) {
-        appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+        if (poolRoot) appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
         runtime.notify?.(`memory: ${discarded.length} work observation(s) discarded (item archived or deleted)`, "info");
       }
     }

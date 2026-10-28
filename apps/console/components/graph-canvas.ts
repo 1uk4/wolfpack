@@ -54,6 +54,8 @@
 
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
+import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "../src/core/dep-draw-list.ts";
+import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH } from "../src/core/dep-palette.ts";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import {
@@ -98,6 +100,8 @@ export interface CanvasNode {
 	/** Multiplier on the labelZoom gate: below 1 the label shows only after
 	 *  zooming further in (default 1). */
 	labelGate?: number;
+	/** Work with an unshipped prerequisite: drawn with an outer ring. */
+	blocked?: boolean;
 }
 
 /** One undirected-looking edge (no arrowheads; direction is irrelevant on
@@ -129,6 +133,11 @@ export interface CanvasColors {
 export interface CanvasData {
 	nodes: CanvasNode[];
 	edges: CanvasEdge[];
+	/** Dependency edges, prerequisite -> dependent: arrows drawn only when
+	 *  zoomed into a Factory region (see buildDepDrawList). */
+	depEdges?: CanvasEdge[];
+	/** Dependency edges inside one Factory: weak layout springs. */
+	depSprings?: CanvasEdge[];
 	/** Hierarchy depth per node id, for the depth anchoring (domain 0 →
 	 *  section → entry → work). Absent = no anchoring. */
 	depths?: ReadonlyMap<string, number>;
@@ -645,6 +654,7 @@ export class GraphCanvasRenderer {
 	/** Node paths grouped by look (colour × disc/ring × dim × outline), so a
 	 *  frame is one fill/stroke per group, not per node. */
 	private nodeGroups: NodeGroup[] = [];
+	private route: DepRouteSelection | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private faintShaftsPath: Path2D = new Path2D();
 	private geometryReady = false;
@@ -847,6 +857,13 @@ export class GraphCanvasRenderer {
 			this.sim.alpha(1);
 			this.simActive = true;
 		}
+		this.markDirty();
+	}
+
+	/** The selected dependency route (bright arrows, dimmed shipped nodes,
+	 *  parallel highlight), or null for none. */
+	setRoute(route: DepRouteSelection | null): void {
+		this.route = route;
 		this.markDirty();
 	}
 
@@ -1249,6 +1266,76 @@ export class GraphCanvasRenderer {
 		this.viewH = h;
 	}
 
+	private drawDependencyLayer(ctx: CanvasRenderingContext2D, ratio: number, k: number, w: number, h: number): void {
+		const data = this.data;
+		if (!data) return;
+		const visible = this.visible;
+		const route = this.route;
+		ctx.save();
+		// Blocked rings (always on) and the route's node halos.
+		for (const n of data.nodes) {
+			if (visible && !visible.has(n.id)) continue;
+			const r = this.radiusOf(n);
+			if (n.blocked) {
+				ctx.globalAlpha = n.dim ? DIM_ALPHA : 1;
+				ctx.strokeStyle = DEP_COLORS.blockedRing;
+				ctx.lineWidth = r * DEP_STYLE.blockedRingWeight;
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, r * DEP_STYLE.blockedRingScale, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+			if (route && route.nodes.has(n.id)) {
+				ctx.globalAlpha = route.done.has(n.id) ? DEP_STYLE.doneAlpha : 1;
+				ctx.strokeStyle = route.parallel.has(n.id) ? DEP_COLORS.parallel : DEP_COLORS.route;
+				ctx.lineWidth = r * DEP_STYLE.haloWeight;
+				ctx.beginPath();
+				ctx.arc(n.x, n.y, r * DEP_STYLE.haloScale, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+		}
+		// Arrows.
+		const positions = new Map<string, { x: number; y: number }>();
+		for (const n of data.nodes) positions.set(n.id, n);
+		const { x: tx, y: ty } = this.transform;
+		const list = buildDepDrawList({
+			edges: data.depEdges ?? [],
+			factories: data.subClusters ?? [],
+			positions,
+			viewport: { minX: -tx / k, minY: -ty / k, maxX: (w - tx) / k, maxY: (h - ty) / k },
+			ratio,
+			visible,
+			route,
+		});
+		const head = DEP_STYLE.headLength / k;
+		ctx.lineCap = "round";
+		ctx.lineJoin = "round";
+		const stroke = (a: DepArrow): void => {
+			const from = this.nodeById.get(a.from);
+			const to = this.nodeById.get(a.to);
+			if (!from || !to) return;
+			const g = edgeGeometry(from, to, this.radiusOf(from), this.radiusOf(to));
+			if (!g) return;
+			const color = a.bright ? DEP_COLORS.route : DEP_COLORS.faintDep;
+			ctx.globalAlpha = a.bright ? 1 : DEP_STYLE.faintAlpha;
+			ctx.strokeStyle = color;
+			ctx.fillStyle = color;
+			ctx.lineWidth = (a.bright ? DEP_STYLE.routeWidth : DEP_STYLE.faintWidth) / k;
+			ctx.beginPath();
+			ctx.moveTo(g.from.x, g.from.y);
+			ctx.lineTo(g.to.x, g.to.y);
+			ctx.stroke();
+			const ang = Math.atan2(g.to.y - g.from.y, g.to.x - g.from.x);
+			ctx.beginPath();
+			ctx.moveTo(g.to.x, g.to.y);
+			ctx.lineTo(g.to.x - head * Math.cos(ang - 0.4), g.to.y - head * Math.sin(ang - 0.4));
+			ctx.lineTo(g.to.x - head * Math.cos(ang + 0.4), g.to.y - head * Math.sin(ang + 0.4));
+			ctx.closePath();
+			ctx.fill();
+		};
+		for (const a of list.arrows) stroke(a);
+		ctx.restore();
+	}
+
 	/** Derive ALL world geometry from data + visibility + settings.
 	 *  Runs only when geoVersion moves — never per frame, never per camera
 	 *  change. Zoom/pan pay zero geometry math, only rasterization. Sizes
@@ -1344,6 +1431,7 @@ export class GraphCanvasRenderer {
 			chargeStrength: t.chargeStrength,
 			linkStrength: t.linkStrength,
 			linkDistance: t.linkDistance,
+			depSprings: data.depSprings?.length ? { edges: data.depSprings, strength: DEP_SPRING_STRENGTH } : undefined,
 			clusterPull:
 				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,
 			depthAnchor:
@@ -1732,6 +1820,10 @@ export class GraphCanvasRenderer {
 			}
 		}
 		ctx.globalAlpha = 1;
+
+		// 5. Dependency layer: blocked rings, route halos, then (zoomed into
+		//    a Factory only) the arrows. All colours from dep-palette.
+		this.drawDependencyLayer(ctx, ratio, k, w, h);
 
 		// 6. Node labels — one global gate (per-node gate multiplier: big
 		// nodes label later), faded together. World-scaled with the graph

@@ -133,6 +133,8 @@ export interface NodeStyle {
 	/** Multiplier on the labelZoom gate: 1 = the global gate, below 1 = the
 	 *  label appears only after zooming further in. */
 	labelGate: number;
+	/** Work only: has a prerequisite (dependsOn, task or feature) that is not shipped or archived. */
+	blocked: boolean;
 }
 
 /** Work outline weight by stage: heavier as the item progresses. */
@@ -148,27 +150,48 @@ export const WORK_RING_WEIGHT: Readonly<Record<string, number>> = {
 };
 const DEFAULT_RING_WEIGHT = 0.25;
 
-/** Kind (and, for work, stage) → draw style. */
-export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage">): NodeStyle {
+/** Stages whose work no longer holds anything up. */
+const DONE_STAGES: ReadonlySet<string> = new Set(["shipped", "live", "archived"]);
+/** Past shipped: drawn as a dim filled disc. */
+const SHIPPED_STAGES: ReadonlySet<string> = new Set(["shipped", "live"]);
+
+/** The work nodes with a dependsOn prerequisite (task or feature) that is
+ *  not shipped or archived. A prerequisite missing from the payload (e.g.
+ *  archived work left out of the view) does not block. */
+export function blockedWorkIds(graph: Pick<KbGraph, "nodes" | "edges">): Set<string> {
+	const stageOf = new Map<string, string>();
+	for (const n of graph.nodes) if (n.kind === "work") stageOf.set(n.id, n.stage ?? "plan");
+	const out = new Set<string>();
+	for (const e of graph.edges) {
+		if (e.kind !== "dependsOn") continue;
+		const dep = stageOf.get(e.target);
+		if (stageOf.has(e.source) && dep !== undefined && !DONE_STAGES.has(dep)) out.add(e.source);
+	}
+	return out;
+}
+
+/** Kind (and, for work, stage + blocked) → draw style. Work fill shows the
+ *  stage: shipped a dim disc, in_build a bright disc, plan and the rest an
+ *  outline (heavier as they progress); `blocked` adds the ring. */
+export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage">, blocked = false): NodeStyle {
 	switch (node.kind) {
 		case "domain":
-			return { radius: 3.2, shape: "disc", ring: 0, dim: false, labelGate: 0.5 };
+			return { radius: 3.2, shape: "disc", ring: 0, dim: false, labelGate: 0.5, blocked: false };
 		case "factory":
-			return { radius: 2.4, shape: "disc", ring: 0, dim: false, labelGate: 0.6 };
+			return { radius: 2.4, shape: "disc", ring: 0, dim: false, labelGate: 0.6, blocked: false };
 		case "section":
-			return { radius: 1.9, shape: "disc", ring: 0, dim: false, labelGate: 0.8 };
-		case "work":
-			return {
-				radius: 1.15,
-				shape: "ring",
-				ring: WORK_RING_WEIGHT[node.stage ?? ""] ?? DEFAULT_RING_WEIGHT,
-				dim: node.stage === "archived",
-				labelGate: 1,
-			};
+			return { radius: 1.9, shape: "disc", ring: 0, dim: false, labelGate: 0.8, blocked: false };
+		case "work": {
+			const stage = node.stage ?? "";
+			const base = { radius: 1.15, labelGate: 1, blocked };
+			if (SHIPPED_STAGES.has(stage)) return { ...base, shape: "disc", ring: 0, dim: true };
+			if (stage === "in_build") return { ...base, shape: "disc", ring: 0, dim: false };
+			return { ...base, shape: "ring", ring: WORK_RING_WEIGHT[stage] ?? DEFAULT_RING_WEIGHT, dim: stage === "archived" };
+		}
 		case "den-topic":
-			return { radius: 0.6, shape: "disc", ring: 0, dim: true, labelGate: 0.7 };
+			return { radius: 0.6, shape: "disc", ring: 0, dim: true, labelGate: 0.7, blocked: false };
 		default:
-			return { radius: 1, shape: "disc", ring: 0, dim: false, labelGate: 1 };
+			return { radius: 1, shape: "disc", ring: 0, dim: false, labelGate: 1, blocked: false };
 	}
 }
 
@@ -282,6 +305,17 @@ export function factoryClusters(
 	return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/** The dependency edges the layout may spring: both endpoints inside the same
+ *  Factory region. Anything touching the KB (entries, sections, den) is never
+ *  in a Factory cluster, so the KB layout is untouched. */
+export function factorySprings(
+	depEdges: ReadonlyArray<KbCanvasEdge>,
+	factories: ReadonlyArray<{ members: ReadonlyArray<string> }>,
+): KbCanvasEdge[] {
+	const sets = factories.map((f) => new Set(f.members));
+	return depEdges.filter((e) => sets.some((s) => s.has(e.from) && s.has(e.to)));
+}
+
 // ─── Canvas data ────────────────────────────────────────────────────────────
 
 /** One node as the renderer draws it (position added by the view). */
@@ -299,6 +333,10 @@ export interface KbCanvasEdge {
 export interface KbCanvasData {
 	nodes: KbCanvasNode[];
 	edges: KbCanvasEdge[];
+	/** dependsOn edges, prerequisite -> dependent (drawn only when zoomed into a Factory). */
+	depEdges: KbCanvasEdge[];
+	/** Dependency edges with both ends inside one Factory region: the layout's weak springs. */
+	depSprings: KbCanvasEdge[];
 	clusters: KbCluster[];
 	/** Factory sub-halos, nested inside the domain regions. */
 	subClusters: KbCluster[];
@@ -313,13 +351,14 @@ export interface KbCanvasData {
  *  dropped; edge direction is irrelevant on the canvas (no arrowheads). */
 export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanvasData {
 	const colors = domainColors(graph);
+	const blocked = blockedWorkIds(graph);
 	const ids = new Set<string>();
 	const nodes: KbCanvasNode[] = [];
 	const depths = new Map<string, number>();
 	for (const n of graph.nodes) {
 		if (ids.has(n.id)) continue;
 		ids.add(n.id);
-		nodes.push({ id: n.id, label: n.label, color: nodeColor(n, colors), ...nodeStyle(n) });
+		nodes.push({ id: n.id, label: n.label, color: nodeColor(n, colors), ...nodeStyle(n, blocked.has(n.id)) });
 		depths.set(n.id, depthOf(n));
 	}
 	const seen = new Set<string>();
@@ -331,7 +370,25 @@ export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanv
 		seen.add(key);
 		edges.push({ from: e.source, to: e.target });
 	}
-	return { nodes, edges, clusters: groupClusters(graph, opts.groupBy, colors), subClusters: factoryClusters(graph, colors), depths };
+	const depEdges: KbCanvasEdge[] = [];
+	const depSeen = new Set<string>();
+	for (const e of graph.edges) {
+		if (e.kind !== "dependsOn" || e.source === e.target || !ids.has(e.source) || !ids.has(e.target)) continue;
+		const key = `${e.target}|${e.source}`;
+		if (depSeen.has(key)) continue;
+		depSeen.add(key);
+		depEdges.push({ from: e.target, to: e.source });
+	}
+	const subClusters = factoryClusters(graph, colors);
+	return {
+		nodes,
+		edges,
+		depEdges,
+		depSprings: factorySprings(depEdges, subClusters),
+		clusters: groupClusters(graph, opts.groupBy, colors),
+		subClusters,
+		depths,
+	};
 }
 
 // ─── Search ─────────────────────────────────────────────────────────────────

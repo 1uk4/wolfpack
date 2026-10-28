@@ -196,6 +196,21 @@ describe("id consistency and edge cases", () => {
     // an empty API answer means no work (not the files)
     expect(ids(buildKbGraph({ kbBase: kb }, { work: [] }), "factory")).toEqual([]);
   });
+  it("work nodes carry stage, kind, parent (partOf) and dependsOn as typed edges, feature to feature included", () => {
+    const work = [
+      { id: "f1", domain: "alpha", kind: "feature", stage: "shipped" },
+      { id: "f2", domain: "alpha", kind: "feature", stage: "plan", dependsOn: ["f1"] },
+      { id: "t1", domain: "alpha", kind: "task", stage: "in_build", partOf: "f2", dependsOn: ["t0", "gone"] },
+      { id: "t0", domain: "alpha", kind: "task", stage: "plan", partOf: "f2" },
+    ];
+    const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work });
+    expect(g.nodes.find((n) => n.id === "work:t1")).toMatchObject({ workKind: "task", stage: "in_build" });
+    expect(g.nodes.find((n) => n.id === "work:f2")).toMatchObject({ workKind: "feature", stage: "plan" });
+    expect(g.edges).toContainEqual({ source: "work:t1", target: "work:f2", kind: "partOf" });
+    expect(g.edges).toContainEqual({ source: "work:t1", target: "work:t0", kind: "dependsOn" });
+    expect(g.edges).toContainEqual({ source: "work:f2", target: "work:f1", kind: "dependsOn" });
+    expect(g.edges.filter((e) => e.kind === "dependsOn" && e.target === "work:gone")).toEqual([]);
+  });
   it("an item whose parent is missing from the API answer attaches to the Factory", () => {
     const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work: [{ id: "w1", domain: "alpha", partOf: "w-missing" }] });
     expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:w1", kind: "hierarchy" });

@@ -34,6 +34,7 @@ import {
 } from "d3-force";
 import type { Position } from "./contracts.ts";
 import { seededRandom } from "./question-core.ts";
+import { DEP_SPRING_STRENGTH } from "./dep-palette.ts";
 
 /** A node the d3 simulation mutates (x/y/vx/vy; fx/fy = pinned). */
 export interface LayoutNode extends SimulationNodeDatum {
@@ -84,6 +85,9 @@ export interface SimOptions {
 	velocityDecay?: number;
 	/** Hierarchy-depth anchoring (see DepthAnchor). Off by default. */
 	depthAnchor?: DepthAnchor;
+	/** Weak extra springs along dependency edges (callers pass only edges
+	 *  inside a Factory, so the KB layout is untouched). */
+	depSprings?: { edges: ReadonlyArray<LayoutEdge>; strength?: number; distance?: number };
 	/** Cluster centroid pull (the "virtual node" without the node):
 	 *  members of each cluster accelerate toward their own cluster's
 	 *  centroid. Two O(n) passes per tick — cheaper than a real virtual
@@ -165,6 +169,36 @@ export function createGraphSimulation(
 		.alphaDecay(options.alphaDecay ?? 0.0228)
 		.velocityDecay(options.velocityDecay ?? 0.4)
 		.stop();
+
+	// Dependency springs: a hand-rolled, fixed-strength (NOT degree-scaled)
+	// Hooke spring per edge, far weaker than the hierarchy links. Edges with
+	// an unknown endpoint are ignored.
+	const ds = options.depSprings;
+	if (ds && ds.edges.length > 0) {
+		const strength = ds.strength ?? DEP_SPRING_STRENGTH;
+		const rest = ds.distance ?? linkDistance;
+		const idx = new Map(nodes.map((n, i) => [n.id, i]));
+		const pairs: Array<[number, number]> = [];
+		for (const e of ds.edges) {
+			const a = idx.get(e.from);
+			const b = idx.get(e.to);
+			if (a !== undefined && b !== undefined && a !== b) pairs.push([a, b]);
+		}
+		sim.force("depSprings", (alpha: number) => {
+			for (const [ai, bi] of pairs) {
+				const a = nodes[ai]!;
+				const b = nodes[bi]!;
+				const dx = (b.x ?? 0) - (a.x ?? 0);
+				const dy = (b.y ?? 0) - (a.y ?? 0);
+				const d = Math.hypot(dx, dy) || 1e-6;
+				const f = ((d - rest) / d) * strength * alpha;
+				a.vx = (a.vx ?? 0) + dx * f;
+				a.vy = (a.vy ?? 0) + dy * f;
+				b.vx = (b.vx ?? 0) - dx * f;
+				b.vy = (b.vy ?? 0) - dy * f;
+			}
+		});
+	}
 
 	// Gravity, mode-projected: in vertical mode the depth force OWNS the
 	// y axis, so gravity goes x-only (it would fight the level lines); in
@@ -322,6 +356,8 @@ export interface IncrementalLayoutOptions {
 	/** Hierarchy-depth anchoring (see DepthAnchor). `center` defaults to
 	 *  the anchored core's centroid. */
 	depthAnchor?: DepthAnchor;
+	/** Dependency springs inside a Factory (see SimOptions.depSprings). */
+	depSprings?: SimOptions["depSprings"];
 }
 
 /**
@@ -448,6 +484,7 @@ export function incrementalLayout(
 	});
 
 	const sim = createGraphSimulation(simNodes, edges, {
+		depSprings: options.depSprings,
 		gravity: {
 			x: cx,
 			y: cy,

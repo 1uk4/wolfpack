@@ -26,6 +26,7 @@
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
+import type { DepRouteSelection } from "../src/core/dep-draw-list.ts";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
@@ -157,6 +158,7 @@ export function GraphView({
 	focusId = null,
 	onFocusHandled,
 	controllerRef,
+	route = null,
 }: {
 	graph: KbGraph;
 	settings: GraphRenderSettings;
@@ -166,6 +168,8 @@ export function GraphView({
 	focusId?: string | null;
 	onFocusHandled?: (nodeId: string) => void;
 	controllerRef?: React.MutableRefObject<GraphViewController | null>;
+	/** The selected dependency route (ticket 3 supplies it): bright arrows, dimmed shipped nodes. */
+	route?: DepRouteSelection | null;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -298,7 +302,7 @@ export function GraphView({
 		if (!renderer || isEmpty || !storedLoaded) return;
 		const known = renderer.positions();
 		for (const [id, p] of storedRef.current) if (!known.has(id)) known.set(id, p);
-		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters });
+		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters, depSprings: { edges: canvasData.depSprings } });
 		if (added.length > 0) {
 			const batch: Record<string, Position> = {};
 			for (const id of added) {
@@ -311,6 +315,8 @@ export function GraphView({
 		renderer.setData({
 			nodes: canvasData.nodes.map((n) => ({ ...n, x: positions.get(n.id)!.x, y: positions.get(n.id)!.y })),
 			edges: canvasData.edges,
+			depEdges: canvasData.depEdges,
+			depSprings: canvasData.depSprings,
 			clusters: canvasData.clusters,
 			subClusters: canvasData.subClusters,
 			depths: canvasData.depths,
@@ -324,6 +330,11 @@ export function GraphView({
 			fontFamily: getComputedStyle(document.body).fontFamily,
 		});
 	}, [canvasData, isEmpty, storedLoaded]);
+
+	// Route selection: just marks the frame dirty (like settings).
+	useEffect(() => {
+		rendererRef.current?.setRoute(route);
+	}, [route, canvasData, isEmpty, storedLoaded]);
 
 	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
 	// re-layout, no camera touch. `isEmpty` in the deps: the renderer is

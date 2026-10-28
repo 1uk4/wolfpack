@@ -139,17 +139,16 @@ describe("nodeStyle (kind by size and style)", () => {
 		assert.equal(style("entry").ring, 0);
 	});
 
-	it("work outline weight grows with the stage; archived work is the lightest and dimmed", () => {
+	it("outlined work (not shipped / in build) has an outline weight that grows with the stage; archived is lightest and dimmed", () => {
 		const w = (stage: string) => style("work", stage).ring;
-		assert.ok(w("idea") < w("plan") && w("plan") < w("approved") && w("approved") < w("in_build"));
-		assert.ok(w("in_build") < w("shipped") && w("shipped") < w("live"));
+		assert.ok(w("idea") < w("plan") && w("plan") < w("approved"));
 		assert.equal(style("work", "archived").dim, true);
-		assert.equal(style("work", "in_build").dim, false);
 		assert.ok(w("archived") <= w("idea"));
 		assert.equal(Object.keys(WORK_RING_WEIGHT).length, 8);
 		assert.ok(style("work", "weird-stage").ring > 0, "unknown stage still gets a ring");
 		assert.ok(style("work", undefined).ring > 0);
 	});
+
 
 	it("den topics are dimmed; nothing else is", () => {
 		assert.equal(style("den-topic").dim, true);
@@ -239,8 +238,10 @@ describe("toCanvasData", () => {
 		assert.equal(data.nodes.find((n) => n.id === "ent:s1")!.color, "#abcdef", "override flows to nodes");
 		assert.equal(data.nodes.find((n) => n.id === "den:hal:t1")!.color, NEUTRAL_NODE_COLOR);
 		const w1 = data.nodes.find((n) => n.id === "work:w1")!;
-		assert.equal(w1.shape, "ring");
-		assert.equal(w1.ring, WORK_RING_WEIGHT.in_build);
+		assert.equal(w1.shape, "disc", "in_build work is a bright filled disc");
+		const w2 = data.nodes.find((n) => n.id === "work:w2")!;
+		assert.equal(w2.shape, "ring");
+		assert.equal(w2.ring, WORK_RING_WEIGHT.plan);
 	});
 
 	it("edges: only the structural hierarchy is drawn; dangling ends, self loops and duplicates are dropped", () => {

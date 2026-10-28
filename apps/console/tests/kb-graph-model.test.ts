@@ -16,6 +16,7 @@ import {
 	domainHue,
 	factoryClusters,
 	factoryShade,
+	kbShade,
 	hexToHsl,
 	focusRemedy,
 	focusStep,
@@ -204,7 +205,7 @@ describe("groupClusters", () => {
 			for (const c of groupClusters(g, mode)) {
 				if (c.id.startsWith("den:")) continue;
 				const members = g.nodes.filter((n) => c.members.includes(n.id));
-				assert.ok(members.every((m) => colors.get(m.domain!) === c.color), `${mode} ${c.id}`);
+				assert.ok(members.every((m) => kbShade(colors.get(m.domain!)!) === c.color), `${mode} ${c.id}`);
 			}
 		}
 	});
@@ -421,8 +422,19 @@ describe("factory sub-halo", () => {
 		for (const hex of [domainHue("wolfpack"), domainHue("snapjack"), "#abcdef"]) {
 			const a = hexToHsl(hex);
 			const b = hexToHsl(factoryShade(hex));
-			assert.ok(a.l - b.l > 0.07 && a.l - b.l < 0.13, `${hex}: ${a.l} -> ${b.l}`);
+			assert.ok(a.l - b.l > 0.2 || b.l <= 0.12 + 1e-6, `${hex}: ${a.l} -> ${b.l}`);
 			assert.ok(Math.abs(a.h - b.h) < 3 || Math.abs(a.h - b.h) > 357, `${hex} hue`);
+		}
+	});
+
+	it("kbShade keeps the hue and raises lightness, so KB and work regions differ by more than 0.3", () => {
+		for (const hex of [domainHue("wolfpack"), domainHue("snapjack"), "#abcdef"]) {
+			const a = hexToHsl(hex);
+			const k = hexToHsl(kbShade(hex));
+			const f = hexToHsl(factoryShade(hex));
+			assert.ok(k.l >= a.l, `${hex}: kb ${k.l} < ${a.l}`);
+			assert.ok(k.l - f.l > 0.3, `${hex}: kb ${k.l} vs work ${f.l}`);
+			assert.ok(Math.abs(a.h - k.h) < 3 || Math.abs(a.h - k.h) > 357, `${hex} hue`);
 		}
 	});
 

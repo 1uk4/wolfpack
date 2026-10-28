@@ -87,14 +87,24 @@ export function hexToHsl(hex: string): { h: number; s: number; l: number } {
 }
 
 /** How much darker (HSL lightness points, 0–1) the Factory sub-halo is than
- *  its domain's hue. The one tuning knob for the nested glow. */
-export const FACTORY_SHADE_LIGHTNESS_DROP = 0.1;
+ *  its domain's hue. Tuning knob for the work-item glow. */
+export const FACTORY_SHADE_LIGHTNESS_DROP = 0.25;
+
+/** How much lighter the KB (domain/section) regions are than the domain's hue,
+ *  so KB and work regions read as clearly different shades. */
+export const KB_SHADE_LIGHTNESS_RAISE = 0.12;
 
 /** The Factory sub-halo tint: the domain's hue and saturation at a lower
  *  lightness (so it reads as a sub-region of the domain's colour region). */
 export function factoryShade(domainHueHex: string): string {
 	const { h, s, l } = hexToHsl(domainHueHex);
-	return hslToHex(h, s, Math.max(0.15, l - FACTORY_SHADE_LIGHTNESS_DROP));
+	return hslToHex(h, s, Math.max(0.12, l - FACTORY_SHADE_LIGHTNESS_DROP));
+}
+
+/** The KB region tint: the domain's hue and saturation at a higher lightness. */
+export function kbShade(domainHueHex: string): string {
+	const { h, s, l } = hexToHsl(domainHueHex);
+	return hslToHex(h, s, Math.min(0.92, l + KB_SHADE_LIGHTNESS_RAISE));
 }
 
 /** A domain's colour: the owner's override (domains.yaml `color`, a valid
@@ -248,7 +258,8 @@ export function groupClusters(
 			continue;
 		}
 		if (!n.domain) continue;
-		const color = colors.get(n.domain) ?? NEUTRAL_NODE_COLOR;
+		const base = colors.get(n.domain);
+		const color = base ? kbShade(base) : NEUTRAL_NODE_COLOR;
 		const domainGroup = () => add(`dom:${n.domain}`, domainLabels.get(n.domain!) ?? n.domain!, color, n.id);
 		if (groupBy === "section") {
 			if (n.kind === "section") {

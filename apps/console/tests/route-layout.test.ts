@@ -151,3 +151,28 @@ describe("routeLineForce", () => {
 		assert.equal(sim.force("routeLine"), undefined);
 	});
 });
+
+import { computeWorkRoute as computeEntryRoute } from "../src/core/work-route.ts";
+import { toRouteSelection } from "../src/core/dep-route-adapter.ts";
+import { routeLinkSet as linkSetForEntry } from "../src/core/route-layout.ts";
+
+describe("route entry edges as springs", () => {
+	it("keeps entry edges (and drops other hierarchy links of members)", () => {
+		const nodes = [
+			{ id: "I", kind: "initiative", stage: "plan", parent: null, dependsOn: [] },
+			{ id: "F", kind: "feature", stage: "plan", parent: "I", dependsOn: [] },
+			{ id: "a", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
+			{ id: "x", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
+		];
+		const route = computeEntryRoute(nodes, "a", { entryViaParent: true });
+		const sel = toRouteSelection(route, null, "d");
+		const hierarchy = [
+			{ from: "work:a", to: "work:F" }, { from: "work:x", to: "work:F" },
+			{ from: "work:F", to: "work:I" }, { from: "work:I", to: "fac:d" },
+		];
+		const links = linkSetForEntry(hierarchy, sel.nodes, sel.edges, () => true).map((l) => `${l.from}|${l.to}`);
+		for (const k of ["fac:d|work:I", "work:I|work:F", "work:F|work:a"]) assert.ok(links.includes(k), k);
+		assert.ok(!links.includes("work:x|work:F"), "non-route child of F is detached from member F");
+		assert.ok(!links.includes("work:a|work:F"));
+	});
+});

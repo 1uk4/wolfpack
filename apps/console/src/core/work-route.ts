@@ -17,6 +17,18 @@ export interface WorkNode {
 /** Synthetic id of the Factory root every route starts from. */
 export const ROUTE_ROOT = "factory";
 
+/**
+ * Experiment switch. On: a route node with no in-route prerequisite enters
+ * from its PARENT (task -> feature -> initiative -> Factory), and a feature
+ * dependency G -> F runs G's terminal tasks -> F node -> F's entry tasks.
+ * Off: the original behaviour (Factory -> first step directly).
+ */
+export const ROUTE_ENTRY_VIA_PARENT = true;
+
+export interface RouteOptions {
+  entryViaParent?: boolean;
+}
+
 export interface RouteEdge {
   from: string;
   to: string;
@@ -24,6 +36,8 @@ export interface RouteEdge {
   implicit: boolean;
   /** Edge from the Factory root to a route entry. */
   root: boolean;
+  /** Hierarchy entry: parent -> child that has no in-route prerequisite. */
+  entry?: true;
 }
 
 export interface RouteStep {
@@ -48,7 +62,10 @@ export interface WorkRoute {
 
 const isDoneStage = (stage: string) => stage === "shipped" || stage === "archived";
 
-export function computeWorkRoute(nodes: readonly WorkNode[], targetId: string): WorkRoute {
+export function computeWorkRoute(
+  nodes: readonly WorkNode[], targetId: string, opts: RouteOptions = {},
+): WorkRoute {
+  const viaParent = opts.entryViaParent ?? ROUTE_ENTRY_VIA_PARENT;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const empty = (): WorkRoute => ({
     target: targetId, root: ROUTE_ROOT, steps: [], edges: [], parallelGroups: [],
@@ -93,15 +110,25 @@ export function computeWorkRoute(nodes: readonly WorkNode[], targetId: string): 
   const exits = (x: string) => (isFeatureWithTasks(x) ? terminals(x) : [x]);
   const entrances = (x: string) => (isFeatureWithTasks(x) ? entries(x) : [x]);
 
+  // A feature target ends at the feature node after all its own tasks.
+  const targetIsFeatureNode = isFeatureWithTasks(targetId);
+
   for (const n of nodes) {
+    // The target feature node ends the route, so it cannot also gate its own tasks.
+    const viaNode = viaParent && isFeatureWithTasks(n.id) && n.id !== targetId;
+    let gated = false;
     for (const d of n.dependsOn ?? []) {
       if (!byId.has(d)) continue;
       const implicit = isFeatureWithTasks(d) || isFeatureWithTasks(n.id);
-      for (const from of exits(d)) for (const to of entrances(n.id)) addEdge(from, to, implicit);
+      if (viaNode) {
+        for (const from of exits(d)) addEdge(from, n.id, true);
+        gated = true;
+      } else {
+        for (const from of exits(d)) for (const to of entrances(n.id)) addEdge(from, to, implicit);
+      }
     }
+    if (gated) for (const to of entries(n.id)) addEdge(n.id, to, true);
   }
-  // A feature target ends at the feature node after all its own tasks.
-  const targetIsFeatureNode = isFeatureWithTasks(targetId);
   if (targetIsFeatureNode) for (const t of terminals(targetId)) addEdge(t, targetId, false);
 
   const preds = new Map<string, string[]>();
@@ -156,10 +183,37 @@ export function computeWorkRoute(nodes: readonly WorkNode[], targetId: string): 
   for (const id of [...inRoute].sort()) if (!state.has(id)) visit(id);
   const edges = sub.filter((e) => !dropped.has(e));
 
+  // Hierarchy entry: a node with no in-route prerequisite enters from its parent
+  // (task -> feature -> initiative -> Factory). Parents join the route as nodes;
+  // a parent with no parent of its own enters from the Factory like any step 0.
+  const ancestorOnly = new Set<string>();
+  if (viaParent) {
+    const hasIn = new Set(edges.map((e) => e.to));
+    const queue = [...inRoute].sort();
+    const seen = new Set<string>();
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id) || hasIn.has(id)) continue;
+      seen.add(id);
+      let parent = byId.get(id)?.parent ?? null;
+      // The target feature ends the route; its tasks enter from the level above it.
+      if (parent && parent === targetId && targetIsFeatureNode) parent = byId.get(parent)?.parent ?? null;
+      if (!parent || !byId.has(parent)) continue;
+      edges.push({ from: parent, to: id, implicit: false, root: false, entry: true });
+      if (!inRoute.has(parent)) { inRoute.add(parent); ancestorOnly.add(parent); }
+      queue.push(parent);
+    }
+  }
+
   // Longest-path layering.
   const incoming = new Map<string, string[]>();
   for (const id of inRoute) incoming.set(id, []);
-  for (const e of edges) incoming.get(e.to)!.push(e.from);
+  const blockers = new Map<string, string[]>();
+  for (const id of inRoute) blockers.set(id, []);
+  for (const e of edges) {
+    incoming.get(e.to)!.push(e.from);
+    if (!e.entry) blockers.get(e.to)!.push(e.from);
+  }
   const level = new Map<string, number>();
   const levelOf = (id: string): number => {
     const known = level.get(id);
@@ -179,9 +233,9 @@ export function computeWorkRoute(nodes: readonly WorkNode[], targetId: string): 
   const done: Record<string, boolean> = {};
   const blocked: Record<string, boolean> = {};
   for (const id of inRoute) done[id] = isDoneStage(byId.get(id)!.stage);
-  for (const id of inRoute) blocked[id] = incoming.get(id)!.some((p) => !done[p]);
+  for (const id of inRoute) blocked[id] = blockers.get(id)!.some((p) => !done[p]);
 
-  const first = steps.findIndex((s) => s.nodes.some((id) => !done[id]));
+  const first = steps.findIndex((s) => s.nodes.some((id) => !done[id] && !ancestorOnly.has(id)));
   return {
     target: targetId, root: ROUTE_ROOT, steps, edges: routeEdges,
     parallelGroups: steps.filter((s) => s.parallel).map((s) => s.nodes),

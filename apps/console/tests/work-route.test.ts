@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  ROUTE_ROOT, computeWorkRoute, cursorChoose, cursorNext, cursorPrev, startCursor, type WorkNode,
+  ROUTE_ENTRY_VIA_PARENT, ROUTE_ROOT, computeWorkRoute as computeRoute, cursorChoose, cursorNext, cursorPrev, startCursor, type WorkNode,
 } from "../src/core/work-route.ts";
+
+// The legacy suites below pin today's behaviour (flag off).
+const computeWorkRoute = (nodes: readonly WorkNode[], target: string) =>
+  computeRoute(nodes, target, { entryViaParent: false });
 
 const t = (id: string, parent: string | null, deps: string[] = [], stage = "plan"): WorkNode =>
   ({ id, kind: "task", stage, parent, dependsOn: deps });
@@ -125,5 +129,84 @@ describe("route cursor", () => {
     c = cursorChoose(r, c, "c");
     assert.deepEqual(c, { step: 1, node: "c" });
     assert.deepEqual(cursorChoose(r, c, "d"), c);
+  });
+});
+
+describe("route entry via parent (flag on)", () => {
+  const on = (nodes: WorkNode[], target: string) => computeRoute(nodes, target, { entryViaParent: true });
+  const init = (id: string): WorkNode => ({ id, kind: "initiative", stage: "plan", parent: null, dependsOn: [] });
+  const fi = (id: string, parent: string | null, deps: string[] = []): WorkNode =>
+    ({ id, kind: "feature", stage: "in_build", parent, dependsOn: deps });
+  const keys = (r: ReturnType<typeof computeRoute>) => r.edges.map((e) => `${e.from}>${e.to}${e.entry ? "*" : ""}`).sort();
+
+  it("the flag is on by default", () => {
+    assert.equal(ROUTE_ENTRY_VIA_PARENT, true);
+    assert.deepEqual(computeRoute([init("I"), fi("F", "I"), t("a", "F")], "a"), on([init("I"), fi("F", "I"), t("a", "F")], "a"));
+  });
+
+  it("single task: Factory -> initiative -> feature -> task", () => {
+    const r = on([init("I"), fi("F", "I"), t("a", "F")], "a");
+    assert.deepEqual(steps(r), [["I"], ["F"], ["a"]]);
+    assert.deepEqual(keys(r), ["F>a*", "I>F*", "factory>I"]);
+    assert.deepEqual(r.edges[0], { from: ROUTE_ROOT, to: "I", implicit: false, root: true });
+    assert.equal(r.blocked.a, false);
+    assert.equal(r.firstUnfinished, 2);
+  });
+
+  it("chain within a feature enters via the feature", () => {
+    const r = on([init("I"), fi("F", "I"), t("a", "F"), t("b", "F", ["a"]), t("c", "F", ["b"])], "c");
+    assert.deepEqual(steps(r), [["I"], ["F"], ["a"], ["b"], ["c"]]);
+    assert.deepEqual(keys(r), ["F>a*", "I>F*", "a>b", "b>c", "factory>I"]);
+  });
+
+  it("diamond still layers as parallel", () => {
+    const r = on([fi("F", null), t("a", "F"), t("b", "F", ["a"]), t("c", "F", ["a"]), t("d", "F", ["b", "c"])], "d");
+    assert.deepEqual(steps(r), [["F"], ["a"], ["b", "c"], ["d"]]);
+    assert.deepEqual(r.parallelGroups, [["b", "c"]]);
+  });
+
+  it("feature without an initiative enters from the Factory", () => {
+    const r = on([fi("F", null), t("a", "F")], "a");
+    assert.deepEqual(steps(r), [["F"], ["a"]]);
+    assert.deepEqual(keys(r), ["F>a*", "factory>F"]);
+  });
+
+  it("cross-feature: G terminals -> F node -> F entries (implicit)", () => {
+    const nodes = [
+      init("I"), fi("G", "I"), t("g1", "G"), t("g2", "G", ["g1"]), t("g3", "G", ["g1"]),
+      fi("F", "I", ["G"]), t("f1", "F"), t("f2", "F", ["f1", "f0"]), t("f0", "F"),
+    ];
+    const r = on(nodes, "f2");
+    assert.deepEqual(steps(r), [["I"], ["G"], ["g1"], ["g2", "g3"], ["F"], ["f0", "f1"], ["f2"]]);
+    const implicit = r.edges.filter((e) => e.implicit).map((e) => `${e.from}>${e.to}`).sort();
+    assert.deepEqual(implicit, ["F>f0", "F>f1", "g2>F", "g3>F"]);
+    // F has an in-route prerequisite, so it does not also enter from its initiative.
+    assert.ok(!r.edges.some((e) => e.from === "I" && e.to === "F"));
+    assert.equal(r.blocked.f1, true);
+  });
+
+  it("shared ancestors appear once", () => {
+    const nodes = [init("I"), fi("F", "I"), fi("H", "I"), t("a", "F"), t("b", "H"), t("c", "F", ["a", "b"])];
+    const r = on(nodes, "c");
+    const all = r.steps.flatMap((s) => s.nodes);
+    assert.equal(new Set(all).size, all.length);
+    assert.equal(r.edges.filter((e) => e.from === "I" && e.to === "F").length, 1);
+    assert.deepEqual(r.steps[1]?.nodes, ["F", "H"]);
+  });
+
+  it("feature target ends at the feature after its tasks", () => {
+    const nodes = [init("I"), fi("F", "I"), t("f1", "F"), t("f2", "F", ["f1"])];
+    const r = on(nodes, "F");
+    assert.deepEqual(steps(r), [["I"], ["f1"], ["f2"], ["F"]]);
+    assert.ok(r.edges.some((e) => e.from === "f2" && e.to === "F" && !e.entry));
+    assert.ok(r.edges.some((e) => e.from === "I" && e.to === "f1" && e.entry));
+  });
+
+  it("cursor starts at the first unfinished route member, not the hierarchy", () => {
+    const nodes = [init("I"), fi("F", "I"), t("a", "F", [], "shipped"), t("b", "F", ["a"])];
+    const r = on(nodes, "b");
+    assert.deepEqual(steps(r), [["I"], ["F"], ["a"], ["b"]]);
+    assert.equal(r.firstUnfinished, 3);
+    assert.equal(r.blocked.b, false);
   });
 });

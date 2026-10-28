@@ -54,7 +54,7 @@ export function buildFeatureProgress(bound: WorkRecordResponse | null, feature: 
 		{ id: g.featureId, kind: "feature", stage: feature?.stage ?? "" },
 		...g.nodes.map((n) => ({ id: n.id, kind: "task", stage: n.stage, parent: g.featureId, dependsOn: (feature?.children ?? []).find((c) => c.id === n.id)?.dependsOn ?? [] })),
 	];
-	const route = computeWorkRoute(nodes, g.featureId);
+	const route = computeWorkRoute(nodes, g.featureId, { entryViaParent: false });
 	const layerOf = new Map<string, number>();
 	const rowOf = new Map<string, number>();
 	let rows = 0;

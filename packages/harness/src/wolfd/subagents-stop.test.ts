@@ -63,3 +63,70 @@ describe("steer to a running child, then it finishes", () => {
     await vi.waitFor(() => expect(rec().ownerTaskId).toBeFalsy());
   });
 });
+
+type Mgr = { port: { thread(id: string): { abort(): Promise<void> } | undefined }; abortFromOwner(id: string): Promise<void> };
+const mgr = (w: TestWolf) => (w.wolf.server as unknown as { subagents: Mgr }).subagents;
+
+/** A wolf whose child calls a tool, then holds its next model call until the gate opens (so a steer lands mid-run). */
+async function bootToolChild(): Promise<{ w: TestWolf; open: () => void; childId: string }> {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const step: FauxResponseStep = async (ctx, options) => {
+    const child = JSON.stringify(ctx.messages.filter((m) => m.role === "system")).includes("You are the sub-agent");
+    const last = ctx.messages[ctx.messages.length - 1]!;
+    const text = typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => b.text ?? "").join("");
+    if (!child) {
+      if (last.role === "toolResult") return fauxAssistantMessage("spawned");
+      if (text.startsWith("spawn:")) return fauxAssistantMessage(fauxToolCall("subagent", { agent: "tester", task: "SLOW work", name: "tester" }), { stopReason: "toolUse" });
+      return fauxAssistantMessage("parent ack");
+    }
+    if (last.role === "user") return fauxAssistantMessage(fauxToolCall("grep", { pattern: "x", path: "." }), { stopReason: "toolUse" });
+    await Promise.race([gate, new Promise<void>((r) => options?.signal?.addEventListener("abort", () => r()))]);
+    if (options?.signal?.aborted) return fauxAssistantMessage("", { stopReason: "aborted" });
+    return fauxAssistantMessage("The first attempt failed. I'll retry. FINAL_REPORT");
+  };
+  const w = await startTestWolf({ script: Array.from({ length: 40 }, () => step) });
+  tw = w;
+  const dir = join(w.root, "agent", "agents");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "tester.md"), PROFILE);
+  await w.client.submit(w.home, "spawn: x", { whenBusy: "reject" });
+  for await (const _ of w.client.watch(w.home));
+  const [child] = await w.client.listChildren!(w.home);
+  return { w, open, childId: child!.id };
+}
+const entries = async (w: TestWolf, id: string) => (await w.client.getLedger!(id)).map((e) => `${e.from}:${e.kind}`);
+
+describe("a steer delivered into the running turn", () => {
+  it("is consumed by that run; the child ends done with no stop entry", async () => {
+    const { w, open, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150)); // the child is past its tool call, holding its next model call
+    await w.client.submit(childId, "Correction: ignore the absolute path", { whenBusy: "steer" });
+    await w.client.submit(w.home, "noop", { whenBusy: "followUp" }).catch(() => {});
+    open();
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("done"), { timeout: 5000 });
+    await new Promise((r) => setTimeout(r, 600));
+    expect((await w.client.listChildren!(w.home))[0]!.state).toBe("done");
+    expect((await entries(w, childId)).filter((e) => e.endsWith(":stop") || e.endsWith(":error"))).toEqual([]);
+  });
+});
+
+describe("what counts as a stop", () => {
+  it("an abort nobody requested is an error entry, not an operator stop", async () => {
+    const { w, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    await mgr(w).port.thread(childId)!.abort();
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("failed"), { timeout: 5000 });
+    const e = await entries(w, childId);
+    expect(e).toContain("system:error");
+    expect(e.some((x) => x.endsWith(":stop"))).toBe(false);
+  });
+
+  it("an explicit operator stop still stops the child", async () => {
+    const { w, childId } = await bootToolChild();
+    await new Promise((r) => setTimeout(r, 150));
+    await mgr(w).abortFromOwner(childId);
+    await vi.waitFor(async () => expect((await w.client.listChildren!(w.home))[0]!.state).toBe("stopped"), { timeout: 5000 });
+    expect(await entries(w, childId)).toContain("owner:stop");
+  });
+});

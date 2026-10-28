@@ -445,7 +445,8 @@ export class SubagentManager {
           : `Sub-agent "${name}" is queued (position ${this.positionOf(rec)}): ${this.maxRunning} sub-agents per wolf and ${this.pool.hostMax} per host run at once. It starts by itself when a slot frees. `) +
         `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
         `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
-        `Until then, move on to other work or tell the user you're waiting.`,
+        `Until then, move on to other work or tell the user you're waiting.` +
+        (plan.workspace ? ` Briefs are rewritten automatically; don't send path corrections.` : ""),
     };
   }
 
@@ -704,8 +705,11 @@ export class SubagentManager {
         this.lastError.set(rec.id, ev.message);
         return;
       case "turn-end":
-        if (rec.isolation === "worktree") void this.endTurn(rec, thread, ev.reason);
-        else this.finishTurn(rec, thread, ev.reason);
+        if (rec.isolation === "worktree") void this.endTurn(rec, thread, ev.reason).then(() => this.retryRelease(rec));
+        else {
+          this.finishTurn(rec, thread, ev.reason);
+          this.retryRelease(rec);
+        }
         return;
       default:
         return;
@@ -744,8 +748,16 @@ export class SubagentManager {
     const name = rec.name;
     const followUp = `\n\nFollow up with subagent_message({ name: "${name}", message: "…" })`;
     const elapsed = formatElapsed(Math.max(0, Math.floor((Date.now() - Date.parse(rec.runStartedAt)) / 1000)));
-    if (rec.stopping || reason === "aborted") {
-      this.finishStopped(rec, rec.stopping ?? "owner");
+    if (rec.stopping) {
+      this.finishStopped(rec, rec.stopping);
+      return;
+    }
+    if (reason === "aborted") {
+      // Nobody asked for this stop (Stop button, subagent_stop, parent release): it is a fault, not an operator decision.
+      const message = "the turn was aborted without a stop request";
+      this.ledger(rec, "system", "parent", "error", message);
+      this.port.onError(new Error(`subagent ${rec.id}: ${message}`));
+      this.settle(rec, "failed", `Sub-agent "${name}" failed after ${elapsed}: its turn was aborted although nobody stopped it.\n\nYou can resume the session with subagent_message.${followUp}`);
       return;
     }
     if (reason === "error") {
@@ -813,10 +825,9 @@ ${text}`;
     this.setState(rec, state);
     if (state === "done" || state === "failed" || state === "stopped") {
       this.guard.releaseAll(rec.id);
-      // Ending the owner task aborts the conversation's work: a steer that arrived as this turn ended is already queued
-      // and starts the next run at once, which that abort would kill (and the turn-end would read as an operator stop).
-      // The release waits for the turn that follows; its own settle comes back here.
-      if (!this.port.thread(rec.id)?.hasQueuedInput) void this.releaseOwnerOf(rec);
+      // Ending the owner task aborts whatever the conversation is running: it is released only once the engine is idle
+      // with nothing pending (a steer consumed or queued as the turn ends starts another run that an abort would kill).
+      this.releaseWhenIdle(rec);
     }
     const target = rec.resolves && (state === "failed" || state === "stopped") ? this.records.find((r) => r.id === rec.resolves) : undefined;
     if (target?.workspace) {
@@ -883,6 +894,31 @@ ${text}`;
     })().finally(() => this.releasing.delete(rec.id));
     this.releasing.set(rec.id, p);
     return p;
+  }
+
+  /** Terminal children whose owner task waits for the conversation to go idle. */
+  private readonly releaseWaiting = new Set<string>();
+  private static readonly IDLE_GRACE_MS = 200;
+
+  private retryRelease(rec: ChildRecord): void {
+    if (this.releaseWaiting.has(rec.id) && (rec.state === "done" || rec.state === "failed" || rec.state === "stopped")) this.releaseWhenIdle(rec);
+  }
+
+  /** Release the owner task once the conversation has no active or pending run; otherwise the next turn end tries again. */
+  private releaseWhenIdle(rec: ChildRecord): void {
+    this.releaseWaiting.add(rec.id);
+    const thread = this.port.thread(rec.id);
+    const busy = () => !!thread && (thread.isRunning || thread.hasQueuedInput);
+    if (busy()) return;
+    // A queued run starts a moment after the turn that ends: look again before aborting anything.
+    const t = setTimeout(() => {
+      if (!this.releaseWaiting.has(rec.id)) return;
+      if (rec.state !== "done" && rec.state !== "failed" && rec.state !== "stopped") return; // resumed meanwhile: its own end releases
+      if (busy()) return; // the next turn end comes back here
+      this.releaseWaiting.delete(rec.id);
+      void this.releaseOwnerOf(rec);
+    }, SubagentManager.IDLE_GRACE_MS);
+    t.unref?.();
   }
 
   /** A parent thread is going away: stop its active children and end all their owner tasks. */
@@ -1578,7 +1614,7 @@ export function rewriteBrief(brief: string, offLimits: string[], to: string): st
     return `${pre}${to}${m.endsWith("/") ? "/" : ""}`;
   });
   if (used.size === 0) return brief;
-  return `Note: paths in this brief were rewritten to your worktree ${to} (from ${[...used].join(", ")}).\n\n${out}`;
+  return `Note: Your working copy is ${to}. Paths in this brief already point there.\n\n${out}`;
 }
 
 /** The child's instructions: its profile's prompt, then what it needs to know about running under a parent. */

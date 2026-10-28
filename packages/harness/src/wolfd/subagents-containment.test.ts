@@ -136,7 +136,8 @@ describe("rewriteBrief", () => {
   it("rewrites the main checkout, its realpath and ~ forms, but not look-alike paths", () => {
     const home = process.env.HOME ?? "/root";
     const out = rewriteBrief(`Repo: /a/repo (also ${home}/x/repo/sub and /a/repo/src/f.ts; not /a/repo-other or /b/a/repo)`, ["/a/repo", `${home}/x/repo`], "/w/child");
-    expect(out.split("\n")[0]).toMatch(/^Note: paths in this brief were rewritten to your worktree \/w\/child/);
+    expect(out.split("\n")[0]).toBe("Note: Your working copy is /w/child. Paths in this brief already point there.");
+    expect(out.split("\n")[0]).not.toContain("/a/repo");
     expect(out).toContain("Repo: /w/child (also /w/child/sub and /w/child/src/f.ts; not /a/repo-other or /b/a/repo)");
   });
 
@@ -152,7 +153,8 @@ describe("worktree child containment", () => {
     await settled(w, 1);
     const [rec] = regOf(w).children;
     const ws = rec.workspace.path;
-    expect(s.childBriefs[0]).toMatch(new RegExp(`^Note: paths in this brief were rewritten to your worktree ${ws}`));
+    expect(s.childBriefs[0]).toMatch(new RegExp(`^Note: Your working copy is ${ws}. Paths in this brief already point there.`));
+    expect(s.childBriefs[0]!.split("\n")[0]).not.toContain(r.dir);
     expect(s.childBriefs[0]).toContain(`Repo: ${ws}.`);
     expect(s.childBriefs[0]).not.toContain(`Repo: ${r.dir}`);
     expect(rec.brief).toBe(s.childBriefs[0]);

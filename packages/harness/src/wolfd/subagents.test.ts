@@ -76,11 +76,12 @@ const profile = (tools: string) => `---\nname: tester\ndescription: A scripted t
 const PROFILE = "---\nname: tester\ndescription: A scripted test agent\nmodel: fast\ntools: read, grep\n---\n\nYou are a test agent. Do what the brief says.\n";
 
 async function boot(agents: { step: FauxResponseStep }, root?: string, modelRelease?: (sessionId: string) => void): Promise<TestWolf> {
-  const w = await startTestWolf({ script: many(agents.step), ...(root ? { root } : {}), ...(modelRelease ? { modelRelease } : {}) });
-  // The wolf's own roster layer: <wolf-home>/agent/agents.
-  const dir = join(w.root, "agent", "agents");
+  // The wolf's own roster layer, <wolf-home>/agent/agents, exists before boot: the roster is part of the home prompt.
+  const home = root ?? mkdtempSync(join(tmpdir(), "test-wolf-"));
+  const dir = join(home, "agent", "agents");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "tester.md"), PROFILE);
+  const w = await startTestWolf({ script: many(agents.step), root: home, ...(modelRelease ? { modelRelease } : {}) });
   return w;
 }
 

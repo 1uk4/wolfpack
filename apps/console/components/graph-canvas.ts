@@ -62,6 +62,9 @@ import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
 	createGraphSimulation,
+	easeInOut,
+	routeFilteredEdges,
+	routeTargetLayout,
 	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
 	sanitizePhysicsTuning,
@@ -276,6 +279,8 @@ const CLICK_SLOP = 4;
 const LIVE_ALPHA_DECAY = 0.05; // snappier anneal than the settle's 0.0228
 const DRAG_ALPHA_TARGET = 0.3; // d3-drag's own reheat constant
 const SIM_SETTLE_ALPHA = 0.005; // below this, the sim counts as settled
+const STRAIGHTEN_MS = 400; // route straighten / restore tween
+const REST_DIM = 0.3; // the rest of the map while a route is straightened
 const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel)
 
 /** Cluster region styling — a low-res world-space SPLAT bitmap (the
@@ -657,6 +662,12 @@ export class GraphCanvasRenderer {
 	 *  frame is one fill/stroke per group, not per node. */
 	private nodeGroups: NodeGroup[] = [];
 	private route: DepRouteSelection | null = null;
+	/** Route straightening: while set, the map is frozen and dimmed, the
+	 *  route's hierarchy links are dropped (`edges`), and `home` holds the
+	 *  normal position of every node displaced so far. */
+	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[] } | null = null;
+	private home = new Map<string, Pt>();
+	private tween: { ids: string[]; from: Pt[]; to: Pt[]; start: number; ms: number; returning: Set<string> } | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private faintShaftsPath: Path2D = new Path2D();
 	private geometryReady = false;
@@ -797,7 +808,13 @@ export class GraphCanvasRenderer {
 		this.dragId = null;
 		this.simMoved = false;
 		this.simCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+		// The fresh nodes sit at their NORMAL positions (positions() hands
+		// back homes); re-straighten the selected route on them at once.
+		this.straighten = null;
+		this.tween = null;
+		this.home.clear();
 		this.buildSim();
+		if (this.route) this.applyStraighten(this.route, true);
 		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
 	}
@@ -867,7 +884,104 @@ export class GraphCanvasRenderer {
 	 *  parallel highlight), or null for none. */
 	setRoute(route: DepRouteSelection | null): void {
 		this.route = route;
+		this.applyStraighten(route, prefersReducedMotion());
 		this.markDirty();
+	}
+
+	/** Straighten (or restore) the route's nodes. Keyed by the route's shape:
+	 *  stepping the cursor changes nothing here. Only the route's nodes move
+	 *  (a tween; the sim stays frozen), so it costs O(route), not O(map). */
+	private applyStraighten(route: DepRouteSelection | null, instant: boolean): void {
+		const layout = route?.layout;
+		const root = layout ? this.nodeById.get(layout.root) : undefined;
+		const tgt = layout ? this.nodeById.get(layout.target) : undefined;
+		let key: string | null = null;
+		let targets: Map<string, Pt> | null = null;
+		if (route && layout && root && tgt) {
+			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}`;
+			targets = routeTargetLayout(layout.root, layout.target, { root: { x: root.x, y: root.y }, target: { x: tgt.x, y: tgt.y } }, layout.steps);
+		}
+		if (key === (this.straighten?.key ?? null)) return;
+
+		// Settle any tween in flight where it is (home entries persist).
+		const dest = new Map<string, Pt>();
+		const returning = new Set<string>();
+		for (const [id, h] of this.home) {
+			dest.set(id, h);
+			returning.add(id);
+		}
+		if (targets) {
+			for (const [id, p] of targets) {
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				if (!this.home.has(id)) this.home.set(id, { x: n.x, y: n.y });
+				dest.set(id, p);
+				returning.delete(id);
+			}
+			const members = new Set([...route!.nodes].filter((id) => this.nodeById.has(id)));
+			this.straighten = { key: key!, members, edges: routeFilteredEdges(this.data!.edges, members) };
+		} else {
+			this.straighten = null;
+		}
+		const ids = [...dest.keys()];
+		const to = ids.map((id) => dest.get(id)!);
+		if (instant || ids.length === 0) {
+			ids.forEach((id, i) => {
+				const n = this.nodeById.get(id);
+				if (n) {
+					n.x = to[i]!.x;
+					n.y = to[i]!.y;
+				}
+			});
+			for (const id of returning) this.home.delete(id);
+			this.tween = null;
+		} else {
+			this.tween = {
+				ids,
+				from: ids.map((id) => {
+					const n = this.nodeById.get(id)!;
+					return { x: n.x, y: n.y };
+				}),
+				to,
+				start: performance.now(),
+				ms: STRAIGHTEN_MS,
+				returning,
+			};
+		}
+		// The sim runs on the links of the moment: route links gone while
+		// straightened, all links back afterwards.
+		this.simActive = false;
+		this.buildSim();
+		this.geoVersion++;
+	}
+
+	/** One tween frame; true while still easing. */
+	private advanceTween(): boolean {
+		const tw = this.tween;
+		if (!tw) return false;
+		const t = Math.min((performance.now() - tw.start) / tw.ms, 1);
+		const e = easeInOut(t);
+		tw.ids.forEach((id, i) => {
+			const n = this.nodeById.get(id);
+			if (!n) return;
+			n.x = tw.from[i]!.x + (tw.to[i]!.x - tw.from[i]!.x) * e;
+			n.y = tw.from[i]!.y + (tw.to[i]!.y - tw.from[i]!.y) * e;
+		});
+		this.geoVersion++;
+		if (t < 1) return true;
+		for (const id of tw.returning) this.home.delete(id);
+		this.tween = null;
+		return false;
+	}
+
+	/** The map is frozen while a route is straightened (or easing back). */
+	private get frozen(): boolean {
+		return this.straighten !== null || this.tween !== null || this.home.size > 0;
+	}
+
+	/** Opacity factor of a node/edge outside the straightened route. */
+	private restDim(id: string): number {
+		return this.straighten && !this.straighten.members.has(id) ? REST_DIM : 1;
 	}
 
 	setVisible(visible: ReadonlySet<string> | null): void {
@@ -907,7 +1021,7 @@ export class GraphCanvasRenderer {
 	 *  so a refetch can hand the same layout back to setData. */
 	positions(): Map<string, Position> {
 		const out = new Map<string, Position>();
-		for (const n of this.data?.nodes ?? []) out.set(n.id, { x: n.x, y: n.y });
+		for (const n of this.data?.nodes ?? []) out.set(n.id, this.home.get(n.id) ?? { x: n.x, y: n.y });
 		return out;
 	}
 
@@ -1005,7 +1119,7 @@ export class GraphCanvasRenderer {
 				const moved =
 					this.dragOrigin !== null &&
 					Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
-				if (moved) {
+				if (moved && !this.frozen) {
 					// First real movement: reheat and glue the node to the cursor.
 					this.commit.cancel();
 					this.sim?.alphaTarget(DRAG_ALPHA_TARGET);
@@ -1176,13 +1290,14 @@ export class GraphCanvasRenderer {
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
 			const simAnim = this.advanceSim();
+			const tweenAnim = this.advanceTween();
 			this.draw();
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
 			let pulseAnim = false;
 			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
-			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim;
+			this.animating = hoverAnim || zoomAnim || simAnim || tweenAnim || pulseAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -1197,7 +1312,7 @@ export class GraphCanvasRenderer {
 	/** One live-sim step; returns true while physics is still in motion.
 	 *  Runs only while simActive (drag reheat or post-release anneal). */
 	private advanceSim(): boolean {
-		if (!this.sim || !this.simActive) return false;
+		if (!this.sim || !this.simActive || this.frozen) return false;
 		this.sim.tick();
 		// Movement check: did any node actually move (a click-pin that
 		// never reheated leaves everything exactly at rest)?
@@ -1397,7 +1512,7 @@ export class GraphCanvasRenderer {
 			const r = this.radiusOf(n);
 			const ring = n.shape === "ring" ? Math.min(Math.max(n.ring ?? 0.25, 0.05), 1) * r : 0;
 			const color = n.color ?? data.colors.node;
-			const alpha = n.dim ? DIM_ALPHA : 1;
+			const alpha = (n.dim ? DIM_ALPHA : 1) * this.restDim(n.id);
 			const key = `${color}|${alpha}|${ring.toFixed(3)}`;
 			let g = groups.get(key);
 			if (!g) groups.set(key, (g = { color, alpha, lineWidth: ring, path: new Path2D() }));
@@ -1411,7 +1526,7 @@ export class GraphCanvasRenderer {
 		// (related / wikilink) edges go in their own path to draw lighter.
 		const shafts = new Path2D();
 		const faintShafts = new Path2D();
-		for (const e of data.edges) {
+		for (const e of this.straighten?.edges ?? data.edges) {
 			if (!isVisible(e.from) || !isVisible(e.to)) continue;
 			const a = this.nodeById.get(e.from);
 			const b = this.nodeById.get(e.to);
@@ -1455,7 +1570,7 @@ export class GraphCanvasRenderer {
 			return;
 		}
 		const t = this.physicsTuning;
-		this.sim = createGraphSimulation(data.nodes, data.edges, {
+		this.sim = createGraphSimulation(data.nodes, this.straighten?.edges ?? data.edges, {
 			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
 			velocityDecay: t.velocityDecay,
@@ -1796,7 +1911,7 @@ export class GraphCanvasRenderer {
 		// every REGION_EVERY-th frame (others blit the last bitmap).
 		if (
 			this.regionBuiltVersion !== this.geoVersion &&
-			(!this.simActive || this.frameCount % REGION_EVERY === 0)
+			(!(this.simActive || this.tween) || this.frameCount % REGION_EVERY === 0)
 		) {
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;
@@ -1831,9 +1946,11 @@ export class GraphCanvasRenderer {
 			ctx.strokeStyle = data.colors.edge;
 			ctx.lineWidth = settings.edgeWidth / k;
 			ctx.lineCap = "round";
-			ctx.stroke(this.shaftsPath);
+			const edgeDim = this.straighten ? REST_DIM : 1;
 			ctx.save();
-			ctx.globalAlpha = FAINT_EDGE_ALPHA;
+			ctx.globalAlpha = edgeDim;
+			ctx.stroke(this.shaftsPath);
+			ctx.globalAlpha = FAINT_EDGE_ALPHA * edgeDim;
 			ctx.stroke(this.faintShaftsPath);
 			ctx.restore();
 		}
@@ -1865,7 +1982,7 @@ export class GraphCanvasRenderer {
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
 				if (!n) continue;
-				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (n.dim ? DIM_LABEL_ALPHA : 1);
+				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id);
 				if (a <= 0.01) continue;
 				ctx.globalAlpha = a;
 				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), data.colors.label);

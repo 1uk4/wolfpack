@@ -22,6 +22,9 @@ export interface DepRouteSelection {
 	done: ReadonlySet<string>;
 	/** The node the card's cursor is on (drawn stronger than the rest of the route). */
 	cursor?: string | null;
+	/** Straightening input: the route's steps (graph ids, in order) between
+	 *  the Factory (`root`) and the selected node (`target`). */
+	layout?: { root: string; target: string; steps: ReadonlyArray<ReadonlyArray<string>> };
 }
 
 export const edgeKey = (from: string, to: string): string => `${from}|${to}`;

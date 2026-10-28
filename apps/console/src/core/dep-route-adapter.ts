@@ -61,7 +61,10 @@ export function toRouteSelection(route: WorkRoute, cursor: RouteCursor | null, d
 		}
 	}
 	const edges = new Set(route.edges.map((e) => `${gid(e.from)}|${gid(e.to)}`));
-	return { nodes, edges, parallel, done, cursor: cursor?.node ? gid(cursor.node) : null };
+	return {
+		nodes, edges, parallel, done, cursor: cursor?.node ? gid(cursor.node) : null,
+		layout: { root: gid(route.root), target: gid(route.target), steps: route.steps.map((s) => s.nodes.map(gid)) },
+	};
 }
 
 /** A feature node's task-graph overlay model, built from the payload alone

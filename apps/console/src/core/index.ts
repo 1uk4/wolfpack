@@ -22,6 +22,7 @@ export * from "./question-core.ts";
 // through this barrel (shell law: pure core via @/src/core only).
 export * from "./events.ts";
 export * from "./layout.ts";
+export * from "./route-layout.ts";
 export * from "./pending.ts";
 export * from "./prompt-segments.ts";
 export * from "./math-delims.ts";

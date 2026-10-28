@@ -4,7 +4,8 @@
 #   npm run dev:stack:desktop    # Electron app (console on :3210 inside)
 # Env (all optional):
 #   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/dev, the sandbox;
-#                         `npm run stack` runs the live wolves in ~/wolves/local with the desktop app)
+#                         `npm run stack` / `stack:desktop` run the live wolves in ~/wolves/local,
+#                         with the browser console / the desktop app)
 #   WOLFPACK_MODELS_FILE  models.json (transport "api")     (default: first */models.json in WOLVES_DIR)
 #   WORKERD_PORT          workerd /v1 port                  (default 7141)
 #   DEV_STACK_NO_EXT_INSTALL=1   skip the sandbox extension reinstall below

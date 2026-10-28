@@ -107,7 +107,7 @@ describe("ThreadChat on a real wolf", () => {
 		const gate = new Promise<void>((r) => (open = r));
 		const step: import("../../../packages/harness/dist/wolfd/scripted-model.js").FauxResponseStep = async (ctx, options) => {
 			const child = JSON.stringify(ctx.messages.filter((m) => m.role === "system")).includes("You are the sub-agent");
-			const last = ctx.messages[ctx.messages.length - 1];
+			const last = ctx.messages[ctx.messages.length - 1]!;
 			const t = typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => b.text ?? "").join("");
 			if (!child) {
 				if (last.role === "toolResult") return fauxAssistantMessage("spawned");
@@ -146,7 +146,7 @@ describe("ThreadChat on a real wolf", () => {
 					<SettingsDialogProvider>
 						<ServerEventsProvider connect={realEventsSource}>
 							<MemoryEventsProvider connect={inertSource}>
-								<ThreadChat wolf="testwolf" slug="home" threadId={tw.home} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
+								<ThreadChat wolf="testwolf" slug="home" threadId={tw!.home} title="Home" initialMessages={threadMessagesToNative(detail.messages)} initialCards={cardsOfThread(detail)} />
 							</MemoryEventsProvider>
 						</ServerEventsProvider>
 					</SettingsDialogProvider>

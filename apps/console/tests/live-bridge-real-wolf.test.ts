@@ -30,7 +30,7 @@ const PROFILE = "---\nname: tester\ndescription: A scripted test agent\nmodel: f
 function agents(gate: Promise<void>): FauxResponseStep {
 	return async (ctx, options) => {
 		const child = JSON.stringify(ctx.messages.filter((m) => m.role === "system")).includes("You are the sub-agent");
-		const last = ctx.messages[ctx.messages.length - 1];
+		const last = ctx.messages[ctx.messages.length - 1]!;
 		const text = typeof last.content === "string" ? last.content : (last.content as Array<{ type: string; text?: string }>).map((b) => b.text ?? "").join("");
 		if (!child) {
 			if (last.role === "toolResult") return fauxAssistantMessage("spawned");

@@ -22,6 +22,7 @@ import {
   type AgentDefaults,
   type ListedAgentDefinition,
   type SubagentSessionMode,
+  orchestratorRules,
 } from "@wolfpack/agents";
 import {
   isMuxAvailable,
@@ -1720,19 +1721,7 @@ function resolveOpsRef(): string {
   return join(SUBAGENTS_DIR, "reference", "ops.example.md");
 }
 
-const ORCHESTRATOR_RULES = `You are the orchestrator: the user's point of contact. Decide, delegate, review. Delegate anything that takes more than a couple of reads or commands, so the main context stays small (call subagents_list for the roster):
-- find or understand code, KB entries, library types → scout
-- diagnose logs, services, VPS, a stuck wolf → investigator (for wolfpack hosts, pass the path ${resolveOpsRef()} in the brief)
-- external docs, READMEs, web pages → researcher
-- a plan from requirements → planner
-- implement an agreed change, run build/tests, commit → worker
-- review a diff or commits → reviewer
-- visualize a system or flow → visualizer
-- independent pieces → spawn in parallel
-Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
-Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
-Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.
-Use the \`model\` tier override only for infrequent edge cases that need extra attention; prefer the agent's own tier. Each agent has its own pane/background default (see subagents_list); omit \`pane\` to use it, and override it only when the user asks. Background agents can't be steered mid-run; message them after they finish to resume.`;
+const ORCHESTRATOR_RULES = orchestratorRules({ opsRef: resolveOpsRef(), surface: "tui" });
 
 export default function subagentsExtension(pi: ExtensionAPI) {
   latestPi = pi;

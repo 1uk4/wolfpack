@@ -21,6 +21,14 @@ function wolf(name: string, yaml: string): string {
 }
 
 describe("loadWolfConfig", () => {
+  it("reads identity (expanded) without an unknown-field warning", () => {
+    const load = (y: string) => loadWolfConfig(wolf("i", y), { home: "/h" });
+    expect(load("name: p\n").config.identity.file).toBeUndefined();
+    const r = load("name: p\nidentity: ~/me/AGENTS.md\n");
+    expect(r.config.identity.file).toBe("/h/me/AGENTS.md");
+    expect(r.warnings).toEqual([]);
+  });
+
   it("reads prompts.structuredOutput (string, false, or unset) without an unknown-field warning", () => {
     const load = (y: string) => loadWolfConfig(wolf("p", y), { home: "/h" });
     expect(load("name: p\n").config.prompts).toEqual({});

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { childInstructions } from "./subagents.js";
 import { DEFAULT_STRUCTURED_OUTPUT_GUIDANCE, composeProjectContext, findUp, loadSkills } from "./context.js";
 
 let home: string;
@@ -84,6 +85,76 @@ describe("composeProjectContext", () => {
       const ins = composeProjectContext({ ...base(), structuredOutput: false }).instructions;
       expect(ins).not.toContain("Structured output");
       expect(ins).not.toContain("show_graph");
+    });
+  });
+
+  describe("identity and orchestrator rules", () => {
+    const wolfHome = () => join(home, "wolf");
+    const base = () => ({ name: "w", cwd: join(home, "ws"), den: join(home, "den"), home, wolfHome: wolfHome() });
+
+    it("loads <wolf-home>/agent/AGENTS.md as the identity, labelled with its path, before the walk's AGENTS.md", () => {
+      put("wolf/agent/AGENTS.md", "I am the owner");
+      put("ws/AGENTS.md", "workspace rules");
+      const ctx = composeProjectContext(base());
+      expect(ctx.identity?.path).toBe(join(wolfHome(), "agent/AGENTS.md"));
+      const ins = ctx.instructions;
+      expect(ins).toContain(`# Identity (${join(wolfHome(), "agent/AGENTS.md")})\n\nI am the owner`);
+      expect(ins.indexOf("I am the owner")).toBeLessThan(ins.indexOf("workspace rules"));
+    });
+
+    it("wolf.yaml identity wins over the agent/ fallback", () => {
+      put("wolf/agent/AGENTS.md", "fallback");
+      put("elsewhere/ME.md", "explicit identity");
+      const ins = composeProjectContext({ ...base(), identityFile: join(home, "elsewhere/ME.md") }).instructions;
+      expect(ins).toContain("explicit identity");
+      expect(ins).not.toContain("fallback");
+    });
+
+    it("includes the orchestrator rules (wolfd wording) and the roster", () => {
+      put("wolf/agent/agents/zed.md", "---\nname: zed\ndescription: Does zed\n---\nprompt");
+      const ins = composeProjectContext(base()).instructions;
+      expect(ins).toContain("# Orchestrator rules");
+      expect(ins).toContain("You are the orchestrator");
+      expect(ins).toContain("console's subagent modal");
+      expect(ins).toMatch(/Subagent roster:\n• /);
+      expect(ins).toContain("• zed");
+      expect(ins).toContain("scout");
+    });
+
+    it("a missing identity file is skipped with a debug log", () => {
+      const logs: string[] = [];
+      const ctx = composeProjectContext({ ...base(), log: (l) => logs.push(l) });
+      expect(ctx.identity).toBeUndefined();
+      expect(ctx.instructions).not.toContain("# Identity");
+      expect(logs.some((l) => l.startsWith("debug:") && l.includes("agent/AGENTS.md"))).toBe(true);
+    });
+
+    it("does not repeat the identity when the walk finds the same file", () => {
+      put("wolf/agent/AGENTS.md", "same file once");
+      const ins = composeProjectContext({ ...base(), cwd: join(home, "wolf/agent") }).instructions;
+      expect(ins.split("same file once").length - 1).toBe(1);
+      expect(ins).not.toContain("# AGENTS.md");
+    });
+
+    it("a feature workspace gets the same sections", () => {
+      put("wolf/agent/AGENTS.md", "identity text");
+      const ins = composeProjectContext({ ...base(), cwd: join(home, "wolf/workspaces/feat") }).instructions;
+      expect(ins).toContain("identity text");
+      expect(ins).toContain("# Orchestrator rules");
+    });
+
+    it("a subagent thread keeps only its profile prompt (neither section)", () => {
+      put("wolf/agent/AGENTS.md", "identity text");
+      const out = childInstructions({ name: "scout", description: "d", body: "Scout prompt." } as never, "scout-1");
+      expect(out).toContain("Scout prompt.");
+      expect(out).not.toContain("identity text");
+      expect(out).not.toContain("orchestrator");
+    });
+
+    it("without a wolfHome (not a wolf process) neither section appears", () => {
+      const ins = composeProjectContext({ name: "w", cwd: home, den: join(home, "den"), home }).instructions;
+      expect(ins).not.toContain("# Identity");
+      expect(ins).not.toContain("Orchestrator");
     });
   });
 

@@ -169,7 +169,7 @@ async function startConfigured(
   const extensions = [...(readonlyExt ? [readonlyExt] : []), ...others];
   const cwd = config.capability.workspace;
   // `prompts?.` is defensive: a stale engine dist predates the field and would crash wolfd boot.
-  const contextFor = (at: string) => composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd: at, den: config.den, home: opts.home, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
+  const contextFor = (at: string) => composeProjectContext({ name: config.identity.name, domains: config.identity.domains, cwd: at, den: config.den, home: opts.home, wolfHome: dirname(config.file), ...(config.identity.file ? { identityFile: config.identity.file } : {}), log, ...(config.prompts?.structuredOutput !== undefined ? { structuredOutput: config.prompts?.structuredOutput } : {}) });
   const context = contextFor(cwd);
 
   // Refuse before touching the store: a second wolfd on a live wolf's den would double-open its sqlite.

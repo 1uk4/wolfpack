@@ -7,13 +7,18 @@
  * - Skills: every `<den>/skills/<dir>/SKILL.md`. Only name + description (frontmatter `name:` / `description:`, name
  *   defaulting to the directory) plus the file path go into the prompt; the model reads the body on demand with its
  *   read tool. Skills without a readable SKILL.md are skipped.
+ * - Identity: wolf.yaml `identity:` (else `<wolf-home>/agent/AGENTS.md`) is loaded first, labelled with its path; a
+ *   missing file is skipped (debug log). The walk's AGENTS.md follows, unless it is the same file.
+ * - Orchestrator rules + roster (the same text the terminal pi extension injects) follow the identity. Home and
+ *   feature threads get both; subagent threads use their own profile instructions and never come through here.
  * - Read once, when the conversation is configured at process start. Editing these files takes effect on the next
  *   wolfd start (the agent state is compared and only reconfigured when it differs).
  * - No .pi/ project config, NOTES.md, or telegram rules: those stay with the legacy harness.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { discoverAgents, formatRosterLines, orchestratorRules } from "@wolfpack/agents";
 import type { PromptSection } from "@wolfpack/engine";
 
 export interface ProjectContextInput {
@@ -27,6 +32,11 @@ export interface ProjectContextInput {
   home?: string;
   /** wolf.yaml `prompts.structuredOutput`: a string replaces the default guidance; `false` or an empty/whitespace string removes it. */
   structuredOutput?: PromptSection;
+  /** wolf.yaml `identity:` (absolute). Default: `<wolfHome>/agent/AGENTS.md`. */
+  identityFile?: string;
+  /** The wolf's home (holds wolf.yaml and agent/); also where the roster's global agents live. Omit to skip identity and orchestrator sections. */
+  wolfHome?: string;
+  log?: (line: string) => void;
 }
 
 /**
@@ -52,6 +62,8 @@ export interface SkillSummary {
 }
 
 export interface ProjectContext {
+  /** The wolf's identity file, when one was found. */
+  identity?: FoundFile;
   agents?: FoundFile;
   claude?: FoundFile;
   skills: SkillSummary[];
@@ -111,14 +123,48 @@ export function loadSkills(den: string): SkillSummary[] {
   return skills;
 }
 
+/** Ops reference path for investigator briefs: $WOLFPACK_OPS_REF, then ~/.wolfpack/ops.md (named even when absent). */
+function opsRef(): string {
+  const fallback = join(homedir(), ".wolfpack", "ops.md");
+  const env = process.env.WOLFPACK_OPS_REF;
+  return env && existsSync(env) ? env : fallback;
+}
+
+function loadIdentity(input: ProjectContextInput): FoundFile | undefined {
+  if (!input.wolfHome) return undefined;
+  const path = input.identityFile ?? join(input.wolfHome, "agent", "AGENTS.md");
+  try {
+    return { path, text: readFileSync(path, "utf8") };
+  } catch {
+    input.log?.(`debug: identity file ${path} not readable; skipped`);
+    return undefined;
+  }
+}
+
+function sameFile(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return resolve(a) === resolve(b);
+  }
+}
+
 export function composeProjectContext(input: ProjectContextInput): ProjectContext {
-  const agents = findUp("AGENTS.md", input.cwd, input.home);
+  const identity = loadIdentity(input);
+  const found = findUp("AGENTS.md", input.cwd, input.home);
+  const agents = found && identity && sameFile(found.path, identity.path) ? undefined : found;
   const claude = findUp("CLAUDE.md", input.cwd, input.home);
   const skills = loadSkills(input.den);
 
   const parts: string[] = [];
   const domains = input.domains?.length ? ` Domains: ${input.domains.join(", ")}.` : "";
   parts.push(`You are ${input.name}, a wolf in the wolfpack.${domains} Your workspace is ${input.cwd}.`);
+  if (identity) parts.push(`# Identity (${identity.path})\n\n${identity.text.trim()}`);
+  if (input.wolfHome) {
+    const roster = formatRosterLines(discoverAgents({ cwd: input.cwd, agentDir: join(input.wolfHome, "agent") }));
+    const rules = orchestratorRules({ opsRef: opsRef(), surface: "wolfd" });
+    parts.push(`# Orchestrator rules\n\n${rules}\n\nSubagent roster:\n${roster.length ? roster.join("\n") : "No subagent definitions found."}`);
+  }
   if (agents) parts.push(`# AGENTS.md (${agents.path})\n\n${agents.text.trim()}`);
   if (claude) parts.push(`# CLAUDE.md (${claude.path})\n\n${claude.text.trim()}`);
   if (skills.length) {
@@ -127,5 +173,5 @@ export function composeProjectContext(input: ProjectContextInput): ProjectContex
   }
   const so = input.structuredOutput === undefined ? DEFAULT_STRUCTURED_OUTPUT_GUIDANCE : input.structuredOutput;
   if (so !== false && so.trim()) parts.push(`# Structured output\n\n${so.trim()}`);
-  return { agents, claude, skills, instructions: parts.join("\n\n") };
+  return { identity, agents, claude, skills, instructions: parts.join("\n\n") };
 }

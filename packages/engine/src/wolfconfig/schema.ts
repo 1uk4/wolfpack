@@ -18,6 +18,7 @@
  *     maxRunning: 3         # subagents running at once for this wolf (default 3); the rest queue
  *   sandbox: true           # redirect den / KB_OPS / WORK_ENDPOINT at a snapshot dev root (default <dir>/sandbox)
  *   sandbox: { root: ~/dev/sf-snap }      # ...or at an explicit dev root
+ *   identity: ~/wolves/local/me/agent/AGENTS.md   # optional; default <wolf-home>/agent/AGENTS.md
  *   prompts:
  *     structuredOutput: |   # overrides the default decision/graph/checklist guidance; `false` removes the section
  *       ...
@@ -68,6 +69,7 @@ export const WolfFileSchema = z.object({
     .default({}),
   subagents: z.object({ maxRunning: z.number().int().min(1).optional() }).passthrough().optional(),
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
+  identity: z.string().min(1).optional(),
   prompts: z.object({ structuredOutput: z.union([z.string(), z.literal(false)]).optional() }).passthrough().optional(),
   memory: z
     .object({
@@ -101,6 +103,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "serve",
   "subagents",
   "sandbox",
+  "identity",
   "prompts",
   "memory",
   "workspaces",
@@ -113,7 +116,13 @@ export interface TierOverrideConfig {
 
 /** Normalized, defaults-applied wolf config. */
 export interface WolfConfig {
-  identity: { id: string; name: string; domains: string[] };
+  identity: {
+    id: string;
+    name: string;
+    domains: string[];
+    /** Absolute path of the wolf.yaml `identity:` file (loaded into home and feature prompts); unset = `<wolf-home>/agent/AGENTS.md`. */
+    file?: string;
+  };
   capability: {
     tools: string[];
     tiers?: Partial<Record<"main" | "smart" | "fast", TierOverrideConfig>>;

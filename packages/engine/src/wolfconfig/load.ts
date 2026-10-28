@@ -105,7 +105,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
     warnings.push(`${abs}: memory configured but not in extensions: memory is off (add \`memory\` to extensions)`);
   }
   const config: WolfConfig = {
-    identity: { id: v.id ?? v.name, name: v.name, domains: v.domains },
+    identity: { id: v.id ?? v.name, name: v.name, domains: v.domains, ...(v.identity ? { file: expand(v.identity, dir, home) } : {}) },
     capability: {
       tools: v.tools,
       ...(v.tiers ? { tiers: v.tiers as WolfConfig["capability"]["tiers"] } : {}),

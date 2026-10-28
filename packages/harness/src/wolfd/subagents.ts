@@ -32,7 +32,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { discoverAgents, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
+import { discoverAgents, formatRosterLines, loadAgent, parseCommaList, type AgentDefinition, type AgentIsolation, type DiscoverOptions } from "@wolfpack/agents";
 import { TIERS, isTier } from "@wolfpack/engine";
 import { readBindingFile } from "@wolfpack/memory";
 import { WriterGuard, abandonChild, gitOk, mergeChild, createChildWorkspace, createHomeChildWorkspace, defaultIsolation, ensureFeatureWorkspace, isWriter, repoOf, resolveWorkspacesRoot, workspaceConflict, featureBranch, type RepoInfo, type Workspace } from "@wolfpack/workspaces";
@@ -307,12 +307,7 @@ export class SubagentManager {
   /** `subagents_list`: the roster, then the calling thread's children. */
   list(callerConversationId: string): ToolOutcome {
     const agents = discoverAgents(this.roster()).filter((a) => !a.disableModelInvocation);
-    const lines = agents.map((a) => {
-      const badge = a.source === "project" ? " (project)" : "";
-      const desc = a.description ? ` — ${a.description}` : "";
-      const model = a.model ? `${a.model}, ` : "";
-      return `• ${a.name}${badge} [${model}${a.pane ? "pane" : "background"}]${desc}`;
-    });
+    const lines = formatRosterLines(agents);
     const out = [lines.length ? lines.join("\n") : "No subagent definitions found."];
     const caller = this.port.threadOfConversation(callerConversationId);
     const mine = caller ? this.records.filter((r) => r.parentThreadId === caller.summary.id) : [];
@@ -1662,7 +1657,7 @@ export function rewriteBrief(brief: string, offLimits: string[], to: string): st
 }
 
 /** The child's instructions: its profile's prompt, then what it needs to know about running under a parent. */
-function childInstructions(def: AgentDefinition, name: string, worktree?: { ws: Workspace; offLimits: string[] }): string {
+export function childInstructions(def: AgentDefinition, name: string, worktree?: { ws: Workspace; offLimits: string[] }): string {
   const off = worktree?.offLimits ?? [];
   const featurePath = off.find((p) => p !== worktree?.ws.repo.mainDir && p !== worktree?.ws.repo.toplevel);
   return [

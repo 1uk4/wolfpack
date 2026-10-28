@@ -895,11 +895,14 @@ export class GraphCanvasRenderer {
 		const layout = route?.layout;
 		const root = layout ? this.nodeById.get(layout.root) : undefined;
 		const tgt = layout ? this.nodeById.get(layout.target) : undefined;
+		// Anchors are the nodes' NORMAL positions: a node displaced by the
+		// previous route (a route switch) must not anchor the new line.
+		const homeOf = (n: CanvasNode): Pt => this.home.get(n.id) ?? { x: n.x, y: n.y };
 		let key: string | null = null;
 		let targets: Map<string, Pt> | null = null;
 		if (route && layout && root && tgt) {
 			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}`;
-			targets = routeTargetLayout(layout.root, layout.target, { root: { x: root.x, y: root.y }, target: { x: tgt.x, y: tgt.y } }, layout.steps);
+			targets = routeTargetLayout(layout.root, layout.target, { root: homeOf(root), target: homeOf(tgt) }, layout.steps);
 		}
 		if (key === (this.straighten?.key ?? null)) return;
 
@@ -964,8 +967,9 @@ export class GraphCanvasRenderer {
 		tw.ids.forEach((id, i) => {
 			const n = this.nodeById.get(id);
 			if (!n) return;
-			n.x = tw.from[i]!.x + (tw.to[i]!.x - tw.from[i]!.x) * e;
-			n.y = tw.from[i]!.y + (tw.to[i]!.y - tw.from[i]!.y) * e;
+			// The last frame lands EXACTLY on the target (no float residue).
+			n.x = t >= 1 ? tw.to[i]!.x : tw.from[i]!.x + (tw.to[i]!.x - tw.from[i]!.x) * e;
+			n.y = t >= 1 ? tw.to[i]!.y : tw.from[i]!.y + (tw.to[i]!.y - tw.from[i]!.y) * e;
 		});
 		this.geoVersion++;
 		if (t < 1) return true;

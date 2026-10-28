@@ -75,6 +75,18 @@ describe("layoutGraph orderClass", () => {
 		const l = layoutGraph(ids("d", "g", "x"), [{ from: "x", to: "g" }], { orderClass: new Map([["d", 3], ["g", 0]]) });
 		const g = l.nodes.find((n) => n.id === "g")!;
 		assert.equal(g.y, 0);
+		const x = l.nodes.find((n) => n.id === "x")!;
 		assert.equal(l.edges[0]!.y1, g.y + g.height / 2);
+		assert.equal(l.edges[0]!.x2, x.x);
+		assert.equal(l.edges[0]!.y2, x.y + x.height / 2);
+	});
+});
+describe("layoutGraph orderClass drives the barycenter rows", () => {
+	it("within a class the barycenter row (not input order) breaks the tie, and unknown ids sort last", () => {
+		// q1 depends on p2 and q2 on p1, all in one class per column: the barycenter puts q2 above q1
+		const l = layoutGraph(ids("p1", "p2", "q1", "q2", "u"), [{ from: "q1", to: "p2" }, { from: "q2", to: "p1" }], { orderClass: new Map([["p1", 0], ["p2", 0], ["q1", 1], ["q2", 1]]) });
+		const y = (id: string) => l.nodes.find((n) => n.id === id)!.y;
+		assert.equal(y("q2") < y("q1"), true);
+		assert.equal(y("u") > y("p2"), true);
 	});
 });

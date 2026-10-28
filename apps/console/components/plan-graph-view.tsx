@@ -34,7 +34,9 @@ const DOT: Record<GraphNodeStatus, string> = {
  * zoom, no node drag): dragging the background moves the graph with NO clamp at the edges, it starts centred on the
  * highlighted node (else the whole graph), and a small re-center button puts it back. A press that travels more than the
  * slop is never a node click. `fill` makes the box fill its parent (the full-screen modal) instead of being as tall as
- * the graph up to the panel cap. `collapseDone` draws done and skipped nodes as thin bars that show only "Done" / "Archived" (the title is in the tooltip and aria-label), packed tighter by the layout; the highlighted node always stays a full card. `orderByStatus` sorts each column doing, blocked, to do, done, skipped. `toolbar` is extra
+ * the graph up to the panel cap. `collapseDone` draws done and skipped nodes as thin bars that show only "Done" /
+ * "Archived" (the title is in the tooltip and aria-label), packed tighter by the layout; the highlighted node always
+ * stays a full card. `orderByStatus` sorts each column doing, blocked, to do, done, skipped. `toolbar` is extra
  * controls placed beside the re-center button.
  */
 export function PlanGraphView({
@@ -133,7 +135,7 @@ export function PlanGraphView({
 							if (!p) return null;
 							const hi = highlightId === n.id;
 							const sliver = slim.has(n.id);
-							const name = `${n.label} (${STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
+							const name = `${n.label} (${sliver && n.status === "skipped" ? "Archived" : STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
 							return (
 								<li
 									key={n.id}
@@ -147,7 +149,7 @@ export function PlanGraphView({
 									title={n.detail ? `${n.label} — ${n.detail}` : n.label}
 									aria-label={sliver && !onNodeClick ? name : undefined}
 									className={cn(
-										sliver ? cn("absolute flex items-center justify-center gap-0.5 overflow-hidden rounded-full text-[10px] font-medium leading-none", n.status === "done" ? "bg-emerald-500/70 text-emerald-950 dark:text-emerald-50" : "bg-muted-foreground/40 text-foreground/80") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
+										sliver ? cn("absolute flex items-center justify-center gap-0.5 rounded-full text-[10px] font-medium leading-none", n.status === "done" ? "bg-emerald-500/70 text-emerald-950 dark:text-emerald-50" : "bg-muted-foreground/40 text-foreground/80") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
 										!sliver && CARD[n.status],
 										hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70",
 									)}
@@ -155,7 +157,7 @@ export function PlanGraphView({
 								>
 									{sliver && dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
 									{sliver && (
-										<span className="flex items-center gap-0.5" aria-hidden>
+										<span className="flex min-w-0 items-center gap-0.5 truncate whitespace-nowrap" aria-hidden data-testid="sliver-text">
 											{n.status === "done" && <CheckIcon className="size-2.5 shrink-0" />}
 											{n.status === "done" ? "Done" : "Archived"}
 										</span>
@@ -180,7 +182,7 @@ export function PlanGraphView({
 											aria-label={name}
 											title={sliver ? n.label : undefined}
 											onClick={() => clickNode(n.id)}
-											className={cn("absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring", sliver ? "-inset-x-0.5 -inset-y-0.5 rounded-full" : "inset-0 rounded-lg")}
+											className={cn("absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring", sliver ? "inset-0 rounded-full" : "inset-0 rounded-lg")}
 										/>
 									)}
 								</li>

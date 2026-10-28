@@ -17,7 +17,7 @@ export interface GraphLayoutOptions {
 	slim?: ReadonlySet<string>;
 	slimHeight?: number;
 	slimWidth?: number;
-	/** Optional sort class per id (lower sits higher). Within each column nodes are ordered by it first, the normal order breaking ties. */
+	/** Optional sort class per id (lower sits higher). Within each column nodes are ordered by it first, the barycenter / input order breaking ties (unknown ids last). */
 	orderClass?: ReadonlyMap<string, number>;
 }
 
@@ -82,11 +82,12 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 	const rowCount = new Map<number, number>();
 	columns.forEach((col, rank) => {
 		if (!col) return;
+		const cls = (id: string): number => (opts.orderClass ? (opts.orderClass.get(id) ?? 99) : 0);
 		const key = (id: string, i: number): number => {
 			const ps = (prereqs.get(id) ?? []).filter((p) => row.has(p));
 			return ps.length ? ps.reduce((a, p) => a + row.get(p)!, 0) / ps.length : i;
 		};
-		const ordered = col.map((id, i) => ({ id, i, k: key(id, i) })).sort((a, b) => a.k - b.k || a.i - b.i);
+		const ordered = col.map((id, i) => ({ id, i, k: key(id, i) })).sort((a, b) => cls(a.id) - cls(b.id) || a.k - b.k || a.i - b.i);
 		ordered.forEach((o, r) => row.set(o.id, r));
 		rowCount.set(rank, col.length);
 	});
@@ -108,8 +109,7 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 		if (!col) return;
 		let y = 0;
 		let prevSlim = false;
-		const cls = opts.orderClass;
-		const ordered = [...col].sort((a, b) => (cls ? (cls.get(a) ?? 0) - (cls.get(b) ?? 0) : 0) || row.get(a)! - row.get(b)!);
+		const ordered = [...col].sort((a, b) => row.get(a)! - row.get(b)!);
 		ordered.forEach((id, i) => {
 			const isSlim = slim.has(id);
 			if (i > 0) y += isSlim || prevSlim ? slimGap : gapY;

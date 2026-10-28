@@ -199,6 +199,8 @@ describe("canvas mode: slivers, free pan, re-center", () => {
 			assert.equal(li.getAttribute("data-sliver"), "true");
 			const text = (li.textContent ?? "").trim();
 			assert.equal(text, id === "a" ? "Done" : "Archived");
+			assert.equal(li.className.includes("overflow-hidden"), false, "li must not clip the focus ring");
+			assert.equal(li.querySelector('[data-testid="sliver-text"]')!.getAttribute("aria-hidden"), "true");
 			assert.equal(text.includes("Alpha") || text.includes("Beta"), false, "title not shown");
 			assert.ok((li.getAttribute("title") ?? "").length > 0);
 			assert.ok((li.querySelector('[data-testid="graph-node-hit"]')!.getAttribute("aria-label") ?? "").includes(id === "a" ? "Alpha done" : "Beta skipped"));

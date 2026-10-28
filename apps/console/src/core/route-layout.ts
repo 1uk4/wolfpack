@@ -95,6 +95,17 @@ export function routeLinkSet<E extends LayoutEdge>(
 	return out;
 }
 
+/** The dependency springs kept while a route is selected: those between two
+ *  route members that are not route edges are dropped (the route's expanded
+ *  path already expresses them). Everything else keeps its spring. */
+export function routeDepSprings<E extends LayoutEdge>(
+	springs: ReadonlyArray<E>,
+	members: ReadonlySet<string>,
+	routeEdgeKeys: ReadonlySet<string>,
+): E[] {
+	return springs.filter((e) => !(members.has(e.from) && members.has(e.to) && !routeEdgeKeys.has(`${e.from}|${e.to}`)));
+}
+
 interface ForceNode {
 	id: string;
 	x?: number;

@@ -8,7 +8,10 @@
  *     in view (its members' bounding box meets the viewport);
  *   - faint by default; edges of the selected route are bright (and listed
  *     last, so they draw on top); route edges the payload lacks (a feature's
- *     terminal task -> a dependent feature's entry task) are added as bright.
+ *     terminal task -> a dependent feature's entry task) are added as bright;
+ *   - while a route is selected, a payload dependency between two route
+ *     members that is not itself a route edge (e.g. feature -> feature, which
+ *     the route expresses through its expanded path) is not drawn.
  */
 
 import { DEP_ARROW_MAX_RATIO } from "./dep-palette.ts";
@@ -28,6 +31,14 @@ export interface DepRouteSelection {
 }
 
 export const edgeKey = (from: string, to: string): string => `${from}|${to}`;
+
+/** A payload dependency that a selected route supersedes: both ends are route
+ *  members but the edge is not a route edge. */
+export const isRouteShortcut = (
+	route: Pick<DepRouteSelection, "nodes" | "edges"> | null | undefined,
+	from: string,
+	to: string,
+): boolean => !!route && route.nodes.has(from) && route.nodes.has(to) && !route.edges.has(edgeKey(from, to));
 
 /** An arrow from a prerequisite (`from`) to its dependent (`to`). */
 export interface DepArrow {
@@ -92,6 +103,7 @@ export function buildDepDrawList(input: DepDrawInput): DepDrawList {
 		const key = edgeKey(from, to);
 		if (seen.has(key) || from === to) return;
 		seen.add(key);
+		if (isRouteShortcut(route, from, to)) return;
 		if (visible && (!visible.has(from) || !visible.has(to))) return;
 		if (!positions.has(from) || !positions.has(to)) return;
 		if (!regions.some((r) => r.has(from) && r.has(to))) return;

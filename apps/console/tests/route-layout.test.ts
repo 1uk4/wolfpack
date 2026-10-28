@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildDepDrawList, edgeKey } from "../src/core/dep-draw-list.ts";
 import { createGraphSimulation } from "../src/core/layout.ts";
-import { ROUTE_LATERAL_SPACING, routeFilteredEdges, routeLineForce, routeLinkSet, routeTargetLayout } from "../src/core/route-layout.ts";
+import { ROUTE_LATERAL_SPACING, routeDepSprings, routeFilteredEdges, routeLineForce, routeLinkSet, routeTargetLayout } from "../src/core/route-layout.ts";
 
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} !~ ${b}`);
 const A = { root: { x: 0, y: 0 }, target: { x: 400, y: 0 } };
@@ -174,5 +174,41 @@ describe("route entry edges as springs", () => {
 		for (const k of ["fac:d|work:I", "work:I|work:F", "work:F|work:a"]) assert.ok(links.includes(k), k);
 		assert.ok(!links.includes("work:x|work:F"), "non-route child of F is detached from member F");
 		assert.ok(!links.includes("work:a|work:F"));
+	});
+});
+
+describe("route drops member-to-member dependency shortcuts", () => {
+	// Feature F depends on feature G: payload edge G>F. The route runs
+	// G's terminal task gt -> F -> F's entry task fe; a task dependency
+	// gt>fe2 is not on the route though both are members.
+	const payload = [
+		{ from: "G", to: "F" },
+		{ from: "gt", to: "F" },
+		{ from: "F", to: "fe" },
+		{ from: "gt", to: "fe2" },
+		{ from: "gt", to: "outside" },
+	];
+	const route = {
+		nodes: new Set(["G", "F", "gt", "fe", "fe2"]),
+		edges: new Set(["gt|F", "F|fe"]),
+		parallel: new Set<string>(),
+		done: new Set<string>(),
+	};
+	const factories = [{ members: ["G", "F", "gt", "fe", "fe2", "outside"] }];
+	const positions = new Map(["G", "F", "gt", "fe", "fe2", "outside"].map((id, i) => [id, { x: i * 10, y: 0 }]));
+	const draw = (r: typeof route | null) =>
+		buildDepDrawList({ edges: payload, factories, positions, viewport: { minX: -9, minY: -9, maxX: 99, maxY: 9 }, ratio: 0.3, route: r }).arrows.map(
+			(a) => `${a.from}>${a.to}${a.bright ? "!" : ""}`,
+		);
+	it("G>F and the off-route member dependency are neither drawn nor sprung; route and non-member edges stay", () => {
+		assert.deepEqual(draw(route), ["gt>outside", "gt>F!", "F>fe!"]);
+		assert.deepEqual(
+			routeDepSprings(payload, route.nodes, route.edges).map((e) => `${e.from}>${e.to}`),
+			["gt>F", "F>fe", "gt>outside"],
+		);
+	});
+	it("on deselect the G>F edge and spring return", () => {
+		assert.ok(draw(null).includes("G>F"));
+		assert.ok(draw(null).includes("gt>fe2"));
 	});
 });

@@ -63,6 +63,7 @@ import {
 	CLUSTER_PULL_STRENGTH,
 	createGraphSimulation,
 	routeFilteredEdges,
+	routeDepSprings,
 	routeLinkSet,
 	routeLineForce,
 	DEFAULT_PHYSICS_TUNING,
@@ -669,7 +670,7 @@ export class GraphCanvasRenderer {
 	 *  sim runs on a different link set (`simEdges`: route members' hierarchy
 	 *  links dropped, route edges added) plus the weak route line force.
 	 *  `edges` are the hierarchy edges drawn. */
-	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[]; simEdges: LayoutEdge[] } | null = null;
+	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[]; simEdges: LayoutEdge[]; depSprings: CanvasEdge[] } | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private faintShaftsPath: Path2D = new Path2D();
 	private geometryReady = false;
@@ -905,6 +906,7 @@ export class GraphCanvasRenderer {
 				members,
 				edges: routeFilteredEdges(this.data!.edges, members),
 				simEdges: routeLinkSet(this.data!.edges, members, route.edges, (id) => this.nodeById.has(id)),
+				depSprings: routeDepSprings(this.data!.depSprings ?? [], route.nodes, route.edges),
 			};
 		} else {
 			this.straighten = null;
@@ -1513,6 +1515,7 @@ export class GraphCanvasRenderer {
 			return;
 		}
 		const t = this.physicsTuning;
+		const springs = this.straighten?.depSprings ?? data.depSprings ?? [];
 		this.sim = createGraphSimulation(data.nodes, this.straighten?.simEdges ?? data.edges, {
 			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
@@ -1520,7 +1523,7 @@ export class GraphCanvasRenderer {
 			chargeStrength: t.chargeStrength,
 			linkStrength: t.linkStrength,
 			linkDistance: t.linkDistance,
-			depSprings: data.depSprings?.length ? { edges: data.depSprings, strength: DEP_SPRING_STRENGTH } : undefined,
+			depSprings: springs.length ? { edges: springs, strength: DEP_SPRING_STRENGTH } : undefined,
 			clusterPull:
 				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,
 			depthAnchor:

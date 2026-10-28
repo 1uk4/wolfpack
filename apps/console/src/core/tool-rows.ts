@@ -106,7 +106,7 @@ export type RenderItem =
 export type ToolItem = Extract<RenderItem, { kind: "tool" }>;
 
 /** The collapsed line of a run of calls: per-name counts, the call to show, and the overall status. */
-export function summarizeGroup(entries: readonly ToolEntry[]): { counts: Array<{ name: string; count: number }>; latest: ToolEntry; status: ToolStatus } {
+export function summarizeGroup(entries: readonly ToolEntry[]): { counts: Array<{ name: string; count: number }>; latest: ToolEntry; status: ToolStatus; errors: number } {
 	const counts: Array<{ name: string; count: number }> = [];
 	for (const e of entries) {
 		const c = counts.find((x) => x.name === e.name);
@@ -116,12 +116,13 @@ export function summarizeGroup(entries: readonly ToolEntry[]): { counts: Array<{
 	const latest = [...entries].reverse().find((e) => e.status === "running") ?? entries[entries.length - 1]!;
 	const status: ToolStatus = entries.some((e) => e.status === "running")
 		? "running"
-		: entries.some((e) => e.status === "error")
+		: entries.every((e) => e.status === "error")
 			? "error"
 			: entries.every((e) => e.status === "pending")
 				? "pending"
 				: "done";
-	return { counts, latest, status };
+	// Only a group of failures is "error"; a mix reads "done" with the failures counted beside it.
+	return { counts, latest, status, errors: entries.filter((e) => e.status === "error").length };
 }
 
 /**

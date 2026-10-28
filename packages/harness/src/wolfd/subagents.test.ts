@@ -26,7 +26,7 @@ interface Call {
 }
 
 /** One scripted model for every conversation: answers by who is asking (a child's prompt says so) and what was said last. */
-function scriptedAgents(opts: { gate?: Promise<void> } = {}): { step: FauxResponseStep; calls: Call[] } {
+function scriptedAgents(opts: { gate?: Promise<void>; parentGate?: Promise<void> } = {}): { step: FauxResponseStep; calls: Call[] } {
   const calls: Call[] = [];
   const step: FauxResponseStep = async (ctx, options) => {
     const system = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
@@ -44,6 +44,10 @@ function scriptedAgents(opts: { gate?: Promise<void> } = {}): { step: FauxRespon
       if (msg) return tool("subagent_message", { name: msg[1], message: msg[2] });
       const stop = /^stop\[(\w+)\]$/.exec(lastText);
       if (stop) return tool("subagent_stop", { name: stop[1] });
+      if (lastText === "slowcard") {
+        await opts.parentGate;
+        return tool("ask_user_question", { question: "Proceed?" });
+      }
       if (lastText === "card") return tool("ask_user_question", { question: "Proceed?" });
       if (lastText === "list") return tool("subagents_list", {});
       if (lastText === "try-nested") return tool("subagent", { agent: "tester", task: "nested" });
@@ -597,6 +601,53 @@ describe("delivery", () => {
     expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
     await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
     await parentSaw(tw, 'Sub-agent "tester" completed');
+    expect(readReg(tw).children[0].outbox).toEqual([]);
+  });
+
+  it("a result queued while the parent's turn runs, which ends with a card, is held (the card is not superseded) and delivered once after the answer", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let openParent!: () => void;
+    const parentGate = new Promise<void>((r) => (openParent = r));
+    tw = await boot(scriptedAgents({ gate, parentGate }));
+    await say(tw, "spawn: SLOW work");
+    await tw.client.submit(tw.home, "slowcard", { whenBusy: "reject" }); // the parent's turn is running
+    open();
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    expect(readReg(tw).children[0].outbox).toHaveLength(1);
+    expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false); // not steered into the running turn
+    openParent();
+    await vi.waitFor(async () => expect((await tw!.client.getThread(tw!.home)).pendingCards).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 300));
+    const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
+    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);
+    expect(readReg(tw).children[0].outbox).toEqual([]);
+  });
+
+  it("a restart while a result is held behind a card delivers it once, after the answer", async () => {
+    const root = newRoot();
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    tw = await boot(scriptedAgents({ gate }), root);
+    await say(tw, "spawn: SLOW work");
+    await say(tw, "card");
+    open();
+    await vi.waitFor(async () => expect((await kids(tw!))[0].state).toBe("done"));
+    expect(readReg(tw).children[0].outbox).toHaveLength(1);
+    await tw.stop();
+    tw = await boot(scriptedAgents(), root);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await texts(tw, tw.home)).some((t) => t.startsWith("Sub-agent"))).toBe(false);
+    const [card] = (await tw.client.getThread(tw.home)).pendingCards!;
+    await tw.client.answerCard!(tw.home, card.callId, { answer: { value: "yes" } });
+    await parentSaw(tw, 'Sub-agent "tester" completed');
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await texts(tw, tw.home)).filter((t) => t.startsWith("Sub-agent"))).toHaveLength(1);
     expect(readReg(tw).children[0].outbox).toEqual([]);
   });
 

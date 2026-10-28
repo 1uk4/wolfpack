@@ -115,7 +115,7 @@ export function ToolGroup({
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 }) {
-	const { counts, latest, status } = summarizeGroup(entries);
+	const { counts, latest, status, errors } = summarizeGroup(entries);
 	const failed = status === "error";
 	return (
 		<details
@@ -133,6 +133,7 @@ export function ToolGroup({
 				{latest.summary && <span className="min-w-0 truncate font-mono text-[11px]">{latest.summary}</span>}
 				<span data-testid="tool-group-status" className={`ml-auto shrink-0 ${failed ? "text-red-500" : "opacity-60"}`}>
 					{STATUS_LABEL[status]}
+					{errors > 0 && status !== "error" && ` · ${errors} error`}
 				</span>
 				<ChevronRight className="size-3 shrink-0 opacity-50 transition-transform group-open:rotate-90" />
 			</summary>

@@ -669,7 +669,7 @@ export class SubagentManager {
     return thread;
   }
 
-  /** Deliveries held back for a parent with an unanswered card go out when its next turn starts. */
+  /** Deliveries held back for a busy parent (or one with an unanswered card) go out when its turn ends. */
   private watchParent(parentId: string): void {
     if (this.parentWatch.has(parentId)) return;
     const parent = this.port.thread(parentId);
@@ -677,7 +677,7 @@ export class SubagentManager {
     this.parentWatch.set(
       parentId,
       parent.observe((ev) => {
-        if (ev.type === "turn-start") this.flush(parentId);
+        if (ev.type === "turn-end") this.flush(parentId);
       }),
     );
   }
@@ -1170,8 +1170,10 @@ ${text}`;
         this.persist();
         return;
       }
-      // An idle parent with an unanswered card would have it dismissed by the message: hold until its next turn starts.
-      if (!parent.isRunning && parent.cards.pending().length > 0) return;
+      // Deliver only to an idle parent with no unanswered card: a steer into a running turn is not wanted, and a message
+      // to an idle parent would supersede its card. Held ones go out when a turn ends (the answer to a card starts a
+      // turn, so they follow it rather than interrupt it).
+      if (parent.isRunning || parent.cards.pending().length > 0) return;
       const { rec, d } = next;
       // Exactly once: the id travels in the steer text. A crash after the submit but before the removal below leaves the
       // entry here; the parent already holds the id, so it is only removed.

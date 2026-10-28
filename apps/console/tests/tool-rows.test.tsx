@@ -218,7 +218,7 @@ describe("tool groups", () => {
 		assert.deepEqual(s.counts, [{ name: "bash", count: 3 }, { name: "read", count: 1 }]);
 		assert.equal(s.status, "running");
 		assert.equal(s.latest.summary, "3");
-		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "error", "2"), e("bash", "done", "3")]).status, "error");
+		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "error", "2"), e("bash", "done", "3")]).status, "done");
 		assert.equal(summarizeGroup([e("bash", "done", "1"), e("bash", "done", "2")]).latest.summary, "2");
 	});
 
@@ -226,8 +226,9 @@ describe("tool groups", () => {
 		const e = (status: "running" | "done" | "error" | "pending") => ({ callId: status, name: "bash", summary: status, status });
 		assert.equal(summarizeGroup([e("done"), e("running")]).status, "running");
 		assert.equal(summarizeGroup([e("error"), e("running"), e("done")]).status, "running");
-		assert.equal(summarizeGroup([e("done"), e("error")]).status, "error");
-		assert.equal(summarizeGroup([e("error"), e("done")]).status, "error");
+		assert.equal(summarizeGroup([e("done"), e("error")]).status, "done"); // partial: not red
+		assert.equal(summarizeGroup([e("error"), e("done")]).errors, 1);
+		assert.equal(summarizeGroup([e("error"), e("error")]).status, "error");
 		assert.equal(summarizeGroup([e("pending"), e("pending")]).status, "pending");
 		assert.equal(summarizeGroup([e("pending"), e("done")]).status, "done");
 	});
@@ -260,7 +261,12 @@ describe("tool groups", () => {
 		assert.match(html, /data-testid="tool-group"/);
 		assert.match(html, /bash ×2 · read/);
 		assert.match(html, /\/x/);
-		assert.match(html, /data-status="error"/);
+		assert.match(html, /data-status="done"/); // one of three failed: partial, not red
+		assert.match(html, /done · 1 error/);
+		assert.doesNotMatch(html.split('data-testid="tool-group-status"')[0]!, /text-red-500/);
+		const allBad = renderToStaticMarkup(<ToolGroup entries={entries.map((x) => ({ ...x, status: "error" as const }))}>{null}</ToolGroup>);
+		assert.match(allBad, /data-status="error"/);
+		assert.match(allBad, /text-red-500/);
 		assert.equal((html.match(/data-testid="tool-row"/g) ?? []).length, 3);
 		assert.doesNotMatch(html, /<details[^>]*data-testid="tool-group"[^>]* open/);
 	});

@@ -99,7 +99,20 @@ async function main() {
   console.log("[harness] Main function completed");
 }
 
-main().catch((err) => {
+// Start smoke: `wolfpack sync` runs the bundle against a throwaway copy of the wolf's home (no telegram, memory off):
+// createWolfHarness runs through config, model selection, extensions, storage and the root conversation, then closes.
+if (process.env.WOLF_HARNESS_SMOKE === "start") {
+  createWolfHarness()
+    .then(async (instance) => {
+      await instance.close();
+      console.log("ok");
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("Harness failed to start:", err);
+      process.exit(1);
+    });
+} else main().catch((err) => {
   console.error("Harness failed to start:", err);
   process.exit(1);
 });

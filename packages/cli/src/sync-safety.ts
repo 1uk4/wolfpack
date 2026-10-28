@@ -10,7 +10,10 @@
  *      rollback to the previous bundle the agent kept (harness.prev.cjs).
  */
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { fileURLToPath } from "node:url";
 
 export interface SmokeResult {
@@ -30,15 +33,28 @@ export function smokeCheckBundle(
   harnessPath: string,
   opts: { timeoutMs?: number; nodePath?: string } = {},
 ): Promise<SmokeResult> {
-  const timeoutMs = opts.timeoutMs ?? 20_000;
+  return runSmoke(harnessPath, ["--smoke"], {
+    cwd: path.dirname(harnessPath),
+    env: { WOLF_HARNESS_SMOKE: "1" },
+    timeoutMs: opts.timeoutMs ?? 20_000,
+    nodePath: opts.nodePath,
+  });
+}
+
+function runSmoke(
+  harnessPath: string,
+  args: string[],
+  o: { cwd: string; env: Record<string, string>; timeoutMs: number; nodePath?: string },
+): Promise<SmokeResult> {
+  const timeoutMs = o.timeoutMs;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [harnessPath, "--smoke"], {
-      cwd: path.dirname(harnessPath),
+    const child = spawn(process.execPath, [harnessPath, ...args], {
+      cwd: o.cwd,
       env: {
         PATH: process.env.PATH ?? "",
         HOME: process.env.HOME ?? "",
-        NODE_PATH: opts.nodePath ?? path.join(repoRoot, "node_modules"),
-        WOLF_HARNESS_SMOKE: "1",
+        NODE_PATH: o.nodePath ?? path.join(repoRoot, "node_modules"),
+        ...o.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -59,6 +75,57 @@ export function smokeCheckBundle(
       else resolve({ ok: code === 0 && said, output });
     });
   });
+}
+
+/** The pieces of a built bundle the start smoke needs. */
+export interface BuiltBundleFiles {
+  harnessPath: string;
+  wolfYamlPath: string;
+  modelsPath: string;
+  agentsMdPath: string;
+  /** Holds extensions/<name>/index.js. */
+  tmpDir: string;
+}
+
+/**
+ * Start smoke (a, deeper): run createWolfHarness from the built bundle against a throwaway copy of the wolf's home
+ * (<tmp>/{wolf.yaml, models.json, agent/AGENTS.md, den/extensions/*}), so a throw during startup (config, model
+ * selection, extensions, storage, root conversation) fails the sync, not the VPS. Safe by construction: no telegram
+ * (extension and block removed), no sandbox, no librarian sweep, memory.enabled false (no timers, no KB/Work writes),
+ * no real credentials, empty KB/Work env. The throwaway home is deleted afterwards.
+ */
+export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutMs?: number; nodePath?: string } = {}): Promise<SmokeResult> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-smoke-home-"));
+  try {
+    const cfg = (yamlParse(fs.readFileSync(built.wolfYamlPath, "utf8")) ?? {}) as Record<string, unknown>;
+    delete cfg.telegram;
+    delete cfg.sandbox;
+    if (Array.isArray(cfg.extensions)) cfg.extensions = (cfg.extensions as string[]).filter((e) => e !== "telegram");
+    cfg.memory = { ...((cfg.memory as object) ?? {}), enabled: false, librarian: false, live: false };
+    fs.writeFileSync(path.join(home, "wolf.yaml"), yamlStringify(cfg));
+    fs.copyFileSync(built.modelsPath, path.join(home, "models.json"));
+    fs.mkdirSync(path.join(home, "agent"), { recursive: true });
+    fs.copyFileSync(built.agentsMdPath, path.join(home, "agent", "AGENTS.md"));
+    const den = path.join(home, "den");
+    fs.mkdirSync(den, { recursive: true });
+    const extSrc = path.join(built.tmpDir, "extensions");
+    if (fs.existsSync(extSrc)) fs.cpSync(extSrc, path.join(den, "extensions"), { recursive: true });
+    return await runSmoke(built.harnessPath, [], {
+      cwd: home,
+      env: {
+        HOME: home,
+        WOLF_DEN: den,
+        WOLF_HARNESS_SMOKE: "start",
+        // Dummies so the subscription/api checks pass; nothing calls a model.
+        CLAUDE_CODE_OAUTH_TOKEN: "smoke-check",
+        ANTHROPIC_API_KEY: "smoke-check",
+      },
+      timeoutMs: opts.timeoutMs ?? 30_000,
+      nodePath: opts.nodePath,
+    });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 /** What the agent's status endpoint returns that this needs. */

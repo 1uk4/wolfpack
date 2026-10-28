@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { parse as yamlParse } from "yaml";
 import { AgentClient } from "../agent-client.js";
-import { smokeCheckBundle, watchAfterRestart } from "../sync-safety.js";
+import { smokeCheckBundle, smokeStartBundle, watchAfterRestart } from "../sync-safety.js";
 import { buildRemoteBundle, buildHarnessBundle, stampExtension } from "../bundle.js";
 import {
   loadConfig,
@@ -229,14 +229,14 @@ async function syncPiDurable(
   }
 
   // Never upload a bundle that does not even load: run it locally in smoke mode.
-  const smoke = await smokeCheckBundle(built.harnessPath);
+  const smoke = await runSmokes(built);
   if (!smoke.ok) {
-    console.error(c.red(`✗ The harness bundle fails its load check; nothing was uploaded, ${cfg.name} is untouched.`));
+    console.error(c.red(`✗ The harness bundle fails its ${smoke.stage} check; nothing was uploaded, ${cfg.name} is untouched.`));
     for (const line of smoke.output.trim().split("\n").slice(-12)) console.error(c.dim(`    ${line}`));
     fs.rmSync(built.tmpDir, { recursive: true, force: true });
     process.exit(1);
   }
-  console.log(c.dim("  Smoke:   bundle loads (ok)"));
+  console.log(c.dim("  Smoke:   bundle loads and starts (ok)"));
 
   // Read and base64 encode the individual files
   const harnessB64 = fs.readFileSync(built.harnessPath).toString("base64");
@@ -485,4 +485,12 @@ async function runMeshReconcile(): Promise<void> {
   } catch (err) {
     console.log(c.yellow(`  ! Mesh reconcile skipped: ${err instanceof Error ? err.message : err}`));
   }
+}
+
+/** Load check, then start check (createWolfHarness against a throwaway home). */
+async function runSmokes(built: Parameters<typeof smokeStartBundle>[0]): Promise<{ ok: boolean; output: string; stage: "load" | "start" }> {
+  const load = await smokeCheckBundle(built.harnessPath);
+  if (!load.ok) return { ...load, stage: "load" };
+  const start = await smokeStartBundle(built);
+  return { ...start, stage: "start" };
 }

@@ -40,6 +40,7 @@ export type { KnowledgeAdapter, ExtractOptions, UsageRecord } from "./adapter.js
 
 // Adapters — provider implementations
 export { AnthropicAdapter } from "./adapters/anthropic.js";
+export { loadQuery } from "./adapters/claude-agent-sdk.js";
 export { LlmInfraError, OutputTruncatedError } from "./adapters/errors.js";
 export { createAdapter } from "./adapters/index.js";
 

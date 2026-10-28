@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { kbBase, kbOps, wolfHome, wolfUser } from "./paths.js";
-import { writeDenExtensions } from "./den-extensions.js";
+import { restoreDenExtensions, snapshotDenExtensions, writeDenExtensions } from "./den-extensions.js";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import type {
   WolfConfig,
@@ -372,8 +372,13 @@ WantedBy=multi-user.target
     // holds the owner's own extensions, so never wipe the directory: remove
     // only what an earlier sync shipped (recorded in .managed.json) and no
     // longer ships, and leave every other name alone.
+    // The set being replaced is saved first (agent/extensions.prev) so a rollback restores extensions with the harness.
+    const extBackup = path.join(agentDir, "extensions.prev");
     if (extensionsMap) {
+      await snapshotDenExtensions(denDir, extBackup, extensionsMap);
       await writeDenExtensions(denDir, extensionsMap);
+    } else {
+      await fs.rm(extBackup, { recursive: true, force: true });
     }
 
     // Write AGENTS.md
@@ -444,6 +449,11 @@ WantedBy=multi-user.target
     await fs.copyFile(prev, path.join(agentDir, "harness.cjs"));
     const user = wolfUser(id);
     await exec("chown", [`${user}:${user}`, path.join(agentDir, "harness.cjs")]);
+    // The extensions that shipped with the bad bundle go back too (a harness + extension pair must match).
+    const denDir = path.join(wolfHome(id), "den");
+    if (await restoreDenExtensions(denDir, path.join(agentDir, "extensions.prev"))) {
+      await exec("chown", ["-R", `${user}:${user}`, path.join(denDir, "extensions")]);
+    }
     await this.restart(id);
   }
 

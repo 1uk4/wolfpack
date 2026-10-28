@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
@@ -462,6 +463,56 @@ export async function installDevExtensions(
 }
 
 /**
+ * pi-claude-bridge imports the Agent SDK statically (only as the default `queryFn`). The SDK is ESM and is not
+ * resolvable from harness.cjs on a VPS (global install, no node_modules above the bundle), so a plain external
+ * require would throw when the bridge initialises. The harness always injects the query function it resolved
+ * itself (engine loadQuery: harness tree, NODE_PATH, global install), so the bridge's own import is stubbed.
+ */
+export function stubBridgeSdkPlugin(): esbuild.Plugin {
+  return {
+    name: "stub-bridge-agent-sdk",
+    setup(build) {
+      build.onResolve({ filter: /^@anthropic-ai\/claude-agent-sdk$/ }, (args) =>
+        /[\\/]pi-claude-bridge[\\/]/.test(args.importer) ? { path: "claude-agent-sdk-stub", namespace: "bridge-sdk-stub" } : undefined,
+      );
+      build.onLoad({ filter: /.*/, namespace: "bridge-sdk-stub" }, () => ({
+        contents: 'export function query() { throw new Error("claude-bridge: the Agent SDK query function must be injected (queryFn)"); }',
+        loader: "js",
+      }));
+    },
+  };
+}
+
+/** Version of the @earendil-works/pi-durable the harness bundle is built against (resolved from the harness package). */
+export function piDurableVersion(repoRoot: string): string {
+  const req = createRequire(path.join(repoRoot, "packages/harness/package.json"));
+  let dir = path.dirname(req.resolve("@earendil-works/pi-durable"));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+      if (pkg.name === "@earendil-works/pi-durable") return String(pkg.version);
+    } catch { /* keep walking up */ }
+    dir = path.dirname(dir);
+  }
+  return "unknown";
+}
+
+/**
+ * A wolf this bundle ships to a VPS IS the live wolf, so its durable memory is opted in explicitly:
+ * `memory: { live: true }`. memoryGate (extensions/wolfpack-memory/unified.ts) is deliberately fail-closed and
+ * stays so; the opt-in belongs to the deployer, not to the harness (which also runs unsandboxed in dev).
+ * An explicit `memory.live` or `memory.enabled: false` in the wolf's config is respected.
+ */
+export function withLiveMemory(extra: Record<string, unknown> | undefined, extensions: readonly string[]): Record<string, unknown> | undefined {
+  const mem = extra?.memory;
+  if (mem !== undefined && (typeof mem !== "object" || mem === null)) return extra;
+  if (mem === undefined && !extensions.includes("memory")) return extra;
+  const memory = (mem ?? {}) as Record<string, unknown>;
+  if (memory.live !== undefined || memory.enabled === false) return extra;
+  return { ...extra, memory: { ...memory, live: true } };
+}
+
+/**
  * Bundle @wolfpack/harness + extensions for pi-durable runtime.
  *
  * Uses esbuild to produce:
@@ -494,6 +545,9 @@ export async function buildHarnessBundle(
     format: "cjs",
     target: "node20",
     external: ["@anthropic-ai/claude-agent-sdk", "grammy"],
+    plugins: [stubBridgeSdkPlugin()],
+    // import.meta.url is empty in CJS and pi-durable is not on the VPS disk: bake its version in (engine/version.ts).
+    define: { __PI_DURABLE_VERSION__: JSON.stringify(piDurableVersion(repoRoot)) },
     logLevel: "silent",
   });
 
@@ -548,9 +602,10 @@ export async function buildHarnessBundle(
   }
 
   // Include extra config (memory, telegram, etc.)
-  if (cfg.extraConfig) {
+  const extraConfig = withLiveMemory(cfg.extraConfig, cfg.extensions);
+  if (extraConfig) {
     const { stringify: yamlStringify } = await import("yaml");
-    for (const [key, value] of Object.entries(cfg.extraConfig)) {
+    for (const [key, value] of Object.entries(extraConfig)) {
       if (value !== undefined && value !== null) {
         const serialized = yamlStringify({ [key]: value }).trim();
         wolfYamlLines.push(serialized);

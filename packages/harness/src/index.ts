@@ -1,13 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { selectMainModel } from "./main-model.js";
 
-// TODO: Claude Agent SDK provider for MAX/Pro subscription support
-// Requires pi-claude-bridge to export a pi-ai provider, or implementing
-// the full pi-ai AssistantMessageEventStream protocol (~500-1000 lines).
-// Until then a pi-durable wolf must resolve to `transport: api`.
 import { createRegistry, Harness, type Conversation, type ContextEdit } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord/context";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
@@ -83,17 +78,15 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // load before extensions: it sets WOLFPACK_MODELS_FILE for the memory worker.
   const table = loadWolfModels(config);
   // On subscription, engine steps (memory, consolidation, KB sweep) run on the
-  // Max plan through the Agent SDK; the main agent has no Max provider on
-  // pi-durable yet, so it stays on the API key either way.
+  // Max plan through the Agent SDK; the main agent uses the pi-claude-bridge
+  // provider on the same plan (selectMainModel), with the API key as fallback.
   if (table.transport === "subscription" && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     throw new Error(
       `${config.name} is on transport: subscription but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
     );
   }
   const main = table.tiers.main;
-  const mainVia = table.transport === "subscription" ? "API key (no Max provider for the main agent on pi-durable yet)" : "API key";
   console.log(`[harness] Models: main=${main.model} smart=${table.tiers.smart.model} fast=${table.tiers.fast.model} (transport ${table.transport})`);
-  console.log(`[harness] Main agent via ${mainVia}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
   for (const w of table.warnings) console.warn(`[harness] models: ${w}`);
   console.log(`[harness] API key set: ${!!process.env.ANTHROPIC_API_KEY}`);
   // Sandbox: serve the snapshot ledger locally and point den / KB_OPS / WORK_ENDPOINT at the dev root. From here
@@ -107,8 +100,11 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     mkdirSync(wolfDen, { recursive: true });
     console.log(`[harness] SANDBOX: den=${wolfDen} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
   }
-  const models = createModels();
-  models.setProvider(anthropicProvider());
+  // Main agent provider: Max subscription via the bridge, else the API key (also if the bridge fails to start).
+  const mainModel = await selectMainModel({ table, cwd: wolfDen });
+  console.log(`[harness] ${mainModel.line}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
+  if (mainModel.warning) console.warn(`[harness] ${mainModel.warning}`);
+  const models = mainModel.models;
 
   // Registry with CodingTools + wolf identity + wolf extensions
   const registry = createRegistry();
@@ -192,11 +188,10 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // Hooks (the memory observer) read conversation records/history through this; the host owns the interval timer.
   const detachReader = attachConversationReader(harness, wolfDen, { hostConsolidationTimer: true });
 
-  // Root conversation with wolf identity. Table IDs carry no provider prefix;
-  // the api transport means pi-ai's anthropic provider.
-  console.log(`[harness] Creating root: provider=anthropic, model=${main.model}`);
+  // Root conversation with wolf identity. Table IDs carry no provider prefix; the provider comes from selectMainModel.
+  console.log(`[harness] Creating root: provider=${mainModel.model.provider}, model=${main.model}`);
   const agent = {
-    model: { provider: "anthropic", modelId: main.model },
+    model: mainModel.model,
     ...(main.thinking ? { thinkingLevel: main.thinking } : {}),
     cwd: wolfDen,
   } as const;
@@ -325,6 +320,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       if (telegram) await telegram.stop();
       detachReader();
       await harness.close(context);
+      mainModel.shutdown();
       await sandbox?.close();
       restoreEnv();
     },

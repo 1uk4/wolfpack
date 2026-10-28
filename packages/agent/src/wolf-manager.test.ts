@@ -59,6 +59,24 @@ describe("harness bundle rollback", () => {
     await expect(manager.rollbackHarness("nope")).rejects.toThrow(/Wolf not found/);
   });
 
+  it("rollback restores the den extensions the bad sync replaced, and leaves owner extensions alone", async () => {
+    const ext = (n: string) => path.join(root, "home", "wolf-abc123", "den", "extensions", n, "index.js");
+    const yaml = b64("id: abc123\nname: hal\n");
+    fs.writeFileSync(path.join(agentDir(), "harness.cjs"), "H0");
+    await manager.updatePiDurableBundle("abc123", b64("H1"), yaml, b64("#"), { memory: b64("M1"), old: b64("O1") });
+    fs.mkdirSync(path.dirname(ext("owner")), { recursive: true });
+    fs.writeFileSync(ext("owner"), "OWN");
+    // The bad sync: new harness, memory changed, "old" dropped, "fresh" added.
+    await manager.updatePiDurableBundle("abc123", b64("H2"), yaml, b64("#"), { memory: b64("M2"), fresh: b64("F2") });
+    expect(fs.existsSync(ext("old"))).toBe(false);
+    await manager.rollbackHarness("abc123");
+    expect(fs.readFileSync(path.join(agentDir(), "harness.cjs"), "utf8")).toBe("H1");
+    expect(fs.readFileSync(ext("memory"), "utf8")).toBe("M1");
+    expect(fs.readFileSync(ext("old"), "utf8")).toBe("O1");
+    expect(fs.existsSync(ext("fresh"))).toBe(false);
+    expect(fs.readFileSync(ext("owner"), "utf8")).toBe("OWN");
+  });
+
   it("status reports the restart count", async () => {
     expect(await manager.status("abc123")).toMatchObject({ serviceState: "active", active: true, restarts: 3 });
   });

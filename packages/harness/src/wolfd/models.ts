@@ -25,17 +25,32 @@ export interface BuildWolfModelsOptions {
 
 export const NO_TOOL_SEARCH = { ENABLE_TOOL_SEARCH: "false" } as const;
 
+/**
+ * The bridge-only registry (provider + shutdown/release), shared by wolfd and the VPS harness so both pick the
+ * provider the same way. Throws if the bridge cannot be created; callers decide whether that is fatal.
+ */
+export function createBridgeModels(opts: BuildWolfModelsOptions & { queryFn?: ClaudeBridgeProviderOptions["queryFn"]; sweepOrphans?: boolean }): Required<WolfModels> {
+  // Env hygiene (stripping ANTHROPIC_API_KEY from the claude child) is done inside the bridge core.
+  // ENABLE_TOOL_SEARCH=false: the bridge runs claude with `tools: []`, which removes ToolSearch, yet Claude Code
+  // still defers MCP tool schemas behind it (the SDK's default for MCP servers). The model then sees task_bind etc.
+  // by name only and has no way to load the schema. Inline schemas for every tool the host hands us.
+  const provider = (opts.createProvider ?? createClaudeBridgeProvider)({
+    cwd: opts.cwd,
+    env: { ...(opts.env ?? process.env), ...NO_TOOL_SEARCH },
+    ...(opts.queryFn ? { queryFn: opts.queryFn } : {}),
+    ...(opts.sweepOrphans === false ? { sweepOrphans: false } : {}),
+  });
+  const models = createModels();
+  models.setProvider(provider);
+  return { models, shutdown: () => provider.shutdown(), release: (sessionId) => void provider.release(sessionId) };
+}
+
 export function buildWolfModels(model: Pick<ResolvedWolfModel, "transport" | "provider">, opts: BuildWolfModelsOptions): WolfModels {
   if (model.transport !== "subscription") return { shutdown: () => {}, release: () => {} };
   if (model.provider !== PROVIDER_ID) {
     throw new Error(`subscription transport resolved provider "${model.provider}", expected "${PROVIDER_ID}"`);
   }
-  // Env hygiene (stripping ANTHROPIC_API_KEY from the claude child) is done inside the bridge core.
-  // ENABLE_TOOL_SEARCH=false: the bridge runs claude with `tools: []`, which removes ToolSearch, yet Claude Code
-  // still defers MCP tool schemas behind it (the SDK's default for MCP servers). The model then sees task_bind etc.
-  // by name only and has no way to load the schema. Inline schemas for every tool the host hands us.
-  const provider = (opts.createProvider ?? createClaudeBridgeProvider)({ cwd: opts.cwd, env: { ...(opts.env ?? process.env), ...NO_TOOL_SEARCH } });
-  const models = createModels();
-  models.setProvider(provider);
-  return { models, shutdown: () => provider.shutdown(), release: (sessionId) => void provider.release(sessionId) };
+  return createBridgeModels(opts);
 }
+
+export { PROVIDER_ID as BRIDGE_PROVIDER_ID };

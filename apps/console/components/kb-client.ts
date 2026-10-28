@@ -16,6 +16,7 @@ import type {
 	MemoryTopic,
 	PromoteResponse,
 	WorkRecordResponse,
+	WorkListResponse,
 } from "@/src/core";
 
 export type KbFailureReason = "unavailable" | "not_found" | "error";
@@ -71,6 +72,11 @@ export function fetchMemoryTopic(wolf: string, id: string, scope?: "den" | "sess
 
 export function fetchWorkRecord(wolf: string, id: string): Promise<KbResult<WorkRecordResponse>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(id)}/record`);
+}
+
+/** The domain's work items through a wolf's Work API client (graduated and archived ones only with `graduated`). */
+export function fetchWorkList(wolf: string, domain: string, graduated = false): Promise<KbResult<WorkListResponse>> {
+	return request(`/api/wolves/${seg(wolf)}/work?domain=${seg(domain)}${graduated ? "&graduated=true" : ""}`);
 }
 
 /** Open (or reopen) the feature's thread on a wolf: `{id, title, ...}` of the ThreadSummary. */

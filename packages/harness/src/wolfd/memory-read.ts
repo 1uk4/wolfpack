@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary, observationIds, stripSources } from "@wolfpack/memory";
-import type { BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
+import type { WorkListItem, BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import type { KbWorkSource } from "@wolfpack/kb/graph";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
@@ -158,6 +158,9 @@ interface ApiWorkItem {
   container?: boolean;
   successCriteria?: string;
   updated?: string;
+  assignee?: string;
+  created?: string;
+  standing?: boolean;
 }
 
 type WorkFetch = { kind: "ok"; item: ApiWorkItem; body: string } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
@@ -262,6 +265,46 @@ function logTail(body: string): string[] {
 }
 
 export type WorkRecordResult = { kind: "ok"; value: WorkRecordResponse } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
+
+export type WorkListResult = { kind: "ok"; items: WorkListItem[] } | { kind: "unconfigured" } | { kind: "error"; message: string };
+
+/**
+ * GET <endpoint>/work?domain=: the domain's items for the console's Work view. Graduated and archived items are left out
+ * unless `includeGraduated`. Unlike the best-effort readers this reports failures, so the view can say why it is empty.
+ */
+export async function readWorkList(domain: string, includeGraduated: boolean, work: { endpoint?: string; token?: string }): Promise<WorkListResult> {
+  const endpoint = (work.endpoint ?? "").replace(/\/$/, "");
+  if (!endpoint || !work.token) return { kind: "unconfigured" };
+  try {
+    const res = await fetch(`${endpoint}/work?domain=${encodeURIComponent(domain)}`, { headers: { "X-API-Key": work.token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+    if (!res.ok) return { kind: "error", message: `HTTP ${res.status}` };
+    const data = (await res.json()) as { items?: ApiWorkItem[] };
+    if (!Array.isArray(data.items)) return { kind: "error", message: "unexpected response" };
+    const items: WorkListItem[] = [];
+    for (const w of data.items) {
+      if (typeof w.id !== "string") continue;
+      const graduated = typeof w.graduated === "string" && w.graduated ? w.graduated : w.graduated === true ? "graduated" : undefined;
+      if (!includeGraduated && (graduated !== undefined || w.stage === "archived")) continue;
+      items.push({
+        id: w.id,
+        title: w.title ?? "",
+        kind: w.kind ?? "",
+        stage: w.stage ?? "",
+        domain: w.domain ?? domain,
+        partOf: w.partOf ?? null,
+        dependsOn: Array.isArray(w.dependsOn) ? w.dependsOn : [],
+        ...(w.assignee ? { assignee: w.assignee } : {}),
+        ...(w.created ? { created: w.created } : {}),
+        ...(w.standing ? { standing: true } : {}),
+        ...(w.container ? { container: true } : {}),
+        ...(graduated !== undefined ? { graduated } : {}),
+      });
+    }
+    return { kind: "ok", items };
+  } catch (e) {
+    return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 /** The item's page data (plan, Record, links) through the Work API client. */
 export async function readWorkRecord(id: string, work: { endpoint?: string; token?: string }): Promise<WorkRecordResult> {

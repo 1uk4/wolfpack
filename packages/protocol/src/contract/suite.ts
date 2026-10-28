@@ -484,6 +484,11 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
         expect(ErrorEnvelopeSchema.parse(await o.json()).code).toBe("memory_unavailable");
       }
       await expectError(await call(`${buildPath("getMemoryObservations", { name: wolf })}?limit=nope`), "invalid_request");
+      await expectError(await call(buildPath("listWork", { name: "no-such-wolf" })), "not_found");
+      await expectError(await call(buildPath("listWork", { name: wolf })), "invalid_request");
+      const l = await call(`${buildPath("listWork", { name: wolf })}?domain=wolfpack`);
+      if (l.status === 200) ROUTES.listWork.response.schema.parse(await l.json());
+      else expect(ErrorEnvelopeSchema.parse(await l.json()).code).toBe("memory_unavailable");
       const w = await call(buildPath("getWorkRecord", { name: wolf, id: "work-x-1234567" }));
       expect(w.status).toBeGreaterThanOrEqual(400);
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);

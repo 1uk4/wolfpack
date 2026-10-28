@@ -26,6 +26,7 @@ import {
   WolfSummarySchema,
   WorkspaceStatusSchema,
   WorkRecordResponseSchema,
+  WorkListResponseSchema,
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
@@ -234,6 +235,12 @@ export const ROUTES = {
    * A work item's page data (plan + Record + links), fetched through the wolf's Work API client. 404 `not_found` for an unknown item or wolf,
    * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.
    */
+  /**
+   * The work items of one domain (`?domain=`, required), via the wolf's Work API client; graduated and archived ones only with `?graduated=true`.
+   * 400 `invalid_request` for a missing domain or a bad flag, 404 `not_found` for an unknown wolf, 409 `memory_unavailable` when the wolf has no
+   * Work API configured, 502 `engine_error` when it cannot be reached.
+   */
+  listWork: { method: "GET", path: "/v1/wolves/:name/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
    * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last

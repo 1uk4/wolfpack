@@ -49,6 +49,7 @@ import {
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
 import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
+import { WorkButton } from "./work-view-entry.tsx";
 import { Hint } from "@/components/ui/hint";
 
 /** The default node look when a node carries no colour of its own. */
@@ -154,7 +155,8 @@ export function GraphChromeRow({
 					{noMatch && <div className="px-1.5 pt-1 text-[11px] text-muted-foreground">No matching nodes.</div>}
 				</div>
 			)}
-			<div className="graph-chrome-fade-in shrink-0">
+			<div className="graph-chrome-fade-in flex shrink-0 items-center gap-2">
+				<WorkButton />
 				<GraphSettingsControl settings={settings} changeSettings={changeSettings} domains={domains} />
 			</div>
 		</>

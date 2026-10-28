@@ -1071,6 +1071,34 @@ export const WorkRecordResponseSchema = z.object({
 });
 export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 
+/** One row of `GET /v1/wolves/:name/work`: the slice of a work item the console's Work view needs. */
+export const WorkListItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.string(),
+  stage: z.string(),
+  domain: z.string(),
+  partOf: z.string().nullable().optional(),
+  dependsOn: z.array(z.string()),
+  assignee: z.string().optional(),
+  /** YYYY-MM-DD. */
+  created: z.string().optional(),
+  /** A standing initiative never completes. Only present when true. */
+  standing: z.boolean().optional(),
+  /** A holding container (a domain's Inbox). Only present when true. */
+  container: z.boolean().optional(),
+  /** The date it graduated; only present on graduated items. */
+  graduated: z.string().optional(),
+});
+export type WorkListItem = z.infer<typeof WorkListItemSchema>;
+
+/**
+ * `GET /v1/wolves/:name/work?domain=<d>[&graduated=true]`: the domain's work items through the wolf's Work API client.
+ * Graduated and archived items are left out unless `graduated=true`.
+ */
+export const WorkListResponseSchema = z.object({ items: z.array(WorkListItemSchema) });
+export type WorkListResponse = z.infer<typeof WorkListResponseSchema>;
+
 // ------------------------------------------------------------ KB graph
 
 export const KbNodeKindSchema = z.enum(["domain", "factory", "section", "entry", "work", "den-topic"]);

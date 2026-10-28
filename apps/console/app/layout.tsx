@@ -5,6 +5,7 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell, SidebarProvider } from "@/components/sidebar";
 import { SubagentModalProvider } from "@/components/subagent-modal";
+import { WorkViewProvider } from "@/components/work-view";
 import { ActivityProvider } from "@/components/activity-dock";
 import { ServerEventsProvider } from "@/components/server-events";
 import { MemoryEventsProvider } from "@/components/memory-events";
@@ -33,7 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 						<SidebarProvider>
 							<ActivityProvider>
 								<SubagentModalProvider>
-									<AppShell>{children}</AppShell>
+									<WorkViewProvider>
+										<AppShell>{children}</AppShell>
+									</WorkViewProvider>
 								</SubagentModalProvider>
 							</ActivityProvider>
 						</SidebarProvider>

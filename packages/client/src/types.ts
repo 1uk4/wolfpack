@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkspaceStatus, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkspaceStatus, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -44,7 +44,7 @@ export type ThreadEventType = ThreadEvent["type"];
 export type { CreateThreadBody } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, WorkListResponse, WorkListItem, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
@@ -154,6 +154,8 @@ export interface ConsoleClient {
   /** The wolf's current observation pool, newest first (`limit`: keep the newest n). Rejects with `memory_unavailable` when memory is inert or off. Optional like watchMemory. */
   getMemoryObservations?(wolf: string, opts?: { limit?: number }): Promise<MemoryObservations>;
   getMemoryTopic?(wolf: string, topicId: string, opts?: { scope?: "den" | "session" }): Promise<MemoryTopic>;
+  /** The domain's work items via the wolf's Work API client (graduated and archived only with `graduated`). Rejects with `memory_unavailable` when the wolf has no Work API. Optional like watchMemory. */
+  listWork?(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /** Dewey's pipeline view. Librarian only: other wolves reject (kb_unavailable). */

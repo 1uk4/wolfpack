@@ -43,7 +43,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkList, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
@@ -618,6 +618,17 @@ export class WolfServer {
         const { state, reason } = memoryState(this.memoryReadInput());
         if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
         return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit), this.opts.work ?? {}));
+      }
+      case "listWork": {
+        this.checkWolf(params.name);
+        const domain = url.searchParams.get("domain");
+        if (!domain) throw new HttpError("invalid_request", "domain is required");
+        const flag = url.searchParams.get("graduated");
+        if (flag !== null && flag !== "true" && flag !== "false") throw new HttpError("invalid_request", "graduated must be true or false");
+        const r = await readWorkList(domain, flag === "true", this.opts.work ?? {});
+        if (r.kind === "unconfigured") throw new HttpError("memory_unavailable", "no Work API configured on this wolf (WORK_ENDPOINT / WORK_TOKEN)");
+        if (r.kind === "error") throw new HttpError("engine_error", `work API: ${r.message}`);
+        return this.json(res, 200, { items: r.items });
       }
       case "getWorkRecord": {
         this.checkWolf(params.name);

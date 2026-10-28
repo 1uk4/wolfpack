@@ -116,6 +116,17 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
+		async workList(wolf: string, domain: string | null, graduated: boolean): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.listWork) return unsupported("memory_unavailable", "work lists");
+				if (!domain) return json({ error: "domain is required", code: "invalid_request" }, 400);
+				return json(await client.listWork(wolf, { domain, graduated }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async consolidate(wolf: string): Promise<Response> {
 			try {
 				const client = source();

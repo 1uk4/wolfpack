@@ -28,6 +28,8 @@ export type {
 	ConsolidateResponse,
 	PromoteResponse,
 	WorkRecordResponse,
+	WorkListItem,
+	WorkListResponse,
 } from "@wolfpack/client";
 
 /** The pack's librarian (serves the KB), or null when none is known/flagged. */

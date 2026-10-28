@@ -302,6 +302,11 @@ export class StubServer {
         if (limit !== null && !/^[1-9]\d{0,6}$/.test(limit)) throw new HttpError("invalid_request", "limit must be a positive integer");
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
       }
+      case "listWork": {
+        this.wolf(params.name);
+        if (!url.searchParams.get("domain")) throw new HttpError("invalid_request", "domain is required");
+        throw new HttpError("memory_unavailable", "no Work API configured on this wolf");
+      }
       case "getWorkRecord":
         this.wolf(params.name);
         throw new HttpError("not_found", `work item ${params.id}`);

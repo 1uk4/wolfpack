@@ -41,6 +41,7 @@ export function OverlayShell({
 	closeTestId,
 	onClose,
 	header,
+	bleed = false,
 	children,
 }: {
 	/** aria-label, when there is no visible title element to point at. */
@@ -52,6 +53,8 @@ export function OverlayShell({
 	onClose: () => void;
 	/** The header row, given the close button. Omit when the body draws its own header (children as a function). */
 	header?: (close: ReactNode) => ReactNode;
+	/** Full-bleed: no page padding, so the body's own TopBar spans the window edge to edge. */
+	bleed?: boolean;
 	children: ReactNode | ((close: ReactNode) => ReactNode);
 }) {
 	const dialogRef = useRef<HTMLDivElement>(null);
@@ -102,7 +105,7 @@ export function OverlayShell({
 	return (
 		<div
 			ref={dialogRef}
-			className="fixed inset-0 z-50 flex flex-col bg-background p-4"
+			className={`fixed inset-0 z-50 flex flex-col bg-background${bleed ? "" : " p-4"}`}
 			role="dialog"
 			aria-modal="true"
 			aria-label={labelledBy ? undefined : label}

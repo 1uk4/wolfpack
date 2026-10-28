@@ -28,6 +28,7 @@ import {
   type MemoryTopic,
   type MemoryObservations,
   type WorkRecordResponse,
+  type WorkListResponse,
   type KbPipelineResponse,
   type PendingCard,
   type PromoteResponse,
@@ -297,6 +298,11 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
     const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
     return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
+  }
+
+  async listWork(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
+    const query = `?domain=${encodeURIComponent(opts.domain)}${opts.graduated ? "&graduated=true" : ""}`;
+    return (await this.json("listWork", { name: wolf }, ROUTES.listWork.response.schema, undefined, wolf, query)) as WorkListResponse;
   }
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {

@@ -70,6 +70,15 @@ describe("memory API: pass-through", () => {
 		assert.deepEqual(await body(await api.kbEntry("lib", "e1")), { w: "lib", id: "e1" });
 	});
 
+	it("workList passes the domain and graduated flag, and needs a domain", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ listWork: async (...a: unknown[]) => (calls.push(a), { items: [] }) }));
+		assert.deepEqual(await body(await api.workList("a", "wolfpack", true)), { items: [] });
+		assert.deepEqual(calls[0], ["a", { domain: "wolfpack", graduated: true }]);
+		assert.equal((await api.workList("a", null, false)).status, 400);
+		assert.equal((await createMemoryApi(stub({})).workList("a", "d", false)).status, 409);
+	});
+
 	it("kbGraph maps query params to options", async () => {
 		const calls: unknown[][] = [];
 		const api = createMemoryApi(stub({ getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }) }));

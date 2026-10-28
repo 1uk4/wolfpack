@@ -200,6 +200,48 @@ export function absorbed(m: LhMessage, record: readonly LhMessage[]): boolean {
 	return false;
 }
 
+/** What a message says, ignoring ids, timestamps and thinking: the key a streamed copy shares with its record copy. */
+function echoKey(m: LhMessage): string | null {
+	const role = (m as { role?: string }).role;
+	if (role === "toolResult") return `r:${(m as ToolResultMessage).toolCallId}`;
+	if (role !== "assistant") return null;
+	const content = (m as { content?: unknown }).content;
+	if (!Array.isArray(content)) return null;
+	const parts = content.flatMap((b: { type?: string; text?: string; id?: string }) =>
+		b.type === "text" ? [`t:${b.text ?? ""}`] : b.type === "toolCall" ? [`c:${b.id ?? ""}`] : [],
+	);
+	return parts.length > 0 ? `a:${parts.join("\u0000")}` : null;
+}
+
+/**
+ * The live tail minus what the record already holds. The stream replays a whole turn from its first event with
+ * client-minted ids, so a turn that finished before the attach (or between the record fetch and the attach) arrives
+ * in BOTH the record and the tail: the record's copy wins. Only the leading run of the tail is compared, against the
+ * record's messages after its last user message; a user message in the tail (this client's own optimistic send) ends
+ * the run, so a genuinely new turn that repeats an earlier reply is never swallowed.
+ */
+export function withoutEchoes(base: readonly LhMessage[], tail: readonly LhMessage[]): LhMessage[] {
+	if (tail.length === 0 || base.length === 0) return tail as LhMessage[];
+	let from = base.length;
+	while (from > 0 && (base[from - 1] as { role?: string }).role !== "user") from--;
+	const pool = new Map<string, number>();
+	for (const m of base.slice(from)) {
+		const k = echoKey(m);
+		if (k !== null) pool.set(k, (pool.get(k) ?? 0) + 1);
+	}
+	if (pool.size === 0) return tail as LhMessage[];
+	const out: LhMessage[] = [];
+	let leading = true;
+	for (const m of tail) {
+		if ((m as { role?: string }).role === "user") leading = false;
+		const k = leading ? echoKey(m) : null;
+		const n = k === null ? 0 : (pool.get(k) ?? 0);
+		if (k !== null && n > 0) pool.set(k, n - 1);
+		else out.push(m);
+	}
+	return out;
+}
+
 /** Structural deep-equal for marker details (JSON-stable payloads — the
  *  constructors mint plain data). */
 function sameDetails(a: unknown, b: unknown): boolean {
@@ -302,9 +344,10 @@ export class SessionModel {
 			this.statusValue === "submitted" || this.statusValue === "streaming"
 				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds }
 				: undefined;
+		const all = [...this.base, ...withoutEchoes(this.base, this.tail)];
 		return {
-			messages: projectView([...this.base, ...this.tail], live),
-			nativeMessages: [...this.base, ...this.tail],
+			messages: projectView(all, live),
+			nativeMessages: all,
 			status: this.statusValue,
 			error: this.errorValue,
 			steerQueue: this.steerQueueValue,

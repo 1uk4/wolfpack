@@ -265,6 +265,19 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		// ---- header git tree ----
+		/** The live git status of a thread's workspace (the header popover). 404 when the thread has none; a client without git support has none. */
+		async workspaceStatus(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getWorkspaceStatus) return json({ error: "this wolf has no git workspaces" }, 404);
+				return json(await client.getWorkspaceStatus(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+		// ---- /header git tree ----
+
 		async abort(ref: ThreadRef): Promise<Response> {
 			try {
 				const client = source();

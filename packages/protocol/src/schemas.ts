@@ -317,6 +317,24 @@ export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
  */
 export const SubagentStateSchema = z.enum(["queued", "running", "waiting", "done", "failed", "stopped"]);
 export type SubagentState = z.infer<typeof SubagentStateSchema>;
+// ---- header git tree (workspace) ----------------------------------------------------------------------------------
+/** Where a thread works: the repo, the branch it is on, what that branch was cut from, and whether it is a linked worktree. */
+export const ThreadWorkspaceSchema = z.object({
+  /** Repository name (the main checkout's directory name). */
+  repo: z.string(),
+  /** Git toplevel of the checkout the thread works in. */
+  toplevel: z.string(),
+  /** The branch this one was cut from (feature: recorded at creation, else the main checkout's branch; subagent: the feature branch). Absent for home. */
+  base: z.string().optional(),
+  /** Current branch ("HEAD" when detached). */
+  branch: z.string(),
+  path: z.string(),
+  /** True when `path` is a linked worktree, not the repo's main checkout. */
+  isWorktree: z.boolean(),
+});
+export type ThreadWorkspace = z.infer<typeof ThreadWorkspaceSchema>;
+// ---- /header git tree ---------------------------------------------------------------------------------------------
+
 export const ThreadSummarySchema = z.object({
   id: z.string(),
   wolf: z.string(),
@@ -344,6 +362,8 @@ export const ThreadSummarySchema = z.object({
   tokens: z.number().int().nonnegative().optional(),
   /** The work item (task) this child serves: named in its brief, else the one its parent is bound to. */
   taskId: z.string().optional(),
+  /** Additive (header git tree): the thread's git workspace. Absent for a non-git thread, or an older server. */
+  workspace: ThreadWorkspaceSchema.optional(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -525,6 +545,29 @@ export const ThreadDetailSchema = ThreadSummarySchema.extend({
   pendingCards: z.array(PendingCardSchema).optional(),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetailSchema>;
+
+// ---- header git tree (workspace status) ---------------------------------------------------------------------------
+export const WorkspaceDirtyFileSchema = z.object({
+  path: z.string(),
+  /** Two-character `git status --porcelain` code (" M", "??", "A " ...). */
+  status: z.string(),
+});
+export const WorkspaceCommitSchema = z.object({ sha: z.string(), subject: z.string(), at: IsoSchema });
+export const WorkspaceChildSchema = z.object({ threadId: z.string(), name: z.string(), branch: z.string(), path: z.string() });
+/** The live git state behind the header popover: read-only, a few seconds old at most. */
+export const WorkspaceStatusSchema = z.object({
+  branch: z.string(),
+  /** Commits ahead of / behind the base branch (0 / 0 without a base). */
+  ahead: z.number().int().nonnegative(),
+  behind: z.number().int().nonnegative(),
+  dirty: z.array(WorkspaceDirtyFileSchema),
+  /** The last 5 commits, newest first. */
+  commits: z.array(WorkspaceCommitSchema),
+  /** Worktrees of this thread's running subagents. */
+  children: z.array(WorkspaceChildSchema),
+});
+export type WorkspaceStatus = z.infer<typeof WorkspaceStatusSchema>;
+// ---- /header git tree ---------------------------------------------------------------------------------------------
 
 // --------------------------------------------------------------- events
 

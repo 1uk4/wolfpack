@@ -199,6 +199,7 @@ async function startConfigured(
 
     const server = new WolfServer({
       name: config.identity.name,
+      workspace: cwd, // header git tree: the home thread's git workspace
       conversation,
       // Feature threads: fresh ownerless conversations configured like home (reconciled again when reopened).
       conversations: {

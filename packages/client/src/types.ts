@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkspaceStatus, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -18,8 +18,10 @@ export type {
   ThreadObject,
   ThreadToolCall,
   ThreadSummary,
+  ThreadWorkspace,
   WhenBusy,
   WolfSummary,
+  WorkspaceStatus,
 } from "@wolfpack/protocol";
 
 /**
@@ -84,6 +86,10 @@ export interface ConsoleClient {
   listChildren?(threadId: string): Promise<ThreadSummary[]>;
   /** A subagent thread's ledger (brief, steers, questions, owner messages, results), oldest first. Rejects NotFoundError for an unknown thread or one that is not a subagent. Optional like listChildren. */
   getLedger?(threadId: string): Promise<LedgerEntry[]>;
+  // ---- header git tree ----
+  /** Live git state of the thread's workspace (header popover). Rejects NotFoundError for an unknown thread or one without a git workspace. Optional: the mock has no git. */
+  getWorkspaceStatus?(threadId: string): Promise<WorkspaceStatus>;
+  // ---- /header git tree ----
   /**
    * Open a thread: `{kind:"home"}`, or `{kind:"feature", workItemId}` for a thread bound to that feature. Idempotent:
    * the same feature returns its existing thread. Optional: not every client has it.

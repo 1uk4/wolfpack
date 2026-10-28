@@ -22,6 +22,7 @@ import {
   ThreadEventSchema,
   ThreadSummarySchema,
   WolfSummarySchema,
+  WorkspaceStatusSchema,
   WorkRecordResponseSchema,
   KbPipelineResponseSchema,
 } from "./schemas.js";
@@ -95,6 +96,13 @@ export const ROUTES = {
    * not a subagent.
    */
   getLedger: { method: "GET", path: "/v1/threads/:id/ledger", response: { kind: "json", schema: LedgerResponseSchema }, status: [200], error: err },
+  // ---- header git tree ----
+  /**
+   * Live git state of a thread's workspace (branch, ahead/behind its base, dirty files, last 5 commits, running
+   * subagents' worktrees). Read-only, cached a few seconds. 404 `not_found` for an unknown thread or one without a git workspace.
+   */
+  getWorkspaceStatus: { method: "GET", path: "/v1/threads/:id/workspace/status", response: { kind: "json", schema: WorkspaceStatusSchema }, status: [200], error: err },
+  // ---- /header git tree ----
   getThread: { method: "GET", path: "/v1/threads/:id", response: { kind: "json", schema: ThreadDetailSchema }, status: [200], error: err },
   submit: { method: "POST", path: "/v1/threads/:id/submit", body: SubmitBodySchema, response: { kind: "json", schema: SubmitAckSchema }, status: [200], error: err },
   /**

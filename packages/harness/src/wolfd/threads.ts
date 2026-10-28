@@ -20,6 +20,8 @@ export interface SavedThread {
   closedReason?: string;
   /** The feature branch's worktree, set on the first worktree spawn; the thread's cwd lives there from then on. */
   workspace?: Workspace;
+  /** Header git tree: the branch the feature branch was cut from, recorded when the workspace was created. */
+  workspaceBase?: string;
 }
 
 const registryFile = (den: string) => join(den, "wolfd", "threads.json");
@@ -73,13 +75,13 @@ export function saveThread(den: string, thread: SavedThread, onError?: (e: unkno
 }
 
 /** Record (or, with undefined, drop) the feature workspace of a saved thread (no-op when the thread is not saved). */
-export function setThreadWorkspace(den: string, id: string, workspace: Workspace | undefined, onError?: (e: unknown) => void): void {
+export function setThreadWorkspace(den: string, id: string, workspace: Workspace | undefined, onError?: (e: unknown) => void, base?: string): void {
   const threads = loadThreads(den, onError);
   if (!threads.some((t) => t.id === id)) return;
   writeThreads(den, threads.map((t) => {
     if (t.id !== id) return t;
-    const { workspace: _drop, ...rest } = t;
-    return workspace ? { ...rest, workspace } : rest;
+    const { workspace: _drop, workspaceBase: _dropBase, ...rest } = t;
+    return workspace ? { ...rest, workspace, ...(base ? { workspaceBase: base } : {}) } : rest;
   }));
 }
 

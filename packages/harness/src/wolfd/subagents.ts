@@ -253,6 +253,20 @@ export class SubagentManager {
     return this.records.filter((r) => r.parentThreadId === parentThreadId).map((r) => this.port.thread(r.id)?.threadSummary() ?? this.summaryOf(r));
   }
 
+  // ---- header git tree ----
+  /** The child's record (its worktree, cwd and parent), or undefined for a thread that is not a subagent. */
+  recordOf(threadId: string): ChildRecord | undefined {
+    return this.records.find((r) => r.id === threadId);
+  }
+
+  /** The children of a thread that are still live (queued, running or waiting), with the worktree each works in. */
+  liveWorktrees(parentThreadId: string): { threadId: string; name: string; branch: string; path: string }[] {
+    return this.records
+      .filter((r) => r.parentThreadId === parentThreadId && r.workspace && (r.state === "queued" || r.state === "running" || r.state === "waiting"))
+      .map((r) => ({ threadId: r.id, name: r.name, branch: r.workspace!.branch, path: r.workspace!.path }));
+  }
+  // ---- /header git tree ----
+
   ledgerOf(childThreadId: string): LedgerEntry[] | undefined {
     return this.records.some((r) => r.id === childThreadId) ? readLedger(this.port.den, childThreadId, (e) => this.port.onError(e)) : undefined;
   }
@@ -1490,7 +1504,8 @@ ${text}`;
       const ws = await ensureFeatureWorkspace({ root, repo, featureSlug: slug, baseDir });
       try {
         await parent.conv.configure({ cwd: ws.path, ...(this.opts.instructionsFor ? { instructions: this.opts.instructionsFor(ws.path) } : {}) });
-        setThreadWorkspace(this.port.den, parent.summary.id, ws, (e) => this.port.onError(e));
+        const base = await gitOk(baseDir, ["branch", "--show-current"]).catch(() => "");
+        setThreadWorkspace(this.port.den, parent.summary.id, ws, (e) => this.port.onError(e), base || undefined);
       } catch (e) {
         await abandonChild(ws).catch((err) => this.port.onError(err)); // just created, nothing on it
         throw e;

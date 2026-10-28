@@ -204,6 +204,15 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await call(buildPath("getLedger", { id: "nope/nope" })), "not_found");
     });
 
+    // ---- header git tree ----
+    it("workspace status: a thread without a git workspace is not_found, one with it matches the schema; unknown threads are not_found", async () => {
+      const r = await call(buildPath("getWorkspaceStatus", { id: threadId }));
+      if (r.status === 200) await expectJson(r, ROUTES.getWorkspaceStatus.response.schema);
+      else await expectError(r, "not_found");
+      await expectError(await call(buildPath("getWorkspaceStatus", { id: "nope/nope" })), "not_found");
+    });
+    // ---- /header git tree ----
+
     it("GET thread returns ThreadDetail; unknown thread is a not_found envelope", async () => {
       const t = await getThread(threadId);
       expect(t.id).toBe(threadId);

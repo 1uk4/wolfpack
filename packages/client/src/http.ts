@@ -42,6 +42,7 @@ import {
   type LedgerEntry,
   type WatchOptions,
   type WolfSummary,
+  type WorkspaceStatus,
 } from "./types.js";
 
 export interface HttpClientOptions {
@@ -105,6 +106,12 @@ export class HttpConsoleClient implements ConsoleClient {
     const r = await this.json("getLedger", { id: threadId }, ROUTES.getLedger.response.schema, undefined, threadId);
     return (r as { entries: LedgerEntry[] }).entries;
   }
+
+  // ---- header git tree ----
+  async getWorkspaceStatus(threadId: string): Promise<WorkspaceStatus> {
+    return (await this.json("getWorkspaceStatus", { id: threadId }, ROUTES.getWorkspaceStatus.response.schema, undefined, threadId)) as WorkspaceStatus;
+  }
+  // ---- /header git tree ----
 
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {
     const body = {

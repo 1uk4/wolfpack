@@ -31,6 +31,7 @@ import {
   type PromoteResponse,
   type WolfEvent,
   type ThreadSummary,
+  type ThreadWorkspace,
   type WolfSummary,
 } from "@wolfpack/protocol";
 import {
@@ -45,6 +46,7 @@ import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, read
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
+import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
 import { readFeatureClosed } from "@wolfpack/memory";
@@ -77,6 +79,12 @@ export interface WolfServerOptions {
   memoryConfig?: MemoryReadConfig;
   /** The Work API client settings (effective WORK_ENDPOINT / WORK_TOKEN) behind the work Record route. */
   work?: { endpoint?: string; token?: string };
+  // ---- header git tree ----
+  /** The wolf's workspace (the home thread's cwd): its git state is the home thread's `workspace`. Unset: home reports none. */
+  workspace?: string;
+  /** How long git answers behind `workspace` stay cached. Default 5000. */
+  gitCacheMs?: number;
+  // ---- /header git tree ----
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -116,6 +124,9 @@ export class WolfServer {
   private wolfBuffer: WolfEvent[] = [];
   private readonly wolfSubs = new Set<(ev: WolfEvent) => void>();
   private closing = false;
+  // ---- header git tree ----
+  private readonly gitInfo: GitInfo;
+  // ---- /header git tree ----
 
   constructor(private readonly opts: WolfServerOptions) {
     this.name = opts.name;
@@ -123,6 +134,7 @@ export class WolfServer {
     this.settleMs = opts.settleTimeoutMs ?? 5000;
     if (opts.den) this.memoryBus = memoryEventsFor(opts.den, opts.name);
     this.homeId = `${this.name}/home`;
+    this.gitInfo = new GitInfo(opts.gitCacheMs ?? 5000);
     if (opts.subagents && opts.den) {
       const { bridge, ...sub } = opts.subagents;
       this.subagents = new SubagentManager(
@@ -319,7 +331,7 @@ export class WolfServer {
     const p = (async () => {
       const id = featureThreadId(this.name, workItemId);
       const have = this.threads.get(id);
-      if (have) return { summary: have.threadSummary(), created: false };
+      if (have) return { summary: await this.withWorkspace(have.threadSummary()), created: false };
       const host = this.opts.conversations;
       if (!host || !this.opts.den) throw new HttpError("invalid_request", "this wolf cannot host feature threads");
       if (!isWorkId(workItemId)) throw new HttpError("invalid_request", "malformed work item id");
@@ -350,11 +362,44 @@ export class WolfServer {
         throw e;
       }
       this.emitWolf({ type: "thread-status", threadId: id, status: t.status() });
-      return { summary: t.threadSummary(), created: true };
+      return { summary: await this.withWorkspace(t.threadSummary()), created: true };
     })().finally(() => this.opening.delete(workItemId));
     this.opening.set(workItemId, p);
     return p;
   }
+
+  // ---- header git tree ----
+  /** Where a thread works (its cwd) and the branch that cwd's branch was cut from. */
+  private async locate(t: ThreadRuntime): Promise<{ dir: string; base?: string } | undefined> {
+    if (t.summary.kind === "subagent") {
+      const rec = this.subagents?.recordOf(t.summary.id);
+      if (!rec) return undefined;
+      const parent = this.threads.get(rec.parentThreadId);
+      // A worktree child was cut from its parent's branch; a child sharing the cwd has no base of its own.
+      const base = rec.workspace && parent ? (await this.workspaceOf(parent))?.branch : undefined;
+      return { dir: rec.workspace?.path ?? rec.cwd, ...(base ? { base } : {}) };
+    }
+    if (t.summary.kind === "feature") {
+      const saved = this.opts.den ? loadThreads(this.opts.den).find((s) => s.id === t.summary.id) : undefined;
+      if (saved?.workspace) {
+        const base = saved.workspaceBase ?? (await this.gitInfo.mainBranch(saved.workspace.repo.mainDir));
+        return { dir: saved.workspace.path, ...(base ? { base } : {}) };
+      }
+    }
+    return this.opts.workspace ? { dir: this.opts.workspace } : undefined;
+  }
+
+  private async workspaceOf(t: ThreadRuntime): Promise<ThreadWorkspace | undefined> {
+    const at = await this.locate(t);
+    return at ? this.gitInfo.workspaceOf(at.dir, at.base) : undefined;
+  }
+
+  private async withWorkspace<S extends ThreadSummary>(summary: S): Promise<S> {
+    const t = this.threads.get(summary.id);
+    const workspace = t ? await this.workspaceOf(t).catch(() => undefined) : undefined;
+    return workspace ? ({ ...summary, workspace } as S) : summary;
+  }
+  // ---- /header git tree ----
 
   // ------------------------------------------------------------- http
 
@@ -379,7 +424,7 @@ export class WolfServer {
         return this.json(res, 200, { wolves: [this.wolfSummary()] });
       case "listThreads":
         this.checkWolf(params.name);
-        return this.json(res, 200, { threads: [...this.threads.values()].map((t) => t.threadSummary()) });
+        return this.json(res, 200, { threads: await Promise.all([...this.threads.values()].map((t) => this.withWorkspace(t.threadSummary()))) });
       case "listCards":
         this.checkWolf(params.name);
         // A subagent's questions go to its parent, not to the operator's needs-you list.
@@ -406,11 +451,11 @@ export class WolfServer {
         // The home thread is the engine root conversation: it always exists once the process is up.
         const status = this.homeCreated ? 200 : 201;
         this.homeCreated = true;
-        return this.json(res, status, this.home.threadSummary());
+        return this.json(res, status, await this.withWorkspace(this.home.threadSummary()));
       }
       case "listChildren": {
         const t = this.checkThread(params.id);
-        return this.json(res, 200, { threads: this.subagents?.children(t.summary.id) ?? [] });
+        return this.json(res, 200, { threads: await Promise.all((this.subagents?.children(t.summary.id) ?? []).map((c) => this.withWorkspace(c))) });
       }
       case "getLedger": {
         const t = this.checkThread(params.id);
@@ -418,8 +463,18 @@ export class WolfServer {
         if (!entries) throw new HttpError("not_found", `thread ${t.summary.id} has no ledger`);
         return this.json(res, 200, { entries });
       }
-      case "getThread":
-        return this.json(res, 200, this.checkThread(params.id).detail());
+      case "getThread": {
+        const detail = this.checkThread(params.id).detail();
+        return this.json(res, 200, await this.withWorkspace(detail));
+      }
+      // ---- header git tree ----
+      case "getWorkspaceStatus": {
+        const t = this.checkThread(params.id);
+        const ws = await this.workspaceOf(t);
+        if (!ws) throw new HttpError("not_found", `thread ${t.summary.id} has no git workspace`);
+        return this.json(res, 200, await this.gitInfo.status(ws, this.subagents?.liveWorktrees(t.summary.id) ?? []));
+      }
+      // ---- /header git tree ----
       case "submit": {
         const t = this.checkThread(params.id);
         await this.assertOpen(t);

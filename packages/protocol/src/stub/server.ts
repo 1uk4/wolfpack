@@ -199,6 +199,15 @@ export class StubServer {
         if (t.summary.kind !== "subagent") throw new HttpError("not_found", `thread ${t.summary.id} has no ledger`);
         return this.json(res, 200, { entries: this.ledgers[t.summary.id] ?? [] });
       }
+      // ---- header git tree ----
+      case "getWorkspaceStatus": {
+        const t = this.thread(params.id);
+        const ws = t.summary.workspace;
+        if (!ws) throw new HttpError("not_found", `thread ${t.summary.id} has no git workspace`);
+        const children = [...this.threads.values()].filter((c) => c.summary.parentThreadId === t.summary.id && c.summary.workspace).map((c) => ({ threadId: c.summary.id, name: c.summary.title, branch: c.summary.workspace!.branch, path: c.summary.workspace!.path }));
+        return this.json(res, 200, { branch: ws.branch, ahead: 0, behind: 0, dirty: [], commits: [], children });
+      }
+      // ---- /header git tree ----
       case "getThread":
         return this.json(res, 200, this.detail(this.thread(params.id)));
       case "submit": {

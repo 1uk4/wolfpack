@@ -127,3 +127,11 @@ Set `WOLFPACK_DEBUG_STREAM=1` in the environment of the wolf process (wolfd) to 
 `text_start` / `thinking_start` / `block` / `message` entries are the restream shapes that used to be dropped; if a reply
 looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 npm run sandbox:stack:desktop`.
 Off by default.
+
+## Updating the runtime checkout
+
+`npm run runtime:update [feature-branch] [-- --dry-run]` promotes work into the live stack: it merges the branch into
+`wolf/1uk4` (never rebases; aborts cleanly on conflict), fast-forwards `stable` in the runtime checkout, runs
+`turbo run build`, rebuilds stale den extension bundles for non-sandbox wolves (old dir kept as `extensions.bak-<ts>`),
+pushes both branches (a failed push only warns), and says whether to reload the console (Cmd-R) or restart the stack.
+Branches are found via `git worktree list`; override with `INTEGRATION_BRANCH`, `RUNTIME_BRANCH`, `WOLVES_DIR`.

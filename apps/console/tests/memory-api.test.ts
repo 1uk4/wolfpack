@@ -240,3 +240,39 @@ describe("memory API: events SSE", () => {
 		assert.equal(aborted, true);
 	});
 });
+
+describe("memory API: graduation", () => {
+	it("graduatePreview and graduateConfirm call the client and pass the token", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				previewGraduation: async (...a: unknown[]) => (calls.push(["preview", ...a]), { token: "abc123abc123" }),
+				confirmGraduation: async (...a: unknown[]) => (calls.push(["confirm", ...a]), { graduated: true }),
+			}),
+		);
+		assert.deepEqual(await body(await api.graduatePreview("hal", "work-x-1")), { token: "abc123abc123" });
+		assert.deepEqual(await body(await api.graduateConfirm("hal", "work-x-1", { token: "abc123abc123" })), { graduated: true });
+		assert.deepEqual(calls, [["preview", "hal", "work-x-1"], ["confirm", "hal", "work-x-1", "abc123abc123"]]);
+	});
+
+	it("confirm needs a token and a client that graduates", async () => {
+		const api = createMemoryApi(stub({ confirmGraduation: async () => ({}) }));
+		for (const bad of [null, {}, { token: "" }, { token: 4 }]) {
+			const res = await api.graduateConfirm("hal", "work-x-1", bad);
+			assert.equal(res.status, 400);
+			assert.equal((await body(res)).code, "invalid_request");
+		}
+		assert.equal((await createMemoryApi(stub({})).graduatePreview("hal", "w")).status, 409);
+		assert.equal((await createMemoryApi(stub({})).graduateConfirm("hal", "w", { token: "t" })).status, 409);
+	});
+
+	it("maps the refusals to 409 with their code and an engine failure to 502", async () => {
+		const fail = (code: string) => stub({ previewGraduation: async () => { throw new ProtocolError(code as never, `no: ${code}`, false); } });
+		for (const code of ["not_ready", "preview_stale", "memory_unavailable"]) {
+			const res = await createMemoryApi(fail(code)).graduatePreview("hal", "w");
+			assert.equal(res.status, 409);
+			assert.deepEqual(await body(res), { error: `no: ${code}`, code });
+		}
+		assert.equal((await createMemoryApi(fail("engine_error")).graduatePreview("hal", "w")).status, 502);
+	});
+});

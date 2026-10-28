@@ -21,12 +21,15 @@ import {
   AnswerCardBodySchema,
   BindThreadBodySchema,
   CreateThreadBodySchema,
+  GraduationConfirmBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
   matchRoute,
   type ConsolidateResponse,
+  type GraduationPreview,
+  type GraduationResult,
   type KbPipelineResponse,
   type LastPromote,
   type PromoteResponse,
@@ -38,7 +41,7 @@ import {
 import {
   type EngineConversation,
 } from "../engine/index.js";
-import { memoryActionsFor, type MemoryActions } from "../memory/actions.js";
+import { graduationActionsFor, memoryActionsFor, type MemoryActions } from "../memory/actions.js";
 import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../memory/events.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
@@ -305,10 +308,48 @@ export class WolfServer {
     return undefined;
   }
 
-  /** Close the feature threads of these work items (a graduation happened). */
-  closeFeatureThreads(workItemIds: string[]): void {
+  /** Close the feature threads of these work items (a graduation happened). Returns the thread ids closed. */
+  closeFeatureThreads(workItemIds: string[]): string[] {
+    const closed: string[] = [];
     for (const t of this.threads.values()) {
-      if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) this.markClosed(t, GRADUATED_MESSAGE);
+      if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) {
+        this.markClosed(t, GRADUATED_MESSAGE);
+        closed.push(t.summary.id);
+      }
+    }
+    return closed;
+  }
+
+  /** Items whose graduation is running: a second preview or confirm for the same item is refused, not queued. */
+  private readonly graduating = new Set<string>();
+
+  /** The wolf's graduation actions, after the checks every graduate route shares. */
+  private graduationFor(params: Record<string, string>, validated?: () => void) {
+    this.checkWolf(params.name);
+    if (!isWorkId(params.id)) throw new HttpError("invalid_request", "malformed work item id");
+    validated?.();
+    if (!this.opts.work?.endpoint) throw new HttpError("memory_unavailable", "no Work API configured on this wolf (WORK_ENDPOINT / WORK_TOKEN)");
+    const actions = this.opts.den ? graduationActionsFor(this.opts.den) : undefined;
+    if (!actions) throw new HttpError("memory_unavailable", "this wolf cannot graduate work (the tasks extension is not loaded)");
+    return actions;
+  }
+
+  /** Run one graduation step for an item, one at a time, mapping the extension's refusals to protocol errors. */
+  private async graduate<T>(id: string, step: () => Promise<T>): Promise<T> {
+    if (this.graduating.has(id)) throw new HttpError("busy", `a graduation of ${id} is already running`);
+    this.graduating.add(id);
+    try {
+      return await step();
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      const code = (e as { name?: string; code?: string } | undefined)?.name === "GraduationError" ? (e as { code: string }).code : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      if (code === "not_ready") throw new HttpError("not_ready", message);
+      if (code === "preview_stale") throw new HttpError("preview_stale", message);
+      if (code === "unavailable") throw new HttpError("memory_unavailable", message);
+      throw new HttpError("engine_error", message);
+    } finally {
+      this.graduating.delete(id);
     }
   }
 
@@ -638,6 +679,28 @@ export class WolfServer {
         if (r.kind === "not_found") throw new HttpError("not_found", `work item ${params.id}`);
         if (r.kind === "error") throw new HttpError("engine_error", `work API: ${r.message}`);
         return this.json(res, 200, r.value);
+      }
+      case "previewGraduation": {
+        const actions = this.graduationFor(params);
+        const body: GraduationPreview = await this.graduate(params.id, () => actions.preview(params.id));
+        return this.json(res, 200, body);
+      }
+      case "confirmGraduation": {
+        const parsed = GraduationConfirmBodySchema.safeParse(await readJson(req));
+        const actions = this.graduationFor(params, () => {
+          if (!parsed.success) throw new HttpError("invalid_request", "body must be {token}");
+        });
+        if (!parsed.success) throw new HttpError("invalid_request", "body must be {token}");
+        const done = await this.graduate(params.id, () => actions.confirm(params.id, parsed.data.token));
+        const result: GraduationResult = {
+          graduated: true,
+          entries: done.entries,
+          archived: done.archived,
+          lateFolded: done.lateFolded,
+          unbound: done.unbound,
+          closedThreads: this.closeFeatureThreads([params.id, ...done.archived]),
+        };
+        return this.json(res, 200, result);
       }
       case "kbPipeline": {
         this.checkWolf(params.name);

@@ -35,8 +35,6 @@ import {
   readyToGraduate,
   readyBoundContext,
   readyBoundReply,
-  previewGraduation,
-  confirmGraduation,
   renderGraduationPreview,
   initiativeOf,
   type GraduationPreview,
@@ -55,7 +53,6 @@ import {
   unbindCompleted,
   peekUnboundNotice,
   clearUnboundNotice,
-  unbindOnGraduation,
   writeUnboundNotice,
   HttpWorkRecordStore,
   type WorkRecordStore,
@@ -72,6 +69,8 @@ import {
   writeBindingFile,
 } from "./conversation-binding.js";
 import { WorkClient, shipAndRollup } from "./work-client.js";
+import { createGraduation } from "./graduation.js";
+import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
 
 type WorkItemKind = "initiative" | "feature" | "task" | "issue" | "spike";
 type WorkItemStage = typeof STAGE_ORDER[number];
@@ -92,9 +91,6 @@ export interface TasksConfig {
   /** Work API store for graduation's pool drain (default: from context.env, else the process env). Test seam. */
   workStore?: WorkRecordStore;
 }
-
-/** A graduation preview waits this long for the owner's answer. */
-const PREVIEW_TTL_MS = 6 * 60 * 60 * 1000;
 
 interface ActiveBinding {
   taskId: string;
@@ -450,8 +446,6 @@ export default function createTasksExtension(
   }
 
   // ── Graduation: preview first, send only on the owner's yes ─────────────
-  const previewDir = () => join(wolfDen, "tasks", "graduation");
-  const previewFile = (token: string) => join(previewDir(), `${token.replace(/[^a-f0-9]/g, "")}.json`);
   function graduationRoots(): KbRoots | null {
     if (config.kbRoots) return config.kbRoots;
     const kbBase = env.KB_BASE;
@@ -508,6 +502,10 @@ export default function createTasksExtension(
   });
   const forgetCompletion = (id: string) => completionChecks.get(wolfDen)?.forget(id);
 
+  // The same wiring serves wolfd's graduate routes (the console's Graduate button): see graduation.ts.
+  const graduation = createGraduation({ client, wolfDen, wolfName, roots: graduationRoots, engine: graduationEngine, drain, ship, forget: forgetCompletion });
+  registerGraduationActions(wolfDen, graduation.actions);
+
   /** Unbind everyone else on a just-shipped task. Never throws: the caller reports a failure apart from the ship. */
   async function unbindOthersOf(ctx: BindingScope, id: string, title: string): Promise<string> {
     forgetCompletion(id);
@@ -523,6 +521,8 @@ export default function createTasksExtension(
   return defineExtension({
     name: "wolfpack-tasks",
     runtimes: ["pi-durable"],
+
+    lifecycle: { stop: () => unregisterGraduationActions(wolfDen, graduation.actions) },
 
     sections: [
       // Task tools instructions
@@ -1368,13 +1368,9 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
         }),
         async execute(args: { id: string; confirm?: string }, ctx: ToolContext): Promise<ToolResult> {
           const fail = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
-          const roots = graduationRoots();
-          if (!roots) return fail("The knowledge base is not configured for this wolf (KB_BASE / KB_OPS).");
           try {
             if (!args.confirm) {
-              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id, roots, drain });
-              await mkdir(previewDir(), { recursive: true });
-              await writeFile(previewFile(preview.token), JSON.stringify(preview));
+              const preview = await graduation.preview(args.id);
               const text = renderGraduationPreview(preview);
               return {
                 content: [{
@@ -1386,25 +1382,14 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
               };
             }
 
-            const file = previewFile(args.confirm);
-            if (!existsSync(file)) return fail("No such preview (or it was already used). Call task_graduate(id) again to get a fresh preview.");
-            const preview = JSON.parse(await readFile(file, "utf-8")) as GraduationPreview;
-            if (preview.itemId !== args.id) return fail(`That token is for ${preview.itemId}, not ${args.id}.`);
-            if (Date.now() - Date.parse(preview.createdAt) > PREVIEW_TTL_MS) {
-              return fail("That preview is too old. Call task_graduate(id) again for a fresh one and ask the owner again.");
-            }
-            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship, drain, engine: graduationEngine() });
-            await unlink(file).catch(() => { /* used once */ });
+            // Nothing more goes to a graduated feature: every holder unbinds, this conversation by the clearBinding below.
+            const { preview, done } = await graduation.confirm(args.id, args.confirm, { exceptRoot: (await resolveBindingRoot(ctx)).root });
 
             // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.
             const stored = isSubagent() ? null : (await readConversationBinding(ctx)).binding;
             const binding = stored ? { taskId: stored.workId, featureId: stored.featureId } : null;
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
             if (done.lateFolded) result.push(`${done.lateFolded} late observation(s) were folded in and included.`);
-            // Nothing more goes to a graduated feature: every conversation bound to it or to one of its tasks unbinds.
-            unbindOnGraduation(wolfDen, { id: args.id, title: preview.title, archived: done.archived, exceptRoot: (await resolveBindingRoot(ctx)).root });
-            forgetCompletion(args.id);
-            for (const a of done.archived) forgetCompletion(a);
             if (binding && (done.archived.includes(binding.taskId) || (binding.featureId && done.archived.includes(binding.featureId)))) {
               if (await clearBinding(ctx)) {
                 clearCache(binding.taskId);

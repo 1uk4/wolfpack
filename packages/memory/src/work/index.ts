@@ -85,6 +85,7 @@ export {
 export {
   canGraduate,
   readyToGraduate,
+  readinessOf,
   archiveSet,
   initiativeOf,
   buildGraduationInput,

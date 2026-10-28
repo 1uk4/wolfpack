@@ -30,6 +30,9 @@ export type {
 	WorkRecordResponse,
 	WorkListItem,
 	WorkListResponse,
+	GraduationPreview,
+	GraduationContribution,
+	GraduationResult,
 } from "@wolfpack/client";
 
 /** The pack's librarian (serves the KB), or null when none is known/flagged. */

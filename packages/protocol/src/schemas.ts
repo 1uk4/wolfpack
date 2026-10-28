@@ -29,6 +29,10 @@ export const ErrorCodeSchema = z.enum([
   "kb_unavailable",
   /** The thread is closed history (its feature graduated): reads work, sends are refused. */
   "thread_closed",
+  /** Graduation: the work item is not ready to graduate (the message says why: "2 tasks open"). */
+  "not_ready",
+  /** Graduation: the preview token is unknown, used, expired or for another item. Preview again. */
+  "preview_stale",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -52,6 +56,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   memory_busy: 409,
   kb_unavailable: 409,
   thread_closed: 409,
+  not_ready: 409,
+  preview_stale: 409,
 };
 
 // ---------------------------------------------------------------- cards
@@ -1098,6 +1104,71 @@ export type WorkListItem = z.infer<typeof WorkListItemSchema>;
  */
 export const WorkListResponseSchema = z.object({ items: z.array(WorkListItemSchema) });
 export type WorkListResponse = z.infer<typeof WorkListResponseSchema>;
+
+// ------------------------------------------------------------ graduation
+
+/** One KB entry a graduation will write (a distilled contribution), as previewed. */
+export const GraduationContributionSchema = z.object({
+  /** Den topic id it is emitted under. */
+  id: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  /** Markdown. */
+  body: z.string(),
+  /** The initiative's own entry. */
+  initiative: z.boolean(),
+  /** The `- ` lines of its History section. */
+  history: z.array(z.string()),
+  /** The existing entry distill says this is about. */
+  target: z.string().optional(),
+  /** A standing feature's own pinned entry. */
+  feature: z.boolean().optional(),
+});
+export type GraduationContribution = z.infer<typeof GraduationContributionSchema>;
+
+/**
+ * `POST /v1/wolves/:name/work/:id/graduate/preview`: what graduating the item would write to the KB. Nothing is sent
+ * or archived. `token` identifies exactly this preview; confirm sends it back.
+ */
+export const GraduationPreviewSchema = z.object({
+  itemId: z.string(),
+  kind: z.string(),
+  title: z.string(),
+  domain: z.string(),
+  contributions: z.array(GraduationContributionSchema),
+  /** Pending observations folded into the Record just before the entries were distilled. */
+  foldedObservations: z.number().int(),
+  /** Non-blocking: totals not carried over, secrets redacted, a stale build, missing History lines. */
+  warnings: z.array(z.string()),
+  /** Set when the entries still break the knowledge lint: they cannot be sent. */
+  blocked: z.string().optional(),
+  /** Items a confirmed graduation archives (the item first, then what it contains). */
+  archive: z.array(z.object({ id: z.string(), title: z.string() })),
+  token: z.string(),
+  createdAt: IsoSchema,
+  /** A preview only exists for a ready item, so `ready` is true here; the field keeps the shape of the readiness check. */
+  readiness: z.object({ ready: z.boolean(), reason: z.string().optional() }),
+});
+export type GraduationPreview = z.infer<typeof GraduationPreviewSchema>;
+
+export const GraduationConfirmBodySchema = z.object({ token: z.string().min(1) });
+export type GraduationConfirmBody = z.infer<typeof GraduationConfirmBodySchema>;
+
+/** `POST /v1/wolves/:name/work/:id/graduate/confirm`: the graduation happened (it is all or nothing). */
+export const GraduationResultSchema = z.object({
+  graduated: z.literal(true),
+  /** Den topic ids written to the KB inbox. */
+  entries: z.array(z.string()),
+  /** Work items archived (the item and what it contained). */
+  archived: z.array(z.string()),
+  /** Observations that arrived after the preview, folded in and included. */
+  lateFolded: z.number().int(),
+  /** Conversations on this wolf that were bound to the item or its tasks and are unbound now. */
+  unbound: z.number().int(),
+  /** Feature threads closed to read-only history. */
+  closedThreads: z.array(z.string()),
+});
+export type GraduationResult = z.infer<typeof GraduationResultSchema>;
 
 // ------------------------------------------------------------ KB graph
 

@@ -27,6 +27,9 @@ import {
   WorkspaceStatusSchema,
   WorkRecordResponseSchema,
   WorkListResponseSchema,
+  GraduationConfirmBodySchema,
+  GraduationPreviewSchema,
+  GraduationResultSchema,
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
@@ -242,6 +245,21 @@ export const ROUTES = {
    */
   listWork: { method: "GET", path: "/v1/wolves/:name/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * Graduation, step 1: distill the work item into KB entries and return them as a preview with a confirmation token.
+   * Nothing is written or archived (the wolf folds the item's pending tagged observations into its Record first). The
+   * wolf runs its own model and drains its own observation pool. No body. 404 `not_found` for an unknown wolf or item,
+   * 400 `invalid_request` for a malformed id, 409 `not_ready` (the message says why), 409 `memory_unavailable` when the
+   * wolf has no Work API / KB / graduation support, 502 `engine_error` when the drain or the distill fails (nothing was changed).
+   */
+  previewGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/preview", response: { kind: "json", schema: GraduationPreviewSchema }, status: [200], error: err },
+  /**
+   * Graduation, step 2: send a previewed graduation. All or nothing: the entries go to the KB inbox, then the item is
+   * marked graduated and archived with its tasks, every conversation bound to it unbinds and its feature thread closes.
+   * 409 `preview_stale` for an unknown, used, expired or other-item token (preview again), 409 `not_ready`, and as for
+   * preview; 502 `engine_error` with nothing archived when the late drain or any write fails.
+   */
+  confirmGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/confirm", body: GraduationConfirmBodySchema, response: { kind: "json", schema: GraduationResultSchema }, status: [200], error: err },
   /**
    * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
    * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).

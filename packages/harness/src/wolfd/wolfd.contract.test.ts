@@ -25,4 +25,4 @@ afterAll(async () => {
   rmSync(den, { recursive: true, force: true });
 });
 
-runContractSuite(() => url, { closeFeatureThread: (id) => server.closeFeatureThreads([id]) });
+runContractSuite(() => url, { closeFeatureThread: (id) => void server.closeFeatureThreads([id]) });

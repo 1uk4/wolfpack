@@ -76,6 +76,31 @@ export function readyToGraduate(item: WorkItem | undefined, all: WorkItem[]): it
   return false;
 }
 
+/** Whether `item` can graduate now and, when it cannot, why in a few words ("2 tasks open"). Mirrors readyToGraduate. */
+export function readinessOf(item: WorkItem | undefined, all: WorkItem[]): { ready: boolean; reason?: string } {
+  if (!item) return { ready: false, reason: "not found" };
+  const ready: boolean = readyToGraduate(item, all);
+  if (ready) return { ready: true };
+  return whyNot(item, all);
+}
+
+function whyNot(item: WorkItem, all: WorkItem[]): { ready: false; reason: string } {
+  if (item.container) return { ready: false, reason: "a holding container never graduates" };
+  if (item.graduated || item.stage === "archived") return { ready: false, reason: "already graduated" };
+  const kids = all.filter((i) => i.partOf === item.id);
+  if (item.kind === "feature") {
+    if (kids.length === 0) return { ready: false, reason: "no tasks yet" };
+    const open = kids.filter((k) => !isComplete(k)).length;
+    return { ready: false, reason: `${open} task${open === 1 ? "" : "s"} open` };
+  }
+  if (item.kind === "initiative") {
+    if (item.standing) return { ready: false, reason: "a standing initiative never graduates" };
+    const open = kids.filter((k) => k.kind === "feature" && !k.graduated).length;
+    return { ready: false, reason: open ? `${open} feature${open === 1 ? "" : "s"} not graduated` : "no features yet" };
+  }
+  return { ready: false, reason: STANDALONE_KINDS.includes(item.kind) ? (isComplete(item) ? "belongs to a feature" : "not shipped yet") : `a ${item.kind} does not graduate` };
+}
+
 /** Check if a work item is eligible for graduation */
 export function canGraduate(item: WorkItem): boolean {
   if (item.container) return false;

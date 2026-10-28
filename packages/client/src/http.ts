@@ -28,6 +28,8 @@ import {
   type MemoryTopic,
   type MemoryObservations,
   type WorkRecordResponse,
+  type GraduationPreview,
+  type GraduationResult,
   type WorkListResponse,
   type KbPipelineResponse,
   type PendingCard,
@@ -307,6 +309,14 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  async previewGraduation(wolf: string, workId: string): Promise<GraduationPreview> {
+    return (await this.json("previewGraduation", { name: wolf, id: workId }, ROUTES.previewGraduation.response.schema, {}, wolf)) as GraduationPreview;
+  }
+
+  async confirmGraduation(wolf: string, workId: string, token: string): Promise<GraduationResult> {
+    return (await this.json("confirmGraduation", { name: wolf, id: workId }, ROUTES.confirmGraduation.response.schema, { token }, wolf)) as GraduationResult;
   }
 
   /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */

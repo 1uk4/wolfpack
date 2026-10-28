@@ -8,6 +8,7 @@
 
 import { fuzzyScore } from "./fuzzy.ts";
 import { stageLabel } from "./kb-graph-model.ts";
+import { featureGraduateState, NO_GRADUATE, type GraduateState } from "./graduate.ts";
 import type { WorkListItem } from "./kb.ts";
 
 export type WorkSortCol = "name" | "stage" | "progress" | "assignee" | "created";
@@ -85,6 +86,8 @@ export interface TableRow {
 	self: Chip | null;
 	/** Graduated or archived: shown greyed (only present with the toggle on). */
 	graduated: boolean;
+	/** The Graduate button: shown on live features, enabled when ready (judged on ALL its tasks, whatever the search kept). */
+	graduate: GraduateState;
 	children: TableRow[];
 	/** Searching: a descendant matched, so this row opens by itself. */
 	autoExpand: boolean;
@@ -183,6 +186,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			notes,
 			self: chipOf(it, blocked),
 			graduated: isGraduated(it),
+			graduate: kind === "feature" ? featureGraduateState({ kind: it.kind, stage: it.stage, graduated: isGraduated(it), container: it.container }, tasks) : NO_GRADUATE,
 			children: kids,
 			autoExpand: false,
 		};
@@ -231,6 +235,7 @@ function groupOf(init: WorkListItem | null, rows: TableRow[], title: string, id:
 		notes: [],
 		self: null,
 		graduated: init ? isGraduated(init) : false,
+		graduate: NO_GRADUATE,
 		children: rows,
 		autoExpand: false,
 	};

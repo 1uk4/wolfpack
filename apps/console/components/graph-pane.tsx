@@ -18,13 +18,14 @@
  * node's card.
  */
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
 import type { KbEntryDetail, NodeCard, WorkRecordResponse } from "@/src/core";
 import {
 	GRAPH_PANE_WIDTH_KEY,
 	PaneCache,
 	clampPaneWidth,
+	featureGraduateState,
 	featureThreadWolves,
 	findLibrarian,
 	paneWork,
@@ -39,6 +40,9 @@ import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, fetchWolves, fetchWorkRecord, openFeatureThread } from "@/components/kb-client";
 import { EntryBody } from "@/components/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
+import { createGraduateClient, type GraduateClient } from "./graduate-client";
+import { GraduateButton, GraduateDialog } from "./graduate-dialog";
+import { useGraduated } from "./graduation-signal";
 import { RouteNav, isEditableTarget, type RouteNavModel } from "./graph-route-nav.tsx";
 
 // ---- Data ------------------------------------------------------------------
@@ -94,6 +98,13 @@ async function loadPaneData(card: NodeCard): Promise<PaneData> {
 export function usePaneData(card: NodeCard): PaneData {
 	const fetchable = card.kind === "work" || card.kind === "entry";
 	const [fetched, setFetched] = useState<{ id: string; data: PaneData } | null>(null);
+	// A graduation changes what the pane showed (the feature is archived now): forget it and read again.
+	const [reads, setReads] = useState(0);
+	useGraduated(() => {
+		dataCache.clear();
+		setFetched(null);
+		setReads((n) => n + 1);
+	});
 	useEffect(() => {
 		if (!fetchable || dataCache.get(card.id)) return;
 		let cancelled = false;
@@ -104,7 +115,7 @@ export function usePaneData(card: NodeCard): PaneData {
 		return () => {
 			cancelled = true;
 		};
-	}, [card.id, fetchable]);
+	}, [card.id, fetchable, reads]);
 	if (!fetchable) return { kind: "none" };
 	return dataCache.get(card.id) ?? (fetched?.id === card.id ? fetched.data : { kind: "loading" });
 }
@@ -210,6 +221,7 @@ export function GraphPane({
 	onSelectNode,
 	onNavigate,
 	onLayout,
+	graduate,
 }: {
 	/** The node whose details show (the route cursor's node while a route is selected). */
 	card: NodeCard;
@@ -221,8 +233,13 @@ export function GraphPane({
 	onNavigate: (href: string) => void;
 	/** The pane opened or changed width: the canvas beside it just resized. */
 	onLayout?: () => void;
+	/** The graduation seam (default: the console routes); tests inject a fake. */
+	graduate?: GraduateClient;
 }) {
 	const [width, setWidth] = usePaneWidth();
+	const graduateClient = useMemo(() => graduate ?? createGraduateClient(), [graduate]);
+	const [graduating, setGraduating] = useState(false);
+	useEffect(() => setGraduating(false), [card.id]);
 	const data = usePaneData(card);
 	const [threadError, setThreadError] = useState<string | null>(null);
 	const [threadBusy, setThreadBusy] = useState(false);
@@ -277,6 +294,11 @@ export function GraphPane({
 	};
 
 	const threadWolves = data.kind === "work" ? data.threadWolves : [];
+	// A feature's tasks come with its record; without them (older server) a shipped feature counts as ready.
+	const graduateState =
+		data.kind === "work"
+			? featureGraduateState({ kind: data.item.kind, stage: data.item.stage, container: data.item.container }, data.item.children ? data.item.children.filter((c) => c.kind !== "feature") : null)
+			: featureGraduateState({ kind: "", stage: "" }, null);
 	return (
 		<aside
 			data-testid="graph-pane"
@@ -350,6 +372,11 @@ export function GraphPane({
 						)}
 					</div>
 				)}
+				{graduateState.show && (
+					<div className="mt-3">
+						<GraduateButton state={graduateState} showReason testid="pane-graduate" onClick={() => setGraduating(true)} />
+					</div>
+				)}
 				{threadError && (
 					<div className="mt-2 text-xs text-destructive" role="alert">
 						{threadError}
@@ -378,6 +405,9 @@ export function GraphPane({
 					</div>
 				)}
 			</div>
+			{graduating && graduateState.show && (
+				<GraduateDialog target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} client={graduateClient} onClose={() => setGraduating(false)} />
+			)}
 		</aside>
 	);
 }

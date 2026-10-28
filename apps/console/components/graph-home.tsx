@@ -36,6 +36,7 @@ import { useMemoryEvents } from "./memory-events";
 import { GraphView, type GraphViewController } from "./graph-view";
 import { useGraphSettings } from "./use-graph-settings";
 import { useKbGraph } from "./use-kb-graph";
+import { useGraduated } from "./graduation-signal";
 import { useLibrarian } from "./use-librarian";
 
 function Placeholder({ title, children }: { title: string; children?: React.ReactNode }) {
@@ -117,6 +118,8 @@ function GraphHomeInner() {
 		denTopics: settings.layers.denTopics || !!forced.denTopics,
 	});
 	const controllerRef = useRef<GraphViewController | null>(null);
+	// A feature graduated (from the Work list or the pane): its node and tasks are archived now.
+	useGraduated(() => kb.refetch());
 
 	// Live activity: pulse the nodes events name; refetch when the librarian
 	// finishes a sweep (positions survive: the view keeps what it has).

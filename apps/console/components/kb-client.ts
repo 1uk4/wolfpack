@@ -9,6 +9,8 @@
  */
 import type {
 	ConsolidateResponse,
+	GraduationPreview,
+	GraduationResult,
 	KbEntryDetail,
 	KbGraph,
 	MemoryObservations,
@@ -108,4 +110,18 @@ export function postConsolidate(wolf: string): Promise<KbResult<ConsolidateRespo
 
 export function postPromote(wolf: string): Promise<KbResult<PromoteResponse>> {
 	return request(`/api/wolves/${seg(wolf)}/memory/promote`, { method: "POST" });
+}
+
+/** Graduation step 1 on a wolf: the KB entries the feature would write (nothing is sent). Failures carry `code` (not_ready, memory_unavailable…). */
+export function postGraduatePreview(wolf: string, workId: string): Promise<KbResult<GraduationPreview>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/preview`, { method: "POST" });
+}
+
+/** Graduation step 2: send the previewed graduation. A `preview_stale` code means preview again. */
+export function postGraduateConfirm(wolf: string, workId: string, token: string): Promise<KbResult<GraduationResult>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/confirm`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ token }),
+	});
 }

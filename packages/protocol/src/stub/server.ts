@@ -27,6 +27,7 @@ import {
   type ThreadMessage,
   type ThreadSummary,
   type WolfSummary,
+  GraduationConfirmBodySchema,
 } from "../schemas.js";
 
 export type ScriptStep =
@@ -310,6 +311,13 @@ export class StubServer {
       case "getWorkRecord":
         this.wolf(params.name);
         throw new HttpError("not_found", `work item ${params.id}`);
+      case "previewGraduation":
+      case "confirmGraduation":
+        this.wolf(params.name);
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(params.id)) throw new HttpError("invalid_request", "malformed work item id");
+        if (m.name === "confirmGraduation" && !GraduationConfirmBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {token}");
+        // The stub has no Work API: it cannot graduate anything.
+        throw new HttpError("memory_unavailable", "no Work API configured on this wolf");
       case "kbPipeline":
         this.wolf(params.name);
         throw new HttpError("kb_unavailable", "this wolf is not the librarian");

@@ -35,6 +35,9 @@ const STATUS_BY_CODE: Record<string, number> = {
 	promote_unavailable: 409,
 	memory_busy: 409,
 	kb_unavailable: 409,
+	thread_closed: 409,
+	not_ready: 409,
+	preview_stale: 409,
 };
 
 export const PING_INTERVAL_MS = 25_000;
@@ -122,6 +125,30 @@ export function createMemoryApi(source: ClientSource) {
 				if (!client.listWork) return unsupported("memory_unavailable", "work lists");
 				if (!domain) return json({ error: "domain is required", code: "invalid_request" }, 400);
 				return json(await client.listWork(wolf, { domain, graduated }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Graduation step 1: the KB entries graduating the item would write. Nothing is sent or archived. */
+		async graduatePreview(wolf: string, id: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.previewGraduation) return unsupported("memory_unavailable", "graduation");
+				return json(await client.previewGraduation(wolf, id));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Graduation step 2: send the previewed graduation. `body` is the request's JSON, `{token}`. */
+		async graduateConfirm(wolf: string, id: string, body: unknown): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.confirmGraduation) return unsupported("memory_unavailable", "graduation");
+				const token = typeof body === "object" && body !== null ? (body as { token?: unknown }).token : undefined;
+				if (typeof token !== "string" || !token) return json({ error: "body must be {token}", code: "invalid_request" }, 400);
+				return json(await client.confirmGraduation(wolf, id, token));
 			} catch (err) {
 				return failure(err);
 			}

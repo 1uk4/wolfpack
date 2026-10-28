@@ -18,6 +18,7 @@
 
 import { entryHref, workHref } from "./kb.ts";
 import type { KbGraph, KbGraphNode, KbNodeKind } from "./kb.ts";
+import { subtreeLinkLength } from "./layout.ts";
 import { NODE_ID_PATTERN } from "./graph-persistence.ts";
 import type { GraphLayerToggles, GroupBy } from "./render-settings.ts";
 
@@ -224,7 +225,8 @@ export function nodeColor(node: Pick<KbGraphNode, "domain">, colors: ReadonlyMap
 
 const KIND_DEPTH: Record<KbNodeKind, number> = { domain: 0, factory: 1, section: 1, entry: 2, work: 3, "den-topic": 4 };
 
-/** Hierarchy depth (domain 0 → factory/section 1 → entry 2 → work 3 → den topic 4):
+/** Hierarchy depth (domain 0 → factory/section 1 → entry 2 → work 2+ → den topic 4;
+ *  work depth is overridden per node by workDepths along partOf, see toCanvasData):
  *  the payload's own depth when sane, else the kind's. */
 export function depthOf(node: Pick<KbGraphNode, "kind" | "depth">): number {
 	const d = node.depth;
@@ -363,6 +365,55 @@ export interface KbCanvasData {
 	subClusters: KbCluster[];
 	/** Hierarchy depth per node id (for the depth anchoring). */
 	depths: Map<string, number>;
+	/** Rest length per work hierarchy link (`from|to`), sized to the child's subtree. */
+	linkLengths: Map<string, number>;
+}
+
+/** Work depth along the hierarchy from the Factory (factory 1, top-level work 2, …).
+ *  Only work nodes are returned; unreachable ones (cycles, orphans) are absent. */
+export function workDepths(
+	nodes: ReadonlyArray<Pick<KbGraphNode, "id" | "kind">>,
+	edges: ReadonlyArray<{ from: string; to: string }>,
+): Map<string, number> {
+	const kids = new Map<string, string[]>();
+	for (const e of edges) (kids.get(e.from) ?? kids.set(e.from, []).get(e.from)!).push(e.to);
+	const isWork = new Set(nodes.filter((n) => n.kind === "work").map((n) => n.id));
+	const out = new Map<string, number>();
+	const queue = nodes.filter((n) => n.kind === "factory").map((n) => ({ id: n.id, d: 1 }));
+	while (queue.length) {
+		const { id, d } = queue.shift()!;
+		for (const c of kids.get(id) ?? []) {
+			if (!isWork.has(c) || out.has(c)) continue;
+			out.set(c, d + 1);
+			queue.push({ id: c, d: d + 1 });
+		}
+	}
+	return out;
+}
+
+/** Rest length for every parent → child link whose child is a work node. */
+export function workLinkLengths(
+	nodes: ReadonlyArray<Pick<KbGraphNode, "id" | "kind">>,
+	edges: ReadonlyArray<{ from: string; to: string }>,
+): Map<string, number> {
+	const isWork = new Set(nodes.filter((n) => n.kind === "work").map((n) => n.id));
+	const kids = new Map<string, string[]>();
+	for (const e of edges) if (isWork.has(e.to)) (kids.get(e.from) ?? kids.set(e.from, []).get(e.from)!).push(e.to);
+	const memo = new Map<string, number>();
+	const count = (id: string, seen: Set<string>): number => {
+		const hit = memo.get(id);
+		if (hit !== undefined) return hit;
+		if (seen.has(id)) return 0;
+		seen.add(id);
+		let n = 0;
+		for (const c of kids.get(id) ?? []) n += 1 + count(c, seen);
+		seen.delete(id);
+		memo.set(id, n);
+		return n;
+	};
+	const out = new Map<string, number>();
+	for (const e of edges) if (isWork.has(e.to)) out.set(`${e.from}|${e.to}`, subtreeLinkLength(count(e.to, new Set([e.from]))));
+	return out;
 }
 
 /** The payload → canvas data. Only the structural hierarchy is drawn
@@ -400,8 +451,10 @@ export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanv
 		depSeen.add(key);
 		depEdges.push({ from: e.target, to: e.source });
 	}
+	for (const [id, d] of workDepths(graph.nodes, edges)) depths.set(id, d);
 	const subClusters = factoryClusters(graph, colors);
 	return {
+		linkLengths: workLinkLengths(graph.nodes, edges),
 		nodes,
 		edges,
 		depEdges,

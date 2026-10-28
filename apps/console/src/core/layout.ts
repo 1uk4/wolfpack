@@ -70,6 +70,9 @@ export interface DepthAnchor {
 export interface SimOptions {
 	/** Link spring rest length (world units). */
 	linkDistance?: number;
+	/** Per-link rest lengths, keyed `from|to` (the edge's own direction).
+	 *  Links absent from the map use linkDistance. */
+	linkLengths?: ReadonlyMap<string, number>;
 	/** Link spring stiffness MULTIPLIER (1 = d3's default
 	 *  1/min(degree) stiffness). */
 	linkStrength?: number;
@@ -107,6 +110,13 @@ export interface LayoutEdge {
 }
 
 export const LINK_DISTANCE = 40;
+/** Work-hierarchy link rest length (parent → child work node):
+ *  base + k·sqrt(descendants of the child), capped. Leaves (tasks) get
+ *  `base`; a feature with 11 tasks ≈ 86; the cap keeps huge subtrees sane. */
+export const WORK_LINK = { base: 40, k: 14, cap: 160 } as const;
+export function subtreeLinkLength(descendants: number, c: { base: number; k: number; cap: number } = WORK_LINK): number {
+	return Math.min(c.cap, c.base + c.k * Math.sqrt(Math.max(0, descendants)));
+}
 export const CHARGE_STRENGTH = -240; // 2026-09-17: −120 → −240 (user: repulsion default too weak); the default is shared with render-settings (gm-centered in CHARGE_RANGE).
 /** Per-tick anchor re-blend: fraction of an anchored node's displacement
  *  from its previous position that SURVIVES each tick. 0.85 = gentle
@@ -150,6 +160,7 @@ export function createGraphSimulation(
 	}
 	const linkStrength = options.linkStrength ?? 1;
 	const linkDistance = options.linkDistance ?? LINK_DISTANCE;
+	const lengths = options.linkLengths && options.linkLengths.size > 0 ? options.linkLengths : undefined;
 
 	const sim = forceSimulation<LayoutNode, SimLink>(nodes)
 		.force(
@@ -158,7 +169,11 @@ export function createGraphSimulation(
 				edges.map((e) => ({ source: e.from, target: e.to })),
 			)
 				.id((d) => d.id)
-				.distance(linkDistance)
+				.distance(
+					lengths
+						? (l) => lengths.get(`${(l.source as LayoutNode).id}|${(l.target as LayoutNode).id}`) ?? linkDistance
+						: linkDistance,
+				)
 				.strength(
 					(l) =>
 						(linkStrength * 1) /
@@ -358,6 +373,8 @@ export interface IncrementalLayoutOptions {
 	depthAnchor?: DepthAnchor;
 	/** Dependency springs inside a Factory (see SimOptions.depSprings). */
 	depSprings?: SimOptions["depSprings"];
+	/** Per-link rest lengths (see SimOptions.linkLengths). */
+	linkLengths?: SimOptions["linkLengths"];
 }
 
 /**
@@ -485,6 +502,7 @@ export function incrementalLayout(
 
 	const sim = createGraphSimulation(simNodes, edges, {
 		depSprings: options.depSprings,
+		linkLengths: options.linkLengths,
 		gravity: {
 			x: cx,
 			y: cy,

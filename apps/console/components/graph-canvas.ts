@@ -143,6 +143,8 @@ export interface CanvasData {
 	depEdges?: CanvasEdge[];
 	/** Dependency edges inside one Factory: weak layout springs. */
 	depSprings?: CanvasEdge[];
+	/** Per work-link rest lengths (`from|to`); links not in it use the uniform distance. */
+	linkLengths?: ReadonlyMap<string, number>;
 	/** Hierarchy depth per node id, for the depth anchoring (domain 0 →
 	 *  section → entry → work). Absent = no anchoring. */
 	depths?: ReadonlyMap<string, number>;
@@ -1554,6 +1556,7 @@ export class GraphCanvasRenderer {
 			chargeStrength: t.chargeStrength,
 			linkStrength: t.linkStrength,
 			linkDistance: t.linkDistance,
+			linkLengths: data.linkLengths,
 			depSprings: springs.length ? { edges: springs, strength: DEP_SPRING_STRENGTH } : undefined,
 			clusterPull:
 				data.clusters.length > 0 ? { clusters: data.clusters, strength: t.clusterPull } : undefined,

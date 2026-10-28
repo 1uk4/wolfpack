@@ -324,7 +324,7 @@ export function GraphView({
 		if (!renderer || isEmpty || !storedLoaded) return;
 		const known = renderer.positions();
 		for (const [id, p] of storedRef.current) if (!known.has(id)) known.set(id, p);
-		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters, depSprings: { edges: canvasData.depSprings } });
+		const { positions, added } = resolvePositions(canvasData.nodes, canvasData.edges, known, { clusters: canvasData.clusters, depSprings: { edges: canvasData.depSprings }, linkLengths: canvasData.linkLengths });
 		if (added.length > 0) {
 			const batch: Record<string, Position> = {};
 			for (const id of added) {
@@ -339,6 +339,7 @@ export function GraphView({
 			edges: canvasData.edges,
 			depEdges: canvasData.depEdges,
 			depSprings: canvasData.depSprings,
+			linkLengths: canvasData.linkLengths,
 			clusters: canvasData.clusters,
 			subClusters: canvasData.subClusters,
 			depths: canvasData.depths,

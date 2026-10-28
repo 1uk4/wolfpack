@@ -260,7 +260,7 @@ describe("toCanvasData", () => {
 		assert.equal(data.depths.get("dom:wolfpack"), 0);
 		assert.equal(data.depths.get("sec:arch"), 1);
 		assert.equal(data.depths.get("ent:e1"), 2);
-		assert.equal(data.depths.get("work:w1"), 3);
+		assert.equal(data.depths.get("work:w1"), 2); // loose feature: Factory 1 → work 2
 		assert.equal(data.depths.get("den:hal:t1"), 4);
 		assert.deepEqual(data.clusters.map((c) => c.id), ["den:hal", "dom:snapjack", "dom:wolfpack"]);
 		assert.ok(toCanvasData(fixture(), { groupBy: "section" }).clusters.some((c) => c.id === "sec:arch"));

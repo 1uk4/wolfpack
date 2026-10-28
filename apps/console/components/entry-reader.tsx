@@ -89,7 +89,7 @@ export function EntryReaderView({ id, state }: { id: string; state: EntryReaderS
 
 const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
 
-function EntryBody({ entry }: { entry: KbEntryDetail }) {
+export function EntryBody({ entry }: { entry: KbEntryDetail }) {
 	const crumbs = entryBreadcrumb(entry);
 	const facts = entryFacts(entry.frontmatter);
 	const related = entryRelated(entry.frontmatter);

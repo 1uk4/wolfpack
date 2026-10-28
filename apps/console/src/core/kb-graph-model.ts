@@ -442,6 +442,8 @@ export interface NodeCard {
 	dependencies: CardLink[];
 	/** Domain: counts of what it contains, by kind. */
 	counts?: Partial<Record<KbNodeKind, number>>;
+	/** Factory: the domain's work items by stage. */
+	stageCounts?: Record<string, number>;
 	/** "open" target: the entry reader or the work item page. */
 	openHref?: string;
 	/** Section: the node ids to focus the graph on (itself, its entries and
@@ -516,6 +518,12 @@ export function describeNode(graph: KbGraph, nodeId: string): NodeCard | null {
 			}
 		}
 		card.focusIds = [...focus];
+		const entries = [...focus].filter((id) => byId.get(id)?.kind === "entry").length;
+		if (entries > 0) card.counts = { entry: entries };
+	} else if (node.kind === "factory") {
+		const stageCounts: Record<string, number> = {};
+		for (const n of graph.nodes) if (n.kind === "work" && n.domain === node.domain && n.stage) stageCounts[n.stage] = (stageCounts[n.stage] ?? 0) + 1;
+		if (Object.keys(stageCounts).length > 0) card.stageCounts = stageCounts;
 	} else if (node.kind === "den-topic") {
 		if (node.wolf) card.wolf = node.wolf;
 		if (node.promotable !== undefined) card.promotable = node.promotable;

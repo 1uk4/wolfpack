@@ -72,6 +72,7 @@ export * from "./graph-activity.ts";
 // rules (positions, camera). Pure, browser-safe.
 export * from "./kb-graph-model.ts";
 export * from "./graph-persistence.ts";
+export * from "./graph-pane.ts";
 export * from "./pipeline-model.ts";
 export * from "./entry-view.ts";
 export * from "./work-view.ts";

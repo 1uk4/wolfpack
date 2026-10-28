@@ -10,7 +10,7 @@
  * (src/core/kb-graph-model.ts — domain colours, node styles, glow groups),
  * give every node a position (stored positions, then the shared d3-force
  * layout for the rest), resolve theme colours to hex, filter via the search
- * box, and own the detail card / settings panel.
+ * box, and own the docked detail pane / settings panel.
  *
  * Data comes IN: graph-home.tsx fetches the payload (and re-fetches on layer
  * toggles); a new payload for the same renderer keeps every position the
@@ -22,7 +22,7 @@
  * the owner (use-graph-settings.ts). The KB is never written.
  *
  * Programmatic focus: `focusNode(id)` (also reachable as
- * `controllerRef.current.focusNode`) frames a node and opens its card — the
+ * `controllerRef.current.focusNode`) frames a node and opens its pane — the
  * `/?focus=<nodeId>` URL param goes through it.
  */
 
@@ -31,7 +31,8 @@ import { featureTaskModel, reconcileCursor, rawWorkId, routeForNode, toRouteSele
 import { startCursor, type RouteCursor } from "../src/core/work-route.ts";
 import { TaskGraphOverlay } from "./task-graph.tsx";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
 	GRAPH_CAMERA_KEY,
@@ -46,7 +47,7 @@ import {
 	type Position,
 } from "@/src/core";
 import { GraphCanvasRenderer } from "./graph-canvas.ts";
-import { GraphCard } from "./graph-card.tsx";
+import { GraphPane } from "./graph-pane.tsx";
 import { GraphSettingsControl } from "./graph-settings-panel.tsx";
 import { Hint } from "@/components/ui/hint";
 
@@ -88,9 +89,6 @@ export interface GraphViewController {
 
 interface Selection {
 	id: string;
-	/** Node position in container pixels (at open time; camera moves
-	 *  dismiss the card, so it never needs re-anchoring). */
-	anchor: { x: number; y: number };
 }
 
 /** A feature's task-graph overlay, built from the payload (double-click on a feature). */
@@ -187,14 +185,12 @@ export function GraphView({
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
-	const cardRef = useRef<HTMLDivElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
 	const [overlayId, setOverlayId] = useState<string | null>(null);
 	const graphRef = useRef(graph);
 	graphRef.current = graph;
-	// Programmatic pans (the route cursor following) must not dismiss the card.
-	const suppressCameraRef = useRef(false);
+	const router = useRouter();
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
 	// event is surface-scoped, dispatched as lh:kbd-find (only this page
@@ -281,17 +277,13 @@ export function GraphView({
 		const renderer = new GraphCanvasRenderer(
 			canvas,
 			{
-				onSelect: (nodeId, pos) => setSelected({ id: nodeId, anchor: pos }),
+				onSelect: (nodeId) => setSelected({ id: nodeId }),
 				onStageClick: () => setSelected(null),
 				onNodeDoubleClick: (nodeId) => {
 					if (opensTaskOverlay(graphRef.current, nodeId)) setOverlayId(nodeId);
 				},
-				// Any camera move detaches the card from its node — close it,
-				// and (debounced) remember where the camera stands.
-				onCameraMove: (t) => {
-					if (!suppressCameraRef.current) setSelected(null);
-					persistCamera(t);
-				},
+				// (Debounced) remember where the camera stands.
+				onCameraMove: persistCamera,
 				// Live physics settled: remember the new rest state. The store
 				// merges the batch, so ids hidden by a layer toggle are kept.
 				onCommit: (positions) => {
@@ -382,22 +374,24 @@ export function GraphView({
 		rendererRef.current?.setRoute(activeRoute);
 	}, [activeRoute, canvasData, isEmpty, storedLoaded]);
 
-	// The camera follows the cursor when its node is off-screen; the card
-	// re-anchors under it.
+	// The camera follows the cursor when its node is off-screen.
 	const cursorNodeId = cursor?.node ? `work:${cursor.node}` : null;
 	useEffect(() => {
-		const renderer = rendererRef.current;
-		if (!renderer || !cursorNodeId) return;
-		suppressCameraRef.current = true;
-		try {
-			renderer.panIntoView(cursorNodeId);
-		} finally {
-			suppressCameraRef.current = false;
-		}
-		const anchor = renderer.nodeScreenPos(cursorNodeId);
-		if (anchor) setSelected((sel) => (sel ? { ...sel, anchor } : sel));
+		if (cursorNodeId) rendererRef.current?.panIntoView(cursorNodeId);
 	}, [cursorNodeId]);
 
+	// The pane docks beside the canvas, so opening or resizing it narrows the
+	// canvas: once the renderer has re-fitted (its ResizeObserver runs after
+	// the frame's layout), nudge the camera so the shown node stays in view.
+	const shownNodeRef = useRef<string | null>(null);
+	const nudgeToShown = useCallback(() => {
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				const id = shownNodeRef.current;
+				if (id) rendererRef.current?.panIntoView(id);
+			}),
+		);
+	}, []);
 	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
 	// re-layout, no camera touch. `isEmpty` in the deps: the renderer is
 	// created by an effect keyed on it, so the load-time run must re-fire.
@@ -425,21 +419,17 @@ export function GraphView({
 		rendererRef.current?.setPhysicsTuning(physicsTuning);
 	}, [physicsTuning, isEmpty]);
 
-	// Programmatic focus: frame the node(s), then (re)open the card at the
-	// node's new screen position. The camera callback closes any open card
-	// first; the select that follows wins (React batches them).
+	// Programmatic focus: frame the node(s), then open its pane.
 	const focusNode = useCallback((nodeId: string): boolean => {
 		const renderer = rendererRef.current;
 		if (!renderer || !renderer.focusOn([nodeId], 3)) return false;
-		const anchor = renderer.nodeScreenPos(nodeId);
-		if (anchor) setSelected({ id: nodeId, anchor });
+		setSelected({ id: nodeId });
 		return true;
 	}, []);
 	const focusNodes = useCallback((ids: string[], anchorId: string) => {
 		const renderer = rendererRef.current;
 		if (!renderer || !renderer.focusOn(ids, 2.5)) return;
-		const anchor = renderer.nodeScreenPos(anchorId);
-		if (anchor) setSelected({ id: anchorId, anchor });
+		setSelected({ id: anchorId });
 	}, []);
 	const focusNodeRef = useRef(focusNode);
 	focusNodeRef.current = focusNode;
@@ -485,10 +475,7 @@ export function GraphView({
 		return () => cancelAnimationFrame(raf);
 	}, [focusId, isEmpty, storedLoaded, canvasData, hiddenBySearch]);
 
-	// Position the detail card: below the clicked node, flipped above near
-	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
-	// before paint) because the flip needs the card's measured height.
-	// With a route the card's details follow the cursor's node.
+	// The pane's details follow the route cursor's node (when a route is selected).
 	const card = useMemo(
 		() => (selected ? (describeNode(graph, cursorNodeId ?? selected.id) ?? describeNode(graph, selected.id)) : null),
 		[graph, selected, cursorNodeId],
@@ -504,97 +491,72 @@ export function GraphView({
 			onCursor: (next) => setCursorState({ id: selectedId!, cursor: next }),
 		};
 	}, [graph, selectedRoute, cursor, selectedId]);
-	useLayoutEffect(() => {
-		const el = cardRef.current;
-		const container = containerRef.current;
-		if (!selected || !card || !el || !container) return;
-		const width = el.offsetWidth;
-		const height = el.offsetHeight;
-		const margin = 8;
-		const gap = 12;
-		const left = Math.min(
-			Math.max(selected.anchor.x - width / 2, margin),
-			Math.max(container.clientWidth - width - margin, margin),
-		);
-		let top = selected.anchor.y + gap;
-		if (top + height > container.clientHeight - margin) {
-			top = Math.max(selected.anchor.y - gap - height, margin);
-		}
-		el.style.left = `${left}px`;
-		el.style.top = `${top}px`;
-		el.style.visibility = "visible";
-	}, [selected, card]);
+	shownNodeRef.current = card?.id ?? null;
 
 	return (
-		<div className="relative h-full w-full">
-			{isEmpty ? (
-				<div className="flex h-full w-full items-center justify-center px-4">
-					<div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
-						<WaypointsIcon className="size-10 opacity-40" strokeWidth={1.25} />
-						<div className="text-lg font-medium text-foreground">Nothing to show</div>
-						<p className="max-w-sm text-sm">
-							{graph.domain
-								? `The ${graph.domain} domain has no nodes in this view. Clear the domain filter in the display settings.`
-								: "The knowledge base has no nodes yet."}
-						</p>
+		<div className="flex h-full w-full">
+			<div className="relative h-full min-w-0 flex-1">
+				{isEmpty ? (
+					<div className="flex h-full w-full items-center justify-center px-4">
+						<div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
+							<WaypointsIcon className="size-10 opacity-40" strokeWidth={1.25} />
+							<div className="text-lg font-medium text-foreground">Nothing to show</div>
+							<p className="max-w-sm text-sm">
+								{graph.domain
+									? `The ${graph.domain} domain has no nodes in this view. Clear the domain filter in the display settings.`
+									: "The knowledge base has no nodes yet."}
+							</p>
+						</div>
+					</div>
+				) : (
+					<div ref={containerRef} className="relative h-full w-full">
+						{/* THE single canvas: every layer (regions, edges, nodes, both
+						    label systems, hover) draws into it, once per frame. */}
+						<canvas ref={canvasRef} className="block h-full w-full touch-none" />
+					</div>
+				)}
+
+				{/* Top-right controls — floating containers. lh-no-drag: home's
+				    floating drag strip underlays this row — Electron's drag mask
+				    ignores z-index, so without an explicit carve-out the controls
+				    were unclickable in the desktop app. The row NEVER wraps; in
+				    narrow windows the search shrinks. */}
+				<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+					<div className="relative z-20 flex min-w-0 items-start gap-2">
+						<GraphChromeRow
+							isEmpty={isEmpty}
+							query={query}
+							onQuery={setQuery}
+							noMatch={!isEmpty && visibleIds.size === 0 && query.trim() !== ""}
+							searchInputRef={searchInputRef}
+							settings={settings}
+							changeSettings={changeSettings}
+							domains={graph.domains}
+						/>
 					</div>
 				</div>
-			) : (
-				<div ref={containerRef} className="relative h-full w-full">
-					{/* THE single canvas: every layer (regions, edges, nodes, both
-					    label systems, hover) draws into it, once per frame. */}
-					<canvas ref={canvasRef} className="block h-full w-full touch-none" />
-				</div>
-			)}
 
-			{/* Top-right controls — floating containers. lh-no-drag: home's
-			    floating drag strip underlays this row — Electron's drag mask
-			    ignores z-index, so without an explicit carve-out the controls
-			    were unclickable in the desktop app. The row NEVER wraps; in
-			    narrow windows the search shrinks. */}
-			<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
-				<div className="relative z-20 flex min-w-0 items-start gap-2">
-					<GraphChromeRow
-						isEmpty={isEmpty}
-						query={query}
-						onQuery={setQuery}
-						noMatch={!isEmpty && visibleIds.size === 0 && query.trim() !== ""}
-						searchInputRef={searchInputRef}
-						settings={settings}
-						changeSettings={changeSettings}
-						domains={graph.domains}
+				{overlayId && (
+					<FeatureTaskOverlay
+						graph={graph}
+						featureId={overlayId}
+						onClose={() => setOverlayId(null)}
+						onSelectNode={(id) => {
+							setOverlayId(null);
+							focusNodeRef.current(id);
+						}}
 					/>
-				</div>
+				)}
 			</div>
-
 			{selected && card && !isEmpty && (
-				<div
-					ref={cardRef}
-					// Positioned imperatively in the layout effect above; hidden
-					// until placed so the flip never flashes in the wrong spot.
-					style={{ visibility: "hidden", left: 0, top: 0 }}
-					// lh-no-drag: the card is placed anywhere on the canvas —
-					// when it lands in the top strip it must stay interactive
-					// over home's drag surface.
-					className="lh-no-drag absolute z-10 max-h-[70%] w-80 max-w-[calc(100%-1rem)] overflow-y-auto rounded-xl border bg-card p-4 text-left shadow-lg"
-				>
-					<GraphCard
-						card={card}
-						onFocus={(ids) => focusNodes(ids, card.id)}
-						onSelectNode={(id) => focusNodeRef.current(id)}
-						routeNav={routeNav}
-					/>
-				</div>
-			)}
-			{overlayId && (
-				<FeatureTaskOverlay
-					graph={graph}
-					featureId={overlayId}
-					onClose={() => setOverlayId(null)}
-					onSelectNode={(id) => {
-						setOverlayId(null);
-						focusNodeRef.current(id);
-					}}
+				<GraphPane
+					card={card}
+					routeNav={routeNav}
+					onClose={() => setSelected(null)}
+					onFocus={(ids) => focusNodes(ids, card.id)}
+					onSelectNode={(id) => focusNodeRef.current(id)}
+					onNavigate={(href) => router.push(href)}
+					onLayout={nudgeToShown}
 				/>
 			)}
 		</div>

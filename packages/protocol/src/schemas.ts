@@ -1058,6 +1058,8 @@ export const WorkRecordResponseSchema = z.object({
   successCriteria: z.string().optional(),
   plan: z.string(),
   record: z.string(),
+  /** The newest ledger entries ("**when** — what", oldest first, at most 10). Omitted when the item has none. */
+  log: z.array(z.string()).optional(),
   /** The item's `updated` date as the Work API reports it (YYYY-MM-DD). */
   updated: z.string().optional(),
   /** Features only: the items directly under it. Omitted when the Work API could not list them (best effort). */

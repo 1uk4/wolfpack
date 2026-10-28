@@ -14,7 +14,7 @@ import Link from "next/link";
 import type { CardLink, NodeCard } from "@/src/core";
 import { RouteNav, type RouteNavModel } from "./graph-route-nav.tsx";
 
-const KIND_LABEL: Record<NodeCard["kind"], string> = {
+export const KIND_LABEL: Record<NodeCard["kind"], string> = {
 	domain: "Domain",
 	factory: "Factory",
 	section: "Section",
@@ -23,7 +23,7 @@ const KIND_LABEL: Record<NodeCard["kind"], string> = {
 	"den-topic": "Den topic",
 };
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
 	return (
 		<div className="flex items-baseline justify-between gap-3 text-xs">
 			<span className="shrink-0 text-muted-foreground">{label}</span>
@@ -32,7 +32,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 	);
 }
 
-function LinkList({
+export function LinkList({
 	title,
 	links,
 	onSelectNode,

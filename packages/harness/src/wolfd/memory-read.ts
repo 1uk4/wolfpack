@@ -244,6 +244,23 @@ function withoutLog(body: string): string {
   return out.join("\n").trim();
 }
 
+/** How many ledger entries the record route carries (the newest). */
+export const LOG_TAIL = 10;
+
+/** The generated `## Log` section's entries ("- **when** — what" lines), the newest LOG_TAIL, oldest first. */
+function logTail(body: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  let inLog = false;
+  for (const line of body.split("\n")) {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (f) fence = fence === null ? f[1][0] : f[1][0] === fence ? null : fence;
+    else if (fence === null && /^#{1,2} /.test(line)) inLog = /^## Log\s*$/.test(line);
+    else if (inLog && fence === null && /^- /.test(line)) out.push(line.slice(2).trim());
+  }
+  return out.slice(-LOG_TAIL);
+}
+
 export type WorkRecordResult = { kind: "ok"; value: WorkRecordResponse } | { kind: "not_found" } | { kind: "unconfigured" } | { kind: "error"; message: string };
 
 /** The item's page data (plan, Record, links) through the Work API client. */
@@ -275,6 +292,7 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
       ...(item.successCriteria?.trim() ? { successCriteria: item.successCriteria } : {}),
       plan: withoutLog(withoutRecord(body)),
       record: section ? section.slice(RECORD_HEADING.length).trim() : "",
+      ...(logTail(body).length > 0 ? { log: logTail(body) } : {}),
       ...(item.updated !== undefined ? { updated: item.updated } : {}),
     },
   };

@@ -261,8 +261,8 @@ describe("collapseDoneFeatures", () => {
   it("the cursor and stepper count steps on the collapsed route", () => {
     const r = computeRoute(nodes, "t2", opts);
     let c = startCursor(r);
-    assert.equal(c.node, "t1");
-    assert.equal(r.steps[c.step]!.nodes.includes("t1"), true);
+    assert.equal(c.node, "T");
+    assert.equal(c.step, r.firstUnfinished);
     const seen: (string | null)[] = [c.node];
     while (true) { const n = cursorNext(r, c); if (n.step === c.step) break; c = n; seen.push(c.node); }
     assert.equal(seen.length, r.steps.length - r.firstUnfinished!);

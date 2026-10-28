@@ -130,25 +130,47 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
-		/** Graduation step 1: the KB entries graduating the item would write. Nothing is sent or archived. */
+		/** Graduation step 1: start the background preview job (answers the running job at once). Nothing is sent or archived. */
 		async graduatePreview(wolf: string, id: string): Promise<Response> {
 			try {
 				const client = source();
-				if (!client.previewGraduation) return unsupported("memory_unavailable", "graduation");
-				return json(await client.previewGraduation(wolf, id));
+				if (!client.startGraduationPreview) return unsupported("memory_unavailable", "graduation");
+				return json(await client.startGraduationPreview(wolf, id));
 			} catch (err) {
 				return failure(err);
 			}
 		},
 
-		/** Graduation step 2: send the previewed graduation. `body` is the request's JSON, `{token}`. */
+		/** Graduation step 2: start the background confirm job (answers the running job at once). `body` is the request's JSON, `{token}`. */
 		async graduateConfirm(wolf: string, id: string, body: unknown): Promise<Response> {
 			try {
 				const client = source();
-				if (!client.confirmGraduation) return unsupported("memory_unavailable", "graduation");
+				if (!client.startGraduationConfirm) return unsupported("memory_unavailable", "graduation");
 				const token = typeof body === "object" && body !== null ? (body as { token?: unknown }).token : undefined;
 				if (typeof token !== "string" || !token) return json({ error: "body must be {token}", code: "invalid_request" }, 400);
-				return json(await client.confirmGraduation(wolf, id, token));
+				return json(await client.startGraduationConfirm(wolf, id, token));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Where the item's graduation job stands (none, running, preview_ready, graduated, error). */
+		async graduateStatus(wolf: string, id: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.graduationStatus) return unsupported("memory_unavailable", "graduation");
+				return json(await client.graduationStatus(wolf, id));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** The pending observations a graduation of the item would fold, per task. */
+		async graduateObservations(wolf: string, id: string): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.graduationObservations) return unsupported("memory_unavailable", "graduation");
+				return json(await client.graduationObservations(wolf, id));
 			} catch (err) {
 				return failure(err);
 			}

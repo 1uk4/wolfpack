@@ -33,6 +33,9 @@ export type {
 	GraduationPreview,
 	GraduationContribution,
 	GraduationResult,
+	GraduationJob,
+	GraduationStatus,
+	GraduationObservations,
 } from "@wolfpack/client";
 
 /** The pack's librarian (serves the KB), or null when none is known/flagged. */

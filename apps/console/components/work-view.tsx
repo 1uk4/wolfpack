@@ -42,7 +42,7 @@ import {
 } from "@/src/core";
 import { createWorkClient, type WorkClient, type WorkDomain } from "./work-client";
 import { createGraduateClient, type GraduateClient } from "./graduate-client";
-import { GraduateButton, GraduateDialog, type GraduateTarget } from "./graduate-dialog";
+import { GraduateControl, GraduateToasts } from "./graduate-dialog";
 import { useGraduated } from "./graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
@@ -104,6 +104,7 @@ export function WorkViewProvider({ children, client, graduate, onSelect }: { chi
 	return (
 		<WorkViewContext.Provider value={api}>
 			{children}
+			<GraduateToasts />
 			{isOpen && <WorkOverlay client={client} graduate={graduate} onClose={close} />}
 		</WorkViewContext.Provider>
 	);
@@ -193,8 +194,8 @@ interface RowCtx {
 	compact: boolean;
 	/** The group's gutter width (px), added to the indent of the rows below the group row. */
 	gutter: number;
-	/** The Graduate button of a feature row was clicked. */
-	onGraduate: (row: TableRow) => void;
+	/** The graduation seam: each feature row's control reads and drives its job through it. */
+	graduate: GraduateClient;
 }
 
 /** A row shows its children when it has some, is not a collapsed-route stand-in, and is open (by hand or by search). */
@@ -258,7 +259,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 						<RowTitle row={row} />
 					)}
 				</span>
-				<GraduateButton state={row.graduate} testid={`work-graduate-${row.key}`} onClick={() => ctx.onGraduate(row)} />
+				<GraduateControl target={{ id: row.id, title: row.title, assignee: row.assignee || undefined }} state={row.graduate} client={ctx.graduate} testid={`work-graduate-${row.key}`} />
 				{stood !== undefined && (
 					<span data-testid={`work-collapsed-${row.key}`} title={`${stood} shipped tasks, collapsed on the route`} className="shrink-0 rounded border border-border/70 px-1 text-[11px] tabular-nums text-muted-foreground">
 						+{stood}
@@ -340,7 +341,6 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 	const { load } = useWorkItems(client, domain, showGraduated);
 	const graduateClient = useMemo(() => injectedGraduate ?? createGraduateClient(), [injectedGraduate]);
-	const [graduating, setGraduating] = useState<GraduateTarget | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -389,7 +389,7 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 		const el = document.querySelector(`[data-testid="work-row-${cursorId}"]`) as (HTMLElement & { scrollIntoView?: (o?: object) => void }) | null;
 		el?.scrollIntoView?.({ block: "nearest" });
 	}, [cursorId]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split, gutter: 0, onGraduate: (r) => setGraduating({ id: r.id, title: r.title, assignee: r.assignee || undefined }) };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split, gutter: 0, graduate: graduateClient };
 	const startResize = (e: React.PointerEvent) => {
 		e.preventDefault();
 		const startX = e.clientX;
@@ -495,7 +495,6 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 							<GroupView key={g.key} group={g} ctx={ctx} />
 						))}
 					</div>
-					{graduating && <GraduateDialog target={graduating} client={graduateClient} onClose={() => setGraduating(null)} />}
 				</div>
 			)}
 		</OverlayShell>

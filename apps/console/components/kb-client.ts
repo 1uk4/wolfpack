@@ -9,8 +9,9 @@
  */
 import type {
 	ConsolidateResponse,
-	GraduationPreview,
-	GraduationResult,
+	GraduationJob,
+	GraduationObservations,
+	GraduationStatus,
 	KbEntryDetail,
 	KbGraph,
 	MemoryObservations,
@@ -112,16 +113,26 @@ export function postPromote(wolf: string): Promise<KbResult<PromoteResponse>> {
 	return request(`/api/wolves/${seg(wolf)}/memory/promote`, { method: "POST" });
 }
 
-/** Graduation step 1 on a wolf: the KB entries the feature would write (nothing is sent). Failures carry `code` (not_ready, memory_unavailable…). */
-export function postGraduatePreview(wolf: string, workId: string): Promise<KbResult<GraduationPreview>> {
+/** Graduation step 1 on a wolf: start the background preview job (answers the running job at once; nothing is sent). */
+export function postGraduatePreview(wolf: string, workId: string): Promise<KbResult<GraduationJob>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/preview`, { method: "POST" });
 }
 
-/** Graduation step 2: send the previewed graduation. A `preview_stale` code means preview again. */
-export function postGraduateConfirm(wolf: string, workId: string, token: string): Promise<KbResult<GraduationResult>> {
+/** Graduation step 2: start the background confirm job that sends the previewed graduation to the librarian's inbox. */
+export function postGraduateConfirm(wolf: string, workId: string, token: string): Promise<KbResult<GraduationJob>> {
 	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/confirm`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ token }),
 	});
+}
+
+/** Where the feature's graduation job stands on this wolf (none, running, preview_ready, graduated, error). */
+export function fetchGraduateStatus(wolf: string, workId: string): Promise<KbResult<GraduationStatus>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/status`);
+}
+
+/** The pending observations in the wolf's pool a graduation of the feature would fold, per task. */
+export function fetchGraduateObservations(wolf: string, workId: string): Promise<KbResult<GraduationObservations>> {
+	return request(`/api/wolves/${seg(wolf)}/work/${seg(workId)}/graduate/observations`);
 }

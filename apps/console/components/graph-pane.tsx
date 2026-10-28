@@ -41,7 +41,7 @@ import { fetchKbEntry, fetchWolves, fetchWorkRecord, openFeatureThread } from "@
 import { EntryBody } from "@/components/entry-reader";
 import { Field, KIND_LABEL, LinkList } from "./graph-card.tsx";
 import { createGraduateClient, type GraduateClient } from "./graduate-client";
-import { GraduateButton, GraduateDialog } from "./graduate-dialog";
+import { GraduateControl } from "./graduate-dialog";
 import { useGraduated } from "./graduation-signal";
 import { RouteNav, isEditableTarget, type RouteNavModel } from "./graph-route-nav.tsx";
 
@@ -238,8 +238,6 @@ export function GraphPane({
 }) {
 	const [width, setWidth] = usePaneWidth();
 	const graduateClient = useMemo(() => graduate ?? createGraduateClient(), [graduate]);
-	const [graduating, setGraduating] = useState(false);
-	useEffect(() => setGraduating(false), [card.id]);
 	const data = usePaneData(card);
 	const [threadError, setThreadError] = useState<string | null>(null);
 	const [threadBusy, setThreadBusy] = useState(false);
@@ -372,9 +370,9 @@ export function GraphPane({
 						)}
 					</div>
 				)}
-				{graduateState.show && (
-					<div className="mt-3">
-						<GraduateButton state={graduateState} showReason testid="pane-graduate" onClick={() => setGraduating(true)} />
+				{card.kind === "work" && (
+					<div className="mt-3 empty:hidden">
+						<GraduateControl key={card.id} target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} state={graduateState} client={graduateClient} showReason testid="pane-graduate" />
 					</div>
 				)}
 				{threadError && (
@@ -405,9 +403,6 @@ export function GraphPane({
 					</div>
 				)}
 			</div>
-			{graduating && graduateState.show && (
-				<GraduateDialog target={{ id: card.id.slice("work:".length), title: card.title, assignee: card.assignee }} client={graduateClient} onClose={() => setGraduating(false)} />
-			)}
 		</aside>
 	);
 }

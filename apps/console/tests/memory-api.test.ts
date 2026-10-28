@@ -246,8 +246,8 @@ describe("memory API: graduation", () => {
 		const calls: unknown[][] = [];
 		const api = createMemoryApi(
 			stub({
-				previewGraduation: async (...a: unknown[]) => (calls.push(["preview", ...a]), { token: "abc123abc123" }),
-				confirmGraduation: async (...a: unknown[]) => (calls.push(["confirm", ...a]), { graduated: true }),
+				startGraduationPreview: async (...a: unknown[]) => (calls.push(["preview", ...a]), { token: "abc123abc123" }),
+				startGraduationConfirm: async (...a: unknown[]) => (calls.push(["confirm", ...a]), { graduated: true }),
 			}),
 		);
 		assert.deepEqual(await body(await api.graduatePreview("hal", "work-x-1")), { token: "abc123abc123" });
@@ -255,8 +255,23 @@ describe("memory API: graduation", () => {
 		assert.deepEqual(calls, [["preview", "hal", "work-x-1"], ["confirm", "hal", "work-x-1", "abc123abc123"]]);
 	});
 
+	it("graduateStatus and graduateObservations call the client", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(
+			stub({
+				graduationStatus: async (...a: unknown[]) => (calls.push(["status", ...a]), { state: "none" }),
+				graduationObservations: async (...a: unknown[]) => (calls.push(["count", ...a]), { total: 0, byWork: [] }),
+			}),
+		);
+		assert.deepEqual(await body(await api.graduateStatus("hal", "work-x-1")), { state: "none" });
+		assert.deepEqual(await body(await api.graduateObservations("hal", "work-x-1")), { total: 0, byWork: [] });
+		assert.deepEqual(calls, [["status", "hal", "work-x-1"], ["count", "hal", "work-x-1"]]);
+		assert.equal((await createMemoryApi(stub({})).graduateStatus("hal", "w")).status, 409);
+		assert.equal((await createMemoryApi(stub({})).graduateObservations("hal", "w")).status, 409);
+	});
+
 	it("confirm needs a token and a client that graduates", async () => {
-		const api = createMemoryApi(stub({ confirmGraduation: async () => ({}) }));
+		const api = createMemoryApi(stub({ startGraduationConfirm: async () => ({}) }));
 		for (const bad of [null, {}, { token: "" }, { token: 4 }]) {
 			const res = await api.graduateConfirm("hal", "work-x-1", bad);
 			assert.equal(res.status, 400);
@@ -267,7 +282,7 @@ describe("memory API: graduation", () => {
 	});
 
 	it("maps the refusals to 409 with their code and an engine failure to 502", async () => {
-		const fail = (code: string) => stub({ previewGraduation: async () => { throw new ProtocolError(code as never, `no: ${code}`, false); } });
+		const fail = (code: string) => stub({ startGraduationPreview: async () => { throw new ProtocolError(code as never, `no: ${code}`, false); } });
 		for (const code of ["not_ready", "preview_stale", "memory_unavailable"]) {
 			const res = await createMemoryApi(fail(code)).graduatePreview("hal", "w");
 			assert.equal(res.status, 409);

@@ -1,8 +1,8 @@
 /**
- * Graduating from the app: the pure readiness / wolf-choice rules, the Graduate button in the Work list and in the graph
- * pane (shown on features, disabled with the reason until ready), and the preview modal (entries as markdown, the
- * folded count, the warnings; Confirm calls the route and refreshes; Cancel does nothing; the wolf picker when the
- * assignee is offline). Node test runner, linkedom, injected fakes: nothing here can reach a real wolf.
+ * Graduating from the app, as background jobs: the pure readiness / wolf-choice rules, and the flow in the Work list and in
+ * the graph pane: Graduate → confirmation step (wolf, observation count) → loader while the preview job runs → Review →
+ * modal (entries, folded count, warnings) → Confirm → loader while the confirm job runs → refresh and a toast. The state
+ * lives in a store shared by both places and survives closing the Work view. Node test runner, linkedom, injected fakes: nothing here can reach a real wolf.
  */
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
@@ -39,14 +39,15 @@ Object.assign(globalThis, {
 const { WorkViewProvider } = await import("../components/work-view.tsx");
 const { WorkButton } = await import("../components/work-view-entry.tsx");
 const { GraphPane, clearPaneCache } = await import("../components/graph-pane.tsx");
-const { GraduateDialog } = await import("../components/graduate-dialog.tsx");
+const { GraduateStartDialog } = await import("../components/graduate-dialog.tsx");
+const { graduateStore } = await import("../components/graduate-store.ts");
 const { featureGraduateState, graduationWolf } = await import("../src/core/graduate.ts");
 const { buildWorkTable } = await import("../src/core/work-table.ts");
 const { describeNode } = await import("../src/core/kb-graph-model.ts");
 import type { GraduateClient } from "../components/graduate-client.ts";
 import type { KbResult } from "../components/kb-client.ts";
 import type { WorkClient } from "../components/work-client.ts";
-import type { GraduationPreview, GraduationResult, KbGraph, WorkListItem } from "../src/core/kb.ts";
+import type { GraduationObservations, GraduationPreview, GraduationResult, GraduationStatus, KbGraph, WorkListItem } from "../src/core/kb.ts";
 import type { NodeCard } from "../src/core/kb-graph-model.ts";
 
 // ---- pure -----------------------------------------------------------------------
@@ -130,21 +131,52 @@ const PREVIEW: GraduationPreview = {
 };
 const RESULT: GraduationResult = { graduated: true, entries: ["ready", "ready~two"], archived: ["ready", "r1", "r2"], lateFolded: 0, unbound: 1, closedThreads: [] };
 
+const OBS: GraduationObservations = { total: 5, byWork: [{ id: "r1", title: "R1", count: 3 }, { id: "r2", title: "R2", count: 2 }] };
+const job = (kind: "preview" | "confirm") => ({ jobId: `j-${kind}`, kind, state: "running" as const, startedAt: "2026-10-28T12:00:00.000Z" });
+
+/** A wolf that runs jobs in the background: a start answers at once, the status says running for `runningPolls` reads, then the outcome. */
 interface FakeGraduate extends GraduateClient {
-	previews: { wolf: string; id: string }[];
-	confirms: { wolf: string; id: string; token: string }[];
-	previewResult: KbResult<GraduationPreview>;
-	confirmResult: KbResult<GraduationResult>;
+	starts: { kind: "preview" | "confirm"; wolf: string; id: string; token?: string }[];
+	statusCalls: number;
+	runningPolls: number;
+	/** What the first status read says before any start (a job the wolf already holds). */
+	initial: GraduationStatus;
+	observationsResult: KbResult<GraduationObservations>;
+	startPreviewResult: KbResult<ReturnType<typeof job>> | null;
+	previewOutcome: GraduationStatus;
+	confirmOutcome: GraduationStatus;
 }
 const fakeGraduate = (over: Partial<FakeGraduate> = {}): FakeGraduate => {
+	const running = new Map<string, { kind: "preview" | "confirm"; polls: number }>();
 	const g: FakeGraduate = {
-		previews: [],
-		confirms: [],
-		previewResult: { ok: true, data: PREVIEW },
-		confirmResult: { ok: true, data: RESULT },
+		starts: [],
+		statusCalls: 0,
+		runningPolls: 1,
+		initial: { state: "none" },
+		observationsResult: { ok: true, data: OBS },
+		startPreviewResult: null,
+		previewOutcome: { state: "preview_ready", preview: PREVIEW },
+		confirmOutcome: { state: "graduated", jobId: "j-confirm", result: RESULT },
 		wolves: async () => WOLVES,
-		preview: async (wolf, id) => (g.previews.push({ wolf, id }), g.previewResult),
-		confirm: async (wolf, id, token) => (g.confirms.push({ wolf, id, token }), g.confirmResult),
+		startPreview: async (wolf, id) => {
+			g.starts.push({ kind: "preview", wolf, id });
+			if (g.startPreviewResult) return g.startPreviewResult;
+			running.set(id, { kind: "preview", polls: 0 });
+			return { ok: true, data: job("preview") };
+		},
+		startConfirm: async (wolf, id, token) => {
+			g.starts.push({ kind: "confirm", wolf, id, token });
+			running.set(id, { kind: "confirm", polls: 0 });
+			return { ok: true, data: job("confirm") };
+		},
+		status: async (_wolf, id) => {
+			g.statusCalls++;
+			const j = running.get(id);
+			if (!j) return { ok: true, data: g.initial };
+			if (j.polls++ < g.runningPolls) return { ok: true, data: { state: "running", jobId: `j-${j.kind}`, kind: j.kind, startedAt: "2026-10-28T12:00:00.000Z" } };
+			return { ok: true, data: j.kind === "preview" ? g.previewOutcome : g.confirmOutcome };
+		},
+		observations: async () => g.observationsResult,
 		...over,
 	};
 	return g;
@@ -164,6 +196,8 @@ let root: Root | null = null;
 beforeEach(() => {
 	store.clear();
 	clearPaneCache();
+	graduateStore.reset();
+	graduateStore.pollMs = 5;
 });
 afterEach(() => {
 	act(() => root?.unmount());
@@ -171,6 +205,15 @@ afterEach(() => {
 	document.body.innerHTML = "";
 });
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 15)); });
+/** Wait (inside act) until the DOM says so. */
+const until = async (what: string, cond: () => boolean) => {
+	for (let i = 0; i < 200; i++) {
+		if (cond()) return;
+		await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+	}
+	assert.fail(`timed out waiting for ${what}`);
+};
+const phase = (id: string) => q(id)?.getAttribute("data-phase") ?? null;
 const q = (id: string) => document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
 const qa = (sel: string) => [...document.querySelectorAll(sel)] as HTMLElement[];
 const click = (el: Element) => act(async () => { el.dispatchEvent(Object.assign(new dom.window.Event("click", { bubbles: true, cancelable: true }), { detail: 1 })); });
@@ -219,11 +262,10 @@ describe("Work list: the Graduate button", () => {
 		await openList(g);
 		await click(q("work-graduate-busy")!);
 		assert.equal(q("graduate-dialog"), null);
-		assert.equal(g.previews.length, 0);
+		assert.equal(g.starts.length, 0);
 	});
-	it("the click does not also select the row", async () => {
-		const g = fakeGraduate();
-		await openList(g);
+	it("the click opens the confirmation step and does not also select the row", async () => {
+		await openList(fakeGraduate());
 		await click(q("work-graduate-ready")!);
 		assert.ok(q("graduate-dialog"));
 		assert.equal(q("work-view")!.getAttribute("data-split"), null);
@@ -231,18 +273,72 @@ describe("Work list: the Graduate button", () => {
 });
 
 describe("graduate flow from the Work list", () => {
-	it("the assignee wolf (online) previews at once; the modal shows the entries, the folded count and the warnings", async () => {
+	it("the confirmation step names the wolf and how many observations from how many tasks will be folded, and starts nothing yet", async () => {
 		const g = fakeGraduate();
 		await openList(g);
 		await click(q("work-graduate-ready")!);
 		await settle();
-		assert.deepEqual(g.previews, [{ wolf: "hal", id: "ready" }]);
-		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "preview");
+		const dlg = q("graduate-dialog")!;
+		assert.equal(dlg.getAttribute("data-step"), "confirm");
+		assert.match(q("graduate-summary")!.textContent!, /Graduate “Ready feature” on hal/);
+		assert.match(q("graduate-count")!.textContent!, /5 observations from 2 tasks will be folded into the contributions sent to the librarian’s inbox/);
+		assert.deepEqual(qa("[data-work]").map((li) => li.textContent), ["R1: 3 observations", "R2: 2 observations"]);
+		assert.doesNotMatch(dlg.textContent!, /written to the (KB|knowledge base)/i);
+		assert.equal(g.starts.length, 0, "nothing runs before Graduate is clicked");
+		await click(q("graduate-cancel")!);
+		assert.equal(q("graduate-dialog"), null);
+		assert.equal(g.starts.length, 0);
+	});
+	it("no pending observations: says so", async () => {
+		await openList(fakeGraduate({ observationsResult: { ok: true, data: { total: 0, byWork: [] } } }));
+		await click(q("work-graduate-ready")!);
+		await settle();
+		assert.match(q("graduate-count")!.textContent!, /no pending observations to fold/);
+	});
+	it("a count that cannot be read does not stop the graduation", async () => {
+		const g = fakeGraduate({ observationsResult: { ok: false, reason: "error", message: "boom" } });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		assert.match(q("graduate-summary")!.textContent!, /could not be counted/);
+		await click(q("graduate-go")!);
+		await settle();
+		assert.deepEqual(g.starts, [{ kind: "preview", wolf: "hal", id: "ready" }]);
+	});
+	it("Graduate closes the step and puts a loader over the button while the preview job runs; the rest of the list stays usable", async () => {
+		const g = fakeGraduate({ runningPolls: 1000 });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await settle();
+		assert.equal(q("graduate-dialog"), null, "the step is closed: the job does not block the UI");
+		assert.deepEqual(g.starts, [{ kind: "preview", wolf: "hal", id: "ready" }]);
+		assert.equal(phase("work-graduate-ready"), "previewing");
+		assert.ok(q("work-graduate-ready-loader"));
+		assert.equal((q("work-graduate-ready") as HTMLButtonElement).disabled, true);
+		// another row still works while it runs
+		await click(q("work-graduate-off")!);
+		await settle();
+		assert.ok(q("graduate-dialog"), "a second feature opens its own step");
+		assert.ok(g.statusCalls > 1, "the status is polled");
+	});
+	it("the button becomes Review; the modal shows the entries, the folded count and the warnings; nothing is sent until Confirm", async () => {
+		const g = fakeGraduate();
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		assert.equal(q("work-graduate-ready")!.textContent, "Review");
+		assert.equal(g.starts.filter((s) => s.kind === "confirm").length, 0);
+		await click(q("work-graduate-ready")!);
+		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "review");
 		const entries = qa('[data-testid="graduate-entry"]');
 		assert.equal(entries.length, 2);
 		assert.equal(entries[0]!.querySelector("[data-entry-title]")!.textContent, "How caching works");
 		assert.equal(entries[0]!.querySelector("[data-entry-summary]")!.textContent, "Lookups are cached.");
-		// the body is markdown: the heading and the bold text are elements, not literal markup
+		// the body is markdown: the bold text is an element, not literal markup
 		const body = entries[0]!.querySelector("[data-entry-body]")!;
 		assert.ok(body.textContent!.includes("Cached for five minutes"));
 		assert.ok(!body.textContent!.includes("**"));
@@ -250,89 +346,169 @@ describe("graduate flow from the Work list", () => {
 		assert.equal(qa("[data-warning]").length, 2);
 		assert.ok(q("graduate-warnings")!.textContent!.includes("a secret was redacted"));
 		assert.ok(q("graduate-archive")!.textContent!.includes("3 work items"));
-		assert.equal(g.confirms.length, 0, "a preview sends nothing");
+		// the copy says what Confirm does: a contribution to the librarian's inbox, not a write to the KB
+		assert.match(q("graduate-body")!.textContent!, /2 proposed entries to the librarian’s inbox/);
+		assert.match(q("graduate-confirm")!.textContent!, /librarian/);
+		assert.doesNotMatch(q("graduate-dialog")!.textContent!, /written to the (KB|knowledge base)|will write/i);
 	});
-	it("Confirm calls the route with the token, closes the modal and refreshes the list", async () => {
+	it("Cancel on the Review modal keeps Review on the button and sends nothing", async () => {
 		const g = fakeGraduate();
-		const work = await openList(g);
+		await openList(g);
 		await click(q("work-graduate-ready")!);
 		await settle();
-		const before = work.lists;
-		await click(q("graduate-confirm")!);
-		await settle();
-		assert.deepEqual(g.confirms, [{ wolf: "hal", id: "ready", token: "abcdef012345" }]);
-		assert.equal(q("graduate-dialog"), null);
-		assert.ok(work.lists > before, "the list was fetched again");
-	});
-	it("Cancel closes the modal and does nothing", async () => {
-		const g = fakeGraduate();
-		const work = await openList(g);
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
 		await click(q("work-graduate-ready")!);
-		await settle();
-		const before = work.lists;
 		await click(q("graduate-cancel")!);
 		assert.equal(q("graduate-dialog"), null);
-		assert.equal(g.confirms.length, 0);
-		assert.equal(work.lists, before);
+		assert.equal(phase("work-graduate-ready"), "ready");
+		assert.equal(g.starts.filter((s) => s.kind === "confirm").length, 0);
 	});
-	it("an offline assignee: the modal first asks which online wolf to use", async () => {
-		const g = fakeGraduate();
+	it("Confirm starts the confirm job with the token, shows the loader again, then refreshes the list and says what was sent", async () => {
+		const g = fakeGraduate({ runningPolls: 3 });
+		const work = await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
+		const before = work.lists;
+		await click(q("graduate-confirm")!);
+		assert.equal(q("graduate-dialog"), null, "the modal closes at once");
+		assert.deepEqual(g.starts.at(-1), { kind: "confirm", wolf: "hal", id: "ready", token: "abcdef012345" });
+		assert.equal(phase("work-graduate-ready"), "graduating");
+		assert.ok(q("work-graduate-ready-loader"));
+		await until("the toast", () => q("graduate-done") !== null);
+		assert.ok(work.lists > before, "the list was fetched again");
+		assert.match(q("graduate-done")!.textContent!, /2 contributions sent to the librarian/);
+		assert.match(q("graduate-done")!.textContent!, /after the librarian’s next sweep/);
+		assert.equal(graduateStore.get("ready"), undefined);
+		await click(q("graduate-done-dismiss")!);
+		assert.equal(q("graduate-done"), null);
+	});
+	it("the state survives closing and reopening the Work view", async () => {
+		const g = fakeGraduate({ runningPolls: 1000 });
+		const work = fakeWork();
+		await openList(g, work);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await settle();
+		await click(q("work-close")!);
+		assert.equal(q("work-view"), null);
+		g.runningPolls = 0; // the wolf finishes while the view is closed
+		await until("the job to finish", () => graduateStore.get("ready")?.phase === "ready");
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-toggle-no-initiative")!);
+		assert.equal(phase("work-graduate-ready"), "ready", "reopened: Review, no new preview");
+		assert.equal(g.starts.filter((s) => s.kind === "preview").length, 1);
+	});
+	it("a preview the wolf already holds shows as Review without a click, and a running one as the loader", async () => {
+		const g = fakeGraduate({ initial: { state: "preview_ready", preview: PREVIEW } });
+		await openList(g);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		assert.equal(g.starts.length, 0);
+		graduateStore.reset();
+		const g2 = fakeGraduate({ initial: { state: "running", jobId: "j", kind: "confirm", startedAt: "2026-10-28T12:00:00.000Z" } });
+		await act(async () => root!.unmount());
+		root = null;
+		document.body.innerHTML = "";
+		await openList(g2);
+		await until("the loader", () => phase("work-graduate-ready") === "graduating");
+	});
+	it("an offline assignee: the step asks which online wolf, and counts that wolf's pool", async () => {
+		const asked: string[] = [];
+		const g = fakeGraduate({ observations: async (wolf) => (asked.push(wolf), { ok: true, data: wolf === "lib" ? { total: 1, byWork: [{ id: "o1", title: "O1", count: 1 }] } : OBS }) });
 		await openList(g);
 		await click(q("work-graduate-off")!);
 		await settle();
 		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "pick");
-		assert.equal(g.previews.length, 0, "nothing runs before the owner picks");
+		assert.equal(g.starts.length, 0, "nothing runs before the owner picks");
 		assert.deepEqual(qa('[data-testid="graduate-wolf"] option').map((o) => o.textContent), ["hal", "lib"]);
 		await change(q("graduate-wolf")!, { value: "lib" });
-		await click(q("graduate-pick-go")!);
 		await settle();
-		assert.deepEqual(g.previews, [{ wolf: "lib", id: "off" }]);
-		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "preview");
-		await click(q("graduate-confirm")!);
+		assert.deepEqual(asked, ["hal", "lib"]);
+		assert.match(q("graduate-count")!.textContent!, /1 observation from 1 task will be folded/);
+		await click(q("graduate-go")!);
 		await settle();
-		assert.deepEqual(g.confirms.map((c) => c.wolf), ["lib"]);
+		assert.deepEqual(g.starts, [{ kind: "preview", wolf: "lib", id: "off" }]);
 	});
 	it("no wolf online: says so and offers nothing to run", async () => {
 		await openList(fakeGraduate({ wolves: async () => [{ name: "hal", status: "offline" }] }));
 		await click(q("work-graduate-ready")!);
 		await settle();
 		assert.ok(q("graduate-no-wolf"));
-		assert.equal(q("graduate-pick-go") === null, true);
+		assert.equal((q("graduate-go") as HTMLButtonElement).disabled, true);
 	});
 	it("a blocked preview cannot be confirmed", async () => {
-		const g = fakeGraduate({ previewResult: { ok: true, data: { ...PREVIEW, blocked: "History line missing" } } });
+		const g = fakeGraduate({ previewOutcome: { state: "preview_ready", preview: { ...PREVIEW, blocked: "History line missing" } } });
 		await openList(g);
 		await click(q("work-graduate-ready")!);
 		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
 		assert.match(q("graduate-blocked")!.textContent!, /History line missing/);
 		assert.equal((q("graduate-confirm") as HTMLButtonElement).disabled, true);
 	});
-	it("a refused preview shows the reason and retries", async () => {
-		const g = fakeGraduate({ previewResult: { ok: false, reason: "unavailable", message: "Ready feature is not ready to graduate: 1 task open", code: "not_ready" } });
+	it("a failed preview shows the reason on the button, and Retry goes back to the confirmation step", async () => {
+		const g = fakeGraduate({ previewOutcome: { state: "error", jobId: "j", kind: "preview", code: "not_ready", message: "Ready feature is not ready to graduate: 1 task open" } });
 		await openList(g);
 		await click(q("work-graduate-ready")!);
 		await settle();
-		assert.match(q("graduate-error")!.textContent!, /1 task open/);
-		g.previewResult = { ok: true, data: PREVIEW };
-		await click(q("graduate-retry")!);
+		await click(q("graduate-go")!);
+		await until("the error", () => phase("work-graduate-ready") === "error");
+		assert.match(q("work-graduate-ready")!.getAttribute("title")!, /1 task open/);
+		assert.equal(q("work-graduate-ready")!.textContent, "Retry");
+		g.previewOutcome = { state: "preview_ready", preview: PREVIEW };
+		await click(q("work-graduate-ready")!);
 		await settle();
-		assert.equal(g.previews.length, 2);
-		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "preview");
+		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "confirm");
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		assert.equal(g.starts.filter((s) => s.kind === "preview").length, 2);
 	});
-	it("a stale preview at confirm offers a fresh one, and nothing closes", async () => {
-		const g = fakeGraduate({ confirmResult: { ok: false, reason: "unavailable", message: "That preview is too old.", code: "preview_stale" } });
+	it("a start that is refused shows on the button too", async () => {
+		const g = fakeGraduate({ startPreviewResult: { ok: false, reason: "unavailable", message: "no Work API configured", code: "memory_unavailable" } });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await settle();
+		assert.equal(phase("work-graduate-ready"), "error");
+		assert.equal(q("work-graduate-ready")!.getAttribute("data-code"), "memory_unavailable");
+	});
+	it("a stale preview at confirm goes back to the Graduate step, and nothing refreshes", async () => {
+		const g = fakeGraduate({ confirmOutcome: { state: "error", jobId: "j", kind: "confirm", code: "preview_stale", message: "That preview is too old." } });
 		const work = await openList(g);
 		await click(q("work-graduate-ready")!);
 		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
 		const before = work.lists;
 		await click(q("graduate-confirm")!);
-		await settle();
-		assert.equal(q("graduate-error")!.getAttribute("data-code"), "preview_stale");
-		assert.equal(q("graduate-retry")!.textContent, "Preview again");
+		await until("the error", () => phase("work-graduate-ready") === "error");
+		assert.equal(q("work-graduate-ready")!.getAttribute("data-code"), "preview_stale");
 		assert.equal(work.lists, before, "a failed graduation refreshes nothing");
-		await click(q("graduate-retry")!);
+		await click(q("work-graduate-ready")!);
 		await settle();
-		assert.equal(g.previews.length, 2);
+		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "confirm");
+	});
+	it("another failure at confirm goes back to Review: the preview is still good", async () => {
+		const g = fakeGraduate({ confirmOutcome: { state: "error", jobId: "j", kind: "confirm", code: "engine_error", message: "graduation stopped, nothing archived" } });
+		await openList(g);
+		await click(q("work-graduate-ready")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("Review", () => phase("work-graduate-ready") === "ready");
+		await click(q("work-graduate-ready")!);
+		await click(q("graduate-confirm")!);
+		await until("the error", () => phase("work-graduate-ready") === "error");
+		await click(q("work-graduate-ready")!);
+		assert.equal(q("graduate-dialog")!.getAttribute("data-step"), "review");
+		assert.equal(g.starts.filter((s) => s.kind === "preview").length, 1);
 	});
 });
 
@@ -352,10 +528,12 @@ const records: Record<string, unknown> = {
 	OPN: { id: "OPN", title: "Open one", kind: "feature", stage: "in_build", domain: "d", plan: "# O", record: "", children: [{ id: "a", title: "A", kind: "task", stage: "shipped", dependsOn: [] }, { id: "b", title: "B", kind: "task", stage: "plan", dependsOn: [] }, { id: "c", title: "C", kind: "task", stage: "plan", dependsOn: [] }] },
 	tk: { id: "tk", title: "tk", kind: "task", stage: "shipped", domain: "d", plan: "# T", record: "" },
 };
+let recordReads = 0;
 const json = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
 globalThis.fetch = (async (url: string) => {
 	if (url === "/api/wolves") return json(200, { wolves: [{ id: "1", name: "lib", host: "h", status: "online", librarian: true }, { id: "2", name: "hal", host: "h", status: "online" }] });
 	const rec = /\/work\/([^/]+)\/record$/.exec(url);
+	if (rec) recordReads++;
 	if (rec) return records[rec[1]!] ? json(200, records[rec[1]!]) : json(404, { error: "nope" });
 	return json(404, { error: "unmocked " + url });
 }) as typeof fetch;
@@ -367,19 +545,43 @@ const mountPane = async (target: string, g: GraduateClient) => {
 };
 
 describe("graph pane: the Graduate button", () => {
-	it("a ready feature has an enabled button that opens the modal on the assignee wolf", async () => {
-		const g = fakeGraduate();
+	it("a ready feature runs the same flow: step → loader → Review → modal → Confirm → loader → refresh", async () => {
+		const g = fakeGraduate({ runningPolls: 1000 });
 		await mountPane("RDY", g);
 		const btn = q("pane-graduate") as HTMLButtonElement;
 		assert.equal(btn.disabled, false);
 		await click(btn);
 		await settle();
-		assert.deepEqual(g.previews, [{ wolf: "hal", id: "RDY" }]);
-		assert.equal(qa('[data-testid="graduate-entry"]').length, 2);
-		await click(q("graduate-confirm")!);
+		assert.match(q("graduate-count")!.textContent!, /5 observations from 2 tasks will be folded/);
+		await click(q("graduate-go")!);
 		await settle();
-		assert.deepEqual(g.confirms, [{ wolf: "hal", id: "RDY", token: "abcdef012345" }]);
 		assert.equal(q("graduate-dialog"), null);
+		assert.deepEqual(g.starts, [{ kind: "preview", wolf: "hal", id: "RDY" }]);
+		assert.equal(phase("pane-graduate"), "previewing");
+		assert.ok(q("pane-graduate-loader"));
+		g.runningPolls = 0;
+		await until("Review", () => phase("pane-graduate") === "ready");
+		await click(q("pane-graduate")!);
+		assert.equal(qa('[data-testid="graduate-entry"]').length, 2);
+		const reads = recordReads;
+		g.runningPolls = 1000;
+		await click(q("graduate-confirm")!);
+		assert.equal(q("graduate-dialog"), null);
+		assert.deepEqual(g.starts.at(-1), { kind: "confirm", wolf: "hal", id: "RDY", token: "abcdef012345" });
+		assert.equal(phase("pane-graduate"), "graduating");
+		g.runningPolls = 0;
+		await until("the graduation", () => graduateStore.getDone().length === 1);
+		assert.equal(graduateStore.getDone()[0]!.id, "RDY");
+		await settle();
+		assert.ok(recordReads > reads, "the pane read the feature again");
+	});
+	it("shares the job state with the Work list: a feature previewed elsewhere shows Review here", async () => {
+		const g = fakeGraduate();
+		await graduateStore.startPreview(g, { id: "RDY", title: "Ready one", assignee: "hal" }, "hal");
+		await until("the preview", () => graduateStore.get("RDY")?.phase === "ready");
+		await mountPane("RDY", g);
+		assert.equal(phase("pane-graduate"), "ready");
+		assert.equal(g.starts.length, 1, "the pane started nothing");
 	});
 	it("a feature with open tasks is disabled and says why", async () => {
 		const g = fakeGraduate();
@@ -394,23 +596,33 @@ describe("graph pane: the Graduate button", () => {
 		await mountPane("tk", fakeGraduate());
 		assert.equal(q("pane-graduate"), null);
 	});
-	it("Cancel leaves the pane as it was and sends nothing", async () => {
+	it("Cancel leaves the pane as it was and starts nothing", async () => {
 		const g = fakeGraduate();
 		await mountPane("RDY", g);
 		await click(q("pane-graduate")!);
 		await settle();
 		await click(q("graduate-cancel")!);
 		assert.equal(q("graduate-dialog"), null);
-		assert.equal(g.confirms.length, 0);
+		assert.equal(g.starts.length, 0);
+		assert.equal(phase("pane-graduate"), null);
 		assert.ok(q("pane-graduate"));
+	});
+	it("a failed job shows its message beside the button", async () => {
+		const g = fakeGraduate({ previewOutcome: { state: "error", jobId: "j", kind: "preview", code: "engine_error", message: "model exploded, nothing archived" } });
+		await mountPane("RDY", g);
+		await click(q("pane-graduate")!);
+		await settle();
+		await click(q("graduate-go")!);
+		await until("the error", () => phase("pane-graduate") === "error");
+		assert.match(q("pane-graduate-error")!.textContent!, /model exploded/);
 	});
 });
 
-describe("GraduateDialog on its own", () => {
-	it("the modal is a dialog and Esc closes it unless it is sending", async () => {
+describe("GraduateStartDialog on its own", () => {
+	it("the step is a dialog and Esc closes it", async () => {
 		const g = fakeGraduate();
 		let closed = 0;
-		await mountEl(<GraduateDialog target={{ id: "ready", title: "Ready feature", assignee: "hal" }} client={g} onClose={() => void closed++} />);
+		await mountEl(<GraduateStartDialog target={{ id: "ready", title: "Ready feature", assignee: "hal" }} client={g} onClose={() => void closed++} />);
 		await settle();
 		assert.equal(q("graduate-dialog")!.getAttribute("role"), "dialog");
 		await act(async () => {
@@ -419,6 +631,6 @@ describe("GraduateDialog on its own", () => {
 			document.dispatchEvent(ev);
 		});
 		assert.equal(closed, 1);
-		assert.equal(g.confirms.length, 0);
+		assert.equal(g.starts.length, 0);
 	});
 });

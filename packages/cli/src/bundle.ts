@@ -502,6 +502,8 @@ export function piDurableVersion(repoRoot: string): string {
  * `memory: { live: true }`. memoryGate (extensions/wolfpack-memory/unified.ts) is deliberately fail-closed and
  * stays so; the opt-in belongs to the deployer, not to the harness (which also runs unsandboxed in dev).
  * An explicit `memory.live` or `memory.enabled: false` in the wolf's config is respected.
+ * Librarians get `live: true` too: the Oct 24 Dewey bundle had no memory gate, so its memory extension was active,
+ * and live: true keeps that behaviour under the gate.
  */
 export function withLiveMemory(extra: Record<string, unknown> | undefined, extensions: readonly string[]): Record<string, unknown> | undefined {
   const mem = extra?.memory;

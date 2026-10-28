@@ -64,6 +64,7 @@ describe("harness bundle rollback", () => {
     const yaml = b64("id: abc123\nname: hal\n");
     fs.writeFileSync(path.join(agentDir(), "harness.cjs"), "H0");
     await manager.updatePiDurableBundle("abc123", b64("H1"), yaml, b64("#"), { memory: b64("M1"), old: b64("O1") });
+    await manager.confirmSync("abc123");
     fs.mkdirSync(path.dirname(ext("owner")), { recursive: true });
     fs.writeFileSync(ext("owner"), "OWN");
     // The bad sync: new harness, memory changed, "old" dropped, "fresh" added.
@@ -75,6 +76,45 @@ describe("harness bundle rollback", () => {
     expect(fs.readFileSync(ext("old"), "utf8")).toBe("O1");
     expect(fs.existsSync(ext("fresh"))).toBe(false);
     expect(fs.readFileSync(ext("owner"), "utf8")).toBe("OWN");
+  });
+
+  it("rollback also restores wolf.yaml and models.json", async () => {
+    const home = path.join(root, "home", "wolf-abc123");
+    fs.writeFileSync(path.join(agentDir(), "harness.cjs"), "H0");
+    fs.writeFileSync(path.join(home, "models.json"), "MODELS0");
+    fs.writeFileSync(path.join(home, "wolf.yaml"), "id: abc123\nname: hal\nrole: old\n");
+    await manager.updatePiDurableBundle("abc123", b64("H1"), b64("id: abc123\nname: hal\nrole: new\n"), b64("#"), {}, b64("MODELS1"));
+    expect(fs.readFileSync(path.join(home, "models.json"), "utf8")).toBe("MODELS1");
+    await manager.rollbackHarness("abc123");
+    expect(fs.readFileSync(path.join(home, "models.json"), "utf8")).toBe("MODELS0");
+    expect(fs.readFileSync(path.join(home, "wolf.yaml"), "utf8")).toContain("role: old");
+  });
+
+  it("a rollback without extensions.prev warns instead of reporting a clean rollback", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      fs.writeFileSync(path.join(agentDir(), "harness.cjs"), "H0");
+      await manager.updatePiDurableBundle("abc123", b64("H1"), b64("id: abc123\nname: hal\n"), b64("#"));
+      await manager.rollbackHarness("abc123");
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/no extensions\.prev/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("two bad syncs in a row do not overwrite the good pair; a confirmed sync rotates", async () => {
+    const yaml = b64("id: abc123\nname: hal\n");
+    fs.writeFileSync(path.join(agentDir(), "harness.cjs"), "GOOD");
+    await manager.updatePiDurableBundle("abc123", b64("BAD1"), yaml, b64("#"), { m: b64("M-BAD1") });
+    await manager.updatePiDurableBundle("abc123", b64("BAD2"), yaml, b64("#"), { m: b64("M-BAD2") });
+    expect(fs.readFileSync(path.join(agentDir(), "harness.prev.cjs"), "utf8")).toBe("GOOD");
+    await manager.rollbackHarness("abc123");
+    expect(fs.readFileSync(path.join(agentDir(), "harness.cjs"), "utf8")).toBe("GOOD");
+    // rolled back = known good: the next sync rotates again
+    await manager.updatePiDurableBundle("abc123", b64("N1"), yaml, b64("#"));
+    await manager.confirmSync("abc123");
+    await manager.updatePiDurableBundle("abc123", b64("N2"), yaml, b64("#"));
+    expect(fs.readFileSync(path.join(agentDir(), "harness.prev.cjs"), "utf8")).toBe("N1");
   });
 
   it("status reports the restart count", async () => {

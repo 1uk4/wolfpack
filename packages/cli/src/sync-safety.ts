@@ -94,7 +94,7 @@ export interface BuiltBundleFiles {
  * (extension and block removed), no sandbox, no librarian sweep, memory.enabled false (no timers, no KB/Work writes),
  * no real credentials, empty KB/Work env. The throwaway home is deleted afterwards.
  */
-export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutMs?: number; nodePath?: string } = {}): Promise<SmokeResult> {
+export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutMs?: number; nodePath?: string; expectBridge?: boolean } = {}): Promise<SmokeResult> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wolfpack-smoke-home-"));
   try {
     const cfg = (yamlParse(fs.readFileSync(built.wolfYamlPath, "utf8")) ?? {}) as Record<string, unknown>;
@@ -110,7 +110,7 @@ export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutM
     fs.mkdirSync(den, { recursive: true });
     const extSrc = path.join(built.tmpDir, "extensions");
     if (fs.existsSync(extSrc)) fs.cpSync(extSrc, path.join(den, "extensions"), { recursive: true });
-    return await runSmoke(built.harnessPath, [], {
+    const res = await runSmoke(built.harnessPath, [], {
       cwd: home,
       env: {
         HOME: home,
@@ -123,6 +123,11 @@ export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutM
       timeoutMs: opts.timeoutMs ?? 30_000,
       nodePath: opts.nodePath,
     });
+    // On subscription the main agent must come up on the bridge: a silent fallback to the API key fails the smoke.
+    if (res.ok && opts.expectBridge && !res.output.includes("Main agent via Max subscription (claude-bridge)")) {
+      return { ok: false, output: `${res.output}\n(expected the main agent on the claude-bridge provider, but it fell back to the API key)`.trim() };
+    }
+    return res;
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

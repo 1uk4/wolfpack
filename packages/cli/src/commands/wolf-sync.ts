@@ -181,7 +181,7 @@ async function syncPiDurable(
       process.exit(1);
     }
     env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    console.log(c.dim("  Max:     memory + sweep on the subscription; main agent stays on the API key"));
+    console.log(c.dim("  Max:     memory + sweep and the main agent run on the subscription (Max); the API key is the fallback"));
   }
 
   // Collect extra config (everything except base keys). transport / models
@@ -229,7 +229,7 @@ async function syncPiDurable(
   }
 
   // Never upload a bundle that does not even load: run it locally in smoke mode.
-  const smoke = await runSmokes(built);
+  const smoke = await runSmokes({ ...built, transport: models.transport });
   if (!smoke.ok) {
     console.error(c.red(`✗ The harness bundle fails its ${smoke.stage} check; nothing was uploaded, ${cfg.name} is untouched.`));
     for (const line of smoke.output.trim().split("\n").slice(-12)) console.error(c.dim(`    ${line}`));
@@ -291,6 +291,8 @@ async function syncPiDurable(
     process.exit(1);
   }
   console.log(c.green(`✓ ${cfg.name} is healthy after the restart`));
+  // An agent without the route (older) keeps its rollback set unrotated, which is the safe side.
+  await client.confirmSync(wolf.id).catch((err) => console.error(c.dim(`  (could not confirm the sync to the agent: ${err})`)));
 
   // Librarian pi-durable wolves also need the standalone KB CLI shipped to
   // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>` for admin ops like
@@ -488,9 +490,13 @@ async function runMeshReconcile(): Promise<void> {
 }
 
 /** Load check, then start check (createWolfHarness against a throwaway home). */
-async function runSmokes(built: Parameters<typeof smokeStartBundle>[0]): Promise<{ ok: boolean; output: string; stage: "load" | "start" }> {
-  const load = await smokeCheckBundle(built.harnessPath);
-  if (!load.ok) return { ...load, stage: "load" };
-  const start = await smokeStartBundle(built);
-  return { ...start, stage: "start" };
+async function runSmokes(built: Parameters<typeof smokeStartBundle>[0] & { transport?: string }): Promise<{ ok: boolean; output: string; stage: "load" | "start" }> {
+  try {
+    const load = await smokeCheckBundle(built.harnessPath);
+    if (!load.ok) return { ...load, stage: "load" };
+    const start = await smokeStartBundle(built, { expectBridge: built.transport === "subscription" });
+    return { ...start, stage: "start" };
+  } catch (err) {
+    return { ok: false, output: `smoke check could not run: ${err instanceof Error ? err.message : String(err)}`, stage: "start" };
+  }
 }

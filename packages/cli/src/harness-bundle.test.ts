@@ -44,7 +44,7 @@ describe("the real harness bundle on subscription", () => {
     });
     const built = await buildHarnessBundle({ name: "smokey", role: "tester", extensions: [], models: table }, "abc123");
     try {
-      const r = await smokeStartBundle(built);
+      const r = await smokeStartBundle(built, { expectBridge: true });
       expect(r.output).toContain("Main agent via Max subscription (claude-bridge)");
       expect(r.output).toContain("provider=claude-bridge");
       expect(r.ok).toBe(true);
@@ -67,6 +67,26 @@ describe("smokeStartBundle catches a startup throw that loading does not", () =>
       const r = await smokeStartBundle(files);
       expect(r.ok).toBe(false);
       expect(r.output).toContain("createRequire");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("smokeStartBundle expectBridge", () => {
+  it("a silent fallback to the API key fails the smoke when the bridge is expected", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smoke-bridge-"));
+    try {
+      const harnessPath = path.join(dir, "harness.cjs");
+      fs.writeFileSync(harnessPath, 'console.log("[harness] Main agent via API key (bridge unavailable: x)"); console.log("ok");');
+      fs.writeFileSync(path.join(dir, "wolf.yaml"), "name: x\n");
+      fs.writeFileSync(path.join(dir, "models.json"), "{}");
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), "#");
+      const files = { harnessPath, wolfYamlPath: path.join(dir, "wolf.yaml"), modelsPath: path.join(dir, "models.json"), agentsMdPath: path.join(dir, "AGENTS.md"), tmpDir: dir };
+      expect((await smokeStartBundle(files)).ok).toBe(true);
+      const r = await smokeStartBundle(files, { expectBridge: true });
+      expect(r.ok).toBe(false);
+      expect(r.output).toContain("fell back to the API key");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

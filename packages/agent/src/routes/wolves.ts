@@ -160,6 +160,21 @@ export function wolvesRouter(manager: WolfManager): Router {
     }
   });
 
+  // The CLI saw the wolf healthy after a sync: the rollback set may rotate next time.
+  router.post("/:nameOrId/confirm-sync", async (req: Request, res: Response) => {
+    try {
+      const config = manager.resolve(req.params.nameOrId);
+      if (!config) {
+        res.status(404).json({ error: `Wolf not found: ${req.params.nameOrId}` });
+        return;
+      }
+      await manager.confirmSync(config.id);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Stop wolf
   router.post("/:nameOrId/stop", async (req: Request, res: Response) => {
     try {

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { selectMainModel } from "./main-model.js";
+import { selectMainModel, startRoot } from "./main-model.js";
 
 import { createRegistry, Harness, type Conversation, type ContextEdit } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord/context";
@@ -101,6 +101,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     console.log(`[harness] SANDBOX: den=${wolfDen} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
   }
   // Main agent provider: Max subscription via the bridge, else the API key (also if the bridge fails to start).
+  let rootId: string | undefined;
   const mainModel = await selectMainModel({ table, cwd: wolfDen });
   console.log(`[harness] ${mainModel.line}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
   if (mainModel.warning) console.warn(`[harness] ${mainModel.warning}`);
@@ -190,20 +191,13 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
 
   // Root conversation with wolf identity. Table IDs carry no provider prefix; the provider comes from selectMainModel.
   console.log(`[harness] Creating root: provider=${mainModel.model.provider}, model=${main.model}`);
-  const agent = {
-    model: mainModel.model,
-    ...(main.thinking ? { thinkingLevel: main.thinking } : {}),
-    cwd: wolfDen,
-  } as const;
-  const root = await harness.root(context, { agent });
-  // root() applies `agent` only when it creates the conversation; an existing
-  // root keeps the model it was created with. Re-apply it on every start so
-  // the shipped table (models.json) decides the model, not history.
-  try {
-    await root.configure({ model: agent.model, thinkingLevel: main.thinking ?? null }, context);
-  } catch (err) {
-    console.error(`[harness] Could not re-apply the main model to the root: ${err instanceof Error ? err.message : err}`);
-  }
+  const root = await startRoot(
+    mainModel,
+    (a) => harness.root(context, { agent: { model: a.model, ...(main.thinking ? { thinkingLevel: main.thinking } : {}), cwd: wolfDen } as never }),
+    main.thinking,
+    context,
+  );
+  rootId = String(root.id);
   try {
     await repairEmptyToolErrors(root, context);
   } catch (err) {
@@ -319,10 +313,14 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
       if (sweepTimer) clearInterval(sweepTimer);
       if (telegram) await telegram.stop();
       detachReader();
-      await harness.close(context);
-      mainModel.shutdown();
-      await sandbox?.close();
-      restoreEnv();
+      try {
+        await harness.close(context);
+      } finally {
+        // The conversation ended: close its parked claude child, then everything else the bridge holds.
+        try { if (rootId) mainModel.release(rootId); } finally { mainModel.shutdown(); }
+        await sandbox?.close();
+        restoreEnv();
+      }
     },
   };
 }

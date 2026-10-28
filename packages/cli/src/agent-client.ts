@@ -78,6 +78,11 @@ export class AgentClient {
     return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/rollback`);
   }
 
+  /** The wolf is healthy after a sync: let the agent rotate its rollback set next time. */
+  async confirmSync(nameOrId: string): Promise<unknown> {
+    return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/confirm-sync`);
+  }
+
   /** Stop wolf */
   async stopWolf(nameOrId: string): Promise<unknown> {
     return this.request("POST", `/wolves/${encodeURIComponent(nameOrId)}/stop`);

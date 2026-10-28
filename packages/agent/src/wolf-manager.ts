@@ -45,6 +45,9 @@ function wolfService(id: string): string {
   return `wolf-${id}.service`;
 }
 
+/** agent/.pending: the last sync has not been confirmed healthy (see updatePiDurableBundle). */
+const PENDING_MARKER = ".pending";
+
 export class WolfManager {
   private wolvesIndex: Map<string, WolfConfig> = new Map();
   private indexPath: string;
@@ -362,24 +365,33 @@ WantedBy=multi-user.target
     // Ensure agent dir exists
     await fs.mkdir(agentDir, { recursive: true });
 
-    // Write harness.cjs, keeping the one it replaces as harness.prev.cjs so a
-    // sync whose bundle crash-loops can be rolled back (rollbackHarness).
+    // Keep what this sync replaces (harness, shipped extensions, wolf.yaml, models.json) so a sync that crash-loops can
+    // be rolled back as a set (rollbackHarness). Not rotated while the previous sync was never confirmed healthy
+    // (agent/.pending exists, cleared by confirmSync or a rollback): two bad syncs in a row must not overwrite the good set.
     const harnessPath = path.join(agentDir, "harness.cjs");
-    await fs.copyFile(harnessPath, path.join(agentDir, "harness.prev.cjs")).catch(() => {});
+    const pending = path.join(agentDir, PENDING_MARKER);
+    const unconfirmed = await fs.access(pending).then(() => true, () => false);
+    const extBackup = path.join(agentDir, "extensions.prev");
+    const cfgBackup = path.join(agentDir, "config.prev");
+    if (unconfirmed) {
+      console.warn(`[agent] ${id}: the previous sync was never confirmed healthy; keeping its rollback set (harness.prev.cjs, extensions.prev, config.prev)`);
+    } else {
+      await fs.copyFile(harnessPath, path.join(agentDir, "harness.prev.cjs")).catch(() => {});
+      await fs.rm(cfgBackup, { recursive: true, force: true });
+      await fs.mkdir(cfgBackup, { recursive: true });
+      for (const f of ["wolf.yaml", "models.json"]) await fs.copyFile(path.join(home, f), path.join(cfgBackup, f)).catch(() => {});
+      // Snapshot BEFORE anything is replaced: a non-ENOENT error here fails the sync with the wolf untouched.
+      if (extensionsMap) await snapshotDenExtensions(denDir, extBackup, extensionsMap);
+      else await fs.rm(extBackup, { recursive: true, force: true });
+    }
+    await fs.writeFile(pending, new Date().toISOString());
     await fs.writeFile(harnessPath, Buffer.from(harnessB64, "base64"));
 
     // Write shipped extensions to den/extensions/<name>/index.js. The den also
     // holds the owner's own extensions, so never wipe the directory: remove
     // only what an earlier sync shipped (recorded in .managed.json) and no
     // longer ships, and leave every other name alone.
-    // The set being replaced is saved first (agent/extensions.prev) so a rollback restores extensions with the harness.
-    const extBackup = path.join(agentDir, "extensions.prev");
-    if (extensionsMap) {
-      await snapshotDenExtensions(denDir, extBackup, extensionsMap);
-      await writeDenExtensions(denDir, extensionsMap);
-    } else {
-      await fs.rm(extBackup, { recursive: true, force: true });
-    }
+    if (extensionsMap) await writeDenExtensions(denDir, extensionsMap);
 
     // Write AGENTS.md
     const agentsPath = path.join(agentDir, "AGENTS.md");
@@ -449,12 +461,35 @@ WantedBy=multi-user.target
     await fs.copyFile(prev, path.join(agentDir, "harness.cjs"));
     const user = wolfUser(id);
     await exec("chown", [`${user}:${user}`, path.join(agentDir, "harness.cjs")]);
-    // The extensions that shipped with the bad bundle go back too (a harness + extension pair must match).
-    const denDir = path.join(wolfHome(id), "den");
+    // The extensions, wolf.yaml and models.json that shipped with the bad bundle go back too (a harness + extension
+    // + config set must match). A missing snapshot is a partial rollback and says so.
+    const home = wolfHome(id);
+    const denDir = path.join(home, "den");
     if (await restoreDenExtensions(denDir, path.join(agentDir, "extensions.prev"))) {
       await exec("chown", ["-R", `${user}:${user}`, path.join(denDir, "extensions")]);
+    } else {
+      console.warn(`[agent] ${id}: rollback restored harness.cjs only: no extensions.prev snapshot, den extensions left as they are`);
     }
+    for (const f of ["wolf.yaml", "models.json"]) {
+      const saved = path.join(agentDir, "config.prev", f);
+      if (await fs.access(saved).then(() => true, () => false)) {
+        await fs.copyFile(saved, path.join(home, f));
+        await exec("chown", [`${user}:${user}`, path.join(home, f)]);
+        if (f === "wolf.yaml") this.wolvesIndex.set(id, yamlParse(await fs.readFile(saved, "utf-8")) as WolfConfig);
+      } else {
+        console.warn(`[agent] ${id}: rollback has no saved ${f}; left as it is`);
+      }
+    }
+    // The restored set is the known-good one.
+    await fs.rm(path.join(agentDir, PENDING_MARKER), { force: true });
+    await this.saveIndex();
     await this.restart(id);
+  }
+
+  /** The wolf came back healthy after the last sync: it may now rotate the rollback set on the next one. */
+  async confirmSync(id: string): Promise<void> {
+    if (!this.wolvesIndex.has(id)) throw new Error(`Wolf not found: ${id}`);
+    await fs.rm(path.join(wolfHome(id), "agent", PENDING_MARKER), { force: true });
   }
 
   async status(id: string): Promise<WolfStatus> {

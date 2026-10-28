@@ -1,6 +1,6 @@
 # Dev sandbox: a production-like pack on this Mac
 
-`npm run dev:stack:desktop` starts workerd, which supervises every wolf in `~/wolves/dev`, plus the Electron app. Two
+`npm run sandbox:stack:desktop` starts workerd, which supervises every wolf in `~/wolves/dev`, plus the Electron app. Two
 durable wolves there run **exactly like production, fully sandboxed**:
 
 | wolf | role | what it does |
@@ -99,7 +99,7 @@ old ledger and items go to `.replaced-<ts>/`. To rebuild everything (e.g. a newe
 ## Running it
 
 ```sh
-npm run dev:stack:desktop      # or dev:stack for the browser console
+npm run sandbox:stack:desktop  # or sandbox:stack for the browser console
 ```
 
 `scripts/dev-stack.sh` needs `ANTHROPIC_API_KEY` only when the models file's transport is `api` (the dev `models.json` is
@@ -125,5 +125,5 @@ with the reason, shown, clicked) is written to the desktop main log; the rendere
 Set `WOLFPACK_DEBUG_STREAM=1` in the environment of the wolf process (wolfd) to log, for every in-flight assistant
 `message_update`, the sequence of engine change types, e.g. `[wolfd stream] message_update changes=[text_start,text_delta]`.
 `text_start` / `thinking_start` / `block` / `message` entries are the restream shapes that used to be dropped; if a reply
-looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 npm run dev:stack:desktop`.
+looks truncated, grep the wolf's log for these lines. With the dev stack: `WOLFPACK_DEBUG_STREAM=1 npm run sandbox:stack:desktop`.
 Off by default.

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # One-terminal dev stack: workerd (supervising every wolf in WOLVES_DIR) + console.
-#   npm run dev:stack            # browser console on :3000
-#   npm run dev:stack:desktop    # Electron app (console on :3210 inside)
+#   npm run dev:stack                # LIVE wolves (~/wolves/local), browser console on :3000
+#   npm run dev:stack:desktop        # LIVE wolves, Electron app (console on :3210 inside)
+#   npm run sandbox:stack[:desktop]  # SANDBOX wolves (~/wolves/dev)
 # Env (all optional):
-#   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/dev, the sandbox;
-#                         `npm run stack` / `stack:desktop` run the live wolves in ~/wolves/local,
-#                         with the browser console / the desktop app)
+#   WOLVES_DIR            dir of wolf dirs with wolf.yaml   (default ~/wolves/local, the live wolves)
 #   WOLFPACK_MODELS_FILE  models.json (transport "api")     (default: first */models.json in WOLVES_DIR)
 #   WORKERD_PORT          workerd /v1 port                  (default 7141)
 #   DEV_STACK_NO_EXT_INSTALL=1   skip the sandbox extension reinstall below
@@ -18,7 +17,12 @@
 # copy on its own timer and needs Ollama at 127.0.0.1:11434 (nomic-embed-text). See docs/dev-sandbox.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WOLVES_DIR="${WOLVES_DIR:-$HOME/wolves/dev}"
+WOLVES_DIR="${WOLVES_DIR:-$HOME/wolves/local}"
+if [ ! -d "$WOLVES_DIR" ] || ! ls "$WOLVES_DIR"/*/wolf.yaml >/dev/null 2>&1; then
+  echo "dev-stack: no wolves in $WOLVES_DIR (no */wolf.yaml). For the sandbox, take a fresh \`wolfpack sandbox snapshot\` first (docs/dev-sandbox.md)." >&2
+  exit 1
+fi
+if grep -qsE '^\s*sandbox:' "$WOLVES_DIR"/*/wolf.yaml; then echo "SANDBOX: $WOLVES_DIR"; else echo "LIVE: $WOLVES_DIR"; fi
 WORKERD_PORT="${WORKERD_PORT:-7141}"
 
 [ -f "$HOME/.wolfpack/.env" ] && { set -a; source "$HOME/.wolfpack/.env"; set +a; }

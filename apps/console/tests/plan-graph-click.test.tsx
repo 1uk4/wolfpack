@@ -180,3 +180,47 @@ describe("draggable graph view: robustness", () => {
 		assert.equal(document.querySelectorAll('[data-testid="graph-node"]').length, 3);
 	});
 });
+
+describe("canvas mode: slivers, free pan, re-center", () => {
+	const g = {
+		nodes: [
+			{ id: "a", label: "Alpha done", kind: "task", status: "done" as const },
+			{ id: "b", label: "Beta skipped", kind: "task", status: "skipped" as const },
+			{ id: "c", label: "Gamma todo", kind: "task", status: "todo" as const },
+		],
+		edges: [{ from: "c", to: "a" }, { from: "c", to: "b" }],
+	};
+	const panX = () => Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"));
+	it("done and archived nodes are label-less slivers with a title and aria-label; a click still reaches onNodeClick; edges still draw", async () => {
+		const clicked: string[] = [];
+		await mount(<PlanGraphView draggable collapseDone graph={g} onNodeClick={(id) => clicked.push(id)} />);
+		for (const id of ["a", "b"]) {
+			const li = q(`[data-node-id="${id}"]`)!;
+			assert.equal(li.getAttribute("data-sliver"), "true");
+			assert.equal((li.textContent ?? "").trim(), "", "no visible text");
+			assert.ok((li.getAttribute("title") ?? "").length > 0);
+			assert.ok((li.getAttribute("aria-label") ?? "").includes(id === "a" ? "Alpha done" : "Beta skipped"));
+		}
+		assert.ok(q('[data-node-id="c"]')!.getAttribute("data-sliver") === null);
+		assert.ok((q('[data-node-id="c"]')!.textContent ?? "").includes("Gamma todo"));
+		assert.equal(document.querySelectorAll('[data-testid="graph-edge"]').length, 2);
+		await click(q('[data-node-id="a"] [data-testid="graph-node-hit"]')!);
+		assert.deepEqual(clicked, ["a"]);
+	});
+	it("the chat card (no collapseDone) still renders done nodes with their labels", async () => {
+		await mount(<PlanGraphView graph={g} />);
+		assert.ok(q('[data-node-id="a"]')!.getAttribute("data-sliver") === null);
+		assert.ok((q('[data-node-id="a"]')!.textContent ?? "").includes("Alpha done"));
+	});
+	it("a pan far past the edges is not clamped; re-center resets the offset", async () => {
+		await mount(<PlanGraphView draggable graph={g} />);
+		const box = q('[data-testid="graph-scroll"]')!;
+		const x0 = panX();
+		await ptr(box, "pointerdown", 5000, 50);
+		await ptr(box, "pointermove", -5000, 50);
+		await ptr(box, "pointerup", -5000, 50);
+		assert.equal(panX(), x0 - 10000);
+		await click(q('[data-testid="graph-recenter"]')!);
+		assert.equal(panX(), x0);
+	});
+});

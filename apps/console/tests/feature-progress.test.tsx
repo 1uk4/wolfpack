@@ -186,15 +186,32 @@ describe("FeatureProgressPanel", () => {
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		const box = q('[data-testid="graph-scroll"]')!;
 		assert.equal(box.getAttribute("data-draggable"), "true");
-		assert.equal(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"), "0");
+		const x0 = Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"));
 		await ptr(box, "pointerdown", 100, 100);
 		await ptr(box, "pointermove", 60, 100);
 		await ptr(box, "pointerup", 60, 100);
 		const x = Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"));
-		assert.ok(x < 0, `panned left (${x})`);
+		assert.ok(x < x0, `panned left (${x} < ${x0})`);
 		await click(q('[data-testid="feature-progress-toggle"]')!);
 		await click(q('[data-testid="feature-progress-toggle"]')!);
-		assert.equal(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"), "0");
+		assert.equal(Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x")), x0);
+	});
+
+	it("full screen: the button opens the canvas in a modal, Esc closes it, a node click there opens the Status panel and closes the modal", async () => {
+		await mountPanel({}, "w/feature-F-full");
+		await click(q('[data-testid="feature-progress-toggle"]')!);
+		assert.ok(q('[data-testid="feature-progress-modal"]') === null);
+		await click(q('[data-testid="feature-progress-fullscreen"]')!);
+		const modal = q('[data-testid="feature-progress-modal"]');
+		assert.ok(modal, "modal open");
+		assert.equal(modal!.querySelectorAll('[data-testid="graph-node"]').length, 4);
+		assert.equal(modal!.querySelector('[data-testid="graph-scroll"]')!.getAttribute("data-draggable"), "true");
+		await act(async () => void document.dispatchEvent(Object.assign(new dom.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "Escape" })));
+		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "Esc closed it");
+		await click(q('[data-testid="feature-progress-fullscreen"]')!);
+		await click(q('[data-testid="feature-progress-modal"] [data-node-id="c"] [data-testid="graph-node-hit"]')!);
+		assert.equal(q('[data-testid="stub-status"]')!.getAttribute("data-task"), "c");
+		assert.ok(q('[data-testid="feature-progress-modal"]') === null, "modal closed so the panel is visible");
 	});
 
 	it("collapse state is remembered per thread (across a remount), not shared between threads", async () => {

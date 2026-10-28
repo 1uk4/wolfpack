@@ -1,9 +1,11 @@
-import { useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { CheckIcon } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { CheckIcon, FocusIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { GraphData, GraphNodeStatus } from "@wolfpack/protocol/objects";
 import { CLICK_SLOP } from "@/components/graph-canvas";
 import { layoutGraph } from "@/src/core";
+
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const STATUS_LABEL: Record<GraphNodeStatus, string> = { todo: "To do", doing: "Doing", done: "Done", blocked: "Blocked", skipped: "Skipped" };
 const CARD: Record<GraphNodeStatus, string> = {
@@ -23,16 +25,40 @@ const DOT: Record<GraphNodeStatus, string> = {
 
 /**
  * THE SHARED GRAPH VIEW: a layered DAG (prerequisites left, dependents right), status-coloured; scrolls sideways when
- * wide. Drawn by the show_graph chat card (PlanGraphCard) and the pinned feature graph. `onNodeClick` turns each node
- * into a button; `highlightId` makes one node glow (the thread's bound task). `draggable` swaps the sideways scroll for a
- * drag-to-pan view like the Knowledge graph's (same click slop, grab / grabbing cursor, no zoom): the box is as tall as
- * the graph up to its container's max height, a drag moves the graph inside it, and a press that travels more than the
- * slop is never a node click. The KB viewer's node drag is its force simulation; this layout is fixed, so nodes stay put.
+ * wide. Drawn by the show_graph chat card (PlanGraphCard, fixed, full labels) and the pinned feature graph. `onNodeClick`
+ * turns each node into a button; `highlightId` makes one node glow (the thread's bound task).
+ *
+ * `draggable` makes it a FREE-PAN CANVAS like the Knowledge graph's feel (same click slop, grab / grabbing cursor, no
+ * zoom, no node drag): dragging the background moves the graph with NO clamp at the edges, it starts centred on the
+ * highlighted node (else the whole graph), and a small re-center button puts it back. A press that travels more than the
+ * slop is never a node click. `fill` makes the box fill its parent (the full-screen modal) instead of being as tall as
+ * the graph up to the panel cap. `collapseDone` draws done and skipped nodes as thin label-less bars (title on hover,
+ * aria-label), packed tighter by the layout; the highlighted node always stays a full card. `toolbar` is extra
+ * controls placed beside the re-center button.
  */
-export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggable = false }: { graph: GraphData; onNodeClick?: (id: string) => void; highlightId?: string | null; label?: string; draggable?: boolean }) {
+export function PlanGraphView({
+	graph,
+	onNodeClick,
+	highlightId,
+	label,
+	draggable = false,
+	collapseDone = false,
+	fill = false,
+	toolbar,
+}: {
+	graph: GraphData;
+	onNodeClick?: (id: string) => void;
+	highlightId?: string | null;
+	label?: string;
+	draggable?: boolean;
+	collapseDone?: boolean;
+	fill?: boolean;
+	toolbar?: ReactNode;
+}) {
 	const pan = usePan(draggable);
 	const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
-	const layout = layoutGraph(graph.nodes, graph.edges);
+	const slim = new Set(collapseDone ? graph.nodes.filter((n) => (n.status === "done" || n.status === "skipped") && n.id !== highlightId).map((n) => n.id) : []);
+	const layout = layoutGraph(graph.nodes, graph.edges, { slim });
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
 	for (const e of graph.edges) {
@@ -44,19 +70,34 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 	}
 	const at = new Map(layout.nodes.map((p) => [p.id, p] as const));
 	const done = graph.nodes.filter((n) => n.status === "done").length;
+	const centreOffset = () => {
+		const box = pan.ref.current;
+		const vw = box?.clientWidth || 0;
+		const vh = box?.clientHeight || 0;
+		const hi = highlightId ? at.get(highlightId) : undefined;
+		if (hi) return { x: Math.round(vw / 2 - (hi.x + hi.width / 2)), y: Math.round(vh / 2 - (hi.y + hi.height / 2)) };
+		// the whole graph: centred when it fits an axis, else its start is at the edge
+		return { x: layout.width <= vw ? Math.round((vw - layout.width) / 2) : 0, y: layout.height <= vh ? Math.round((vh - layout.height) / 2) : 0 };
+	};
+	const centreRef = useRef(centreOffset);
+	centreRef.current = centreOffset;
+	useIsoLayoutEffect(() => {
+		if (draggable) pan.setOffset(centreRef.current());
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draggable]);
 	const clickNode = (id: string) => {
 		if (!pan.consumeDrag()) onNodeClick?.(id);
 	};
 	return (
 		<div
-			className={draggable ? cn("relative max-h-[calc(40vh-1.5rem)] touch-none select-none overflow-hidden", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
-			style={draggable ? { height: layout.height } : undefined}
+			className={draggable ? cn("relative touch-none select-none overflow-hidden", fill ? "h-full" : "max-h-[calc(40vh-1.5rem)]", pan.dragging ? "cursor-grabbing" : "cursor-grab") : "overflow-x-auto pb-1"}
+			style={draggable && !fill ? { height: layout.height } : undefined}
 			data-testid="graph-scroll"
 			data-draggable={draggable ? "true" : undefined}
 			{...pan.handlers}
 			ref={pan.ref}
 		>
-			<div className="relative" style={draggable ? { transform: `translate(${pan.view(layout.width, layout.height).x}px, ${pan.view(layout.width, layout.height).y}px)`, width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-pan-x={pan.view(layout.width, layout.height).x} data-pan-y={pan.view(layout.width, layout.height).y}>
+			<div className="relative" style={draggable ? { transform: `translate(${pan.offset.x}px, ${pan.offset.y}px)`, width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-pan-x={pan.offset.x} data-pan-y={pan.offset.y}>
 				<div className="relative" role="group" aria-label={`${label ?? `Plan graph${graph.title ? `: ${graph.title}` : ""}`}, ${graph.nodes.length} nodes, ${done} done`} style={{ width: layout.width, height: layout.height }}>
 					<svg className="pointer-events-none absolute inset-0 text-muted-foreground" width={layout.width} height={layout.height} aria-hidden>
 						<defs>
@@ -87,6 +128,8 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 							const p = at.get(n.id);
 							if (!p) return null;
 							const hi = highlightId === n.id;
+							const sliver = slim.has(n.id);
+							const name = `${n.label} (${STATUS_LABEL[n.status]}${hi ? ", current" : ""})`;
 							return (
 								<li
 									key={n.id}
@@ -96,26 +139,37 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 									data-kind={n.kind}
 									data-rank={p.rank}
 									data-highlight={hi ? "true" : "false"}
+									data-sliver={sliver ? "true" : undefined}
 									title={n.detail ? `${n.label} — ${n.detail}` : n.label}
-									className={cn("absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5", CARD[n.status], hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70")}
-									style={{ left: p.x, top: p.y, width: layout.nodeWidth, height: layout.nodeHeight }}
+									aria-label={sliver ? name : undefined}
+									className={cn(
+										sliver ? (n.status === "done" ? "absolute rounded-full bg-emerald-500/70" : "absolute rounded-full bg-muted-foreground/40") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
+										!sliver && CARD[n.status],
+										hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70",
+									)}
+									style={{ left: p.x, top: p.y, width: p.width, height: p.height }}
 								>
-									<div className="flex items-center gap-1.5 text-[10px] leading-none">
-										{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}
-										<span className="font-medium">{STATUS_LABEL[n.status]}</span>
-										<span className="ml-auto truncate text-muted-foreground/80" title={n.kind}>
-											{n.kind}
-										</span>
-									</div>
-									<div className={cn("line-clamp-2 break-words text-xs leading-4", n.status === "skipped" && "line-through")}>{n.label}</div>
-									{dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
+									{!sliver && (
+										<>
+											<div className="flex items-center gap-1.5 text-[10px] leading-none">
+												{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}
+												<span className="font-medium">{STATUS_LABEL[n.status]}</span>
+												<span className="ml-auto truncate text-muted-foreground/80" title={n.kind}>
+													{n.kind}
+												</span>
+											</div>
+											<div className={cn("line-clamp-2 break-words text-xs leading-4", n.status === "skipped" && "line-through")}>{n.label}</div>
+											{dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
+										</>
+									)}
 									{onNodeClick && (
 										<button
 											type="button"
 											data-testid="graph-node-hit"
-											aria-label={`${n.label} (${STATUS_LABEL[n.status]}${hi ? ", current" : ""})`}
+											aria-label={name}
+											title={sliver ? n.label : undefined}
 											onClick={() => clickNode(n.id)}
-											className="absolute inset-0 cursor-pointer rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+											className={cn("absolute cursor-pointer focus-visible:outline-2 focus-visible:outline-ring", sliver ? "-inset-x-0.5 -inset-y-1 rounded-full" : "inset-0 rounded-lg")}
 										/>
 									)}
 								</li>
@@ -124,6 +178,21 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 					</ul>
 				</div>
 			</div>
+			{draggable && (
+				<div className="absolute right-1 top-1 z-10 flex items-center gap-1" data-testid="graph-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+					{toolbar}
+					<button
+						type="button"
+						data-testid="graph-recenter"
+						aria-label="Re-center graph"
+						title="Re-center graph"
+						onClick={() => pan.setOffset(centreOffset())}
+						className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+					>
+						<FocusIcon className="size-3.5" aria-hidden />
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -131,7 +200,7 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 /**
  * Drag-to-pan state for the draggable view. Pointer events on the box; the pointer is captured only once it travels past
  * CLICK_SLOP, so a plain press still reaches the node button as a click, and a press that became a drag is swallowed
- * (`consumeDrag`). The offset is clamped so the graph cannot leave the box; an axis the graph fits in does not pan.
+ * (`consumeDrag`). The offset is NOT clamped: the canvas pans freely past the graph's edges.
  */
 function usePan(enabled: boolean) {
 	const ref = useRef<HTMLDivElement | null>(null);
@@ -140,7 +209,6 @@ function usePan(enabled: boolean) {
 	const press = useRef<{ x: number; y: number; ox: number; oy: number; id: number } | null>(null);
 	const moved = useRef(false);
 	const pressSeq = useRef(0);
-	const clamp = (v: number, view: number, content: number) => (content <= view ? 0 : Math.min(0, Math.max(view - content, v)));
 	const handlers = enabled
 		? {
 				onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -170,13 +238,7 @@ function usePan(enabled: boolean) {
 							/* capture is best-effort */
 						}
 					}
-					const box = ref.current;
-					const inner = box?.firstElementChild as HTMLElement | null;
-					const vw = box?.clientWidth ?? 0;
-					const vh = box?.clientHeight ?? 0;
-					const cw = inner ? Number.parseFloat(inner.style.width) || 0 : 0;
-					const ch = inner ? Number.parseFloat(inner.style.height) || 0 : 0;
-					setOffset({ x: clamp(p.ox + dx, vw, cw), y: clamp(p.oy + dy, vh, ch) });
+					setOffset({ x: p.ox + dx, y: p.oy + dy });
 				},
 				onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => {
 					if (!press.current) return;
@@ -206,11 +268,5 @@ function usePan(enabled: boolean) {
 		moved.current = false;
 		return was;
 	};
-	/** The offset clamped to the current layout and box (a refetch or resize can leave the stored one out of view). */
-	const view = (cw: number, ch: number) => {
-		const box = ref.current;
-		if (!box) return offset; // first render: nothing to clamp against yet
-		return { x: clamp(offset.x, box.clientWidth ?? 0, cw), y: clamp(offset.y, box.clientHeight ?? 0, ch) };
-	};
-	return { ref, offset, view, dragging, handlers, consumeDrag };
+	return { ref, offset, setOffset, dragging, handlers, consumeDrag };
 }

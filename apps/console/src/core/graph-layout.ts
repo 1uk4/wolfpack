@@ -13,6 +13,10 @@ export interface GraphLayoutOptions {
 	nodeHeight?: number;
 	gapX?: number;
 	gapY?: number;
+	/** Ids drawn as thin bars (done / skipped slivers): `slimHeight` tall, and a column of only slivers is `slimWidth` wide. */
+	slim?: ReadonlySet<string>;
+	slimHeight?: number;
+	slimWidth?: number;
 }
 
 export interface PlacedGraphNode {
@@ -20,6 +24,8 @@ export interface PlacedGraphNode {
 	rank: number;
 	x: number;
 	y: number;
+	width: number;
+	height: number;
 }
 
 export interface GraphLayout {
@@ -82,26 +88,51 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 		ordered.forEach((o, r) => row.set(o.id, r));
 		rowCount.set(rank, col.length);
 	});
-	const placed: PlacedGraphNode[] = nodes.map((n) => {
-		const rank = ranks.get(n.id)!;
-		return { id: n.id, rank, x: rank * (nodeWidth + gapX), y: row.get(n.id)! * (nodeHeight + gapY) };
+	const slim = opts.slim ?? new Set<string>();
+	const slimHeight = opts.slimHeight ?? 8;
+	const slimWidth = opts.slimWidth ?? 36;
+	const slimGap = Math.min(gapY, 4);
+	// Column widths: a column of only slivers is narrow. Heights stack per column (a sliver is short, with a tight gap).
+	const colWidth: number[] = columns.map((col) => (col && col.length > 0 && col.every((id) => slim.has(id)) ? slimWidth : nodeWidth));
+	const colX: number[] = [];
+	let cursorX = 0;
+	for (let c = 0; c < columns.length; c++) {
+		colX[c] = cursorX;
+		cursorX += (colWidth[c] ?? nodeWidth) + gapX;
+	}
+	const placed: PlacedGraphNode[] = [];
+	let totalHeight = 0;
+	columns.forEach((col, rank) => {
+		if (!col) return;
+		let y = 0;
+		let prevSlim = false;
+		const ordered = [...col].sort((a, b) => row.get(a)! - row.get(b)!);
+		ordered.forEach((id, i) => {
+			const isSlim = slim.has(id);
+			if (i > 0) y += isSlim || prevSlim ? slimGap : gapY;
+			const h = isSlim ? slimHeight : nodeHeight;
+			placed.push({ id, rank, x: colX[rank]!, y, width: isSlim && colWidth[rank] === nodeWidth ? nodeWidth : colWidth[rank]!, height: h });
+			y += h;
+			prevSlim = isSlim;
+		});
+		totalHeight = Math.max(totalHeight, y);
 	});
+	const order = new Map(nodes.map((n, i) => [n.id, i] as const));
+	placed.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
 	const at = new Map(placed.map((p) => [p.id, p] as const));
 	const out: GraphLayout["edges"] = [];
 	for (const e of edges) {
 		const prereq = at.get(e.to);
 		const dependent = at.get(e.from);
 		if (!prereq || !dependent) continue;
-		out.push({ from: e.from, to: e.to, x1: prereq.x + nodeWidth, y1: prereq.y + nodeHeight / 2, x2: dependent.x, y2: dependent.y + nodeHeight / 2 });
+		out.push({ from: e.from, to: e.to, x1: prereq.x + prereq.width, y1: prereq.y + prereq.height / 2, x2: dependent.x, y2: dependent.y + dependent.height / 2 });
 	}
 	const cols = placed.length ? Math.max(...placed.map((p) => p.rank)) + 1 : 0;
-	let maxRows = 0;
-	for (const c of rowCount.values()) maxRows = Math.max(maxRows, c);
 	return {
 		nodes: placed,
 		edges: out,
-		width: cols ? cols * nodeWidth + (cols - 1) * gapX : 0,
-		height: maxRows ? maxRows * nodeHeight + (maxRows - 1) * gapY : 0,
+		width: cols ? cursorX - gapX : 0,
+		height: totalHeight,
 		nodeWidth,
 		nodeHeight,
 	};

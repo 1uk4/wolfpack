@@ -18,15 +18,22 @@ export interface WorkNode {
 export const ROUTE_ROOT = "factory";
 
 /**
- * Experiment switch. On: a route node with no in-route prerequisite enters
- * from its PARENT (task -> feature -> initiative -> Factory), and a feature
- * dependency G -> F runs G's terminal tasks -> F node -> F's entry tasks.
- * Off: the original behaviour (Factory -> first step directly).
+ * How the hierarchy joins a route (experiment switch).
+ * - "entry": a route node with no in-route prerequisite enters from its
+ *   PARENT (Factory -> initiative -> feature -> entry tasks), and a feature
+ *   dependency G -> F runs G's terminal tasks -> F node -> F's entry tasks.
+ * - "exit": prerequisite-free tasks enter from the Factory; a feature's
+ *   terminal tasks lead INTO the feature node, features lead into their
+ *   initiative (the end of the path), and a feature dependency G -> F runs
+ *   G node -> F's entry tasks.
+ * - "none": the original behaviour (Factory -> first step directly).
  */
-export const ROUTE_ENTRY_VIA_PARENT = true;
+export type RouteParentMode = "entry" | "exit" | "none";
+export const ROUTE_PARENT_MODE: RouteParentMode = "exit";
 
 export interface RouteOptions {
-  entryViaParent?: boolean;
+  /** Overrides ROUTE_PARENT_MODE. */
+  parentMode?: RouteParentMode;
   /**
    * Collapse each fully done prerequisite feature (not the target, nor the
    * target's own feature) to its feature node: its tasks leave the route's
@@ -47,6 +54,8 @@ export interface RouteEdge {
   root: boolean;
   /** Hierarchy entry: parent -> child that has no in-route prerequisite. */
   entry?: true;
+  /** Hierarchy exit: terminal task -> feature, or feature -> initiative. */
+  exit?: true;
 }
 
 export interface RouteStep {
@@ -76,7 +85,9 @@ const isDoneStage = (stage: string) => stage === "shipped" || stage === "live" |
 export function computeWorkRoute(
   nodes: readonly WorkNode[], targetId: string, opts: RouteOptions = {},
 ): WorkRoute {
-  const viaParent = opts.entryViaParent ?? ROUTE_ENTRY_VIA_PARENT;
+  const mode = opts.parentMode ?? ROUTE_PARENT_MODE;
+  const viaParent = mode === "entry";
+  const exitMode = mode === "exit";
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const empty = (): WorkRoute => ({
     target: targetId, root: ROUTE_ROOT, steps: [], edges: [], parallelGroups: [],
@@ -124,7 +135,17 @@ export function computeWorkRoute(
   // A feature target ends at the feature node after all its own tasks.
   const targetIsFeatureNode = isFeatureWithTasks(targetId);
 
+  const exitKeys = new Set<string>();
   for (const n of nodes) {
+    if (exitMode) {
+      // A feature dependency G -> F leaves from the G node (or a task) into F's entry tasks.
+      for (const d of n.dependsOn ?? []) {
+        if (!byId.has(d)) continue;
+        const implicit = isFeatureWithTasks(d) || isFeatureWithTasks(n.id);
+        for (const to of entrances(n.id)) addEdge(d, to, implicit);
+      }
+      continue;
+    }
     // The target feature node ends the route, so it cannot also gate its own tasks.
     const viaNode = viaParent && isFeatureWithTasks(n.id) && n.id !== targetId;
     let gated = false;
@@ -141,6 +162,20 @@ export function computeWorkRoute(
     if (gated) for (const to of entries(n.id)) addEdge(n.id, to, true);
   }
   if (targetIsFeatureNode) for (const t of terminals(targetId)) addEdge(t, targetId, false);
+  if (exitMode) {
+    for (const n of nodes) {
+      if (!isFeatureWithTasks(n.id)) continue;
+      for (const t of terminals(n.id)) { addEdge(t, n.id, false); exitKeys.add(`${t}\0${n.id}`); }
+    }
+  }
+  // A selected task's tail goes straight to its feature, not via the feature's other terminals.
+  const tailFeature = exitMode && target.kind !== "feature" && target.kind !== "initiative" && target.parent && isFeatureWithTasks(target.parent)
+    ? target.parent : null;
+  if (tailFeature) {
+    for (const key of [...edgeMap.keys()]) if (key.endsWith(`\0${tailFeature}`) && !key.startsWith(`${targetId}\0`)) edgeMap.delete(key);
+    addEdge(targetId, tailFeature, false);
+    exitKeys.add(`${targetId}\0${tailFeature}`);
+  }
 
   const preds = new Map<string, string[]>();
   for (const e of edgeMap.values()) {
@@ -149,7 +184,11 @@ export function computeWorkRoute(
   }
 
   // Ancestor closure.
-  const seeds = targetIsFeatureNode ? [targetId] : exits(targetId);
+  let seeds = targetIsFeatureNode ? [targetId] : exits(targetId);
+  // An initiative is the natural end of all its features' paths.
+  if (exitMode && target.kind === "initiative") {
+    seeds = nodes.filter((n) => n.kind === "feature" && n.parent === targetId).map((n) => n.id).sort();
+  }
   const inRoute = new Set<string>(seeds);
   const stack = [...seeds];
   while (stack.length) {
@@ -164,6 +203,25 @@ export function computeWorkRoute(
       inRoute.add(t);
       const st = [t];
       while (st.length) for (const p of preds.get(st.pop()!) ?? []) if (!inRoute.has(p)) { inRoute.add(p); st.push(p); }
+    }
+  }
+
+  if (exitMode) {
+    inRoute.add(targetId);
+    if (tailFeature) inRoute.add(tailFeature);
+    // A feature with no in-route dependent ends at its initiative.
+    const ends: string[] = [];
+    for (const id of [...inRoute].sort()) {
+      const n = byId.get(id);
+      if (n?.kind !== "feature" || !n.parent || !byId.has(n.parent)) continue;
+      const leads = [...edgeMap.values()].some((e) => e.from === id && inRoute.has(e.to) && e.to !== n.parent);
+      if (!leads) ends.push(id);
+    }
+    for (const id of ends) {
+      const parent = byId.get(id)!.parent!;
+      inRoute.add(parent);
+      addEdge(id, parent, false);
+      exitKeys.add(`${id}\0${parent}`);
     }
   }
 
@@ -192,7 +250,7 @@ export function computeWorkRoute(
     state.set(id, 2);
   };
   for (const id of [...inRoute].sort()) if (!state.has(id)) visit(id);
-  const edges = sub.filter((e) => !dropped.has(e));
+  const edges = sub.filter((e) => !dropped.has(e)).map((e) => (exitKeys.has(`${e.from}\0${e.to}`) ? { ...e, exit: true as const } : e));
 
   // Hierarchy entry: a node with no in-route prerequisite enters from its parent
   // (task -> feature -> initiative -> Factory). Parents join the route as nodes;
@@ -250,6 +308,7 @@ export function computeWorkRoute(
         else {
           prev.implicit = prev.implicit && e.implicit;
           if (!e.entry) delete prev.entry;
+          if (!e.exit) delete prev.exit;
         }
       }
       let next = [...merged.values()];
@@ -297,7 +356,10 @@ export function computeWorkRoute(
   }
   for (const id of inRoute) blocked[id] = blockers.get(id)!.some((p) => !done[p]);
 
-  const first = steps.findIndex((s) => s.nodes.some((id) => !done[id] && !ancestorOnly.has(id)));
+  // Exit mode: feature (with tasks) and initiative nodes are containers, not work to do.
+  const container = (id: string) =>
+    exitMode && (byId.get(id)?.kind === "initiative" || (isFeatureWithTasks(id) && !(id in collapsed)));
+  const first = steps.findIndex((s) => s.nodes.some((id) => !done[id] && !ancestorOnly.has(id) && !container(id)));
   return {
     target: targetId, root: ROUTE_ROOT, steps, edges: routeEdges,
     parallelGroups: steps.filter((s) => s.parallel).map((s) => s.nodes),

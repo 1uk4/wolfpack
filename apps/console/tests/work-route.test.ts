@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  ROUTE_ENTRY_VIA_PARENT, ROUTE_ROOT, computeWorkRoute as computeRoute, cursorChoose, cursorNext, cursorPrev, startCursor, type WorkNode,
+  ROUTE_PARENT_MODE, ROUTE_ROOT, computeWorkRoute as computeRoute, cursorChoose, cursorNext, cursorPrev, startCursor, type WorkNode,
 } from "../src/core/work-route.ts";
 
 // The legacy suites below pin today's behaviour (flag off).
 const computeWorkRoute = (nodes: readonly WorkNode[], target: string) =>
-  computeRoute(nodes, target, { entryViaParent: false });
+  computeRoute(nodes, target, { parentMode: "none" });
 
 const t = (id: string, parent: string | null, deps: string[] = [], stage = "plan"): WorkNode =>
   ({ id, kind: "task", stage, parent, dependsOn: deps });
@@ -132,16 +132,17 @@ describe("route cursor", () => {
   });
 });
 
-describe("route entry via parent (flag on)", () => {
-  const on = (nodes: WorkNode[], target: string) => computeRoute(nodes, target, { entryViaParent: true });
+describe("route entry via parent (entry mode)", () => {
+  const on = (nodes: WorkNode[], target: string) => computeRoute(nodes, target, { parentMode: "entry" });
   const init = (id: string): WorkNode => ({ id, kind: "initiative", stage: "plan", parent: null, dependsOn: [] });
   const fi = (id: string, parent: string | null, deps: string[] = []): WorkNode =>
     ({ id, kind: "feature", stage: "in_build", parent, dependsOn: deps });
   const keys = (r: ReturnType<typeof computeRoute>) => r.edges.map((e) => `${e.from}>${e.to}${e.entry ? "*" : ""}`).sort();
 
-  it("the flag is on by default", () => {
-    assert.equal(ROUTE_ENTRY_VIA_PARENT, true);
-    assert.deepEqual(computeRoute([init("I"), fi("F", "I"), t("a", "F")], "a"), on([init("I"), fi("F", "I"), t("a", "F")], "a"));
+  it("exit is the default mode", () => {
+    assert.equal(ROUTE_PARENT_MODE, "exit");
+    const ns = [init("I"), fi("F", "I"), t("a", "F")];
+    assert.deepEqual(computeRoute(ns, "a"), computeRoute(ns, "a", { parentMode: "exit" }));
   });
 
   it("single task: Factory -> initiative -> feature -> task", () => {
@@ -217,11 +218,11 @@ describe("collapseDoneFeatures", () => {
     f("S", [], "shipped"), t("s1", "S", [], "shipped"), t("s2", "S", ["s1"], "shipped"), t("s3", "S", ["s1"], "shipped"),
     f("T", ["S"], "in_build"), t("t1", "T"), t("t2", "T", ["t1"]),
   ].map((n) => (n.id === "S" || n.id === "T" ? { ...n, parent: "I" } : n));
-  const opts = { collapseDoneFeatures: true };
+  const opts = { collapseDoneFeatures: true, parentMode: "entry" as const };
   const ids = (r: { steps: { nodes: string[] }[] }) => r.steps.flatMap((s) => s.nodes);
 
   it("a shipped prerequisite feature becomes one step; edges redirect to/from it", () => {
-    const full = computeRoute(nodes, "t2");
+    const full = computeRoute(nodes, "t2", { parentMode: "entry" });
     assert.ok(ids(full).includes("s2"));
     const r = computeRoute(nodes, "t2", opts);
     const all = ids(r);
@@ -237,7 +238,7 @@ describe("collapseDoneFeatures", () => {
   it("expanding restores its tasks to the route", () => {
     const r = computeRoute(nodes, "t2", { ...opts, expanded: new Set(["S"]) });
     assert.deepEqual(r.collapsed, {});
-    assert.deepEqual(r, { ...computeRoute(nodes, "t2"), collapsed: {} });
+    assert.deepEqual(r, { ...computeRoute(nodes, "t2", { parentMode: "entry" }), collapsed: {} });
     assert.ok(ids(r).includes("s2"));
   });
 
@@ -276,5 +277,120 @@ describe("collapseDoneFeatures", () => {
     const r = computeRoute(ready, "t2", opts);
     assert.equal(r.done.S, true);
     assert.ok("S" in r.collapsed);
+  });
+});
+
+describe("route exit via parent (exit mode)", () => {
+  const ex = (nodes: WorkNode[], target: string, extra: object = {}) => computeRoute(nodes, target, { parentMode: "exit", ...extra });
+  const init = (id: string): WorkNode => ({ id, kind: "initiative", stage: "plan", parent: null, dependsOn: [] });
+  const fi = (id: string, parent: string | null, deps: string[] = [], stage = "in_build"): WorkNode =>
+    ({ id, kind: "feature", stage, parent, dependsOn: deps });
+  const keys = (r: ReturnType<typeof computeRoute>) => r.edges.map((e) => `${e.from}>${e.to}${e.exit ? "^" : ""}`).sort();
+
+  it("single task: Factory -> task -> feature -> initiative", () => {
+    const r = ex([init("I"), fi("F", "I"), t("a", "F")], "a");
+    assert.deepEqual(steps(r), [["a"], ["F"], ["I"]]);
+    assert.deepEqual(keys(r), ["F>I^", "a>F^", "factory>a"]);
+    assert.deepEqual(r.edges[0], { from: ROUTE_ROOT, to: "a", implicit: false, root: true });
+    assert.equal(r.firstUnfinished, 0);
+    assert.equal(r.blocked.a, false);
+    assert.equal(r.blocked.F, true);
+  });
+
+  it("chain within a feature", () => {
+    const r = ex([init("I"), fi("F", "I"), t("a", "F"), t("b", "F", ["a"]), t("c", "F", ["b"])], "c");
+    assert.deepEqual(steps(r), [["a"], ["b"], ["c"], ["F"], ["I"]]);
+    assert.deepEqual(keys(r), ["F>I^", "a>b", "b>c", "c>F^", "factory>a"]);
+  });
+
+  it("diamond stays parallel and ends at the feature", () => {
+    const r = ex([fi("F", null), t("a", "F"), t("b", "F", ["a"]), t("c", "F", ["a"]), t("d", "F", ["b", "c"])], "d");
+    assert.deepEqual(steps(r), [["a"], ["b", "c"], ["d"], ["F"]]);
+    assert.deepEqual(r.parallelGroups, [["b", "c"]]);
+  });
+
+  it("task target does not pull in the feature's other terminals", () => {
+    const r = ex([init("I"), fi("F", "I"), t("a", "F"), t("b", "F", ["a"]), t("x", "F", ["a"])], "a");
+    assert.deepEqual(steps(r), [["a"], ["F"], ["I"]]);
+    const r2 = ex([init("I"), fi("F", "I"), t("a", "F"), t("b", "F", ["a"]), t("x", "F")], "b");
+    assert.deepEqual(steps(r2), [["a"], ["b"], ["F"], ["I"]]);
+    assert.deepEqual(keys(r2), ["F>I^", "a>b", "b>F^", "factory>a"]);
+  });
+
+  it("two features G -> F: G's tasks -> G -> F's entries -> F -> initiative", () => {
+    const nodes = [
+      init("I"), fi("G", "I"), t("g1", "G"), t("g2", "G", ["g1"]), t("g3", "G", ["g1"]),
+      fi("F", "I", ["G"]), t("f1", "F"), t("f2", "F", ["f1", "f0"]), t("f0", "F"),
+    ];
+    const r = ex(nodes, "f2");
+    assert.deepEqual(steps(r), [["g1"], ["g2", "g3"], ["G"], ["f0", "f1"], ["f2"], ["F"], ["I"]]);
+    assert.deepEqual(keys(r), ["F>I^", "G>f0", "G>f1", "f0>f2", "f1>f2", "f2>F^", "factory>g1", "g1>g2", "g1>g3", "g2>G^", "g3>G^"].sort());
+    assert.ok(!r.edges.some((e) => e.from === "G" && e.to === "I"), "G leads into F, not straight to the initiative");
+    assert.deepEqual(r.edges.filter((e) => e.implicit).map((e) => `${e.from}>${e.to}`).sort(), ["G>f0", "G>f1"]);
+    assert.equal(r.blocked.f1, true);
+  });
+
+  it("feature target: its tasks, prerequisite features, then the feature and initiative", () => {
+    const nodes = [init("I"), fi("G", "I"), t("g", "G"), fi("F", "I", ["G"]), t("f1", "F"), t("f2", "F", ["f1"]), t("z", "F")];
+    const r = ex(nodes, "F");
+    assert.deepEqual(steps(r), [["g"], ["G"], ["f1", "z"], ["f2"], ["F"], ["I"]]);
+    assert.ok(r.edges.some((e) => e.from === "f2" && e.to === "F" && e.exit));
+    assert.ok(r.edges.some((e) => e.from === "z" && e.to === "F" && e.exit));
+  });
+
+  it("initiative target: every feature path leads to it", () => {
+    const nodes = [init("I"), fi("G", "I"), t("g", "G"), fi("F", "I", ["G"]), t("f", "F"), fi("H", "I"), t("h", "H"), t("other", null)];
+    const r = ex(nodes, "I");
+    assert.deepEqual(steps(r), [["g", "h"], ["G", "H"], ["f"], ["F"], ["I"]]);
+    const all = r.steps.flatMap((s) => s.nodes).sort();
+    assert.deepEqual(all, ["F", "G", "H", "I", "f", "g", "h"]);
+    assert.equal(r.steps.at(-1)!.nodes.join(), "I");
+    assert.deepEqual(keys(r).filter((k) => k.endsWith(">I^")), ["F>I^", "H>I^"]);
+  });
+
+  it("feature without an initiative ends at itself", () => {
+    const r = ex([fi("F", null), t("a", "F")], "a");
+    assert.deepEqual(steps(r), [["a"], ["F"]]);
+    assert.deepEqual(keys(r), ["a>F^", "factory>a"]);
+  });
+
+  it("a feature with no tasks enters from the Factory", () => {
+    const r = ex([init("I"), fi("F", "I")], "F");
+    assert.deepEqual(steps(r), [["F"], ["I"]]);
+    assert.deepEqual(keys(r), ["F>I^", "factory>F"]);
+  });
+
+  it("collapse: one node with the prerequisite paths in and dependents/initiative out", () => {
+    const nodes = [
+      init("I"), fi("S", "I", [], "shipped"), t("s1", "S", [], "shipped"), t("s2", "S", ["s1"], "shipped"),
+      fi("T", "I", ["S"]), t("t1", "T"), t("t2", "T", ["t1"]),
+    ];
+    const full = ex(nodes, "t2");
+    assert.deepEqual(steps(full), [["s1"], ["s2"], ["S"], ["t1"], ["t2"], ["T"], ["I"]]);
+    const r = ex(nodes, "t2", { collapseDoneFeatures: true });
+    assert.deepEqual(r.collapsed, { S: ["s1", "s2"] });
+    assert.deepEqual(steps(r), [["S"], ["t1"], ["t2"], ["T"], ["I"]]);
+    assert.deepEqual(keys(r), ["S>t1", "T>I^", "factory>S", "t1>t2", "t2>T^"]);
+    assert.equal(r.done.S, true);
+    // A collapsed feature with no dependents leads to the initiative.
+    const solo = ex([init("I"), fi("S", "I", [], "shipped"), t("s1", "S", [], "shipped"), t("x", null)], "I", { collapseDoneFeatures: true });
+    assert.deepEqual(keys(solo), ["S>I^", "factory>S"]);
+  });
+
+  it("cursor starts at the first unfinished task, skipping containers", () => {
+    const nodes = [init("I"), fi("G", "I", [], "shipped"), t("g", "G", [], "shipped"), fi("F", "I", ["G"]), t("a", "F"), t("b", "F", ["a"])];
+    const r = ex(nodes, "b");
+    assert.deepEqual(steps(r), [["g"], ["G"], ["a"], ["b"], ["F"], ["I"]]);
+    assert.equal(r.firstUnfinished, 2);
+    assert.deepEqual(startCursor(r), { step: 2, node: "a" });
+    const done = ex([init("I"), fi("F", "I"), t("a", "F", [], "shipped")], "a");
+    assert.equal(done.firstUnfinished, null);
+  });
+
+  it("collapse cursor lands on the collapsed done feature when stepping back", () => {
+    const nodes = [init("I"), fi("S", "I", [], "shipped"), t("s1", "S", [], "shipped"), fi("T", "I", ["S"]), t("t1", "T")];
+    const r = ex(nodes, "t1", { collapseDoneFeatures: true });
+    assert.deepEqual(startCursor(r), { step: 1, node: "t1" });
+    assert.equal(cursorPrev(r, startCursor(r)).node, "S");
   });
 });

@@ -164,7 +164,7 @@ describe("route entry edges as springs", () => {
 			{ id: "a", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
 			{ id: "x", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
 		];
-		const route = computeEntryRoute(nodes, "a", { entryViaParent: true });
+		const route = computeEntryRoute(nodes, "a", { parentMode: "entry" });
 		const sel = toRouteSelection(route, null, "d");
 		const hierarchy = [
 			{ from: "work:a", to: "work:F" }, { from: "work:x", to: "work:F" },
@@ -288,7 +288,7 @@ describe("physics on the collapsed route", () => {
 		{ id: "t1", kind: "task", stage: "plan", parent: "T", dependsOn: [] },
 	];
 	it("the link set springs the feature in place of its hidden tasks", () => {
-		const route = computeEntryRoute(nodes, "t1", { collapseDoneFeatures: true });
+		const route = computeEntryRoute(nodes, "t1", { collapseDoneFeatures: true, parentMode: "entry" });
 		const sel = toRouteSelection(route, null, "d");
 		const hierarchy = [{ from: "work:s1", to: "work:S" }, { from: "work:s2", to: "work:S" }, { from: "work:S", to: "work:I" }];
 		const links = linkSetForEntry(hierarchy, sel.nodes, sel.edges, () => true).map((l) => `${l.from}|${l.to}`);
@@ -297,5 +297,27 @@ describe("physics on the collapsed route", () => {
 		assert.deepEqual(sel.layout!.steps.flat().filter((id) => id === "work:s1" || id === "work:s2"), []);
 		assert.deepEqual([...sel.hidden!].sort(), ["work:s1", "work:s2"]);
 		assert.equal(sel.collapsed!.get("work:S"), 2);
+	});
+});
+
+describe("route exit edges as springs", () => {
+	it("keeps exit edges (task -> feature -> initiative) and drops other hierarchy links of members", () => {
+		const nodes = [
+			{ id: "I", kind: "initiative", stage: "plan", parent: null, dependsOn: [] },
+			{ id: "F", kind: "feature", stage: "plan", parent: "I", dependsOn: [] },
+			{ id: "a", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
+			{ id: "x", kind: "task", stage: "plan", parent: "F", dependsOn: [] },
+		];
+		const route = computeEntryRoute(nodes, "a", { parentMode: "exit" });
+		assert.ok(route.edges.filter((e) => e.exit).length === 2);
+		const sel = toRouteSelection(route, null, "d");
+		const hierarchy = [
+			{ from: "work:a", to: "work:F" }, { from: "work:x", to: "work:F" },
+			{ from: "work:F", to: "work:I" }, { from: "work:I", to: "fac:d" },
+		];
+		const links = linkSetForEntry(hierarchy, sel.nodes, sel.edges, () => true).map((l) => `${l.from}|${l.to}`);
+		for (const k of ["fac:d|work:a", "work:a|work:F", "work:F|work:I"]) assert.ok(links.includes(k), k);
+		assert.ok(!links.includes("work:x|work:F"));
+		assert.ok(!links.includes("work:I|fac:d"));
 	});
 });

@@ -70,9 +70,9 @@ describe("route adapter", () => {
 	it("maps a route to graph ids, the Factory root and edge keys", () => {
 		const route = routeForNode(graph, "work:e")!;
 		const sel = toRouteSelection(route, startCursor(route), "d");
-		// Entry via parent: Factory -> F (no initiative) -> a.
+		// Exit via parent: Factory -> a ... e -> F (no initiative, ends at itself).
 		for (const id of ["fac:d", "work:F", "work:a", "work:b", "work:c", "work:e"]) assert.ok(sel.nodes.has(id), id);
-		assert.ok(sel.edges.has("fac:d|work:F") && sel.edges.has("work:F|work:a") && sel.edges.has("work:a|work:b") && sel.edges.has("work:c|work:e"));
+		assert.ok(sel.edges.has("fac:d|work:a") && sel.edges.has("work:e|work:F") && sel.edges.has("work:a|work:b") && sel.edges.has("work:c|work:e"));
 		assert.deepEqual([...sel.parallel].sort(), ["work:b", "work:c"]);
 		assert.deepEqual([...sel.done], ["work:a"]);
 		assert.equal(sel.cursor, "work:b"); // first unfinished step, first unfinished node
@@ -133,30 +133,28 @@ describe("reconcileCursor", () => {
 describe("RouteNav", () => {
 	it("starts at the first unfinished step and steps with the buttons", () => {
 		const host = mount(<Harness />);
-		assert.equal(q(host, "route-step").textContent, "Step 3 of 4 · in build");
+		assert.equal(q(host, "route-step").textContent, "Step 2 of 4 · in build");
 		act(() => q(host, "route-next").click());
-		assert.equal(q(host, "route-step").textContent, "Step 4 of 4 · plan");
+		assert.equal(q(host, "route-step").textContent, "Step 3 of 4 · plan");
 		act(() => q(host, "route-prev").click());
 		act(() => q(host, "route-prev").click());
-		assert.equal(q(host, "route-step").textContent, "Step 2 of 4 · shipped");
-		act(() => q(host, "route-prev").click());
-		assert.equal(q(host, "route-step").textContent, "Step 1 of 4 · in build");
+		assert.equal(q(host, "route-step").textContent, "Step 1 of 4 · shipped");
 		assert.ok(q(host, "route-prev").hasAttribute("disabled"));
 	});
 
 	it("steps with ← and → keys", () => {
 		const host = mount(<Harness />);
 		key("ArrowRight");
-		assert.ok(q(host, "route-step").textContent!.startsWith("Step 4 of 4"));
+		assert.ok(q(host, "route-step").textContent!.startsWith("Step 3 of 4"));
 		key("ArrowLeft");
 		key("ArrowLeft");
-		assert.ok(q(host, "route-step").textContent!.startsWith("Step 2 of 4"));
+		assert.ok(q(host, "route-step").textContent!.startsWith("Step 1 of 4"));
 	});
 
 	it("ignores the keys in inputs", () => {
 		const host = mount(<Harness />);
 		key("ArrowRight", q(host, "box"));
-		assert.ok(q(host, "route-step").textContent!.startsWith("Step 3 of 4"));
+		assert.ok(q(host, "route-step").textContent!.startsWith("Step 2 of 4"));
 	});
 
 	it("lists the step's nodes at a parallel step; choosing one moves the cursor", () => {

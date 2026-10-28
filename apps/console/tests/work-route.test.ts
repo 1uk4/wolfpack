@@ -30,7 +30,7 @@ describe("work route", () => {
     const r = computeWorkRoute([f("F"), t("a", "F"), t("b", "F", ["a"]), t("c", "F", ["a"]), t("d", "F", ["b", "c"])], "d");
     assert.deepEqual(steps(r), [["a"], ["b", "c"], ["d"]]);
     assert.deepEqual(r.parallelGroups, [["b", "c"]]);
-    assert.equal(r.steps[1].parallel, true);
+    assert.equal(r.steps[1]?.parallel, true);
   });
 
   it("uneven diamond uses longest path", () => {
@@ -87,7 +87,7 @@ describe("work route", () => {
     const nodes = [f("F"), t("a", "F", ["c"]), t("b", "F", ["a"]), t("c", "F", ["b"])];
     const r = computeWorkRoute(nodes, "c");
     assert.equal(r.warnings.length, 1);
-    assert.match(r.warnings[0], /cycle/);
+    assert.match(r.warnings[0] ?? "", /cycle/);
     assert.equal(r.steps.flatMap((s) => s.nodes).length, 3);
     assert.deepEqual(computeWorkRoute(nodes, "c"), r);
   });

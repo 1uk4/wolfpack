@@ -200,7 +200,7 @@ function landOn(route: WorkRoute, step: number, prefer: string | null): RouteCur
   const s = clampStep(route, step);
   const nodes = route.steps[s]?.nodes ?? [];
   if (!nodes.length) return { step: 0, node: null };
-  const node = prefer && nodes.includes(prefer) ? prefer : (nodes.find((n) => !route.done[n]) ?? nodes[0]);
+  const node = prefer && nodes.includes(prefer) ? prefer : (nodes.find((n) => !route.done[n]) ?? nodes[0] ?? null);
   return { step: s, node };
 }
 

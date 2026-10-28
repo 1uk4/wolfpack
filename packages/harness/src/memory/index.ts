@@ -1,5 +1,7 @@
 export {
   consolidatePool,
+  drainWorkObservations,
+  type DrainWorkConfig,
   getPoolStats,
   promoteSessionTopics,
   durableSessionTopics,

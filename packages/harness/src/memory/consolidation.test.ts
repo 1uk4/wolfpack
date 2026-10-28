@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { writeDenTopic } from "@wolfpack/memory";
-import { consolidatePool, durableSessionTopics } from "./consolidation.js";
+import { consolidatePool, drainWorkObservations, durableSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
 let root: string;
@@ -280,5 +280,59 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(poolLines()).toEqual([]);
       expect(readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8")).toContain("observation 0");
     });
+  });
+});
+
+describe("drainWorkObservations (graduation)", () => {
+  const dir = () => join(den, ".memory", "pool");
+  const o = (n: number, extra: object = {}) => ({ timestamp: `2026-10-20T10:0${n}:00Z`, recordedAt: `2026-10-20T11:0${n}:00Z`, content: `observation ${n}`, ...extra });
+  const poolLines = () => readFileSync(join(dir(), "observations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).content);
+  function setup(failSet = false) {
+    mkdirSync(dir(), { recursive: true });
+    writeFileSync(join(dir(), "observations.jsonl"), [
+      o(0), // untagged
+      o(1, { work: "t1", feature: "f1" }), // a task of the graduating feature
+      o(2, { feature: "f1" }), // feature tag only
+      o(3, { work: "t9", feature: "f9" }), // another feature
+      o(4, { work: "f1" }), // the feature itself
+    ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const prompts: string[] = [];
+    const writes: string[] = [];
+    const engine = { call: async (_s: string, schema: { parse: (v: unknown) => unknown }, p: { prompt: string }) => { prompts.push(p.prompt); return schema.parse({ decisions: [], changes: ["Did it"], findings: [], problems: [] }); } } as unknown as Engine;
+    const workStore = {
+      get: async (id: string) => ({ id, title: "T", kind: "feature", stage: "in_build", body: "## Plan\n\np" }),
+      setBody: async (id: string) => { if (failSet) throw new Error("HTTP 502"); writes.push(id); },
+    };
+    return { engine, workStore, prompts, writes };
+  }
+
+  it("folds the feature's and its tasks' observations into the Record and leaves everything else in the pool", async () => {
+    const m = setup();
+    const r = await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] });
+    expect(r.folded).toBe(3);
+    expect(m.writes).toEqual(["f1"]);
+    expect(m.prompts[0]).toContain("observation 1");
+    expect(m.prompts[0]).toContain("observation 2");
+    expect(m.prompts[0]).toContain("observation 4");
+    expect(m.prompts[0]).not.toContain("observation 3");
+    expect(poolLines()).toEqual(["observation 0", "observation 3"]);
+  });
+
+  it("a Record write failure throws and leaves the observations in the pool", async () => {
+    const m = setup(true);
+    await expect(drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["f1", "t1"] })).rejects.toThrow(/HTTP 502/);
+    expect(poolLines()).toHaveLength(5);
+  });
+
+  it("no Work API configured: pending observations are an error, not a silent skip", async () => {
+    const m = setup();
+    await expect(drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: undefined, workIds: ["f1"] })).rejects.toThrow();
+    expect(poolLines()).toHaveLength(5);
+  });
+
+  it("nothing to fold: resolves with zero and touches nothing", async () => {
+    const m = setup();
+    expect((await drainWorkObservations({ wolfDen: den, engine: m.engine, workStore: m.workStore, workIds: ["zzz"] })).folded).toBe(0);
+    expect(poolLines()).toHaveLength(5);
   });
 });

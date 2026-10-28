@@ -1226,6 +1226,8 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
   /** The work system's view of the bound task (set when it initialises, below). */
   let workHandle: WorkSystemHandle | null = null;
   const workRecordStore = new HttpWorkRecordStore();
+  /** Graduation folds this session's pending tagged observations first (memory off: none were recorded). */
+  const piDrain = async (ids: string[]) => (orchestrator ? orchestrator.drainWork(ids) : { folded: 0 });
   let engine: Engine | null = null;
   let enabled = false;
   let observerPending = false;
@@ -1577,11 +1579,11 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
       preview: async (id) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         if (!engine && !(modelTable && credsOk)) throw new Error("no model is available to write the graduation (check the wolf's credentials)");
-        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id, roots: kbRoots });
+        return previewGraduation({ client: new WorkClient(), engine: engine ?? buildEngine(), id, roots: kbRoots, drain: piDrain });
       },
       confirm: async (preview, ship) => {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
-        const done = await confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship });
+        const done = await confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship, drain: piDrain });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
         unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;

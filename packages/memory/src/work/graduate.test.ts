@@ -156,6 +156,37 @@ describe("graduation: preview then confirm", () => {
     expect(sentTopics()).toEqual([]);
   });
 
+  it("folds pending observations into the Record before distill: the preview shows the count, the distill input has them", async () => {
+    const bodies: Record<string, string> = { [f.id as string]: PLAN };
+    const { client, calls } = fakeClient([init, f, t1, t2], bodies);
+    const drain = vi.fn(async (ids: string[]) => {
+      bodies[f.id as string] = PLAN + "## Record\n\n### Decisions\n\n- Folded from a pending observation — why: it was tagged.\n";
+      return { folded: 3 };
+    });
+    const { engine, call } = engineOf(answer(f.id));
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22", drain });
+    expect(drain).toHaveBeenCalledWith([f.id, t1.id, t2.id]); // the feature and its tasks
+    expect((call.mock.calls[0] as any)[2].prompt).toContain("Folded from a pending observation");
+    expect(p.foldedObservations).toBe(3);
+    expect(renderGraduationPreview(p)).toContain("Folded 3 pending observation(s) into the Record first.");
+    expect(calls).toEqual([]);
+  });
+
+  it("a failing drain stops the preview and the confirm with nothing distilled, sent or archived", async () => {
+    const { client, calls } = fakeClient([init, f, t1, t2], { [f.id]: PLAN + RECORD });
+    const bad = async () => { throw new Error("Work API 502"); };
+    const { engine, call } = engineOf(answer(f.id));
+    await expect(previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22", drain: bad })).rejects.toThrow(/nothing archived.*Work API 502/);
+    expect(call).not.toHaveBeenCalled();
+
+    const p = await previewGraduation({ client, engine, id: f.id as string, today: "2026-10-22" });
+    const ship = vi.fn(async () => {});
+    await expect(confirmGraduation({ client, roots, wolf: "owner", preview: p, ship, drain: bad })).rejects.toThrow(/nothing archived.*Work API 502/);
+    expect(ship).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(sentTopics()).toEqual([]);
+  });
+
   it("confirm writes the contributions under work-<d>-<id>, the initiative's topic and splits, then graduates and archives", async () => {
     const items = [init, f, t1, t2];
     const { client, calls } = fakeClient(items, { [f.id]: PLAN + RECORD });

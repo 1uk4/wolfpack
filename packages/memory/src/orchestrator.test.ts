@@ -305,6 +305,33 @@ describe("orchestrator work tagging and Records", () => {
     expect(log).toContain('"reason":"archived"');
   });
 
+  it("drainWork (graduation) folds the feature's and its tasks' observations and leaves untagged and other features' alone", async () => {
+    const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]], [{ timestamp: "2026-10-19 10:02", content: "other feature note" }]]);
+    const s = store({ "work-f1": { title: "F", kind: "feature", stage: "in_build", body: "" }, "work-f9": { title: "G", kind: "feature", stage: "in_build", body: "" } });
+    let bound: { taskId: string; featureId?: string } | null = { taskId: "work-t1", featureId: "work-f1" };
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => bound, workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]);
+    bound = null;
+    await orch.processChunks([chunk("c2")]);
+    bound = { taskId: "work-t9", featureId: "work-f9" };
+    await orch.processChunks([chunk("c3")]);
+
+    const r = await orch.drainWork(["work-f1", "work-t1"]);
+    expect(r.folded).toBe(1);
+    expect(s.writes.map((w) => w.id)).toEqual(["work-f1"]);
+    expect(prompts.record[0]).toContain("TTL cache");
+    expect(orch.getActiveObservations().map((o) => o.content)).toEqual(["unrelated chatter", "other feature note"]);
+  });
+
+  it("drainWork rejects when a Record cannot be written and keeps the observations", async () => {
+    const { engine } = engineWithRecord([[OBS[0]]]);
+    const s = store({ "work-t1": { title: "T", kind: "task", stage: "in_build", body: "" } }, true);
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, getBoundWork: () => ({ taskId: "work-t1" }), workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]);
+    await expect(orch.drainWork(["work-t1"])).rejects.toThrow(/HTTP 503/);
+    expect(orch.getActiveObservations()).toHaveLength(1);
+  });
+
   it("pending tagged observations never reach the den and do not starve the untagged overflow", async () => {
     const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]]]);
     const s = store({ "work-f1": { title: "F", kind: "feature", stage: "in_build", body: "" } }, true);

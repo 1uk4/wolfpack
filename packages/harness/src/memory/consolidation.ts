@@ -237,14 +237,73 @@ async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<
  */
 export async function consolidatePool(config: ConsolidationConfig): Promise<ConsolidationResult> {
   const ids = new Set<string>();
-  const result = await consolidatePoolInner({
+  const result = await withPoolLock(config.wolfDen, () => consolidatePoolInner({
     ...config,
     onTopic: (t) => {
       ids.add(t.id);
       config.onTopic?.(t);
     },
-  });
+  }));
   return { ...result, topicIds: [...ids] };
+}
+
+// Consolidation and a graduation drain both rewrite the pool file: one at a time per wolf den.
+const poolLocks = new Map<string, Promise<unknown>>();
+function withPoolLock<T>(wolfDen: string, op: () => Promise<T>): Promise<T> {
+  const run = (poolLocks.get(wolfDen) ?? Promise.resolve()).then(op, op);
+  const tail = run.catch(() => {});
+  poolLocks.set(wolfDen, tail);
+  void tail.then(() => { if (poolLocks.get(wolfDen) === tail) poolLocks.delete(wolfDen); });
+  return run;
+}
+
+export interface DrainWorkConfig {
+  wolfDen: string;
+  engine: Engine;
+  /** The Work API; absent → anything pending for these ids is an error. */
+  workStore?: WorkRecordStore;
+  workIds: string[];
+  onProgress?: (msg: string) => void;
+  onRecord?: ConsolidationConfig["onRecord"];
+}
+
+/**
+ * Graduation: fold the pool's pending observations tagged (work or feature) with any of `workIds` into their
+ * Records now (same consolidateWorkRecords as normal consolidation, but ignoring retry backoff) and remove them
+ * from the pool. Other observations stay. Throws when any of them stays pending (Work API or model error), so
+ * graduation stops with nothing archived. Reaches only this wolf's pool.
+ */
+export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ folded: number }> {
+  const { wolfDen, engine, workIds, onProgress } = config;
+  return withPoolLock(wolfDen, async () => {
+    const ids = new Set(workIds);
+    const mine = (await readPool(wolfDen)).filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
+    if (mine.length === 0) return { folded: 0 };
+    onProgress?.(`Folding ${mine.length} pending observation(s) into the Record for graduation`);
+    const outcomes = await consolidateWorkRecords({
+      engine,
+      store: config.workStore ?? defaultWorkStore(),
+      observations: mine.map((o) => ({ id: poolKey(o), content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      onProgress,
+    });
+    for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
+    const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+    const handled: PoolObservation[] = [];
+    const discarded: Array<{ obs: PoolObservation; reason: string }> = [];
+    for (const o of mine) {
+      const out = status.get(poolKey(o));
+      if (out?.status === "written") handled.push(o);
+      else if (out?.status === "discarded") {
+        handled.push(o);
+        discarded.push({ obs: o, reason: out.reason });
+      }
+    }
+    await settlePool(wolfDen, handled);
+    appendDiscarded(wolfDen, discarded, onProgress);
+    const stuck = outcomes.find((o) => o.status === "pending");
+    if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
+    return { folded: handled.length - discarded.length };
+  });
 }
 
 async function consolidatePoolInner(

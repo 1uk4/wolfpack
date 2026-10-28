@@ -111,6 +111,14 @@ export interface MemoryOrchestrator {
    * Get the session memory root path.
    */
   getMemoryRoot(): string;
+
+  /**
+   * Graduation: fold this session's pending observations tagged with any of these work ids (a tag on the item or on
+   * its feature) into their Records now, ignoring retry backoff, and drop them from the pool. Serialized with
+   * consolidation. Rejects when any stays pending, so graduation can stop before anything is archived. Only this
+   * session's ledger is reachable.
+   */
+  drainWork(workIds: string[]): Promise<{ folded: number }>;
 }
 
 /**
@@ -427,6 +435,33 @@ export function createOrchestrator(
     return result;
   }
 
+  function drainWork(workIds: string[]): Promise<{ folded: number }> {
+    return serialized(async () => {
+      const ids = new Set(workIds);
+      const mine = foldLedger(ledgerEvents).activeObservations.filter((o) => (o.work && ids.has(o.work)) || (o.feature && ids.has(o.feature)));
+      if (mine.length === 0) return { folded: 0 };
+      runtime.notify?.(`memory: folding ${mine.length} pending observation(s) into the Record for graduation`, "info");
+      // No retry state: graduation tries now, and a 404 here is not a grace-period question.
+      const outcomes = await consolidateWorkRecords({
+        engine,
+        store: cfg.workRecordStore,
+        observations: mine.map((o) => ({ id: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+        onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
+      });
+      const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
+      const done = mine.filter((o) => status.get(o.timestamp)?.status === "written" || status.get(o.timestamp)?.status === "discarded").map((o) => o.timestamp);
+      if (done.length > 0) {
+        appendEvent({ type: "observations_dropped", observationTimestamps: done, coversUpToId: foldLedger(ledgerEvents).latestCoverageId ?? "" });
+      }
+      const discarded = mine.filter((o) => status.get(o.timestamp)?.status === "discarded").map((o) => ({ obs: o, reason: (status.get(o.timestamp) as { reason: string }).reason }));
+      const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
+      if (discarded.length > 0 && poolRoot) appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+      const stuck = outcomes.find((o) => o.status === "pending");
+      if (stuck && stuck.status === "pending") throw new Error(`work ${stuck.work}: ${stuck.reason}`);
+      return { folded: done.length - discarded.length };
+    });
+  }
+
   function getActiveObservations(): Observation[] {
     return foldLedger(ledgerEvents).activeObservations;
   }
@@ -446,5 +481,6 @@ export function createOrchestrator(
     getActiveObservations,
     getMemoryRoot,
     setDefaultDomain,
+    drainWork,
   };
 }

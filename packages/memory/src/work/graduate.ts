@@ -241,12 +241,44 @@ export interface PreviewContribution {
   feature?: boolean;
 }
 
+/**
+ * Folds the pending pool observations tagged with any of these work ids (the item, its tasks, and for an initiative
+ * its features' tasks) into their Records, through the same consolidation that writes Records normally. Resolves with
+ * how many it folded; REJECTS when any stayed pending (LLM or Work API error), so graduation stops before anything
+ * is archived. Each path supplies its own: the durable pool (harness drainWorkObservations) or pi's ledger
+ * (orchestrator.drainWork). It can only reach the pool of the wolf that runs the graduation.
+ */
+export type DrainWork = (workIds: string[]) => Promise<{ folded: number }>;
+
+/** The ids a graduation drains: the item and everything under it (its tasks; an initiative's features and their tasks). */
+export function drainScope(item: WorkItem, all: WorkItem[]): string[] {
+  const out: string[] = [];
+  const walk = (i: WorkItem) => {
+    out.push(i.id as string);
+    for (const child of all.filter((c) => c.partOf === i.id)) walk(child);
+  };
+  walk(item);
+  return out;
+}
+
+async function drainFor(drain: DrainWork | undefined, item: WorkItem, all: WorkItem[], onProgress?: (m: string) => void): Promise<number> {
+  if (!drain) return 0;
+  onProgress?.("folding pending observations into the Record…");
+  try {
+    return (await drain(drainScope(item, all))).folded;
+  } catch (err) {
+    throw new Error(`graduation stopped, nothing archived: pending observations could not be folded into the Record (${err instanceof Error ? err.message : String(err)}). Try again.`);
+  }
+}
+
 export interface GraduationPreview {
   itemId: string;
   kind: string;
   title: string;
   domain: string;
   contributions: PreviewContribution[];
+  /** Pending observations folded into the Record just before distill. */
+  foldedObservations?: number;
   /** Non-blocking: Totals values not carried over, a missing History line… */
   warnings: string[];
   /** Set when distill's output still breaks the knowledge lint: it cannot be sent. */
@@ -299,6 +331,8 @@ export async function previewGraduation(opts: {
   today?: string;
   /** The KB mirror: when given, distill is shown the nearest existing entries. */
   roots?: KbRoots;
+  /** Folds the pending observations first (every graduation entry point passes one). */
+  drain?: DrainWork;
   onProgress?: (msg: string) => void;
 }): Promise<GraduationPreview> {
   const { client, engine, id } = opts;
@@ -306,6 +340,7 @@ export async function previewGraduation(opts: {
   const item = all.find((i) => i.id === id);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? id} is not ready to graduate`);
 
+  const folded = await drainFor(opts.drain, item, all, opts.onProgress);
   const { body } = await client.getWithBody(id);
   const input = buildGraduationInput({ item, all, body: body ?? "", roots: opts.roots });
   const isInitiative = item.kind === "initiative";
@@ -378,6 +413,7 @@ export async function previewGraduation(opts: {
     contributions,
     warnings,
     ...(blocked ? { blocked } : {}),
+    ...(folded > 0 ? { foldedObservations: folded } : {}),
     archive,
     token,
     createdAt: new Date().toISOString(),
@@ -401,6 +437,7 @@ export function renderGraduationPreview(p: GraduationPreview): string {
     out.push(`   ${oneLine(c.summary, 280)}`);
     for (const h of c.history) out.push(`   ${oneLine(h, 240)}`);
   });
+  if (p.foldedObservations) out.push("", `Folded ${p.foldedObservations} pending observation(s) into the Record first.`);
   if (p.warnings.length) out.push("", "Warnings:", ...p.warnings.map((w) => `- ${w}`));
   if (p.blocked) out.push("", `Cannot send: ${p.blocked}`);
   const rest = p.archive.length - 1;
@@ -436,6 +473,8 @@ export async function confirmGraduation(opts: {
   preview: GraduationPreview;
   /** Ships an item (the caller's runtime folds it into its feature's Outcomes). */
   ship: (id: string) => Promise<unknown>;
+  /** Folds what was observed since the preview, before anything is sent or archived. */
+  drain?: DrainWork;
   session?: string;
 }): Promise<ConfirmedGraduation> {
   const { client, roots, wolf, preview } = opts;
@@ -443,6 +482,9 @@ export async function confirmGraduation(opts: {
   const all = (await client.query({})) ?? [];
   const item = all.find((i) => i.id === preview.itemId);
   if (!item || !readyToGraduate(item, all)) throw new Error(`${(item as WorkItem | undefined)?.title ?? preview.itemId} is no longer ready to graduate`);
+
+  // Anything observed since the preview is folded now; a failure stops here, before anything is shipped or archived.
+  await drainFor(opts.drain, item, all);
 
   if (!isComplete(item)) {
     await opts.ship(item.id as string);

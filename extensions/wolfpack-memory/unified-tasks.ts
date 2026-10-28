@@ -19,6 +19,7 @@ import {
   type ToolResult,
 } from "@wolfpack/harness/extension";
 import { confirmCard } from "@wolfpack/harness/engine";
+import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
   type WorkItem,
   type CreateWorkInput,
@@ -56,6 +57,8 @@ import {
   clearUnboundNotice,
   unbindOnGraduation,
   writeUnboundNotice,
+  HttpWorkRecordStore,
+  type WorkRecordStore,
 } from "@wolfpack/memory";
 import {
   type BindingScope,
@@ -86,6 +89,8 @@ export interface TasksConfig {
   engine?: () => Engine;
   /** KB roots for graduation (default: KB_BASE / KB_OPS, den-local state under <den>/kb). Test seam. */
   kbRoots?: KbRoots;
+  /** Work API store for graduation's pool drain (default: from context.env, else the process env). Test seam. */
+  workStore?: WorkRecordStore;
 }
 
 /** A graduation preview waits this long for the owner's answer. */
@@ -464,6 +469,15 @@ export default function createTasksExtension(
       steps: engineSteps(t),
     });
   }
+
+  /** Graduation folds this wolf's pending pool observations for the item and its tasks into the Record first. */
+  const drain = (workIds: string[]) =>
+    drainWorkObservations({
+      wolfDen,
+      engine: graduationEngine(),
+      workStore: config.workStore ?? (context.env ? new HttpWorkRecordStore(context.env.WORK_ENDPOINT ?? "", context.env.WORK_TOKEN ?? "") : undefined),
+      workIds,
+    });
 
   /** Ship an item and fold it into its feature's ## Outcomes (a failed rollup never blocks the ship). */
   const ship = (id: string) => shipAndRollup(client, id, rollupToParent);
@@ -1355,7 +1369,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
           if (!roots) return fail("The knowledge base is not configured for this wolf (KB_BASE / KB_OPS).");
           try {
             if (!args.confirm) {
-              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id, roots });
+              const preview = await previewGraduation({ client, engine: graduationEngine(), id: args.id, roots, drain });
               await mkdir(previewDir(), { recursive: true });
               await writeFile(previewFile(preview.token), JSON.stringify(preview));
               const text = renderGraduationPreview(preview);
@@ -1376,7 +1390,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             if (Date.now() - Date.parse(preview.createdAt) > PREVIEW_TTL_MS) {
               return fail("That preview is too old. Call task_graduate(id) again for a fresh one and ask the owner again.");
             }
-            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship });
+            const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship, drain });
             await unlink(file).catch(() => { /* used once */ });
 
             // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.

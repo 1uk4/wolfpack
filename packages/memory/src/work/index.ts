@@ -91,6 +91,8 @@ export {
   previewGraduation,
   renderGraduationPreview,
   confirmGraduation,
+  drainScope,
+  type DrainWork,
   type GraduationInput,
   type GraduationClient,
   type GraduationPreview,

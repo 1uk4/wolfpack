@@ -100,8 +100,8 @@ export function unbindConversation(den: string, conversationId: number): void {
 }
 
 /** Another conversation on this den that is bound to `workId`, or undefined. */
-export function findBindingHolder(den: string, workId: string): number | undefined {
-  return findHolder(den, workId);
+export function findBindingHolder(den: string, workId: string, exceptRoot?: number): number | undefined {
+  return findHolder(den, workId, exceptRoot);
 }
 
 /** The feature's title and domain: from the Work API when configured, else from the id (`work-<domain>-<hash>`). */

@@ -9,6 +9,7 @@ import { BrailleSpinner } from "@/components/braille-spinner";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
+import { FEATURE_PROGRESS_RESERVE, FeatureProgressPanel, useFeatureProgress } from "@/components/feature-progress";
 import { Separator } from "@/components/ui/separator";
 import { SubagentMessage } from "@/components/subagent-message";
 import { parseSubagentMessage } from "@/src/core/subagent-message";
@@ -160,6 +161,7 @@ function ThreadChatInner({
 	initiallyInFlight,
 	initialCards = NO_CARDS,
 	closedReason,
+	initialBound,
 }: {
 	wolf: string;
 	slug: string;
@@ -174,6 +176,8 @@ function ThreadChatInner({
 	initialCards?: ThreadCards;
 	/** Set when the thread is read-only history (its feature graduated): the notice replaces the composer. */
 	closedReason?: string;
+	/** The work item the thread is bound to at load (`boundItem ?? boundWorkItem`): its progress panel replaces the floating checklist from the first paint. */
+	initialBound?: string;
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -187,6 +191,8 @@ function ThreadChatInner({
 	const [cards, setCards] = useState<ThreadCards>(initialCards);
 	const [answering, setAnswering] = useState<string | null>(null);
 	const [cardError, setCardError] = useState<string | null>(null);
+	// Feature progress: bumped when a turn ends, so the panel's live data refetches.
+	const [progressTick, setProgressTick] = useState(0);
 	// The thread record is the truth for cards: refetched whenever a turn settles (a turn that ended on a card), and
 	// after an answer that did not start a turn (siblings still wait).
 	// Sequenced: only the newest response applies, and a response that a card event overtook is refetched, so a slow
@@ -240,6 +246,7 @@ function ThreadChatInner({
 		const wasRunning = was === "submitted" || was === "streaming";
 		if (wasRunning && status === "ready") {
 			void refreshCards();
+			setProgressTick((n) => n + 1);
 			if (busyMissed.current) resumeStream();
 		}
 		if (status === "ready" || status === "error") busyMissed.current = false;
@@ -307,8 +314,13 @@ function ThreadChatInner({
 		() => messages.map((m, mi) => (m.role === "assistant" ? renderItems(m.parts, status === "streaming" && mi === messages.length - 1) : null)),
 		[messages, status],
 	);
+	// A thread bound to a feature (or one of its tasks) pins the feature's progress panel INSTEAD of the floating checklist.
+	const featureProgress = useFeatureProgress(wolf, threadId, progressTick);
+	const progressShown = featureProgress.state.phase === "ready";
+	const checklistReplaced = progressShown || (featureProgress.state.phase === "pending" && initialBound !== undefined);
 	const active = useMemo(() => activeChecklist(messages), [messages]);
-	const pinned = useChecklistDismissed(threadId, active?.objectId) ? undefined : active;
+	const dismissedChecklist = useChecklistDismissed(threadId, active?.objectId);
+	const pinned = dismissedChecklist || checklistReplaced ? undefined : active;
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 	const subagents = useSubagentChildren(wolf, slug, threadId);
@@ -416,7 +428,7 @@ function ThreadChatInner({
 				<div className="relative flex min-h-0 flex-1">
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">
-							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${pinned ? PINNED_CHECKLIST_RESERVE : "pt-4"}`}>
+							<div className={`${COLUMN} flex flex-1 flex-col gap-4 ${progressShown ? FEATURE_PROGRESS_RESERVE : pinned ? PINNED_CHECKLIST_RESERVE : "pt-4"}`}>
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
@@ -575,6 +587,17 @@ function ThreadChatInner({
 							</div>
 						</div>
 					</Conversation>
+					{featureProgress.state.phase === "ready" && (
+						<FeatureProgressPanel
+							wolf={wolf}
+							slug={slug}
+							threadId={threadId}
+							progress={featureProgress.state.progress}
+							busy={busy}
+							closed={closedReason !== undefined}
+							onBound={featureProgress.refresh}
+						/>
+					)}
 					<PinnedChecklist active={pinned} threadId={threadId} onDismiss={() => inputRef.current?.focus()} />
 				</div>
 			</div>

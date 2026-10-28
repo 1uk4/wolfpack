@@ -503,6 +503,19 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await skip(threadId), "not_found");
     });
 
+    // --- feature progress: bind ---
+    it("bind: an unknown thread is not_found, a bad body or malformed id is invalid_request, a valid bind answers the schema", async () => {
+      const bind = (id: string, body: unknown) => post(buildPath("bindThread", { id }), body);
+      await expectError(await bind("nope/nope", { workItemId: "work-x-1234567" }), "not_found");
+      await expectError(await bind(threadId, { nope: 1 }), "invalid_request");
+      await expectError(await bind(threadId, { workItemId: "../etc" }), "invalid_request");
+      const ok = await bind(threadId, { workItemId: "work-contract-task1" });
+      // A server without a Work API answers a refusal; the ones that bind answer the schema.
+      if (ok.status === 200) expect(ROUTES.bindThread.response.schema.parse(await ok.json()).workItemId).toBe("work-contract-task1");
+      else expect(ErrorEnvelopeSchema.parse(await ok.json()).code).toMatch(/^(not_found|memory_unavailable|invalid_request)$/);
+    });
+    // --- end feature progress ---
+
     it("kb routes: unknown wolf is not_found; otherwise a valid graph / entry, or kb_unavailable when not the librarian", async () => {
       for (const path of [buildPath("getKbGraph", { name: "no-such-wolf" }), buildPath("getKbEntry", { name: "no-such-wolf", id: "kb-x-1234567" })]) {
         await expectError(await call(path), "not_found");

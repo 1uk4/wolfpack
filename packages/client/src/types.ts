@@ -2,10 +2,11 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkspaceStatus, KbPipelineResponse } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkspaceStatus, KbPipelineResponse } from "@wolfpack/protocol";
 
 export type {
   Actor,
+  BindThreadResponse,
   Attachment,
   LedgerEntry,
   LedgerKind,
@@ -109,6 +110,13 @@ export interface ConsoleClient {
   answerCard?(threadId: string, callId: string, answers: CardAnswers): Promise<SubmitAck>;
   /** Skip a pending card without answering: the agent is told, siblings count it as resolved. Errors as `answerCard`. Optional like it. */
   skipCard?(threadId: string, callId: string): Promise<SubmitAck>;
+  // --- feature progress: bind ---
+  /**
+   * Bind the thread's conversation to a work item (task, issue or spike). Rejects ProtocolError `invalid_request` (not
+   * bindable, another feature's, held by another conversation), `thread_closed`, NotFoundError. Optional: the mock accepts any id.
+   */
+  bindThread?(threadId: string, workItemId: string): Promise<BindThreadResponse>;
+  // --- end feature progress ---
   /** Cards waiting for the operator on this wolf (the needs-you list). Optional like answerCard. */
   listCards?(wolf: string): Promise<PendingCard[]>;
   /** Ends the running turn; the event stream finishes with turn-end (reason "aborted"). */

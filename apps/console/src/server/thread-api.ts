@@ -254,6 +254,21 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		// --- feature progress: bind ---
+		/** Bind the thread's conversation to a work item: the console's side of `POST /v1/threads/:id/bind` (body `{workItemId}`). */
+		async bind(ref: ThreadRef, req: Request): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.bindThread) return json({ error: "this client cannot bind threads" }, 501);
+				const body = (await req.json().catch(() => null)) as { workItemId?: unknown } | null;
+				if (typeof body?.workItemId !== "string" || !body.workItemId) return json({ error: "body must be {workItemId}" }, 400);
+				return json(await client.bindThread(await resolve(client, ref), body.workItemId));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+		// --- end feature progress ---
+
 		/** A subagent thread's ledger (`{entries}`), oldest first. */
 		async ledger(ref: ThreadRef): Promise<Response> {
 			try {

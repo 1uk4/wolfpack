@@ -5,6 +5,7 @@ import {
   NotFoundError,
   ProtocolError,
   type Attachment,
+  type BindThreadResponse,
   type AttachmentRef,
   type Card,
   type CardAnswers,
@@ -216,6 +217,15 @@ export class MockConsoleClient implements ConsoleClient {
     this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
     return { messageId: `card-${callId}`, disposition: "started" };
   }
+
+  // --- feature progress: bind ---
+  readonly binds: Array<{ threadId: string; workItemId: string }> = [];
+  async bindThread(threadId: string, workItemId: string): Promise<BindThreadResponse> {
+    this.get(threadId);
+    this.binds.push({ threadId, workItemId });
+    return { threadId, workItemId };
+  }
+  // --- end feature progress ---
 
   async listCards(wolf: string): Promise<PendingCard[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);

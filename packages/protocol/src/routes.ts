@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   AttachmentSchema,
+  BindThreadRequestSchema,
+  BindThreadResponseSchema,
   AnswerCardRequestSchema,
   ConsolidateResponseSchema,
   CreateThreadBodyVariantsSchema,
@@ -45,6 +47,9 @@ export type CreateThreadBody = z.infer<typeof CreateThreadBodySchema>;
 
 export const AnswerCardBodySchema = AnswerCardRequestSchema.omit({ threadId: true, callId: true });
 export type AnswerCardBody = z.infer<typeof AnswerCardBodySchema>;
+// --- feature progress: bind ---
+export const BindThreadBodySchema = BindThreadRequestSchema;
+// --- end feature progress ---
 export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSchema) });
 
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
@@ -147,6 +152,24 @@ export const ROUTES = {
     status: [200],
     error: err,
   },
+  // --- feature progress: bind ---
+  /**
+   * Bind the thread's conversation to a work item (task, issue or spike), the way the agent's `task_bind` does: same
+   * binding file, and the agent learns of it from its next prompt. A feature thread accepts the items of its own feature
+   * (or the feature itself). 400 `invalid_request` for an item that cannot be bound (a feature/initiative, archived, another
+   * feature's, malformed) or one another conversation holds (the message names it); 404 `not_found` for an unknown thread or
+   * item; 409 `thread_closed` on a closed (graduated) thread; 409 `memory_unavailable` when the wolf has no den or Work API;
+   * 502 `engine_error` when the Work API cannot be reached.
+   */
+  bindThread: {
+    method: "POST",
+    path: "/v1/threads/:id/bind",
+    body: BindThreadRequestSchema,
+    response: { kind: "json", schema: BindThreadResponseSchema },
+    status: [200],
+    error: err,
+  },
+  // --- end feature progress ---
   /** Cards waiting for the operator across this wolf's threads (the needs-you list). */
   listCards: { method: "GET", path: "/v1/wolves/:name/cards", response: { kind: "json", schema: ListCardsResponseSchema }, status: [200], error: err },
   abort: { method: "POST", path: "/v1/threads/:id/abort", response: { kind: "json", schema: AbortResponseSchema }, status: [200], error: err },

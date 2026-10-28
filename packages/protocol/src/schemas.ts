@@ -364,6 +364,14 @@ export const ThreadSummarySchema = z.object({
   taskId: z.string().optional(),
   /** Additive (header git tree): the thread's git workspace. Absent for a non-git thread, or an older server. */
   workspace: ThreadWorkspaceSchema.optional(),
+  // --- feature progress: bound item (additive) ---
+  /**
+   * Additive: the work item the thread's conversation is bound to RIGHT NOW (the binding file: set by the bind route or
+   * the agent's task_bind), present only when it differs from `boundWorkItem` (the feature a feature thread was opened
+   * for). The progress panel follows `boundItem ?? boundWorkItem`.
+   */
+  boundItem: z.string().optional(),
+  // --- end feature progress ---
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -1146,6 +1154,20 @@ export const SubmitAckSchema = z.object({
   disposition: z.enum(["started", "steered", "queued"]),
 });
 export type SubmitAck = z.infer<typeof SubmitAckSchema>;
+
+// --- feature progress: bind a thread to a work item ---
+/** Bind the thread's conversation to a work item (a task, issue or spike). Wire: the thread id rides the path. */
+export const BindThreadRequestSchema = z.object({ workItemId: z.string().min(1) });
+export type BindThreadRequest = z.infer<typeof BindThreadRequestSchema>;
+export const BindThreadResponseSchema = z.object({
+  threadId: z.string(),
+  /** The item the conversation is bound to now. */
+  workItemId: z.string(),
+  /** What it was bound to before, when that was another item. */
+  previousWorkItemId: z.string().optional(),
+});
+export type BindThreadResponse = z.infer<typeof BindThreadResponseSchema>;
+// --- end feature progress ---
 
 /**
  * Answer a pending card. The answer is a submission: the card's tool call is resolved with it and the next turn starts

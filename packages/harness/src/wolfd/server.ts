@@ -19,6 +19,7 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_NAME_HEADER,
   AnswerCardBodySchema,
+  BindThreadBodySchema,
   CreateThreadBodySchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -43,6 +44,7 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
 import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
@@ -453,6 +455,27 @@ export class WolfServer {
         this.homeCreated = true;
         return this.json(res, status, await this.withWorkspace(this.home.threadSummary()));
       }
+      // --- feature progress: bind ---
+      case "bindThread": {
+        const t = this.checkThread(params.id);
+        if (t.isChild || t.summary.kind === "process") throw new HttpError("invalid_request", `a ${t.summary.kind} thread cannot be bound`);
+        await this.assertOpen(t);
+        const body = BindThreadBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {workItemId}");
+        if (!this.opts.den) throw new HttpError("memory_unavailable", "this wolf has no den to keep a binding in");
+        const known = new Set([this.home.conv.id, ...loadThreads(this.opts.den, (e) => this.opts.onError?.(e)).map((s) => s.conversationId)]);
+        const r = await bindConversation({
+          den: this.opts.den,
+          work: this.opts.work ?? {},
+          conversationId: t.conv.id,
+          ...(t.summary.kind === "feature" && t.summary.boundWorkItem ? { threadFeature: t.summary.boundWorkItem } : {}),
+          knownConversations: known,
+          workItemId: body.data.workItemId,
+        });
+        this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+        return this.json(res, 200, { threadId: t.summary.id, workItemId: body.data.workItemId, ...(r.previous ? { previousWorkItemId: r.previous } : {}) });
+      }
+      // --- end feature progress ---
       case "listChildren": {
         const t = this.checkThread(params.id);
         return this.json(res, 200, { threads: await Promise.all((this.subagents?.children(t.summary.id) ?? []).map((c) => this.withWorkspace(c))) });

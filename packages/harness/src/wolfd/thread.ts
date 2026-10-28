@@ -40,6 +40,7 @@ import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
 import { CardTracker, answerText, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
+import { readBindingFile } from "@wolfpack/memory";
 
 export type WolfEventDraft = WolfEvent extends infer E ? (E extends unknown ? Omit<E, "id" | "wolf" | "at"> : never) : never;
 
@@ -356,8 +357,18 @@ export class ThreadRuntime {
   }
 
   threadSummary(): ThreadSummary {
-    return { ...this.summary, status: this.status() };
+    return { ...this.summary, status: this.status(), ...this.boundItemField() };
   }
+
+  // --- feature progress: bound item ---
+  /** `boundItem`: the item the conversation is bound to now (read fresh), when it is not the feature the thread was opened for. */
+  private boundItemField(): { boundItem?: string } {
+    const den = this.host.den;
+    if (!den || this.isChild || !/^\d+$/.test(this.conv.id)) return {};
+    const now = readBindingFile(den, Number(this.conv.id))?.workId;
+    return now && now !== this.summary.boundWorkItem ? { boundItem: now } : {};
+  }
+  // --- end feature progress ---
 
   detail(): ThreadDetail {
     const den = this.host.den;

@@ -6,6 +6,7 @@ import {
   SSE_DONE,
   SubmitBodySchema,
   AnswerCardBodySchema,
+  BindThreadBodySchema,
   CreateThreadBodySchema,
   matchRoute,
 } from "../routes.js";
@@ -259,6 +260,17 @@ export class StubServer {
         // The stub's scripted turns raise no cards: every card id is unknown.
         throw new HttpError("not_found", `card ${params.callId}`);
       }
+      // --- feature progress: bind ---
+      case "bindThread": {
+        const t = this.thread(params.id);
+        const body = BindThreadBodySchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {workItemId}");
+        if (!/^work-[A-Za-z0-9-]+$/.test(body.data.workItemId)) throw new HttpError("invalid_request", "malformed work item id");
+        const previous = t.summary.boundItem ?? t.summary.boundWorkItem;
+        t.summary.boundItem = body.data.workItemId;
+        return this.json(res, 200, { threadId: t.summary.id, workItemId: body.data.workItemId, ...(previous && previous !== body.data.workItemId ? { previousWorkItemId: previous } : {}) });
+      }
+      // --- end feature progress ---
       case "skipCard":
         this.thread(params.id);
         throw new HttpError("not_found", `card ${params.callId}`);

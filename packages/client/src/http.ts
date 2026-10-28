@@ -10,6 +10,7 @@ import {
   parseMemoryEvent,
   parseThreadEvent,
   parseWolfEvent,
+  type BindThreadResponse,
   type RouteName,
 } from "@wolfpack/protocol";
 import {
@@ -149,6 +150,12 @@ export class HttpConsoleClient implements ConsoleClient {
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
   }
+
+  // --- feature progress: bind ---
+  async bindThread(threadId: string, workItemId: string): Promise<BindThreadResponse> {
+    return (await this.json("bindThread", { id: threadId }, ROUTES.bindThread.response.schema, { workItemId }, threadId)) as BindThreadResponse;
+  }
+  // --- end feature progress ---
 
   async listCards(wolf: string): Promise<PendingCard[]> {
     const r = await this.json("listCards", { name: wolf }, ROUTES.listCards.response.schema, undefined, wolf);

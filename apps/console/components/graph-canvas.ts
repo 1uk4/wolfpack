@@ -62,10 +62,9 @@ import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
 	createGraphSimulation,
-	easeInOut,
 	routeFilteredEdges,
-	routeDragLayout,
-	routeTargetLayout,
+	routeLinkSet,
+	routeLineForce,
 	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
 	sanitizePhysicsTuning,
@@ -73,6 +72,7 @@ import {
 	type PhysicsTuning,
 	type RegionTuning,
 	INCREMENTAL_GRAVITY,
+	type LayoutEdge,
 	LINK_DISTANCE,
 	type DepthAnchorMode,
 	type GraphRenderSettings,
@@ -280,8 +280,8 @@ const CLICK_SLOP = 4;
 const LIVE_ALPHA_DECAY = 0.05; // snappier anneal than the settle's 0.0228
 const DRAG_ALPHA_TARGET = 0.3; // d3-drag's own reheat constant
 const SIM_SETTLE_ALPHA = 0.005; // below this, the sim counts as settled
-const STRAIGHTEN_MS = 400; // route straighten / restore tween
-const REST_DIM = 0.3; // the rest of the map while a route is straightened
+const ROUTE_REHEAT_ALPHA = 0.3; // gentle reheat on route select/deselect (a drag's own level)
+const REST_DIM = 0.3; // the rest of the map while a route is selected
 const COMMIT_DEBOUNCE_MS = 250; // settle → ledger PUT delay (new drags cancel)
 
 /** Cluster region styling — a low-res world-space SPLAT bitmap (the
@@ -616,6 +616,8 @@ export class GraphCanvasRenderer {
 	private simActive = false;
 	private dragId: string | null = null;
 	private dragOrigin: Pt | null = null;
+	/** The press passed the click slop (a real drag, not a click). */
+	private dragMoved = false;
 	private simMoved = false; // any real movement since the last commit
 	private commit = createCommitScheduler(COMMIT_DEBOUNCE_MS, () => this.commitNow());
 
@@ -663,22 +665,11 @@ export class GraphCanvasRenderer {
 	 *  frame is one fill/stroke per group, not per node. */
 	private nodeGroups: NodeGroup[] = [];
 	private route: DepRouteSelection | null = null;
-	/** Route straightening: while set, the map is frozen and dimmed, the
-	 *  route's hierarchy links are dropped (`edges`), and `home` holds the
-	 *  normal position of every node displaced so far. */
-	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[] } | null = null;
-	private home = new Map<string, Pt>();
-	/** Route-node drops for this selection (graph id → world position). The
-	 *  dragged selected node is the line's far anchor; the rest stay put. */
-	private routePins = new Map<string, Pt>();
-	/** A route drag passed the click slop; the latest cursor world point is
-	 *  applied once per frame. */
-	private routeDragging = false;
-	private routeDragPt: Pt | null = null;
-	/** Selected nodes the user dropped: after the restore they pin while the
-	 *  sim settles around them, and their spot is saved as their normal one. */
-	private placed = new Set<string>();
-	private tween: { ids: string[]; from: Pt[]; to: Pt[]; start: number; ms: number; returning: Set<string> } | null = null;
+	/** Route selection: while set, the rest of the map is dimmed and the SAME
+	 *  sim runs on a different link set (`simEdges`: route members' hierarchy
+	 *  links dropped, route edges added) plus the weak route line force.
+	 *  `edges` are the hierarchy edges drawn. */
+	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[]; simEdges: LayoutEdge[] } | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private faintShaftsPath: Path2D = new Path2D();
 	private geometryReady = false;
@@ -819,17 +810,10 @@ export class GraphCanvasRenderer {
 		this.dragId = null;
 		this.simMoved = false;
 		this.simCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-		// The fresh nodes sit at their NORMAL positions (positions() hands
-		// back homes); re-straighten the selected route on them at once.
+		// Fresh nodes, fresh sim: re-apply the selected route's link set.
 		this.straighten = null;
-		this.tween = null;
-		this.home.clear();
-		this.routePins.clear();
-		this.placed.clear();
-		this.routeDragging = false;
-		this.routeDragPt = null;
 		this.buildSim();
-		if (this.route) this.applyStraighten(this.route, true);
+		if (this.route) this.applyStraighten(this.route);
 		this.geoVersion++; // new data → rebuild world geometry
 		this.markDirty();
 	}
@@ -899,148 +883,42 @@ export class GraphCanvasRenderer {
 	 *  parallel highlight), or null for none. */
 	setRoute(route: DepRouteSelection | null): void {
 		this.route = route;
-		this.applyStraighten(route, prefersReducedMotion());
+		this.applyStraighten(route);
 		this.markDirty();
 	}
 
-	/** Straighten (or restore) the route's nodes. Keyed by the route's shape:
-	 *  stepping the cursor changes nothing here. Only the route's nodes move
-	 *  (a tween; the sim stays frozen), so it costs O(route), not O(map). */
-	private applyStraighten(route: DepRouteSelection | null, instant: boolean): void {
+	/** Select (or clear) a route: swap the link set the sim runs on, add or
+	 *  drop the route line force, and reheat gently so the map relaxes into
+	 *  the new shape the way it does after a drag. Keyed by the route's shape:
+	 *  stepping the cursor changes nothing here. No positions are touched. */
+	private applyStraighten(route: DepRouteSelection | null): void {
 		const layout = route?.layout;
-		const root = layout ? this.nodeById.get(layout.root) : undefined;
-		const tgt = layout ? this.nodeById.get(layout.target) : undefined;
-		// Anchors are the nodes' NORMAL positions: a node displaced by the
-		// previous route (a route switch) must not anchor the new line.
-		const homeOf = (n: CanvasNode): Pt => this.home.get(n.id) ?? { x: n.x, y: n.y };
 		let key: string | null = null;
-		let targets: Map<string, Pt> | null = null;
-		if (route && layout && root && tgt) {
-			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}`;
-			targets = routeTargetLayout(layout.root, layout.target, { root: homeOf(root), target: homeOf(tgt) }, layout.steps);
+		if (route && layout && this.nodeById.has(layout.root) && this.nodeById.has(layout.target)) {
+			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}|${[...route.edges].join(",")}`;
 		}
 		if (key === (this.straighten?.key ?? null)) return;
-		this.routePins.clear();
-		this.routeDragging = false;
-		this.routeDragPt = null;
-
-		// Settle any tween in flight where it is (home entries persist).
-		const dest = new Map<string, Pt>();
-		const returning = new Set<string>();
-		for (const [id, h] of this.home) {
-			dest.set(id, h);
-			returning.add(id);
-		}
-		if (targets) {
-			for (const [id, p] of targets) {
-				const n = this.nodeById.get(id);
-				if (!n) continue;
-				if (!this.home.has(id)) this.home.set(id, { x: n.x, y: n.y });
-				dest.set(id, p);
-				returning.delete(id);
-			}
-			const members = new Set([...route!.nodes].filter((id) => this.nodeById.has(id)));
-			this.straighten = { key: key!, members, edges: routeFilteredEdges(this.data!.edges, members) };
+		if (key && route && layout) {
+			const members = new Set([...route.nodes].filter((id) => this.nodeById.has(id)));
+			this.straighten = {
+				key,
+				members,
+				edges: routeFilteredEdges(this.data!.edges, members),
+				simEdges: routeLinkSet(this.data!.edges, members, route.edges, (id) => this.nodeById.has(id)),
+			};
 		} else {
 			this.straighten = null;
 		}
-		const ids = [...dest.keys()];
-		const to = ids.map((id) => dest.get(id)!);
-		if (instant || ids.length === 0) {
-			ids.forEach((id, i) => {
-				const n = this.nodeById.get(id);
-				if (n) {
-					n.x = to[i]!.x;
-					n.y = to[i]!.y;
-				}
-			});
-			for (const id of returning) this.home.delete(id);
-			this.tween = null;
-		} else {
-			this.tween = {
-				ids,
-				from: ids.map((id) => {
-					const n = this.nodeById.get(id)!;
-					return { x: n.x, y: n.y };
-				}),
-				to,
-				start: performance.now(),
-				ms: STRAIGHTEN_MS,
-				returning,
-			};
-		}
-		// The sim runs on the links of the moment: route links gone while
-		// straightened, all links back afterwards.
-		this.simActive = false;
+		// Same sim, different links (+ the line force); positions and any
+		// drag pin carry over.
 		this.buildSim();
-		this.reheatPlaced();
-		this.geoVersion++;
-	}
-
-	/** Back on the normal map: let the sim settle around the nodes the user
-	 *  dropped (pinned meanwhile), then the settle commits the new rest state. */
-	private reheatPlaced(): void {
-		if (this.frozen || this.placed.size === 0) return;
-		for (const id of this.placed) {
-			const n = this.simById.get(id);
-			if (n) {
-				n.fx = n.x;
-				n.fy = n.y;
-			}
-		}
 		if (this.sim) {
-			this.sim.alpha(DRAG_ALPHA_TARGET);
+			this.sim.alpha(Math.max(this.sim.alpha(), ROUTE_REHEAT_ALPHA));
 			this.simActive = true;
 			this.simMoved = true;
-		}
-	}
-
-	/** Apply the pending route-drag point: the dragged node follows the
-	 *  cursor and the route re-lays out on the new anchor (no tween). */
-	private advanceRouteDrag(id: string | null = this.dragId): void {
-		const pt = this.routeDragPt;
-		const layout = this.route?.layout;
-		if (!pt || !id || !layout || !this.straighten) return;
-		this.routeDragPt = null;
-		const root = this.nodeById.get(layout.root);
-		const tgt = this.nodeById.get(layout.target);
-		if (!root || !tgt) return;
-		this.routePins.set(id, pt);
-		const homeOf = (n: CanvasNode): Pt => this.home.get(n.id) ?? { x: n.x, y: n.y };
-		const out = routeDragLayout(layout.root, layout.target, { root: homeOf(root), target: homeOf(tgt) }, layout.steps, this.routePins);
-		for (const [id, p] of out) {
-			const n = this.nodeById.get(id);
-			if (!n) continue;
-			n.x = p.x;
-			n.y = p.y;
+			this.commit.cancel();
 		}
 		this.geoVersion++;
-	}
-
-	/** One tween frame; true while still easing. */
-	private advanceTween(): boolean {
-		const tw = this.tween;
-		if (!tw) return false;
-		const t = Math.min((performance.now() - tw.start) / tw.ms, 1);
-		const e = easeInOut(t);
-		tw.ids.forEach((id, i) => {
-			const n = this.nodeById.get(id);
-			if (!n) return;
-			// The last frame lands EXACTLY on the target (no float residue).
-			n.x = t >= 1 ? tw.to[i]!.x : tw.from[i]!.x + (tw.to[i]!.x - tw.from[i]!.x) * e;
-			n.y = t >= 1 ? tw.to[i]!.y : tw.from[i]!.y + (tw.to[i]!.y - tw.from[i]!.y) * e;
-		});
-		this.geoVersion++;
-		if (t < 1) return true;
-		for (const id of tw.returning) this.home.delete(id);
-		this.tween = null;
-		this.reheatPlaced();
-		return this.simActive;
-	}
-
-	/** The map is frozen while a route is straightened (or easing back). */
-	private get frozen(): boolean {
-		return this.straighten !== null || this.tween !== null || this.home.size > 0;
 	}
 
 	/** Opacity factor of a node/edge outside the straightened route. */
@@ -1085,7 +963,7 @@ export class GraphCanvasRenderer {
 	 *  so a refetch can hand the same layout back to setData. */
 	positions(): Map<string, Position> {
 		const out = new Map<string, Position>();
-		for (const n of this.data?.nodes ?? []) out.set(n.id, this.home.get(n.id) ?? { x: n.x, y: n.y });
+		for (const n of this.data?.nodes ?? []) out.set(n.id, { x: n.x, y: n.y });
 		return out;
 	}
 
@@ -1178,33 +1056,13 @@ export class GraphCanvasRenderer {
 	private onPointerMove = (e: PointerEvent) => {
 		const pos = this.eventPos(e);
 		if (this.dragId) {
-			if (this.straighten) {
-				// Route selected: only its own nodes move (not the Factory);
-				// everything else is frozen. Click slop still gates the drag.
-				const layout = this.route?.layout;
-				const draggable = this.straighten.members.has(this.dragId) && layout !== undefined && this.dragId !== layout.root;
-				const far = this.dragOrigin !== null && Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
-				if (draggable && (this.routeDragging || far)) {
-					if (!this.routeDragging) {
-						this.routeDragging = true;
-						// A straighten tween in flight lands first.
-						if (this.tween) {
-							this.tween.start = -Infinity;
-							this.advanceTween();
-						}
-					}
-					const { x: tx, y: ty, k } = this.transform;
-					this.routeDragPt = { x: (pos.x - tx) / k, y: (pos.y - ty) / k };
-					this.markDirty();
-				}
-				return;
-			}
 			const n = this.simById.get(this.dragId);
 			if (n) {
 				const moved =
 					this.dragOrigin !== null &&
 					Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
-				if (moved && !this.frozen) {
+				if (moved && !this.dragMoved) {
+					this.dragMoved = true;
 					// First real movement: reheat and glue the node to the cursor.
 					this.commit.cancel();
 					this.sim?.alphaTarget(DRAG_ALPHA_TARGET);
@@ -1244,6 +1102,7 @@ export class GraphCanvasRenderer {
 			}
 			this.dragId = node.id;
 			this.dragOrigin = pos;
+			this.dragMoved = false;
 			const n = this.simById.get(node.id);
 			if (n) {
 				n.fx = n.x;
@@ -1275,11 +1134,7 @@ export class GraphCanvasRenderer {
 				n.fx = null;
 				n.fy = null;
 			}
-			if (this.routeDragging) {
-				this.releaseRouteDrag(id);
-				return;
-			}
-			if (this.simActive) {
+			if (this.dragMoved) {
 				// Real drag: the sim anneals to the new rest state; advanceSim
 				// detects the settle and schedules the commit.
 				this.sim?.alphaTarget(0);
@@ -1299,22 +1154,6 @@ export class GraphCanvasRenderer {
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
 	};
-
-	/** A route drag ended: the node stays where it was dropped. The selected
-	 *  node's spot becomes its normal position (saved; the sim settles around
-	 *  it after deselect); other route nodes only stay for this selection. */
-	private releaseRouteDrag(id: string): void {
-		this.advanceRouteDrag(id);
-		this.routeDragging = false;
-		this.routeDragPt = null;
-		const drop = this.routePins.get(id);
-		if (drop && id === this.route?.layout?.target) {
-			this.home.set(id, { ...drop });
-			this.placed.add(id);
-			this.callbacks.onCommit({ [id]: { x: drop.x, y: drop.y } });
-		}
-		this.markDirty();
-	}
 
 	private onDoubleClick = (e: MouseEvent) => {
 		const pos = this.eventPos(e);
@@ -1394,16 +1233,14 @@ export class GraphCanvasRenderer {
 			this.lastTickAt = now;
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
-			this.advanceRouteDrag();
 			const simAnim = this.advanceSim();
-			const tweenAnim = this.advanceTween();
 			this.draw();
 			// Keep frames coming ONLY while an animation is in motion (hover
 			// fade, zoom glide, or live physics); an idle graph schedules no
 			// rAF at all.
 			let pulseAnim = false;
 			for (const p of this.pulses.values()) if (!p.reduce) pulseAnim = true;
-			this.animating = hoverAnim || zoomAnim || simAnim || tweenAnim || pulseAnim;
+			this.animating = hoverAnim || zoomAnim || simAnim || pulseAnim;
 		} finally {
 			this.inTick = false;
 		}
@@ -1418,7 +1255,7 @@ export class GraphCanvasRenderer {
 	/** One live-sim step; returns true while physics is still in motion.
 	 *  Runs only while simActive (drag reheat or post-release anneal). */
 	private advanceSim(): boolean {
-		if (!this.sim || !this.simActive || this.frozen) return false;
+		if (!this.sim || !this.simActive) return false;
 		this.sim.tick();
 		// Movement check: did any node actually move (a click-pin that
 		// never reheated leaves everything exactly at rest)?
@@ -1432,14 +1269,6 @@ export class GraphCanvasRenderer {
 		// Settled (drag released long ago, alpha annealed away)?
 		if (!this.dragId && this.sim.alpha() < SIM_SETTLE_ALPHA) {
 			this.simActive = false;
-			for (const id of this.placed) {
-				const p = this.simById.get(id);
-				if (p) {
-					p.fx = null;
-					p.fy = null;
-				}
-			}
-			this.placed.clear();
 			this.scheduleCommit();
 			return false;
 		}
@@ -1684,7 +1513,7 @@ export class GraphCanvasRenderer {
 			return;
 		}
 		const t = this.physicsTuning;
-		this.sim = createGraphSimulation(data.nodes, this.straighten?.edges ?? data.edges, {
+		this.sim = createGraphSimulation(data.nodes, this.straighten?.simEdges ?? data.edges, {
 			gravity: { x: this.simCenter.x, y: this.simCenter.y, strength: t.gravity },
 			alphaDecay: LIVE_ALPHA_DECAY,
 			velocityDecay: t.velocityDecay,
@@ -1706,6 +1535,7 @@ export class GraphCanvasRenderer {
 							center: this.simCenter,
 						},
 		});
+		if (this.route?.layout && this.straighten) this.sim.force("routeLine", routeLineForce(this.route.layout));
 		this.simById = new Map(data.nodes.map((n) => [n.id, n as LayoutNode]));
 		// Hygiene (2026-09-23 fix wave): a fresh sim starts at alpha 1 and
 		// never decays while stopped — so the first post-rebuild drag would
@@ -2025,7 +1855,7 @@ export class GraphCanvasRenderer {
 		// every REGION_EVERY-th frame (others blit the last bitmap).
 		if (
 			this.regionBuiltVersion !== this.geoVersion &&
-			(!(this.simActive || this.tween) || this.frameCount % REGION_EVERY === 0)
+			(!this.simActive || this.frameCount % REGION_EVERY === 0)
 		) {
 			this.buildRegions();
 			this.regionBuiltVersion = this.geoVersion;

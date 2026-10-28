@@ -1,8 +1,8 @@
 /**
- * Route straightening moves the REAL nodes: one position per node, shared by
- * the discs, labels, halos, hit-testing and every edge. Drives the actual
- * GraphCanvasRenderer on a stubbed canvas and compares the node objects, the
- * disc geometry it built and the layout targets.
+ * Route selection is physics, not a second view: one position per node (the
+ * sim's), shared by the discs, labels, halos, hit-testing and every edge. The
+ * sim keeps running and every node drags as on the normal map. Drives the
+ * actual GraphCanvasRenderer on a stubbed canvas.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -46,148 +46,121 @@ const pump = async () => {
 };
 
 const sel = (steps: string[][], target: string) => ({
-	nodes: new Set(["fac:d", ...steps.flat()]), edges: new Set<string>(), parallel: new Set<string>(), done: new Set<string>(),
+	nodes: new Set(["fac:d", ...steps.flat()]), edges: new Set<string>(["fac:d|a", "fac:d|b", "a|t", "b|t"]), parallel: new Set<string>(), done: new Set<string>(),
 	layout: { root: "fac:d", target, steps },
 });
 
 async function setup() {
 	const { GraphCanvasRenderer } = await import("../components/graph-canvas.ts");
-	const { routeTargetLayout } = await import("../src/core/route-layout.ts");
 	const r: any = new GraphCanvasRenderer(canvas, { onSelect() {}, onStageClick() {}, onCommit() {}, onCameraMove() {} } as any, { k: 1, x: 400, y: 300 });
-	const nodes = [["fac:d", 0, 0], ["a", 50, 80], ["b", -60, 120], ["t", 200, 90], ["u", 300, -40]].map(([id, x, y]) => ({ id: id as string, x: x as number, y: y as number, label: id as string }));
+	const nodes = [["fac:d", 0, 0], ["a", 50, 80], ["b", -60, 120], ["t", 200, 90], ["u", 300, -40]].map(([id, x, y]) => ({ id: id as string, x: x as number, y: y as number, label: id as string } as { id: string; x: number; y: number; label: string; fx?: number | null; fy?: number | null }));
 	r.setSettings({ nodeSize: 6, labelSize: 10, labelZoom: 0.5, edgeWidth: 1 });
 	r.setData({
 		nodes, edges: [{ from: "fac:d", to: "a" }], depEdges: [], depSprings: [], clusters: [],
 		subClusters: [{ id: "x", label: null, members: nodes.map((n) => n.id), color: "#fff" }],
 		colors: { node: "#fff", edge: "#aaa", label: "#bbb", hoverText: "#ccc" }, fontFamily: "x",
 	});
-	return { r, nodes, routeTargetLayout };
+	return { r, nodes };
 }
 const discs = (r: any): number[][] => r.nodeGroups.flatMap((g: any) => g.path.pts);
 
-describe("route straightening moves the real nodes", () => {
-	it("node positions used for drawing equal the layout targets", async () => {
-		const { r, nodes, routeTargetLayout } = await setup();
+const links = (r: any): string[] => r.sim.force("link").links().map((l: any) => `${l.source.id}>${l.target.id}`).sort();
+const NORMAL = ["fac:d>a"];
+const dist = (n: any, p: { x: number; y: number }) => Math.hypot(n.x - p.x, n.y - p.y);
+
+describe("route selection runs on the same simulation", () => {
+	it("drawn positions are the sim's: same node objects, discs on nodes, no pins, nothing frozen", async () => {
+		const { r, nodes } = await setup();
 		r.setRoute(sel([["a", "b"], ["t"]], "t"));
+		assert.ok(r.simActive, "reheated, not frozen");
 		await pump();
-		const targets = routeTargetLayout("fac:d", "t", { root: { x: 0, y: 0 }, target: { x: 200, y: 90 } }, [["a", "b"], ["t"]]);
-		for (const [id, p] of targets) {
-			const n = nodes.find((x) => x.id === id)!;
-			assert.ok(r.nodeById.get(id) === n, "the renderer draws the very node objects it was given");
-			assert.deepEqual([n.x, n.y], [p.x, p.y], id);
-			assert.ok(discs(r).some(([x, y]) => x === p.x && y === p.y), `disc of ${id} drawn at its target`);
+		for (const n of nodes) {
+			assert.ok(r.nodeById.get(n.id) === n && r.simById.get(n.id) === n, "renderer and sim share the given objects");
+			assert.ok(n.fx == null && n.fy == null, "nothing pinned");
 		}
 		for (const [x, y] of discs(r)) assert.ok(nodes.some((n) => n.x === x && n.y === y), "every disc sits on a node");
-		assert.deepEqual([nodes[4]!.x, nodes[4]!.y], [300, -40], "non-route nodes stay put");
+		assert.deepEqual(r.positions().get("a"), { x: nodes[1]!.x, y: nodes[1]!.y });
 	});
-	it("deselect restores the original positions on the same objects", async () => {
+	it("links: members' hierarchy links swapped for the route's edges; the line force is installed", async () => {
+		const { r } = await setup();
+		assert.deepEqual(links(r), NORMAL);
+		r.setRoute(sel([["a", "b"], ["t"]], "t"));
+		assert.deepEqual(links(r), ["a>t", "b>t", "fac:d>a", "fac:d>b"]);
+		assert.ok(r.sim.force("routeLine"));
+	});
+	it("members relax toward the Factory -> target line over ticks, without being placed on it", async () => {
+		const { r, nodes } = await setup();
+		const line = (id: string) => {
+			// distance of the node from the Factory -> t segment
+			const n = nodes.find((x) => x.id === id)!;
+			const t = nodes[3]!;
+			return Math.abs(t.x * n.y - t.y * n.x) / Math.hypot(t.x, t.y);
+		};
+		const before = line("b");
+		r.setRoute(sel([["a", "b"], ["t"]], "t"));
+		await pump();
+		assert.ok(line("b") < before, `b ${line("b")} < ${before}`);
+		assert.ok(nodes.every((n) => n.fx == null), "free throughout");
+	});
+	it("deselect: normal links back, line force gone, gentle reheat, no special restore", async () => {
 		const { r, nodes } = await setup();
 		r.setRoute(sel([["a", "b"], ["t"]], "t"));
 		await pump();
 		r.setRoute(null);
+		assert.deepEqual(links(r), NORMAL);
+		assert.equal(r.sim.force("routeLine"), undefined);
+		assert.ok(r.simActive && r.sim.alpha() >= 0.3, "reheated like a drag");
+		assert.ok(!r.straighten);
 		await pump();
-		assert.deepEqual(nodes.map((n) => [n.x, n.y]), [[0, 0], [50, 80], [-60, 120], [200, 90], [300, -40]]);
-		assert.equal(r.home.size, 0);
-	});
-	it("a route switch anchors on the normal positions, not the displaced ones", async () => {
-		const { r, nodes, routeTargetLayout } = await setup();
-		r.setRoute(sel([["a"], ["b"], ["t"]], "t"));
-		await pump();
-		r.setRoute(sel([["b"], ["a"]], "a"));
-		await pump();
-		const want = routeTargetLayout("fac:d", "a", { root: { x: 0, y: 0 }, target: { x: 50, y: 80 } }, [["b"], ["a"]]);
-		for (const [id, p] of want) {
-			const n = nodes.find((x) => x.id === id)!;
-			assert.deepEqual([n.x, n.y], [p.x, p.y], id);
-		}
-		assert.deepEqual([nodes[3]!.x, nodes[3]!.y], [200, 90], "the old route's target went home");
+		assert.ok(nodes.every((n) => n.fx == null));
 	});
 });
 
-describe("dragging while a route is selected", () => {
+describe("dragging while a route is selected is the normal drag", () => {
 	// Canvas listeners are stubbed; call the handlers directly (camera k=1, origin 400,300).
 	const ev = (x: number, y: number) => ({ button: 0, clientX: x + 400, clientY: y + 300, pointerId: 1, preventDefault() {} });
-	const drag = async (r: any, id: string, to: [number, number] | null, from?: [number, number]) => {
-		const n = r.nodeById.get(id);
-		const [sx, sy] = from ?? [n.x, n.y];
-		r.onPointerDown(ev(sx, sy));
-		if (to) {
-			r.onPointerMove(ev(to[0], to[1]));
-			await pump();
-		}
-		r.onPointerUp(ev(to?.[0] ?? sx, to?.[1] ?? sy));
-		await pump();
-	};
 	const withSelect = async () => {
 		const s = await setup();
 		const selected: string[] = [];
-		const commits: any[] = [];
 		s.r.callbacks.onSelect = (id: string) => selected.push(id);
-		s.r.callbacks.onCommit = (p: any) => commits.push(p);
 		s.r.setRoute(sel([["a", "b"], ["t"]], "t"));
 		await pump();
-		return { ...s, selected, commits };
+		return { ...s, selected };
 	};
-	const steps = [["a", "b"], ["t"]];
-
-	it("dragging the selected node re-lays out the route on the new anchor", async () => {
-		const { r, nodes, selected, commits, routeTargetLayout } = await withSelect();
-		await drag(r, "t", [250, 200]);
-		const want = routeTargetLayout("fac:d", "t", { root: { x: 0, y: 0 }, target: { x: 250, y: 200 } }, steps);
-		for (const [id, p] of want) {
+	for (const id of ["a", "t", "fac:d", "u"]) {
+		it(`${id === "u" ? "a non-route node" : id === "fac:d" ? "the Factory" : `route node ${id}`} follows the cursor, then is released free`, async () => {
+			const { r, nodes, selected } = await withSelect();
 			const n = nodes.find((x) => x.id === id)!;
-			assert.deepEqual([n.x, n.y], [p.x, p.y], id);
-			assert.ok(discs(r).some(([x, y]) => x === p.x && y === p.y), `disc of ${id} drawn at its target`);
-		}
-		assert.deepEqual(selected, [], "a drag does not select");
-		assert.deepEqual(commits, [{ t: { x: 250, y: 200 } }]);
-		assert.deepEqual([nodes[0]!.x, nodes[0]!.y], [0, 0], "the Factory stays pinned");
-	});
-	it("dragging another route node moves only it, and it stays", async () => {
+			r.onPointerDown(ev(n.x, n.y));
+			r.onPointerMove(ev(n.x + 120, n.y + 60));
+			const want = { x: n.x + 120, y: n.y + 60 };
+			await pump();
+			assert.ok(r.simActive && r.sim.alphaTarget() === 0.3, "sim is hot during the drag");
+			assert.ok(dist(n, want) < 1e-6, "pinned to the cursor while held");
+			r.onPointerUp(ev(want.x, want.y));
+			assert.ok(n.fx == null && n.fy == null, "released");
+			assert.deepEqual(selected, [], "a drag does not select");
+			await pump();
+			assert.ok(r.sim.force("routeLine"), "selection stays");
+		});
+	}
+	it("dragging the selected node bends the route (members follow the moved end)", async () => {
 		const { r, nodes } = await withSelect();
-		const before = nodes.map((n) => [n.x, n.y]);
-		await drag(r, "a", [10, 10]);
-		assert.deepEqual([nodes[1]!.x, nodes[1]!.y], [10, 10]);
-		nodes.forEach((n, i) => { if (i !== 1) assert.deepEqual([n.x, n.y], before[i], n.id); });
-	});
-	it("a non-route node cannot be dragged while a route is selected", async () => {
-		const { r, nodes, selected } = await withSelect();
-		await drag(r, "u", [100, 100]);
-		assert.deepEqual([nodes[4]!.x, nodes[4]!.y], [300, -40]);
-		assert.deepEqual(selected, ["u"]);
-	});
-	it("the Factory cannot be dragged", async () => {
-		const { r, nodes } = await withSelect();
-		await drag(r, "fac:d", [90, 90]);
-		assert.deepEqual([nodes[0]!.x, nodes[0]!.y], [0, 0]);
+		const a = nodes[1]!;
+		const before = a.y;
+		const t = nodes[3]!;
+		r.onPointerDown(ev(t.x, t.y));
+		r.onPointerMove(ev(t.x, t.y + 600));
+		for (let i = 0; i < 3; i++) await pump();
+		r.onPointerUp(ev(t.x, t.y));
+		assert.ok(a.y > before! + 40, `${a.y} > ${before}`);
 	});
 	it("click vs drag threshold", async () => {
 		const { r, nodes, selected } = await withSelect();
-		await drag(r, "t", [nodes[3]!.x + 2, nodes[3]!.y + 2]);
-		assert.deepEqual(selected, ["t"], "tiny movement is a click");
-		assert.ok(!r.routeDragging);
-		const far = await withSelect();
-		await drag(far.r, "t", [far.nodes[3]!.x + 30, far.nodes[3]!.y]);
-		assert.deepEqual(far.selected, [], "past the threshold is a drag");
-	});
-	it("deselect keeps the dragged selected node and eases the others back", async () => {
-		const { r, nodes } = await withSelect();
-		await drag(r, "t", [250, 200]);
-		await drag(r, "b", [-10, -10]);
-		r.setRoute(null);
-		// Stop the moment the ease lands (before the sim settles around t).
-		for (let i = 0; i < 100 && r.tween; i++) {
-			await new Promise((res) => setTimeout(res, 15));
-			const f = frames;
-			frames = [];
-			f.forEach((x) => x());
-		}
-		assert.deepEqual(nodes.slice(0, 3).map((n) => [n.x, n.y]), [[0, 0], [50, 80], [-60, 120]]);
-		assert.deepEqual(r.positions().get("t"), { x: 250, y: 200 }, "saved as t's normal position");
-		assert.equal(r.home.size, 0);
-		assert.ok(r.placed.has("t") && r.simActive, "sim reheats around the placed node");
-		for (let i = 0; i < 8; i++) await pump();
-		assert.deepEqual([nodes[3]!.x, nodes[3]!.y], [250, 200], "the placed node stays put while the sim settles");
-		assert.equal(r.placed.size, 0, "settled");
+		const t = nodes[3]!;
+		r.onPointerDown(ev(t.x, t.y));
+		r.onPointerMove(ev(t.x + 2, t.y + 2));
+		r.onPointerUp(ev(t.x + 2, t.y + 2));
+		assert.deepEqual(selected, ["t"], "tiny movement is a click (even while the sim is relaxing)");
 	});
 });

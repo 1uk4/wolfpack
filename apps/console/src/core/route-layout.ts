@@ -1,8 +1,10 @@
 /**
- * Route straightening — pure. While a work node is selected its dependency
- * route detaches from the map's structure and lies on the straight line from
- * the Factory to the selected node: steps in order, evenly spaced; nodes of a
- * parallel step spread perpendicular to the line, centred on it.
+ * Route physics — pure. While a work node is selected the SAME force
+ * simulation runs on a slightly different link set (the route's members lose
+ * their hierarchy links, the route's own edges become springs) plus one weak
+ * positional force that leans the route's members towards the straight line
+ * from the Factory to the selected node: steps in order, evenly spaced; nodes
+ * of a parallel step spread perpendicular to the line, centred on it.
  */
 
 import type { LayoutEdge } from "./layout.ts";
@@ -14,6 +16,10 @@ export interface RoutePoint {
 
 /** Perpendicular distance between neighbours of a parallel step (world units). */
 export const ROUTE_LATERAL_SPACING = 56;
+
+/** Pull of the line force (per unit alpha, as a fraction of the distance to
+ *  the target). Weak on purpose: the route leans, it is never snapped. */
+export const ROUTE_LINE_STRENGTH = 0.12;
 
 /** Graph id prefix of a Factory node. */
 const FACTORY_PREFIX = "fac:";
@@ -56,26 +62,7 @@ export function routeTargetLayout(
 	return out;
 }
 
-/**
- * `routeTargetLayout` with user placements: a pinned target moves the line's
- * far anchor; every other pinned node sits exactly where it was dropped
- * (the Factory is never pinned). Re-run per frame while a node is dragged.
- */
-export function routeDragLayout(
-	rootId: string,
-	targetId: string,
-	anchors: { root: RoutePoint; target: RoutePoint },
-	steps: ReadonlyArray<ReadonlyArray<string>>,
-	pins: ReadonlyMap<string, RoutePoint>,
-	lateralSpacing: number = ROUTE_LATERAL_SPACING,
-): Map<string, RoutePoint> {
-	const target = pins.get(targetId) ?? anchors.target;
-	const out = routeTargetLayout(rootId, targetId, { root: anchors.root, target }, steps, lateralSpacing);
-	for (const [id, p] of pins) if (id !== rootId && out.has(id)) out.set(id, { ...p });
-	return out;
-}
-
-/** The edges the layout/draw keep while a route is straightened: every edge
+/** The edges the simulation/draw keep while a route is selected: every edge
  *  touching a route member (other than the Factory) is a hierarchy link that
  *  would pull against the route, so it is dropped. A Factory's links to
  *  non-members stay. */
@@ -84,5 +71,71 @@ export function routeFilteredEdges<E extends LayoutEdge>(edges: ReadonlyArray<E>
 	return edges.filter((e) => !detached(e.from) && !detached(e.to));
 }
 
-/** Ease in-out for the restore/straighten tween. */
-export const easeInOut = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+/** The link set the simulation runs on while a route is selected: the
+ *  filtered hierarchy plus the route's own edges (keys `from|to`, as the
+ *  route model supplies them) as plain springs. Edges with an unknown
+ *  endpoint (`known`) or already present are skipped. */
+export function routeLinkSet<E extends LayoutEdge>(
+	edges: ReadonlyArray<E>,
+	members: ReadonlySet<string>,
+	routeEdgeKeys: Iterable<string>,
+	known: (id: string) => boolean,
+): LayoutEdge[] {
+	const out: LayoutEdge[] = routeFilteredEdges(edges, members);
+	const seen = new Set(out.map((e) => `${e.from}|${e.to}`));
+	for (const key of routeEdgeKeys) {
+		const i = key.indexOf("|");
+		if (i <= 0 || seen.has(key)) continue;
+		const from = key.slice(0, i);
+		const to = key.slice(i + 1);
+		if (from === to || !known(from) || !known(to)) continue;
+		seen.add(key);
+		out.push({ from, to });
+	}
+	return out;
+}
+
+interface ForceNode {
+	id: string;
+	x?: number;
+	y?: number;
+	vx?: number;
+	vy?: number;
+}
+
+/**
+ * A d3 force: each route member is pulled (alpha-scaled, like gravity)
+ * towards its point on the Factory -> selected-node line. Targets are
+ * recomputed every tick from the two ends' CURRENT positions, so dragging
+ * either end bends the route. Only route members are touched; the two ends
+ * are anchors and receive nothing.
+ */
+export function routeLineForce(
+	layout: { root: string; target: string; steps: ReadonlyArray<ReadonlyArray<string>> },
+	strength: number = ROUTE_LINE_STRENGTH,
+) {
+	let byId = new Map<string, ForceNode>();
+	const force = (alpha: number): void => {
+		const root = byId.get(layout.root);
+		const tgt = byId.get(layout.target);
+		if (!root || !tgt) return;
+		const targets = routeTargetLayout(
+			layout.root,
+			layout.target,
+			{ root: { x: root.x ?? 0, y: root.y ?? 0 }, target: { x: tgt.x ?? 0, y: tgt.y ?? 0 } },
+			layout.steps,
+		);
+		const k = strength * alpha;
+		for (const [id, p] of targets) {
+			if (id === layout.root || id === layout.target) continue;
+			const n = byId.get(id);
+			if (!n) continue;
+			n.vx = (n.vx ?? 0) + (p.x - (n.x ?? 0)) * k;
+			n.vy = (n.vy ?? 0) + (p.y - (n.y ?? 0)) * k;
+		}
+	};
+	force.initialize = (nodes: ForceNode[]): void => {
+		byId = new Map(nodes.map((n) => [n.id, n]));
+	};
+	return force;
+}

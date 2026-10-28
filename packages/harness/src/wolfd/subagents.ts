@@ -813,7 +813,10 @@ ${text}`;
     this.setState(rec, state);
     if (state === "done" || state === "failed" || state === "stopped") {
       this.guard.releaseAll(rec.id);
-      void this.releaseOwnerOf(rec);
+      // Ending the owner task aborts the conversation's work: a steer that arrived as this turn ended is already queued
+      // and starts the next run at once, which that abort would kill (and the turn-end would read as an operator stop).
+      // The release waits for the turn that follows; its own settle comes back here.
+      if (!this.port.thread(rec.id)?.hasQueuedInput) void this.releaseOwnerOf(rec);
     }
     const target = rec.resolves && (state === "failed" || state === "stopped") ? this.records.find((r) => r.id === rec.resolves) : undefined;
     if (target?.workspace) {

@@ -65,6 +65,7 @@ export class ThreadRuntime {
   private running: { turnId: string } | null = null;
   private turnStarts = 0;
   private messages: ThreadMessage[] = [];
+  private queuedInputs = new Set<number>();
   private seenEntries = new Set<EngineSnapshot["entries"][number]["id"]>();
   private readonly subs = new Set<Sub>();
   private readonly waiters = new Set<() => void>();
@@ -116,6 +117,11 @@ export class ThreadRuntime {
     const was = this.running !== null;
     await this.conv.abort();
     if (was) await this.waitFor(() => this.running === null);
+  }
+
+  /** A steer or follow-up the engine accepted but has not started yet: another run follows the one that is ending. */
+  get hasQueuedInput(): boolean {
+    return this.queuedInputs.size > 0;
   }
 
   get isRunning(): boolean {
@@ -180,6 +186,12 @@ export class ThreadRuntime {
       }
     }
     this.applyMapped(this.mapper!.push(batch));
+    // After the mapped events: a turn-end in this batch is seen while the input that follows it still counts as queued.
+    for (const ev of batch) {
+      if (ev.type !== "submission" || ev.record.type !== "input") continue;
+      if (ev.record.status === "queued") this.queuedInputs.add(Number(ev.record.id));
+      else this.queuedInputs.delete(Number(ev.record.id));
+    }
   }
 
   /** Re-base thread state on an engine snapshot. `initial`: synthesize the in-flight turn into the buffer. */

@@ -312,6 +312,7 @@ export function GraphView({
 			nodes: canvasData.nodes.map((n) => ({ ...n, x: positions.get(n.id)!.x, y: positions.get(n.id)!.y })),
 			edges: canvasData.edges,
 			clusters: canvasData.clusters,
+			subClusters: canvasData.subClusters,
 			depths: canvasData.depths,
 			colors: {
 				node: tokenHex(NODE_COLOR_TOKEN),

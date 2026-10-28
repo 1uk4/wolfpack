@@ -14,6 +14,9 @@ import {
 	describeNode,
 	domainColors,
 	domainHue,
+	factoryClusters,
+	factoryShade,
+	hexToHsl,
 	focusRemedy,
 	focusStep,
 	groupClusters,
@@ -409,5 +412,27 @@ describe("focusStep (the /?focus= flow)", () => {
 		assert.equal(focusStep({ ...base, view: widened, settled: false }).kind, "wait");
 		const landed = { ...g, nodes: [...g.nodes, node({ id: "work:w9", kind: "work", domain: "wolfpack" })] };
 		assert.equal(focusStep({ ...base, graph: landed, view: widened }).kind, "focus");
+	});
+});
+
+describe("factory sub-halo", () => {
+	it("factoryShade keeps the hue and lowers lightness", () => {
+		for (const hex of [domainHue("wolfpack"), domainHue("snapjack"), "#abcdef"]) {
+			const a = hexToHsl(hex);
+			const b = hexToHsl(factoryShade(hex));
+			assert.ok(a.l - b.l > 0.07 && a.l - b.l < 0.13, `${hex}: ${a.l} -> ${b.l}`);
+			assert.ok(Math.abs(a.h - b.h) < 3 || Math.abs(a.h - b.h) > 357, `${hex} hue`);
+		}
+	});
+
+	it("members are fac:<domain> and its work descendants only", () => {
+		const g = fixture();
+		g.nodes.push(node({ id: "work:w4", kind: "work", label: "Other", domain: "wolfpack" }));
+		g.edges.push({ source: "work:w1", target: "work:w3", kind: "hierarchy" });
+		const cs = factoryClusters(g);
+		assert.deepEqual(cs.map((c) => c.id), ["fac:wolfpack"]);
+		assert.deepEqual([...cs[0]!.members].sort(), ["fac:wolfpack", "work:w1", "work:w2", "work:w3"]);
+		assert.equal(cs[0]!.color, factoryShade(domainHue("wolfpack")));
+		assert.deepEqual(toCanvasData(g, { groupBy: "domain" }).subClusters.map((c) => c.id), ["fac:wolfpack"]);
 	});
 });

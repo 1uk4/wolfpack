@@ -133,6 +133,9 @@ export interface CanvasData {
 	 *  section → entry → work). Absent = no anchoring. */
 	depths?: ReadonlyMap<string, number>;
 	clusters: CanvasCluster[];
+	/** Nested sub-halos (the Factory subtree), painted over the cluster
+	 *  regions in the same bitmap; no labels, no layout pull. */
+	subClusters?: CanvasCluster[];
 	colors: CanvasColors;
 	/** Body font family (labels must match the app typography). */
 	fontFamily: string;
@@ -1567,6 +1570,39 @@ export class GraphCanvasRenderer {
 				rctx.fill();
 			}
 		});
+
+		// Nested sub-halos (Factory subtree): the same dilated-skeleton
+		// stroke, painted OVER the domain regions in the same bitmap, so the
+		// darker shade replaces the domain hue where they overlap and one
+		// blur + alpha pass covers both.
+		for (const sub of data.subClusters ?? []) {
+			const inSub = new Set(sub.members);
+			rctx.strokeStyle = sub.color;
+			rctx.fillStyle = sub.color;
+			rctx.beginPath();
+			const touched = new Set<string>();
+			for (const e of data.edges) {
+				if (!inSub.has(e.from) || !inSub.has(e.to)) continue;
+				if (!isVisible(e.from) || !isVisible(e.to)) continue;
+				const a = this.nodeById.get(e.from);
+				const b = this.nodeById.get(e.to);
+				if (!a || !b) continue;
+				rctx.moveTo((a.x - minX) / cell, (a.y - minY) / cell);
+				rctx.lineTo((b.x - minX) / cell, (b.y - minY) / cell);
+				touched.add(e.from);
+				touched.add(e.to);
+			}
+			rctx.stroke();
+			const discR = dilationW / cell;
+			for (const id of sub.members) {
+				if (touched.has(id) || !isVisible(id)) continue;
+				const n = this.nodeById.get(id);
+				if (!n) continue;
+				rctx.beginPath();
+				rctx.arc((n.x - minX) / cell, (n.y - minY) / cell, discR, 0, Math.PI * 2);
+				rctx.fill();
+			}
+		}
 
 		// THE blur + alpha (in that order, by design — user-decided
 		// 2026-09-14): 3 box-blur rounds on the premultiplied bitmap,

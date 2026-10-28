@@ -68,6 +68,35 @@ export function hslToHex(h: number, s: number, l: number): string {
 	return `#${[f(0), f(8), f(4)].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** "#rrggbb" → HSL (h 0–360, s/l 0–1). */
+export function hexToHsl(hex: string): { h: number; s: number; l: number } {
+	const v = normalizeHex(hex) ?? NEUTRAL_NODE_COLOR;
+	const r = parseInt(v.slice(1, 3), 16) / 255;
+	const g = parseInt(v.slice(3, 5), 16) / 255;
+	const b = parseInt(v.slice(5, 7), 16) / 255;
+	const max = Math.max(r, g, b);
+	const min = Math.min(r, g, b);
+	const l = (max + min) / 2;
+	const d = max - min;
+	if (d === 0) return { h: 0, s: 0, l };
+	const s = d / (1 - Math.abs(2 * l - 1));
+	let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+	h *= 60;
+	if (h < 0) h += 360;
+	return { h, s, l };
+}
+
+/** How much darker (HSL lightness points, 0–1) the Factory sub-halo is than
+ *  its domain's hue. The one tuning knob for the nested glow. */
+export const FACTORY_SHADE_LIGHTNESS_DROP = 0.1;
+
+/** The Factory sub-halo tint: the domain's hue and saturation at a lower
+ *  lightness (so it reads as a sub-region of the domain's colour region). */
+export function factoryShade(domainHueHex: string): string {
+	const { h, s, l } = hexToHsl(domainHueHex);
+	return hslToHex(h, s, Math.max(0.15, l - FACTORY_SHADE_LIGHTNESS_DROP));
+}
+
 /** A domain's colour: the owner's override (domains.yaml `color`, a valid
  *  hex) wins; then its pinned palette slot; then a stable hash-derived hue. */
 export function domainHue(name: string, override?: string | null): string {
@@ -217,6 +246,42 @@ export function groupClusters(
 		.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/**
+ * The Factory sub-halos: per domain, `fac:<domain>` plus every work node
+ * reachable from it through hierarchy edges (archived work included when the
+ * payload carries it). Drawn nested inside the domain region in
+ * factoryShade(hue); they never take part in layout pull or labels.
+ */
+export function factoryClusters(
+	graph: Pick<KbGraph, "nodes" | "edges" | "domains">,
+	colors: ReadonlyMap<string, string> = domainColors(graph),
+): KbCluster[] {
+	const kindOf = new Map(graph.nodes.map((n) => [n.id, n.kind]));
+	const children = new Map<string, string[]>();
+	for (const e of graph.edges) {
+		if (e.kind !== "hierarchy") continue;
+		const list = children.get(e.source);
+		if (list) list.push(e.target);
+		else children.set(e.source, [e.target]);
+	}
+	const out: KbCluster[] = [];
+	for (const f of graph.nodes) {
+		if (f.kind !== "factory" || !f.domain) continue;
+		const members = [f.id];
+		const seen = new Set(members);
+		for (const id of members) {
+			for (const c of children.get(id) ?? []) {
+				if (seen.has(c) || kindOf.get(c) !== "work") continue;
+				seen.add(c);
+				members.push(c);
+			}
+		}
+		if (members.length < 2) continue;
+		out.push({ id: f.id, label: null, color: factoryShade(colors.get(f.domain) ?? NEUTRAL_NODE_COLOR), members });
+	}
+	return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 // ─── Canvas data ────────────────────────────────────────────────────────────
 
 /** One node as the renderer draws it (position added by the view). */
@@ -235,6 +300,8 @@ export interface KbCanvasData {
 	nodes: KbCanvasNode[];
 	edges: KbCanvasEdge[];
 	clusters: KbCluster[];
+	/** Factory sub-halos, nested inside the domain regions. */
+	subClusters: KbCluster[];
 	/** Hierarchy depth per node id (for the depth anchoring). */
 	depths: Map<string, number>;
 }
@@ -264,7 +331,7 @@ export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanv
 		seen.add(key);
 		edges.push({ from: e.source, to: e.target });
 	}
-	return { nodes, edges, clusters: groupClusters(graph, opts.groupBy, colors), depths };
+	return { nodes, edges, clusters: groupClusters(graph, opts.groupBy, colors), subClusters: factoryClusters(graph, colors), depths };
 }
 
 // ─── Search ─────────────────────────────────────────────────────────────────

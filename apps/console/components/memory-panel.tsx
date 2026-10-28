@@ -19,7 +19,6 @@ import {
 	applyPromoteEvent,
 	bannerOf,
 	bindOffered,
-	featureIdFor,
 	isWorkEvent,
 	BLOCKED_LABELS,
 	pendingWarning,
@@ -106,8 +105,7 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	const [unread, setUnread] = useState(0);
 	useEffect(() => {
 		try {
-			const v = parseView(localStorage.getItem(MEMORY_PANEL_VIEW_KEY));
-			setView(v);
+			setView(parseView(localStorage.getItem(MEMORY_PANEL_VIEW_KEY)));
 		} catch {}
 	}, []);
 	const chooseView = (next: PanelView) => {
@@ -125,8 +123,9 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	const [selectedId, setSelectedId] = useState<string | null>(selectTaskId ?? null);
 	/** A task asked for from outside, until the bound item is known (the bound-item effect must not wipe it). */
 	const wantedRef = useRef<string | null>(selectTaskId ?? null);
-	const [binding, setBinding] = useState(false);
-	const [bindError, setBindError] = useState<string | null>(null);
+	/** The bind in flight or its refusal, keyed by the task it concerns (never shown on another task). */
+	const [bindSt, setBindSt] = useState<{ id: string; busy: boolean; error: string | null } | null>(null);
+	const bindInFlight = useRef(false);
 	const [selected, setSelected] = useState<Loaded | null>(null);
 	const [selectedFailed, setSelectedFailed] = useState(false);
 	/** The wolf's observation pool (null until the first load) and the work items' titles/stages looked up for its groups. */
@@ -294,7 +293,6 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 		setView("item");
 	}, [selectTaskId, selectNonce]);
 	useEffect(() => {
-		setBindError(null);
 		setSelected(null);
 		setSelectedFailed(false);
 		void refreshSelected(selectedId);
@@ -377,21 +375,22 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	const banner = status ? bannerOf(status) : null;
 	const pool = status ? poolSummary(status.pool) : null;
 	const bindHere = async (id: string) => {
-		if (!slug) return;
-		setBinding(true);
-		setBindError(null);
+		if (!slug || bindInFlight.current) return;
+		bindInFlight.current = true;
+		setBindSt({ id, busy: true, error: null });
+		let error: string | null = null;
 		try {
 			const res = await fetch(bindUrl(wolf, slug), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workItemId: id }) });
 			if (!res.ok) {
-				const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
-				setBindError(body?.error ?? body?.message ?? `Could not bind (${res.status}).`);
-				return;
-			}
-			void refreshStatus();
+				const body = (await res.json().catch(() => null)) as { error?: unknown; message?: unknown } | null;
+				const text = body?.error ?? body?.message;
+				error = typeof text === "string" && text ? text : `Could not bind (${res.status}).`;
+			} else await refreshStatus();
 		} catch {
-			setBindError("Could not reach the console server.");
+			error = "Could not reach the console server.";
 		} finally {
-			setBinding(false);
+			bindInFlight.current = false;
+			setBindSt({ id, busy: false, error });
 		}
 	};
 	const viewingOther = !!selectedId && selectedId !== boundId;
@@ -400,7 +399,7 @@ export function MemoryPanel({ wolf, threadId, slug, selectTaskId, selectNonce, e
 	const otherState = viewingOther && !showing ? (selectedFailed ? "error" : "loading") : undefined;
 
 	// The bind button (see bindOffered).
-	const bindState = bindOffered(showing?.own ?? null, boundId, !!slug) ? { id: showing!.own.id, busy: binding, error: bindError, onBind: () => void bindHere(showing!.own.id) } : null;
+	const bindState = bindOffered(showing?.own ?? null, boundId, !!slug) ? { id: showing!.own.id, busy: bindSt?.id === showing!.own.id && bindSt.busy, error: bindSt?.id === showing!.own.id ? bindSt.error : null, onBind: () => void bindHere(showing!.own.id) } : null;
 
 	const content = (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
@@ -544,8 +543,8 @@ export function StatusSection({ view, bound, shown, viewingOther = false, otherS
 					) : (
 						<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
 					)
-				) : viewingOther ? (
-					<Button size="xs" variant="ghost" className="-ml-1 shrink-0" data-testid="memory-back-bound" onClick={onBack} disabled={!bound}>
+				) : viewingOther && bound ? (
+					<Button size="xs" variant="ghost" className="-ml-1 shrink-0" data-testid="memory-back-bound" onClick={onBack}>
 						<ChevronLeftIcon className="size-3 shrink-0" />
 						Bound item
 					</Button>

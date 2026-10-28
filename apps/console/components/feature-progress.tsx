@@ -30,12 +30,12 @@ function readOpen(): string[] {
 		const v: unknown = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]");
 		return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 	} catch {
-		return memoryOpen;
+		return memoryOpen; // localStorage unavailable: the in-memory copy
 	}
 }
 
 export function isProgressOpen(threadId: string): boolean {
-	return readOpen().includes(threadId) || memoryOpen.includes(threadId);
+	return readOpen().includes(threadId);
 }
 
 export function setProgressOpen(threadId: string, open: boolean): void {
@@ -54,6 +54,9 @@ export const FEATURE_PROGRESS_RESERVE = "pt-14";
 // ---------------------------------------------------------------- data
 
 export type ProgressState = { phase: "pending" } | { phase: "none" } | { phase: "ready"; model: Model; boundId: string };
+const PENDING: ProgressState = { phase: "pending" };
+/** Same graph and binding: the refetch changed nothing, so the panel is not re-rendered (and a user's drag is not disturbed). */
+const sameState = (a: ProgressState, b: ProgressState): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
 
 interface ThreadRow {
 	id: string;
@@ -80,8 +83,11 @@ async function getRecord(wolf: string, id: string): Promise<WorkRecordResponse |
  * Events that do not name a feature refetch anyway.
  */
 export function useFeatureProgress(wolf: string, threadId: string, refreshKey: number): { state: ProgressState } {
-	const [state, setState] = useState<ProgressState>({ phase: "pending" });
+	const [state, setState] = useState<ProgressState>(PENDING);
+	const stateRef = useRef(state);
+	stateRef.current = state;
 	const seq = useRef(0);
+	const put = useCallback((next: ProgressState) => setState((prev) => (sameState(prev, next) ? prev : next)), []);
 	const load = useCallback(async () => {
 		const n = ++seq.current;
 		try {
@@ -90,16 +96,16 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 			const list = ((await res.json()) as { threads?: ThreadRow[] }).threads ?? [];
 			const row = list.find((t) => t.id === threadId);
 			const boundId = row?.boundItem ?? row?.boundWorkItem;
-			if (!boundId) return void (n === seq.current && setState({ phase: "none" }));
+			if (!boundId) return void (n === seq.current && put({ phase: "none" }));
 			const rec = await getRecord(wolf, boundId);
 			const feature = !rec ? null : rec.kind === "feature" ? rec : rec.partOf ? await getRecord(wolf, rec.partOf) : null;
 			if (n !== seq.current) return;
 			const model = buildFeatureGraph(rec, feature);
-			setState(model.kind === "graph" ? { phase: "ready", model, boundId } : { phase: "none" });
+			put(model.kind === "graph" ? { phase: "ready", model, boundId } : { phase: "none" });
 		} catch {
 			/* keep what is shown; the next trigger refetches */
 		}
-	}, [wolf, threadId]);
+	}, [wolf, threadId, put]);
 	const loadRef = useRef(load);
 	loadRef.current = load;
 	// Debounce from the FIRST signal (not trailing-reset): a steady stream of events still refetches every window.
@@ -115,9 +121,14 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 		() => () => {
 			if (timer.current) clearTimeout(timer.current);
 			timer.current = null;
+			seq.current++; // a load still in flight must not set state after unmount
 		},
 		[],
 	);
+	// Another thread (or wolf) starts from pending, never showing the previous one's graph.
+	useEffect(() => {
+		setState((prev) => (prev === PENDING ? prev : PENDING));
+	}, [wolf, threadId]);
 	useEffect(() => {
 		void load();
 	}, [load, refreshKey]);
@@ -135,7 +146,12 @@ export function useFeatureProgress(wolf: string, threadId: string, refreshKey: n
 	useOptionalServerEvent("thread-updated", (p) => {
 		// This thread's own change, or any bound thread's (a task moved in the feature; the event does not say which feature).
 		const t = p.thread as { id: string; boundWorkItem?: string; boundItem?: string };
-		if (p.wolf === wolf && (t.id === threadId || t.boundItem || t.boundWorkItem)) schedule();
+		if (p.wolf !== wolf) return;
+		const cur = stateRef.current;
+		const bound = t.boundItem ?? t.boundWorkItem;
+		// Known graph: only this thread, or a thread bound to this feature or one of its tasks. Unknown (no graph yet, or a thread
+		// with no binding we can match): refetch anyway.
+		if (t.id === threadId || cur.phase !== "ready" || !bound || bound === cur.model.featureId || cur.model.graph.nodes.some((n) => n.id === bound)) schedule();
 	});
 	useOptionalServerEvent("needs-you-changed", (p) => {
 		if (p.wolf === wolf && (p.threadId === undefined || (p.threadId === threadId && p.kind === "status"))) schedule();

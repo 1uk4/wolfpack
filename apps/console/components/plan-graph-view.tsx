@@ -35,7 +35,13 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 	const layout = layoutGraph(graph.nodes, graph.edges);
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
-	for (const e of graph.edges) (dependsOn.get(e.from) ?? dependsOn.set(e.from, []).get(e.from)!).push(labelOf.get(e.to)!);
+	for (const e of graph.edges) {
+		const dep = labelOf.get(e.to);
+		if (dep === undefined || !labelOf.has(e.from)) continue;
+		const list = dependsOn.get(e.from) ?? [];
+		list.push(dep);
+		dependsOn.set(e.from, list);
+	}
 	const at = new Map(layout.nodes.map((p) => [p.id, p] as const));
 	const done = graph.nodes.filter((n) => n.status === "done").length;
 	const clickNode = (id: string) => {
@@ -50,72 +56,73 @@ export function PlanGraphView({ graph, onNodeClick, highlightId, label, draggabl
 			{...pan.handlers}
 			ref={pan.ref}
 		>
-			<div className="relative" style={draggable ? { transform: `translate(${pan.offset.x}px, ${pan.offset.y}px)`, width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-pan-x={pan.offset.x} data-pan-y={pan.offset.y}>
-			<div className="relative" role="group" aria-label={`${label ?? `Plan graph${graph.title ? `: ${graph.title}` : ""}`}, ${graph.nodes.length} nodes, ${done} done`} style={{ width: layout.width, height: layout.height }}>
-				<svg className="pointer-events-none absolute inset-0 text-muted-foreground" width={layout.width} height={layout.height} aria-hidden>
-					<defs>
-						<marker id={`arrow-${uid}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
-							<path d="M0 0L8 4L0 8z" fill="currentColor" />
-						</marker>
-					</defs>
-					{layout.edges.map((e) => {
-						const mid = (e.x1 + e.x2) / 2;
-						return (
-							<path
-								key={`${e.from}->${e.to}`}
-								data-testid="graph-edge"
-								data-from={e.from}
-								data-to={e.to}
-								d={`M${e.x1} ${e.y1}C${mid} ${e.y1} ${mid} ${e.y2} ${e.x2} ${e.y2}`}
-								fill="none"
-								stroke="currentColor"
-								strokeWidth={1.25}
-								opacity={0.6}
-								markerEnd={`url(#arrow-${uid})`}
-							/>
-						);
-					})}
-				</svg>
-				<ul role="list" className="m-0 list-none p-0">
-					{graph.nodes.map((n) => {
-						const p = at.get(n.id)!;
-						const hi = highlightId === n.id;
-						return (
-							<li
-								key={n.id}
-								data-testid="graph-node"
-								data-node-id={n.id}
-								data-status={n.status}
-								data-kind={n.kind}
-								data-rank={p.rank}
-								data-highlight={hi ? "true" : "false"}
-								title={n.detail ? `${n.label} — ${n.detail}` : n.label}
-								className={cn("absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5", CARD[n.status], hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70")}
-								style={{ left: p.x, top: p.y, width: layout.nodeWidth, height: layout.nodeHeight }}
-							>
-								<div className="flex items-center gap-1.5 text-[10px] leading-none">
-									{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}
-									<span className="font-medium">{STATUS_LABEL[n.status]}</span>
-									<span className="ml-auto truncate text-muted-foreground/80" title={n.kind}>
-										{n.kind}
-									</span>
-								</div>
-								<div className={cn("line-clamp-2 break-words text-xs leading-4", n.status === "skipped" && "line-through")}>{n.label}</div>
-								{dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
-								{onNodeClick && (
-									<button
-										type="button"
-										data-testid="graph-node-hit"
-										aria-label={`${n.label} (${STATUS_LABEL[n.status]}${hi ? ", current" : ""})`}
-										onClick={() => clickNode(n.id)}
-										className="absolute inset-0 cursor-pointer rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
-									/>
-								)}
-							</li>
-						);
-					})}
-				</ul>
-			</div>
+			<div className="relative" style={draggable ? { transform: `translate(${pan.view(layout.width, layout.height).x}px, ${pan.view(layout.width, layout.height).y}px)`, width: layout.width, height: layout.height } : undefined} data-testid="graph-pan" data-pan-x={pan.view(layout.width, layout.height).x} data-pan-y={pan.view(layout.width, layout.height).y}>
+				<div className="relative" role="group" aria-label={`${label ?? `Plan graph${graph.title ? `: ${graph.title}` : ""}`}, ${graph.nodes.length} nodes, ${done} done`} style={{ width: layout.width, height: layout.height }}>
+					<svg className="pointer-events-none absolute inset-0 text-muted-foreground" width={layout.width} height={layout.height} aria-hidden>
+						<defs>
+							<marker id={`arrow-${uid}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+								<path d="M0 0L8 4L0 8z" fill="currentColor" />
+							</marker>
+						</defs>
+						{layout.edges.map((e) => {
+							const mid = (e.x1 + e.x2) / 2;
+							return (
+								<path
+									key={`${e.from}->${e.to}`}
+									data-testid="graph-edge"
+									data-from={e.from}
+									data-to={e.to}
+									d={`M${e.x1} ${e.y1}C${mid} ${e.y1} ${mid} ${e.y2} ${e.x2} ${e.y2}`}
+									fill="none"
+									stroke="currentColor"
+									strokeWidth={1.25}
+									opacity={0.6}
+									markerEnd={`url(#arrow-${uid})`}
+								/>
+							);
+						})}
+					</svg>
+					<ul role="list" className="m-0 list-none p-0">
+						{graph.nodes.map((n) => {
+							const p = at.get(n.id);
+							if (!p) return null;
+							const hi = highlightId === n.id;
+							return (
+								<li
+									key={n.id}
+									data-testid="graph-node"
+									data-node-id={n.id}
+									data-status={n.status}
+									data-kind={n.kind}
+									data-rank={p.rank}
+									data-highlight={hi ? "true" : "false"}
+									title={n.detail ? `${n.label} — ${n.detail}` : n.label}
+									className={cn("absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5", CARD[n.status], hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70")}
+									style={{ left: p.x, top: p.y, width: layout.nodeWidth, height: layout.nodeHeight }}
+								>
+									<div className="flex items-center gap-1.5 text-[10px] leading-none">
+										{n.status === "done" ? <CheckIcon className="size-3 shrink-0 text-emerald-500" aria-hidden /> : <span className={cn("size-2 shrink-0 rounded-full", DOT[n.status])} aria-hidden />}
+										<span className="font-medium">{STATUS_LABEL[n.status]}</span>
+										<span className="ml-auto truncate text-muted-foreground/80" title={n.kind}>
+											{n.kind}
+										</span>
+									</div>
+									<div className={cn("line-clamp-2 break-words text-xs leading-4", n.status === "skipped" && "line-through")}>{n.label}</div>
+									{dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
+									{onNodeClick && (
+										<button
+											type="button"
+											data-testid="graph-node-hit"
+											aria-label={`${n.label} (${STATUS_LABEL[n.status]}${hi ? ", current" : ""})`}
+											onClick={() => clickNode(n.id)}
+											className="absolute inset-0 cursor-pointer rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+										/>
+									)}
+								</li>
+							);
+						})}
+					</ul>
+				</div>
 			</div>
 		</div>
 	);
@@ -132,17 +139,25 @@ function usePan(enabled: boolean) {
 	const [dragging, setDragging] = useState(false);
 	const press = useRef<{ x: number; y: number; ox: number; oy: number; id: number } | null>(null);
 	const moved = useRef(false);
+	const pressSeq = useRef(0);
 	const clamp = (v: number, view: number, content: number) => (content <= view ? 0 : Math.min(0, Math.max(view - content, v)));
 	const handlers = enabled
 		? {
 				onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => {
 					if (e.button !== 0) return;
 					moved.current = false;
+					pressSeq.current++;
 					press.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y, id: e.pointerId };
 				},
 				onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => {
 					const p = press.current;
 					if (!p) return;
+					if (e.buttons === 0) {
+						press.current = null;
+						setDragging(false);
+						return;
+					}
+					if (e.pointerId !== p.id) return;
 					const dx = e.clientX - p.x;
 					const dy = e.clientY - p.y;
 					if (!moved.current) {
@@ -172,9 +187,15 @@ function usePan(enabled: boolean) {
 					}
 					press.current = null;
 					setDragging(false);
+					// the click that ends a real drag never comes when the release is off the node: do not leave `moved` set
+					const seq = pressSeq.current;
+					setTimeout(() => {
+						if (pressSeq.current === seq) moved.current = false; // not if a new press began meanwhile
+					}, 0);
 				},
 				onPointerCancel: () => {
 					press.current = null;
+					moved.current = false;
 					setDragging(false);
 				},
 			}
@@ -185,5 +206,11 @@ function usePan(enabled: boolean) {
 		moved.current = false;
 		return was;
 	};
-	return { ref, offset, dragging, handlers, consumeDrag };
+	/** The offset clamped to the current layout and box (a refetch or resize can leave the stored one out of view). */
+	const view = (cw: number, ch: number) => {
+		const box = ref.current;
+		if (!box) return offset; // first render: nothing to clamp against yet
+		return { x: clamp(offset.x, box.clientWidth ?? 0, cw), y: clamp(offset.y, box.clientHeight ?? 0, ch) };
+	};
+	return { ref, offset, view, dragging, handlers, consumeDrag };
 }

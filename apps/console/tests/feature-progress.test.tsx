@@ -89,6 +89,7 @@ describe("buildFeatureGraph", () => {
 	it("work item ids and work memory events are recognised", () => {
 		assert.equal(isWorkItemId("work-wolfpack-ASNQgEf"), true);
 		assert.equal(isWorkItemId("step-1"), false);
+		assert.equal(isWorkItemId("work-my-domain-ASNQgEf"), true, "a domain may contain a hyphen");
 		assert.equal(isWorkItemId("work-wolfpack-short"), false);
 		assert.equal(isWorkEvent({ type: "record_written", target: { kind: "work", workId: "x" } }), true);
 		assert.equal(isWorkEvent({ type: "observation_captured", target: { kind: "den" } }), false);
@@ -133,7 +134,7 @@ async function mountPanel(over: Partial<React.ComponentProps<typeof FeatureProgr
 	);
 }
 const ptr = (el: Element, type: string, x: number, y: number) =>
-	act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), { clientX: x, clientY: y, button: 0, pointerId: 1 })));
+	act(async () => void el.dispatchEvent(Object.assign(new dom.window.Event(type, { bubbles: true, cancelable: true }), { clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 1 })));
 
 describe("FeatureProgressPanel", () => {
 	it("is folded by default to the strip '<feature> · n/m done'; the loader shows only while busy", async () => {

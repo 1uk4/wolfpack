@@ -47,7 +47,7 @@ export function buildFeatureGraph(bound: WorkRecordResponse | null, feature: Wor
 export const featureStrip = (g: Extract<FeatureGraph, { kind: "graph" }>): string => `${g.title} · ${g.label}`;
 
 /** A work item id (`work-<domain>-<7 chars>`, the Work API's format). */
-export const isWorkItemId = (id: string): boolean => /^work-[a-z0-9]+-[0-9A-Za-z]{7}$/.test(id);
+export const isWorkItemId = (id: string): boolean => /^work-[a-z0-9-]+-[0-9A-Za-z]{7}$/.test(id);
 
 /** A memory event about a work item (a Record written, an observation tagged to it): the item's stage or tasks may have moved with it. */
 export function isWorkEvent(e: { type?: unknown; target?: unknown }): boolean {

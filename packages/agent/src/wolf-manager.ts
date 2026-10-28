@@ -475,13 +475,17 @@ WantedBy=multi-user.target
       if (await fs.access(saved).then(() => true, () => false)) {
         await fs.copyFile(saved, path.join(home, f));
         await exec("chown", [`${user}:${user}`, path.join(home, f)]);
-        if (f === "wolf.yaml") this.wolvesIndex.set(id, yamlParse(await fs.readFile(saved, "utf-8")) as WolfConfig);
+        if (f === "wolf.yaml") this.wolvesIndex.set(id, { ...(yamlParse(await fs.readFile(saved, "utf-8")) as WolfConfig), id });
       } else {
         console.warn(`[agent] ${id}: rollback has no saved ${f}; left as it is`);
       }
     }
     // The restored set is the known-good one.
-    await fs.rm(path.join(agentDir, PENDING_MARKER), { force: true });
+    const pendingFile = path.join(agentDir, PENDING_MARKER);
+    if (await fs.access(pendingFile).then(() => true, () => false)) {
+      console.warn(`[agent] ${id}: clearing .pending on rollback; the restored set was never verified healthy itself (it is the set before the failed sync)`);
+    }
+    await fs.rm(pendingFile, { force: true });
     await this.saveIndex();
     await this.restart(id);
   }

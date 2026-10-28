@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { selectMainModel, startRoot } from "./main-model.js";
-import { guardProviderStreams } from "./wolfd/models.js";
+import { createBridgeModels, guardProviderStreams } from "./wolfd/models.js";
 
 const MODEL = "claude-sonnet-5-5";
 const table = (transport: "api" | "subscription", model = MODEL) => ({ transport, tiers: { main: { model } } }) as never;
@@ -84,7 +84,7 @@ describe("selectMainModel", () => {
     c.fallBackToApi("test");
     expect(c.via).toBe("api");
     expect(c.models.getModel("anthropic", MODEL)?.provider).toBe("anthropic");
-    expect(c.models.getModel("claude-bridge", MODEL)).toBeUndefined();
+    expect(c.models.getModel("claude-bridge", MODEL)?.provider).toBe("anthropic"); // reverse alias
   });
 });
 
@@ -130,5 +130,36 @@ describe("guardProviderStreams: a throwing provider reports an error stream even
       expect(events[0]).toMatchObject({ type: "error", reason: "error", error: { stopReason: "error", errorMessage: "spawn failed" } });
       await expect(s.result()).resolves.toMatchObject({ stopReason: "error" });
     }
+  });
+});
+
+describe("aliases", () => {
+  it("on the API, a stored claude-bridge ref resolves to the anthropic model with the same id (no token / api transport)", async () => {
+    for (const c of [await selectMainModel({ ...base, table: table("subscription"), env: {} }), await selectMainModel({ ...base, table: table("api"), env: {} })]) {
+      expect(c.via).toBe("api");
+      expect(c.models.getModel("claude-bridge", MODEL)?.provider).toBe("anthropic");
+    }
+  });
+
+  it("an alias miss warns naming provider and id, once, and returns undefined", async () => {
+    const warn = vi.fn();
+    const c = await selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => fakeProvider(), warn });
+    expect(c.models.getModel("anthropic", "claude-haiku-4-5-20251001")).toBeUndefined();
+    c.models.getModel("anthropic", "claude-haiku-4-5-20251001");
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]![0])).toContain("anthropic/claude-haiku-4-5-20251001");
+    expect(String(warn.mock.calls[0]![0])).toContain("claude-bridge");
+  });
+});
+
+describe("guard through createBridgeModels", () => {
+  it("models.streamSimple on a bridge whose stream throws yields an error event", async () => {
+    const provider = fakeProvider([MODEL], () => { throw new Error("spawn failed"); });
+    const b = createBridgeModels({ cwd: "/tmp", createProvider: () => provider });
+    const model = b.models.getModel("claude-bridge", MODEL)!;
+    const s = (b.models as any).streamSimple(model, { messages: [] });
+    const events: any[] = [];
+    for await (const e of s) events.push(e);
+    expect(events[0]).toMatchObject({ type: "error", error: { errorMessage: "spawn failed" } });
   });
 });

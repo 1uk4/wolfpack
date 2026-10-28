@@ -72,4 +72,22 @@ describe("existing den with a root stored on provider anthropic", () => {
     expect(choice.models.getModel("anthropic", MODEL)?.provider).toBe("anthropic");
     await h.close(ctx);
   });
+
+  it("a root stored as claude-bridge boots on the API (rolled back / no token): the old ref resolves to anthropic", async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "den-fixture-"));
+    const bridgeModels = createModels();
+    bridgeModels.setProvider(bridgeProvider());
+    const h0 = await openHarness(bridgeModels);
+    const id = (await h0.root(ctx, { agent: { model: { provider: "claude-bridge", modelId: MODEL }, cwd: dir } } as never)).id;
+    await h0.close(ctx);
+
+    const choice = await selectMainModel({ cwd: dir, table: { transport: "subscription", tiers: { main: { model: MODEL } } } as never, env: {}, warn: () => {} });
+    expect(choice.via).toBe("api");
+    const h = await openHarness(choice.models as never);
+    const root = await startRoot(choice, (a) => h.root(ctx, { agent: { model: a.model, cwd: dir } } as never), undefined, ctx, { warn: () => {} });
+    expect(root.id).toBe(id);
+    expect(choice.models.getModel("claude-bridge", MODEL)?.provider).toBe("anthropic");
+    expect(() => h.resume()).not.toThrow();
+    await h.close(ctx);
+  });
 });

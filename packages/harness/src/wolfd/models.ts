@@ -50,7 +50,8 @@ export function createBridgeModels(opts: BuildWolfModelsOptions & { queryFn?: Cl
 /**
  * A provider's stream() must report failure as an `error` stream event, never by throwing or rejecting: on the VPS
  * harness an unhandled rejection exits the process (crash loop). The bridge already maps SDK errors to error events;
- * this covers a synchronous throw out of stream()/streamSimple() (and a stream that rejects before returning one).
+ * this covers ONLY a synchronous throw out of stream()/streamSimple(). It does not catch a rejection from a detached
+ * promise (the harness crash guard handles those after startup).
  */
 export function guardProviderStreams<P extends { stream: (...a: any[]) => any; streamSimple: (...a: any[]) => any }>(provider: P, ids: { provider: string; api?: string }): P {
   const guard = (orig: (...a: any[]) => any) => (model: any, ...rest: any[]) => {

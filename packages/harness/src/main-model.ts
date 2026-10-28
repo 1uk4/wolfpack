@@ -36,16 +36,34 @@ export interface SelectMainModelOptions {
   /** Test seams. */
   createProvider?: BuildWolfModelsOptions["createProvider"];
   loadSdkQuery?: () => Promise<unknown>;
+  warn?: (line: string) => void;
 }
 
-function facade(current: () => Models, alias: () => { from: string; to: string } | undefined): Models {
+/**
+ * Registry facade. `alias()` names the provider whose stored refs must resolve on the other one: on the bridge,
+ * "anthropic" refs map to claude-bridge; on the API, "claude-bridge" refs map to anthropic (a rolled-back or fallen-back
+ * wolf still holds conversations stored under the other name). A miss on the aliased lookup is never silent: neither
+ * provider has a resolver for non-table ids (dated snapshots such as claude-haiku-4-5-20251001), so it warns once
+ * naming the provider and id, and returns undefined.
+ */
+function facade(current: () => Models, alias: () => { from: string; to: string }, warn: (l: string) => void): Models {
+  const warned = new Set<string>();
   return new Proxy({} as Models, {
     get(_t, prop) {
       const target = current() as any;
       if (prop === "getModel") {
         return (provider: string, id: string) => {
           const a = alias();
-          return target.getModel(a && provider === a.from ? a.to : provider, id);
+          if (provider !== a.from) return target.getModel(provider, id);
+          const hit = target.getModel(a.to, id);
+          if (!hit) {
+            const key = `${provider}/${id}`;
+            if (!warned.has(key)) {
+              warned.add(key);
+              warn(`[harness] stored model ref ${provider}/${id} has no model "${id}" in the ${a.to} table; conversations using it will fail to resolve`);
+            }
+          }
+          return hit;
         };
       }
       const v = target[prop];
@@ -67,7 +85,7 @@ export async function selectMainModel(opts: SelectMainModelOptions): Promise<Mai
   };
   const choice: MainModelChoice = {
     via: "api",
-    models: facade(() => target, () => (bridge ? { from: "anthropic", to: BRIDGE_PROVIDER_ID } : undefined)),
+    models: facade(() => target, () => (bridge ? { from: "anthropic", to: BRIDGE_PROVIDER_ID } : { from: BRIDGE_PROVIDER_ID, to: "anthropic" }), (l) => (opts.warn ?? console.warn)(l)),
     model: { provider: "anthropic", modelId },
     line: "",
     shutdown: () => { const b = bridge; bridge = undefined; b?.shutdown(); },

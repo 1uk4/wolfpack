@@ -292,7 +292,11 @@ async function syncPiDurable(
   }
   console.log(c.green(`✓ ${cfg.name} is healthy after the restart`));
   // An agent without the route (older) keeps its rollback set unrotated, which is the safe side.
-  await client.confirmSync(wolf.id).catch((err) => console.error(c.dim(`  (could not confirm the sync to the agent: ${err})`)));
+  await client.confirmSync(wolf.id).catch((err) => {
+    console.error(c.yellow(`! Could not confirm the sync to the agent (${err}).`));
+    console.error(c.yellow(`  ${cfg.name} is healthy, but its rollback set (harness.prev.cjs, extensions.prev, config.prev) will NOT rotate on the next sync.`));
+    console.error(c.yellow(`  To clear it: update the agent on the host (confirm-sync route) and re-run \`wolfpack sync ${cfg.name}\`, or remove <wolf home>/agent/.pending on the host.`));
+  });
 
   // Librarian pi-durable wolves also need the standalone KB CLI shipped to
   // /opt/wolfpack-kb/cli.cjs (used by `wolfpack kb <cmd>` for admin ops like

@@ -1,14 +1,8 @@
 #!/usr/bin/env node
 
-// Early error catching
-process.on("uncaughtException", (err) => {
-  console.error("[harness] Uncaught exception:", err);
-  process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[harness] Unhandled rejection:", reason);
-  process.exit(1);
-});
+// Early error catching (unhandled rejections only exit before startup completes; see crash-guard.ts)
+import { installCrashGuard } from "../crash-guard.js";
+const crashGuard = installCrashGuard(process);
 
 console.log("[harness] Loading modules...");
 
@@ -30,6 +24,7 @@ if (process.argv.includes("--smoke") || process.env.WOLF_HARNESS_SMOKE === "1") 
 async function main() {
   console.log("[harness] Starting main...");
   const instance = await createWolfHarness();
+  crashGuard.markStarted();
   console.log("[harness] Wolf harness created");
   const context = BACKGROUND_CONTEXT;
 

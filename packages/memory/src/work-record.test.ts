@@ -312,8 +312,8 @@ describe("renderFeatureRecord", () => {
 // ── sources: where each Record line came from ────────────────────────────────
 
 describe("Record line sources", () => {
-  const tsObs = (work: string, ...contents: string[]) => contents.map((c, i) => ({ id: `id${i + 1}`, timestamp: `2026-10-27T10:0${i}:00Z`, content: c, work }));
-  const run = async (answer: unknown, body = "", observations = tsObs("work-a", "first", "second", "third"), prompts: string[] = []) => {
+  const tsObs = (work: string, ...contents: string[]): Array<{ id: string; timestamp?: string; content: string; work: string }> => contents.map((c, i) => ({ id: `id${i + 1}`, timestamp: `2026-10-27T10:0${i}:00Z`, content: c, work }));
+  const run = async (answer: unknown, body = "", observations: Array<{ id: string; timestamp?: string; content: string; work: string }> = tsObs("work-a", "first", "second", "third"), prompts: string[] = []) => {
     const { store, writes } = fakeStore({ "work-a": { body } });
     const engine = fakeEngine([answer as WorkRecord], prompts);
     const out = await consolidateWorkRecords({ engine, store, observations });

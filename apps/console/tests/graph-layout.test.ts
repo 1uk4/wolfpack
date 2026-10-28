@@ -38,24 +38,43 @@ describe("layoutGraph with slim", () => {
 	it("an all-sliver column is slimWidth wide and the next column starts 36 + gapX later", () => {
 		const l = layoutGraph(ids("a", "b", "c"), [{ from: "b", to: "a" }, { from: "c", to: "b" }], { slim: new Set(["a"]) });
 		const at = (id: string) => l.nodes.find((n) => n.id === id)!;
-		assert.equal(at("a").width, 36);
-		assert.equal(at("a").height, 8);
-		assert.equal(at("b").x, at("a").x + 36 + GX);
+		assert.equal(at("a").width, 64);
+		assert.equal(at("a").height, 18);
+		assert.equal(at("b").x, at("a").x + 64 + GX);
 		assert.equal(at("b").width, W);
-		assert.equal(l.width, 36 + GX + W + GX + W);
+		assert.equal(l.width, 64 + GX + W + GX + W);
 	});
 	it("sliver edge endpoints sit on the bar's middle and its right edge", () => {
 		const l = layoutGraph(ids("a", "b"), [{ from: "b", to: "a" }], { slim: new Set(["a"]) });
 		const a = l.nodes.find((n) => n.id === "a")!;
 		const e = l.edges[0]!;
 		assert.equal(e.x1, a.x + a.width);
-		assert.equal(e.y1, a.y + 4);
+		assert.equal(e.y1, a.y + 9);
 	});
 	it("a mixed column keeps the full width, with the 4px gap only next to a sliver", () => {
 		const l = layoutGraph(nodes, [], { slim: new Set(["m1"]) });
 		const col = ["a", "b", "c", "m1", "m2"].map((id) => l.nodes.find((n) => n.id === id)!);
 		assert.equal(col.every((n) => n.width === W), true);
 		const ys = col.map((n) => n.y);
-		assert.equal(ys.join(","), [0, H + GY, 2 * (H + GY), 2 * (H + GY) + H + 4, 2 * (H + GY) + H + 4 + 8 + 4].join(","));
+		assert.equal(ys.join(","), [0, H + GY, 2 * (H + GY), 2 * (H + GY) + H + 4, 2 * (H + GY) + H + 4 + 18 + 4].join(","));
+	});
+});
+describe("layoutGraph orderClass", () => {
+	const cls = new Map([["d", 3], ["s", 4], ["t", 2], ["b", 1], ["g", 0], ["t2", 2]]);
+	const list = ids("d", "s", "t", "b", "g", "t2");
+	it("orders a column doing < blocked < todo < done < skipped, stable within a class", () => {
+		const l = layoutGraph(list, [], { orderClass: cls });
+		const byY = [...l.nodes].sort((a, b) => a.y - b.y).map((n) => n.id).join(",");
+		assert.equal(byY, "g,b,t,t2,d,s");
+	});
+	it("is the input order without the option", () => {
+		const l = layoutGraph(list, []);
+		assert.equal([...l.nodes].sort((a, b) => a.y - b.y).map((n) => n.id).join(","), "d,s,t,b,g,t2");
+	});
+	it("edges follow the reordered nodes", () => {
+		const l = layoutGraph(ids("d", "g", "x"), [{ from: "x", to: "g" }], { orderClass: new Map([["d", 3], ["g", 0]]) });
+		const g = l.nodes.find((n) => n.id === "g")!;
+		assert.equal(g.y, 0);
+		assert.equal(l.edges[0]!.y1, g.y + g.height / 2);
 	});
 });

@@ -17,6 +17,8 @@ export interface GraphLayoutOptions {
 	slim?: ReadonlySet<string>;
 	slimHeight?: number;
 	slimWidth?: number;
+	/** Optional sort class per id (lower sits higher). Within each column nodes are ordered by it first, the normal order breaking ties. */
+	orderClass?: ReadonlyMap<string, number>;
 }
 
 export interface PlacedGraphNode {
@@ -89,8 +91,8 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 		rowCount.set(rank, col.length);
 	});
 	const slim = opts.slim ?? new Set<string>();
-	const slimHeight = opts.slimHeight ?? 8;
-	const slimWidth = opts.slimWidth ?? 36;
+	const slimHeight = opts.slimHeight ?? 18;
+	const slimWidth = opts.slimWidth ?? 64;
 	const slimGap = Math.min(gapY, 4);
 	// Column widths: a column of only slivers is narrow. Heights stack per column (a sliver is short, with a tight gap).
 	const colWidth: number[] = columns.map((col) => (col && col.length > 0 && col.every((id) => slim.has(id)) ? slimWidth : nodeWidth));
@@ -106,7 +108,8 @@ export function layoutGraph(nodes: ReadonlyArray<{ id: string }>, edges: readonl
 		if (!col) return;
 		let y = 0;
 		let prevSlim = false;
-		const ordered = [...col].sort((a, b) => row.get(a)! - row.get(b)!);
+		const cls = opts.orderClass;
+		const ordered = [...col].sort((a, b) => (cls ? (cls.get(a) ?? 0) - (cls.get(b) ?? 0) : 0) || row.get(a)! - row.get(b)!);
 		ordered.forEach((id, i) => {
 			const isSlim = slim.has(id);
 			if (i > 0) y += isSlim || prevSlim ? slimGap : gapY;

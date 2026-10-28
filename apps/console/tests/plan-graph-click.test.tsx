@@ -191,13 +191,15 @@ describe("canvas mode: slivers, free pan, re-center", () => {
 		edges: [{ from: "c", to: "a" }, { from: "c", to: "b" }],
 	};
 	const panX = () => Number(q('[data-testid="graph-pan"]')!.getAttribute("data-pan-x"));
-	it("done and archived nodes are label-less slivers with a title and aria-label; a click still reaches onNodeClick; edges still draw", async () => {
+	it("done and archived nodes are status-only slivers with a title and aria-label; a click still reaches onNodeClick; edges still draw", async () => {
 		const clicked: string[] = [];
 		await mount(<PlanGraphView draggable collapseDone graph={g} onNodeClick={(id) => clicked.push(id)} />);
 		for (const id of ["a", "b"]) {
 			const li = q(`[data-node-id="${id}"]`)!;
 			assert.equal(li.getAttribute("data-sliver"), "true");
-			assert.equal((li.textContent ?? "").trim(), "", "no visible text");
+			const text = (li.textContent ?? "").trim();
+			assert.equal(text, id === "a" ? "Done" : "Archived");
+			assert.equal(text.includes("Alpha") || text.includes("Beta"), false, "title not shown");
 			assert.ok((li.getAttribute("title") ?? "").length > 0);
 			assert.ok((li.querySelector('[data-testid="graph-node-hit"]')!.getAttribute("aria-label") ?? "").includes(id === "a" ? "Alpha done" : "Beta skipped"));
 		}
@@ -213,6 +215,20 @@ describe("canvas mode: slivers, free pan, re-center", () => {
 		assert.equal((q('[data-node-id="a"]')!.textContent ?? "").includes("depends on: Beta skipped"), true);
 		assert.equal(q('[data-node-id="a"]')!.getAttribute("aria-label"), null);
 		assert.equal((q('[data-node-id="a"] [data-testid="graph-node-hit"]')!.getAttribute("aria-label") ?? "").includes("Alpha done"), true);
+	});
+	it("orderByStatus sorts a column by status; without it the input order stays", async () => {
+		const col = { nodes: [
+			{ id: "s", label: "S", kind: "task", status: "skipped" as const },
+			{ id: "d", label: "D", kind: "task", status: "done" as const },
+			{ id: "t", label: "T", kind: "task", status: "todo" as const },
+			{ id: "b", label: "B", kind: "task", status: "blocked" as const },
+			{ id: "g", label: "G", kind: "task", status: "doing" as const },
+		], edges: [] };
+		const order = () => [...document.querySelectorAll('[data-testid="graph-node"]')].sort((x, y) => parseInt((x as HTMLElement).style.top) - parseInt((y as HTMLElement).style.top)).map((e) => e.getAttribute("data-node-id")).join(",");
+		await mount(<PlanGraphView draggable collapseDone orderByStatus graph={col} />);
+		assert.equal(order(), "g,b,t,d,s");
+		await act(async () => root!.render(<PlanGraphView draggable collapseDone graph={col} />));
+		assert.equal(order(), "s,d,t,b,g");
 	});
 	it("a refetch with a changed graph does not move the view", async () => {
 		await mount(<PlanGraphView draggable collapseDone graph={g} />);

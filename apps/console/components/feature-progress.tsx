@@ -223,6 +223,7 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 								<PlanGraphView
 									draggable
 									collapseDone
+									orderByStatus
 									graph={model.graph}
 									highlightId={model.boundId}
 									label={`Task graph: ${model.title}`}
@@ -266,7 +267,7 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 					)}
 				>
 					<div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border" data-testid="feature-progress-modal-body">
-						<PlanGraphView draggable collapseDone fill graph={model.graph} highlightId={model.boundId} label={`Task graph: ${model.title}`} onNodeClick={openTask} />
+						<PlanGraphView draggable collapseDone orderByStatus fill graph={model.graph} highlightId={model.boundId} label={`Task graph: ${model.title}`} onNodeClick={openTask} />
 					</div>
 				</OverlayShell>,
 				document.body,

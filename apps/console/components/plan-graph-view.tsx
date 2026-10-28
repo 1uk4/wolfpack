@@ -15,6 +15,8 @@ const CARD: Record<GraphNodeStatus, string> = {
 	blocked: "border-dashed border-red-400 bg-red-400/10 text-foreground",
 	skipped: "border-border bg-muted/40 text-muted-foreground opacity-60",
 };
+/** Top-to-bottom order inside a column when `orderByStatus`. */
+const STATUS_ORDER: Record<GraphNodeStatus, number> = { doing: 0, blocked: 1, todo: 2, done: 3, skipped: 4 };
 const DOT: Record<GraphNodeStatus, string> = {
 	todo: "border border-muted-foreground/60",
 	doing: "bg-sky-400",
@@ -32,8 +34,7 @@ const DOT: Record<GraphNodeStatus, string> = {
  * zoom, no node drag): dragging the background moves the graph with NO clamp at the edges, it starts centred on the
  * highlighted node (else the whole graph), and a small re-center button puts it back. A press that travels more than the
  * slop is never a node click. `fill` makes the box fill its parent (the full-screen modal) instead of being as tall as
- * the graph up to the panel cap. `collapseDone` draws done and skipped nodes as thin label-less bars (title on hover,
- * aria-label), packed tighter by the layout; the highlighted node always stays a full card. `toolbar` is extra
+ * the graph up to the panel cap. `collapseDone` draws done and skipped nodes as thin bars that show only "Done" / "Archived" (the title is in the tooltip and aria-label), packed tighter by the layout; the highlighted node always stays a full card. `orderByStatus` sorts each column doing, blocked, to do, done, skipped. `toolbar` is extra
  * controls placed beside the re-center button.
  */
 export function PlanGraphView({
@@ -43,6 +44,7 @@ export function PlanGraphView({
 	label,
 	draggable = false,
 	collapseDone = false,
+	orderByStatus = false,
 	fill = false,
 	toolbar,
 }: {
@@ -52,13 +54,15 @@ export function PlanGraphView({
 	label?: string;
 	draggable?: boolean;
 	collapseDone?: boolean;
+	orderByStatus?: boolean;
 	fill?: boolean;
 	toolbar?: ReactNode;
 }) {
 	const pan = usePan(draggable);
 	const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const slim = new Set(collapseDone ? graph.nodes.filter((n) => (n.status === "done" || n.status === "skipped") && n.id !== highlightId).map((n) => n.id) : []);
-	const layout = layoutGraph(graph.nodes, graph.edges, { slim });
+	const orderClass = orderByStatus ? new Map(graph.nodes.map((n) => [n.id, STATUS_ORDER[n.status]] as const)) : undefined;
+	const layout = layoutGraph(graph.nodes, graph.edges, { slim, orderClass });
 	const labelOf = new Map(graph.nodes.map((n) => [n.id, n.label] as const));
 	const dependsOn = new Map<string, string[]>();
 	for (const e of graph.edges) {
@@ -143,13 +147,19 @@ export function PlanGraphView({
 									title={n.detail ? `${n.label} — ${n.detail}` : n.label}
 									aria-label={sliver && !onNodeClick ? name : undefined}
 									className={cn(
-										sliver ? (n.status === "done" ? "absolute rounded-full bg-emerald-500/70" : "absolute rounded-full bg-muted-foreground/40") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
+										sliver ? cn("absolute flex items-center justify-center gap-0.5 overflow-hidden rounded-full text-[10px] font-medium leading-none", n.status === "done" ? "bg-emerald-500/70 text-emerald-950 dark:text-emerald-50" : "bg-muted-foreground/40 text-foreground/80") : "absolute flex flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-1.5",
 										!sliver && CARD[n.status],
 										hi && "border-yellow-400 shadow-[0_0_10px_1px_rgba(250,204,21,0.45)] ring-1 ring-yellow-400/70",
 									)}
 									style={{ left: p.x, top: p.y, width: p.width, height: p.height }}
 								>
 									{sliver && dependsOn.has(n.id) && <span className="sr-only">depends on: {dependsOn.get(n.id)!.join(", ")}</span>}
+									{sliver && (
+										<span className="flex items-center gap-0.5" aria-hidden>
+											{n.status === "done" && <CheckIcon className="size-2.5 shrink-0" />}
+											{n.status === "done" ? "Done" : "Archived"}
+										</span>
+									)}
 									{!sliver && (
 										<>
 											<div className="flex items-center gap-1.5 text-[10px] leading-none">

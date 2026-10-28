@@ -168,6 +168,22 @@ describe("splitFatEntry", () => {
     }
   });
 
+  it("hand-carries the parent's source-* properties to every shard (and no other property)", async () => {
+    const path = writeEntry("testdom", "kb-testdom-parent2", 18000);
+    writeFileSync(path, readFileSync(path, "utf-8").replace('  foo: "bar"\n', '  foo: "bar"\n  source-feature: "work-t-FEAT001"\n  source-record-lines: "a1b2c3d4, 0a0b0c0d"\n'));
+    const engine = fakeEngine([
+      { title: "Shard One", summary: "First half", body: "## Section A\n\n" + "x".repeat(500) },
+      { title: "Shard Two", summary: "Second half", body: "## Section B\n\n" + "y".repeat(500) },
+    ]);
+    const r = await splitFatEntry({ engine, roots, entryId: "kb-testdom-parent2" });
+    expect(r.shards).toHaveLength(2);
+    for (const sh of r.shards) {
+      const raw = readFileSync(join(roots.kbBase, "domains", "testdom", "entries", `${sh.entryId}.md`), "utf-8");
+      expect(raw).toContain('properties:\n  source-feature: "work-t-FEAT001"\n  source-record-lines: "a1b2c3d4, 0a0b0c0d"');
+      expect(raw).not.toContain("foo:");
+    }
+  });
+
   it("dryRun reports shards without touching disk", async () => {
     writeEntry("testdom", "kb-testdom-parent2", 18000);
     const engine = fakeEngine([

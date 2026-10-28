@@ -353,7 +353,8 @@ export const DISTILL_GRADUATION = `GRADUATION INPUT. When the input is headed "G
   or, when a fact was replaced: "- Until <YYYY-MM-DD>: <old>. Now <new>, because <why> (<work id>)". The work id appears ONLY at the end of a History line: never in a title, summary or body section, and never any other work id.
 - TOTALS: when the input lists TOTALS, every value (digits and unit) must appear unchanged in the contribution that reports the outcomes, in its body or History.
 - INITIATIVE: when the input has an INITIATIVE section, add exactly one more contribution about the initiative, with "initiative": true and slug "initiative". Its body is present tense: the initiative's goal and scope, the decisions that span its features, and what this work delivered, as part of the current state. Link to subject entries with [[kb-...]] ONLY for ids listed under KNOWN ENTRIES; with none listed, describe the subjects in words. When the INITIATIVE section says THIS ITEM, the graduating item is the initiative itself: write ONLY the initiative contribution. If the INITIATIVE is marked COMPLETE, say in the body that it is complete and what it achieved overall. A standing initiative never completes: its entry is a live page of the area. Its History line says what this work added, with the same work id. Every other contribution omits "initiative".
-Respond with the same JSON, where a contribution may carry "initiative": true.`;
+- RECORD LINES: the Record's lines are numbered [r1], [r2]…. For each contribution, list in "recordLines" the numbers of the Record lines it draws on, e.g. ["r2","r5"]. Never write [rN] in a title, summary or body.
+Respond with the same JSON, where a contribution may carry "initiative": true and "recordLines": [string].`;
 
 /**
  * stage: distill (graduation of a feature of a STANDING initiative) · appended after DISTILL_GRADUATION

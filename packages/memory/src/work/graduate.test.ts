@@ -52,7 +52,7 @@ describe("buildGraduationInput", () => {
     expect(plan).toContain("Use two panes.");
     expect(plan).not.toContain("Cache in the client");
     expect(plan).not.toContain("Add cache, shipped");
-    expect(text).toContain("RECORD:\n\n### Decisions\n\n- Cache in the client — why: round trips dominate.");
+    expect(text).toContain("RECORD:\n\n### Decisions\n\n- [r1] Cache in the client — why: round trips dominate.");
     expect(text).toContain("OUTCOMES:\n- Add cache, shipped 2026-10-15");
     expect(text).not.toContain("rollup:");
     expect(text).toContain("- Write compose file (shipped): file exists");

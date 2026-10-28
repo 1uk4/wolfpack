@@ -268,6 +268,10 @@ function rewriteShardFrontmatter(
     out.push(`summary: ${yamlQuote(shardSummary)}`);
   }
 
+  // The shard's file drops properties, but where the knowledge came from is the same for every shard: hand-carry source-*.
+  const carried = parentYaml.split("\n").filter((l) => /^  source-[a-z-]+:/.test(l));
+  if (carried.length > 0) out.push("properties:", ...carried);
+
   if (siblingIds.length > 0) {
     out.push("relations:");
     for (const sid of siblingIds) {

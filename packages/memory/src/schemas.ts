@@ -30,6 +30,8 @@ export const TopicActionSchema = z.object({
     .nullable()
     .optional(),
   reasoning: z.string(),
+  /** Durable consolidation: the [oN] numbers of the observations folded into this topic (provenance for the archive). */
+  sources: z.array(z.string()).nullish().transform((s) => s ?? []),
 });
 
 export type TopicAction = z.infer<typeof TopicActionSchema>;

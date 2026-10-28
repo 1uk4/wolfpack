@@ -12,8 +12,9 @@
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
-import { withSourceProperties } from "./source-props.js";
+import { patchSourceProperties, sourceDiffers, withSourceProperties } from "./source-props.js";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
@@ -763,6 +764,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
       // ── COMMIT (entry is live NOW) ──────────────────────────────────────
       // A decision the contribution agrees with is left exactly as it is.
       if (!unchanged) commitEntry(roots, entry);
+      else if (existingMarkdown && targetId && sourceDiffers(existingMarkdown, entry)) {
+        // The text is left as it is; only the code-set source properties move.
+        atomicWrite(join(entriesDir(roots, domain), `${targetId}.md`), patchSourceProperties(existingMarkdown, entry));
+      }
       committed = true;
       if (supersedes) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} supersedes decision ${supersedes} → new decision ${entry.id}`);
 

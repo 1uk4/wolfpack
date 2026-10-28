@@ -80,9 +80,10 @@ const list = (v: unknown): string[] | undefined => {
 /** The graduation provenance fields of a contribution's frontmatter (ids only; anything else is dropped). */
 function sourceFrom(fields: Record<string, unknown>): ParsedContribution["source"] {
   const feature = list(fields.source_feature)?.[0];
-  const tasks = list(fields.source_tasks);
-  const recordLines = list(fields.source_record_lines);
-  return feature || tasks || recordLines ? { ...(feature ? { feature } : {}), ...(tasks ? { tasks } : {}), ...(recordLines ? { recordLines } : {}) } : undefined;
+  const tasks = list(fields.source_tasks)?.slice(-50);
+  const recordLines = list(fields.source_record_lines)?.slice(-64);
+  const scope = String(fields.source_record_lines_scope ?? "") === "record" ? ("record" as const) : undefined;
+  return feature || tasks || recordLines ? { ...(feature ? { feature } : {}), ...(tasks ? { tasks } : {}), ...(recordLines ? { recordLines } : {}), ...(scope ? { recordLinesScope: scope } : {}) } : undefined;
 }
 
 function parseContribution(filePath: string, from: string): ParsedContribution {

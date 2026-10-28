@@ -53,6 +53,8 @@ export const DistillOutputSchema = z.object({
         initiative: z.boolean().optional(),
         /** Standing-feature graduation: the one contribution whose summary describes the feature itself. */
         feature: z.boolean().optional(),
+        /** Graduation: the [rN] numbers of the Record lines this contribution draws on. */
+        recordLines: z.array(z.string()).nullish().transform((r) => r ?? []),
         /** An id from EXISTING ENTRIES: the entry this contribution is about. Models
          *  often say "no existing entry" as null, so null means the same as absent. */
         target: z.string().nullish().transform((t) => t ?? undefined),
@@ -76,6 +78,8 @@ export interface DistilledContribution {
   feature?: boolean;
   /** The existing entry this contribution is about (always one of the offered ones). */
   target?: string;
+  /** Graduation: the [rN] numbers of the Record lines it draws on (empty: the model did not say). */
+  recordLines?: string[];
 }
 
 export interface DistillRecord {
@@ -187,9 +191,12 @@ function buildPrompt(input: DistillInput, failures?: LintFinding[], missing: str
   ].join("\n");
 }
 
+/** A Record line marker the model copied into its text: dropped (the numbers are for the audit only). */
+const stripMarkers = (t: string): string => t.replace(/[ \t]*\[r\d+\]/g, "");
+
 /** Body of a model contribution, normalized: no title line, no Detail wrapper, no repeated lede. */
 function cleanBody(summary: string, body: string): string {
-  const noTitle = body.replace(/^\s*# [^\n]*\n+/, "");
+  const noTitle = stripMarkers(body).replace(/^\s*# [^\n]*\n+/, "");
   return stripLedeRepeat(summary, stripDetailHeading(noTitle)).trim();
 }
 
@@ -262,8 +269,9 @@ export async function distillTopic(engine: Engine, input: DistillInput): Promise
       id: isInit ? grad!.initiativeTopicId! : isFeat ? input.id : plain++ === 0 ? input.id : `${input.id}~${slug}`,
       slug,
       title,
-      summary: c.summary,
+      summary: stripMarkers(c.summary),
       body: `# ${title}\n\n${body}\n`,
+      ...(c.recordLines?.length ? { recordLines: c.recordLines } : {}),
       ...(isInit ? { initiative: true } : {}),
       ...(isFeat ? { feature: true } : {}),
       // Confinement: only an offered entry can be a target; the initiative is anchored, never targeted.

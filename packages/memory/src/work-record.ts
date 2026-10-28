@@ -29,7 +29,7 @@
 import { z } from "zod";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
-import { formatSources, lineRef, numberRecordLines, parseRecordLines, stripSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
+import { formatSources, lineRef, noComments, numberRecordLines, parseRecordLines, stripSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
 
 // ── the Record section of a document ─────────────────────────────────────────
 
@@ -152,7 +152,7 @@ export const WorkRecordSchema = z.object({
 });
 export type WorkRecord = z.input<typeof WorkRecordSchema>;
 
-const one = (s: string) => s.replace(/\s+/g, " ").trim();
+const one = (s: string) => noComments(s).replace(/\s+/g, " ").trim();
 
 const GROUPS = ["Decisions", "Changes", "Findings", "Problems & fixes"] as const;
 
@@ -179,12 +179,14 @@ export interface RenderedLine {
   text: string;
   sources: SourceRef[];
   batch: boolean;
+  /** Refs omitted by the cap, now or in an earlier render. */
+  more?: number;
 }
 
 function renderLines(lines: RenderedLine[], withSources: boolean): string {
   const parts = GROUPS.map((name) => [name, lines.filter((l) => l.group === name)] as const)
     .filter(([, items]) => items.length > 0)
-    .map(([name, items]) => `### ${name}\n\n${items.map((i) => `- ${i.text}${withSources ? formatSources(i.sources, i.batch) : ""}`).join("\n")}`);
+    .map(([name, items]) => `### ${name}\n\n${items.map((i) => `- ${i.text}${withSources ? formatSources(i.sources, i.batch, i.more ?? 0) : ""}`).join("\n")}`);
   return [RECORD_HEADING, ...parts].join("\n\n");
 }
 
@@ -195,10 +197,22 @@ export function renderRecord(r: WorkRecord): string {
 
 const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+const words = (t: string) => new Set(norm(t).split(" ").filter((w) => w.length > 2));
+function similarity(a: string, b: string): number {
+  const x = words(a), y = words(b);
+  if (!x.size || !y.size) return 0;
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / (x.size + y.size - both);
+}
+/** A reworded line counts as the old one when this much of their words overlap. */
+const REWORD_MIN = 0.5;
+
 /**
  * Attach sources to the answer's lines. A line's refs resolve to the batch's observations (`oN`) and to the
- * sources of existing lines it carries over (`rN`). With no usable ref, a line whose text is an existing line
- * keeps that line's sources, and any other line gets the whole batch's (flagged `batch`).
+ * sources of existing lines it carries over (`rN`). A line with no `rN` that matches an existing line (same text, or
+ * a rewording of one in the same group by word overlap) keeps that line's sources; if it also names no `oN` it gets
+ * the whole batch's on top (flagged `batch`), unless the text is unchanged. A line matching nothing gets the batch.
  * A ref to an existing line without sources (an older Record) adds none: it is not blamed on the batch.
  */
 export function resolveSources(r: WorkRecord, current: RecordLine[], batch: SourceRef[]): RenderedLine[] {
@@ -207,23 +221,32 @@ export function resolveSources(r: WorkRecord, current: RecordLine[], batch: Sour
     const text = it.text.replace(/^\[[ro]\d+\]\s*/, "");
     const sources: SourceRef[] = [];
     let batchLevel = false;
-    let mapped = false;
+    let more = 0;
+    let usedBatch = false;
+    let mappedO = false;
+    let mappedR = false;
     const add = (refs: SourceRef[]) => {
       for (const ref of refs) if (!sources.some((s) => s.id === ref.id)) sources.push(ref);
     };
+    const carry = (l: RecordLine) => { add(l.sources); batchLevel ||= l.batch; more += l.more; };
     for (const f of it.from) {
       const m = /^\[?([ro])(\d+)\]?$/i.exec(f.trim());
       if (!m) continue;
       const n = Number(m[2]) - 1;
-      if (m[1].toLowerCase() === "o" && batch[n]) { mapped = true; add([batch[n]]); }
-      else if (m[1].toLowerCase() === "r" && current[n]) { mapped = true; add(current[n].sources); batchLevel ||= current[n].batch; }
+      if (m[1].toLowerCase() === "o" && batch[n]) { mappedO = true; add([batch[n]]); }
+      else if (m[1].toLowerCase() === "r" && current[n]) { mappedR = true; carry(current[n]); }
     }
-    if (!mapped) {
+    if (!mappedR) {
       const same = byText.get(norm(text));
-      if (same) { add(same.sources); batchLevel = same.batch; }
-      else { add(batch); batchLevel = true; }
+      if (same) { carry(same); usedBatch = true; } // unchanged: its own sources are the whole story
+      else {
+        const near = current.filter((l) => l.group === it.group).map((l) => [l, similarity(l.text, text)] as const).sort((a, b) => b[1] - a[1])[0];
+        if (near && near[1] >= REWORD_MIN) carry(near[0]); // a rewording keeps the line it replaced
+      }
     }
-    return { group: it.group, text, sources: sources.slice(-SOURCE_CAP), batch: batchLevel };
+    if (!mappedO && !mappedR && !usedBatch) { add(batch); batchLevel = true; }
+    const dropped = Math.max(0, sources.length - SOURCE_CAP);
+    return { group: it.group, text, sources: sources.slice(-SOURCE_CAP), batch: batchLevel, more: more + dropped };
   });
 }
 

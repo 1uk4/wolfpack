@@ -197,6 +197,7 @@ function render(c: Contribution): string {
     c.source?.feature ? `source_feature: ${c.source.feature}` : null,
     c.source?.tasks?.length ? `source_tasks: ${c.source.tasks.join(", ")}` : null,
     c.source?.recordLines?.length ? `source_record_lines: ${c.source.recordLines.join(", ")}` : null,
+    c.source?.recordLinesScope ? `source_record_lines_scope: ${c.source.recordLinesScope}` : null,
     `submitted: ${c.submitted}`,
     "---",
   ]

@@ -401,6 +401,17 @@ async function consolidatePoolInner(
   const denObs = refuseTagged(observations.filter((o) => !isTagged(o)), onProgress);
   let discarded = 0;
   const denHandled = (outcome: ArchiveOutcome): Handled[] => denObs.map((obs) => ({ obs, outcome, target: [...topics].join(",") || "skipped" }));
+  // Legacy mode: the model says which observations went into which topic ([oN]); a den observation is `promoted`
+  // only when its own topic emitted a claim, with that topic as the target. Unmapped ones stay `den`.
+  const written: Array<{ topic: string; nums: Set<number> }> = [];
+  const emittedTopics = new Set<string>();
+  const denOutcomes = (): Handled[] =>
+    denObs.map((obs, i) => {
+      const own = written.filter((w) => w.nums.has(i + 1)).map((w) => w.topic);
+      if (own.length === 0) return { obs, outcome: "den" as const, target: [...topics].join(",") || "skipped" };
+      const hit = own.find((t) => [...emittedTopics].some((e) => e === t || e.startsWith(`${t}~`)));
+      return hit ? { obs, outcome: "promoted" as const, target: hit } : { obs, outcome: "den" as const, target: own.join(",") };
+    });
   let recordsWritten = 0;
   let pending = 0;
   const workObs = observations.filter(isTagged);
@@ -475,9 +486,9 @@ async function consolidatePoolInner(
 
   // Build prompt (same format as Pi-CLI orchestrator)
   const obsLines = denObs
-    .map((o) => {
+    .map((o, i) => {
       const domainTag = o.domain ? ` [${o.domain}]` : "";
-      return `${o.timestamp}${domainTag}  ${o.content}`;
+      return `[o${i + 1}] ${o.timestamp}${domainTag}  ${o.content}`;
     })
     .join("\n");
 
@@ -494,7 +505,7 @@ Fold the observations into topics. For each group of related observations, decid
 Domain tags [domain] appear on observations. When creating or merging topics, set the domain field to the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.`;
 
   onProgress?.("Running LLM consolidation...");
-  let consolidateSystem = CONSOLIDATE_SYSTEM;
+  let consolidateSystem = `${CONSOLIDATE_SYSTEM}\n\nEach observation line starts with its number [oN]. For every action that writes a topic (merge or create), also return "sources": the numbers of the observations folded into it, e.g. ["o1","o4"].`;
   if (domainCtx) {
     consolidateSystem += `\n\nObservations carry domain tags [domain]. When creating or merging topics, set the domain field to match the dominant domain of the observations in that group. NEVER merge observations from different domains into the same topic.\n\n${domainCtx}`;
   }
@@ -551,6 +562,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
     });
 
     const res = action.result;
+    written.push({ topic: res.id, nums: new Set((action.sources ?? []).map((s) => Number(/\d+/.exec(s)?.[0])).filter((n) => n > 0)) });
     safely(() => config.onTopic?.({ id: res.id, domain: domainOf(res.domain), change, scope: "den", observationCount: denObs.length }));
     onProgress?.(`  ${change === "merge" ? "updated" : "created"}: ${action.result.title}`);
     if (action.result.body.length > TOPIC_SOFT_CAP) onProgress?.(`  topic over ${TOPIC_SOFT_CAP} chars (${action.result.body.length}): ${action.result.id} — should be split by subject`);
@@ -585,6 +597,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
       wolf: wolfName,
       defaultDomain,
       onProgress,
+      onEmit: (c) => emittedTopics.add(c.denTopicId),
       onHold: (t, reason) =>
         writeDenTopic(wolfDen, { ...t, updated: now, domain: t.domain, promotable: false, promotableReason: reason }),
     });
@@ -598,7 +611,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   renderDenIndex(wolfDen);
 
   // Archive processed observations (move to .memory/archive/)
-  await settlePool(wolfDen, [...handled, ...denHandled(claimsSubmitted > 0 ? "promoted" : "den")], onProgress);
+  await settlePool(wolfDen, [...handled, ...denOutcomes()], onProgress);
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 

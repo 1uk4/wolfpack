@@ -25,6 +25,7 @@ describe("sweep: graduated work", () => {
   const notes: string[] = [];
   const calls: Array<{ step: string; prompt: string }> = [];
   let subjectAnswer: () => unknown;
+  let produceProps: Record<string, string> = {};
   const inbox = () => join(roots.opsRoot, "inbox", "w1");
   const entries = () => join(roots.kbBase, "domains", "wp", "entries");
 
@@ -35,7 +36,7 @@ describe("sweep: graduated work", () => {
       if (step === "matchSubject") return schema.parse(subjectAnswer());
       return schema.parse({
         title: "Topic", kind: { type: "fact" }, summary: "s", detail: "## How\n\nd\n\n## History\n\n- 2026-10-22: changed (work-wp-FEAT001).",
-        confidence: "high", facets: {}, properties: {}, proposedRelations: [],
+        confidence: "high", facets: {}, properties: produceProps, proposedRelations: [],
       });
     }),
     usage: { summarize: () => ({}) },
@@ -64,6 +65,8 @@ describe("sweep: graduated work", () => {
     calls.length = 0;
     n = 0;
     subjectAnswer = () => ({ match: "new" });
+    produceProps = {};
+    calls.length = 0;
     base = mkdtempSync(join(tmpdir(), "kb-work-"));
     roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
     mkdirSync(inbox(), { recursive: true });
@@ -118,6 +121,54 @@ describe("sweep: graduated work", () => {
       dropSrc("work-wp-FEAT001", "source_feature: work-wp-FEAT001\nsource_record_lines: a1b2c3d4, 99998888\n", { anchor: "work-wp-FEAT001", verbatim: true });
       await run({});
       expect(props(only())).toEqual({ "source-feature": "work-wp-FEAT001", "source-record-lines": "a1b2c3d4, 99998888" });
+    });
+
+    it("the model never sees or sets source-*: hidden from the existing entry, echoes and edits discarded, no lint retry", async () => {
+      entry("kb-wp-CCCCCCC", 'properties:\n  source-feature: "work-wp-FEAT001"\n  source-record-lines: "11111111"\n  host: "x"\n');
+      dropSrc("work-wp-FEAT002", "source_feature: work-wp-FEAT002\nsource_record_lines: 22222222\n");
+      subjectAnswer = () => ({ match: "kb-wp-CCCCCCC" });
+      produceProps = { "source-feature": "work-wp-BOGUS99", "source-tasks": "work-wp-TASK999", "source-record-lines": "deadbeef", note: "kept" };
+      await run({ "kb-wp-CCCCCCC": 0.9 });
+      const prompt = produceCalls()[0].prompt;
+      expect(prompt).toContain("EXISTING ENTRY");
+      expect(prompt).not.toContain("source-");
+      expect(prompt).not.toContain("work-wp-FEAT001");
+      expect(prompt).toContain("host:");
+      expect(produceCalls()).toHaveLength(1); // a work id in source-* did not trigger a lint retry
+      const md = readFileSync(join(entries(), "kb-wp-CCCCCCC.md"), "utf8");
+      expect(props(md)).toEqual({ "source-feature": "work-wp-FEAT001, work-wp-FEAT002", "source-record-lines": "11111111, 22222222" });
+      expect(md).not.toContain("BOGUS");
+      expect(md).not.toContain("deadbeef");
+      expect(md).not.toContain("TASK999");
+    });
+
+    it("caps source-record-lines at the newest 64 and source-tasks at 50", async () => {
+      const refs = Array.from({ length: 80 }, (_, i) => (i + 0x10000000).toString(16));
+      const tasks = Array.from({ length: 60 }, (_, i) => `work-wp-T${String(i).padStart(6, "0")}`);
+      dropSrc("work-wp-FEAT001", `source_feature: work-wp-FEAT001\nsource_tasks: ${tasks.join(", ")}\nsource_record_lines: ${refs.join(", ")}\n`);
+      await run({});
+      const p = props(only());
+      expect(p["source-record-lines"].split(", ")).toEqual(refs.slice(-64));
+      expect(p["source-tasks"].split(", ")).toEqual(tasks.slice(-50));
+    });
+
+    it("scope `record` is written", async () => {
+      dropSrc("work-wp-FEAT001", "source_feature: work-wp-FEAT001\nsource_record_lines: a1b2c3d4\nsource_record_lines_scope: record\n", { anchor: "work-wp-FEAT001", verbatim: true });
+      await run({});
+      expect(props(only())["source-record-lines-scope"]).toBe("record");
+    });
+
+    it("an unchanged verbatim re-send still commits changed source-* values (and nothing else)", async () => {
+      const fixed = (src: string) => writeFileSync(join(inbox(), `fixed-${++n}.md`), `---\nfrom: w1\nden_topic_id: work-wp-FEAT001\ncontent_hash: c0de${n.toString(16)}\nprev_hash: null\ndomain_hint: wp\nanchor: work-wp-FEAT001\nverbatim: true\n${src}---\n\n# A rule\n\nsame body\n`);
+      fixed("source_feature: work-wp-FEAT001\nsource_record_lines: a1b2c3d4\n");
+      await run({});
+      const id = readdirSync(entries()).find((f) => !f.startsWith("kb-wp-AAAAAAA") && !f.startsWith("kb-wp-BBBBBBB"))!;
+      const before = readFileSync(join(entries(), id), "utf8");
+      fixed("source_feature: work-wp-FEAT001\nsource_record_lines: 99998888\n");
+      await run({ [id.slice(0, -3)]: 0.3 });
+      const after = readFileSync(join(entries(), id), "utf8");
+      expect(props(after)["source-record-lines"]).toBe("a1b2c3d4, 99998888");
+      expect(after.replace(/^  source-.*\n/gm, "")).toBe(before.replace(/^  source-.*\n/gm, ""));
     });
 
     it("a contribution without source leaves the entry's properties alone; unsafe values are dropped at intake", async () => {

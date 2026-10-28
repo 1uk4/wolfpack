@@ -92,6 +92,8 @@ export const ContributionSchema = z.object({
       tasks: z.array(z.string()).optional(),
       /** Record line refs (8 hex of the line's group and text; see record-sources in the memory package). */
       recordLines: z.array(z.string()).optional(),
+      /** `record`: recordLines is the whole Record, not only the lines that fed this entry. */
+      recordLinesScope: z.literal("record").optional(),
     })
     .optional(),
 });

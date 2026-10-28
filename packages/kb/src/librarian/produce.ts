@@ -3,6 +3,7 @@
  * curated entry. On merge, feed it only the delta + the existing entry so the
  * call stays bounded and cheap (don't re-generate unchanged prose).
  */
+import { dropSourceProps, hideSourceProperties } from "./source-props.js";
 import type { Engine } from "@wolfpack/engine";
 import { parseFrontmatter, PRODUCE_SYSTEM } from "@wolfpack/engine";
 import type { ParsedContribution } from "../shared/index.js";
@@ -97,7 +98,7 @@ export function lintOpinion(o: LlmOpinion, previous: string | undefined, liveIds
   // The History heading stays: it tells the lint where History lines begin.
   const body = o.detail.split("\n").filter((l) => !old.has(l.trim()) || /^## History[ \t]*$/.test(l)).join("\n");
   // Content checks look at what is new; size counts the whole entry the reader gets.
-  const fresh = lintKnowledge({ title: o.title, summary: o.summary, body, properties: o.properties, cap: Infinity, liveIds });
+  const fresh = lintKnowledge({ title: o.title, summary: o.summary, body, properties: dropSourceProps(o.properties), cap: Infinity, liveIds });
   const size = lintKnowledge({ body: o.detail, extraChars: o.summary.length }).filter((f) => f.code === "oversize");
   return [...fresh, ...size];
 }
@@ -128,7 +129,7 @@ export async function produceEntry(
     contribution.summary,
     "",
     contribution.body,
-    existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${existingMarkdown}` : "",
+    existingMarkdown ? `\nEXISTING ENTRY (${entryId}):\n${hideSourceProperties(existingMarkdown)}` : "",
     `\nCONTRIBUTION DATE: ${contribution.sourceUpdated ?? now().slice(0, 10)}`,
     `ACTION: ${action}`,
     allowOverflow
@@ -166,7 +167,7 @@ export async function produceEntry(
       const dd = dedupeDetail(detail, keepHistory, o.overflow.detail);
       detail = dd.detail;
     }
-    return LlmOpinion.parse({ ...o, summary, properties: stripProperties(o.properties), detail });
+    return LlmOpinion.parse({ ...o, summary, properties: dropSourceProps(stripProperties(o.properties)), detail });
   };
 
   // Last line of defence against changelog content: lint, ONE retry with the

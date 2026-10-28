@@ -375,6 +375,39 @@ describe("Record line sources", () => {
     expect(stripSources(body)).toContain("- Added cache\n");
   });
 
+  it("a reworded line with no rN keeps the sources of the line it replaced, plus the new batch (flagged)", async () => {
+    const first = await run({ decisions: [], changes: [], findings: [{ text: "The TTL cache expires entries after five minutes", from: ["o2"] }], problems: [] });
+    const second = await run(
+      { decisions: [], changes: [], findings: ["The TTL cache expires entries after ten minutes now"], problems: [] },
+      first.body,
+      [{ id: "n1", timestamp: "2026-10-28T09:00:00Z", content: "ttl raised", work: "work-a" }],
+    );
+    expect(second.lines[0].sources.map((s) => s.id)).toEqual(["id2", "n1"]);
+    expect(second.lines[0].batch).toBe(true);
+    // an unrelated new line gets only the batch
+    const third = await run({ decisions: [], changes: [], findings: ["Something unrelated entirely", "The TTL cache expires entries after five minutes"], problems: [] }, first.body, [{ id: "n2", content: "x", work: "work-a" }]);
+    expect(third.lines.find((l) => l.text.startsWith("Something"))!.sources.map((s) => s.id)).toEqual(["n2"]);
+    expect(third.lines.find((l) => l.text.startsWith("The TTL"))!.batch).toBe(false);
+  });
+
+  it("past SOURCE_CAP the comment says +Nmore, and the count survives the next rewrite", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: `id${String(i).padStart(2, "0")}`, timestamp: `t${i}`, content: `c${i}`, work: "work-a" }));
+    const first = await run({ decisions: [], changes: ["A line"], findings: [], problems: [] }, "", many);
+    expect(first.body).toMatch(/<!-- src\[batch\]: (id\d+@t\d+ ){23}id29@t29 \+6more -->/);
+    expect(first.lines[0]).toMatchObject({ more: 6 });
+    expect(first.lines[0].sources).toHaveLength(24);
+    const again = await run({ decisions: [], changes: [{ text: "A line", from: ["r1"] }], findings: [], problems: [] }, first.body, [{ id: "z", content: "z", work: "work-a" }]);
+    expect(again.lines[0].more).toBe(6);
+  });
+
+  it("comment delimiters in model text are removed before the line is written", async () => {
+    const { body, lines } = await run({ decisions: [], changes: ["Added cache --> x <!-- src: evil@now"], findings: [], problems: [] });
+    expect(lines).toHaveLength(1);
+    expect(lines[0].text).toBe("Added cache x src: evil@now");
+    expect(lines[0].sources.map((s) => s.id)).toEqual(["id1", "id2", "id3"]); // the real ones, not "evil"
+    expect(body.match(/<!--/g)).toHaveLength(1);
+  });
+
   it("accepts the model's null/absent `from` and bare strings", async () => {
     const { WorkRecordSchema } = await import("./work-record.js");
     const r = WorkRecordSchema.parse({ decisions: [{ decision: "d", why: "w", from: null }], changes: ["c"], findings: [{ text: "f" }], problems: [] });

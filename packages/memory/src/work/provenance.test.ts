@@ -17,9 +17,9 @@ const w = (id: string, kind: string, partOf: string | null, extra: Record<string
   ({ id, kind, title: id, partOf, domain: "wp", stage: "shipped", successCriteria: null, created: "2026-10-14", log: [], dependsOn: [], graduated: null, container: false, ...extra }) as unknown as WorkItem;
 
 const PLAN = "## Plan\n\nDo the thing.\n\n";
-const subject = (workId: string) => ({ slug: "rule", title: "A lasting rule", summary: "How X works.", body: `## Rule\n\nAlways.\n\n## History\n\n- 2026-10-22: chose X (${workId})` });
-const engineOf = () => {
-  const call = vi.fn(async (_s: string, schema: { parse: (v: unknown) => unknown }, o: { prompt: string }) => schema.parse({ contributions: [subject(/WORK ID: (\S+)/.exec(o.prompt)?.[1] ?? "work-wp-FEAT001")] }));
+const subject = (workId: string, recordLines?: string[]) => ({ slug: "rule", title: "A lasting rule", summary: "How X works.", body: `## Rule\n\nAlways [r2].\n\n## History\n\n- 2026-10-22: chose X (${workId})`, ...(recordLines ? { recordLines } : {}) });
+const engineOf = (recordLines?: string[]) => {
+  const call = vi.fn(async (_s: string, schema: { parse: (v: unknown) => unknown }, o: { prompt: string }) => schema.parse({ contributions: [subject(/WORK ID: (\S+)/.exec(o.prompt)?.[1] ?? "work-wp-FEAT001", recordLines)] }));
   return { engine: { call, usage: { summarize: () => ({}) } } as unknown as Engine, call };
 };
 
@@ -82,6 +82,8 @@ describe("graduated entries point back to the Record lines and the archived obse
     expect(md).not.toContain("<!--");
     const refs = field(md, "source_record_lines")!.split(", ");
     expect(refs).toHaveLength(2);
+    expect(field(md, "source_record_lines_scope")).toBe("record"); // the model mapped no lines: the whole Record
+    expect(md).not.toContain("[r2]"); // marker the model echoed is removed
 
     const lines = refs.map((r) => findRecordLine(bodies[feat.id as string], r)!);
     expect(lines.map((l) => l.text)).toEqual(["Chose X — why: simple", "Y is slow"]);
@@ -90,6 +92,27 @@ describe("graduated entries point back to the Record lines and the archived obse
     expect(walked.map((e) => e.content)).toEqual(["observation 0", "observation 1", "observation 2"]);
     expect(walked.every((e) => e.outcome === "written" && e.target === feat.id)).toBe(true);
     expect(walked.map((e) => e.work)).toEqual([t1.id, t1.id, t2.id]);
+  });
+
+  it("when distill maps the entry to Record lines, source-record-lines is just those; the archived document keeps its Record with the comments", async () => {
+    const ids = await writeRecord();
+    const before = bodies[feat.id as string];
+    const { engine, call } = engineOf(["r2"]);
+    const p = await previewGraduation({ client: client([feat, t1, t2]), engine, id: feat.id as string, today: "2026-10-22" });
+    expect((call.mock.calls[0] as any)[2].prompt).toContain("- [r1] Chose X");
+    expect((call.mock.calls[0] as any)[2].prompt).toContain("- [r2] Y is slow");
+    expect((call.mock.calls[0] as any)[2].prompt).not.toContain("<!--");
+    await confirmGraduation({ client: client([feat, t1, t2]), roots, wolf: "owner", preview: p, ship: async () => {} });
+    const md = sent()[0];
+    const refs = field(md, "source_record_lines")!.split(", ");
+    expect(refs).toHaveLength(1);
+    expect(field(md, "source_record_lines_scope")).toBeUndefined();
+    const line = findRecordLine(bodies[feat.id as string], refs[0])!;
+    expect(line.text).toBe("Y is slow");
+    expect(line.sources.map((s) => s.id)).toEqual([ids[2]]);
+    // graduation never writes the document (the client has no way to): the Record and its comments are still there
+    expect(bodies[feat.id as string]).toBe(before);
+    expect(bodies[feat.id as string]).toContain("<!-- src:");
   });
 
   it("a confirm that re-distills after a late fold carries the same source metadata, with the new line", async () => {

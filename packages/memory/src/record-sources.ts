@@ -26,12 +26,21 @@ export const SOURCE_CAP = 24;
 
 const COMMENT = /[ \t]*<!-- src(\[batch\])?: ([^>]*?) -->[ \t]*$/;
 
+/** Model text goes into a line verbatim: a comment delimiter in it would open or close the sources comment. */
+export const noComments = (s: string): string => s.replace(/<!--|-->/g, "").replace(/[ \t]{2,}/g, " ");
+
 const clean = (s: string) => s.replace(/\s+/g, "_").replace(/--+/g, "-").replace(/[<>]/g, "");
 
-export function formatSources(refs: SourceRef[], batch: boolean): string {
+/**
+ * The comment for a line. Beyond SOURCE_CAP the newest refs are kept and the rest are counted (`+Nmore`) so the
+ * truncation is visible; the omitted observations are still in the archive. `more` is what earlier renders already omitted.
+ */
+export function formatSources(refs: SourceRef[], batch: boolean, more = 0): string {
   if (refs.length === 0) return "";
   const kept = refs.slice(-SOURCE_CAP);
-  return ` <!-- src${batch ? "[batch]" : ""}: ${kept.map((r) => (r.timestamp ? `${clean(r.id)}@${clean(r.timestamp)}` : clean(r.id))).join(" ")} -->`;
+  const omitted = more + refs.length - kept.length;
+  const parts = kept.map((r) => (r.timestamp ? `${clean(r.id)}@${clean(r.timestamp)}` : clean(r.id)));
+  return ` <!-- src${batch ? "[batch]" : ""}: ${parts.join(" ")}${omitted > 0 ? ` +${omitted}more` : ""} -->`;
 }
 
 /** The text without source comments (what the agent and the model see). */
@@ -52,10 +61,12 @@ export interface RecordLine {
   sources: SourceRef[];
   /** The sources are the batch's, not the line's own (see the header). */
   batch: boolean;
+  /** Refs older than the ones listed, omitted by the cap (they are in the archive). */
+  more: number;
 }
 
 function parseRefs(s: string): SourceRef[] {
-  return s.split(/\s+/).filter(Boolean).map((p) => {
+  return s.split(/\s+/).filter((p) => p && !/^\+\d+more$/.test(p)).map((p) => {
     const at = p.indexOf("@");
     return at < 0 ? { id: p } : { id: p.slice(0, at), timestamp: p.slice(at + 1) };
   });
@@ -71,7 +82,7 @@ export function parseRecordLines(record: string): RecordLine[] {
     if (!line.startsWith("- ")) continue;
     const m = COMMENT.exec(line);
     const text = (m ? line.slice(0, m.index) : line).slice(2).trim();
-    out.push({ group, text, ref: lineRef(group, text), sources: m ? parseRefs(m[2]) : [], batch: !!m?.[1] });
+    out.push({ group, text, ref: lineRef(group, text), sources: m ? parseRefs(m[2]) : [], batch: !!m?.[1], more: Number(/\+(\d+)more/.exec(m?.[2] ?? "")?.[1] ?? 0) });
   }
   return out;
 }

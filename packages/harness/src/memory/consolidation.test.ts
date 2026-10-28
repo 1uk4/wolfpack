@@ -61,6 +61,29 @@ describe("consolidatePool reconcile (pi-durable promote)", () => {
     expect(prompt).not.toContain("absorbed body");
   });
 
+  it("archives a den observation as promoted only when its own topic emitted a claim (target = that topic); the rest as den", async () => {
+    pool(6);
+    const engine = {
+      call: async (step: string, schema: { parse: (v: unknown) => unknown }, opts: { prompt: string }) => {
+        if (step === "distill") {
+          if (/^TOPIC TITLE: Beta/m.test(opts.prompt)) throw new Error("model down"); // Beta's claim never goes out
+          return schema.parse({ contributions: [{ slug: "main", title: /^TOPIC TITLE: (.*)$/m.exec(opts.prompt)?.[1] ?? "Topic", summary: "s", body: "## Details\nbody" }] });
+        }
+        expect(opts.prompt).toContain("[o1] ");
+        return schema.parse({ actions: [
+          { sessionTopicId: "alpha", action: "create", reasoning: "r", sources: ["o1", "o2", "o3"], result: { id: "alpha", title: "Alpha", summary: "s", body: "b1", domain: "personal" } },
+          { sessionTopicId: "beta", action: "create", reasoning: "r", sources: ["o4", "o5"], result: { id: "beta", title: "Beta", summary: "s", body: "b2", domain: "personal" } },
+        ] });
+      },
+    } as unknown as Engine;
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, kbRoots: roots, defaultDomain: "personal", domains: ["personal"], engine });
+    const by = Object.fromEntries(readArchive(den).map((e) => [e.content.slice(0, 13).trim(), e]));
+    expect(Object.keys(by)).toHaveLength(6);
+    for (const c of ["observation 0", "observation 1", "observation 2"]) expect(by[c]).toMatchObject({ outcome: "promoted", target: "alpha" });
+    for (const c of ["observation 3", "observation 4"]) expect(by[c]).toMatchObject({ outcome: "den", target: "beta" });
+    expect(by["observation 5"].outcome).toBe("den"); // the model did not place it
+  });
+
   it("keeps only subscribed domains as the hint; invented tags fall back to the default", async () => {
     pool(6);
     const engine = {

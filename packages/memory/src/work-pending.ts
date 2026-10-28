@@ -3,7 +3,7 @@
  * Everything lives under `<root>/.memory/pool/` (root = the wolf's den): the observation archive and `work-state.json`.
  * State is advisory: any read/write failure degrades to "no state" and never blocks consolidation.
  */
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { observationHash } from "./observation-id.js";
 
@@ -24,7 +24,9 @@ export const archivePath = (root: string): string => join(poolDir(root), "archiv
 /**
  * What became of an observation that left the pool:
  * written (folded into a Record), discarded (its item is archived or deleted), den (folded into a den or
- * session topic), promoted (its topic was distilled to the KB).
+ * session topic), promoted (its own topic emitted a KB claim; target = that topic). Only the durable (harness)
+ * consolidation can say which topic an observation fed; the pi path folds into session topics that are promoted
+ * later and archives as `den` only.
  */
 export type ArchiveOutcome = "written" | "discarded" | "den" | "promoted";
 
@@ -51,36 +53,109 @@ export interface ArchiveItem {
   target: string;
 }
 
+/** The archive rotates to `archive-<n>.jsonl` when `archive.jsonl` reaches this size (WOLF_ARCHIVE_ROTATE_BYTES overrides). */
+export const ARCHIVE_ROTATE_BYTES = 20 * 1024 * 1024;
+const rotateBytes = (): number => Number(process.env.WOLF_ARCHIVE_ROTATE_BYTES) || ARCHIVE_ROTATE_BYTES;
+
+/** Rotated files, oldest first, then the live one. */
+export function archiveFiles(root: string): string[] {
+  let names: string[] = [];
+  try { names = readdirSync(poolDir(root)); } catch { /* none yet */ }
+  const rotated = names
+    .map((n) => /^archive-(\d+)\.jsonl$/.exec(n))
+    .filter((m): m is RegExpExecArray => !!m)
+    .sort((a, b) => Number(a[1]) - Number(b[1]))
+    .map((m) => join(poolDir(root), m[0]));
+  return [...rotated, archivePath(root)];
+}
+
+const sizeOf = (f: string): number => { try { return statSync(f).size; } catch { return 0; } };
+
+// A <id>:<outcome> index per archive, built once per process and rebuilt when the files changed under us
+// (another process appended, or the file rotated): the key is the files' names and sizes.
+const indexes = new Map<string, { sig: string; keys: Set<string> }>();
+const signature = (root: string): string => archiveFiles(root).map((f) => `${f}:${sizeOf(f)}`).join("|");
+function keyIndex(root: string): Set<string> {
+  const sig = signature(root);
+  const hit = indexes.get(root);
+  if (hit && hit.sig === sig) return hit.keys;
+  const keys = new Set(readArchive(root).map((e) => `${e.id}\u0000${e.outcome}`));
+  indexes.set(root, { sig, keys });
+  return keys;
+}
+
+/** A small cross-process lock for read-dedupe-append (sync: the section is a few milliseconds). */
+function withArchiveLock<T>(root: string, op: () => T): T {
+  const lock = join(poolDir(root), "archive.lock");
+  const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  let held = false;
+  for (let i = 0; i < 200 && !held; i++) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: "wx" });
+      held = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try { if (Date.now() - statSync(lock).mtimeMs > 30_000) unlinkSync(lock); } catch { /* raced */ }
+      sleep(10);
+    }
+  }
+  try {
+    return op();
+  } finally {
+    if (held) try { unlinkSync(lock); } catch { /* gone */ }
+  }
+}
+
 /**
  * Append observations that left the pool to the archive; guarded: a failed append is reported, never thrown.
- * An observation already archived with the same outcome is not written twice (a settle that failed halfway reruns safely).
+ * Under a lock, an observation already archived with the same outcome is skipped (a settle that failed halfway
+ * reruns safely); a torn last line is terminated before appending; a full file rotates first.
  */
 export function appendArchive(root: string, items: ArchiveItem[], onError?: (msg: string) => void): boolean {
   if (items.length === 0) return true;
   try {
     mkdirSync(poolDir(root), { recursive: true });
-    const at = new Date().toISOString();
-    const have = new Set(readArchive(root).map((e) => `${e.id}\u0000${e.outcome}`));
-    const lines: string[] = [];
-    for (const { obs, id, outcome, target } of items) {
-      const oid = id ?? observationHash(obs);
-      const key = `${oid}\u0000${outcome}`;
-      if (have.has(key)) continue;
-      have.add(key);
-      const e: ArchiveEntry = {
-        id: oid,
-        timestamp: obs.timestamp ?? "",
-        recordedAt: obs.recordedAt ?? "",
-        content: obs.content,
-        ...(obs.work ? { work: obs.work } : {}),
-        ...(obs.feature ? { feature: obs.feature } : {}),
-        outcome,
-        target,
-        at,
-      };
-      lines.push(JSON.stringify(e) + "\n");
-    }
-    if (lines.length > 0) appendFileSync(archivePath(root), lines.join(""));
+    withArchiveLock(root, () => {
+      const at = new Date().toISOString();
+      const keys = keyIndex(root);
+      const lines: string[] = [];
+      for (const { obs, id, outcome, target } of items) {
+        const oid = id ?? observationHash(obs);
+        const key = `${oid}\u0000${outcome}`;
+        if (keys.has(key)) continue;
+        keys.add(key);
+        const e: ArchiveEntry = {
+          id: oid,
+          timestamp: obs.timestamp ?? "",
+          recordedAt: obs.recordedAt ?? "",
+          content: obs.content,
+          ...(obs.work ? { work: obs.work } : {}),
+          ...(obs.feature ? { feature: obs.feature } : {}),
+          outcome,
+          target,
+          at,
+        };
+        lines.push(JSON.stringify(e) + "\n");
+      }
+      if (lines.length === 0) return;
+      const file = archivePath(root);
+      if (sizeOf(file) >= rotateBytes()) {
+        const n = Math.max(0, ...archiveFiles(root).map((f) => Number(/archive-(\d+)\.jsonl$/.exec(f)?.[1] ?? 0))) + 1;
+        renameSync(file, join(poolDir(root), `archive-${n}.jsonl`));
+      }
+      let prefix = "";
+      const size = sizeOf(file);
+      if (size > 0) {
+        const fd = openSync(file, "r");
+        try {
+          const b = Buffer.alloc(1);
+          readSync(fd, b, 0, 1, size - 1);
+          if (b[0] !== 10) prefix = "\n"; // a torn line: end it so the next entry stands alone
+        } finally { closeSync(fd); }
+      }
+      appendFileSync(file, prefix + lines.join(""));
+      indexes.set(root, { sig: signature(root), keys });
+    });
     return true;
   } catch (err) {
     onError?.(`observation archive not written: ${err instanceof Error ? err.message : String(err)}`);
@@ -104,11 +179,11 @@ function readJsonl(file: string): Array<Record<string, unknown>> {
 }
 
 /**
- * The archive, oldest first. The old `discarded.jsonl` is read too (its lines become `discarded` entries) when it
- * exists and the archive does not already hold the observation.
+ * The archive, oldest first, across rotated files. The old `discarded.jsonl` is read too (its lines become
+ * `discarded` entries) when it exists and the archive does not already hold the observation. Torn lines are skipped.
  */
 export function readArchive(root: string): ArchiveEntry[] {
-  const out = readJsonl(archivePath(root)) as unknown as ArchiveEntry[];
+  const out = archiveFiles(root).flatMap((f) => readJsonl(f)) as unknown as ArchiveEntry[];
   const legacy = readJsonl(discardLogPath(root));
   if (legacy.length === 0) return out;
   const have = new Set(out.map((e) => `${e.id}\u0000${e.outcome}`));

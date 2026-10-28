@@ -35,7 +35,7 @@ import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpa
 import { deliveredBullets, mergeDelivered, parseKbNotes, resolveRetiredIds, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
 import { distillTopic, existingFor, type DistilledContribution } from "../distill.js";
 import { extractRecord, recordLines as recordLinesOf, withoutRecord } from "../work-record.js";
-import { stripSources } from "../record-sources.js";
+import { numberRecordLines, stripSources } from "../record-sources.js";
 import { staleBuildWarning } from "./build-stamp.js";
 import { hasRollupZone, outcomesText, stripRollupMarkers, totalsText, totalsValues, withoutRollup } from "./rollup.js";
 import { scanSecrets } from "./secrets.js";
@@ -178,7 +178,7 @@ export function buildGraduationInput(opts: {
     }
   }
   if (plan) lines.push("", "PLAN (written before the work; may be outdated, the Record and Outcomes win):", clip(plan, SECTION_CAP));
-  if (record) lines.push("", clip(record.replace(/^## Record/, "RECORD:"), SECTION_CAP));
+  if (record) lines.push("", clip(numberRecordLines(record).replace(/^## Record/, "RECORD:"), SECTION_CAP));
   if (outcomes) lines.push("", "OUTCOMES:", clip(outcomes, SECTION_CAP));
   if (totals.length) {
     lines.push("", "TOTALS (each value must appear unchanged in what you write):", ...totals.map((t) => `- ${t.key}: ${t.value}`));
@@ -248,7 +248,7 @@ export interface PreviewContribution {
   /** A standing feature's own entry: stored verbatim, pinned to the item, grouped under the initiative. */
   feature?: boolean;
   /** Provenance copied to the entry's properties: the item, its tasks, the Record lines (see sourceOf). */
-  source?: { feature?: string; tasks?: string[]; recordLines?: string[] };
+  source?: { feature?: string; tasks?: string[]; recordLines?: string[]; recordLinesScope?: "record" };
 }
 
 /**
@@ -256,11 +256,20 @@ export interface PreviewContribution {
  * lines (the lines carry the observation ids; the observation archive holds the observations). Every entry of a
  * graduation gets the whole Record's lines: the model does not say which line fed which entry. Initiatives have no Record.
  */
-export function sourceOf(item: WorkItem, all: WorkItem[], rawBody: string): PreviewContribution["source"] {
+export function sourceOf(item: WorkItem, all: WorkItem[], rawBody: string, picked?: string[]): PreviewContribution["source"] {
   if (item.kind === "initiative") return undefined;
   const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature").map((t) => t.id as string);
-  const recordLines = recordLinesOf(rawBody).map((l) => l.ref);
-  return { feature: item.id as string, ...(tasks.length ? { tasks } : {}), ...(recordLines.length ? { recordLines } : {}) };
+  const lines = recordLinesOf(rawBody);
+  // The model's [rN] are 1-based positions in the Record as numbered for it; only real ones count.
+  const own = [...new Set((picked ?? []).map((p) => Number(/\d+/.exec(p)?.[0]) - 1).filter((i) => i >= 0 && i < lines.length))].map((i) => lines[i].ref);
+  const recordLines = own.length ? own : lines.map((l) => l.ref);
+  return {
+    feature: item.id as string,
+    ...(tasks.length ? { tasks } : {}),
+    ...(recordLines.length ? { recordLines } : {}),
+    // the model did not map the entry to lines (or it is the feature's own document): the refs are the whole Record
+    ...(!own.length && recordLines.length ? { recordLinesScope: "record" as const } : {}),
+  };
 }
 
 /**
@@ -429,7 +438,7 @@ async function distillPreview(opts: {
     if (o.feature) return featureContribution(o.summary);
     // The initiative's list of delivered features is built here, not by the model.
     const text = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
-    return { id: o.id, title: o.title, summary: o.summary, body: text, initiative: !!o.initiative, history: historyOf(text), ...(o.target ? { target: o.target } : {}), ...(!o.initiative && source ? { source } : {}) };
+    return { id: o.id, title: o.title, summary: o.summary, body: text, initiative: !!o.initiative, history: historyOf(text), ...(o.target ? { target: o.target } : {}), ...(!o.initiative && item.kind !== "initiative" ? { source: sourceOf(item, all, rawBody ?? "", o.recordLines) } : {}) };
   });
   if (standing && !contributions.some((c) => c.feature)) contributions.push(featureContribution(item.successCriteria || item.title));
   if (standing) {

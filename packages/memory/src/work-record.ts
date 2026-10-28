@@ -24,6 +24,7 @@
  */
 import { z } from "zod";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
+import type { PendingCause, WorkPendingState } from "./work-pending.js";
 
 // ── the Record section of a document ─────────────────────────────────────────
 
@@ -189,6 +190,8 @@ export interface WorkRecordStore {
   get(id: string): Promise<WorkRecordItem | null>;
   /** Replace the whole document. */
   setBody(id: string, body: string): Promise<void>;
+  /** The Work API answers a list call. Absent: a successful get is taken as proof of health. */
+  healthy?(): Promise<boolean>;
 }
 
 /** The Work API over HTTP (WORK_ENDPOINT / WORK_TOKEN, like the extensions' client). */
@@ -212,6 +215,16 @@ export class HttpWorkRecordStore implements WorkRecordStore {
       headers: { "X-API-Key": this.token, ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
+  }
+
+  async healthy(): Promise<boolean> {
+    if (!this.configured) return false;
+    try {
+      const res = await this.fetchImpl(`${this.endpoint}/work?partOf=${encodeURIComponent("work-health-probe")}`, { headers: { "X-API-Key": this.token }, signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   async get(id: string): Promise<WorkRecordItem | null> {
@@ -259,7 +272,7 @@ export type WorkRecordOutcome =
   /** Item archived or deleted: the observations are discarded (logged by the caller), never sent to the den. */
   | { work: string; ids: string[]; status: "discarded"; reason: string }
   /** Work API unreachable or not configured, or an infra error: the observations stay pending for the next run. */
-  | { work: string; ids: string[]; status: "pending"; reason: string };
+  | { work: string; ids: string[]; status: "pending"; reason: string; cause: PendingCause };
 
 /** The reason a pending outcome carries when the Work API is missing or unreachable. */
 export const WORK_API_UNAVAILABLE = "work-api-unavailable";
@@ -269,6 +282,8 @@ export interface ConsolidateWorkOptions {
   /** Absent (Work API not configured) → every group stays pending; tagged observations never go to the den. */
   store?: WorkRecordStore;
   observations: WorkObservation[];
+  /** Retry backoff and the 404 grace period. Absent: every group is tried now and a 404 discards at once. */
+  state?: WorkPendingState;
   onProgress?: (msg: string) => void;
 }
 
@@ -301,7 +316,7 @@ const isInfra = (err: unknown) => err instanceof LlmInfraError || (err instanceo
  * outcome says what happened to its observations.
  */
 export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Promise<WorkRecordOutcome[]> {
-  const { engine, store, onProgress } = opts;
+  const { engine, store, onProgress, state } = opts;
   const groups = new Map<string, WorkObservation[]>();
   // The key is the feature when it is a real, live feature; anything else
   // (no feature, the Inbox, deleted, archived, store unreachable) keeps the item's own.
@@ -319,14 +334,29 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
 
   const outcomes: WorkRecordOutcome[] = [];
   for (const [work, obs] of groups) {
+    const ids = obs.map((o) => o.id);
     if (!store) {
       onProgress?.(`  work ${work}: no Work API configured, ${obs.length} observation(s) stay pending`);
-      outcomes.push({ work, ids: obs.map((o) => o.id), status: "pending", reason: WORK_API_UNAVAILABLE });
+      state?.pending(work, "work-api-unavailable");
+      outcomes.push({ work, ids, status: "pending", reason: WORK_API_UNAVAILABLE, cause: "work-api-unavailable" });
       continue;
     }
+    if (state && !state.due(work)) {
+      onProgress?.(`  work ${work}: backing off, ${obs.length} observation(s) stay pending`);
+      outcomes.push({ work, ids, status: "pending", reason: "backoff", cause: state.entry(work)?.cause ?? "work-api-unavailable" });
+      continue;
+    }
+    let phase: PendingCause = "work-api-unavailable";
     try {
       const item = await store.get(work);
+      if (!item && store.healthy && !(await store.healthy())) throw new Error("Work API unhealthy: a 404 proves nothing");
+      if (!item && state && !state.missing(work)) {
+        onProgress?.(`  work ${work}: not found, waiting to confirm before discarding ${obs.length} observation(s)`);
+        outcomes.push({ work, ids, status: "pending", reason: "not found, in grace period", cause: "work-api-unavailable" });
+        continue;
+      }
       if (!item || item.stage === "archived") {
+        state?.clear(work);
         const reason = item ? "archived" : "deleted";
         onProgress?.(`  work ${work}: item is ${reason}, ${obs.length} observation(s) are discarded`);
         outcomes.push({ work, ids: obs.map((o) => o.id), status: "discarded", reason });
@@ -334,13 +364,17 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       }
 
       const current = extractRecord(item.body);
-      const ask = async (tooLong?: number) =>
-        WorkRecordSchema.parse(
+      const ask = async (tooLong?: number) => {
+        phase = "consolidation-failed";
+        const r = WorkRecordSchema.parse(
           await engine.call("workRecord", WorkRecordSchema, {
             system: WORK_RECORD_SYSTEM,
             prompt: buildPrompt(item, current, obs, tooLong),
           }),
         );
+        phase = "work-api-unavailable";
+        return r;
+      };
 
       let record = await ask();
       let rendered = renderRecord(record);
@@ -354,13 +388,16 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       // ran is not overwritten (only the Record section is ours).
       const fresh = (await store.get(work)) ?? item;
       await store.setBody(work, replaceRecordSection(fresh.body, rendered));
+      state?.clear(work);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
       outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: rendered.length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);
-      outcomes.push({ work, ids: obs.map((o) => o.id), status: "pending", reason });
+      state?.pending(work, phase);
+      outcomes.push({ work, ids, status: "pending", reason, cause: phase });
     }
   }
+  state?.save();
   return outcomes;
 }

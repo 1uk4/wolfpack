@@ -35,7 +35,7 @@ export function resendDenTopics(
   return promote(
     set.topics
       .filter((t) => t.promotable) // held in the den as a session log
-      .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const })),
+      .map((t) => ({ id: t.id, title: t.title, summary: t.summary, body: t.body, change: "create" as const, ...(t.work ? { work: t.work } : {}), ...(t.feature ? { feature: t.feature } : {}) })),
     { ...opts, force: true }
   );
 }

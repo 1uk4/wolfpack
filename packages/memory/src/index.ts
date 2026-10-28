@@ -154,7 +154,8 @@ export {
   type DistillRecord,
   type DistilledContribution,
 } from "./distill.js";
-export { TOPIC_SOFT_CAP, refuseTagged } from "./consolidate.js";
+export { TOPIC_SOFT_CAP } from "./consolidate.js";
+export { refuseTagged } from "./tag-guard.js";
 
 // Work Record — curated per-item knowledge kept in the work item itself
 export {
@@ -184,3 +185,5 @@ export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";
 
 // Per-conversation binding files (memory extension + wolfd)
 export { bindingFile, readBindingFile, writeBindingFile, findHolder, type StoredBinding } from "./binding-file.js";
+
+export { WorkPendingState, appendDiscarded, discardLogPath, readPendingSummary, poolDir, type PendingCause } from "./work-pending.js";

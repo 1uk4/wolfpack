@@ -11,8 +11,6 @@
  * The orchestrator is stateful per-session but never imports any
  * agent-specific code. The runtime feeds it events and content.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import { CONSOLIDATE_SYSTEM } from "@wolfpack/engine";
 import { SESSION_CONSOLIDATION_USER_PROMPT } from "./config/prompts/consolidations.js";
@@ -34,6 +32,7 @@ import { consolidateSession, type ConsolidateResult } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { consolidateWorkRecords, type WorkRecordStore } from "./work-record.js";
+import { WorkPendingState, appendDiscarded } from "./work-pending.js";
 
 /** The work item a session is bound to right now. */
 export interface BoundWork {
@@ -66,6 +65,8 @@ export interface OrchestratorConfig {
   getBoundWork?: () => BoundWork | null | undefined;
   /** Where Records are written (the Work API). Absent: tagged observations fall back to the den. */
   workRecordStore?: WorkRecordStore;
+  /** The wolf's den root: the discard log and retry state live in `<denRoot>/.memory/pool/` (default: the runtime's cwd). */
+  denRoot?: string;
 }
 
 export const DEFAULT_CONFIG: OrchestratorConfig = {
@@ -248,16 +249,19 @@ export function createOrchestrator(
   async function consolidatePool(forceAll: boolean): Promise<void> {
     const folded = foldLedger(ledgerEvents);
 
+    // Tagged observations never count toward (or hide behind) the den's overflow: a group stuck pending must not
+    // starve the untagged ones. They are all offered to the Record step each run; its backoff paces the retries.
+    const isTagged = (o: { work?: string; feature?: string }) => !!(o.work || o.feature);
+    const untaggedActive = folded.activeObservations.filter((o) => !isTagged(o));
+    const taggedActive = folded.activeObservations.filter(isTagged);
     let promote: typeof folded.activeObservations;
     if (forceAll) {
       // Force mode: consolidate everything
-      promote = [...folded.activeObservations];
+      promote = [...untaggedActive, ...taggedActive];
     } else {
       // Normal mode: only promote overflow above target
-      ({ promote } = selectPromotionOverflow(
-        folded.activeObservations,
-        cfg.poolTargetTokens
-      ));
+      ({ promote } = selectPromotionOverflow(untaggedActive, cfg.poolTargetTokens));
+      promote = [...promote, ...taggedActive];
     }
 
     if (promote.length === 0) return;
@@ -268,29 +272,27 @@ export function createOrchestrator(
     // pending (Work API down or not configured, infra error) → left in the pool for the next run.
     const consumedWork = new Set<string>();
     const heldWork = new Set<string>();
-    const tagged = promote.filter((o) => o.work);
+    const tagged = promote.filter(isTagged);
     if (tagged.length > 0) {
+      const poolRoot = cfg.denRoot ?? runtime.cwd;
+      const state = new WorkPendingState(poolRoot);
       runtime.notify?.(`memory: updating Records from ${tagged.length} work observation(s)`, "info");
       const outcomes = await consolidateWorkRecords({
         engine,
         store: cfg.workRecordStore,
-        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
+        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+        state,
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
       const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
-      const discarded: string[] = [];
+      const discarded: Array<{ obs: object; reason: string }> = [];
       for (const o of tagged) {
         const out = status.get(o.timestamp);
         if (out?.status === "written") consumedWork.add(o.timestamp);
         else if (out?.status === "discarded") {
           consumedWork.add(o.timestamp);
-          discarded.push(JSON.stringify({ ...o, discardedAt: new Date().toISOString(), reason: out.reason }) + "\n");
+          discarded.push({ obs: o, reason: out.reason });
         } else heldWork.add(o.timestamp); // pending or no outcome: never the den
-      }
-      if (discarded.length > 0) {
-        mkdirSync(memRoot, { recursive: true });
-        appendFileSync(join(memRoot, "discarded.jsonl"), discarded.join(""));
-        runtime.notify?.(`memory: ${discarded.length} work observation(s) discarded (item archived or deleted)`, "info");
       }
       if (consumedWork.size > 0) {
         appendEvent({
@@ -299,9 +301,14 @@ export function createOrchestrator(
           coversUpToId: folded.latestCoverageId ?? "",
         });
       }
+      // After the drop is recorded, so a failed drop does not log the same discards twice.
+      if (discarded.length > 0) {
+        appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+        runtime.notify?.(`memory: ${discarded.length} work observation(s) discarded (item archived or deleted)`, "info");
+      }
     }
     // Defense in depth: nothing tagged reaches the den pass.
-    promote = promote.filter((o) => !o.work && !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
+    promote = promote.filter((o) => !isTagged(o) && !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
     if (promote.length === 0) return;
 
     runtime.notify?.(

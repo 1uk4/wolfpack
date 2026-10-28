@@ -26,6 +26,9 @@ export interface DenTopic {
   /** false = held back as private working memory: never emitted to the KB. */
   promotable: boolean;
   promotableReason?: string;
+  /** Work tags (frontmatter), if any. A tagged topic never promotes. */
+  work?: string;
+  feature?: string;
 }
 
 export interface DenConfig {
@@ -133,6 +136,8 @@ function readTopicFiles(dir: string, idFromStem: (stem: string) => string = (ste
       filePath,
       promotable: String(fields.promotable) !== "false",
       promotableReason: fields.promotable_reason ? String(fields.promotable_reason) : undefined,
+      ...(fields.work ? { work: String(fields.work) } : {}),
+      ...(fields.feature ? { feature: String(fields.feature) } : {}),
     };
     return { topic, fields, mtimeMs: statSync(filePath).mtimeMs };
   });

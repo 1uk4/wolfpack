@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics } from "@wolfpack/memory";
+import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary } from "@wolfpack/memory";
 import type { BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
@@ -79,20 +79,37 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
   };
 }
 
+const PROBE_TTL_MS = 30_000;
+const probeCache = new Map<string, { at: number; unavailable: boolean }>();
+
+/** Whether tagged observations are waiting on the Work API; probed at most once per 30 s per den. */
+async function workApiUnavailable(den: string, probeId: string, api: { endpoint?: string; token?: string }, now: number): Promise<boolean> {
+  const hit = probeCache.get(den);
+  if (hit && now - hit.at < PROBE_TTL_MS) return hit.unavailable;
+  const r = await fetchWorkItem(probeId, api);
+  const unavailable = r.kind === "unconfigured" || r.kind === "error";
+  probeCache.set(den, { at: now, unavailable });
+  return unavailable;
+}
+
+/** Test hook: forget cached probes. */
+export const resetObservationProbeCache = (): void => probeCache.clear();
+
 /**
  * The wolf's observation pool (`<den>/.memory/pool/observations.jsonl`), newest first: by recordedAt, ties by
  * the later append. Ids hash the entry (an ordinal tells identical entries apart), so the same entry keeps its id
  * from read to read until consolidation archives it.
  */
-export async function readMemoryObservations(den: string, limit?: number, work?: { endpoint?: string; token?: string }): Promise<MemoryObservations> {
+export async function readMemoryObservations(den: string, limit?: number, work?: { endpoint?: string; token?: string }, now: number = Date.now()): Promise<MemoryObservations> {
   const pool = await readPool(den);
-  // Tagged observations wait for the Work API (consolidation never sends them to the den): probe it once.
-  const probe = pool.find((o) => o.work || o.feature);
-  let blocked = false;
-  if (probe && work) {
-    const r = await fetchWorkItem((probe.work || probe.feature)!, work);
-    blocked = r.kind === "unconfigured" || r.kind === "error";
-  }
+  const tagged = pool.filter((o) => o.work || o.feature);
+  // Same resolution as consolidation: the configured Work API, else WORK_ENDPOINT / WORK_TOKEN.
+  const api = { endpoint: work?.endpoint || process.env.WORK_ENDPOINT, token: work?.token || process.env.WORK_TOKEN };
+  const unavailable = tagged.length > 0 && (await workApiUnavailable(den, tagged[0]!.work || tagged[0]!.feature!, api, now));
+  const waiting = readPendingSummary(den, now);
+  const causeOf = (o: { work?: string; feature?: string }): "work-api-unavailable" | "consolidation-failed" | undefined =>
+    (o.feature && waiting.keys[o.feature]) || (o.work && waiting.keys[o.work]) || (unavailable && (o.work || o.feature) ? "work-api-unavailable" : undefined);
+  const blocked = unavailable;
   const seen = new Map<string, number>();
   const all = pool.map((o, i): MemoryObservation & { _i: number } => {
     const h = createHash("sha1").update(`${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`).digest("hex").slice(0, 16);
@@ -107,13 +124,14 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
       ...(o.domain ? { domain: o.domain } : {}),
       ...(o.work ? { work: o.work } : {}),
       ...(o.feature ? { feature: o.feature } : {}),
-      ...(blocked && (o.work || o.feature) ? { blocked: "work-api-unavailable" as const } : {}),
+      ...(causeOf(o) ? { blocked: causeOf(o)! } : {}),
       _i: i,
     };
   });
+  const pendingCount = all.filter((o) => o.blocked).length;
   all.sort((a, b) => (b.recordedAt ?? b.timestamp).localeCompare(a.recordedAt ?? a.timestamp) || b._i - a._i);
   const kept = limit === undefined ? all : all.slice(0, limit);
-  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}) };
+  return { observations: kept.map(({ _i, ...o }) => o), total: all.length, ...(blocked ? { blocked: "work-api-unavailable" as const } : {}), ...(pendingCount > 0 ? { pending: { count: pendingCount, ...(waiting.oldestAgeMs !== undefined ? { oldestAgeMs: waiting.oldestAgeMs } : {}) } } : {}) };
 }
 
 /** One topic by id. `scope` restricts the store; otherwise den first, then session. Undefined: no such topic. */

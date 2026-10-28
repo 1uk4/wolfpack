@@ -145,11 +145,67 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     const r = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(r.recordsWritten).toBe(1);
     expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
+    // a 404 is not trusted yet: grace period, the observation waits and nothing is logged
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(poolLines()).toEqual([]);
     expect(m.prompts.consolidate).toEqual([]);
     const logged = readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l));
     expect(logged).toHaveLength(1);
     expect(logged[0]).toMatchObject({ content: "observation 0", work: "gone", reason: "deleted" });
+  });
+
+  it("a feature-only observation never reaches the den, even without a work tag", async () => {
+    poolWith([o(0, { feature: "work-f1" }), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks();
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    expect(m.prompts.consolidate.join("\n")).not.toContain("observation 0");
+    expect(m.writes.map((w) => w.id)).toEqual(["work-f1"]);
+    expect(poolLines()).toEqual([]);
+  });
+
+  it("untagged observations still consolidate while a tagged group is pending (no starvation), and the tagged retry backs off", async () => {
+    poolWith([o(0, { work: "work-t1" }), o(1), o(2), o(3), o(4), o(5)]);
+    const m = mocks({ failSet: true });
+    let sets = 0;
+    const setBody = m.workStore.setBody;
+    m.workStore.setBody = async (id: string, b: string) => { sets++; return setBody(id, b); };
+    const cfg = { wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore, poolTarget: 1 };
+    const r = await consolidatePool(cfg);
+    expect(r.observationsPending).toBe(1);
+    expect(m.prompts.consolidate.join("\n")).toContain("observation 1");
+    expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
+    expect(sets).toBe(1);
+    await consolidatePool(cfg);
+    expect(sets).toBe(1); // backing off: not retried on every trigger
+  });
+
+  it("a 404 is only trusted while the Work API is healthy; an unhealthy API keeps them pending", async () => {
+    poolWith([o(0, { work: "gone" })]);
+    const m = mocks();
+    const store = Object.assign(m.workStore, { healthy: async () => false });
+    const cfg = { wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: store };
+    await consolidatePool(cfg);
+    await consolidatePool(cfg);
+    await consolidatePool(cfg);
+    expect(poolLines()).toHaveLength(1);
+    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+  });
+
+  it("a task of a live feature that shipped or was archived is written to the feature's Record, not discarded", async () => {
+    poolWith([o(1, { work: "work-t1", feature: "work-f1" }), o(2, { work: "work-t2", feature: "work-f1" })]);
+    const m = mocks();
+    const get = m.workStore.get;
+    m.workStore.get = async (id: string) =>
+      id === "work-f1" ? { id, title: "F", kind: "feature", stage: "in_build", body: "" }
+      : id === "work-t1" ? { id, title: "T1", kind: "task", stage: "shipped", body: "" }
+      : id === "work-t2" ? { id, title: "T2", kind: "task", stage: "archived", body: "" }
+      : get(id);
+    await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
+    expect(m.writes.map((w) => w.id)).toEqual(["work-f1"]);
+    expect(poolLines()).toEqual([]);
+    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
   });
 
   it("an archived item's observations are discarded and logged", async () => {
@@ -216,7 +272,9 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       poolWith([o(0, { work: "gone" })]);
       const m = mocks();
       const prompts: string[] = [];
-      await consolidatePool({ wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), workStore: m.workStore, sessionTopics: durableSessionTopics(den), minObservations: 1 });
+      const cfg = { wolfDen: den, wolfName: WOLF, engine: sessionEngine(prompts), workStore: m.workStore, sessionTopics: durableSessionTopics(den), minObservations: 1 };
+      await consolidatePool(cfg);
+      await consolidatePool(cfg); // second run: still gone, the grace period is over
       expect(prompts).toEqual([]);
       expect(existsSync(sessions())).toBe(false);
       expect(poolLines()).toEqual([]);

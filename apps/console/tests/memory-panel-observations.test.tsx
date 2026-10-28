@@ -12,6 +12,7 @@ const store = new Map<string, string>();
 interface Obs { id: string; timestamp: string; recordedAt: string; content: string; tokenCount: number; work?: string; feature?: string; blocked?: string }
 let pool: Obs[] = [];
 let poolStatus = 200;
+let poolPending: { count: number; oldestAgeMs?: number } | undefined;
 let poolFetches = 0;
 const titles: Record<string, { title: string; stage: string; kind: string }> = {
 	"work-a": { title: "Fix the login", stage: "in_build", kind: "task" },
@@ -34,7 +35,7 @@ Object.assign(globalThis, {
 		const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
 		if (u.endsWith("/memory/observations")) {
 			poolFetches++;
-			return poolStatus === 200 ? json({ observations: [...pool].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)), total: pool.length }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
+			return poolStatus === 200 ? json({ observations: [...pool].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)), total: pool.length, ...(poolPending ? { pending: poolPending } : {}) }) : json({ error: "nope", code: "memory_unavailable" }, poolStatus);
 		}
 		const m = /\/work\/([^/]+)\/record$/.exec(u);
 		if (m) return titles[decodeURIComponent(m[1]!)] ? json({ id: m[1], plan: "", record: "", ...titles[decodeURIComponent(m[1]!)] }) : json({ error: "gone", code: "not_found" }, 404);
@@ -76,6 +77,7 @@ beforeEach(() => {
 		ob("5", "2026-10-26T08:00:00Z", "den two"),
 	];
 	poolStatus = 200;
+	poolPending = undefined;
 	poolFetches = 0;
 	emit = () => {};
 });
@@ -108,6 +110,20 @@ describe("observation pool in the Memory panel", () => {
 		await mount();
 		assert.match(q('[data-testid="memory-obs-group-work-a"]')!.textContent!, /waiting for Work API/);
 		assert.equal(q('[data-testid="memory-obs-group-den"]')!.querySelector('[data-testid="memory-obs-blocked"]'), null);
+	});
+
+	it("warns when pending observations are old or many, and says why a group is blocked", async () => {
+		pool = [{ ...ob("2", "2026-10-26T10:00:00Z", "x", { work: "work-a" }), blocked: "consolidation-failed" }];
+		poolPending = { count: 1, oldestAgeMs: 25 * 3_600_000 };
+		await mount();
+		assert.match(q('[data-testid="memory-obs-pending-warning"]')!.textContent!, /waited over 25 h/);
+		assert.match(q('[data-testid="memory-obs-blocked"]')!.textContent!, /consolidation failed/);
+	});
+
+	it("shows no warning for a fresh, small backlog", async () => {
+		poolPending = { count: 3, oldestAgeMs: 60_000 };
+		await mount();
+		assert.equal(q('[data-testid="memory-obs-pending-warning"]'), null);
 	});
 
 	it("falls back to the id when the work lookup fails", async () => {

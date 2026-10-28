@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
-import { consolidateSession, refuseTagged } from "./consolidate.js";
+import { consolidateSession } from "./consolidate.js";
+import { refuseTagged } from "./tag-guard.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "promote-guard-")); });

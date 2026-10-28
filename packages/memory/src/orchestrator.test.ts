@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
-import { readTopics, sessionMemoryRoot } from "./session/memory.js";
+import { readTopics } from "./session/memory.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
 
@@ -269,8 +269,12 @@ describe("orchestrator work tagging and Records", () => {
 
     expect(orch.getActiveObservations().map((o) => o.content)).toEqual([OBS[0].content]);
     expect(prompts.consolidate).toEqual([]); // nothing leaked to the den
-    // next run, the Work API is back
+    // an immediate retry waits out the backoff
     s.store.setBody = async (id: string, body: string) => { s.writes.push({ id, body }); };
+    await orch.consolidateNow();
+    expect(s.writes).toHaveLength(0);
+    // later, the Work API is back
+    rmSync(join(cwd, ".memory", "pool", "work-state.json"));
     await orch.consolidateNow();
     expect(orch.getActiveObservations()).toEqual([]);
     expect(s.writes).toHaveLength(1);
@@ -296,9 +300,23 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.record).toEqual([]);
     expect(prompts.consolidate).toEqual([]);
     expect(orch.getActiveObservations()).toEqual([]);
-    const log = readFileSync(join(sessionMemoryRoot(cwd, "sess-1"), "discarded.jsonl"), "utf-8");
+    const log = readFileSync(join(cwd, ".memory", "pool", "discarded.jsonl"), "utf-8");
     expect(log).toContain("TTL cache");
     expect(log).toContain('"reason":"archived"');
+  });
+
+  it("pending tagged observations never reach the den and do not starve the untagged overflow", async () => {
+    const { engine, prompts } = engineWithRecord([[OBS[0]], [OBS[1]]]);
+    const s = store({ "work-f1": { title: "F", kind: "feature", stage: "in_build", body: "" } }, true);
+    let bound: { taskId: string; featureId?: string } | null = { taskId: "work-f1" };
+    const orch = createOrchestrator(engine, makeRuntime(cwd), { consolidateAtPoolTokens: 1e9, poolTargetTokens: 0, getBoundWork: () => bound, workRecordStore: s.store });
+    await orch.processChunks([chunk("c1")]); // tagged; the store fails: pending
+    bound = null;
+    await orch.processChunks([chunk("c2")]); // untagged
+    await orch.consolidateNow();
+    expect(prompts.consolidate.join("\n")).not.toContain(OBS[0].content);
+    expect(prompts.consolidate.join("\n")).toContain(OBS[1].content);
+    expect(orch.getActiveObservations().filter((o) => o.work)).toHaveLength(1);
   });
 
   it("with no Work API the tagged observations stay pending in the pool, never the den", async () => {

@@ -17,6 +17,7 @@
  * and, when held, the reason. The trivial-change skip compares RAW bodies, so an
  * unchanged topic costs no LLM call.
  */
+import { refuseTagged } from "./tag-guard.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -331,6 +332,9 @@ export interface PromoteTopic {
   body: string;
   domain?: string;
   change: "create" | "merge";
+  /** Work tags: a tagged topic is refused (work knowledge reaches the KB only through graduation). */
+  work?: string;
+  feature?: string;
 }
 
 export interface PromoteOptions {
@@ -367,7 +371,8 @@ export interface PromoteStats {
 /**
  * Distill and emit a set of den topics. Never throws for one bad topic.
  */
-export async function promoteTopics(topics: PromoteTopic[], opts: PromoteOptions): Promise<PromoteStats> {
+export async function promoteTopics(allTopics: PromoteTopic[], opts: PromoteOptions): Promise<PromoteStats> {
+  const topics = refuseTagged(allTopics, opts.onProgress);
   const { engine, roots, wolf, defaultDomain, onProgress, force } = opts;
   const stats: PromoteStats = { distilled: 0, split: 0, held: 0, trivialSkipped: 0, pending: 0, emitted: 0 };
   const today = opts.today ?? new Date().toISOString().slice(0, 10);

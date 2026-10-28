@@ -280,7 +280,7 @@ export interface PoolObservation {
 	work?: string;
 	feature?: string;
 	/** Pending because the Work API is unavailable (consolidation never sends tagged observations to the den). */
-	blocked?: "work-api-unavailable";
+	blocked?: "work-api-unavailable" | "consolidation-failed";
 }
 
 /** One row of the grouped list: the den, or a work item (id = its key). */
@@ -289,7 +289,7 @@ export interface ObservationGroup {
 	kind: "den" | "work";
 	count: number;
 	/** Waiting for the Work API: some of the group's observations are blocked on it. */
-	blocked?: "work-api-unavailable";
+	blocked?: "work-api-unavailable" | "consolidation-failed";
 	/** Sort stamp of the group's newest observation. */
 	latest: string;
 }
@@ -335,6 +335,18 @@ export const observationsInGroup = (obs: readonly PoolObservation[], key: string
 
 /** The note a blocked group shows. */
 export const BLOCKED_LABEL = "waiting for Work API";
+export const BLOCKED_LABELS = { "work-api-unavailable": BLOCKED_LABEL, "consolidation-failed": "consolidation failed, retrying" } as const;
+
+/** Pending observations older than this, or more than PENDING_WARN_COUNT of them, raise a warning in the panel. */
+export const PENDING_WARN_AGE_MS = 24 * 3_600_000;
+export const PENDING_WARN_COUNT = 50;
+export interface PoolPending { count: number; oldestAgeMs?: number }
+export function pendingWarning(p: PoolPending | undefined | null): string | null {
+	if (!p || p.count === 0) return null;
+	if ((p.oldestAgeMs ?? 0) >= PENDING_WARN_AGE_MS) return `${p.count} observation(s) have waited over ${Math.floor((p.oldestAgeMs ?? 0) / 3_600_000)} h to be folded into a Record`;
+	if (p.count > PENDING_WARN_COUNT) return `${p.count} observations are waiting to be folded into a Record`;
+	return null;
+}
 
 /** What the list shows for a work item: its title and stage, or just the id when the lookup failed. */
 export interface GroupInfo {

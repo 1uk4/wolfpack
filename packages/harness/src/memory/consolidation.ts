@@ -12,7 +12,7 @@
  *   1. Read the pool; 2. archive absorbed den topics (reconcileDen) and read the rest for context;
  *   3. LLM consolidation; 4. write $WOLF_DEN/memory/topics/; 5. emit deltas to the KB inbox; 6. archive observations.
  */
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -46,6 +46,8 @@ import {
   TOPIC_SOFT_CAP,
   type WorkRecordStore,
   refuseTagged,
+  WorkPendingState,
+  appendDiscarded,
 } from "@wolfpack/memory";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 
@@ -226,15 +228,6 @@ async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<
   await writeFile(poolFile, kept.map((l) => l + "\n").join(""));
 }
 
-/** Append discarded tagged observations, with the reason, to `.memory/pool/discarded.jsonl` (nothing is lost silently). */
-async function logDiscarded(wolfDen: string, items: Array<{ obs: PoolObservation; reason: string }>): Promise<void> {
-  if (items.length === 0) return;
-  const dir = join(wolfDen, ".memory", "pool");
-  await mkdir(dir, { recursive: true });
-  const at = new Date().toISOString();
-  await appendFile(join(dir, "discarded.jsonl"), items.map(({ obs, reason }) => JSON.stringify({ ...obs, discardedAt: at, reason }) + "\n").join(""));
-}
-
 /**
  * Consolidate pool observations directly to den topics.
  * 
@@ -275,7 +268,11 @@ async function consolidatePoolInner(
 
   // Read pool
   const pool = await readPool(wolfDen);
-  const observations = config.poolTarget === undefined ? pool : overflowAbove(pool, config.poolTarget);
+  // Tagged observations are offered to the Record step every run (its backoff paces retries); only untagged ones
+  // count toward the den's overflow, so a group stuck pending cannot starve them.
+  const isTagged = (o: PoolObservation) => !!(o.work || o.feature);
+  const untaggedPool = pool.filter((o) => !isTagged(o));
+  const observations = config.poolTarget === undefined ? pool : [...overflowAbove(untaggedPool, config.poolTarget), ...pool.filter(isTagged)];
   if (observations.length === 0) {
     onProgress?.("No observations to consolidate");
     return { observationsProcessed: 0, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0 };
@@ -289,7 +286,7 @@ async function consolidatePoolInner(
 
   // Check minimum thresholds (skip if pool too small)
   // (Work-tagged observations bypass it: a Record rewrite is cheap and the den pass re-checks its own share.)
-  if (observations.length < minObservations && totalTokens < minTokens && !observations.some((o) => o.work)) {
+  if (observations.length < minObservations && totalTokens < minTokens && !observations.some(isTagged)) {
     onProgress?.(`Pool too small (${observations.length} obs, ~${totalTokens} tokens) — skipping`);
     return { observationsProcessed: 0, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0 };
   }
@@ -302,17 +299,21 @@ async function consolidatePoolInner(
   // written → consumed; discarded (item archived/deleted) → logged and consumed, never the den;
   // pending (Work API or model unavailable) → stays in the pool for the next run.
   const handled: PoolObservation[] = [];
-  const denObs = observations.filter((o) => !o.work);
+  // The one den-bound set: nothing tagged (work or feature) gets in, whatever wrote the pool line.
+  const denObs = refuseTagged(observations.filter((o) => !isTagged(o)), onProgress);
   const discarded: Array<{ obs: PoolObservation; reason: string }> = [];
+  // After settlePool has archived them, so a failed settle does not log the same discards again on the next run.
+  const logDiscarded = () => void appendDiscarded(wolfDen, discarded, onProgress);
   let recordsWritten = 0;
   let pending = 0;
-  const workObs = observations.filter((o) => o.work);
+  const workObs = observations.filter(isTagged);
   if (workObs.length > 0) {
     const store = config.workStore ?? defaultWorkStore();
     const outcomes = await consolidateWorkRecords({
       engine,
       store,
-      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: o.work!, ...(o.feature ? { feature: o.feature } : {}) })),
+      state: new WorkPendingState(wolfDen),
+      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
     for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
@@ -325,7 +326,6 @@ async function consolidatePoolInner(
         discarded.push({ obs: o, reason: out.reason });
       } else pending++; // pending, or no outcome: stays in the pool, never the den
     }
-    await logDiscarded(wolfDen, discarded);
     if (discarded.length > 0) onProgress?.(`${discarded.length} work observation(s) discarded (item archived or deleted)`);
     recordsWritten = outcomes.filter((o) => o.status === "written").length;
     if (pending > 0) onProgress?.(`${pending} work observation(s) stay pending`);
@@ -333,12 +333,14 @@ async function consolidatePoolInner(
   const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
   if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
     await settlePool(wolfDen, handled);
+    logDiscarded();
     return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending };
   }
 
   if (config.sessionTopics) {
     const folded = await consolidateToSessionTopics({ ...config, sessionTopics: config.sessionTopics }, engine, denObs, domainCtx);
     await settlePool(wolfDen, [...handled, ...denObs]);
+    logDiscarded();
     return {
       observationsProcessed: handled.length + denObs.length,
       topicsCreated: folded.created,
@@ -502,6 +504,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
 
   // Archive processed observations (move to .memory/archive/)
   await settlePool(wolfDen, [...handled, ...denObs]);
+  logDiscarded();
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 

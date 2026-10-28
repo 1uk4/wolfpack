@@ -19,7 +19,9 @@ import {
 	bannerOf,
 	buildTaskGraph,
 	featureIdFor,
-	BLOCKED_LABEL,
+	BLOCKED_LABELS,
+	pendingWarning,
+	type PoolPending,
 	groupLabel,
 	groupObservations,
 	observationsInGroup,
@@ -124,6 +126,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	/** The wolf's observation pool (null until the first load) and the work items' titles/stages looked up for its groups. */
 	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
 	const [poolError, setPoolError] = useState<string | null>(null);
+	const [poolPending, setPoolPending] = useState<PoolPending | null>(null);
 	const [groupInfo, setGroupInfo] = useState<Record<string, GroupInfo | undefined>>({});
 	/** The group whose observations are open: DEN_GROUP or a work id; null = the list. */
 	const [openGroup, setOpenGroup] = useState<string | null>(null);
@@ -165,6 +168,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 		if (!guard.isCurrent(token)) return;
 		if (r.ok) {
 			setObsPool(r.data.observations);
+			setPoolPending(r.data.pending ?? null);
 			setPoolError(null);
 		} else setPoolError(r.message);
 	}, [wolf]);
@@ -407,7 +411,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 					setSelectedFailed(false);
 					void refreshSelected(selectedRef.current);
 				}}
-				observations={{ list: obsPool, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }}
+				observations={{ list: obsPool, pending: poolPending, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }}
 				onGraph={() => {
 					setSelectedId(null);
 					chooseView("graph");
@@ -461,7 +465,7 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	otherState?: "loading" | "error";
 	onRetry?: () => void;
 	/** The pool view: the loaded observations (null until the first load), grouped; `open` is the group being read. */
-	observations: { list: PoolObservation[] | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
+	observations: { list: PoolObservation[] | null; pending?: PoolPending | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
 	/** Back to the feature graph (persisted as the graph view). */
 	onGraph: () => void;
 	onToggleFeed: () => void;
@@ -553,6 +557,8 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 							))}
 						</ul>
 					) : (
+						<>
+						{pendingWarning(observations.pending) ? <p className="rounded bg-amber-50 px-1.5 py-1 text-[11px] text-amber-700" data-testid="memory-obs-pending-warning">{pendingWarning(observations.pending)}</p> : null}
 						<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
 							{groups.map((g) => {
 								const info = observations.info[g.key];
@@ -567,7 +573,7 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 										>
 											<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
 											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-												{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABEL}</span> : null}
+												{g.blocked ? <span className="text-amber-600" data-testid="memory-obs-blocked">{BLOCKED_LABELS[g.blocked]}</span> : null}
 												{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
 												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
 											</span>
@@ -576,6 +582,7 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 								);
 							})}
 						</ul>
+						</>
 					)}
 				</>
 			) : view === "graph" ? (

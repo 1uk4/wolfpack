@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readMemoryObservations } from "./memory-read.js";
+import { readMemoryObservations, resetObservationProbeCache } from "./memory-read.js";
 
 let den: string;
 beforeEach(() => {
+  resetObservationProbeCache();
   den = mkdtempSync(join(tmpdir(), "obs-blocked-"));
   mkdirSync(join(den, ".memory", "pool"), { recursive: true });
   const rows = [
@@ -38,6 +39,25 @@ describe("observations route: blocked on the Work API", () => {
     const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" });
     expect(r.blocked).toBeUndefined();
     expect(r.observations.every((o) => o.blocked === undefined)).toBe(true);
+  });
+
+  it("caches the probe for 30 s", async () => {
+    const f = vi.fn(async () => new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", f);
+    const api = { endpoint: "http://x", token: "t" };
+    await readMemoryObservations(den, undefined, api, 1_000_000);
+    await readMemoryObservations(den, undefined, api, 1_020_000);
+    expect(f).toHaveBeenCalledTimes(1);
+    await readMemoryObservations(den, undefined, api, 1_031_000);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports pending counts, the oldest wait, and a model failure as its own cause", async () => {
+    writeFileSync(join(den, ".memory", "pool", "work-state.json"), JSON.stringify({ "work-wolfpack-AAAAAAA": { firstPendingAt: 1_000_000, tries: 2, nextAttemptAt: 0, cause: "consolidation-failed" } }));
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    const r = await readMemoryObservations(den, undefined, { endpoint: "http://x", token: "t" }, 1_000_000 + 25 * 3_600_000);
+    expect(r.observations.find((o) => o.work)?.blocked).toBe("consolidation-failed");
+    expect(r.pending).toEqual({ count: 1, oldestAgeMs: 25 * 3_600_000 });
   });
 
   it("flags nothing for a pool with no tagged observations", async () => {

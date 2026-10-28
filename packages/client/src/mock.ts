@@ -150,6 +150,7 @@ export class MockConsoleClient implements ConsoleClient {
 
   async submit(threadId: string, input: string, opts: SubmitOptions = {}): Promise<SubmitAck> {
     const t = this.get(threadId);
+    if (t.summary.closed) throw new ProtocolError("thread_closed", t.summary.closedReason ?? "thread is closed", false);
     const whenBusy = opts.whenBusy ?? "reject";
     const attachments = opts.attachments ?? [];
     for (const a of attachments) if (!this.uploads.some((u) => u.id === a.id && u.threadId === threadId)) throw new ProtocolError("invalid_request", `unknown attachment ${a.id}`, false);
@@ -261,6 +262,12 @@ export class MockConsoleClient implements ConsoleClient {
   }
 
   // --- internals ---
+
+  /** Test hook: mark a thread read-only history (its feature graduated); submits then reject with `thread_closed`. */
+  closeThread(threadId: string, reason = "This feature has graduated; its thread is read-only history. Start a new feature or use home."): void {
+    const t = this.get(threadId);
+    t.summary = { ...t.summary, closed: true, closedReason: reason };
+  }
 
   private get(threadId: string): ThreadState {
     const t = this.threads.get(threadId);

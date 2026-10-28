@@ -16,6 +16,8 @@ export interface SavedThread {
   kind: "feature";
   workItemId: string;
   title: string;
+  /** Set once the feature graduated: the thread is read-only history. */
+  closedReason?: string;
   /** The feature branch's worktree, set on the first worktree spawn; the thread's cwd lives there from then on. */
   workspace?: Workspace;
 }

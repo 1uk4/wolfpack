@@ -27,6 +27,8 @@ export const ErrorCodeSchema = z.enum([
   "memory_busy",
   /** The KB routes (graph, entries, pipeline) are served by the librarian wolf: this one is not, or has no KB roots. */
   "kb_unavailable",
+  /** The thread is closed history (its feature graduated): reads work, sends are refused. */
+  "thread_closed",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -49,6 +51,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   promote_unavailable: 409,
   memory_busy: 409,
   kb_unavailable: 409,
+  thread_closed: 409,
 };
 
 // ---------------------------------------------------------------- cards
@@ -320,6 +323,9 @@ export const ThreadSummarySchema = z.object({
   kind: ThreadKindSchema,
   title: z.string(),
   boundWorkItem: z.string().optional(),
+  /** Additive: true when the thread is read-only history (its feature graduated). Sends answer `thread_closed`. */
+  closed: z.boolean().optional(),
+  closedReason: z.string().optional(),
   /** Additive: absent on servers that predate cards (treat as idle/busy from `ThreadDetail.busy`). */
   status: ThreadStatusSchema.optional(),
   /** Additive: the thread that spawned this one (subagent threads only). */

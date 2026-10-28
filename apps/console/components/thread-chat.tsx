@@ -156,6 +156,7 @@ function ThreadChatInner({
 	initialMessages,
 	initiallyInFlight,
 	initialCards = NO_CARDS,
+	closedReason,
 }: {
 	wolf: string;
 	slug: string;
@@ -166,6 +167,8 @@ function ThreadChatInner({
 	initiallyInFlight?: boolean;
 	/** Interaction cards of the thread record (pending ones + the card-raising calls of the history). */
 	initialCards?: ThreadCards;
+	/** Set when the thread is read-only history (its feature graduated): the notice replaces the composer. */
+	closedReason?: string;
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
@@ -529,6 +532,12 @@ function ThreadChatInner({
 							<div className="bg-background pb-4">
 								<div className={DOCK}>
 									<SubagentStrip wolf={wolf} slug={slug} items={subagents} />
+									{closedReason !== undefined ? (
+										<div data-testid="thread-closed" className="pointer-events-auto rounded-2xl border bg-card px-4 py-3 text-sm shadow-lg">
+											<div className="font-medium">Feature graduated</div>
+											<div className="text-muted-foreground">{closedReason}</div>
+										</div>
+									) : (
 									<div className={`pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg${dragging ? " ring-2 ring-primary" : ""}`}>
 										<Composer
 											busy={busy}
@@ -554,6 +563,7 @@ function ThreadChatInner({
 											<DictationBar dictation={dictation} />
 										</div>
 									</div>
+									)}
 								</div>
 							</div>
 						</div>

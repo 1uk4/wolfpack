@@ -29,6 +29,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				initialMessages={withHistoryAttachments(threadMessagesToNative(thread.messages), thread.messages)}
 				initiallyInFlight={thread.busy}
 				initialCards={cardsOfThread(thread)}
+				closedReason={thread.closed ? (thread.closedReason ?? "Feature graduated") : undefined}
 			/>
 		);
 	} catch (err) {

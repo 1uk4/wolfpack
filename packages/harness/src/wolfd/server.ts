@@ -47,6 +47,7 @@ import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.
 import { HttpError } from "./http-error.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
+import { readFeatureClosed } from "@wolfpack/memory";
 import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, removeThread, saveThread, unbindConversation } from "./threads.js";
 
 export interface WolfServerOptions {
@@ -89,6 +90,8 @@ export interface ThreadConversations {
 const WOLF_EVENT_BUFFER = 256;
 const MEMORY_KEEPALIVE_MS = 20_000;
 const MEMORY_STREAM_MAX_BUFFER = 1_000_000;
+
+const GRADUATED_MESSAGE = "This feature has graduated; its thread is read-only history. Start a new feature or use home.";
 
 export class WolfServer {
   private readonly name: string;
@@ -197,6 +200,8 @@ export class WolfServer {
         }
         const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId };
         const t = this.makeThread(summary, conv);
+        const reason = saved.closedReason ?? (await this.closedReasonOf(saved.workItemId, Number(saved.conversationId)));
+        if (reason) this.markClosed(t, reason);
         try {
           await t.attach();
         } catch (e) {
@@ -264,6 +269,47 @@ export class WolfServer {
     this.threads.set(summary.id, t);
     this.subagents?.watchShips(t);
     return t;
+  }
+
+  /** Read-only history: a graduated feature's thread keeps its messages, refuses new ones. */
+  private markClosed(t: ThreadRuntime, reason: string): void {
+    t.summary = { ...t.summary, closed: true, closedReason: reason };
+    const den = this.opts.den;
+    const saved = den ? loadThreads(den).find((s) => s.id === t.summary.id) : undefined;
+    if (den && saved && saved.closedReason !== reason) saveThread(den, { ...saved, closedReason: reason }, (e) => this.opts.onError?.(e));
+  }
+
+  /** Why a feature thread is closed: the graduation marker the unbind leaves, or the feature's stage in the Work API. Undefined when open or unknown. */
+  private async closedReasonOf(workItemId: string, conversationId: number): Promise<string | undefined> {
+    const den = this.opts.den;
+    if (den) {
+      const m = readFeatureClosed(den, conversationId);
+      if (m?.workId === workItemId) return GRADUATED_MESSAGE;
+    }
+    const r = await fetchWorkItem(workItemId, this.opts.work ?? {});
+    if (r.kind === "ok" && (r.item.stage === "archived" || r.item.graduated)) return GRADUATED_MESSAGE;
+    return undefined;
+  }
+
+  /** Close the feature threads of these work items (a graduation happened). */
+  closeFeatureThreads(workItemIds: string[]): void {
+    for (const t of this.threads.values()) {
+      if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) this.markClosed(t, GRADUATED_MESSAGE);
+    }
+  }
+
+  private readonly closeChecks = new Map<string, number>();
+
+  /** Refuse a send on a closed feature thread (409 thread_closed); a still-open one is re-checked against the feature's stage at most every 10 s. */
+  private async assertOpen(t: ThreadRuntime): Promise<void> {
+    if (t.summary.kind !== "feature") return;
+    if (!t.summary.closed && Date.now() - (this.closeChecks.get(t.summary.id) ?? 0) > 10_000) {
+      this.closeChecks.set(t.summary.id, Date.now());
+      const saved = this.opts.den ? loadThreads(this.opts.den).find((s) => s.id === t.summary.id) : undefined;
+      const reason = await this.closedReasonOf(t.summary.boundWorkItem ?? "", saved ? Number(saved.conversationId) : -1);
+      if (reason) this.markClosed(t, reason);
+    }
+    if (t.summary.closed) throw new HttpError("thread_closed", t.summary.closedReason ?? GRADUATED_MESSAGE);
   }
 
   /** Open (or return) the feature thread for a work item: an ownerless conversation bound to the feature. */
@@ -340,6 +386,7 @@ export class WolfServer {
         return this.json(res, 200, { cards: [...this.threads.values()].filter((t) => !t.isChild).flatMap((t) => t.cards.pending()) });
       case "answerCard": {
         const t = this.checkThread(params.id);
+        await this.assertOpen(t);
         const body = AnswerCardBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {answers: {<fieldId>: {value, other?}}}");
         return this.json(res, 200, await t.answerCard(params.callId, body.data.answers));
@@ -375,6 +422,7 @@ export class WolfServer {
         return this.json(res, 200, this.checkThread(params.id).detail());
       case "submit": {
         const t = this.checkThread(params.id);
+        await this.assertOpen(t);
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];

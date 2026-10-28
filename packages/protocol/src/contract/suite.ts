@@ -20,6 +20,8 @@ export interface ContractOptions {
   wolf?: string;
   /** Max ms to wait for a scripted turn to finish. Default 10000. */
   turnTimeoutMs?: number;
+  /** Servers that can graduate a feature: closes the feature thread of this work item (enables the thread_closed test). */
+  closeFeatureThread?: (workItemId: string) => Promise<void> | void;
 }
 
 interface Frame {
@@ -174,6 +176,16 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       const detail = await getThread(f.id);
       expect(detail.messages.some((m) => m.role === "user" && m.text.includes("from the feature"))).toBe(true);
       expect((await getThread(threadId)).messages.some((m) => m.text.includes("from the feature"))).toBe(false);
+    });
+
+    it.runIf(!!options.closeFeatureThread)("a closed feature thread stays readable and refuses sends with 409 thread_closed", async () => {
+      const f = await expectJson(await post(buildPath("createThread", { name: wolf }), { kind: "feature", workItemId: "work-contract-closed" }), ROUTES.createThread.response.schema, [200, 201]);
+      await options.closeFeatureThread!("work-contract-closed");
+      const detail = await getThread(f.id);
+      expect(detail.closed).toBe(true);
+      expect(detail.closedReason).toContain("graduated");
+      const res = await post(buildPath("submit", { id: f.id }), { input: "more", whenBusy: "reject" });
+      await expectError(res, "thread_closed");
     });
 
     it("create rejects bad bodies, a feature without a work item, subagents and unknown wolves", async () => {

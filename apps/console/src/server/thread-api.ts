@@ -72,6 +72,7 @@ function failure(err: unknown): Response {
 	if (isBusy(err)) return json({ error: err.message, code: "busy" }, 409);
 	// A refusal the user can act on (unsupported type, too large, unknown attachment).
 	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "invalid_request") return json({ error: err.message }, 400);
+	if (isError(err, "ProtocolError") && (err as Error & { code?: string }).code === "thread_closed") return json({ error: err.message, code: "thread_closed" }, 409);
 	return json({ error: err instanceof Error ? err.message : "Unexpected error" }, 500);
 }
 

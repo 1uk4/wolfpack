@@ -153,6 +153,7 @@ interface ApiWorkItem {
   title?: string;
   kind?: string;
   stage?: string;
+  graduated?: boolean | string;
   domain?: string;
   partOf?: string | null;
   dependsOn?: string[];

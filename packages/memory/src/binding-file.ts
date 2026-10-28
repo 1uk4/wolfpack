@@ -53,6 +53,17 @@ export function findHolder(den: string, workId: string, exceptRoot?: number): nu
   return undefined;
 }
 
+/** Left in the dir of a feature thread whose feature graduated (persistent; wolfd reads it to close the thread). */
+const closedFile = (den: string, cid: number) => join(conversationsDir(den), String(cid), "feature-closed.json");
+export function readFeatureClosed(den: string, cid: number): { workId: string; title: string; at: string } | null {
+  try {
+    const c = JSON.parse(readFileSync(closedFile(den, cid), "utf-8"));
+    return c?.workId ? c : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Left on a conversation that was unbound because its item completed; the next prompt says it once. */
 export interface UnboundNotice {
   workId: string;
@@ -102,6 +113,7 @@ export function unbindCompleted(
     if (!b || !(ids.has(b.workId) || (done.viaFeature && b.featureId && ids.has(b.featureId)))) continue;
     writeBindingFile(den, cid, null);
     writeUnboundNotice(den, cid, { workId: done.id, title: done.title, at: new Date().toISOString() });
+    if (done.viaFeature && b.workId === done.id) writeFileSync(closedFile(den, cid), JSON.stringify({ workId: done.id, title: done.title, at: new Date().toISOString() }));
     out.push(cid);
   }
   return out;

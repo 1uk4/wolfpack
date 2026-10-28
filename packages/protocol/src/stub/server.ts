@@ -203,6 +203,7 @@ export class StubServer {
         return this.json(res, 200, this.detail(this.thread(params.id)));
       case "submit": {
         const t = this.thread(params.id);
+        if (t.summary.closed) throw new HttpError("thread_closed", t.summary.closedReason ?? "thread is closed");
         const body = SubmitBodySchema.safeParse(await readJson(req));
         if (!body.success) throw new HttpError("invalid_request", "body must be {input, whenBusy: steer|followUp|reject}");
         const refs = body.data.attachments ?? [];
@@ -317,6 +318,12 @@ export class StubServer {
     const w = this.wolves.find((x) => x.name === name || x.id === name);
     if (!w) throw new HttpError("not_found", `wolf ${name}`);
     return w;
+  }
+
+  /** Test hook: mark a feature thread read-only history (its feature graduated). */
+  closeThread(id: string, reason = "This feature has graduated; its thread is read-only history. Start a new feature or use home."): void {
+    const t = this.thread(id);
+    t.summary = { ...t.summary, closed: true, closedReason: reason };
   }
 
   private thread(id: string): ThreadState {

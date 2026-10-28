@@ -9,7 +9,8 @@ beforeAll(async () => {
 });
 afterAll(() => stub.close());
 
-runContractSuite(() => url);
+runContractSuite(() => url, { closeFeatureThread: (id) => stub.closeThread(`${stubWolf()}/feature-${id}`) });
+const stubWolf = () => "1uk4";
 
 it("stub: memory actions answer the exact memory_unavailable envelope", async () => {
   const wolf = ((await (await fetch(`${url}/v1/wolves`)).json()) as { wolves: { name: string }[] }).wolves[0].name;

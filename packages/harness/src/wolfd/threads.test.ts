@@ -95,6 +95,28 @@ describe("feature threads on a real wolf", () => {
   });
 });
 
+describe("a graduated feature's thread is read-only history", () => {
+  it("graduation (the unbind marker) closes it: reads work, submit and answer answer thread_closed, home is untouched", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage("HOME_OK")] });
+    const den = tw.wolf.config.den;
+    const feature = await tw.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-grad0001" });
+    expect(feature.closed).toBeUndefined();
+    const { unbindCompleted, readBindingFile } = await import("@wolfpack/memory");
+    const cid = Number(JSON.parse(readFileSync(join(den, "wolfd", "threads.json"), "utf8")).threads.find((t: { id: string }) => t.id === feature.id).conversationId);
+    expect(readBindingFile(den, cid)?.workId).toBe("work-wolfpack-grad0001");
+    unbindCompleted(den, { workIds: ["work-wolfpack-grad0001"], viaFeature: true, title: "Grad", id: "work-wolfpack-grad0001" });
+    expect(readBindingFile(den, cid)).toBeNull();
+
+    const err = await tw.client.submit(feature.id, "more", { whenBusy: "reject" }).catch((e) => e);
+    expect(err).toMatchObject({ code: "thread_closed", message: "This feature has graduated; its thread is read-only history. Start a new feature or use home." });
+    const detail = await tw.client.getThread(feature.id);
+    expect(detail).toMatchObject({ closed: true });
+    expect((await tw.client.listThreads("testwolf")).find((t) => t.id === feature.id)?.closed).toBe(true);
+    await expect(tw.client.answerCard!(feature.id, "call-1", { answer: { value: "x" } })).rejects.toMatchObject({ code: "thread_closed" });
+    await tw.client.submit(tw.home, "hi", { whenBusy: "reject" }); // home still takes turns
+  });
+});
+
 describe("feature threads survive a restart", () => {
   it("a new WolfServer on the same den re-attaches the persisted threads", async () => {
     const den = mkdtempSync(join(tmpdir(), "wolfd-threads-"));

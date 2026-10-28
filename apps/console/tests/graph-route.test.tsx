@@ -24,7 +24,7 @@ Object.assign(globalThis, {
 	ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
 });
 
-const { routeForNode, toRouteSelection, workNodesFromGraph, featureTaskModel } = await import("../src/core/dep-route-adapter.ts");
+const { reconcileCursor, routeForNode, toRouteSelection, workNodesFromGraph, featureTaskModel } = await import("../src/core/dep-route-adapter.ts");
 const { startCursor } = await import("../src/core/work-route.ts");
 const { RouteNav } = await import("../components/graph-route-nav.tsx");
 const { FeatureTaskOverlay, opensTaskOverlay } = await import("../components/graph-view.tsx");
@@ -115,6 +115,18 @@ const key = (k: string, target: Element = document.body) => act(() => {
 	const ev = new dom.window.Event("keydown", { bubbles: true, cancelable: true });
 	Object.defineProperty(ev, "key", { value: k });
 	target.dispatchEvent(ev);
+});
+
+describe("reconcileCursor", () => {
+	it("keeps the node across a recompute (new step index) and falls back when it is gone", () => {
+		const route = routeForNode(graph, "work:e")!;
+		const next = reconcileCursor(route, { step: 0, node: "c" });
+		assert.equal(next.node, "c");
+		assert.equal(next.step, route.steps.findIndex((s) => s.nodes.includes("c")));
+		const gone = reconcileCursor(route, { step: 5, node: "zzz" });
+		assert.equal(gone.node, startCursor(route).node);
+		assert.equal(reconcileCursor(route, null).step, route.firstUnfinished);
+	});
 });
 
 describe("RouteNav", () => {

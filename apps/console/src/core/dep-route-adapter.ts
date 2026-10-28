@@ -8,7 +8,7 @@
 import type { DepRouteSelection } from "./dep-draw-list.ts";
 import type { KbGraph } from "./kb.ts";
 import { buildTaskGraph, type TaskGraphModel } from "./task-graph.ts";
-import { computeWorkRoute, type RouteCursor, type WorkNode, type WorkRoute } from "./work-route.ts";
+import { computeWorkRoute, startCursor, type RouteCursor, type WorkNode, type WorkRoute } from "./work-route.ts";
 
 const WORK = "work:";
 export const rawWorkId = (graphId: string): string | null =>
@@ -79,4 +79,14 @@ export function featureTaskModel(graph: KbGraph, graphId: string): Extract<TaskG
 	const record = { id, kind: "feature", title: feature.label, stage: feature.stage ?? "plan", dependsOn: [], children } as unknown as Parameters<typeof buildTaskGraph>[0];
 	const model = buildTaskGraph(record, record);
 	return model.kind === "graph" ? model : null;
+}
+
+/** The cursor on a recomputed route: stays on the same node when it is still
+ *  in the route (at its new step index); otherwise restarts at firstUnfinished. */
+export function reconcileCursor(route: WorkRoute, prev: RouteCursor | null): RouteCursor {
+	if (prev?.node) {
+		const step = route.steps.findIndex((s) => s.nodes.includes(prev.node!));
+		if (step >= 0) return { step, node: prev.node };
+	}
+	return startCursor(route);
 }

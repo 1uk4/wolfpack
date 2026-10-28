@@ -27,7 +27,7 @@
  */
 
 import type { DepRouteSelection } from "../src/core/dep-draw-list.ts";
-import { featureTaskModel, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
+import { featureTaskModel, reconcileCursor, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
 import { startCursor, type RouteCursor } from "../src/core/work-route.ts";
 import { TaskGraphOverlay } from "./task-graph.tsx";
 import type { RouteNavModel } from "./graph-route-nav.tsx";
@@ -358,8 +358,18 @@ export function GraphView({
 	// step whenever the route is recomputed; clearing the selection clears both.
 	const selectedId = selected?.id ?? null;
 	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId) : null), [graph, selectedId]);
-	const [cursorState, setCursorState] = useState<{ route: unknown; cursor: RouteCursor } | null>(null);
-	const cursor: RouteCursor | null = selectedRoute ? (cursorState?.route === selectedRoute ? cursorState.cursor : startCursor(selectedRoute)) : null;
+	// Keyed by the selected id: a refetch recomputes the route but the cursor
+	// stays on its node (reconcileCursor); a new selection starts fresh.
+	const [cursorState, setCursorState] = useState<{ id: string; cursor: RouteCursor } | null>(null);
+	const cursor: RouteCursor | null = selectedRoute
+		? reconcileCursor(selectedRoute, cursorState?.id === selectedId ? cursorState.cursor : null)
+		: null;
+	const cursorRef = useRef<RouteCursor | null>(null);
+	cursorRef.current = cursor;
+	useEffect(() => {
+		// Pin the effective cursor so later payloads reconcile against it.
+		if (selectedId && cursor && (cursorState?.id !== selectedId || cursorState.cursor.node !== cursor.node)) setCursorState({ id: selectedId, cursor });
+	}, [selectedId, cursor, cursorState]);
 	const routeSelection = useMemo(() => {
 		if (!selectedRoute) return null;
 		const node = graph.nodes.find((n) => n.id === selectedId);
@@ -491,9 +501,9 @@ export function GraphView({
 			cursor,
 			label: (id) => byRaw.get(id)?.label ?? id,
 			stage: (id) => byRaw.get(id)?.stage ?? "",
-			onCursor: (next) => setCursorState({ route: selectedRoute, cursor: next }),
+			onCursor: (next) => setCursorState({ id: selectedId!, cursor: next }),
 		};
-	}, [graph, selectedRoute, cursor]);
+	}, [graph, selectedRoute, cursor, selectedId]);
 	useLayoutEffect(() => {
 		const el = cardRef.current;
 		const container = containerRef.current;

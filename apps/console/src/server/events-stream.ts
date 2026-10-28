@@ -25,6 +25,22 @@
  * ui-stream subscribe() pattern.
  */
 import { subscribe, type ServerEvent } from "../core/events.ts";
+import { getConsoleClient } from "./console-client.ts";
+import { activityBridge } from "./needs-you-api.ts";
+
+/**
+ * The activity bridge is what turns a wolf's thread-status into needs-you-changed on this channel. It used to start
+ * only when /api/needs-you was listed, so a window that never listed (or listed before the wolf was up) got ': connected'
+ * and pings and nothing else. Opening the channel starts it, and every ping re-ensures it (idempotent and cheap: the
+ * wolf list is cached), so a wolf that appears later is followed too.
+ */
+function ensureBridge(): void {
+	try {
+		activityBridge().ensure(getConsoleClient());
+	} catch {
+		/* the channel works without it; the next ping retries */
+	}
+}
 
 /** One window's subscription as an SSE Response. */
 export function eventsResponse(): Response {
@@ -64,7 +80,11 @@ export function eventsResponse(): Response {
 			// Flush the headers now so EventSource.onopen fires immediately,
 			// not at the first ping 25s later.
 			frame(": connected\n\n");
-			heartbeat = setInterval(() => frame(": ping\n\n"), 25_000);
+			ensureBridge();
+			heartbeat = setInterval(() => {
+				frame(": ping\n\n");
+				ensureBridge();
+			}, 25_000);
 
 			teardown = stop;
 		},

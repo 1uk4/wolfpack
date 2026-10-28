@@ -49,6 +49,11 @@ import {
   withHeadsUp,
   UNBOUND_CONTEXT,
   BINDING_RULES,
+  completeLine,
+  unboundCompleteNotice,
+  unbindCompleted,
+  takeUnboundNotice,
+  writeUnboundNotice,
 } from "@wolfpack/memory";
 import {
   type BindingScope,
@@ -114,11 +119,38 @@ async function readBinding(scope: BindingScope): Promise<ActiveBinding | null> {
   return readStored(scope);
 }
 
+/**
+ * Per den: how to tell a bound item has completed (graduated/archived, or a task shipped inside a feature). Set by the
+ * tasks extension that owns the den's Work client; a completion that happened elsewhere (the console, the Work API)
+ * is only visible by asking.
+ */
+const completionChecks = new Map<string, (id: string) => Promise<string | null>>();
+
+/**
+ * The stored binding for this conversation, with self-detection: when the bound item has completed (someone else
+ * shipped or graduated it) this conversation unbinds itself, leaves the once-only notice, and reads as unbound.
+ */
+async function readStoredFull(scope: BindingScope): Promise<{ binding: ActiveBinding | null; root: number; readOnly: boolean }> {
+  const { binding, root, readOnly } = await readConversationBinding(scope);
+  if (!binding) return { binding: null, root, readOnly };
+  const title = await completionChecks.get(scope.wolfDen)?.(binding.workId);
+  if (title !== null && title !== undefined) {
+    // A task conversation only sees its owner's binding: it can't clear it, but it must not act on a completed item.
+    if (!readOnly && readBindingFile(scope.wolfDen, root)?.workId === binding.workId) {
+      writeBindingFile(scope.wolfDen, root, null);
+      writeUnboundNotice(scope.wolfDen, root, { workId: binding.workId, title, at: new Date().toISOString() });
+    }
+    return { binding: null, root, readOnly };
+  }
+  return {
+    binding: { taskId: binding.workId, domain: binding.domain, boundAt: binding.boundAt, ...(binding.featureId ? { featureId: binding.featureId } : {}) },
+    root,
+    readOnly,
+  };
+}
+
 async function readStored(scope: BindingScope): Promise<ActiveBinding | null> {
-  const { binding } = await readConversationBinding(scope);
-  return binding
-    ? { taskId: binding.workId, domain: binding.domain, boundAt: binding.boundAt, ...(binding.featureId ? { featureId: binding.featureId } : {}) }
-    : null;
+  return (await readStoredFull(scope)).binding;
 }
 
 /** The work item this conversation is bound to (memory tags observations with it). Null when unbound. */
@@ -435,6 +467,25 @@ export default function createTasksExtension(
 
   const ID_NOTE = " Optional id: act on that item instead of the bound one (the reply then warns that it is not the bound item).";
 
+  completionChecks.set(wolfDen, async (id) => {
+    try {
+      const item = await client.get(id);
+      if (item.stage === "archived" || item.graduated) return item.title;
+      // A shipped loose task waits, bound, for its graduation; one inside a real feature is simply done.
+      if (["task", "issue", "spike"].includes(item.kind) && isComplete(item) && item.partOf) {
+        const parent = await client.get(item.partOf as string);
+        if (parent.kind === "feature" && !parent.container) return item.title;
+      }
+    } catch { /* unreachable or deleted: not known to be complete */ }
+    return null;
+  });
+
+  /** Everyone else bound to a just-shipped task unbinds and is told on their next prompt. */
+  async function unbindOthersOf(ctx: BindingScope, id: string, title: string): Promise<void> {
+    const { root } = await resolveBindingRoot(ctx);
+    unbindCompleted(wolfDen, { workIds: [id], title, id, exceptRoot: root });
+  }
+
   return defineExtension({
     name: "wolfpack-tasks",
     runtimes: ["pi-durable"],
@@ -457,12 +508,11 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
         if (isSubagent()) return "";
         try {
           // Per conversation: a fork shows its lineage's binding, a task conversation its owner's (read-only).
-          const { binding: stored } = await readConversationBinding({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation });
-          const binding: ActiveBinding | null = stored
-            ? { taskId: stored.workId, domain: stored.domain, boundAt: stored.boundAt, ...(stored.featureId ? { featureId: stored.featureId } : {}) }
-            : null;
+          const { binding, root, readOnly } = await readStoredFull({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation });
           if (!binding?.taskId) {
-            return `## Active Task\n\n${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
+            // Unbound because its item completed: say so once.
+            const notice = readOnly ? null : takeUnboundNotice(wolfDen, root);
+            return `## Active Task\n\n${notice ? `${unboundCompleteNotice(notice.title)}\n\n` : ""}${UNBOUND_CONTEXT}\nUse \`task_query\` to see available work.`;
           }
 
           // The cache holds one file per work item: read THIS conversation's.
@@ -960,6 +1010,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             if (held) return held;
             try {
               const shippedOther = await ship(args.id);
+              await unbindOthersOf(ctx, args.id, shippedOther.title);
               return {
                 content: [{ type: "text", text: heads(shippedLine(args.id!), { id: args.id, title: shippedOther.title }, boundRef(binding)) }],
               };
@@ -1001,6 +1052,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             const parentItem = found?.item.partOf ? all.find((i) => i.id === found.item.partOf) : undefined;
             const realFeature = parentItem && parentItem.kind === "feature" && !parentItem.container ? parentItem : undefined;
             const shippedItem = await client.get(binding.taskId);
+            await unbindOthersOf(ctx, binding.taskId, shippedItem.title);
             if (!realFeature) {
               if (readyToGraduate(shippedItem, all)) {
                 await writeCache(shippedItem);
@@ -1044,6 +1096,10 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
                 result.push(`No more tasks in this feature. ${STAYS_BOUND}`);
               }
             }
+
+            // The shipped task is complete: say it plainly when this conversation is no longer bound to it.
+            const after = await readConversationBinding(ctx);
+            if (!after.readOnly && after.binding?.workId !== binding.taskId) result.splice(1, 0, completeLine(shippedItem.title, binding.taskId));
 
             return {
               content: [{ type: "text", text: result.join("\n") }],
@@ -1305,11 +1361,17 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             const done = await confirmGraduation({ client, roots, wolf: wolfName, preview, ship });
             await unlink(file).catch(() => { /* used once */ });
 
-            const binding = await readBinding(ctx);
+            // Raw read: the self-check would already see the item archived and leave a notice the result line replaces.
+            const stored = isSubagent() ? null : (await readConversationBinding(ctx)).binding;
+            const binding = stored ? { taskId: stored.workId, featureId: stored.featureId } : null;
             const result = [`Graduated "${preview.title}": ${done.sent.length} contribution(s) sent to Dewey; ${done.archived.length} item(s) archived.`];
-            if (binding && done.archived.includes(binding.taskId)) {
-              if (await clearBinding(ctx)) clearCache(binding.taskId);
-              else result.push(STAYS_BOUND);
+            // Nothing more goes to a graduated feature: every conversation bound to it or to one of its tasks unbinds.
+            unbindCompleted(wolfDen, { workIds: done.archived, viaFeature: true, title: preview.title, id: args.id, exceptRoot: (await resolveBindingRoot(ctx)).root });
+            if (binding && (done.archived.includes(binding.taskId) || (binding.featureId && done.archived.includes(binding.featureId)))) {
+              if (await clearBinding(ctx)) {
+                clearCache(binding.taskId);
+                result.push(completeLine(preview.title, args.id));
+              } else result.push(STAYS_BOUND);
             }
             try {
               const all = await client.query({ domain: preview.domain });

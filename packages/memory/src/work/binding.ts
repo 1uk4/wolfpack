@@ -18,6 +18,7 @@ export const BINDING_RULES = [
   "Work item binding:",
   "- Bind (task_bind) the item you are working on BEFORE you start: it decides where what you learn is kept.",
   "- One bound item per session. Rebind (task_bind) when you switch to another item.",
+  "- You unbind (task_unbind) when you stop working on the item. Completing it (shipping a task, graduating a feature) unbinds you automatically and says so; after that, new work needs a new or different item (task_create or task_bind), never the completed one.",
   "- When a subagent finishes, relay the decisions and findings that matter to the user in your own words; the raw report is not kept in memory.",
 ].join("\n");
 
@@ -132,3 +133,10 @@ export async function recordFeatureId(
     return undefined;
   }
 }
+
+/** The tool result line for a completed item. */
+export const completeLine = (title: string, id: string) => `${title} (${id}) is complete; you are no longer bound to it.`;
+
+/** Shown once in the next prompt of a conversation unbound because its item completed. */
+export const unboundCompleteNotice = (title: string) =>
+  `Your previous work item ${title} is complete and you are unbound. Don't add work to it; new work needs a new or different item (task_create or task_bind).`;

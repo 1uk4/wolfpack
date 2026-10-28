@@ -123,6 +123,8 @@ export { syncFeatureStage, BEFORE_BUILD, type StageSyncClient } from "./stage-sy
 export {
   UNBOUND_CONTEXT,
   BINDING_RULES,
+  completeLine,
+  unboundCompleteNotice,
   shouldBindOnCreate,
   notBoundReason,
   bindingLabel,

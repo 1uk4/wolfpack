@@ -33,6 +33,7 @@ export function writeBindingFile(den: string, cid: number, b: StoredBinding | nu
   try {
     writeFileSync(tmp, b ? JSON.stringify(b, null, 2) : "null");
     renameSync(tmp, file);
+    if (b) clearUnboundNotice(den, cid); // bound again: the "your item is complete" notice is moot
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* already gone */ }
     throw err;
@@ -50,4 +51,58 @@ export function findHolder(den: string, workId: string, exceptRoot?: number): nu
     if (readBindingFile(den, cid)?.workId === workId) return cid;
   }
   return undefined;
+}
+
+/** Left on a conversation that was unbound because its item completed; the next prompt says it once. */
+export interface UnboundNotice {
+  workId: string;
+  title: string;
+  at: string;
+}
+
+const noticeFile = (den: string, cid: number) => join(conversationsDir(den), String(cid), "unbound-notice.json");
+
+export function writeUnboundNotice(den: string, cid: number, n: UnboundNotice): void {
+  mkdirSync(join(conversationsDir(den), String(cid)), { recursive: true });
+  writeFileSync(noticeFile(den, cid), JSON.stringify(n));
+}
+
+export function clearUnboundNotice(den: string, cid: number): void {
+  try { unlinkSync(noticeFile(den, cid)); } catch { /* none */ }
+}
+
+/** Read and remove the notice: it is shown once. */
+export function takeUnboundNotice(den: string, cid: number): UnboundNotice | null {
+  try {
+    const n = JSON.parse(readFileSync(noticeFile(den, cid), "utf-8")) as UnboundNotice;
+    clearUnboundNotice(den, cid);
+    return n?.workId ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Unbind every conversation whose binding matches (`workIds` against its workId, and with `viaFeature` against its
+ * featureId too), except `exceptRoot`, and leave each a notice. Returns the conversations unbound.
+ */
+export function unbindCompleted(
+  den: string,
+  done: { workIds: Iterable<string>; viaFeature?: boolean; title: string; id: string; exceptRoot?: number },
+): number[] {
+  const ids = new Set(done.workIds);
+  const out: number[] = [];
+  let dirs: string[] = [];
+  try { dirs = readdirSync(conversationsDir(den)); } catch { return out; }
+  for (const d of dirs) {
+    if (!/^\d+$/.test(d)) continue;
+    const cid = Number(d);
+    if (!Number.isSafeInteger(cid) || cid === done.exceptRoot) continue;
+    const b = readBindingFile(den, cid);
+    if (!b || !(ids.has(b.workId) || (done.viaFeature && b.featureId && ids.has(b.featureId)))) continue;
+    writeBindingFile(den, cid, null);
+    writeUnboundNotice(den, cid, { workId: done.id, title: done.title, at: new Date().toISOString() });
+    out.push(cid);
+  }
+  return out;
 }

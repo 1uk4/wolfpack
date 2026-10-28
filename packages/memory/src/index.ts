@@ -184,6 +184,6 @@ export { scanSecrets, type SecretScan } from "./work/secrets.js";
 export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";
 
 // Per-conversation binding files (memory extension + wolfd)
-export { bindingFile, readBindingFile, writeBindingFile, findHolder, unbindCompleted, readFeatureClosed, takeUnboundNotice, writeUnboundNotice, clearUnboundNotice, type StoredBinding, type UnboundNotice } from "./binding-file.js";
+export { bindingFile, readBindingFile, writeBindingFile, findHolder, unbindCompleted, unbindOnGraduation, peekUnboundNotice, readFeatureClosed, takeUnboundNotice, writeUnboundNotice, clearUnboundNotice, type StoredBinding, type UnboundNotice } from "./binding-file.js";
 
 export { WorkPendingState, appendDiscarded, discardLogPath, readPendingSummary, poolDir, type PendingCause } from "./work-pending.js";

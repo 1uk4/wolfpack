@@ -8,6 +8,9 @@
 import type { WorkItem, CreateWorkInput, WorkQuery } from "@wolfpack/kb/client";
 import type { RollupClient } from "@wolfpack/memory";
 
+/** Every Work call gives up after this long: binding self-detection must never hang a prompt or a tool. */
+export const WORK_TIMEOUT_MS = 3000;
+
 export class WorkClient {
   private endpoint: string;
   private token: string;
@@ -34,6 +37,7 @@ export class WorkClient {
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(WORK_TIMEOUT_MS),
     });
 
     const data = await res.json() as Record<string, unknown>;

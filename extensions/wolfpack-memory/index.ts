@@ -52,7 +52,7 @@ import {
   canGraduate,
   previewGraduation,
   confirmGraduation,
-  unbindCompleted,
+  unbindOnGraduation,
   getWorkSession,
   getFileSession,
   summarizeFileChanges,
@@ -1583,7 +1583,7 @@ export default function wolfpackMemory(pi: ExtensionAPI): void {
         if (!kbEnabled) throw new Error("the knowledge base is not configured (KB_BASE / KB_OPS)");
         const done = await confirmGraduation({ client: new WorkClient(), roots: kbRoots, wolf: wolfName, preview, ship });
         // The feature is complete and signed off: every conversation bound to it or its tasks unbinds.
-        unbindCompleted(wolfDen, { workIds: done.archived, viaFeature: true, title: preview.title, id: preview.itemId });
+        unbindOnGraduation(wolfDen, { id: preview.itemId, title: preview.title, archived: done.archived }); // the invoking conversation too: graduation completes its item
         return done;
       },
     },

@@ -78,6 +78,16 @@ export function writeUnboundNotice(den: string, cid: number, n: UnboundNotice): 
   writeFileSync(noticeFile(den, cid), JSON.stringify(n));
 }
 
+/** The notice without removing it (the render that shows it removes it once it is produced). */
+export function peekUnboundNotice(den: string, cid: number): UnboundNotice | null {
+  try {
+    const n = JSON.parse(readFileSync(noticeFile(den, cid), "utf-8")) as UnboundNotice;
+    return n?.workId ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function clearUnboundNotice(den: string, cid: number): void {
   try { unlinkSync(noticeFile(den, cid)); } catch { /* none */ }
 }
@@ -91,6 +101,11 @@ export function takeUnboundNotice(den: string, cid: number): UnboundNotice | nul
   } catch {
     return null;
   }
+}
+
+/** A feature graduated: unbind every conversation bound to it or to one of its archived tasks (the caller included unless excepted). */
+export function unbindOnGraduation(den: string, g: { id: string; title: string; archived: string[]; exceptRoot?: number }): number[] {
+  return unbindCompleted(den, { workIds: g.archived, viaFeature: true, title: g.title, id: g.id, exceptRoot: g.exceptRoot });
 }
 
 /**

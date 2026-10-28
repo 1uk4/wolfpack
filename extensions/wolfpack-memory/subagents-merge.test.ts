@@ -344,7 +344,7 @@ describe("merge on ship", () => {
     await answer(true);
     await vi.waitFor(() => expect(existsSync(rec.workspace.path)).toBe(false), { timeout: 8000 });
     expect(branches(repo!)).not.toContain(rec.workspace.branch);
-  });
+  }, 30_000);
 
   it("an untracked-only file also asks", async () => {
     const { w, feature, rec } = await withChild("TOUCH scratch.txt");

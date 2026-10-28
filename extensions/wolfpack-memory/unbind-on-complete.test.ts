@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import createTasksExtension, { readBoundTask as readBound } from "./unified-tasks.js";
 import { bindingFile, readBindingFile, writeBindingFile } from "./conversation-binding.js";
-import { unbindCompleted } from "@wolfpack/memory";
+import { unbindCompleted, unbindOnGraduation, writeUnboundNotice } from "@wolfpack/memory";
 
 // The same task tools on the durable stack: an in-memory Work API behind fetch.
 type Item = Record<string, any>;
@@ -126,7 +126,94 @@ describe("completing a work item unbinds its conversations", () => {
     bind(1, t.id, f.id);
     expect((await readBoundTask(den))?.taskId).toBe(t.id);
     items.get(t.id)!.stage = "archived";
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 30_000 }); // past the completion cache's TTL
+    try {
+      expect(await readBoundTask(den)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a shipped loose task: the shipper and every other holder are unbound and told", async () => {
+    const loose = add({ kind: "task", title: "Loose" });
+    bind(1, loose.id);
+    bind(2, loose.id);
+    const r = await run("task_done", { confirm: false }, 1);
+    expect(r).toContain(`Loose (${loose.id}) is complete; you are no longer bound to it.`);
+    expect(readBindingFile(den, 1)).toBeNull();
+    expect(readBindingFile(den, 2)).toBeNull();
+    expect(await sectionText("active_task", 2)).toContain(NOTICE("Loose"));
+  });
+
+  it("self-detection treats a shipped loose task as complete, and never unbinds on a Work error or timeout", async () => {
+    const loose = add({ kind: "task", title: "Loose", stage: "shipped" });
+    bind(1, loose.id);
+    bind(2, "work-missing"); // a 404
     expect(await readBoundTask(den)).toBeNull();
+    vi.stubGlobal("fetch", async () => { throw new DOMException("timed out", "TimeoutError"); });
+    expect((await readBound({ wolfDen: den, conversationId: 2 }))?.taskId).toBe("work-missing");
+    expect(readBindingFile(den, 2)?.workId).toBe("work-missing");
+  });
+
+  it("completion lookups are cached for 10 s; shipping through task_done forgets them", async () => {
+    const f = add({ kind: "feature", title: "F" });
+    const a = add({ kind: "task", title: "A", partOf: f.id });
+    bind(1, a.id, f.id);
+    let gets = 0;
+    const base = fetchImpl;
+    vi.stubGlobal("fetch", (u: string | URL, i?: RequestInit) => { if (!i?.method || i.method === "GET") gets++; return base(u, i); });
+    await readBoundTask(den);
+    const first = gets;
+    await readBoundTask(den);
+    await readBoundTask(den);
+    expect(gets).toBe(first); // no further Work GETs inside the TTL
+  });
+
+  it("task_unbind clears a pending completion notice", async () => {
+    const live = add({ kind: "task", title: "Live" });
+    bind(1, live.id);
+    writeUnboundNotice(den, 1, { workId: "work-old", title: "Old", at: "2026-10-27T00:00:00Z" }); // a stale notice left beside a binding
+    await run("task_unbind", {}, 1);
+    expect(await sectionText("active_task", 1)).not.toContain("Your previous work item");
+  });
+
+  it("task_graduate confirm: unbinds the other holders (feature thread, task), the caller with the complete line, not unrelated ones", async () => {
+    const f = add({ kind: "feature", title: "Feat", stage: "shipped" });
+    const t = add({ kind: "task", title: "Tk", stage: "shipped", partOf: f.id });
+    bind(3, f.id, f.id); // feature thread
+    bind(4, t.id, f.id); // a conversation on a task
+    bind(5, "work-unrelated");
+    bind(1, t.id, f.id); // the caller (a task of the feature)
+    // an in-memory graduate endpoint is missing in this fake API: serve the preview + confirm through the real flow
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const token = "abcdef012345";
+    mkdirSync(join(den, "tasks", "graduation"), { recursive: true });
+    const preview = { itemId: f.id, kind: "feature", title: "Feat", domain: "wolfpack", contributions: [], warnings: [], archive: [], token, createdAt: new Date().toISOString() };
+    writeFileSync(join(den, "tasks", "graduation", `${token}.json`), JSON.stringify(preview));
+    const base = fetchImpl;
+    vi.stubGlobal("fetch", async (u: string | URL, i: RequestInit = {}) => {
+      const m = new URL(String(u)).pathname.replace(/^\/work\/?/, "");
+      if (i.method === "POST" && m === `${f.id}/graduate`) { items.get(f.id)!.graduated = "2026-10-27"; return json({ item: items.get(f.id) }); }
+      return base(u, i);
+    });
+    ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kbbase"), opsRoot: join(den, "ops"), denLocal: join(den, "kb") } }, { wolfDen: den, wolfName: "1uk4", domains: ["wolfpack"], wolfConfig: {} });
+    const r = await run("task_graduate", { id: f.id, confirm: token }, 1);
+    expect(r).toContain("2 item(s) archived");
+    expect(r).toContain(`Feat (${f.id}) is complete; you are no longer bound to it.`);
+    expect(readBindingFile(den, 1)).toBeNull();
+    expect(readBindingFile(den, 3)).toBeNull();
+    expect(readBindingFile(den, 4)).toBeNull();
+    expect(readBindingFile(den, 5)?.workId).toBe("work-unrelated");
+    expect(await sectionText("active_task", 3)).toContain(NOTICE("Feat"));
+  });
+
+  it("/task g (the graduation hook) unbinds the invoking conversation too and tells it", async () => {
+    bind(1, "work-t", "work-f");
+    bind(2, "work-f", "work-f");
+    unbindOnGraduation(den, { id: "work-f", title: "Feat", archived: ["work-f", "work-t"] });
+    expect(readBindingFile(den, 1)).toBeNull();
+    expect(readBindingFile(den, 2)).toBeNull();
+    expect(await sectionText("active_task", 1)).toContain(NOTICE("Feat"));
   });
 
   it("graduation unbinds the feature thread and conversations bound to its tasks, not the caller or others", async () => {

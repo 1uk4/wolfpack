@@ -177,16 +177,16 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect((await readBoundTask(den))?.taskId).toBe(f.id);
   });
 
-  it("a lone Inbox task stays bound to itself, ready to graduate", async () => {
+  it("a lone Inbox task is complete when shipped: the shipper is unbound and told, graduating stays the owner's call", async () => {
     const inbox = add({ kind: "feature", title: "Inbox", container: true });
     const s = add({ kind: "task", title: "Stray", partOf: inbox.id });
     add({ kind: "task", title: "Another stray", partOf: inbox.id });
     await run("task_bind", { id: s.id });
     const r = await run("task_done", { confirm: false });
-    expect(r.split("\n").at(-1)).toBe("Bound to Stray (shipped — ready to graduate)");
+    expect(r).toContain(`Stray (${s.id}) is complete; you are no longer bound to it.`);
+    expect(r).toContain("ready to graduate on its own");
     expect(r).not.toContain("Bound to next");
-    expect(await readBoundTask(den)).toEqual({ taskId: s.id });
-    expect(await sectionText("active_task")).toContain("Bound to Stray — shipped, ready to graduate (press g / task_graduate)");
+    expect(await readBoundTask(den)).toBeNull();
   });
 });
 

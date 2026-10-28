@@ -17,6 +17,7 @@ import { wolfConfig } from "../commands/wolf-config.js";
 import { wolfModels } from "../commands/wolf-models.js";
 import { usageCmd } from "../commands/usage.js";
 import { workDoctor } from "../commands/work-doctor.js";
+import { workBackfillFeatureStages } from "../commands/work-backfill.js";
 import { wolfLaunch } from "../commands/wolf-launch.js";
 import { wolfSync } from "../commands/wolf-sync.js";
 import { domainCmd } from "../commands/domain.js";
@@ -44,6 +45,7 @@ ${c.bold("COMMANDS")}
   logs <wolf>                     View wolf logs
   models [wolf]                   Resolved model per use (tier, model, thinking, source)
   usage [wolf]                    Model calls, tokens and cost (--since 7d, --by wolf|model|use|day)
+  work backfill-feature-stages    Move features whose tasks all shipped to shipped (--dry-run, --domain d)
   work doctor                     Read-only work-item hygiene check (--domain d, --json)
   config [wolf]                   Configure wolf (domains, extensions, models); no wolf = pack models
 
@@ -360,7 +362,11 @@ async function main(): Promise<void> {
         break;
 
       case "work":
-        if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json]");
+        if (sub === "backfill-feature-stages") {
+          await workBackfillFeatureStages({ dryRun: passthrough.includes("--dry-run"), domain: flags.domain as string | undefined });
+          break;
+        }
+        if (sub !== "doctor") throw new Error("Usage: wolfpack work doctor [--domain d] [--json] | work backfill-feature-stages [--dry-run]");
         await workDoctor({ domain: flags.domain as string | undefined, json: flags.json as boolean | undefined });
         break;
 

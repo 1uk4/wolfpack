@@ -423,4 +423,90 @@ describe("work-ops", () => {
       expect(readWorkLedger(roots).at(-1)).toMatchObject({ type: "work.unlinked", rel: "depends_on", target: a.id });
     });
   });
+
+  describe("feature auto-ship", () => {
+    const feat = (extra: Record<string, unknown> = {}) =>
+      createWork(roots, { kind: "feature", domain: "wolfpack", title: "F", assignee: "owner", stage: "in_build", ...extra } as never).item;
+    const task = (partOf: string, stage?: string) => {
+      const t = createWork(roots, { kind: "task", domain: "wolfpack", title: "T", assignee: "owner", successCriteria: "done", partOf }).item;
+      if (stage) stageWork(roots, t.id, stage);
+      return t;
+    };
+    const stageOf = (id: string) => loadWorkState(roots).get(id as never)!.stage;
+    const autoEvents = (id: string) => readWorkLedger(roots).filter((e) => e.id === id && e.type === "work.noted" && (e as { text: string }).text.startsWith("auto:"));
+
+    it("the last task shipping moves the feature to shipped, with staged + noted events", () => {
+      const f = feat();
+      const a = task(f.id), b = task(f.id);
+      stageWork(roots, a.id, "shipped");
+      expect(stageOf(f.id)).toBe("in_build");
+      stageWork(roots, b.id, "live");
+      expect(stageOf(f.id)).toBe("shipped");
+      const evs = readWorkLedger(roots).filter((e) => e.id === f.id);
+      expect(evs.at(-2)).toMatchObject({ type: "work.staged", to: "shipped" });
+      expect(evs.at(-1)).toMatchObject({ type: "work.noted", text: "auto: all tasks shipped" });
+      // shipping again / another no-op call adds nothing
+      stageWork(roots, b.id, "live");
+      expect(autoEvents(f.id)).toHaveLength(1);
+    });
+
+    it("archiving counts as done; a feature at plan still ships when its tasks do", () => {
+      const f = feat({ stage: "plan" });
+      const a = task(f.id);
+      stageWork(roots, a.id, "archived");
+      expect(stageOf(f.id)).toBe("shipped");
+    });
+
+    it("reopening a task, or adding a new one, sends a shipped feature back to in_build", () => {
+      const f = feat();
+      const a = task(f.id, "shipped");
+      expect(stageOf(f.id)).toBe("shipped");
+      stageWork(roots, a.id, "in_build");
+      expect(stageOf(f.id)).toBe("in_build");
+      expect(readWorkLedger(roots).filter((e) => e.id === f.id).at(-1)).toMatchObject({ type: "work.noted", text: "auto: task reopened" });
+      stageWork(roots, a.id, "shipped");
+      expect(stageOf(f.id)).toBe("shipped");
+      task(f.id);
+      expect(stageOf(f.id)).toBe("in_build");
+      expect(autoEvents(f.id).map((e) => (e as { text: string }).text)).toEqual([
+        "auto: all tasks shipped", "auto: task reopened", "auto: all tasks shipped", "auto: task reopened",
+      ]);
+    });
+
+    it("leaves no-task, standing, container, graduated and archived features alone", () => {
+      const empty = feat();
+      expect(stageOf(empty.id)).toBe("in_build");
+      const inbox = ensureInbox(roots, "wolfpack", "owner");
+      task(inbox.id, "shipped");
+      expect(stageOf(inbox.id)).toBe("in_build");
+      const arch = feat();
+      const t = task(arch.id);
+      stageWork(roots, arch.id, "archived");
+      stageWork(roots, t.id, "shipped");
+      expect(stageOf(arch.id)).toBe("archived");
+    });
+
+    it("leaves a graduated feature alone", () => {
+      const f = feat();
+      const t = task(f.id);
+      graduateWork(roots, f.id);
+      stageWork(roots, t.id, "shipped");
+      expect(stageOf(f.id)).toBe("in_build");
+    });
+
+    it("moving a task out of or into a feature recomputes both", () => {
+      const a = feat(), b = feat();
+      const t1 = task(a.id, "shipped"), t2 = task(a.id);
+      const t3 = task(b.id, "shipped");
+      expect(stageOf(a.id)).toBe("in_build");
+      expect(stageOf(b.id)).toBe("shipped");
+      moveWork(roots, t2.id, b.id); // open task leaves a (a done) and joins b (b reopens)
+      expect(stageOf(a.id)).toBe("shipped");
+      expect(stageOf(b.id)).toBe("in_build");
+      moveWork(roots, t2.id, a.id);
+      expect(stageOf(a.id)).toBe("in_build");
+      expect(stageOf(b.id)).toBe("shipped");
+      void t1; void t3;
+    });
+  });
 });

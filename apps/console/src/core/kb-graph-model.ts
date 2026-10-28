@@ -159,6 +159,14 @@ export const WORK_RING_WEIGHT: Readonly<Record<string, number>> = {
 	archived: 0.15,
 };
 const DEFAULT_RING_WEIGHT = 0.25;
+/** Outline weight of a shipped feature (ready to graduate). */
+export const READY_RING_WEIGHT = 0.55;
+
+/** Display text for a stage: a shipped feature reads "ready to graduate". */
+export function stageLabel(stage: string, workKind?: string): string {
+	if (stage === "shipped" && workKind === "feature") return "shipped · ready to graduate";
+	return stage.replace(/_/g, " ");
+}
 
 /** Stages whose work no longer holds anything up. */
 const DONE_STAGES: ReadonlySet<string> = new Set(["shipped", "live", "archived"]);
@@ -183,7 +191,7 @@ export function blockedWorkIds(graph: Pick<KbGraph, "nodes" | "edges">): Set<str
 /** Kind (and, for work, stage + blocked) → draw style. Work fill shows the
  *  stage: shipped a dim disc, in_build a bright disc, plan and the rest an
  *  outline (heavier as they progress); `blocked` adds the ring. */
-export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage">, blocked = false): NodeStyle {
+export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage" | "workKind">, blocked = false): NodeStyle {
 	switch (node.kind) {
 		case "domain":
 			return { radius: 3.2, shape: "disc", ring: 0, dim: false, labelGate: 0.5, blocked: false };
@@ -194,6 +202,8 @@ export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage">, blocked = f
 		case "work": {
 			const stage = node.stage ?? "";
 			const base = { radius: 1.15, labelGate: 1, blocked };
+			// A shipped feature is ready to graduate: a bright, larger, heavy ring (not the dim disc of a shipped task).
+			if (stage === "shipped" && node.workKind === "feature") return { ...base, radius: 1.4, shape: "ring", ring: READY_RING_WEIGHT, dim: false };
 			if (SHIPPED_STAGES.has(stage)) return { ...base, shape: "disc", ring: 0, dim: true };
 			if (stage === "in_build") return { ...base, shape: "disc", ring: 0, dim: false };
 			return { ...base, shape: "ring", ring: WORK_RING_WEIGHT[stage] ?? DEFAULT_RING_WEIGHT, dim: stage === "archived" };

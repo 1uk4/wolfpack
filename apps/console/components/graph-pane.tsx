@@ -30,6 +30,7 @@ import {
 	paneWork,
 	parsePaneWidth,
 	resolveWork,
+	stageLabel,
 	threadHref,
 	workWolfCandidates,
 	type PaneWork,
@@ -310,7 +311,7 @@ export function GraphPane({
 					{card.section && <Field label="Section">{card.section.label}</Field>}
 					{card.entryKind && <Field label="Kind">{card.entryKind}</Field>}
 					{card.maturity && <Field label="Maturity">{card.maturity}</Field>}
-					{card.stage && <Field label="Stage">{card.stage.replace(/_/g, " ")}</Field>}
+					{card.stage && <Field label="Stage">{stageLabel(card.stage, card.workKind)}</Field>}
 					{card.workKind && <Field label="Type">{card.workKind}</Field>}
 					{card.assignee && <Field label="Assignee">{card.assignee}</Field>}
 					{card.wolf && <Field label="Wolf">{card.wolf}</Field>}

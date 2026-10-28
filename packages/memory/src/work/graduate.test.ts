@@ -278,6 +278,17 @@ describe("graduation: preview then confirm", () => {
     expect(sentTopics()).toEqual([stray.id]);
   });
 
+  it("a shipped feature is ready, and so is an in_build one whose tasks are all done", () => {
+    const t = w("task", "T", "work-wp-f", { successCriteria: "x" });
+    const shipped = w("feature", "S", null, { stage: "shipped", id: "work-wp-f" });
+    const legacy = w("feature", "L", null, { stage: "in_build", id: "work-wp-f" });
+    expect(readyToGraduate(shipped, [shipped, t])).toBe(true);
+    expect(readyToGraduate(legacy, [legacy, t])).toBe(true);
+    const open = { ...t, stage: "in_build" } as WorkItem;
+    expect(readyToGraduate(legacy, [legacy, open])).toBe(false);
+    expect(readyToGraduate({ ...shipped, graduated: "2026-10-01" } as WorkItem, [shipped, t])).toBe(false);
+  });
+
   it("an initiative graduates with only its own contribution, under its own topic", async () => {
     const g = { ...f, graduated: "2026-10-05", stage: "archived" } as WorkItem;
     const { client } = fakeClient([init, g], { [init.id]: "# Dockerize\n\n## Plan\n\nContainerise.\n" });

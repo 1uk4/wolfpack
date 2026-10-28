@@ -43,6 +43,9 @@ export type TaskGraphModel =
 			label: string;
 	  };
 
+/** Appended to the progress label of a shipped feature (all tasks done, awaiting graduation). */
+export const READY_SUFFIX = " · ready to graduate";
+
 const isShipped = (stage: string): boolean => stage === "shipped" || stage === "live";
 
 /** Which feature the panel shows for a bound item: anything but a feature shows its parent; a feature binding (leftover state once its last task ships, never bound directly) shows itself. Null: none. */
@@ -94,6 +97,6 @@ export function buildTaskGraph(bound: WorkRecordResponse | null, feature: WorkRe
 		edges,
 		boundId,
 		progress: { shipped, total: nodes.length },
-		label: `${shipped}/${nodes.length} shipped`,
+		label: `${shipped}/${nodes.length} shipped${feature.stage === "shipped" ? READY_SUFFIX : ""}`,
 	};
 }

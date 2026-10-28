@@ -13,6 +13,7 @@ import {
   type WorkId,
   type WolfId,
   type LinkRel,
+  isComplete,
   foldWork,
   assertAdvanceable,
   isBindable,
@@ -31,6 +32,48 @@ import {
   readWorkLedger,
   resolveWorkItem,
 } from "./work-store.js";
+
+// ── feature auto-ship ───────────────────────────────────────────────────────
+
+/**
+ * Keep a feature's stage honest about its tasks: when the last open child
+ * completes the feature moves to `shipped` (ready to graduate); when a shipped
+ * feature gains an open child it goes back to `in_build`. Standing, container,
+ * archived and graduated features and features without children are left
+ * alone. Emits ordinary staged + noted events (auditable) and only when the
+ * stage actually changes, so repeated calls never duplicate events.
+ */
+export function syncFeatureStage(roots: KbRoots, featureId: string | null | undefined): WorkEvent[] {
+  if (!featureId) return [];
+  const items = loadWorkState(roots);
+  const feature = items.get(featureId as WorkId);
+  if (!feature || feature.kind !== "feature") return [];
+  if (feature.container || feature.standing || feature.graduated || feature.stage === "archived") return [];
+  const kids = Array.from(items.values()).filter((i) => i.partOf === feature.id);
+  if (kids.length === 0) return [];
+  const allDone = kids.every(isComplete);
+
+  let to: WorkItem["stage"] | null = null;
+  let text = "";
+  if (allDone && feature.stage !== "shipped" && feature.stage !== "live") {
+    to = "shipped";
+    text = "auto: all tasks shipped";
+  } else if (!allDone && feature.stage === "shipped") {
+    to = "in_build";
+    text = "auto: task reopened";
+  }
+  if (!to) return [];
+
+  const at = now();
+  const events: WorkEvent[] = [
+    { type: "work.staged", id: feature.id, at, to },
+    { type: "work.noted", id: feature.id, at, text },
+  ];
+  appendWorkLedger(roots, events);
+  const updated = loadWorkState(roots).get(feature.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, feature.domain as string, feature.id)?.body);
+  return events;
+}
 
 // ── create ──────────────────────────────────────────────────────────────────
 
@@ -106,6 +149,7 @@ export function createWork(roots: KbRoots, input: CreateWorkInput): CreateWorkRe
   const item = items.get(id);
   if (!item) throw new Error(`Failed to create work item ${id} — event did not fold`);
   commitWorkItem(roots, item);
+  if (partOf) syncFeatureStage(roots, partOf);
   return { id, event, item };
 }
 
@@ -171,6 +215,8 @@ export function moveWork(
   appendWorkLedger(roots, [event]);
   const updated = loadWorkState(roots).get(item.id)!;
   commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  syncFeatureStage(roots, item.partOf);
+  syncFeatureStage(roots, target);
   return { event, item: updated };
 }
 
@@ -214,6 +260,7 @@ export function stageWork(
   appendWorkLedger(roots, [event]);
   const updated = loadWorkState(roots).get(id as WorkId)!;
   commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  if (item.kind !== "feature" && item.kind !== "initiative") syncFeatureStage(roots, item.partOf);
   return { event, item: updated };
 }
 

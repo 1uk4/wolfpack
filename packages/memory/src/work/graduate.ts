@@ -49,7 +49,9 @@ const STANDALONE_KINDS = ["task", "issue", "spike"];
 
 /**
  * Ready to graduate (shown in /task, triggered with `g` — never automatic):
- *   feature     all its tasks are complete (at least one), not graduated yet
+ *   feature     all its tasks are complete (at least one), not graduated yet.
+ *               The Work API moves such a feature to `shipped`; an `in_build`
+ *               one with all tasks done (not yet migrated) is accepted too.
  *   initiative  all its current features have graduated (more can be added
  *               later, so it never completes on its own), not graduated yet,
  *               and not standing (a standing initiative never completes)

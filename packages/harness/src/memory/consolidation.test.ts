@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
-import { writeDenTopic } from "@wolfpack/memory";
+import { writeDenTopic, observationIds, findArchived, findRecordLine, parseRecordLines, extractRecord, readArchive } from "@wolfpack/memory";
 import { consolidatePool, drainWorkObservations, durableSessionTopics } from "./consolidation.js";
 
 const WOLF = "w1";
@@ -92,6 +92,8 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
   const o = (n: number, extra: object = {}) => ({ timestamp: `2026-10-20T10:0${n}:00Z`, recordedAt: `2026-10-20T11:0${n}:00Z`, content: `observation ${n}`, ...extra });
   const poolLines = () => readFileSync(join(den, ".memory", "pool", "observations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 
+  const archived = () => readArchive(den);
+
   function mocks(opts: { failSet?: boolean } = {}) {
     const prompts = { consolidate: [] as string[], record: [] as string[] };
     const writes: Array<{ id: string; body: string }> = [];
@@ -129,6 +131,30 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(poolLines()).toEqual([]);
   });
 
+  it("the archive gets written, discarded and den observations, with the id the pool and the Record use", async () => {
+    // 6 untagged + 1 for a task whose item is gone + 1 for a live task
+    const pool = [o(0), o(1, { work: "work-t1" }), o(2), o(3, { work: "gone" }), o(4), o(5), o(6), o(7)];
+    poolWith(pool);
+    const ids = observationIds(pool);
+    const m = mocks();
+    const cfg = { wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore };
+    await consolidatePool(cfg);
+    await consolidatePool(cfg); // the 404 is confirmed on the second run
+    expect(poolLines().map((l) => l.content)).toEqual([]);
+
+    const by = Object.fromEntries(archived().map((e) => [e.content, e]));
+    expect(by["observation 1"]).toMatchObject({ id: ids[1], outcome: "written", target: "work-t1", work: "work-t1", timestamp: pool[1].timestamp, recordedAt: pool[1].recordedAt });
+    expect(by["observation 3"]).toMatchObject({ id: ids[3], outcome: "discarded", target: "deleted", work: "gone" });
+    expect(by["observation 0"]).toMatchObject({ id: ids[0], outcome: "den", target: "skipped" });
+    expect(archived()).toHaveLength(8);
+    expect(archived().every((e) => e.at.length > 0)).toBe(true);
+
+    // the Record line cites the same id and timestamp
+    const line = parseRecordLines(extractRecord(m.writes[0].body)!)[0];
+    expect(line.sources).toEqual([{ id: ids[1], timestamp: pool[1].timestamp }]);
+    expect(findArchived(den, line.sources[0].id)?.content).toBe("observation 1");
+  });
+
   it("an infra failure leaves only the tagged observations in the pool", async () => {
     poolWith([o(0), o(1, { work: "work-t1" }), o(2), o(3), o(4), o(5)]);
     const m = mocks({ failSet: true });
@@ -147,13 +173,13 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     expect(m.writes.map((w) => w.id)).toEqual(["work-t1"]);
     // a 404 is not trusted yet: grace period, the observation waits and nothing is logged
     expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
-    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+    expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
     await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(poolLines()).toEqual([]);
     expect(m.prompts.consolidate).toEqual([]);
-    const logged = readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    const logged = archived().filter((e) => e.outcome === "discarded");
     expect(logged).toHaveLength(1);
-    expect(logged[0]).toMatchObject({ content: "observation 0", work: "gone", reason: "deleted" });
+    expect(logged[0]).toMatchObject({ content: "observation 0", work: "gone", outcome: "discarded", target: "deleted" });
   });
 
   it("a feature-only observation never reaches the den, even without a work tag", async () => {
@@ -190,7 +216,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     await consolidatePool(cfg);
     await consolidatePool(cfg);
     expect(poolLines()).toHaveLength(1);
-    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+    expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
   });
 
   it("a task of a live feature that shipped or was archived is written to the feature's Record, not discarded", async () => {
@@ -205,7 +231,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(m.writes.map((w) => w.id)).toEqual(["work-f1"]);
     expect(poolLines()).toEqual([]);
-    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+    expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
   });
 
   it("an archived item's observations are discarded and logged", async () => {
@@ -216,7 +242,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: m.engine, workStore: m.workStore });
     expect(poolLines()).toEqual([]);
     expect(m.prompts.consolidate).toEqual([]);
-    expect(readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8")).toContain('"reason":"archived"');
+    expect(readFileSync(join(den, ".memory", "pool", "archive.jsonl"), "utf-8")).toContain('"target":"archived"');
   });
 
   it("with no Work API, or one that is down, tagged observations stay pending and never reach the den", async () => {
@@ -232,7 +258,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
     const r2 = await consolidatePool({ wolfDen: den, wolfName: WOLF, skipClaims: true, engine: down.engine, workStore: down.workStore, minObservations: 1 });
     expect(r2.observationsPending).toBe(1);
     expect(poolLines().map((l) => l.content)).toEqual(["observation 0"]);
-    expect(existsSync(join(den, ".memory", "pool", "discarded.jsonl"))).toBe(false);
+    expect(archived().filter((e) => e.outcome === "discarded")).toEqual([]);
   });
 
   it("tasks of one feature share one Record on the feature; a legacy line with only `work` keeps its item", async () => {
@@ -278,7 +304,7 @@ describe("consolidatePool work-tagged observations (pi-durable)", () => {
       expect(prompts).toEqual([]);
       expect(existsSync(sessions())).toBe(false);
       expect(poolLines()).toEqual([]);
-      expect(readFileSync(join(den, ".memory", "pool", "discarded.jsonl"), "utf-8")).toContain("observation 0");
+      expect(readFileSync(join(den, ".memory", "pool", "archive.jsonl"), "utf-8")).toContain("observation 0");
     });
   });
 });

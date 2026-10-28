@@ -87,6 +87,8 @@ export interface EmitDeltaInput {
   groupDate?: string;
   /** Distill's hint: the existing entry this contribution is about. */
   target?: string;
+  /** Provenance for the entry's properties (graduation). */
+  source?: Contribution["source"];
   /** Rebuild (resend-all / --emit-den): write even when the body was emitted before. */
   force?: boolean;
 }
@@ -133,6 +135,7 @@ export function emitDelta(input: EmitDeltaInput): Contribution | null {
     group: input.group,
     groupDate: input.groupDate,
     target: input.target,
+    source: input.source,
   };
 
   const file = join(dir, `${safeSegment(input.denTopicId, "den topic id")}-${hashTag(hash)}.md`);
@@ -191,6 +194,9 @@ function render(c: Contribution): string {
     c.group ? `group: ${c.group}` : null,
     c.groupDate ? `group_date: ${c.groupDate}` : null,
     c.target ? `target: ${c.target}` : null,
+    c.source?.feature ? `source_feature: ${c.source.feature}` : null,
+    c.source?.tasks?.length ? `source_tasks: ${c.source.tasks.join(", ")}` : null,
+    c.source?.recordLines?.length ? `source_record_lines: ${c.source.recordLines.join(", ")}` : null,
     `submitted: ${c.submitted}`,
     "---",
   ]

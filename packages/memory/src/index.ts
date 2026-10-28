@@ -172,6 +172,10 @@ export {
   renderWorkingDocument,
   renderFeatureRecord,
   type WorkRecord,
+  resolveSources,
+  findRecordLine,
+  recordLines,
+  type RenderedLine,
   type WorkRecordStore,
   type WorkRecordItem,
   type WorkObservation,
@@ -186,4 +190,20 @@ export { readResendSet, resendDenTopics, type ResendSet } from "./resend.js";
 // Per-conversation binding files (memory extension + wolfd)
 export { bindingFile, readBindingFile, writeBindingFile, findHolder, unbindCompleted, unbindOnGraduation, peekUnboundNotice, readFeatureClosed, takeUnboundNotice, writeUnboundNotice, clearUnboundNotice, type StoredBinding, type UnboundNotice } from "./binding-file.js";
 
-export { WorkPendingState, appendDiscarded, discardLogPath, readPendingSummary, poolDir, type PendingCause } from "./work-pending.js";
+export {
+  WorkPendingState,
+  appendDiscarded,
+  appendArchive,
+  readArchive,
+  findArchived,
+  archivePath,
+  discardLogPath,
+  readPendingSummary,
+  poolDir,
+  type PendingCause,
+  type ArchiveEntry,
+  type ArchiveItem,
+  type ArchiveOutcome,
+} from "./work-pending.js";
+export { observationHash, observationIds, type ObservationIdFields } from "./observation-id.js";
+export { parseRecordLines, stripSources, lineRef, numberRecordLines, formatSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";

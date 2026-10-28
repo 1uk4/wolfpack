@@ -12,6 +12,7 @@
  * member vectors are marshaled. It only reorganizes LIVE entries; it never gates
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
+import { withSourceProperties } from "./source-props.js";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
@@ -746,9 +747,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
         allowOverflow: overflowOk,
       };
       // Verbatim: the anchored entry is the contribution as authored, no model call.
-      const { entry, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = c.anchor && c.verbatim
+      const { entry: produced, action, unchanged, supersedes, historyRestored, lint, overflow, deduped } = c.anchor && c.verbatim
         ? produceVerbatim(produceInput)
         : await produceEntry(itemEngine, produceInput);
+      const entry = withSourceProperties(produced, c.source, existingMarkdown);
       if (lint?.retried) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → produce retried for lint: ${lint.before.map((f) => f.code).join(",")}`);
       if (lint?.sizePass) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → size pass on ${entry.id}`);
       if (lint?.oversizeChars) ctx.notify?.(`sweep: ${c.from}/${c.denTopicId} → kept oversize: ${entry.id} ${lint.oversizeChars}`);

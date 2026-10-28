@@ -47,7 +47,10 @@ import {
   type WorkRecordStore,
   refuseTagged,
   WorkPendingState,
-  appendDiscarded,
+  appendArchive,
+  observationIds,
+  type ArchiveItem,
+  type ArchiveOutcome,
 } from "@wolfpack/memory";
 import { isSafeSegment, type KbRoots } from "@wolfpack/kb/shared";
 
@@ -202,25 +205,42 @@ function overflowAbove(pool: PoolObservation[], target: number): PoolObservation
 
 const poolKey = (o: PoolObservation) => `${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`;
 
+/** What became of an observation this run handled (it goes to `.memory/pool/archive.jsonl`). */
+interface Handled {
+  obs: PoolObservation;
+  outcome: ArchiveOutcome;
+  target: string;
+}
+
 /**
  * Archive the observations this run handled and leave the rest in the pool:
  * tagged observations that stay pending, and anything appended while the
- * consolidation was running.
+ * consolidation was running. Each archived observation is first appended to
+ * the archive (id, content, outcome, target), then the pool is rewritten
+ * without it, so nothing vanishes.
  */
-async function settlePool(wolfDen: string, handled: PoolObservation[]): Promise<void> {
+async function settlePool(wolfDen: string, handled: Handled[], onError?: (msg: string) => void): Promise<void> {
   const poolFile = join(wolfDen, ".memory", "pool", "observations.jsonl");
   if (!existsSync(poolFile) || handled.length === 0) return;
 
-  const done = new Set(handled.map(poolKey));
+  const done = new Map(handled.map((h) => [poolKey(h.obs), h] as const));
   const lines = (await readFile(poolFile, "utf-8")).split("\n").filter((l) => l.trim());
+  const parsed = lines.map((line) => { try { return JSON.parse(line) as PoolObservation; } catch { return null; } });
+  // Ids over the whole pool in order: the same ones the route shows and the Records cite.
+  const ids = observationIds(parsed.map((o) => o ?? { content: "" }));
   const archived: string[] = [];
   const kept: string[] = [];
-  for (const line of lines) {
-    let key: string | null = null;
-    try { key = poolKey(JSON.parse(line) as PoolObservation); } catch { /* keep unparsable lines */ }
-    (key !== null && done.has(key) ? archived : kept).push(line);
-  }
+  const items: ArchiveItem[] = [];
+  lines.forEach((line, i) => {
+    const o = parsed[i];
+    const h = o ? done.get(poolKey(o)) : undefined; // unparsable lines are kept
+    if (o && h) {
+      archived.push(line);
+      items.push({ obs: o, id: ids[i], outcome: h.outcome, target: h.target });
+    } else kept.push(line);
+  });
 
+  appendArchive(wolfDen, items, onError);
   const archiveDir = join(wolfDen, ".memory", "archive");
   await mkdir(archiveDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -319,8 +339,11 @@ export async function drainWorkObservations(config: DrainWorkConfig): Promise<{ 
 }
 
 async function consolidatePoolInner(
-  config: ConsolidationConfig
+  config0: ConsolidationConfig
 ): Promise<ConsolidationResult> {
+  // Topic ids written this run: the target of the observations folded into them.
+  const topics = new Set<string>();
+  const config: ConsolidationConfig = { ...config0, onTopic: (t) => { topics.add(t.id); config0.onTopic?.(t); } };
   const {
     wolfDen,
     wolfName,
@@ -339,6 +362,8 @@ async function consolidatePoolInner(
 
   // Read pool
   const pool = await readPool(wolfDen);
+  const idList = observationIds(pool);
+  const poolIds = new Map(pool.map((o, i) => [o, idList[i]!] as const));
   // Tagged observations are offered to the Record step every run (its backoff paces retries); only untagged ones
   // count toward the den's overflow, so a group stuck pending cannot starve them.
   const isTagged = (o: PoolObservation) => !!(o.work || o.feature);
@@ -369,12 +394,11 @@ async function consolidatePoolInner(
   // Observations tagged with a work item feed that item's Record, not the den.
   // written → consumed; discarded (item archived/deleted) → logged and consumed, never the den;
   // pending (Work API or model unavailable) → stays in the pool for the next run.
-  const handled: PoolObservation[] = [];
+  const handled: Handled[] = [];
   // The one den-bound set: nothing tagged (work or feature) gets in, whatever wrote the pool line.
   const denObs = refuseTagged(observations.filter((o) => !isTagged(o)), onProgress);
-  const discarded: Array<{ obs: PoolObservation; reason: string }> = [];
-  // After settlePool has archived them, so a failed settle does not log the same discards again on the next run.
-  const logDiscarded = () => void appendDiscarded(wolfDen, discarded, onProgress);
+  let discarded = 0;
+  const denHandled = (outcome: ArchiveOutcome): Handled[] => denObs.map((obs) => ({ obs, outcome, target: [...topics].join(",") || "skipped" }));
   let recordsWritten = 0;
   let pending = 0;
   const workObs = observations.filter(isTagged);
@@ -384,34 +408,32 @@ async function consolidatePoolInner(
       engine,
       store,
       state: new WorkPendingState(wolfDen),
-      observations: workObs.map((o) => ({ id: poolKey(o), content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+      observations: workObs.map((o) => ({ id: poolIds.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
       onProgress,
     });
     for (const o of outcomes) if (o.status === "written") safely(() => config.onRecord?.({ work: o.work, observationCount: o.ids.length, ...(o.chars !== undefined ? { chars: o.chars } : {}) }));
     const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
     for (const o of workObs) {
-      const out = status.get(poolKey(o));
-      if (out?.status === "written") handled.push(o);
+      const out = status.get(poolIds.get(o)!);
+      if (out?.status === "written") handled.push({ obs: o, outcome: "written", target: out.work });
       else if (out?.status === "discarded") {
-        handled.push(o);
-        discarded.push({ obs: o, reason: out.reason });
+        handled.push({ obs: o, outcome: "discarded", target: out.reason });
+        discarded++;
       } else pending++; // pending, or no outcome: stays in the pool, never the den
     }
-    if (discarded.length > 0) onProgress?.(`${discarded.length} work observation(s) discarded (item archived or deleted)`);
+    if (discarded > 0) onProgress?.(`${discarded} work observation(s) discarded (item archived or deleted)`);
     recordsWritten = outcomes.filter((o) => o.status === "written").length;
     if (pending > 0) onProgress?.(`${pending} work observation(s) stay pending`);
   }
   const denTokens = denObs.reduce((sum, o) => sum + Math.ceil(o.content.length / 4), 0);
   if (denObs.length === 0 || (workObs.length > 0 && denObs.length < minObservations && denTokens < minTokens)) {
-    await settlePool(wolfDen, handled);
-    logDiscarded();
+    await settlePool(wolfDen, handled, onProgress);
     return { observationsProcessed: handled.length, topicsCreated: 0, topicsMerged: 0, topicsSkipped: 0, claimsSubmitted: 0, recordsWritten, observationsPending: pending };
   }
 
   if (config.sessionTopics) {
     const folded = await consolidateToSessionTopics({ ...config, sessionTopics: config.sessionTopics }, engine, denObs, domainCtx);
-    await settlePool(wolfDen, [...handled, ...denObs]);
-    logDiscarded();
+    await settlePool(wolfDen, [...handled, ...denHandled("den")], onProgress);
     return {
       observationsProcessed: handled.length + denObs.length,
       topicsCreated: folded.created,
@@ -574,8 +596,7 @@ Domain tags [domain] appear on observations. When creating or merging topics, se
   renderDenIndex(wolfDen);
 
   // Archive processed observations (move to .memory/archive/)
-  await settlePool(wolfDen, [...handled, ...denObs]);
-  logDiscarded();
+  await settlePool(wolfDen, [...handled, ...denHandled(claimsSubmitted > 0 ? "promoted" : "den")], onProgress);
 
   onProgress?.(`Done: ${created} created, ${merged} updated, ${skipped} skipped, ${held} held back, ${trivialSkipped} trivial, ${claimsSubmitted} emitted to KB`);
 

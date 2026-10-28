@@ -18,6 +18,10 @@
  *           Findings, Problems & fixes), short bullets, capped
  *   write   PATCH the document body, replacing ONLY the `## Record` section
  *
+ * Provenance: every Record line carries the ids and timestamps of the observations it came from (a trailing
+ * comment, see record-sources.ts). The model maps each line to the observations it used (`from: ["o2", "r3"]`:
+ * new observation 2, existing line 3); a line it does not map carries the whole batch's ids, flagged `[batch]`.
+ *
  * Failure rules: an infra error (Work API down, model unavailable) leaves the
  * observations pending for the next run; an item that is archived, deleted or
  * unreachable-by-config falls back to den consolidation.
@@ -25,6 +29,7 @@
 import { z } from "zod";
 import { LlmInfraError, WORK_RECORD_SYSTEM, type Engine } from "@wolfpack/engine";
 import type { PendingCause, WorkPendingState } from "./work-pending.js";
+import { formatSources, lineRef, numberRecordLines, parseRecordLines, stripSources, SOURCE_CAP, type RecordLine, type SourceRef } from "./record-sources.js";
 
 // ── the Record section of a document ─────────────────────────────────────────
 
@@ -106,7 +111,7 @@ const PLAN_MIN = 600;
  * (it keeps at least PLAN_MIN characters). Document order is kept: plan, then Record.
  */
 export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP): string {
-  const doc = body.trim();
+  const doc = stripSources(body).trim();
   if (doc.length <= cap) return doc;
   const record = extractRecord(doc) ?? "";
   const plan = withoutRecord(doc);
@@ -123,7 +128,7 @@ export function renderWorkingDocument(body: string, cap: number = DOCUMENT_CAP):
 export function renderFeatureRecord(featureTitle: string, featureBody: string, cap: number = DOCUMENT_CAP): string {
   const record = extractRecord(featureBody);
   if (!record) return "";
-  const text = record.slice(RECORD_HEADING.length).trim();
+  const text = stripSources(record).slice(RECORD_HEADING.length).trim();
   if (!text) return "";
   const head = `## Feature Record — ${featureTitle} (shared by all its tasks; kept up to date by memory)`;
   const room = Math.max(0, cap - head.length - 2);
@@ -133,31 +138,108 @@ export function renderFeatureRecord(featureTitle: string, featureBody: string, c
 
 // ── the Record's shape ───────────────────────────────────────────────────────
 
+/** Refs the model names for a line: `o2` a new observation, `r3` an existing Record line. Null counts as absent. */
+const From = z.array(z.string()).nullish().transform((f) => f ?? []);
+
+/** A bullet is a plain string (older answers) or `{text, from}`. */
+const Item = z.union([z.string().min(1), z.object({ text: z.string().min(1), from: From })]);
+
 export const WorkRecordSchema = z.object({
-  decisions: z.array(z.object({ decision: z.string().min(1), why: z.string().default("") })),
-  changes: z.array(z.string().min(1)),
-  findings: z.array(z.string().min(1)),
-  problems: z.array(z.string().min(1)),
+  decisions: z.array(z.object({ decision: z.string().min(1), why: z.string().default(""), from: From })),
+  changes: z.array(Item),
+  findings: z.array(Item),
+  problems: z.array(Item),
 });
-export type WorkRecord = z.infer<typeof WorkRecordSchema>;
+export type WorkRecord = z.input<typeof WorkRecordSchema>;
 
 const one = (s: string) => s.replace(/\s+/g, " ").trim();
 
-function bullets(items: string[]): string {
-  return items.map((i) => `- ${one(i)}`).join("\n");
+const GROUPS = ["Decisions", "Changes", "Findings", "Problems & fixes"] as const;
+
+interface FlatItem {
+  group: (typeof GROUPS)[number];
+  text: string;
+  from: string[];
 }
 
-/** Render the fixed layout; empty groups are left out, order is fixed. */
-export function renderRecord(r: WorkRecord): string {
-  const groups: Array<[string, string[]]> = [
-    ["Decisions", r.decisions.map((d) => (d.why.trim() ? `${one(d.decision)} — why: ${one(d.why)}` : one(d.decision)))],
-    ["Changes", r.changes],
-    ["Findings", r.findings],
-    ["Problems & fixes", r.problems],
+function flatten(r: WorkRecord): FlatItem[] {
+  const plain = (group: FlatItem["group"], items: Array<z.input<typeof Item>>): FlatItem[] =>
+    items.map((i) => (typeof i === "string" ? { group, text: one(i), from: [] } : { group, text: one(i.text), from: i.from ?? [] }));
+  return [
+    ...(r.decisions ?? []).map((d): FlatItem => ({ group: "Decisions", text: d.why?.trim() ? `${one(d.decision)} — why: ${one(d.why)}` : one(d.decision), from: d.from ?? [] })),
+    ...plain("Changes", r.changes ?? []),
+    ...plain("Findings", r.findings ?? []),
+    ...plain("Problems & fixes", r.problems ?? []),
   ];
-  const parts = groups.filter(([, items]) => items.length > 0).map(([name, items]) => `### ${name}\n\n${bullets(items)}`);
+}
+
+/** A Record line ready to render: visible text plus where it came from. */
+export interface RenderedLine {
+  group: string;
+  text: string;
+  sources: SourceRef[];
+  batch: boolean;
+}
+
+function renderLines(lines: RenderedLine[], withSources: boolean): string {
+  const parts = GROUPS.map((name) => [name, lines.filter((l) => l.group === name)] as const)
+    .filter(([, items]) => items.length > 0)
+    .map(([name, items]) => `### ${name}\n\n${items.map((i) => `- ${i.text}${withSources ? formatSources(i.sources, i.batch) : ""}`).join("\n")}`);
   return [RECORD_HEADING, ...parts].join("\n\n");
 }
+
+/** Render the fixed layout without sources; empty groups are left out, order is fixed. */
+export function renderRecord(r: WorkRecord): string {
+  return renderLines(flatten(r).map((i) => ({ group: i.group, text: i.text, sources: [], batch: false })), false);
+}
+
+const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Attach sources to the answer's lines. A line's refs resolve to the batch's observations (`oN`) and to the
+ * sources of existing lines it carries over (`rN`). With no usable ref, a line whose text is an existing line
+ * keeps that line's sources, and any other line gets the whole batch's (flagged `batch`).
+ * A ref to an existing line without sources (an older Record) adds none: it is not blamed on the batch.
+ */
+export function resolveSources(r: WorkRecord, current: RecordLine[], batch: SourceRef[]): RenderedLine[] {
+  const byText = new Map(current.map((l) => [norm(l.text), l]));
+  return flatten(r).map((it): RenderedLine => {
+    const text = it.text.replace(/^\[[ro]\d+\]\s*/, "");
+    const sources: SourceRef[] = [];
+    let batchLevel = false;
+    let mapped = false;
+    const add = (refs: SourceRef[]) => {
+      for (const ref of refs) if (!sources.some((s) => s.id === ref.id)) sources.push(ref);
+    };
+    for (const f of it.from) {
+      const m = /^\[?([ro])(\d+)\]?$/i.exec(f.trim());
+      if (!m) continue;
+      const n = Number(m[2]) - 1;
+      if (m[1].toLowerCase() === "o" && batch[n]) { mapped = true; add([batch[n]]); }
+      else if (m[1].toLowerCase() === "r" && current[n]) { mapped = true; add(current[n].sources); batchLevel ||= current[n].batch; }
+    }
+    if (!mapped) {
+      const same = byText.get(norm(text));
+      if (same) { add(same.sources); batchLevel = same.batch; }
+      else { add(batch); batchLevel = true; }
+    }
+    return { group: it.group, text, sources: sources.slice(-SOURCE_CAP), batch: batchLevel };
+  });
+}
+
+/** Where a Record line came from, found in a document: the line and its sources, by its ref. */
+export function findRecordLine(body: string, ref: string): RecordLine | undefined {
+  const rec = extractRecord(body);
+  return rec ? parseRecordLines(rec).find((l) => l.ref === ref) : undefined;
+}
+
+/** Every Record line of a document with its ref and sources (empty when it has no Record). */
+export function recordLines(body: string): RecordLine[] {
+  const rec = extractRecord(body);
+  return rec ? parseRecordLines(rec) : [];
+}
+
+export { lineRef, stripSources, type RecordLine, type SourceRef };
 
 /** Last resort over the cap: drop the last bullet of the fullest group until it fits. */
 function trimToCap(r: WorkRecord, cap: number): WorkRecord {
@@ -254,8 +336,10 @@ export class HttpWorkRecordStore implements WorkRecordStore {
 
 /** An observation tagged for a work item. */
 export interface WorkObservation {
-  /** Unique id (the observation's timestamp). */
+  /** Unique id (observationIds over the pool); the Record keeps it as the line's source. */
   id: string;
+  /** When it was observed; stored next to the id in a line's sources. */
+  timestamp?: string;
   content: string;
   work: string;
   /** The task's parent feature when it was tagged. */
@@ -298,11 +382,11 @@ function buildPrompt(item: WorkRecordItem, current: string | null, obs: WorkObse
     "PLAN (the working document outside the Record):",
     plan ? (plan.length > PLAN_CAP ? plan.slice(0, PLAN_CAP) + "\n[…]" : plan) : "(none)",
     "",
-    "CURRENT RECORD:",
-    current ?? "(empty — no Record yet)",
+    "CURRENT RECORD (lines are numbered [r1], [r2]…):",
+    current ? numberRecordLines(current) : "(empty — no Record yet)",
     "",
-    "NEW OBSERVATIONS:",
-    ...obs.map((o) => `- ${o.content}`),
+    "NEW OBSERVATIONS (numbered [o1], [o2]…):",
+    ...obs.map((o, i) => `- [o${i + 1}] ${o.content}`),
     tooLong ? `\nYour previous answer rendered ${tooLong} characters. Fold older detail so the Record stays under ${RECORD_CAP - 500} characters.` : "",
   ].join("\n");
 }
@@ -376,13 +460,15 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
         return r;
       };
 
-      let record = await ask();
+      let record: WorkRecord = await ask();
       let rendered = renderRecord(record);
       if (rendered.length > RECORD_CAP) {
         record = await ask(rendered.length);
         rendered = renderRecord(record);
-        if (rendered.length > RECORD_CAP) rendered = renderRecord(trimToCap(record, RECORD_CAP));
+        if (rendered.length > RECORD_CAP) record = trimToCap(record, RECORD_CAP);
       }
+      // The cap counts what is read; the sources ride along as comments.
+      rendered = renderLines(resolveSources(record, current ? parseRecordLines(current) : [], obs.map((o) => ({ id: o.id, ...(o.timestamp ? { timestamp: o.timestamp } : {}) }))), true);
 
       // Re-read right before the write so a plan edit made while the model
       // ran is not overwritten (only the Record section is ours).
@@ -390,7 +476,7 @@ export async function consolidateWorkRecords(opts: ConsolidateWorkOptions): Prom
       await store.setBody(work, replaceRecordSection(fresh.body, rendered));
       state?.clear(work);
       onProgress?.(`  work ${work}: Record rewritten (${rendered.length} chars) from ${obs.length} observation(s)`);
-      outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: rendered.length });
+      outcomes.push({ work, ids: obs.map((o) => o.id), status: "written", chars: stripSources(rendered).length });
     } catch (err) {
       const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
       onProgress?.(`  work ${work}: ${isInfra(err) ? "model unavailable" : "failed"}, ${obs.length} observation(s) stay pending — ${reason}`);

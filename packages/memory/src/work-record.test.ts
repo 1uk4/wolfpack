@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { LlmInfraError } from "@wolfpack/engine";
+import { stripSources, parseRecordLines, formatSources } from "./record-sources.js";
 import {
   consolidateWorkRecords,
   extractRecord,
@@ -9,6 +10,9 @@ import {
   renderFeatureRecord,
   replaceRecordSection,
   withoutRecord,
+  resolveSources,
+  recordLines,
+  findRecordLine,
   RECORD_CAP,
   DOCUMENT_CAP,
   type WorkRecord,
@@ -169,7 +173,7 @@ describe("consolidateWorkRecords", () => {
     expect(prompts[0]).toContain("Fix cache");
     expect(prompts[0]).toContain("no stale reads");
     expect(prompts[0]).toContain("step one");
-    expect(prompts[0]).toContain("- old finding");
+    expect(prompts[0]).toContain("- [r1] old finding");
     expect(prompts[0]).toContain("chose a TTL cache");
     expect(writes).toHaveLength(1);
     expect(writes[0].body.startsWith("## Plan\n\nstep one\n\n## Record")).toBe(true);
@@ -222,7 +226,7 @@ describe("consolidateWorkRecords", () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain("Your previous answer rendered");
     expect(out[0].status).toBe("written");
-    expect(extractRecord(writes[0].body)!.length).toBeLessThanOrEqual(RECORD_CAP);
+    expect(stripSources(extractRecord(writes[0].body)!).length).toBeLessThanOrEqual(RECORD_CAP);
   });
 });
 
@@ -302,5 +306,79 @@ describe("renderFeatureRecord", () => {
   it("is empty when the feature has no Record", () => {
     expect(renderFeatureRecord("F", "## Plan\n\nx")).toBe("");
     expect(renderFeatureRecord("F", "")).toBe("");
+  });
+});
+
+// ── sources: where each Record line came from ────────────────────────────────
+
+describe("Record line sources", () => {
+  const tsObs = (work: string, ...contents: string[]) => contents.map((c, i) => ({ id: `id${i + 1}`, timestamp: `2026-10-27T10:0${i}:00Z`, content: c, work }));
+  const run = async (answer: unknown, body = "", observations = tsObs("work-a", "first", "second", "third"), prompts: string[] = []) => {
+    const { store, writes } = fakeStore({ "work-a": { body } });
+    const engine = fakeEngine([answer as WorkRecord], prompts);
+    const out = await consolidateWorkRecords({ engine, store, observations });
+    expect(out[0].status).toBe("written");
+    return { body: writes[0].body, lines: parseRecordLines(extractRecord(writes[0].body)!), prompts };
+  };
+
+  it("a line the model mapped carries only its observations, with timestamps (per line)", async () => {
+    const { body, lines, prompts } = await run({
+      decisions: [{ decision: "Use TTL", why: "simple", from: ["o2"] }],
+      changes: [{ text: "Added cache", from: ["o1", "o3"] }],
+      findings: [],
+      problems: [],
+    });
+    expect(prompts[0]).toContain("- [o1] first");
+    expect(prompts[0]).toContain("- [o3] third");
+    expect(lines.map((l) => [l.text, l.sources, l.batch])).toEqual([
+      ["Use TTL — why: simple", [{ id: "id2", timestamp: "2026-10-27T10:01:00Z" }], false],
+      ["Added cache", [{ id: "id1", timestamp: "2026-10-27T10:00:00Z" }, { id: "id3", timestamp: "2026-10-27T10:02:00Z" }], false],
+    ]);
+    expect(body).toContain("- Added cache <!-- src: id1@2026-10-27T10:00:00Z id3@2026-10-27T10:02:00Z -->");
+  });
+
+  it("a line without a mapping carries the whole batch, flagged [batch]", async () => {
+    const { body, lines } = await run({ decisions: [], changes: ["Added cache", { text: "Dropped refs", from: ["o9"] }], findings: [], problems: [] });
+    expect(lines.every((l) => l.batch && l.sources.map((s) => s.id).join() === "id1,id2,id3")).toBe(true);
+    expect(body).toContain("<!-- src[batch]: id1@");
+  });
+
+  it("an unchanged line keeps its sources; a reworded line unions its refs with the new observations", async () => {
+    const first = await run({ decisions: [], changes: [{ text: "Added cache", from: ["o1"] }], findings: [{ text: "TTL is 5m", from: ["o2"] }], problems: [] });
+    const second = await run(
+      { decisions: [], changes: [{ text: "Added cache", from: [] }], findings: [{ text: "TTL is 10m now", from: ["r2", "o1"] }], problems: [] },
+      first.body,
+      [{ id: "n1", timestamp: "2026-10-28T09:00:00Z", content: "ttl raised", work: "work-a" }],
+    );
+    expect(second.prompts[0]).toContain("- [r1] Added cache");
+    expect(second.prompts[0]).not.toContain("<!--");
+    expect(second.lines.find((l) => l.text === "Added cache")).toMatchObject({ sources: [{ id: "id1" }], batch: false });
+    expect(second.lines.find((l) => l.text === "TTL is 10m now")!.sources.map((s) => s.id)).toEqual(["id2", "n1"]);
+  });
+
+  it("an older Record without sources still parses and renders; carried lines gain none, new lines get the batch", async () => {
+    const old = "## Plan\n\np\n\n## Record\n\n### Findings\n\n- old finding\n";
+    expect(parseRecordLines(extractRecord(old)!)).toEqual([expect.objectContaining({ group: "Findings", text: "old finding", sources: [], batch: false })]);
+    expect(renderFeatureRecord("F", old)).toContain("- old finding");
+    const { body, lines } = await run({ decisions: [], changes: ["new thing"], findings: [{ text: "old finding", from: ["r1"] }], problems: [] }, old);
+    expect(lines.find((l) => l.text === "old finding")!.sources).toEqual([]);
+    expect(body).toContain("- old finding\n");
+    expect(lines.find((l) => l.text === "new thing")!.batch).toBe(true);
+  });
+
+  it("the agent's views and the size cap leave the comments out; the document keeps them", async () => {
+    const { body } = await run({ decisions: [], changes: [{ text: "Added cache", from: ["o1"] }], findings: [], problems: [] });
+    expect(body).toContain("<!--");
+    expect(renderFeatureRecord("F", body)).not.toContain("<!--");
+    expect(renderFeatureRecord("F", body)).toContain("- Added cache");
+    expect(renderWorkingDocument(body)).not.toContain("<!--");
+    expect(stripSources(body)).toContain("- Added cache\n");
+  });
+
+  it("accepts the model's null/absent `from` and bare strings", async () => {
+    const { WorkRecordSchema } = await import("./work-record.js");
+    const r = WorkRecordSchema.parse({ decisions: [{ decision: "d", why: "w", from: null }], changes: ["c"], findings: [{ text: "f" }], problems: [] });
+    expect(r.decisions[0].from).toEqual([]);
+    expect(findRecordLine("## Record\n\n### Changes\n\n- c\n", parseRecordLines("### Changes\n\n- c")[0].ref)?.text).toBe("c");
   });
 });

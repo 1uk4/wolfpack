@@ -391,7 +391,9 @@ REWRITE, DO NOT APPEND:
 LEAVE OUT: session narrative ("we then", "the user asked"), test counts and "N tests pass", build/deploy/verified status, who did what, next-step lists, dates (except where a decision's timing is what matters), and anything the plan already says. A commit hash may be kept sparingly, only on a change that is hard to find otherwise.
 Do not invent facts that neither the current record nor the observations state. If nothing in the new observations is worth recording, return the current record unchanged.
 
-Respond with valid JSON: {"decisions": [{"decision": string, "why": string}], "changes": [string], "findings": [string], "problems": [string]}. An empty group is an empty array.`;
+SOURCES: the CURRENT RECORD lines are numbered [r1], [r2]… and the NEW OBSERVATIONS [o1], [o2]…. For every item, list in "from" the observations it rests on and, when you keep or fold an existing line, that line: e.g. ["o2", "r3"]. An unchanged line keeps its own ref. Use only refs you were given; never put a ref in the text itself.
+
+Respond with valid JSON: {"decisions": [{"decision": string, "why": string, "from": [string]}], "changes": [{"text": string, "from": [string]}], "findings": [{"text": string, "from": [string]}], "problems": [{"text": string, "from": [string]}]}. An empty group is an empty array.`;
 
 /**
  * stage: produce (KB sweep) · model: smart · in: contribution + existing (if merge) · out: entry

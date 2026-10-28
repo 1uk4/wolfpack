@@ -72,6 +72,19 @@ function quarantineBad(filePath: string, reason: string): void {
   }
 }
 
+const list = (v: unknown): string[] | undefined => {
+  const out = String(v ?? "").split(",").map((t) => t.trim()).filter((t) => /^[A-Za-z0-9._-]+$/.test(t));
+  return out.length ? out : undefined;
+};
+
+/** The graduation provenance fields of a contribution's frontmatter (ids only; anything else is dropped). */
+function sourceFrom(fields: Record<string, unknown>): ParsedContribution["source"] {
+  const feature = list(fields.source_feature)?.[0];
+  const tasks = list(fields.source_tasks);
+  const recordLines = list(fields.source_record_lines);
+  return feature || tasks || recordLines ? { ...(feature ? { feature } : {}), ...(tasks ? { tasks } : {}), ...(recordLines ? { recordLines } : {}) } : undefined;
+}
+
 function parseContribution(filePath: string, from: string): ParsedContribution {
   const raw = readFileSync(filePath, "utf-8");
   const { fields, body } = parseFrontmatter(raw);
@@ -128,6 +141,7 @@ function parseContribution(filePath: string, from: string): ParsedContribution {
     group: grouped ? group : undefined,
     groupDate: grouped ? groupDate : undefined,
     target: fields.target && /^kb-[A-Za-z0-9-]+$/.test(String(fields.target)) ? String(fields.target) : undefined,
+    source: sourceFrom(fields),
     summary: fields.summary ? String(fields.summary) : content.split("\n\n")[0] ?? "",
     session: fields.session ? String(fields.session) : undefined,
     submitted: fields.submitted ? String(fields.submitted) : "",

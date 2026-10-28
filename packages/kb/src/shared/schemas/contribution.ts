@@ -82,6 +82,18 @@ export const ContributionSchema = z.object({
    * prior for the sweep's subject check, never a bypass of it.
    */
   target: z.string().optional(),
+  /**
+   * Where the knowledge came from (graduation): the feature, its tasks and the Record lines it was written from.
+   * The librarian copies it to the entry's properties (source-feature, source-tasks, source-record-lines).
+   */
+  source: z
+    .object({
+      feature: z.string().optional(),
+      tasks: z.array(z.string()).optional(),
+      /** Record line refs (8 hex of the line's group and text; see record-sources in the memory package). */
+      recordLines: z.array(z.string()).optional(),
+    })
+    .optional(),
 });
 
 export type Contribution = z.infer<typeof ContributionSchema>;

@@ -6,6 +6,7 @@ import type { Engine } from "@wolfpack/engine";
 import { createOrchestrator } from "./orchestrator.js";
 import type { AgentRuntime, ConversationChunk, LedgerEntry } from "./runtime.js";
 import { readTopics } from "./session/memory.js";
+import { stripSources } from "./record-sources.js";
 
 type RawObs = { timestamp: string; content: string; domain?: string };
 
@@ -255,7 +256,8 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.record[0]).toContain("plan text");
     expect(prompts.record[0]).not.toContain("unrelated chatter");
     expect(s.writes).toHaveLength(1);
-    expect(s.writes[0].body).toBe("## Plan\n\nplan text\n\n## Record\n\n### Decisions\n\n- Use TTL cache — why: simple\n");
+    expect(stripSources(s.writes[0].body)).toBe("## Plan\n\nplan text\n\n## Record\n\n### Decisions\n\n- Use TTL cache — why: simple\n");
+    expect(s.writes[0].body).toMatch(/- Use TTL cache — why: simple <!-- src\[batch\]: [0-9a-f]{16}@/);
     // both consumed
     expect(orch.getActiveObservations()).toEqual([]);
   });
@@ -300,9 +302,9 @@ describe("orchestrator work tagging and Records", () => {
     expect(prompts.record).toEqual([]);
     expect(prompts.consolidate).toEqual([]);
     expect(orch.getActiveObservations()).toEqual([]);
-    const log = readFileSync(join(cwd, ".memory", "pool", "discarded.jsonl"), "utf-8");
+    const log = readFileSync(join(cwd, ".memory", "pool", "archive.jsonl"), "utf-8");
     expect(log).toContain("TTL cache");
-    expect(log).toContain('"reason":"archived"');
+    expect(log).toContain('"target":"archived"');
   });
 
   it("drainWork (graduation) folds the feature's and its tasks' observations and leaves untagged and other features' alone", async () => {

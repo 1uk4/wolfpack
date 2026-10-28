@@ -32,7 +32,8 @@ import { consolidateSession, type ConsolidateResult } from "./consolidate.js";
 import type { DenConfig } from "./den.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { consolidateWorkRecords, type WorkRecordStore } from "./work-record.js";
-import { WorkPendingState, appendDiscarded } from "./work-pending.js";
+import { WorkPendingState, appendArchive, type ArchiveItem } from "./work-pending.js";
+import { observationIds } from "./observation-id.js";
 
 /** The work item a session is bound to right now. */
 export interface BoundWork {
@@ -258,6 +259,8 @@ export function createOrchestrator(
 
   async function consolidatePool(forceAll: boolean): Promise<void> {
     const folded = foldLedger(ledgerEvents);
+    // One id per observation, the same scheme as the pool, the route and the Records.
+    const ids = observationIds(folded.activeObservations);
 
     // Tagged observations never count toward (or hide behind) the den's overflow: a group stuck pending must not
     // starve the untagged ones. They are all offered to the Record step each run; its backoff paces the retries.
@@ -288,25 +291,28 @@ export function createOrchestrator(
       const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
       if (!poolRoot && !warnedNoDen) {
         warnedNoDen = true;
-        runtime.notify?.("memory: no den configured (denRoot / WOLF_DEN): discarded work observations are not logged to a file", "warning");
+        runtime.notify?.("memory: no den configured (denRoot / WOLF_DEN): archived work observations are not kept in a file", "warning");
       }
       const state = new WorkPendingState(poolRoot, undefined);
       runtime.notify?.(`memory: updating Records from ${tagged.length} work observation(s)`, "info");
+      const idOf = new Map(folded.activeObservations.map((o, i) => [o, ids[i]!] as const));
       const outcomes = await consolidateWorkRecords({
         engine,
         store: cfg.workRecordStore,
-        observations: tagged.map((o) => ({ id: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
+        observations: tagged.map((o) => ({ id: idOf.get(o)!, timestamp: o.timestamp, content: o.content, work: (o.work ?? o.feature)!, ...(o.feature ? { feature: o.feature } : {}) })),
         state,
         onProgress: (m) => runtime.notify?.(`memory: ${m.trim()}`, "info"),
       });
       const status = new Map(outcomes.flatMap((o) => o.ids.map((id) => [id, o] as const)));
-      const discarded: Array<{ obs: object; reason: string }> = [];
+      const archived: ArchiveItem[] = [];
       for (const o of tagged) {
-        const out = status.get(o.timestamp);
-        if (out?.status === "written") consumedWork.add(o.timestamp);
-        else if (out?.status === "discarded") {
+        const out = status.get(idOf.get(o)!);
+        if (out?.status === "written") {
           consumedWork.add(o.timestamp);
-          discarded.push({ obs: o, reason: out.reason });
+          archived.push({ obs: o, id: idOf.get(o), outcome: "written", target: out.work });
+        } else if (out?.status === "discarded") {
+          consumedWork.add(o.timestamp);
+          archived.push({ obs: o, id: idOf.get(o), outcome: "discarded", target: out.reason });
         } else heldWork.add(o.timestamp); // pending or no outcome: never the den
       }
       if (consumedWork.size > 0) {
@@ -316,11 +322,10 @@ export function createOrchestrator(
           coversUpToId: folded.latestCoverageId ?? "",
         });
       }
-      // After the drop is recorded, so a failed drop does not log the same discards twice.
-      if (discarded.length > 0) {
-        if (poolRoot) appendDiscarded(poolRoot, discarded, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
-        runtime.notify?.(`memory: ${discarded.length} work observation(s) discarded (item archived or deleted)`, "info");
-      }
+      // The archive skips an observation it already holds, so a failed drop that reruns does not log twice.
+      if (poolRoot) appendArchive(poolRoot, archived, (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+      const discarded = archived.filter((a) => a.outcome === "discarded").length;
+      if (discarded > 0) runtime.notify?.(`memory: ${discarded} work observation(s) discarded (item archived or deleted)`, "info");
     }
     // Defense in depth: nothing tagged reaches the den pass.
     promote = promote.filter((o) => !isTagged(o) && !consumedWork.has(o.timestamp) && !heldWork.has(o.timestamp));
@@ -376,8 +381,10 @@ export function createOrchestrator(
     const soleDomain = batchDomains.size === 1 ? [...batchDomains][0] : undefined;
 
     // Write results
+    const topicIds: string[] = [];
     for (const action of result.actions) {
       if (action.action === "skip" || !action.result) continue;
+      topicIds.push(action.result.id);
 
       writeTopic(memRoot, {
         id: action.result.id,
@@ -389,7 +396,12 @@ export function createOrchestrator(
       });
     }
 
-    // Tombstone promoted observations
+    // Tombstone promoted observations (kept in the archive: they folded into session topics)
+    const poolRoot = cfg.denRoot || process.env.WOLF_DEN || undefined;
+    if (poolRoot) {
+      const idOfObs = new Map(folded.activeObservations.map((o, i) => [o, ids[i]!] as const));
+      appendArchive(poolRoot, promote.map((o) => ({ obs: o, id: idOfObs.get(o), outcome: "den" as const, target: topicIds.join(",") || "skipped" })), (m) => runtime.notify?.(`memory: ${m}`, "warning"));
+    }
     const timestamps = promote.map((o) => o.timestamp);
     if (timestamps.length > 0) {
       appendEvent({

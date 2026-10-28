@@ -34,7 +34,8 @@ import type { Engine } from "@wolfpack/engine";
 import { isComplete, tryEmitDelta, type WorkItem, type WorkQuery } from "@wolfpack/kb/client";
 import { deliveredBullets, mergeDelivered, parseKbNotes, resolveRetiredIds, type DeliveredBullet, type KbRoots } from "@wolfpack/kb/shared";
 import { distillTopic, existingFor, type DistilledContribution } from "../distill.js";
-import { extractRecord, withoutRecord } from "../work-record.js";
+import { extractRecord, recordLines as recordLinesOf, withoutRecord } from "../work-record.js";
+import { stripSources } from "../record-sources.js";
 import { staleBuildWarning } from "./build-stamp.js";
 import { hasRollupZone, outcomesText, stripRollupMarkers, totalsText, totalsValues, withoutRollup } from "./rollup.js";
 import { scanSecrets } from "./secrets.js";
@@ -246,6 +247,20 @@ export interface PreviewContribution {
   target?: string;
   /** A standing feature's own entry: stored verbatim, pinned to the item, grouped under the initiative. */
   feature?: boolean;
+  /** Provenance copied to the entry's properties: the item, its tasks, the Record lines (see sourceOf). */
+  source?: { feature?: string; tasks?: string[]; recordLines?: string[] };
+}
+
+/**
+ * Where the graduated knowledge came from: the item holding the Record, its tasks, and the refs of the Record's
+ * lines (the lines carry the observation ids; the observation archive holds the observations). Every entry of a
+ * graduation gets the whole Record's lines: the model does not say which line fed which entry. Initiatives have no Record.
+ */
+export function sourceOf(item: WorkItem, all: WorkItem[], rawBody: string): PreviewContribution["source"] {
+  if (item.kind === "initiative") return undefined;
+  const tasks = all.filter((t) => t.partOf === item.id && t.kind !== "feature").map((t) => t.id as string);
+  const recordLines = recordLinesOf(rawBody).map((l) => l.ref);
+  return { feature: item.id as string, ...(tasks.length ? { tasks } : {}), ...(recordLines.length ? { recordLines } : {}) };
 }
 
 /**
@@ -369,7 +384,10 @@ async function distillPreview(opts: {
   onProgress?: (msg: string) => void;
 }, item: WorkItem, all: WorkItem[], folded: number): Promise<GraduationPreview> {
   const { client, engine, id } = opts;
-  const { body } = await client.getWithBody(id);
+  const { body: rawBody } = await client.getWithBody(id);
+  // The sources in the Record's comments are for audit: the model and the entries never see them.
+  const body = rawBody === null ? null : stripSources(rawBody);
+  const source = sourceOf(item, all, rawBody ?? "");
   const input = buildGraduationInput({ item, all, body: body ?? "", roots: opts.roots });
   const isInitiative = item.kind === "initiative";
   const standing = isStanding(item, all);
@@ -405,13 +423,13 @@ async function distillPreview(opts: {
     const sum = scanSecrets(summary);
     const ttl = scanSecrets(item.title);
     for (const f of [...sum.findings, ...ttl.findings]) featureWarnings.push(`redacted ${f.count} ${f.kind}${f.count === 1 ? "" : "s"} from the feature entry's title or summary; check the document`);
-    return { id: item.id as string, title: ttl.text, summary: sum.text, body: `# ${ttl.text}\n\n${scan.text}\n`, initiative: false, history: [], feature: true };
+    return { id: item.id as string, title: ttl.text, summary: sum.text, body: `# ${ttl.text}\n\n${scan.text}\n`, initiative: false, history: [], feature: true, ...(source ? { source } : {}) };
   };
   let contributions: PreviewContribution[] = r.outputs.map((o: DistilledContribution) => {
     if (o.feature) return featureContribution(o.summary);
     // The initiative's list of delivered features is built here, not by the model.
     const text = o.initiative ? mergeDelivered(o.body, delivered) : o.body;
-    return { id: o.id, title: o.title, summary: o.summary, body: text, initiative: !!o.initiative, history: historyOf(text), ...(o.target ? { target: o.target } : {}) };
+    return { id: o.id, title: o.title, summary: o.summary, body: text, initiative: !!o.initiative, history: historyOf(text), ...(o.target ? { target: o.target } : {}), ...(!o.initiative && source ? { source } : {}) };
   });
   if (standing && !contributions.some((c) => c.feature)) contributions.push(featureContribution(item.successCriteria || item.title));
   if (standing) {
@@ -550,6 +568,7 @@ export async function confirmGraduation(opts: {
         ...(c.initiative || c.feature ? { anchor: c.id } : {}),
         ...(c.feature && initiative ? { verbatim: true, group: initiative.id as string, groupDate: String(item.created).slice(0, 10) } : {}),
         ...(c.target && !c.initiative && !c.feature ? { target: c.target } : {}),
+        ...(c.source ? { source: c.source } : {}),
         domainHint: preview.domain,
         summary: c.summary,
         body: c.body,

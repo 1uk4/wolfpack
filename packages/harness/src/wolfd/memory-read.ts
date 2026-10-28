@@ -3,10 +3,9 @@
  * Pure reads of the wolf's own den (and its Work API client); nothing here writes. The topic lookup matches ids
  * against what the readers found on disk, so a request id is never joined into a path.
  */
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary } from "@wolfpack/memory";
+import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary, observationIds, stripSources } from "@wolfpack/memory";
 import type { BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
@@ -110,13 +109,11 @@ export async function readMemoryObservations(den: string, limit?: number, work?:
   const causeOf = (o: { work?: string; feature?: string }): "work-api-unavailable" | "consolidation-failed" | undefined =>
     (o.feature && waiting.keys[o.feature]) || (o.work && waiting.keys[o.work]) || (unavailable && (o.work || o.feature) ? "work-api-unavailable" : undefined);
   const blocked = unavailable;
-  const seen = new Map<string, number>();
+  // The same ids the Records and the archive use (observationIds, in @wolfpack/memory).
+  const poolIds = observationIds(pool);
   const all = pool.map((o, i): MemoryObservation & { _i: number } => {
-    const h = createHash("sha1").update(`${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`).digest("hex").slice(0, 16);
-    const n = seen.get(h) ?? 0;
-    seen.set(h, n + 1);
     return {
-      id: n === 0 ? h : `${h}-${n}`,
+      id: poolIds[i]!,
       timestamp: o.timestamp ?? "",
       ...(o.recordedAt ? { recordedAt: o.recordedAt } : {}),
       content: o.content ?? "",
@@ -223,7 +220,8 @@ export async function readWorkRecord(id: string, work: { endpoint?: string; toke
   const r = await fetchWorkItem(id, work);
   if (r.kind !== "ok") return r;
   const { item, body } = r;
-  const section = extractRecord(body);
+  const record = extractRecord(body);
+  const section = record === null ? null : stripSources(record); // the console reads the Record; the sources stay in the document
   const listed = item.kind === "feature" ? await fetchChildren(item.id, work) : undefined;
   // a container (Inbox) can be huge: only its count goes out; a feature's list is capped
   const childCount = item.container && listed ? listed.length : undefined;

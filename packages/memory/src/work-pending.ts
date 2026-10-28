@@ -1,10 +1,11 @@
 /**
  * Bookkeeping for tagged observations that cannot be folded into a Record yet, shared by the durable and pi paths.
- * Everything lives under `<root>/.memory/pool/` (root = the wolf's den): the discard log and `work-state.json`.
+ * Everything lives under `<root>/.memory/pool/` (root = the wolf's den): the observation archive and `work-state.json`.
  * State is advisory: any read/write failure degrades to "no state" and never blocks consolidation.
  */
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { observationHash } from "./observation-id.js";
 
 export type PendingCause = "work-api-unavailable" | "consolidation-failed";
 
@@ -16,21 +17,120 @@ export const MISSING_GRACE_MS = 10 * 60_000;
 export const MISSING_GRACE_RUNS = 2;
 
 export const poolDir = (root: string): string => join(root, ".memory", "pool");
+/** The old discard log (ticket 1): still read, no longer written; its entries are folded into the archive. */
 export const discardLogPath = (root: string): string => join(poolDir(root), "discarded.jsonl");
+export const archivePath = (root: string): string => join(poolDir(root), "archive.jsonl");
 
-/** Append discarded observations with their reason; guarded: a failed append is reported, never thrown. */
-export function appendDiscarded(root: string, items: Array<{ obs: object; reason: string }>, onError?: (msg: string) => void): boolean {
+/**
+ * What became of an observation that left the pool:
+ * written (folded into a Record), discarded (its item is archived or deleted), den (folded into a den or
+ * session topic), promoted (its topic was distilled to the KB).
+ */
+export type ArchiveOutcome = "written" | "discarded" | "den" | "promoted";
+
+/** One line of `.memory/pool/archive.jsonl`: the observation as it was, and where it went. Append-only. */
+export interface ArchiveEntry {
+  id: string;
+  timestamp: string;
+  recordedAt: string;
+  content: string;
+  work?: string;
+  feature?: string;
+  outcome: ArchiveOutcome;
+  /** written: the work item holding the Record · discarded: the reason · den / promoted: the topic id(s). */
+  target: string;
+  /** When it was archived (ISO). */
+  at: string;
+}
+
+export interface ArchiveItem {
+  obs: { timestamp?: string; recordedAt?: string; content: string; work?: string; feature?: string };
+  /** The observation's id (observationIds over the pool); absent: the hash without ordinal. */
+  id?: string;
+  outcome: ArchiveOutcome;
+  target: string;
+}
+
+/**
+ * Append observations that left the pool to the archive; guarded: a failed append is reported, never thrown.
+ * An observation already archived with the same outcome is not written twice (a settle that failed halfway reruns safely).
+ */
+export function appendArchive(root: string, items: ArchiveItem[], onError?: (msg: string) => void): boolean {
   if (items.length === 0) return true;
   try {
     mkdirSync(poolDir(root), { recursive: true });
     const at = new Date().toISOString();
-    appendFileSync(discardLogPath(root), items.map(({ obs, reason }) => JSON.stringify({ ...obs, discardedAt: at, reason }) + "\n").join(""));
+    const have = new Set(readArchive(root).map((e) => `${e.id}\u0000${e.outcome}`));
+    const lines: string[] = [];
+    for (const { obs, id, outcome, target } of items) {
+      const oid = id ?? observationHash(obs);
+      const key = `${oid}\u0000${outcome}`;
+      if (have.has(key)) continue;
+      have.add(key);
+      const e: ArchiveEntry = {
+        id: oid,
+        timestamp: obs.timestamp ?? "",
+        recordedAt: obs.recordedAt ?? "",
+        content: obs.content,
+        ...(obs.work ? { work: obs.work } : {}),
+        ...(obs.feature ? { feature: obs.feature } : {}),
+        outcome,
+        target,
+        at,
+      };
+      lines.push(JSON.stringify(e) + "\n");
+    }
+    if (lines.length > 0) appendFileSync(archivePath(root), lines.join(""));
     return true;
   } catch (err) {
-    onError?.(`discard log not written: ${err instanceof Error ? err.message : String(err)}`);
+    onError?.(`observation archive not written: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
+
+/** Append discarded observations with their reason (an archive entry with outcome `discarded`). */
+export function appendDiscarded(root: string, items: Array<{ obs: ArchiveItem["obs"]; id?: string; reason: string }>, onError?: (msg: string) => void): boolean {
+  return appendArchive(root, items.map(({ obs, id, reason }) => ({ obs, id, outcome: "discarded" as const, target: reason })), onError);
+}
+
+function readJsonl(file: string): Array<Record<string, unknown>> {
+  try {
+    return readFileSync(file, "utf-8").split("\n").filter((l) => l.trim()).flatMap((l) => {
+      try { return [JSON.parse(l) as Record<string, unknown>]; } catch { return []; }
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The archive, oldest first. The old `discarded.jsonl` is read too (its lines become `discarded` entries) when it
+ * exists and the archive does not already hold the observation.
+ */
+export function readArchive(root: string): ArchiveEntry[] {
+  const out = readJsonl(archivePath(root)) as unknown as ArchiveEntry[];
+  const legacy = readJsonl(discardLogPath(root));
+  if (legacy.length === 0) return out;
+  const have = new Set(out.map((e) => `${e.id}\u0000${e.outcome}`));
+  for (const l of legacy) {
+    const o = { timestamp: String(l.timestamp ?? ""), recordedAt: String(l.recordedAt ?? ""), content: String(l.content ?? "") };
+    const id = observationHash(o);
+    if (have.has(`${id}\u0000discarded`)) continue;
+    out.push({
+      id,
+      ...o,
+      ...(typeof l.work === "string" ? { work: l.work } : {}),
+      ...(typeof l.feature === "string" ? { feature: l.feature } : {}),
+      outcome: "discarded",
+      target: String(l.reason ?? ""),
+      at: String(l.discardedAt ?? ""),
+    });
+  }
+  return out;
+}
+
+/** An archived observation by id (any outcome; the last entry wins). */
+export const findArchived = (root: string, id: string): ArchiveEntry | undefined => readArchive(root).filter((e) => e.id === id).pop();
 
 export interface PendingEntry {
   firstPendingAt: number;

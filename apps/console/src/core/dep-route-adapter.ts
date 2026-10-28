@@ -35,11 +35,11 @@ export function workNodesFromGraph(graph: Pick<KbGraph, "nodes" | "edges">): Wor
 /** The route for a selected graph node, or null when it has none (not a
  *  work node, an initiative, or the Factory itself: the Factory selects no
  *  route). */
-export function routeForNode(graph: KbGraph, graphId: string): WorkRoute | null {
+export function routeForNode(graph: KbGraph, graphId: string, opts: { expanded?: ReadonlySet<string> } = {}): WorkRoute | null {
 	const id = rawWorkId(graphId);
 	const node = graph.nodes.find((n) => n.id === graphId);
 	if (!id || node?.kind !== "work" || node.workKind === "initiative") return null;
-	const route = computeWorkRoute(workNodesFromGraph(graph), id);
+	const route = computeWorkRoute(workNodesFromGraph(graph), id, { collapseDoneFeatures: true, expanded: opts.expanded });
 	return route.steps.length > 0 ? route : null;
 }
 
@@ -60,9 +60,15 @@ export function toRouteSelection(route: WorkRoute, cursor: RouteCursor | null, d
 			if (route.done[n]) done.add(gid(n));
 		}
 	}
+	const hidden = new Set<string>();
+	const collapsed = new Map<string, number>();
+	for (const [f, tasks] of Object.entries(route.collapsed)) {
+		collapsed.set(gid(f), tasks.length);
+		for (const t of tasks) hidden.add(gid(t));
+	}
 	const edges = new Set(route.edges.map((e) => `${gid(e.from)}|${gid(e.to)}`));
 	return {
-		nodes, edges, parallel, done, cursor: cursor?.node ? gid(cursor.node) : null,
+		nodes, edges, parallel, done, hidden, collapsed, cursor: cursor?.node ? gid(cursor.node) : null,
 		layout: { root: gid(route.root), target: gid(route.target), steps: route.steps.map((s) => s.nodes.map(gid)) },
 	};
 }

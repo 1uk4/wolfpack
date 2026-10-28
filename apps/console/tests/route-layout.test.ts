@@ -213,14 +213,15 @@ describe("route drops member-to-member dependency shortcuts", () => {
 	});
 });
 
-describe("completed route edges draw darker", () => {
-	const ids = ["a", "b", "c", "p", "q"];
+describe("completed route edges are judged by the node they enter", () => {
+	const ids = ["I", "S", "a", "b", "c", "p", "q"];
 	const positions = new Map(ids.map((id, i) => [id, { x: i * 10, y: 0 }]));
 	const route = {
 		nodes: new Set(ids),
-		edges: new Set(["a|b", "b|c", "p|q"]),
+		edges: new Set(["I|S", "a|b", "b|c", "p|q", "q|c"]),
 		parallel: new Set(["p", "q"]),
-		done: new Set(["a", "b", "p", "q"]),
+		// S: a shipped / ready-to-graduate feature; c is unfinished.
+		done: new Set(["S", "a", "b", "p", "q"]),
 	};
 	const arrows = buildDepDrawList({
 		edges: [],
@@ -231,13 +232,70 @@ describe("completed route edges draw darker", () => {
 		route,
 	}).arrows;
 	const get = (from: string, to: string) => arrows.find((a) => a.from === from && a.to === to)!;
-	it("done→done is flagged done, done→unfinished stays bright", () => {
+	it("an edge entering a done node is done, even from an unfinished tail", () => {
+		assert.equal(get("I", "S").done, true, "initiative -> shipped feature");
 		assert.equal(get("a", "b").done, true);
+		assert.equal(get("p", "q").done, true);
+	});
+	it("done -> unfinished stays bright (not done)", () => {
 		assert.equal(get("b", "c").done, undefined);
 		assert.equal(get("b", "c").bright, true);
 	});
-	it("parallel done→done is flagged parallel", () => {
-		assert.equal(get("p", "q").done, true);
-		assert.equal(get("p", "q").parallel, true);
+	it("parallel hue is only for unfinished parallel steps", () => {
+		assert.equal(get("p", "q").parallel, undefined);
+		assert.equal(get("q", "c").parallel, undefined);
+	});
+	it("hidden (collapsed) ends are not drawn", () => {
+		const hidden = buildDepDrawList({
+			edges: [{ from: "a", to: "b" }], factories: [{ members: ids }], positions,
+			viewport: { minX: -9, minY: -9, maxX: 99, maxY: 9 }, ratio: 0.3, route: { ...route, hidden: new Set(["a"]) },
+		}).arrows;
+		assert.ok(!hidden.some((a) => a.from === "a" || a.to === "a"));
+	});
+});
+
+describe("route done styling constants", () => {
+	it("one muted grey for done edges/nodes; node opacity sits between route and background", async () => {
+		const palette = await import("../src/core/dep-palette.ts");
+		assert.match(palette.ROUTE_DONE_COLOR, /^#[0-9a-f]{6}$/);
+		const hex = palette.ROUTE_DONE_COLOR.slice(1).match(/../g)!.map((h) => parseInt(h, 16));
+		assert.ok(Math.max(...hex) - Math.min(...hex) < 40, "grey: channels close together");
+		assert.equal("PARALLEL_DONE_COLOR" in palette, false);
+		assert.ok(palette.DEP_STYLE.doneWidth < palette.DEP_STYLE.routeWidth);
+		assert.ok(palette.DEP_STYLE.routeDoneNodeAlpha > 0.3 && palette.DEP_STYLE.routeDoneNodeAlpha < 1);
+	});
+	it("the selection marks done nodes (shipped feature, ready-to-graduate feature)", () => {
+		const nodes = [
+			{ id: "I", kind: "initiative", stage: "plan", parent: null, dependsOn: [] },
+			{ id: "S", kind: "feature", stage: "in_build", parent: "I", dependsOn: [] },
+			{ id: "s1", kind: "task", stage: "shipped", parent: "S", dependsOn: [] },
+			{ id: "T", kind: "feature", stage: "plan", parent: "I", dependsOn: ["S"] },
+			{ id: "t1", kind: "task", stage: "plan", parent: "T", dependsOn: [] },
+		];
+		const sel = toRouteSelection(computeEntryRoute(nodes, "t1"), null, "d");
+		assert.ok(sel.done.has("work:S") && sel.done.has("work:s1"));
+		assert.ok(!sel.done.has("work:t1"));
+	});
+});
+
+describe("physics on the collapsed route", () => {
+	const nodes = [
+		{ id: "I", kind: "initiative", stage: "plan", parent: null, dependsOn: [] },
+		{ id: "S", kind: "feature", stage: "shipped", parent: "I", dependsOn: [] },
+		{ id: "s1", kind: "task", stage: "shipped", parent: "S", dependsOn: [] },
+		{ id: "s2", kind: "task", stage: "shipped", parent: "S", dependsOn: ["s1"] },
+		{ id: "T", kind: "feature", stage: "plan", parent: "I", dependsOn: ["S"] },
+		{ id: "t1", kind: "task", stage: "plan", parent: "T", dependsOn: [] },
+	];
+	it("the link set springs the feature in place of its hidden tasks", () => {
+		const route = computeEntryRoute(nodes, "t1", { collapseDoneFeatures: true });
+		const sel = toRouteSelection(route, null, "d");
+		const hierarchy = [{ from: "work:s1", to: "work:S" }, { from: "work:s2", to: "work:S" }, { from: "work:S", to: "work:I" }];
+		const links = linkSetForEntry(hierarchy, sel.nodes, sel.edges, () => true).map((l) => `${l.from}|${l.to}`);
+		assert.ok(links.includes("work:S|work:T"));
+		assert.ok(!links.some((l) => l.includes("work:s1") || l.includes("work:s2")));
+		assert.deepEqual(sel.layout!.steps.flat().filter((id) => id === "work:s1" || id === "work:s2"), []);
+		assert.deepEqual([...sel.hidden!].sort(), ["work:s1", "work:s2"]);
+		assert.equal(sel.collapsed!.get("work:S"), 2);
 	});
 });

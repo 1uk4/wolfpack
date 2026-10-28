@@ -210,3 +210,71 @@ describe("route entry via parent (flag on)", () => {
     assert.equal(r.blocked.b, false);
   });
 });
+
+describe("collapseDoneFeatures", () => {
+  const nodes: WorkNode[] = [
+    { id: "I", kind: "initiative", stage: "plan", parent: null, dependsOn: [] },
+    f("S", [], "shipped"), t("s1", "S", [], "shipped"), t("s2", "S", ["s1"], "shipped"), t("s3", "S", ["s1"], "shipped"),
+    f("T", ["S"], "in_build"), t("t1", "T"), t("t2", "T", ["t1"]),
+  ].map((n) => (n.id === "S" || n.id === "T" ? { ...n, parent: "I" } : n));
+  const opts = { collapseDoneFeatures: true };
+  const ids = (r: { steps: { nodes: string[] }[] }) => r.steps.flatMap((s) => s.nodes);
+
+  it("a shipped prerequisite feature becomes one step; edges redirect to/from it", () => {
+    const full = computeRoute(nodes, "t2");
+    assert.ok(ids(full).includes("s2"));
+    const r = computeRoute(nodes, "t2", opts);
+    const all = ids(r);
+    assert.ok(all.includes("S") && !all.some((id) => id.startsWith("s")));
+    assert.deepEqual(r.collapsed, { S: ["s1", "s2", "s3"] });
+    const keys = r.edges.map((e) => `${e.from}>${e.to}`);
+    assert.ok(keys.includes("I>S") && keys.includes("S>T") && keys.includes("T>t1"));
+    assert.ok(!keys.some((k) => /s[123]/.test(k)));
+    assert.ok(r.steps.length < full.steps.length);
+    assert.equal(r.done.S, true);
+  });
+
+  it("expanding restores its tasks to the route", () => {
+    const r = computeRoute(nodes, "t2", { ...opts, expanded: new Set(["S"]) });
+    assert.deepEqual(r.collapsed, {});
+    assert.deepEqual(r, { ...computeRoute(nodes, "t2"), collapsed: {} });
+    assert.ok(ids(r).includes("s2"));
+  });
+
+  it("the target's own feature never collapses (even fully done), nor the target feature", () => {
+    const done = nodes.map((n) => (n.id === "t1" || n.id === "t2" ? { ...n, stage: "shipped" } : n));
+    const r = computeRoute(done, "t2", opts);
+    assert.ok(ids(r).includes("t1"));
+    assert.ok(!(("T") in r.collapsed));
+    const rf = computeRoute(done, "T", opts);
+    assert.ok(ids(rf).includes("t1") && ids(rf).includes("T"));
+    assert.deepEqual(Object.keys(rf.collapsed), ["S"]);
+  });
+
+  it("a partially done feature does not collapse", () => {
+    const part = nodes.map((n) => (n.id === "s3" ? { ...n, stage: "plan" } : n));
+    const r = computeRoute(part, "t2", opts);
+    assert.deepEqual(r.collapsed, {});
+    assert.ok(ids(r).includes("s3"));
+  });
+
+  it("the cursor and stepper count steps on the collapsed route", () => {
+    const r = computeRoute(nodes, "t2", opts);
+    let c = startCursor(r);
+    assert.equal(c.node, "t1");
+    assert.equal(r.steps[c.step]!.nodes.includes("t1"), true);
+    const seen: (string | null)[] = [c.node];
+    while (true) { const n = cursorNext(r, c); if (n.step === c.step) break; c = n; seen.push(c.node); }
+    assert.equal(seen.length, r.steps.length - r.firstUnfinished!);
+    assert.ok(!seen.some((id) => id?.startsWith("s") ?? false));
+    c = cursorPrev(r, startCursor(r));
+    assert.equal(c.node, "S");
+  });
+
+  it("a feature with all tasks done counts as done (ready to graduate) before it ships", () => {
+    const ready = nodes.map((n) => (n.id === "S" ? { ...n, stage: "in_build" } : n));
+    const r = computeRoute(ready, "t2", opts);
+    assert.equal(r.done.S, true);
+    assert.ok("S" in r.collapsed);
+  });
+});

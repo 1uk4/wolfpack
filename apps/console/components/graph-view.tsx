@@ -277,7 +277,13 @@ export function GraphView({
 		const renderer = new GraphCanvasRenderer(
 			canvas,
 			{
-				onSelect: (nodeId) => setSelected({ id: nodeId }),
+				onSelect: (nodeId) => {
+					// A collapsed feature on the selected route expands in place
+					// instead of re-targeting the route.
+					const raw = rawWorkId(nodeId);
+					if (raw && collapsedRef.current.has(raw)) setExpanded((prev) => ({ id: selectedIdRef.current, set: new Set([...(prev.id === selectedIdRef.current ? prev.set : []), raw]) }));
+					else setSelected({ id: nodeId });
+				},
 				onStageClick: () => setSelected(null),
 				onNodeDoubleClick: (nodeId) => {
 					if (opensTaskOverlay(graphRef.current, nodeId)) setOverlayId(nodeId);
@@ -349,7 +355,14 @@ export function GraphView({
 	// the card's cursor on it. The cursor restarts at the first unfinished
 	// step whenever the route is recomputed; clearing the selection clears both.
 	const selectedId = selected?.id ?? null;
-	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId) : null), [graph, selectedId]);
+	// Features the user expanded on this selection (reset on a new selection).
+	const [expanded, setExpanded] = useState<{ id: string | null; set: ReadonlySet<string> }>({ id: null, set: new Set() });
+	const expandedSet = expanded.id === selectedId ? expanded.set : undefined;
+	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId, { expanded: expandedSet }) : null), [graph, selectedId, expandedSet]);
+	const collapsedRef = useRef<ReadonlySet<string>>(new Set());
+	collapsedRef.current = new Set(Object.keys(selectedRoute?.collapsed ?? {}));
+	const selectedIdRef = useRef<string | null>(null);
+	selectedIdRef.current = selectedId;
 	// Keyed by the selected id: a refetch recomputes the route but the cursor
 	// stays on its node (reconcileCursor); a new selection starts fresh.
 	const [cursorState, setCursorState] = useState<{ id: string; cursor: RouteCursor } | null>(null);

@@ -23,6 +23,10 @@ export interface DepRouteSelection {
 	edges: ReadonlySet<string>;
 	parallel: ReadonlySet<string>;
 	done: ReadonlySet<string>;
+	/** Ids hidden while collapsed into a feature node (not drawn at all). */
+	hidden?: ReadonlySet<string>;
+	/** Collapsed feature graph id -> how many tasks it stands in for. */
+	collapsed?: ReadonlyMap<string, number>;
 	/** The node the card's cursor is on (drawn stronger than the rest of the route). */
 	cursor?: string | null;
 	/** Straightening input: the route's steps (graph ids, in order) between
@@ -45,8 +49,8 @@ export interface DepArrow {
 	from: string;
 	to: string;
 	bright: boolean;
-	/** A route edge whose both ends are done: drawn darker (route or, when
-	 *  both ends are parallel, parallel hue). */
+	/** A route edge whose head (the node it enters) is done: drawn thinner in
+	 *  the single muted grey. */
 	done?: boolean;
 	/** Both ends sit at a parallel step of the route. */
 	parallel?: boolean;
@@ -108,14 +112,15 @@ export function buildDepDrawList(input: DepDrawInput): DepDrawList {
 		const key = edgeKey(from, to);
 		if (seen.has(key) || from === to) return;
 		seen.add(key);
+		if (route?.hidden?.has(from) || route?.hidden?.has(to)) return;
 		if (isRouteShortcut(route, from, to)) return;
 		if (visible && (!visible.has(from) || !visible.has(to))) return;
 		if (!positions.has(from) || !positions.has(to)) return;
 		if (!regions.some((r) => r.has(from) && r.has(to))) return;
 		if (route?.edges.has(key)) {
 			const arrow: DepArrow = { from, to, bright: true };
-			if (route.done.has(from) && route.done.has(to)) arrow.done = true;
-			if (route.parallel.has(from) && route.parallel.has(to)) arrow.parallel = true;
+			if (route.done.has(to)) arrow.done = true;
+			else if (route.parallel.has(from) && route.parallel.has(to)) arrow.parallel = true;
 			bright.push(arrow);
 		}
 		else faint.push({ from, to, bright: false });

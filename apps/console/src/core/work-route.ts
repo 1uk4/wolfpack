@@ -27,6 +27,15 @@ export const ROUTE_ENTRY_VIA_PARENT = true;
 
 export interface RouteOptions {
   entryViaParent?: boolean;
+  /**
+   * Collapse each fully done prerequisite feature (not the target, nor the
+   * target's own feature) to its feature node: its tasks leave the route's
+   * steps, edges into them redirect to the feature and edges out of them
+   * start from it. See `WorkRoute.collapsed`.
+   */
+  collapseDoneFeatures?: boolean;
+  /** Features kept expanded despite `collapseDoneFeatures` (per selection). */
+  expanded?: ReadonlySet<string>;
 }
 
 export interface RouteEdge {
@@ -58,9 +67,11 @@ export interface WorkRoute {
   /** Index of the first step with an unfinished node, or null when all are done. */
   firstUnfinished: number | null;
   warnings: string[];
+  /** Collapsed feature id -> the route task ids it stands in for (sorted). */
+  collapsed: Record<string, string[]>;
 }
 
-const isDoneStage = (stage: string) => stage === "shipped" || stage === "archived";
+const isDoneStage = (stage: string) => stage === "shipped" || stage === "live" || stage === "archived";
 
 export function computeWorkRoute(
   nodes: readonly WorkNode[], targetId: string, opts: RouteOptions = {},
@@ -69,7 +80,7 @@ export function computeWorkRoute(
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const empty = (): WorkRoute => ({
     target: targetId, root: ROUTE_ROOT, steps: [], edges: [], parallelGroups: [],
-    done: {}, blocked: {}, firstUnfinished: null, warnings: [],
+    done: {}, blocked: {}, firstUnfinished: null, warnings: [], collapsed: {},
   });
   const target = byId.get(targetId);
   if (!target) return empty();
@@ -205,6 +216,53 @@ export function computeWorkRoute(
     }
   }
 
+  // Collapse fully done prerequisite features to their feature node.
+  const collapsed: Record<string, string[]> = {};
+  if (opts.collapseDoneFeatures) {
+    const ownFeature = targetIsFeatureNode ? targetId : target.parent;
+    const taskDone = (id: string) => isDoneStage(byId.get(id)!.stage);
+    const acyclic = (list: readonly RouteEdge[], ids: Iterable<string>): boolean => {
+      const indeg = new Map<string, number>();
+      for (const id of ids) indeg.set(id, 0);
+      for (const e of list) indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
+      const ready = [...indeg].filter(([, d]) => d === 0).map(([id]) => id);
+      let seen = 0;
+      while (ready.length) {
+        const id = ready.pop()!;
+        seen++;
+        for (const e of list) if (e.from === id && indeg.set(e.to, indeg.get(e.to)! - 1).get(e.to) === 0) ready.push(e.to);
+      }
+      return seen === indeg.size;
+    };
+    for (const f of [...inRoute].sort()) {
+      if (f === targetId || f === ownFeature || opts.expanded?.has(f) || !isFeatureWithTasks(f)) continue;
+      if (!tasksIn(f).every(taskDone)) continue;
+      const hide = new Set(tasksIn(f).filter((t) => inRoute.has(t)));
+      if (!hide.size) continue;
+      const merged = new Map<string, RouteEdge>();
+      for (const e of edges) {
+        const from = hide.has(e.from) ? f : e.from;
+        const to = hide.has(e.to) ? f : e.to;
+        if (from === to) continue;
+        const key = `${from}\0${to}`;
+        const prev = merged.get(key);
+        if (!prev) merged.set(key, { ...e, from, to });
+        else {
+          prev.implicit = prev.implicit && e.implicit;
+          if (!e.entry) delete prev.entry;
+        }
+      }
+      let next = [...merged.values()];
+      const gated = new Set(next.filter((e) => !e.entry).map((e) => e.to));
+      next = next.filter((e) => !e.entry || !gated.has(e.to));
+      const remaining = [...inRoute].filter((id) => !hide.has(id));
+      if (!acyclic(next, remaining)) continue;
+      edges.splice(0, edges.length, ...next);
+      for (const t of hide) inRoute.delete(t);
+      collapsed[f] = [...hide].sort();
+    }
+  }
+
   // Longest-path layering.
   const incoming = new Map<string, string[]>();
   for (const id of inRoute) incoming.set(id, []);
@@ -232,14 +290,18 @@ export function computeWorkRoute(
 
   const done: Record<string, boolean> = {};
   const blocked: Record<string, boolean> = {};
-  for (const id of inRoute) done[id] = isDoneStage(byId.get(id)!.stage);
+  // A feature is done when shipped, or ready to graduate (all its tasks done).
+  for (const id of inRoute) {
+    const tasks = tasksIn(id);
+    done[id] = isDoneStage(byId.get(id)!.stage) || (isFeatureWithTasks(id) && tasks.every((t) => isDoneStage(byId.get(t)!.stage)));
+  }
   for (const id of inRoute) blocked[id] = blockers.get(id)!.some((p) => !done[p]);
 
   const first = steps.findIndex((s) => s.nodes.some((id) => !done[id] && !ancestorOnly.has(id)));
   return {
     target: targetId, root: ROUTE_ROOT, steps, edges: routeEdges,
     parallelGroups: steps.filter((s) => s.parallel).map((s) => s.nodes),
-    done, blocked, firstUnfinished: first < 0 ? null : first, warnings,
+    done, blocked, firstUnfinished: first < 0 ? null : first, warnings, collapsed,
   };
 }
 

@@ -55,7 +55,7 @@
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { buildDepDrawList, type DepArrow, type DepRouteSelection } from "../src/core/dep-draw-list.ts";
-import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, PARALLEL_DONE_COLOR, ROUTE_DONE_COLOR } from "../src/core/dep-palette.ts";
+import { DEP_COLORS, DEP_STYLE, DEP_SPRING_STRENGTH, ROUTE_DONE_COLOR } from "../src/core/dep-palette.ts";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import type { Pt } from "./cluster-geometry.ts";
 import {
@@ -603,7 +603,9 @@ export class GraphCanvasRenderer {
 	/** id -> node for the current data (avoids O(n^2) scans). */
 	private nodeById = new Map<string, CanvasNode>();
 	private settings: GraphRenderSettings | null = null;
+	/** Effective visibility: the search filter minus route-hidden (collapsed) nodes. */
 	private visible: ReadonlySet<string> | null = null;
+	private searchVisible: ReadonlySet<string> | null = null;
 
 	// ── Live physics ──
 	// One d3-force sim shared with the server settle (createGraphSimulation
@@ -789,6 +791,7 @@ export class GraphCanvasRenderer {
 		this.flushCommit();
 		this.data = data;
 		this.nodeById = new Map(data.nodes.map((n) => [n.id, n]));
+		this.refreshVisible();
 		let minX = Infinity;
 		let minY = Infinity;
 		let maxX = -Infinity;
@@ -884,6 +887,7 @@ export class GraphCanvasRenderer {
 	 *  parallel highlight), or null for none. */
 	setRoute(route: DepRouteSelection | null): void {
 		this.route = route;
+		this.refreshVisible();
 		this.applyStraighten(route);
 		this.markDirty();
 	}
@@ -896,7 +900,7 @@ export class GraphCanvasRenderer {
 		const layout = route?.layout;
 		let key: string | null = null;
 		if (route && layout && this.nodeById.has(layout.root) && this.nodeById.has(layout.target)) {
-			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}|${[...route.edges].join(",")}`;
+			key = `${layout.root}>${layout.target}:${layout.steps.map((st) => st.join(",")).join(";")}|${[...route.edges].join(",")}|${[...route.done].join(",")}|${[...(route.hidden ?? [])].join(",")}`;
 		}
 		if (key === (this.straighten?.key ?? null)) return;
 		if (key && route && layout) {
@@ -928,8 +932,20 @@ export class GraphCanvasRenderer {
 		return this.straighten && !this.straighten.members.has(id) ? REST_DIM : 1;
 	}
 
+	/** Search filter minus the route's hidden (collapsed-feature) tasks. */
+	private refreshVisible(): void {
+		const hidden = this.route?.hidden;
+		if (!hidden || hidden.size === 0) {
+			this.visible = this.searchVisible;
+			return;
+		}
+		const base = this.searchVisible ?? (this.data ? this.data.nodes.map((n) => n.id) : []);
+		this.visible = new Set([...base].filter((id) => !hidden.has(id)));
+	}
+
 	setVisible(visible: ReadonlySet<string> | null): void {
-		this.visible = visible;
+		this.searchVisible = visible;
+		this.refreshVisible();
 		this.geoVersion++; // member visibility changes hulls + paths
 		this.markDirty();
 	}
@@ -1368,8 +1384,8 @@ export class GraphCanvasRenderer {
 				ctx.stroke();
 			}
 			if (route && route.nodes.has(n.id)) {
-				ctx.globalAlpha = route.done.has(n.id) ? DEP_STYLE.doneAlpha : 1;
-				ctx.strokeStyle = route.parallel.has(n.id) ? DEP_COLORS.parallel : DEP_COLORS.route;
+				ctx.globalAlpha = route.done.has(n.id) ? DEP_STYLE.routeDoneNodeAlpha : 1;
+				ctx.strokeStyle = route.done.has(n.id) ? ROUTE_DONE_COLOR : route.parallel.has(n.id) ? DEP_COLORS.parallel : DEP_COLORS.route;
 				ctx.lineWidth = r * DEP_STYLE.haloWeight;
 				ctx.beginPath();
 				ctx.arc(n.x, n.y, r * DEP_STYLE.haloScale, 0, Math.PI * 2);
@@ -1382,6 +1398,20 @@ export class GraphCanvasRenderer {
 					ctx.arc(n.x, n.y, r * DEP_STYLE.haloScale * 1.35, 0, Math.PI * 2);
 					ctx.stroke();
 				}
+			}
+		}
+		// "+N" badge on each collapsed feature (click the node to expand it).
+		if (route?.collapsed?.size) {
+			ctx.font = this.worldLabelFont;
+			ctx.textAlign = "left";
+			ctx.textBaseline = "middle";
+			ctx.fillStyle = DEP_COLORS.route;
+			ctx.globalAlpha = 1;
+			for (const [id, count] of route.collapsed) {
+				const n = this.nodeById.get(id);
+				if (!n || (visible && !visible.has(id))) continue;
+				const r = this.radiusOf(n);
+				ctx.fillText(`+${count}`, n.x + r * DEP_STYLE.haloScale * 1.1, n.y - r * DEP_STYLE.haloScale);
 			}
 		}
 		// Arrows.
@@ -1406,13 +1436,7 @@ export class GraphCanvasRenderer {
 			if (!from || !to) return;
 			const g = edgeGeometry(from, to, this.radiusOf(from), this.radiusOf(to));
 			if (!g) return;
-			const color = !a.bright
-				? DEP_COLORS.faintDep
-				: a.done
-					? a.parallel
-						? PARALLEL_DONE_COLOR
-						: ROUTE_DONE_COLOR
-					: DEP_COLORS.route;
+			const color = !a.bright ? DEP_COLORS.faintDep : a.done ? ROUTE_DONE_COLOR : a.parallel ? DEP_COLORS.parallel : DEP_COLORS.route;
 			ctx.globalAlpha = a.bright ? 1 : DEP_STYLE.faintAlpha;
 			ctx.strokeStyle = color;
 			ctx.fillStyle = color;
@@ -1462,8 +1486,9 @@ export class GraphCanvasRenderer {
 			if (!isVisible(n.id)) continue;
 			const r = this.radiusOf(n);
 			const ring = n.shape === "ring" ? Math.min(Math.max(n.ring ?? 0.25, 0.05), 1) * r : 0;
-			const color = n.color ?? data.colors.node;
-			const alpha = (n.dim ? DIM_ALPHA : 1) * this.restDim(n.id);
+			const routeDone = !!this.route?.nodes.has(n.id) && this.route.done.has(n.id);
+			const color = routeDone ? ROUTE_DONE_COLOR : (n.color ?? data.colors.node);
+			const alpha = routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_ALPHA : 1) * this.restDim(n.id);
 			const key = `${color}|${alpha}|${ring.toFixed(3)}`;
 			let g = groups.get(key);
 			if (!g) groups.set(key, (g = { color, alpha, lineWidth: ring, path: new Path2D() }));
@@ -1935,10 +1960,11 @@ export class GraphCanvasRenderer {
 			for (const [id, lines] of this.labelLines) {
 				const n = this.nodeById.get(id);
 				if (!n) continue;
-				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id);
+				const routeDone = !!this.route?.nodes.has(id) && this.route.done.has(id);
+				const a = labelAlpha(ratio, settings.labelZoom * (n.labelGate ?? 1)) * (routeDone ? DEP_STYLE.routeDoneNodeAlpha : (n.dim ? DIM_LABEL_ALPHA : 1) * this.restDim(id));
 				if (a <= 0.01) continue;
 				ctx.globalAlpha = a;
-				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), data.colors.label);
+				drawNameLines(ctx, n.x, n.y, lines, this.world, this.radiusOf(n), routeDone ? ROUTE_DONE_COLOR : data.colors.label);
 			}
 			ctx.restore();
 		}

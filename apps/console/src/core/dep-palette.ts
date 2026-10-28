@@ -21,10 +21,10 @@ export const DEP_COLORS: DepColors = {
 	blockedRing: "#ef476f",
 };
 
-/** Route / parallel edges whose BOTH ends are done: the same hues, much
- *  darker (lower lightness), drawn slightly thinner (DEP_STYLE.doneWidth). */
-export const ROUTE_DONE_COLOR = "#7a6330";
-export const PARALLEL_DONE_COLOR = "#1f6b57";
+/** Completed route edges (their head node is done), done route nodes and
+ *  their labels: one muted grey for all, so completed work reads as
+ *  background, not as a category. Edges draw thinner (DEP_STYLE.doneWidth). */
+export const ROUTE_DONE_COLOR = "#7d8493";
 
 /**
  * Dependency arrows draw only at a camera ratio at or below this (ratio =
@@ -44,6 +44,9 @@ export const DEP_STYLE = {
 	/** Opacity of faint arrows and of dimmed (shipped) route nodes. */
 	faintAlpha: 0.45,
 	doneAlpha: 0.4,
+	/** Done route nodes and labels: between the bright route (1) and the
+	 *  dimmed rest of the map (0.3). */
+	routeDoneNodeAlpha: 0.65,
 	/** Arrowhead length, screen px. */
 	headLength: 7,
 	/** Blocked ring: radius multiplier over the node's radius and stroke fraction of radius. */

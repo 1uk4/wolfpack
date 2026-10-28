@@ -28,6 +28,9 @@ import {
   WorkRecordResponseSchema,
   WorkListResponseSchema,
   GraduationConfirmBodySchema,
+  GraduationJobSchema,
+  GraduationObservationsSchema,
+  GraduationStatusSchema,
   GraduationPreviewSchema,
   GraduationResultSchema,
   KbPipelineResponseSchema,
@@ -246,20 +249,32 @@ export const ROUTES = {
   listWork: { method: "GET", path: "/v1/wolves/:name/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
-   * Graduation, step 1: distill the work item into KB entries and return them as a preview with a confirmation token.
-   * Nothing is written or archived (the wolf folds the item's pending tagged observations into its Record first). The
-   * wolf runs its own model and drains its own observation pool. No body. 404 `not_found` for an unknown wolf or item,
-   * 400 `invalid_request` for a malformed id, 409 `not_ready` (the message says why), 409 `memory_unavailable` when the
-   * wolf has no Work API / KB / graduation support, 502 `engine_error` when the drain or the distill fails (nothing was changed).
+   * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
+   * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start
+   * while a job for the item is running returns that job. Nothing is sent or archived (the wolf folds the item's pending
+   * tagged observations into its Record first, on its own model and pool). No body. Poll `graduationStatus`.
+   * 404 `not_found` for an unknown wolf, 400 `invalid_request` for a malformed id, 409 `memory_unavailable` when the wolf has no
+   * Work API / KB / graduation support. A not-ready item, a failed drain or distill is reported by the status as an error.
    */
-  previewGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/preview", response: { kind: "json", schema: GraduationPreviewSchema }, status: [200], error: err },
+  previewGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/preview", response: { kind: "json", schema: GraduationJobSchema }, status: [200], error: err },
   /**
-   * Graduation, step 2: send a previewed graduation. All or nothing: the entries go to the KB inbox, then the item is
-   * marked graduated and archived with its tasks, every conversation bound to it unbinds and its feature thread closes.
-   * 409 `preview_stale` for an unknown, used, expired or other-item token (preview again), 409 `not_ready`, and as for
-   * preview; 502 `engine_error` with nothing archived when the late drain or any write fails.
+   * Graduation, step 2: start a background job that sends a previewed graduation. All or nothing: the contributions go
+   * to the librarian's inbox, then the item is marked graduated and archived with its tasks, every conversation bound
+   * to it unbinds and its feature thread closes. Answers at once with the job (the running one when a job for the item
+   * runs). 400 `invalid_request` for a bad body. A stale token, a not-ready item or a failed write shows in the status as an error
+   * (`preview_stale`, `not_ready`, `engine_error`) with nothing archived.
    */
-  confirmGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/confirm", body: GraduationConfirmBodySchema, response: { kind: "json", schema: GraduationResultSchema }, status: [200], error: err },
+  confirmGraduation: { method: "POST", path: "/v1/wolves/:name/work/:id/graduate/confirm", body: GraduationConfirmBodySchema, response: { kind: "json", schema: GraduationJobSchema }, status: [200], error: err },
+  /**
+   * The state of the item's graduation job on this wolf (see GraduationStatus). After a wolfd restart a finished preview
+   * is recovered from its token file (`preview_ready`) while it has not expired.
+   */
+  graduationStatus: { method: "GET", path: "/v1/wolves/:name/work/:id/graduate/status", response: { kind: "json", schema: GraduationStatusSchema }, status: [200], error: err },
+  /**
+   * How many pending observations in this wolf's pool a graduation of the item would fold (tagged with the item or its descendant
+   * tasks), split per work item. Only this wolf's pool is read: a work item has a single assignee.
+   */
+  graduationObservations: { method: "GET", path: "/v1/wolves/:name/work/:id/graduate/observations", response: { kind: "json", schema: GraduationObservationsSchema }, status: [200], error: err },
   /**
    * Dewey's pipeline: inbox lanes per wolf, the newest 50 receipts, parked items, the sweep in progress and the last
    * sweep. Librarian only: 409 `kb_unavailable` on any other wolf (or one without KB roots).

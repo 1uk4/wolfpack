@@ -28,7 +28,7 @@ import {
   SubmitBodySchema,
   matchRoute,
   type ConsolidateResponse,
-  type GraduationPreview,
+  type ErrorCode,
   type GraduationResult,
   type KbPipelineResponse,
   type LastPromote,
@@ -51,6 +51,7 @@ import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
+import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
@@ -320,8 +321,8 @@ export class WolfServer {
     return closed;
   }
 
-  /** Items whose graduation is running: a second preview or confirm for the same item is refused, not queued. */
-  private readonly graduating = new Set<string>();
+  /** Graduation jobs by `<wolf>:<work id>`: preview and confirm run in the background, a second start returns the running job. */
+  private readonly graduationJobs = new GraduationJobs();
 
   /** The wolf's graduation actions, after the checks every graduate route shares. */
   private graduationFor(params: Record<string, string>, validated?: () => void) {
@@ -334,23 +335,15 @@ export class WolfServer {
     return actions;
   }
 
-  /** Run one graduation step for an item, one at a time, mapping the extension's refusals to protocol errors. */
-  private async graduate<T>(id: string, step: () => Promise<T>): Promise<T> {
-    if (this.graduating.has(id)) throw new HttpError("busy", `a graduation of ${id} is already running`);
-    this.graduating.add(id);
-    try {
-      return await step();
-    } catch (e) {
-      if (e instanceof HttpError) throw e;
-      const code = (e as { name?: string; code?: string } | undefined)?.name === "GraduationError" ? (e as { code: string }).code : undefined;
-      const message = e instanceof Error ? e.message : String(e);
-      if (code === "not_ready") throw new HttpError("not_ready", message);
-      if (code === "preview_stale") throw new HttpError("preview_stale", message);
-      if (code === "unavailable") throw new HttpError("memory_unavailable", message);
-      throw new HttpError("engine_error", message);
-    } finally {
-      this.graduating.delete(id);
-    }
+  /** An error of a graduation step as the protocol code and message the job reports: the extension's refusals keep their code. */
+  private graduationFailure(e: unknown): { code: ErrorCode; message: string } {
+    if (e instanceof HttpError) return { code: e.code, message: e.message };
+    const code = (e as { name?: string; code?: string } | undefined)?.name === "GraduationError" ? (e as { code: string }).code : undefined;
+    const message = e instanceof Error ? e.message : String(e);
+    if (code === "not_ready") return { code: "not_ready", message };
+    if (code === "preview_stale") return { code: "preview_stale", message };
+    if (code === "unavailable") return { code: "memory_unavailable", message };
+    return { code: "engine_error", message };
   }
 
   private readonly closeChecks = new Map<string, number>();
@@ -682,8 +675,14 @@ export class WolfServer {
       }
       case "previewGraduation": {
         const actions = this.graduationFor(params);
-        const body: GraduationPreview = await this.graduate(params.id, () => actions.preview(params.id));
-        return this.json(res, 200, body);
+        const key = `${params.name}:${params.id}`;
+        const job = this.graduationJobs.start(
+          key,
+          "preview",
+          async () => ({ kind: "preview", preview: await actions.preview(params.id) }),
+          (e) => this.graduationFailure(e),
+        );
+        return this.json(res, 200, job);
       }
       case "confirmGraduation": {
         const parsed = GraduationConfirmBodySchema.safeParse(await readJson(req));
@@ -691,16 +690,43 @@ export class WolfServer {
           if (!parsed.success) throw new HttpError("invalid_request", "body must be {token}");
         });
         if (!parsed.success) throw new HttpError("invalid_request", "body must be {token}");
-        const done = await this.graduate(params.id, () => actions.confirm(params.id, parsed.data.token));
-        const result: GraduationResult = {
-          graduated: true,
-          entries: done.entries,
-          archived: done.archived,
-          lateFolded: done.lateFolded,
-          unbound: done.unbound,
-          closedThreads: this.closeFeatureThreads([params.id, ...done.archived]),
-        };
-        return this.json(res, 200, result);
+        const token = parsed.data.token;
+        const key = `${params.name}:${params.id}`;
+        const job = this.graduationJobs.start(
+          key,
+          "confirm",
+          async () => {
+            const done = await actions.confirm(params.id, token);
+            const result: GraduationResult = {
+              graduated: true,
+              entries: done.entries,
+              archived: done.archived,
+              lateFolded: done.lateFolded,
+              unbound: done.unbound,
+              closedThreads: this.closeFeatureThreads([params.id, ...done.archived]),
+            };
+            return { kind: "confirm", result };
+          },
+          (e) => this.graduationFailure(e),
+        );
+        return this.json(res, 200, job);
+      }
+      case "graduationStatus": {
+        const actions = this.graduationFor(params);
+        const known = this.graduationJobs.get(`${params.name}:${params.id}`);
+        if (known) return this.json(res, 200, known);
+        // No job in memory (wolfd restarted): a preview whose token file is still fresh is ready to confirm.
+        const preview = await actions.pendingPreview(params.id).catch(() => undefined);
+        return this.json(res, 200, preview ? { state: "preview_ready", preview } : { state: "none" });
+      }
+      case "graduationObservations": {
+        const actions = this.graduationFor(params);
+        try {
+          return this.json(res, 200, await actions.observations(params.id));
+        } catch (e) {
+          const f = this.graduationFailure(e);
+          throw new HttpError(f.code, f.message);
+        }
       }
       case "kbPipeline": {
         this.checkWolf(params.name);

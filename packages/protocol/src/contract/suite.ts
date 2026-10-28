@@ -494,20 +494,30 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       expect(["not_found", "memory_unavailable"]).toContain(ErrorEnvelopeSchema.parse(await w.json()).code);
     });
 
-    it("graduation: unknown wolf is not_found, a bad id or confirm body is invalid_request, an answer is a schema-valid result or a refusal", async () => {
+    it("graduation: unknown wolf is not_found, a bad id or confirm body is invalid_request, a start answers a job or a refusal, status and count answer their schemas", async () => {
       const preview = (name: string, id: string) => post(buildPath("previewGraduation", { name, id }), {});
       const confirm = (name: string, id: string, body: unknown) => post(buildPath("confirmGraduation", { name, id }), body);
+      const status = (name: string, id: string) => call(buildPath("graduationStatus", { name, id }));
+      const count = (name: string, id: string) => call(buildPath("graduationObservations", { name, id }));
       await expectError(await preview("no-such-wolf", "work-x-1234567"), "not_found");
       await expectError(await confirm("no-such-wolf", "work-x-1234567", { token: "abc" }), "not_found");
+      await expectError(await status("no-such-wolf", "work-x-1234567"), "not_found");
+      await expectError(await count("no-such-wolf", "work-x-1234567"), "not_found");
       await expectError(await preview(wolf, "../etc"), "invalid_request");
       await expectError(await confirm(wolf, "work-x-1234567", { nope: 1 }), "invalid_request");
-      // A server without a Work API refuses; one with it answers the schema or says why the item cannot graduate.
-      const p = await preview(wolf, "work-x-1234567");
-      if (p.status === 200) ROUTES.previewGraduation.response.schema.parse(await p.json());
-      else expect(["memory_unavailable", "not_found", "not_ready", "engine_error"]).toContain(ErrorEnvelopeSchema.parse(await p.json()).code);
-      const c = await confirm(wolf, "work-x-1234567", { token: "deadbeef0000" });
-      if (c.status === 200) ROUTES.confirmGraduation.response.schema.parse(await c.json());
-      else expect(["memory_unavailable", "not_found", "not_ready", "preview_stale", "engine_error"]).toContain(ErrorEnvelopeSchema.parse(await c.json()).code);
+      await expectError(await status(wolf, "../etc"), "invalid_request");
+      await expectError(await count(wolf, "../etc"), "invalid_request");
+      // A server without a Work API refuses; one with it answers the schemas (a start answers a running job, never the preview itself).
+      const answers = [
+        [await preview(wolf, "work-x-1234567"), ROUTES.previewGraduation.response.schema],
+        [await confirm(wolf, "work-x-1234567", { token: "deadbeef0000" }), ROUTES.confirmGraduation.response.schema],
+        [await status(wolf, "work-x-1234567"), ROUTES.graduationStatus.response.schema],
+        [await count(wolf, "work-x-1234567"), ROUTES.graduationObservations.response.schema],
+      ] as const;
+      for (const [res, schema] of answers) {
+        if (res.status === 200) schema.parse(await res.json());
+        else expect(["memory_unavailable", "not_found"]).toContain(ErrorEnvelopeSchema.parse(await res.json()).code);
+      }
     });
 
     it("cards: unknown wolf/thread/card are not_found, a bad answer body is invalid_request, the list is valid", async () => {

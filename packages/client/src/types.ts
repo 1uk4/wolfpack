@@ -2,7 +2,7 @@
  * Wire types are owned by @wolfpack/protocol; re-exported here so SDK
  * consumers keep a single import site. SDK-level types stay local.
  */
-import type { Actor, BindThreadResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkspaceStatus, KbPipelineResponse, GraduationPreview, GraduationResult } from "@wolfpack/protocol";
+import type { Actor, BindThreadResponse, CreateThreadBody, LedgerEntry, CardAnswers, PendingCard, Attachment, AttachmentRef, ConsolidateResponse, ErrorCode, KbEntryDetail, KbGraph, MemoryEvent, MemoryStatus, MemoryObservations, WolfEvent, MemoryTopic, PromoteResponse, SubmitAck, ThreadDetail, ThreadEvent as ProtocolThreadEvent, ThreadSummary, WhenBusy, WolfSummary, WorkRecordResponse, WorkListResponse, WorkspaceStatus, KbPipelineResponse, GraduationJob, GraduationObservations, GraduationStatus } from "@wolfpack/protocol";
 
 export type {
   Actor,
@@ -44,7 +44,7 @@ export type ThreadEventType = ThreadEvent["type"];
 export type { CreateThreadBody } from "@wolfpack/protocol";
 export type { WolfEvent, WolfEventType, CardOutcome } from "@wolfpack/protocol";
 export type { Card, CardAnswers, CardClosed, CardField, CardFieldAnswer, CardFieldKind, ConfirmFieldAnswer, MultiFieldAnswer, TextFieldAnswer, CardOption, PendingCard, ThreadStatus } from "@wolfpack/protocol";
-export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, GraduationPreview, GraduationContribution, GraduationResult, WorkListResponse, WorkListItem, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
+export type { ConsolidateResponse, PromoteResponse, MemoryEvent, MemoryEventType, MemoryTarget, MemoryStatus, MemoryTopic, MemoryTopicRef, MemoryObservation, MemoryObservations, BoundWork, MemoryState, MemoryPoolStatus, LastPromote, WorkRecordResponse, GraduationPreview, GraduationContribution, GraduationResult, GraduationJob, GraduationJobKind, GraduationStatus, GraduationObservations, WorkListResponse, WorkListItem, KbPipelineResponse, PipelineOutcome, PipelineLane, PipelineReceipt, PipelineParked, PipelineCurrent, PipelineLastSweep, SweepOutcome } from "@wolfpack/protocol";
 export type { KbGraph, KbGraphNode, KbGraphEdge, KbEntryDetail, KbNodeKind, KbEdgeKind } from "@wolfpack/protocol";
 
 export type WolfStatus = WolfSummary["status"];
@@ -159,12 +159,16 @@ export interface ConsoleClient {
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /**
-   * Graduation step 1: the KB entries graduating the work item would write, with a confirmation token. Nothing is sent.
-   * Rejects `not_ready` (the message says why), `memory_unavailable` (no Work API), `engine_error` (drain/distill failed, nothing changed).
+   * Graduation step 1: start the background job that distills the work item into KB contribution entries. Answers at once with the
+   * running job (the running one if a job for the item runs). Read the outcome with `graduationStatus`. Rejects `memory_unavailable` (no Work API).
    */
-  previewGraduation?(wolf: string, workId: string): Promise<GraduationPreview>;
-  /** Graduation step 2: send the previewed graduation (all or nothing). Rejects `preview_stale` (preview again), `not_ready`, `engine_error` (nothing archived). */
-  confirmGraduation?(wolf: string, workId: string, token: string): Promise<GraduationResult>;
+  startGraduationPreview?(wolf: string, workId: string): Promise<GraduationJob>;
+  /** Graduation step 2: start the background job that sends the previewed graduation (all or nothing). Answers at once with the job. */
+  startGraduationConfirm?(wolf: string, workId: string, token: string): Promise<GraduationJob>;
+  /** Where the item's graduation job stands: none, running, preview_ready (with the preview), graduated, or error (with the code). */
+  graduationStatus?(wolf: string, workId: string): Promise<GraduationStatus>;
+  /** The pending observations in the wolf's pool a graduation of the item would fold, per work item. */
+  graduationObservations?(wolf: string, workId: string): Promise<GraduationObservations>;
   /** Dewey's pipeline view. Librarian only: other wolves reject (kb_unavailable). */
   getKbPipeline?(wolf: string): Promise<KbPipelineResponse>;
   /** The KB graph (librarian wolf only; rejects ProtocolError `kb_unavailable` elsewhere, NotFoundError for an unknown domain). Layers default off. */

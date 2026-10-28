@@ -5,12 +5,13 @@
  * stay in @wolfpack/memory; this only wires them to a wolf.
  */
 import { existsSync } from "node:fs";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import {
   confirmGraduation,
+  drainScope,
   previewGraduation,
   readinessOf,
   unbindOnGraduation,
@@ -19,7 +20,7 @@ import {
   type GraduationClient,
   type GraduationPreview,
 } from "@wolfpack/memory";
-import { GraduationError, type GraduationConfirmResult, type GraduationPreviewResult } from "./memory-actions.js";
+import { GraduationError, readPool, type GraduationConfirmResult, type GraduationObservationCount, type GraduationPreviewResult } from "./memory-actions.js";
 
 /** A graduation preview waits this long for the owner's answer. */
 export const PREVIEW_TTL_MS = 6 * 60 * 60 * 1000;
@@ -117,38 +118,88 @@ export function createGraduation(deps: GraduationDeps) {
     return unbound;
   }
 
+  /** The preview as the wire carries it. */
+  const toResult = (p: GraduationPreview): GraduationPreviewResult => ({
+    itemId: p.itemId,
+    kind: p.kind,
+    title: p.title,
+    domain: p.domain,
+    contributions: p.contributions.map((c) => ({
+      id: c.id,
+      title: c.title,
+      summary: c.summary,
+      body: c.body,
+      initiative: c.initiative,
+      history: c.history,
+      ...(c.target ? { target: c.target } : {}),
+      ...(c.feature ? { feature: true } : {}),
+    })),
+    foldedObservations: p.foldedObservations ?? 0,
+    warnings: p.warnings,
+    ...(p.blocked ? { blocked: p.blocked } : {}),
+    archive: p.archive,
+    token: p.token,
+    createdAt: p.createdAt,
+    readiness: { ready: true },
+  });
+
+  /** The newest unexpired stored preview of this item (token files outlive a wolfd restart). */
+  async function pendingPreview(id: string): Promise<GraduationPreviewResult | undefined> {
+    let names: string[] = [];
+    try {
+      names = await readdir(previewDir());
+    } catch {
+      return undefined;
+    }
+    let best: GraduationPreview | undefined;
+    for (const n of names.filter((f) => f.endsWith(".json"))) {
+      try {
+        const p = JSON.parse(await readFile(join(previewDir(), n), "utf-8")) as GraduationPreview;
+        if (p.itemId !== id || Date.now() - Date.parse(p.createdAt) > PREVIEW_TTL_MS) continue;
+        if (!best || Date.parse(p.createdAt) > Date.parse(best.createdAt)) best = p;
+      } catch {
+        // an unreadable token file is not a preview
+      }
+    }
+    return best ? toResult(best) : undefined;
+  }
+
+  /** Pending observations of this wolf's pool that a graduation of the item folds: tagged with the item or a descendant. */
+  async function observations(id: string): Promise<GraduationObservationCount> {
+    try {
+      const all = (await client.query({})) ?? [];
+      const item = all.find((i) => i.id === id);
+      if (!item) throw new GraduationError("not_ready", `${id} was not found`);
+      const scope = new Set(drainScope(item, all));
+      const counts = new Map<string, number>();
+      for (const o of await readPool(wolfDen)) {
+        // The same match the drain uses: tagged with a work id in scope, else with a feature in scope.
+        const w = o.work && scope.has(o.work) ? o.work : o.feature && scope.has(o.feature) ? o.feature : undefined;
+        if (w) counts.set(w, (counts.get(w) ?? 0) + 1);
+      }
+      const byWork = [...counts]
+        .map(([wid, count]) => {
+          const title = all.find((i) => i.id === wid)?.title;
+          return { id: wid, ...(title ? { title } : {}), count };
+        })
+        .sort((x, y) => y.count - x.count);
+      return { total: byWork.reduce((n, b) => n + b.count, 0), byWork };
+    } catch (err) {
+      throw asFailure(err);
+    }
+  }
+
   /** The registry face wolfd's routes call. */
   const actions = {
     async preview(id: string): Promise<GraduationPreviewResult> {
-      const p = await preview(id);
-      return {
-        itemId: p.itemId,
-        kind: p.kind,
-        title: p.title,
-        domain: p.domain,
-        contributions: p.contributions.map((c) => ({
-          id: c.id,
-          title: c.title,
-          summary: c.summary,
-          body: c.body,
-          initiative: c.initiative,
-          history: c.history,
-          ...(c.target ? { target: c.target } : {}),
-          ...(c.feature ? { feature: true } : {}),
-        })),
-        foldedObservations: p.foldedObservations ?? 0,
-        warnings: p.warnings,
-        ...(p.blocked ? { blocked: p.blocked } : {}),
-        archive: p.archive,
-        token: p.token,
-        createdAt: p.createdAt,
-        readiness: { ready: true },
-      };
+      return toResult(await preview(id));
     },
     async confirm(id: string, token: string): Promise<GraduationConfirmResult> {
       const { done, unbound } = await confirm(id, token);
       return { entries: done.sent, archived: done.archived, lateFolded: done.lateFolded ?? 0, unbound: unbound.length };
     },
+    pendingPreview,
+    observations,
   };
 
   return { preview, loadPreview, confirm, actions };

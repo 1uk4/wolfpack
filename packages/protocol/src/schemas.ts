@@ -1170,6 +1170,50 @@ export const GraduationResultSchema = z.object({
 });
 export type GraduationResult = z.infer<typeof GraduationResultSchema>;
 
+/**
+ * `POST .../graduate/preview` and `POST .../graduate/confirm` start a background job on the wolf and answer at once with
+ * it. A start while a job for the same item is running returns that running job instead of refusing. Poll
+ * `GET .../graduate/status` for the outcome.
+ */
+export const GraduationJobKindSchema = z.enum(["preview", "confirm"]);
+export type GraduationJobKind = z.infer<typeof GraduationJobKindSchema>;
+
+export const GraduationJobSchema = z.object({
+  jobId: z.string().min(1),
+  kind: GraduationJobKindSchema,
+  state: z.literal("running"),
+  startedAt: IsoSchema,
+});
+export type GraduationJob = z.infer<typeof GraduationJobSchema>;
+
+/**
+ * `GET .../graduate/status`: where the item's graduation stands on this wolf.
+ * - `none`: no job and no stored preview.
+ * - `running`: a preview or confirm job is running.
+ * - `preview_ready`: the preview finished (or was recovered from its token file after a restart); `preview.token` confirms it.
+ * - `graduated`: the confirm finished (the result of the graduation).
+ * - `error`: the last job failed; `code` is the error code the synchronous route would have answered (`not_ready`,
+ *   `preview_stale`, `engine_error`, `memory_unavailable`). Nothing was archived.
+ */
+export const GraduationStatusSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }),
+  GraduationJobSchema,
+  z.object({ state: z.literal("preview_ready"), jobId: z.string().optional(), preview: GraduationPreviewSchema }),
+  z.object({ state: z.literal("graduated"), jobId: z.string(), result: GraduationResultSchema }),
+  z.object({ state: z.literal("error"), jobId: z.string(), kind: GraduationJobKindSchema, code: ErrorCodeSchema, message: z.string() }),
+]);
+export type GraduationStatus = z.infer<typeof GraduationStatusSchema>;
+
+/**
+ * `GET .../graduate/observations`: the pending observations in this wolf's pool that a graduation of the item would fold
+ * (those tagged with the item or any of its descendant tasks), per work item.
+ */
+export const GraduationObservationsSchema = z.object({
+  total: z.number().int(),
+  byWork: z.array(z.object({ id: z.string(), title: z.string().optional(), count: z.number().int() })),
+});
+export type GraduationObservations = z.infer<typeof GraduationObservationsSchema>;
+
 // ------------------------------------------------------------ KB graph
 
 export const KbNodeKindSchema = z.enum(["domain", "factory", "section", "entry", "work", "den-topic"]);

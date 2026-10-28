@@ -13,6 +13,7 @@ import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { parkExtension, startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
 import createMemoryExtension from "./unified.js";
 import createTasksExtension from "./unified-tasks.js";
+import { graduationActionsFor } from "@wolfpack/harness/memory";
 import { readBindingFile, writeBindingFile } from "./conversation-binding.js";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), `grad-${p}-`));
@@ -37,13 +38,14 @@ async function devRoot(): Promise<string> {
 }
 
 /** What the scripted engine does for each model step; tests flip these. */
-const behave = { workRecordFails: false, distillCalls: 0, recordCalls: 0, featureId: "" };
+const behave: { workRecordFails: boolean; distillCalls: number; recordCalls: number; featureId: string; hold: Promise<void> | null } = { workRecordFails: false, distillCalls: 0, recordCalls: 0, featureId: "", hold: null };
 
 const engine = (): Engine =>
   ({
     call: async (step: string, schema: { parse: (v: unknown) => unknown }) => {
       if (step === "distill") {
         behave.distillCalls++;
+        await behave.hold;
         return schema.parse({
           contributions: [{ slug: "main", title: "How caching works", summary: "Session lookups are cached.", body: `## How\n\nSession lookups are cached for five minutes.\n\n## History\n\n- 2026-10-28: added caching (${behave.featureId})` }],
         });
@@ -115,17 +117,122 @@ const tag = (den: string, work: string, content = "we cached the lookups because
 };
 const poolCount = (den: string) => (existsSync(pool(den)) ? readFileSync(pool(den), "utf8").trim().split("\n").filter(Boolean).length : 0);
 
+/** Wait for the item's graduation job to leave `running`. */
+async function pollUntil(id: string, timeoutMs = 15_000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const s = await tw!.client.graduationStatus!("testwolf", id);
+    if (s.state !== "running") return s;
+    if (Date.now() > until) throw new Error(`graduation of ${id} still running`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+const failed = (s: { code: string; message: string }) => Object.assign(new Error(s.message), { code: s.code });
+/** Start a preview job and wait for it: the preview, or a rejection with the job's error code. */
+async function preview(id: string) {
+  await tw!.client.startGraduationPreview!("testwolf", id);
+  const s = await pollUntil(id);
+  if (s.state === "error") throw failed(s);
+  if (s.state !== "preview_ready") throw new Error(`unexpected status ${s.state}`);
+  return s.preview;
+}
+/** Start a confirm job and wait for it: the result, or a rejection with the job's error code. */
+async function confirm(id: string, token: string) {
+  await tw!.client.startGraduationConfirm!("testwolf", id, token);
+  const s = await pollUntil(id);
+  if (s.state === "error") throw failed(s);
+  if (s.state !== "graduated") throw new Error(`unexpected status ${s.state}`);
+  return s.result;
+}
+
 beforeEach(() => {
   behave.workRecordFails = false;
   behave.distillCalls = 0;
   behave.recordCalls = 0;
+  behave.hold = null;
 });
 
 describe("graduate routes", () => {
+  it("a start answers at once with the running job; a second start returns that job, not a second run", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    let release!: () => void;
+    behave.hold = new Promise<void>((r) => (release = r));
+    const a = await tw.client.startGraduationPreview!("testwolf", feature);
+    const b = await tw.client.startGraduationPreview!("testwolf", feature);
+    expect(a).toMatchObject({ kind: "preview", state: "running" });
+    expect(b.jobId).toBe(a.jobId);
+    expect(await tw.client.graduationStatus!("testwolf", feature)).toMatchObject({ state: "running", jobId: a.jobId });
+    release();
+    const done = await pollUntil(feature);
+    expect(done).toMatchObject({ state: "preview_ready", jobId: a.jobId });
+    expect(behave.distillCalls).toBe(1);
+  });
+
+  it("status runs none → running → preview_ready → running (confirm) → graduated", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    expect(await tw.client.graduationStatus!("testwolf", feature)).toEqual({ state: "none" });
+    const p = await preview(feature);
+    const ready = await tw.client.graduationStatus!("testwolf", feature);
+    expect(ready).toMatchObject({ state: "preview_ready", preview: { token: p.token } });
+    let release!: () => void;
+    behave.hold = new Promise<void>((r) => (release = r));
+    behave.workRecordFails = false;
+    const job = await tw.client.startGraduationConfirm!("testwolf", feature, p.token);
+    expect(job.kind).toBe("confirm");
+    release();
+    const done = await pollUntil(feature);
+    expect(done).toMatchObject({ state: "graduated", jobId: job.jobId, result: { graduated: true } });
+  });
+
+  it("recovers a finished preview from its token file when wolfd has no job for it (after a restart)", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw);
+    // straight through the wolf's graduation actions: the token file exists, wolfd has no job
+    const p = await graduationActionsFor(tw.wolf.config.den)!.preview(feature);
+    const s = await tw.client.graduationStatus!("testwolf", feature);
+    expect(s).toMatchObject({ state: "preview_ready", preview: { token: p.token, itemId: feature } });
+    // and the token confirms
+    expect(await confirm(feature, p.token)).toMatchObject({ graduated: true });
+    // an expired token file is not recovered
+    const { feature: f2 } = await makeFeature(tw);
+    const p2 = await graduationActionsFor(tw.wolf.config.den)!.preview(f2);
+    const file = join(tw.wolf.config.den, "tasks", "graduation", `${p2.token}.json`);
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), createdAt: new Date(Date.now() - 7 * 3600_000).toISOString() }));
+    expect(await tw.client.graduationStatus!("testwolf", f2)).toEqual({ state: "none" });
+  });
+
+  it("a failed job reports its error code in the status, and a new start replaces it", async () => {
+    tw = await boot(await devRoot());
+    const { feature } = await makeFeature(tw, { open: 1 });
+    const job = await tw.client.startGraduationPreview!("testwolf", feature);
+    const s = await pollUntil(feature);
+    expect(s).toMatchObject({ state: "error", jobId: job.jobId, kind: "preview", code: "not_ready", message: expect.stringContaining("1 task open") });
+    const again = await tw.client.startGraduationPreview!("testwolf", feature);
+    expect(again.jobId).not.toBe(job.jobId);
+  });
+
+  it("counts the pending observations a graduation would fold, per task, from this wolf's pool only", async () => {
+    tw = await boot(await devRoot());
+    const den = tw.wolf.config.den;
+    const { feature, tasks } = await makeFeature(tw);
+    expect(await tw.client.graduationObservations!("testwolf", feature)).toEqual({ total: 0, byWork: [] });
+    tag(den, tasks[0]!);
+    tag(den, tasks[0]!, "another");
+    tag(den, tasks[1]!);
+    tag(den, "work-wolfpack-ZZZZZZZ", "someone else's");
+    const c = await tw.client.graduationObservations!("testwolf", feature);
+    expect(c.total).toBe(3);
+    expect(c.byWork).toEqual([{ id: tasks[0], title: "Task 0", count: 2 }, { id: tasks[1], title: "Task 1", count: 1 }]);
+    // counting changes nothing
+    expect(poolCount(den)).toBe(4);
+  });
+
   it("preview returns the entries and a token and changes nothing", async () => {
     tw = await boot(await devRoot());
     const { feature, tasks } = await makeFeature(tw);
-    const p = await tw.client.previewGraduation!("testwolf", feature);
+    const p = await preview(feature);
     expect(p).toMatchObject({ itemId: feature, kind: "feature", title: "Session caching", foldedObservations: 0, readiness: { ready: true } });
     expect(p.token).toMatch(/^[a-f0-9]{12}$/);
     expect(p.contributions).toHaveLength(1);
@@ -147,8 +254,8 @@ describe("graduate routes", () => {
     writeBindingFile(den, 77, { workId: tasks[0]!, domain: "wolfpack", boundAt: "now", featureId: feature });
     expect(readBindingFile(den, cid)).toMatchObject({ workId: feature });
 
-    const p = await tw.client.previewGraduation!("testwolf", feature);
-    const r = await tw.client.confirmGraduation!("testwolf", feature, p.token);
+    const p = await preview(feature);
+    const r = await confirm(feature, p.token);
     expect(r).toMatchObject({ graduated: true, entries: [p.contributions[0]!.id], lateFolded: 0, unbound: 2 });
     expect(r.archived).toEqual([feature, ...tasks]);
     expect(r.closedThreads).toEqual([thread.id]);
@@ -160,21 +267,21 @@ describe("graduate routes", () => {
     const t = await tw.client.getThread(thread.id);
     expect(t.closed).toBe(true);
     // a token works once
-    await expect(tw.client.confirmGraduation!("testwolf", feature, p.token)).rejects.toMatchObject({ code: "preview_stale" });
+    await expect(confirm(feature, p.token)).rejects.toMatchObject({ code: "preview_stale" });
   });
 
   it("refuses a wrong or expired token and changes nothing", async () => {
     tw = await boot(await devRoot());
     const den = tw.wolf.config.den;
     const a = await makeFeature(tw);
-    const pa = await tw.client.previewGraduation!("testwolf", a.feature);
+    const pa = await preview(a.feature);
     const b = await makeFeature(tw);
-    await expect(tw.client.confirmGraduation!("testwolf", b.feature, pa.token)).rejects.toMatchObject({ code: "preview_stale", message: expect.stringContaining(`for ${a.feature}`) });
-    await expect(tw.client.confirmGraduation!("testwolf", a.feature, "deadbeef0000")).rejects.toMatchObject({ code: "preview_stale" });
+    await expect(confirm(b.feature, pa.token)).rejects.toMatchObject({ code: "preview_stale", message: expect.stringContaining(`for ${a.feature}`) });
+    await expect(confirm(a.feature, "deadbeef0000")).rejects.toMatchObject({ code: "preview_stale" });
     const file = join(den, "tasks", "graduation", `${pa.token}.json`);
     const stored = JSON.parse(readFileSync(file, "utf8"));
     writeFileSync(file, JSON.stringify({ ...stored, createdAt: new Date(Date.now() - 7 * 3600_000).toISOString() }));
-    await expect(tw.client.confirmGraduation!("testwolf", a.feature, pa.token)).rejects.toMatchObject({ code: "preview_stale", message: expect.stringContaining("too old") });
+    await expect(confirm(a.feature, pa.token)).rejects.toMatchObject({ code: "preview_stale", message: expect.stringContaining("too old") });
     expect(inbox(tw)).toEqual([]);
     expect((await item(tw, a.feature)).graduated).toBeFalsy();
   });
@@ -182,9 +289,7 @@ describe("graduate routes", () => {
   it("refuses a feature that is not ready, with the reason (409 not_ready)", async () => {
     tw = await boot(await devRoot());
     const { feature } = await makeFeature(tw, { open: 2 });
-    await expect(tw.client.previewGraduation!("testwolf", feature)).rejects.toMatchObject({ code: "not_ready", message: expect.stringContaining("2 tasks open") });
-    const res = await fetch(`${tw.url}/v1/wolves/testwolf/work/${feature}/graduate/preview`, { method: "POST" });
-    expect(res.status).toBe(409);
+    await expect(preview(feature)).rejects.toMatchObject({ code: "not_ready", message: expect.stringContaining("2 tasks open") });
     expect(behave.distillCalls).toBe(0);
   });
 
@@ -194,22 +299,22 @@ describe("graduate routes", () => {
     const { feature, tasks } = await makeFeature(tw);
     tag(den, tasks[0]!);
     behave.workRecordFails = true;
-    await expect(tw.client.previewGraduation!("testwolf", feature)).rejects.toMatchObject({ code: "engine_error", message: expect.stringContaining("nothing archived") });
+    await expect(preview(feature)).rejects.toMatchObject({ code: "engine_error", message: expect.stringContaining("nothing archived") });
     expect(poolCount(den)).toBe(1);
 
     behave.workRecordFails = false;
-    const p = await tw.client.previewGraduation!("testwolf", feature);
+    const p = await preview(feature);
     expect(p.foldedObservations).toBe(1);
     expect(poolCount(den)).toBe(0);
     tag(den, tasks[1]!, "a late observation");
     behave.workRecordFails = true;
-    await expect(tw.client.confirmGraduation!("testwolf", feature, p.token)).rejects.toMatchObject({ code: "engine_error", message: expect.stringContaining("nothing archived") });
+    await expect(confirm(feature, p.token)).rejects.toMatchObject({ code: "engine_error", message: expect.stringContaining("nothing archived") });
     expect(inbox(tw)).toEqual([]);
     expect((await item(tw, feature)).graduated).toBeFalsy();
     for (const id of [feature, ...tasks]) expect((await item(tw, id)).stage).not.toBe("archived");
     // the preview survives a failed confirm: trying again once the model is back works and includes the late fold
     behave.workRecordFails = false;
-    const r = await tw.client.confirmGraduation!("testwolf", feature, p.token);
+    const r = await confirm(feature, p.token);
     expect(r.lateFolded).toBe(1);
     expect(inbox(tw)).toHaveLength(1);
   });
@@ -221,7 +326,7 @@ describe("graduate routes", () => {
     tag(den, tasks[0]!);
     tag(den, feature, "feature-level note");
     tag(den, "work-wolfpack-ZZZZZZZ", "someone else's"); // not in scope: stays
-    const p = await tw.client.previewGraduation!("testwolf", feature);
+    const p = await preview(feature);
     expect(p.foldedObservations).toBe(2);
     expect(poolCount(den)).toBe(1);
     expect(behave.recordCalls).toBeGreaterThan(0);
@@ -234,5 +339,9 @@ describe("graduate routes", () => {
     expect((await post("/v1/wolves/testwolf/work/..%2Fetc/graduate/preview")).status).toBe(400);
     expect((await post("/v1/wolves/testwolf/work/work-wolfpack-AAAAAAA/graduate/confirm", { nope: 1 })).status).toBe(400);
     expect((await post("/v1/wolves/nobody/work/work-wolfpack-AAAAAAA/graduate/preview")).status).toBe(404);
+    const get = (path: string) => fetch(`${tw!.url}${path}`);
+    expect((await get("/v1/wolves/testwolf/work/..%2Fetc/graduate/status")).status).toBe(400);
+    expect((await get("/v1/wolves/testwolf/work/..%2Fetc/graduate/observations")).status).toBe(400);
+    expect((await get("/v1/wolves/nobody/work/work-wolfpack-AAAAAAA/graduate/status")).status).toBe(404);
   });
 });

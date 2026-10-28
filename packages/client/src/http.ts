@@ -28,8 +28,9 @@ import {
   type MemoryTopic,
   type MemoryObservations,
   type WorkRecordResponse,
-  type GraduationPreview,
-  type GraduationResult,
+  type GraduationJob,
+  type GraduationObservations,
+  type GraduationStatus,
   type WorkListResponse,
   type KbPipelineResponse,
   type PendingCard,
@@ -311,12 +312,20 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
   }
 
-  async previewGraduation(wolf: string, workId: string): Promise<GraduationPreview> {
-    return (await this.json("previewGraduation", { name: wolf, id: workId }, ROUTES.previewGraduation.response.schema, {}, wolf)) as GraduationPreview;
+  async startGraduationPreview(wolf: string, workId: string): Promise<GraduationJob> {
+    return (await this.json("previewGraduation", { name: wolf, id: workId }, ROUTES.previewGraduation.response.schema, {}, wolf)) as GraduationJob;
   }
 
-  async confirmGraduation(wolf: string, workId: string, token: string): Promise<GraduationResult> {
-    return (await this.json("confirmGraduation", { name: wolf, id: workId }, ROUTES.confirmGraduation.response.schema, { token }, wolf)) as GraduationResult;
+  async startGraduationConfirm(wolf: string, workId: string, token: string): Promise<GraduationJob> {
+    return (await this.json("confirmGraduation", { name: wolf, id: workId }, ROUTES.confirmGraduation.response.schema, { token }, wolf)) as GraduationJob;
+  }
+
+  async graduationStatus(wolf: string, workId: string): Promise<GraduationStatus> {
+    return (await this.json("graduationStatus", { name: wolf, id: workId }, ROUTES.graduationStatus.response.schema, undefined, wolf)) as GraduationStatus;
+  }
+
+  async graduationObservations(wolf: string, workId: string): Promise<GraduationObservations> {
+    return (await this.json("graduationObservations", { name: wolf, id: workId }, ROUTES.graduationObservations.response.schema, undefined, wolf)) as GraduationObservations;
   }
 
   /** Dewey's pipeline (lanes, receipts, parked, sweep). The wolf must be the librarian: others reject with a kb_unavailable error. */

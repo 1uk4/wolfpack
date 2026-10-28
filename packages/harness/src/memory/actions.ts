@@ -102,6 +102,15 @@ export interface GraduationActions {
   preview(id: string): Promise<GraduationPreviewResult>;
   /** Check the token, fold late observations, send, graduate, archive, unbind. All or nothing. Throws GraduationError. */
   confirm(id: string, token: string): Promise<GraduationConfirmResult>;
+  /** The newest stored preview of this item that has not expired (its token file survives a restart), if any. */
+  pendingPreview(id: string): Promise<GraduationPreviewResult | undefined>;
+  /** The pending observations in this wolf's pool a graduation of the item folds (the item and its descendants), per work item. */
+  observations(id: string): Promise<GraduationObservationCount>;
+}
+
+export interface GraduationObservationCount {
+  total: number;
+  byWork: Array<{ id: string; title?: string; count: number }>;
 }
 
 const GRADUATION_REGISTRY = Symbol.for("wolfpack.graduationActions");

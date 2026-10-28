@@ -313,6 +313,8 @@ export class StubServer {
         throw new HttpError("not_found", `work item ${params.id}`);
       case "previewGraduation":
       case "confirmGraduation":
+      case "graduationStatus":
+      case "graduationObservations":
         this.wolf(params.name);
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(params.id)) throw new HttpError("invalid_request", "malformed work item id");
         if (m.name === "confirmGraduation" && !GraduationConfirmBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {token}");

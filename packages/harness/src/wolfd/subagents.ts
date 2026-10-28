@@ -949,7 +949,7 @@ ${text}`;
     if (this.merging.has(rec.id)) return `A merge of "${rec.name}" is already running.`;
     this.merging.add(rec.id);
     try {
-      const say = (text: string): string => (notify && this.tell(rec, text), text);
+      const say = (text: string): string => (notify && this.tell(rec, `Sub-agent "${rec.name}" merge: ${text}`), text);
       const feature = this.featureWsOf(rec);
       // (mergeTried is set only once an attempt has an outcome: a crash mid-merge is retried by recover)
       const tried = (): void => {

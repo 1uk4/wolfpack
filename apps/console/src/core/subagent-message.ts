@@ -40,6 +40,8 @@ export function parseSubagentMessage(text: string): SubagentOrigin | undefined {
 		warned = true;
 		rest = rest.replace(WARNING, "").replace(/^\n+/, "");
 	}
+	const merge = /^Sub-agent "([^"\n]+)" merge: ([\s\S]*)$/.exec(rest);
+	if (merge) return { event: "merge", name: merge[1], body, summary: firstLine(merge[2]!), warned };
 	const head = HEAD.exec(rest);
 	if (head) {
 		const after = rest.slice(head[0].length).replace(/^[^\n]*?\)?\.?\n+/, "");

@@ -60,6 +60,8 @@ describe("parseSubagentMessage", () => {
 		assert.deepEqual([q.event, q.duration, q.summary], ["question", "3s", "Which branch?"]);
 		const f = parseSubagentMessage('Sub-agent "c" failed after 9s (provider/agent error).\n\nError: boom\n\n[delivery c.2]')!;
 		assert.deepEqual([f.event, f.duration], ["error", "9s"]);
+		const nm = parseSubagentMessage('Sub-agent "c" merge: Merged a into b (2 commits); done.\n\n[delivery c.9]')!;
+		assert.deepEqual([nm.event, nm.name, nm.summary], ["merge", "c", "Merged a into b (2 commits); done."]);
 		const m = parseSubagentMessage('Not merged: dirty. Nothing was changed. then call subagent_merge({ name: "c", action: "retry" }).\n\n[delivery c.3]')!;
 		assert.deepEqual([m.event, m.name], ["merge", "c"]);
 		const w = parseSubagentMessage('WARNING: the main checkout /x changed while this child ran.\n\nSub-agent "c" completed (1s).\n\ndone\n\n[delivery c.4]')!;

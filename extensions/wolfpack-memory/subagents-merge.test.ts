@@ -136,7 +136,7 @@ function scripted(): FauxResponseStep {
     }
     if (lastText.includes("Merge conflict merging")) {
       conflictName = /subagent_merge\(\{ name: "([^"]+)"/.exec(lastText)![1];
-      const question = /^(Merge conflict merging [^\n]*?)\. The merge stopped/m.exec(lastText)![1];
+      const question = /(Merge conflict merging [^\n]*?)\. The merge stopped/m.exec(lastText)![1];
       const options = JSON.parse(/options (\[.*\]). Then/.exec(lastText)![1]);
       return tool("ask_user_question", { question, options });
     }
@@ -218,7 +218,7 @@ describe("merge on ship", () => {
     const main = repo!.git(["rev-parse", "main"]);
     expect(existsSync(rec.workspace.path)).toBe(true);
     await say(w, `ship ${TASK}`, feature);
-    await parentSaid(w, feature, `Merged ${rec.workspace.branch} into ${featureWs.branch} (1 commit)`);
+    await parentSaid(w, feature, `Sub-agent "${rec.name}" merge: Merged ${rec.workspace.branch} into ${featureWs.branch} (1 commit)`);
     expect(items.get(TASK)!.stage).toBe("shipped");
     expect(repo!.git(["show", `${featureWs.branch}:a.txt`])).toBe("one");
     expect(existsSync(rec.workspace.path)).toBe(false);

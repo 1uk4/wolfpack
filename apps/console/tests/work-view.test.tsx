@@ -1,6 +1,6 @@
 /**
  * The Work view overlay (node test runner, linkedom, an injected fake client): opens from the graph header's button
- * and the sidebar's nav entry, the remembered domain, expand/collapse, the KaTeX dependency glyphs, header sorting,
+ * and the sidebar's nav entry, the remembered domain, expand/collapse, the gutter lanes, header sorting,
  * the search that auto-expands, the graduated toggle, refresh on focus, and the select no-op seam.
  */
 import React, { act } from "react";
@@ -163,7 +163,7 @@ describe("domain", () => {
 });
 
 describe("rows", () => {
-	it("starts collapsed: only the initiative group and No initiative", async () => {
+	it("starts collapsed: only the initiative group and the Inbox", async () => {
 		await open();
 		assert.deepEqual(rows(), ["i1", "no-initiative"]);
 	});
@@ -172,7 +172,7 @@ describe("rows", () => {
 		await click(q("work-toggle-i1")!);
 		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]);
 		await click(q("work-toggle-f1")!);
-		assert.deepEqual(rows(), ["i1", "f1", "t2", "t1", "t3", "f2", "no-initiative"]);
+		assert.deepEqual(rows(), ["i1", "f1", "t1", "t2", "t3", "f2", "no-initiative"]);
 		assert.equal(q("work-toggle-f1")!.getAttribute("aria-expanded"), "true");
 		await click(q("work-toggle-i1")!);
 		assert.deepEqual(rows(), ["i1", "no-initiative"]);
@@ -187,22 +187,50 @@ describe("rows", () => {
 		assert.equal(q("work-progress-f1")!.textContent, "1/3 shipped");
 		assert.ok(q("work-row-f1")!.textContent!.includes("2026-10-05"));
 	});
-	it("draws the dependency line with real KaTeX glyphs and stage-styled chips", async () => {
+	it("draws no inline dependency line: each item appears once, as a titled chip styled by stage", async () => {
 		await open();
 		await click(q("work-toggle-i1")!);
 		await click(q("work-toggle-f1")!);
-		const and = q("work-and-t3-1")!;
-		const implies = q("work-implies-t3")!;
-		assert.ok(and.querySelector(".katex") && and.textContent!.includes("∧"));
-		assert.ok(implies.querySelector(".katex") && implies.textContent!.includes("⟹"));
-		assert.equal(q("work-premise-t3-t1")!.getAttribute("data-chip-state"), "shipped");
-		assert.equal(q("work-premise-t3-t2")!.getAttribute("data-chip-state"), "building");
+		assert.equal(qa(".katex").length, 0);
+		assert.equal(q("work-premise-t3-t1"), null);
+		assert.equal(q("work-implies-t3"), null);
 		assert.equal(q("work-chip-t3")!.getAttribute("data-chip-state"), "blocked");
 		assert.equal(q("work-chip-f2")!.getAttribute("data-chip-state"), "ready");
-		// feature rows use feature-level deps; a row with no premises has no glyphs
-		assert.ok(q("work-premise-f2-f1") && q("work-implies-f2"));
-		assert.equal(q("work-implies-t1"), null);
-		assert.match(q("work-row-t3")!.querySelector("[aria-label]")!.getAttribute("aria-label")!, /T1 and T2 implies T3/);
+		for (const id of ["f1", "t1", "t2", "t3", "f2"]) assert.equal(qa(`[data-testid="work-chip-${id}"]`).length, 1);
+		assert.equal(q("work-row-t3")!.style.height, "32px");
+	});
+});
+
+describe("gutter lanes", () => {
+	const laneIds = () => qa('[data-testid^="work-lane-"]').filter((e) => e.tagName.toLowerCase() === "g").map((e) => e.getAttribute("data-testid")!.slice("work-lane-".length));
+	it("collapsed groups draw no lanes; opening draws one per dependency, closing hides them again", async () => {
+		await open();
+		assert.deepEqual(laneIds(), []);
+		assert.equal(q("work-lanes-i1"), null);
+		await click(q("work-toggle-i1")!);
+		assert.deepEqual(laneIds(), ["f1-f2"]);
+		await click(q("work-toggle-f1")!);
+		assert.deepEqual(laneIds().sort(), ["f1-f2", "t1-t2", "t1-t3", "t2-t3"]);
+		await click(q("work-toggle-i1")!);
+		assert.deepEqual(laneIds(), []);
+	});
+	it("a done dependent's lane is muted grey; an open one is the faint colour", async () => {
+		await open();
+		await click(q("work-toggle-i1")!);
+		await click(q("work-toggle-f1")!);
+		const lane = (id: string) => q(`work-lane-${id}`)!;
+		assert.equal(lane("f1-f2").getAttribute("data-lane-state"), "done"); // f2 is shipped
+		assert.equal(lane("f1-f2").getAttribute("stroke"), "#7d8493");
+		assert.equal(lane("t1-t2").getAttribute("data-lane-state"), "plain");
+		assert.equal(lane("t1-t2").getAttribute("stroke"), "#8a93a6");
+	});
+	it("shows an out-of-parent dependency as a ↖ note", async () => {
+		const c = fake();
+		c.items = [...ITEMS, item("f4", "feature", { dependsOn: ["f2"], title: "Later" })];
+		await open(c);
+		await click(q("work-toggle-no-initiative")!);
+		assert.equal(q("work-note-f4-f2")!.textContent, "↖ Graduate");
+		assert.deepEqual(laneIds(), []);
 	});
 });
 
@@ -213,7 +241,7 @@ describe("sorting", () => {
 		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]); // in build, then shipped
 		assert.equal(q("work-sort-stage")!.getAttribute("aria-sort"), "ascending");
 		await click(q("work-sort-name")!);
-		assert.deepEqual(rows(), ["i1", "f2", "f1", "no-initiative"]); // Graduate, Work view
+		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]); // Graduate, Work view
 		assert.equal(q("work-sort-name")!.getAttribute("aria-sort"), "ascending");
 		assert.equal(q("work-sort-stage")!.getAttribute("aria-sort"), "none");
 		assert.ok(q("work-sort-name")!.querySelector("svg"));
@@ -227,7 +255,7 @@ describe("sorting", () => {
 		await click(q("work-sort-created")!);
 		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]);
 		await click(q("work-sort-created")!);
-		assert.deepEqual(rows(), ["i1", "f2", "f1", "no-initiative"]);
+		assert.deepEqual(rows(), ["i1", "f1", "f2", "no-initiative"]);
 	});
 });
 

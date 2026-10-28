@@ -1,7 +1,8 @@
 /**
  * THE WORK VIEW'S ROW MODEL (pure, browser-safe, deterministic): the domain's work items from the Work API become a
- * tree of initiative groups → feature rows → task rows, each with its progress, its dependency line (premises ⟹ the
- * row) and its stage label. Sorting, the graduated toggle and the fuzzy search all happen here so the component only
+ * tree of initiative groups → feature rows → task rows, each with its progress, its sibling dependencies (drawn as
+ * gutter lanes by work-connectors.ts) and its stage label. Siblings are ordered by dependency layer (layerOrder).
+ * The "Inbox" group holds everything outside an initiative, with the domain's Inbox container flattened into it. Sorting, the graduated toggle and the fuzzy search all happen here so the component only
  * draws. Stage text comes from the graph pane's `stageLabel`, so both surfaces say "shipped · ready to graduate" alike.
  */
 
@@ -46,6 +47,11 @@ export interface Chip {
 	state: ChipState;
 }
 
+export interface DepNote {
+	id: string;
+	title: string;
+}
+
 export interface ProgressCell {
 	shipped: number;
 	total: number;
@@ -56,7 +62,7 @@ export interface ProgressCell {
 export type RowKind = "initiative" | "feature" | "task";
 
 export interface TableRow {
-	/** The work id; "" for the synthetic "No initiative" group. */
+	/** The work id; "" for the synthetic Inbox group. */
 	id: string;
 	/** Unique across the table (expansion state keys on it). */
 	key: string;
@@ -71,8 +77,10 @@ export interface TableRow {
 	/** YYYY-MM-DD, "" when unknown. */
 	created: string;
 	progress: ProgressCell | null;
-	/** The dependsOn items that are in the table's data; empty for initiatives. */
-	premises: Chip[];
+	/** The dependsOn ids that are siblings of this row (same parent): drawn as gutter lanes. */
+	dependsOn: string[];
+	/** Dependencies outside the row's parent (or domain): a small "↖ title" note instead of a lane. */
+	notes: DepNote[];
 	/** The row as the conclusion of its dependency line; null for initiative groups. */
 	self: Chip | null;
 	/** Graduated or archived: shown greyed (only present with the toggle on). */
@@ -95,7 +103,17 @@ export interface WorkTable {
 	searching: boolean;
 }
 
-export const NO_INITIATIVE_KEY = "no-initiative";
+/** Key (and data-testid suffix) of the Inbox group; the value predates the rename from "No initiative". */
+export const INBOX_KEY = "no-initiative";
+export const NO_INITIATIVE_KEY = INBOX_KEY;
+export const INBOX_TITLE = "Inbox";
+
+/**
+ * A domain's Inbox container: the container flag or kind first, falling back to the title "Inbox" on a non-leaf kind
+ * (initiative / feature / container). Its children are flattened into the Inbox group; it never becomes a row itself.
+ */
+export const isInboxContainer = (it: WorkListItem): boolean =>
+	it.container === true || it.kind === "container" || (it.title.trim().toLowerCase() === "inbox" && (it.kind === "initiative" || it.kind === "feature"));
 
 const isGraduated = (it: WorkListItem): boolean => it.graduated !== undefined || it.stage === "archived";
 
@@ -114,7 +132,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 	const query = (opts.query ?? "").trim();
 	const searching = query !== "";
 
-	const live = items.filter((it) => !it.container && (showGraduated || !isGraduated(it)));
+	const live = items.filter((it) => !isInboxContainer(it) && (showGraduated || !isGraduated(it)));
 	const byId = new Map(items.map((it) => [it.id, it] as const));
 	const liveIds = new Set(live.map((it) => it.id));
 
@@ -136,10 +154,18 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		else kidsOf.set(p, [it]);
 	}
 
-	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind): TableRow => {
-		const premises = it.dependsOn.map((d) => byId.get(d)).filter((d): d is WorkListItem => d !== undefined && (showGraduated || !isGraduated(d))).map((d) => chipOf(d, blocked));
+	const rowOf = (it: WorkListItem, depth: 1 | 2, kind: RowKind, sibIds: ReadonlySet<string>): TableRow => {
+		const dependsOn = it.dependsOn.filter((d) => sibIds.has(d) && d !== it.id);
+		const notes: DepNote[] = [];
+		for (const d of it.dependsOn) {
+			if (sibIds.has(d)) continue;
+			const dep = byId.get(d);
+			if (dep && !showGraduated && isGraduated(dep)) continue;
+			notes.push({ id: d, title: dep?.title ?? d });
+		}
 		const tasks = kind === "feature" ? kidsOf.get(it.id) ?? [] : [];
-		const kids = tasks.map((t) => rowOf(t, 2, "task"));
+		const taskIds = new Set(tasks.map((t) => t.id));
+		const kids = tasks.map((t) => rowOf(t, 2, "task", taskIds));
 		const shipped = tasks.filter((t) => isShipped(t.stage) || t.graduated !== undefined).length;
 		return {
 			id: it.id,
@@ -153,7 +179,8 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 			assignee: it.assignee ?? "",
 			created: it.created ?? "",
 			progress: kind === "feature" && tasks.length > 0 ? { shipped, total: tasks.length, label: `${shipped}/${tasks.length} shipped` } : null,
-			premises,
+			dependsOn,
+			notes,
 			self: chipOf(it, blocked),
 			graduated: isGraduated(it),
 			children: kids,
@@ -161,7 +188,10 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		};
 	};
 
-	const featureRows = (list: WorkListItem[]): TableRow[] => list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task"));
+	const featureRows = (list: WorkListItem[]): TableRow[] => {
+		const sibIds = new Set(list.map((f) => f.id));
+		return list.map((f) => rowOf(f, 1, f.kind === "feature" ? "feature" : "task", sibIds));
+	};
 
 	const groups: TableRow[] = [];
 	for (const init of live.filter((it) => it.kind === "initiative")) {
@@ -174,7 +204,7 @@ export function buildWorkTable(items: readonly WorkListItem[], opts: WorkTableOp
 		return !!p && liveIds.has(p.id) && (p.kind === "feature" || p.kind === "initiative");
 	};
 	const loose = live.filter((it) => it.kind !== "initiative" && !placed(it));
-	if (loose.length > 0) groups.push(groupOf(null, featureRows(loose), "No initiative", "", NO_INITIATIVE_KEY));
+	if (loose.length > 0) groups.push(groupOf(null, featureRows(loose), INBOX_TITLE, "", INBOX_KEY));
 
 	const filtered = searching ? groups.map((g) => prune(g, query)).filter((g): g is TableRow => g !== null) : groups;
 	sortRows(filtered, sort);
@@ -197,7 +227,8 @@ function groupOf(init: WorkListItem | null, rows: TableRow[], title: string, id:
 		assignee: init?.assignee ?? "",
 		created: init?.created ?? "",
 		progress: features.length > 0 ? { shipped, total: features.length, label: `${shipped}/${features.length} shipped` } : null,
-		premises: [],
+		dependsOn: [],
+		notes: [],
 		self: null,
 		graduated: init ? isGraduated(init) : false,
 		children: rows,
@@ -207,7 +238,7 @@ function groupOf(init: WorkListItem | null, rows: TableRow[], title: string, id:
 
 const countRows = (rows: readonly TableRow[]): number => rows.reduce((n, r) => n + 1 + countRows(r.children), 0);
 
-/** A row matches on its title, id or stage (the label and the raw stage). The synthetic "No initiative" group never does. */
+/** A row matches on its title, id or stage (the label and the raw stage). The synthetic Inbox group never does. */
 const matches = (r: TableRow, query: string): boolean => r.key !== NO_INITIATIVE_KEY && fuzzyScore(query, r.title, r.id, r.stageLabel, r.stage) !== null;
 
 /**
@@ -244,7 +275,32 @@ const rankOf = (r: TableRow): number =>
 	r.kind === "initiative" && r.children.length > 0 ? Math.min(...r.children.map(rankOf)) : stageRank(r.stage);
 const ratio = (r: TableRow): number => (r.progress && r.progress.total > 0 ? r.progress.shipped / r.progress.total : -1);
 
-/** Orders the groups and, recursively, the rows within them. "No initiative" stays last. */
+/**
+ * Dependency layering of one sibling set: longest-path layers over the dependsOn edges among the siblings (a cycle's
+ * back edge is ignored). Rows keep their incoming (sorted) order within a layer, so parallel siblings stay adjacent.
+ */
+export function layerOrder<T extends { id: string; dependsOn: readonly string[] }>(rows: readonly T[]): T[] {
+	const byId = new Map(rows.map((r) => [r.id, r] as const));
+	const layer = new Map<string, number>();
+	const visiting = new Set<string>();
+	const layerOf = (id: string): number => {
+		const known = layer.get(id);
+		if (known !== undefined) return known;
+		if (visiting.has(id)) return -1;
+		visiting.add(id);
+		let l = 0;
+		for (const d of byId.get(id)!.dependsOn) if (byId.has(d)) l = Math.max(l, layerOf(d) + 1);
+		visiting.delete(id);
+		layer.set(id, l);
+		return l;
+	};
+	return rows
+		.map((r, i) => ({ r, i, l: layerOf(r.id) }))
+		.sort((a, b) => a.l - b.l || a.i - b.i)
+		.map((x) => x.r);
+}
+
+/** Orders the groups and, recursively, the rows within them. The Inbox group stays last; siblings are layered by dependency. */
 function sortRows(rows: TableRow[], sort: WorkSort): void {
 	rows.sort((a, b) => {
 		const aLast = a.key === NO_INITIATIVE_KEY ? 1 : 0;
@@ -255,5 +311,8 @@ function sortRows(rows: TableRow[], sort: WorkSort): void {
 		// tie-breaks never flip: newest first, then name
 		return (b.created || "").localeCompare(a.created || "") || collator.compare(a.title, b.title) || (a.id < b.id ? -1 : 1);
 	});
-	for (const r of rows) sortRows(r.children, sort);
+	for (const r of rows) {
+		sortRows(r.children, sort);
+		if (r.children.length > 1) r.children = layerOrder(r.children);
+	}
 }

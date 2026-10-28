@@ -45,7 +45,7 @@ export type RowRoute =
 	| { mode: "none"; selected: false; cursor: false }
 	| { mode: "on" | "off"; selected: boolean; cursor: boolean; step: number | null; parallel: boolean };
 
-/** How one row draws against the selection. Rows without a work id (the "No initiative" group) are never dimmed. */
+/** How one row draws against the selection. Rows without a work id (the Inbox group) are never dimmed. */
 export function rowRouteState(view: WorkRouteView | null, id: string): RowRoute {
 	if (!view || !id) return { mode: "none", selected: false, cursor: false };
 	const hit = view.steps[id];

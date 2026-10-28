@@ -3,8 +3,9 @@
 /**
  * THE WORK VIEW: a read-only, full-bleed overlay over the domain's work, repurposed from learnharness's chain table.
  * Initiative groups hold feature rows, which hold task rows, all collapsed to begin with; indentation carries the
- * structure and the only lines are horizontal separators. A row's name is its dependency line, `A ∧ B ⟹ C`, with the
- * connectives drawn by KaTeX (latex-glyph.tsx) and the chips styled by stage. Columns: Name, Stage, Progress,
+ * structure. Dependencies among siblings are lanes in a narrow left gutter (one SVG per group, work-connectors.ts):
+ * a line down from the prerequisite ending in an elbow arrow at the dependent; a dependency outside the parent is a
+ * "↖ title" note on the row. Rows have a fixed height so the lanes align. A row's title is a chip styled by stage. Columns: Name, Stage, Progress,
  * Assignee, Created; all sort on click (chevron on the active one); the fuzzy search expands matching groups.
  *
  * Data: the injected `WorkClient` (default: console → wolfd → the Work API), fetched when the view opens, on window
@@ -16,14 +17,19 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SearchIcon } from "lucide-react";
 import { OverlayShell } from "@/components/overlay-shell";
 import { TopBar } from "@/components/top-bar";
-import { LatexGlyph } from "@/components/latex-glyph";
 import { WorkViewContext, useWorkView, type WorkSelection } from "./work-view-entry";
 import {
 	DEFAULT_WORK_SORT,
 	WORK_COL_WIDTH_KEY,
 	ancestorKeys,
+	LANE_COLOR,
+	WORK_ROW_H,
 	buildWorkTable,
 	clampPaneWidth,
+	groupConnectors,
+	laneKey,
+	lanePath,
+	laneState,
 	nextWorkSort,
 	parseWorkColWidth,
 	rowRouteState,
@@ -148,20 +154,18 @@ function ChipView({ chip, testid }: { chip: Chip; testid: string }) {
 	);
 }
 
-/** `A ∧ B ⟹ C` in real KaTeX glyphs; a row with no premises is just its chip. */
-function DependencyLine({ row }: { row: TableRow }) {
-	const self = row.self!;
-	const plain = row.premises.length > 0 ? `${row.premises.map((p) => p.title).join(" and ")} implies ${row.title}` : row.title;
+/** The row's title chip, with a "↖ title" note per dependency outside its parent. */
+function RowTitle({ row }: { row: TableRow }) {
 	return (
-		<span aria-label={plain} className="flex min-w-0 flex-wrap items-center gap-x-0.5 gap-y-1 text-[13px] leading-tight">
-			{row.premises.map((p, i) => (
-				<span key={p.id} className="flex items-center">
-					{i > 0 && <LatexGlyph cmd="\land" testid={`work-and-${row.id}-${i}`} className="px-1.5 text-foreground" />}
-					<ChipView chip={p} testid={`work-premise-${row.id}-${p.id}`} />
+		<span className="flex min-w-0 items-center gap-2 text-[13px] leading-tight">
+			<span className="min-w-0 truncate">
+				<ChipView chip={row.self!} testid={`work-chip-${row.id}`} />
+			</span>
+			{row.notes.map((n) => (
+				<span key={n.id} data-testid={`work-note-${row.id}-${n.id}`} title={`Depends on ${n.title}`} className="max-w-48 shrink-0 truncate text-[11px] text-muted-foreground">
+					↖ {n.title}
 				</span>
 			))}
-			{row.premises.length > 0 && <LatexGlyph cmd="\implies" testid={`work-implies-${row.id}`} className="px-1.5 text-foreground" />}
-			<ChipView chip={self} testid={`work-chip-${row.id}`} />
 		</span>
 	);
 }
@@ -172,7 +176,7 @@ const COLS = {
 	assignee: "w-24 shrink-0",
 	created: "w-24 shrink-0",
 };
-const INDENT = ["pl-3", "pl-10", "pl-18"] as const;
+const INDENT_PX = [12, 40, 72] as const;
 
 interface RowCtx {
 	expanded: ReadonlySet<string>;
@@ -182,15 +186,23 @@ interface RowCtx {
 	view: WorkRouteView | null;
 	/** The split's narrow column: only Name and Stage (plus the step number). */
 	compact: boolean;
+	/** The group's gutter width (px), added to the indent of the rows below the group row. */
+	gutter: number;
+}
+
+/** A row shows its children when it has some, is not a collapsed-route stand-in, and is open (by hand or by search). */
+function isOpenRow(row: TableRow, ctx: Pick<RowCtx, "expanded" | "view">): boolean {
+	const stood = row.id && ctx.view ? ctx.view.collapsed[row.id] : undefined;
+	return row.children.length > 0 && stood === undefined && (row.autoExpand || ctx.expanded.has(row.key));
 }
 
 function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
-	const { expanded, onToggle, onSelect, view, compact } = ctx;
+	const { onToggle, onSelect, view, compact } = ctx;
 	const rr = rowRouteState(view, row.id);
 	// A collapsed done feature is one row standing in for N route tasks ("+N"); expanding it on the map opens it here too.
 	const stood = row.id && view ? view.collapsed[row.id] : undefined;
 	const hasKids = row.children.length > 0 && stood === undefined;
-	const open = hasKids && (row.autoExpand || expanded.has(row.key));
+	const open = isOpenRow(row, ctx);
 	const lit = rr.mode === "on";
 	return (
 		<>
@@ -203,7 +215,8 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 				data-selected={rr.selected || undefined}
 				data-cursor={view && rr.cursor ? true : undefined}
 				onClick={row.id ? () => onSelect(row.id) : undefined}
-				className={`flex items-center gap-1 py-1 pr-3 ${INDENT[row.depth]} ${row.graduated ? "opacity-50" : ""} ${rr.mode === "off" ? "opacity-35" : ""} ${lit ? "bg-emerald-500/10" : ""} ${view && rr.cursor ? "bg-accent ring-1 ring-inset ring-ring/60" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
+				style={{ height: WORK_ROW_H, paddingLeft: INDENT_PX[row.depth] + (row.depth > 0 ? ctx.gutter : 0) }}
+				className={`flex items-center gap-1 pr-3 ${row.graduated ? "opacity-50" : ""} ${rr.mode === "off" ? "opacity-35" : ""} ${lit ? "bg-emerald-500/10" : ""} ${view && rr.cursor ? "bg-accent ring-1 ring-inset ring-ring/60" : ""} ${row.id ? "cursor-pointer hover:bg-accent/40" : ""}`}
 			>
 				{hasKids ? (
 					<button
@@ -235,7 +248,7 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 					{row.kind === "initiative" ? (
 						<span className={`truncate text-sm font-medium ${row.id ? "" : "text-muted-foreground"}`}>{row.title}</span>
 					) : (
-						<DependencyLine row={row} />
+						<RowTitle row={row} />
 					)}
 				</span>
 				{stood !== undefined && (
@@ -258,6 +271,42 @@ function RowView({ row, ctx }: { row: TableRow; ctx: RowCtx }) {
 			</div>
 			{open && row.children.map((c) => <RowView key={c.key} row={c} ctx={ctx} />)}
 		</>
+	);
+}
+
+/** One group: its rows plus the gutter SVG with the group's dependency lanes (none while the group is collapsed). */
+function GroupView({ group, ctx }: { group: TableRow; ctx: RowCtx }) {
+	const gc = groupConnectors(group, (r) => isOpenRow(r, ctx));
+	const states = gc.edges.map((e) => laneState(e, ctx.view));
+	// Muted lanes first, lit ones last, so a lit lane is never painted over by a shared trunk.
+	const order = gc.edges.map((_, i) => i).sort((a, b) => ["done", "plain", "lit"].indexOf(states[a]!) - ["done", "plain", "lit"].indexOf(states[b]!));
+	return (
+		<div data-testid={`work-group-${group.key}`} className="relative border-b border-border/60">
+			{gc.width > 0 && (
+				<svg
+					data-testid={`work-lanes-${group.key}`}
+					data-lanes={gc.lanes}
+					width={gc.width}
+					height={gc.rows.length * WORK_ROW_H}
+					aria-hidden="true"
+					className="pointer-events-none absolute left-0 top-0"
+				>
+					{order.map((i) => {
+						const e = gc.edges[i]!;
+						const st = states[i]!;
+						const p = lanePath(e, gc.lanes);
+						const color = LANE_COLOR[st];
+						return (
+							<g key={laneKey(e)} data-testid={`work-lane-${e.from}-${e.to}`} data-lane={e.lane} data-lane-state={st} stroke={color} fill="none" strokeWidth={st === "done" ? 1 : 1.5}>
+								<path d={p.d} />
+								<path d={p.head} fill={color} stroke="none" />
+							</g>
+						);
+					})}
+				</svg>
+			)}
+			<RowView row={group} ctx={{ ...ctx, gutter: gc.width }} />
+		</div>
 	);
 }
 
@@ -330,7 +379,7 @@ export function WorkOverlay({ client: injected, onClose }: { client?: WorkClient
 		const el = document.querySelector(`[data-testid="work-row-${cursorId}"]`) as (HTMLElement & { scrollIntoView?: (o?: object) => void }) | null;
 		el?.scrollIntoView?.({ block: "nearest" });
 	}, [cursorId]);
-	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split };
+	const ctx: RowCtx = { expanded, onToggle: toggle, onSelect: select, view, compact: split, gutter: 0 };
 	const startResize = (e: React.PointerEvent) => {
 		e.preventDefault();
 		const startX = e.clientX;
@@ -433,9 +482,7 @@ export function WorkOverlay({ client: injected, onClose }: { client?: WorkClient
 							</div>
 						)}
 						{table?.groups.map((g) => (
-							<div key={g.key} data-testid={`work-group-${g.key}`} className="border-b border-border/60">
-								<RowView row={g} ctx={ctx} />
-							</div>
+							<GroupView key={g.key} group={g} ctx={ctx} />
 						))}
 					</div>
 				</div>

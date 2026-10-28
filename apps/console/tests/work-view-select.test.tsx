@@ -204,6 +204,15 @@ describe("route rows", () => {
 		assert.equal(q("work-row-fx")!.getAttribute("data-step"), null);
 		assert.ok(!/opacity-35/.test(q("work-row-b")!.className));
 	});
+	it("the selected row's lanes light in the route colour; lanes elsewhere stay faint or muted", async () => {
+		await openAndSelect("e");
+		const lanes = [...document.querySelectorAll('g[data-testid^="work-lane-"]')];
+		assert.ok(lanes.length > 0, "the opened groups draw lanes");
+		const lit = lanes.filter((g) => g.getAttribute("data-lane-state") === "lit");
+		assert.ok(lit.length > 0, "a lane touching the route is lit");
+		for (const g of lit) assert.equal(g.getAttribute("stroke"), "#ffd166");
+		for (const g of lanes.filter((g) => g.getAttribute("data-lane-state") === "done")) assert.equal(g.getAttribute("stroke"), "#7d8493");
+	});
 	it("a collapsed done feature is one row with +N, its tasks hidden; expanding on the map opens it", async () => {
 		await openAndSelect("e");
 		const route = routeForNode(graph, "work:e")!;

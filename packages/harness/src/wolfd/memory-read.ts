@@ -3,11 +3,12 @@
  * Pure reads of the wolf's own den (and its Work API client); nothing here writes. The topic lookup matches ids
  * against what the readers found on disk, so a request id is never joined into a path.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics } from "@wolfpack/memory";
-import type { BoundWork, LastPromote, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
-import { DURABLE_SESSION_ID, getPoolStats } from "../memory/consolidation.js";
+import type { BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
+import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
 /** What wolfd knows of this wolf's memory configuration (wolf.yaml, after the sandbox redirect). */
 export interface MemoryReadConfig {
@@ -76,6 +77,35 @@ export async function readMemoryStatus(i: MemoryStateInput, lastPromote: LastPro
     lastPromote,
     bound,
   };
+}
+
+/**
+ * The wolf's observation pool (`<den>/.memory/pool/observations.jsonl`), newest first: by recordedAt, ties by
+ * the later append. Ids hash the entry (an ordinal tells identical entries apart), so the same entry keeps its id
+ * from read to read until consolidation archives it.
+ */
+export async function readMemoryObservations(den: string, limit?: number): Promise<MemoryObservations> {
+  const pool = await readPool(den);
+  const seen = new Map<string, number>();
+  const all = pool.map((o, i): MemoryObservation & { _i: number } => {
+    const h = createHash("sha1").update(`${o.recordedAt}\u0000${o.timestamp}\u0000${o.content}`).digest("hex").slice(0, 16);
+    const n = seen.get(h) ?? 0;
+    seen.set(h, n + 1);
+    return {
+      id: n === 0 ? h : `${h}-${n}`,
+      timestamp: o.timestamp ?? "",
+      ...(o.recordedAt ? { recordedAt: o.recordedAt } : {}),
+      content: o.content ?? "",
+      tokenCount: Math.ceil((o.content ?? "").length / 4),
+      ...(o.domain ? { domain: o.domain } : {}),
+      ...(o.work ? { work: o.work } : {}),
+      ...(o.feature ? { feature: o.feature } : {}),
+      _i: i,
+    };
+  });
+  all.sort((a, b) => (b.recordedAt ?? b.timestamp).localeCompare(a.recordedAt ?? a.timestamp) || b._i - a._i);
+  const kept = limit === undefined ? all : all.slice(0, limit);
+  return { observations: kept.map(({ _i, ...o }) => o), total: all.length };
 }
 
 /** One topic by id. `scope` restricts the store; otherwise den first, then session. Undefined: no such topic. */

@@ -13,6 +13,7 @@ import {
   WolfEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
+  MemoryObservationsSchema,
   PendingCardSchema,
   PromoteResponseSchema,
   SubmitAckSchema,
@@ -192,6 +193,12 @@ export const ROUTES = {
    * 409 `memory_unavailable` when memory is inert or off.
    */
   getMemoryTopic: { method: "GET", path: "/v1/wolves/:name/memory/topics/:id", response: { kind: "json", schema: MemoryTopicSchema }, status: [200], error: err },
+  /**
+   * The wolf's current observation pool (what the status pool count counts), newest first, each with its `work` /
+   * `feature` tags. `?limit=<n>` keeps the newest n (`total` is the whole pool). Persisted: survives a restart.
+   * 400 `invalid_request` for a bad limit, 409 `memory_unavailable` when memory is inert or off.
+   */
+  getMemoryObservations: { method: "GET", path: "/v1/wolves/:name/memory/observations", response: { kind: "json", schema: MemoryObservationsSchema }, status: [200], error: err },
   /**
    * A work item's page data (plan + Record + links), fetched through the wolf's Work API client. 404 `not_found` for an unknown item or wolf,
    * 409 `memory_unavailable` when the wolf has no Work API configured, 502 `engine_error` when it cannot be reached.

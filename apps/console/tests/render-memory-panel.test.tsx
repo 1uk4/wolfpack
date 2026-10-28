@@ -19,22 +19,23 @@ describe("MemoryPanel SSR", () => {
 		assert.match(html, /data-testid="memory-panel"/);
 		assert.match(html, /data-open="true"/);
 		assert.match(html, /Collapse status panel/);
-		assert.match(html, /Nothing captured yet/);
+		assert.match(html, /Loading…/);
 		assert.doesNotMatch(html, /memory-banner/);
 		assert.doesNotMatch(html, /memory-view-toggle/);
-		assert.match(html, /Observations \(live\)/);
+		assert.match(html, />Observations</);
 		assert.equal(html.match(/data-testid="memory-feed"/g)?.length, 1);
 	});
 	const bound = { workId: "work-1", title: "Item" } as never;
 	const item = { id: "work-1", title: "Item", kind: "task", stage: "in_build", domain: "wolfpack", plan: "# Item\n\n## Plan\n\nDo it.\n\n## Notes\n", successCriteria: "- it works", record: "" } as never;
 	const shown = { item, rec: { record: "### Decisions\n\n- one", inheritedFrom: null } } as never;
-	const feed = [{ key: "f0", summary: "saw it", count: 1, destination: "den" }] as never;
+	const poolObs = [{ id: "o1", timestamp: "2026-10-26 10:00", recordedAt: "2026-10-26T10:00:00Z", content: "saw it", tokenCount: 2 }];
+	const obsProps = (list: unknown = poolObs, open: string | null = null) => ({ list: list as never, error: null, info: {}, open, onOpen: () => {} });
 	const kid = (id: string, stage: string, dependsOn: string[] = []) => ({ id, title: `Task ${id}`, kind: "task", stage, dependsOn });
 	const feat = { id: "F", kind: "feature", title: "Feat", stage: "in_build", plan: "", record: "", children: [kid("a", "shipped"), kid("b", "in_build", ["a"]), kid("c", "idea", ["b"])] };
 	const graphOf = (boundId: string) => buildTaskGraph({ id: boundId, kind: "task", title: "", stage: "", plan: "", record: "", partOf: "F" }, feat as never);
 	const r = (view: "graph" | "item" | "feed", b: unknown, o: { otherState?: "loading" | "error"; shown?: unknown; graph?: ReturnType<typeof buildTaskGraph>; viewingOther?: boolean } = {}) =>
 		renderToStaticMarkup(
-			<StatusSection view={view} bound={b as never} graph={o.graph ?? graphOf("b")} shown={("shown" in o ? o.shown : shown) as never} viewingOther={o.viewingOther} otherState={o.otherState} feed={feed} onGraph={() => {}} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />,
+			<StatusSection view={view} bound={b as never} graph={o.graph ?? graphOf("b")} shown={("shown" in o ? o.shown : shown) as never} viewingOther={o.viewingOther} otherState={o.otherState} observations={obsProps()} onGraph={() => {}} onToggleFeed={() => {}} onSelect={() => {}} onBack={() => {}} />,
 		);
 
 	it("graph view: Feature label, feature link with progress, and the graph SVG", () => {
@@ -105,15 +106,17 @@ describe("MemoryPanel SSR", () => {
 	});
 	it("feed view: feed shown with a back button", () => {
 		const html = r("feed", bound);
-		assert.match(html, /Observations \(live\)/);
+		assert.match(html, />Observations</);
 		assert.match(html, /memory-feed-back/);
 		assert.match(html, /‹ back/);
 		assert.doesNotMatch(html, /« Status|memory-view-toggle/);
-		assert.match(html, /saw it/);
+		// the list shows the Den group with its count, not the observation text
+		assert.match(html, /memory-obs-group-den/);
+		assert.match(html, /data-count="1"/);
 	});
-	it("unbound: feed shown, no toggle or back button", () => {
+	it("unbound: observations shown, no toggle or back button", () => {
 		const html = r("graph", null);
-		assert.match(html, /saw it/);
+		assert.match(html, /memory-obs-group-den/);
 		assert.doesNotMatch(html, /memory-feed-back|memory-back-graph/);
 	});
 });

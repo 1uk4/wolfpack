@@ -41,7 +41,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, isTopicId, isWorkId, memoryState, readBound, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
@@ -484,6 +484,14 @@ export class WolfServer {
         const topic = readMemoryTopic(this.opts.den!, params.id, scope ?? undefined);
         if (!topic) throw new HttpError("not_found", `topic ${params.id}`);
         return this.json(res, 200, topic);
+      }
+      case "getMemoryObservations": {
+        this.checkWolf(params.name);
+        const rawLimit = url.searchParams.get("limit");
+        if (rawLimit !== null && !/^[1-9]\d{0,6}$/.test(rawLimit)) throw new HttpError("invalid_request", "limit must be a positive integer");
+        const { state, reason } = memoryState(this.memoryReadInput());
+        if (state === "inert" || state === "off") throw new HttpError("memory_unavailable", reason);
+        return this.json(res, 200, await readMemoryObservations(this.opts.den!, rawLimit === null ? undefined : Number(rawLimit)));
       }
       case "getWorkRecord": {
         this.checkWolf(params.name);

@@ -264,3 +264,73 @@ export function latestOnly(): { start(): number; isCurrent(token: number): boole
 export function focusRefetchDue(visible: boolean, now: number, last: number, minMs = 5000): boolean {
 	return visible && now - last >= minMs;
 }
+
+// ─── Observation pool, grouped ─────────────────────────────────────────────────
+
+/** The group of general observations (no work item). */
+export const DEN_GROUP = "den";
+
+/** A pool observation as the console reads it (`GET .../memory/observations`). */
+export interface PoolObservation {
+	id: string;
+	timestamp: string;
+	recordedAt?: string;
+	content: string;
+	tokenCount: number;
+	work?: string;
+	feature?: string;
+}
+
+/** One row of the grouped list: the den, or a work item (id = its key). */
+export interface ObservationGroup {
+	key: string;
+	kind: "den" | "work";
+	count: number;
+	/** Sort stamp of the group's newest observation. */
+	latest: string;
+}
+
+const stampOf = (o: PoolObservation): string => o.recordedAt ?? o.timestamp;
+
+/** Which group an observation belongs to: its `work` tag, else its `feature` tag (tagged only with the feature), else the den. */
+export const groupKeyOf = (o: Pick<PoolObservation, "work" | "feature">): string => o.work || o.feature || DEN_GROUP;
+
+/** Newest first (the server's order is kept for ties). */
+export function newestFirst<T extends PoolObservation>(obs: readonly T[]): T[] {
+	return obs.map((o, i) => [o, i] as const).sort(([a, i], [b, j]) => stampOf(b).localeCompare(stampOf(a)) || i - j).map(([o]) => o);
+}
+
+/** Add `incoming` to `current` without repeating an id (a later copy replaces the earlier one); newest first. */
+export function mergeObservations<T extends PoolObservation>(current: readonly T[], incoming: readonly T[]): T[] {
+	const byId = new Map<string, T>();
+	for (const o of current) byId.set(o.id, o);
+	for (const o of incoming) byId.set(o.id, o);
+	return newestFirst([...byId.values()]);
+}
+
+/** The den first (when it has observations), then work items by their newest observation. */
+export function groupObservations(obs: readonly PoolObservation[]): ObservationGroup[] {
+	const groups = new Map<string, ObservationGroup>();
+	for (const o of obs) {
+		const key = groupKeyOf(o);
+		const g = groups.get(key);
+		if (!g) groups.set(key, { key, kind: key === DEN_GROUP ? "den" : "work", count: 1, latest: stampOf(o) });
+		else {
+			g.count++;
+			if (stampOf(o) > g.latest) g.latest = stampOf(o);
+		}
+	}
+	const rows = [...groups.values()];
+	const den = rows.filter((g) => g.kind === "den");
+	return [...den, ...rows.filter((g) => g.kind === "work").sort((a, b) => b.latest.localeCompare(a.latest) || a.key.localeCompare(b.key))];
+}
+
+/** One group's observations, newest first. */
+export const observationsInGroup = (obs: readonly PoolObservation[], key: string): PoolObservation[] => newestFirst(obs.filter((o) => groupKeyOf(o) === key));
+
+/** What the list shows for a work item: its title and stage, or just the id when the lookup failed. */
+export interface GroupInfo {
+	title: string;
+	stage?: string;
+}
+export const groupLabel = (key: string, info: Readonly<Record<string, GroupInfo | undefined>>): string => (key === DEN_GROUP ? "Den" : info[key]?.title || key);

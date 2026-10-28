@@ -21,6 +21,8 @@ export type {
 	MemoryState,
 	MemoryStatus,
 	MemoryTarget,
+	MemoryObservation,
+	MemoryObservations,
 	MemoryTopic,
 	MemoryTopicRef,
 	ConsolidateResponse,

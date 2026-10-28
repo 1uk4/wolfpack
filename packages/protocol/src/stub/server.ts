@@ -274,6 +274,12 @@ export class StubServer {
       case "getMemoryTopic":
         this.wolf(params.name);
         throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
+      case "getMemoryObservations": {
+        this.wolf(params.name);
+        const limit = url.searchParams.get("limit");
+        if (limit !== null && !/^[1-9]\d{0,6}$/.test(limit)) throw new HttpError("invalid_request", "limit must be a positive integer");
+        throw new HttpError("memory_unavailable", "memory is not loaded on this wolf");
+      }
       case "getWorkRecord":
         this.wolf(params.name);
         throw new HttpError("not_found", `work item ${params.id}`);

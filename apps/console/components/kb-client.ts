@@ -11,6 +11,7 @@ import type {
 	ConsolidateResponse,
 	KbEntryDetail,
 	KbGraph,
+	MemoryObservations,
 	MemoryStatus,
 	MemoryTopic,
 	PromoteResponse,
@@ -57,6 +58,11 @@ export function fetchWolves(): Promise<KbResult<{ wolves: { id: string; name: st
 export function fetchMemoryStatus(wolf: string, thread?: string): Promise<KbResult<MemoryStatus>> {
 	const q = thread ? `?thread=${seg(thread)}` : "";
 	return request(`/api/wolves/${seg(wolf)}/memory${q}`);
+}
+
+/** The wolf's current observation pool, newest first (what the pool count counts). */
+export function fetchMemoryObservations(wolf: string): Promise<KbResult<MemoryObservations>> {
+	return request(`/api/wolves/${seg(wolf)}/memory/observations`);
 }
 
 export function fetchMemoryTopic(wolf: string, id: string, scope?: "den" | "session"): Promise<KbResult<MemoryTopic>> {

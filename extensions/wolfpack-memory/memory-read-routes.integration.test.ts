@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Engine } from "@wolfpack/engine";
 import { takeSnapshot } from "@wolfpack/engine";
 import { startLocalWorkServer } from "@wolfpack/agent";
-import { ErrorEnvelopeSchema, MemoryStatusSchema, MemoryTopicSchema, PROTOCOL_VERSION, WorkRecordResponseSchema, type MemoryEvent } from "@wolfpack/protocol";
+import { ErrorEnvelopeSchema, MemoryObservationsSchema, MemoryStatusSchema, MemoryTopicSchema, PROTOCOL_VERSION, WorkRecordResponseSchema, type MemoryEvent } from "@wolfpack/protocol";
 import { adaptToDurable } from "../../packages/harness/src/adapters/durable.js";
 import { fauxAssistantMessage } from "../../packages/harness/src/wolfd/scripted-model.js";
 import { startTestWolf, type TestWolf } from "../../packages/harness/src/wolfd/test-wolf.js";
@@ -257,6 +257,47 @@ describe("memory read routes", { timeout: 30_000 }, () => {
     writeFileSync(join(dir, "my topic.md"), "---\nid: my topic\ntitle: Spacey\nsummary: s\nupdated: 2026-10-26\n---\nbody here\n");
     const topic = MemoryTopicSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory/topics/my%20topic")).json());
     expect(topic).toMatchObject({ id: "my topic", scope: "session", body: "body here" });
+  });
+
+  it("observations: the persisted pool is served newest first after a restart, tags intact, with limit", async () => {
+    const { dev } = await liveAndDev();
+    const first = await startMemoryWolf({ dev });
+    const pool = join(first.wolf.config.den, ".memory", "pool");
+    mkdirSync(pool, { recursive: true });
+    const lines = [
+      { timestamp: "2026-10-26 09:00", content: "den fact", recordedAt: "2026-10-26T09:00:00.000Z", domain: "wolfpack" },
+      { timestamp: "2026-10-26 10:00", content: "task fact", recordedAt: "2026-10-26T10:00:00.000Z", domain: "wolfpack", work: "work-wolfpack-aaa", feature: "work-wolfpack-fff" },
+      { timestamp: "2026-10-26 10:00", content: "task fact", recordedAt: "2026-10-26T10:00:00.000Z", domain: "wolfpack", work: "work-wolfpack-aaa", feature: "work-wolfpack-fff" },
+      { timestamp: "2026-10-26 11:00", content: "feature fact", recordedAt: "2026-10-26T11:00:00.000Z", feature: "work-wolfpack-fff" },
+    ];
+    writeFileSync(join(pool, "observations.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    await first.stop();
+    tw = undefined;
+
+    const t = await startMemoryWolf({ dev });
+    const body = MemoryObservationsSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory/observations")).json());
+    expect(body.total).toBe(4);
+    expect(body.observations.map((o) => o.content)).toEqual(["feature fact", "task fact", "task fact", "den fact"]);
+    expect(new Set(body.observations.map((o) => o.id)).size).toBe(4);
+    expect(body.observations[0]).toMatchObject({ feature: "work-wolfpack-fff", tokenCount: 3 });
+    expect(body.observations[0].work).toBeUndefined();
+    expect(body.observations[1]).toMatchObject({ work: "work-wolfpack-aaa", feature: "work-wolfpack-fff", timestamp: "2026-10-26 10:00" });
+    // same ids on a second read; the count matches the status pool
+    const again = MemoryObservationsSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory/observations")).json());
+    expect(again.observations.map((o) => o.id)).toEqual(body.observations.map((o) => o.id));
+    expect(MemoryStatusSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory")).json()).pool?.count).toBe(4);
+    const limited = MemoryObservationsSchema.parse(await (await get(t, "/v1/wolves/testwolf/memory/observations?limit=2")).json());
+    expect(limited).toMatchObject({ total: 4 });
+    expect(limited.observations.map((o) => o.content)).toEqual(["feature fact", "task fact"]);
+    for (const bad of ["0", "-1", "x", "1.5"]) expect((await errorOf(await get(t, `/v1/wolves/testwolf/memory/observations?limit=${bad}`))).code).toBe("invalid_request");
+  });
+
+  it("observations: 409 memory_unavailable when memory is off; unknown wolf is not_found", async () => {
+    tw = await startTestWolf({ script: [fauxAssistantMessage(REPLY)] });
+    const res = await get(tw, "/v1/wolves/testwolf/memory/observations");
+    expect(res.status).toBe(409);
+    expect((await errorOf(res)).code).toBe("memory_unavailable");
+    expect((await errorOf(await get(tw, "/v1/wolves/nope/memory/observations"))).code).toBe("not_found");
   });
 
   it("memory.live reports state live", async () => {

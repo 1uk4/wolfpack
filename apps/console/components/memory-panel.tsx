@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronLeftIcon, CornerDownRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
+import { fetchMemoryObservations, fetchMemoryStatus, fetchWorkRecord, postConsolidate, postPromote } from "@/components/kb-client";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { WorkBadges } from "@/components/work-badges";
 import { TaskGraph } from "@/components/task-graph";
@@ -19,6 +19,9 @@ import {
 	bannerOf,
 	buildTaskGraph,
 	featureIdFor,
+	groupLabel,
+	groupObservations,
+	observationsInGroup,
 	focusRefetchDue,
 	latestOnly,
 	parseOpen,
@@ -27,7 +30,6 @@ import {
 	poolSummary,
 	promoteLine,
 	promoteStartedState,
-	pushFeed,
 	feedItemOf,
 	refreshPlan,
 	settlePromotePost,
@@ -37,7 +39,8 @@ import {
 	serializeOpen,
 	serializeView,
 	workHref,
-	type FeedItem,
+	type GroupInfo,
+	type PoolObservation,
 	type MemoryStatus,
 	type PanelView,
 	type RecordView,
@@ -47,6 +50,8 @@ import {
 } from "@/src/core";
 
 const REFRESH_DEBOUNCE_MS = 250;
+/** A work item's title/stage is looked up again once it is this old (stages change; a failed lookup retries too). */
+const INFO_TTL_MS = 60_000;
 
 
 /** An item's own record plus the parent's when the Record is inherited. */
@@ -60,8 +65,8 @@ interface Loaded {
  * off/inert banner, pool gauge with its consolidate / promote actions,
  * and one section, running to the bottom of the panel, with three views:
  * the feature's task graph, the item viewer (the bound item, or the task
- * clicked in the graph) and the live observation feed (live-only, capped,
- * this thread's events). Collapse and view state persist in
+ * clicked in the graph) and the observation pool (loaded from wolfd on open,
+ * refetched on every live capture, grouped into the den and work items). Collapse and view state persist in
  * localStorage (lh.memory-panel.open.v1 / lh.memory-panel.view.v1).
  */
 export function MemoryPanel({ wolf, threadId, embedded = false }: {
@@ -115,7 +120,12 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [selected, setSelected] = useState<Loaded | null>(null);
 	const [selectedFailed, setSelectedFailed] = useState(false);
-	const [feed, setFeed] = useState<FeedItem[]>([]);
+	/** The wolf's observation pool (null until the first load) and the work items' titles/stages looked up for its groups. */
+	const [obsPool, setObsPool] = useState<PoolObservation[] | null>(null);
+	const [poolError, setPoolError] = useState<string | null>(null);
+	const [groupInfo, setGroupInfo] = useState<Record<string, GroupInfo | undefined>>({});
+	/** The group whose observations are open: DEN_GROUP or a work id; null = the list. */
+	const [openGroup, setOpenGroup] = useState<string | null>(null);
 	const [promote, setPromote] = useState<PromoteState>(PROMOTE_IDLE);
 	const [consolidating, setConsolidating] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
@@ -133,7 +143,9 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	const statusReq = useRef(0);
 	const recordReq = useRef(0);
 	const selectedReq = useRef(latestOnly());
-	const feedSeq = useRef(0);
+	const poolReq = useRef(latestOnly());
+	/** When each work id's info was fetched (success or failure), so lookups are not repeated every event. */
+	const infoAt = useRef(new Map<string, number>());
 
 	const refreshStatus = useCallback(async () => {
 		const req = ++statusReq.current;
@@ -144,6 +156,30 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 			setStatusError(null);
 		} else setStatusError(r.message);
 	}, [wolf, threadId]);
+
+	const refreshPool = useCallback(async () => {
+		const guard = poolReq.current;
+		const token = guard.start();
+		const r = await fetchMemoryObservations(wolf);
+		if (!guard.isCurrent(token)) return;
+		if (r.ok) {
+			setObsPool(r.data.observations);
+			setPoolError(null);
+		} else setPoolError(r.message);
+	}, [wolf]);
+
+	// Titles and stages of the work items the pool mentions (the group's work, else its feature); the id stands in when a lookup fails.
+	useEffect(() => {
+		if (!obsPool) return;
+		const now = Date.now();
+		const due = groupObservations(obsPool).filter((g) => g.kind === "work" && now - (infoAt.current.get(g.key) ?? -Infinity) >= INFO_TTL_MS);
+		for (const g of due) {
+			infoAt.current.set(g.key, now);
+			void fetchWorkRecord(wolf, g.key).then((r) => {
+				if (r.ok) setGroupInfo((m) => ({ ...m, [g.key]: { title: r.data.title || g.key, stage: r.data.stage || undefined } }));
+			});
+		}
+	}, [obsPool, wolf]);
 
 	const loadItem = useCallback(
 		async (id: string): Promise<Loaded | null> => {
@@ -196,23 +232,25 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	);
 
 	// Trailing-debounced refetch shared by status + record: event bursts coalesce.
-	const dirty = useRef({ status: false, record: false });
+	const dirty = useRef({ status: false, record: false, pool: false });
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const flush = useCallback(() => {
 		if (timer.current) clearTimeout(timer.current);
 		timer.current = null;
 		const d = dirty.current;
-		dirty.current = { status: false, record: false };
+		dirty.current = { status: false, record: false, pool: false };
 		if (d.status) void refreshStatus();
+		if (d.pool) void refreshPool();
 		if (d.record) {
 			void refreshRecord(boundRef.current);
 			void refreshSelected(selectedRef.current);
 		}
-	}, [refreshStatus, refreshRecord, refreshSelected]);
+	}, [refreshStatus, refreshPool, refreshRecord, refreshSelected]);
 	const schedule = useCallback(
+		// the pool is read whenever the status is (a capture, consolidation, promote or archive all change both)
 		(plan: { status: boolean; record: boolean }) => {
 			if (!plan.status && !plan.record) return;
-			dirty.current = { status: dirty.current.status || plan.status, record: dirty.current.record || plan.record };
+			dirty.current = { status: dirty.current.status || plan.status, record: dirty.current.record || plan.record, pool: dirty.current.pool || plan.status };
 			if (timer.current) clearTimeout(timer.current);
 			timer.current = setTimeout(flush, REFRESH_DEBOUNCE_MS);
 		},
@@ -226,11 +264,16 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	);
 
 	useEffect(() => {
-		setFeed([]);
+		setObsPool(null);
+		setPoolError(null);
+		setGroupInfo({});
+		infoAt.current.clear();
+		setOpenGroup(null);
 		setUnread(0);
 		setPromote(PROMOTE_IDLE);
 		void refreshStatus();
-	}, [refreshStatus]);
+		void refreshPool();
+	}, [refreshStatus, refreshPool]);
 	useEffect(() => {
 		setSelectedId(null);
 		void refreshRecord(boundId);
@@ -257,17 +300,13 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 	useMemoryEvents(
 		wolf,
 		(e) => {
-			const titles = boundRef.current && boundTitle ? { [boundRef.current]: boundTitle } : undefined;
-			const item = feedItemOf(e, threadId, `f${feedSeq.current++}`, titles);
-			if (item) {
-				setFeed((f) => pushFeed(f, item));
-				if (viewRef.current !== "feed" && boundRef.current) setUnread((n) => n + 1);
-			}
+			// this thread's captures raise the unread badge; the pool itself is wolf-wide and refetched below
+			if (feedItemOf(e, threadId, "") && viewRef.current !== "feed" && boundRef.current) setUnread((n) => n + 1);
 			if (e.type.startsWith("promote_")) setPromote((s) => applyPromoteEvent(s, e));
 			schedule(refreshPlan(e, shownRef.current));
 		},
 		() => {
-			dirty.current = { status: true, record: true };
+			dirty.current = { status: true, record: true, pool: true };
 			flush();
 		},
 	);
@@ -283,6 +322,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 		if (r.ok) setNote(`Consolidated ${r.data.observationsProcessed} observations → ${r.data.topicsCreated} new, ${r.data.topicsMerged} merged topics`);
 		else setNote(r.code === "memory_busy" ? BUSY_TEXT : r.message);
 		void refreshStatus();
+		void refreshPool();
 		void refreshRecord(boundRef.current);
 		void refreshSelected(selectedRef.current);
 	};
@@ -366,7 +406,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 					setSelectedFailed(false);
 					void refreshSelected(selectedRef.current);
 				}}
-				feed={feed}
+				observations={{ list: obsPool, error: poolError, info: groupInfo, open: openGroup, onOpen: setOpenGroup }}
 				onGraph={() => {
 					setSelectedId(null);
 					chooseView("graph");
@@ -408,7 +448,7 @@ export function MemoryPanel({ wolf, threadId, embedded = false }: {
 }
 
 /** The Status section: the feature graph, the item viewer or the live observation feed, one at a time; no bound item → feed only. */
-export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, feed, onGraph, onToggleFeed, onSelect, onBack }: {
+export function StatusSection({ view, bound, graph, shown, viewingOther = false, otherState, onRetry, observations, onGraph, onToggleFeed, onSelect, onBack }: {
 	view: PanelView;
 	bound: MemoryStatus["bound"] | null;
 	graph: TaskGraphModel;
@@ -419,7 +459,8 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	/** Viewing another task whose record is not in: still loading, or the fetch failed. */
 	otherState?: "loading" | "error";
 	onRetry?: () => void;
-	feed: FeedItem[];
+	/** The pool view: the loaded observations (null until the first load), grouped; `open` is the group being read. */
+	observations: { list: PoolObservation[] | null; error: string | null; info: Readonly<Record<string, GroupInfo | undefined>>; open: string | null; onOpen: (key: string | null) => void };
 	/** Back to the feature graph (persisted as the graph view). */
 	onGraph: () => void;
 	onToggleFeed: () => void;
@@ -427,6 +468,10 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 	onBack: () => void;
 }) {
 	const showFeed = view === "feed" || !bound;
+	const list = observations.list;
+	const groups = list ? groupObservations(list) : [];
+	// a group that emptied (consolidated away) falls back to the list
+	const openKey = observations.open && groups.some((g) => g.key === observations.open) ? observations.open : null;
 	const featureTitle = graph.kind === "graph" ? graph.featureTitle : null;
 	/** The shown item sits under the graphed feature (a task, not the feature itself). */
 	const isChild = !!shown?.item.partOf && graph.kind === "graph" && shown.item.partOf === graph.featureId;
@@ -435,7 +480,20 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 		<section data-testid={showFeed ? "memory-feed" : view === "graph" ? "memory-graph" : "memory-record"} data-view={showFeed ? "feed" : view}>
 			<div className="mb-1 flex items-center justify-between gap-2">
 				{showFeed ? (
-					<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations (live)</h3>
+					openKey ? (
+						<button
+							type="button"
+							className="-ml-1 flex min-w-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label="Back to observation groups"
+							data-testid="memory-obs-back"
+							onClick={() => observations.onOpen(null)}
+						>
+							<ChevronLeftIcon className="size-3 shrink-0" />
+							<span className="truncate">{groupLabel(openKey, observations.info)}</span>
+						</button>
+					) : (
+						<h3 className="text-xs font-medium uppercase text-muted-foreground">Observations</h3>
+					)
 				) : view === "graph" ? (
 					graph.kind === "graph" ? (
 						<>
@@ -480,15 +538,43 @@ export function StatusSection({ view, bound, graph, shown, viewingOther = false,
 			</div>
 			{showFeed ? (
 				<>
-					{feed.length === 0 ? <p className="text-xs text-muted-foreground">Nothing captured yet.</p> : null}
-					<ul className="flex flex-col gap-1.5">
-						{feed.map((f) => (
-							<li key={f.key} className="text-xs">
-								<div>{f.summary || "(observation)"}{f.count > 1 ? ` ×${f.count}` : ""}</div>
-								<div className="text-muted-foreground">→ {f.destination}</div>
-							</li>
-						))}
-					</ul>
+					{list === null ? (
+						<p className="text-xs text-muted-foreground" data-testid="memory-obs-state">{observations.error ? `Observations unavailable: ${observations.error}` : "Loading…"}</p>
+					) : groups.length === 0 ? (
+						<p className="text-xs text-muted-foreground">Nothing captured yet.</p>
+					) : openKey ? (
+						<ul className="flex flex-col gap-2" data-testid="memory-obs-items" data-group={openKey}>
+							{observationsInGroup(list, openKey).map((o) => (
+								<li key={o.id} className="text-xs" data-testid="memory-obs-item">
+									<div className="text-muted-foreground">{o.timestamp}</div>
+									<div className="whitespace-pre-wrap break-words">{o.content}</div>
+								</li>
+							))}
+						</ul>
+					) : (
+						<ul className="flex flex-col gap-1" data-testid="memory-obs-groups">
+							{groups.map((g) => {
+								const info = observations.info[g.key];
+								return (
+									<li key={g.key}>
+										<button
+											type="button"
+											className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+											data-testid={`memory-obs-group-${g.key}`}
+											data-count={g.count}
+											onClick={() => observations.onOpen(g.key)}
+										>
+											<span className="min-w-0 truncate">{groupLabel(g.key, observations.info)}</span>
+											<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+												{info?.stage ? <span data-testid="memory-obs-stage">{info.stage.replace(/_/g, " ")}</span> : null}
+												<span className="rounded-full bg-muted px-1.5 text-[10px]" data-testid="memory-obs-count">{g.count}</span>
+											</span>
+										</button>
+									</li>
+								);
+							})}
+						</ul>
+					)}
 				</>
 			) : view === "graph" ? (
 				graph.kind === "graph" ? (

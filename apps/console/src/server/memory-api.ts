@@ -82,6 +82,17 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
+		async memoryObservations(wolf: string, limit?: string | null): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getMemoryObservations) return unsupported("memory_unavailable", "memory observations");
+				if (limit && !/^[1-9]\d{0,6}$/.test(limit)) return json({ error: "limit must be a positive integer", code: "invalid_request" }, 400);
+				return json(await client.getMemoryObservations(wolf, limit ? { limit: Number(limit) } : {}));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		async memoryTopic(wolf: string, id: string, scope?: string | null): Promise<Response> {
 			try {
 				const client = source();

@@ -25,6 +25,7 @@ import {
   type KbGraph,
   type MemoryStatus,
   type MemoryTopic,
+  type MemoryObservations,
   type WorkRecordResponse,
   type KbPipelineResponse,
   type PendingCard,
@@ -277,6 +278,11 @@ export class HttpConsoleClient implements ConsoleClient {
   async getMemoryTopic(wolf: string, topicId: string, opts: { scope?: "den" | "session" } = {}): Promise<MemoryTopic> {
     const query = opts.scope ? `?scope=${opts.scope}` : "";
     return (await this.json("getMemoryTopic", { name: wolf, id: topicId }, ROUTES.getMemoryTopic.response.schema, undefined, wolf, query)) as MemoryTopic;
+  }
+
+  async getMemoryObservations(wolf: string, opts: { limit?: number } = {}): Promise<MemoryObservations> {
+    const query = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : "";
+    return (await this.json("getMemoryObservations", { name: wolf }, ROUTES.getMemoryObservations.response.schema, undefined, wolf, query)) as MemoryObservations;
   }
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {

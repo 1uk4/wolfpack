@@ -938,6 +938,34 @@ export const MemoryTopicSchema = MemoryTopicRefSchema.extend({
 });
 export type MemoryTopic = z.infer<typeof MemoryTopicSchema>;
 
+/**
+ * One observation of the wolf's pool (`GET /v1/wolves/:name/memory/observations`). `work` / `feature` are the tags
+ * the observation was captured under (absent: general, it feeds the den). `id` is stable for a pool entry across
+ * reads (a hash of its recordedAt, timestamp and content, plus an ordinal when two entries are identical).
+ */
+export const MemoryObservationSchema = z.object({
+  id: z.string(),
+  /** When the observation was made (as the classifier stamped it). */
+  timestamp: z.string(),
+  /** When it was appended to the pool; the newest-first order uses it. */
+  recordedAt: z.string().optional(),
+  content: z.string(),
+  /** Estimated tokens (the pool's own estimate: ceil(chars / 4)). */
+  tokenCount: z.number().int().nonnegative(),
+  domain: z.string().optional(),
+  work: z.string().optional(),
+  feature: z.string().optional(),
+});
+export type MemoryObservation = z.infer<typeof MemoryObservationSchema>;
+
+export const MemoryObservationsSchema = z.object({
+  /** Newest first. */
+  observations: z.array(MemoryObservationSchema),
+  /** The pool's size, before `limit`. */
+  total: z.number().int().nonnegative(),
+});
+export type MemoryObservations = z.infer<typeof MemoryObservationsSchema>;
+
 /** One child of a feature, as much as a task graph needs. */
 export const WorkChildSchema = z.object({
   id: z.string(),

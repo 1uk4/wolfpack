@@ -43,6 +43,18 @@ describe("memory API: pass-through", () => {
 		assert.deepEqual(calls[1], ["w", "x", {}]);
 	});
 
+	it("memoryObservations passes a valid limit, rejects a bad one", async () => {
+		const calls: unknown[][] = [];
+		const api = createMemoryApi(stub({ getMemoryObservations: async (...a: unknown[]) => (calls.push(a), { observations: [], total: 0 }) }));
+		await api.memoryObservations("w", "5");
+		await api.memoryObservations("w");
+		assert.deepEqual(calls, [["w", { limit: 5 }], ["w", {}]]);
+		const bad = await api.memoryObservations("w", "0");
+		assert.equal(bad.status, 400);
+		assert.equal((await body(bad)).code, "invalid_request");
+		assert.equal((await createMemoryApi(stub({})).memoryObservations("w")).status, 409);
+	});
+
 	it("workRecord, consolidate, promote, kbEntry call the client", async () => {
 		const api = createMemoryApi(
 			stub({

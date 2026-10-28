@@ -155,6 +155,8 @@ export interface RendererCallbacks {
 	onSelect: (nodeId: string, screenPos: Pt) => void;
 	/** The empty stage was clicked. */
 	onStageClick: () => void;
+	/** A node was double-clicked. */
+	onNodeDoubleClick?: (nodeId: string) => void;
 	/** Any camera move (pan/zoom) — the caller dismisses anchored UI and
 	 *  persists the camera (view state). */
 	onCameraMove: (transform: { k: number; x: number; y: number }) => void;
@@ -711,6 +713,7 @@ export class GraphCanvasRenderer {
 		canvas.addEventListener("pointerdown", this.onPointerDown);
 		canvas.addEventListener("pointerup", this.onPointerUp);
 		canvas.addEventListener("pointerleave", this.onPointerLeave);
+		canvas.addEventListener("dblclick", this.onDoubleClick);
 		// The native menu on a full-bleed custom canvas is never useful.
 		canvas.addEventListener("contextmenu", this.onContextMenu);
 
@@ -946,6 +949,19 @@ export class GraphCanvasRenderer {
 		return true;
 	}
 
+	/** Pan (keeping the zoom) so the node is on screen; no-op when it already
+	 *  is. True when the camera moved. */
+	panIntoView(id: string, margin = 60): boolean {
+		const w = this.canvas.clientWidth;
+		const h = this.canvas.clientHeight;
+		const p = this.nodeScreenPos(id);
+		if (!p || w < 10 || h < 10) return false;
+		if (p.x >= margin && p.x <= w - margin && p.y >= margin && p.y <= h - margin) return false;
+		const { x, y, k } = this.transform;
+		select(this.canvas).call(this.zoomBehavior.transform, zoomIdentity.translate(x + w / 2 - p.x, y + h / 2 - p.y).scale(k));
+		return true;
+	}
+
 	destroy(): void {
 		if (this.frameId !== null) cancelAnimationFrame(this.frameId);
 		this.flushCommit();
@@ -958,6 +974,7 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("pointermove", this.onPointerMove);
 		this.canvas.removeEventListener("pointerdown", this.onPointerDown);
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
+		this.canvas.removeEventListener("dblclick", this.onDoubleClick);
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
 		this.canvas.removeEventListener("contextmenu", this.onContextMenu);
 		this.canvas.style.cursor = "";
@@ -1078,6 +1095,12 @@ export class GraphCanvasRenderer {
 		const node = this.pickAt(pos.x, pos.y);
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
+	};
+
+	private onDoubleClick = (e: MouseEvent) => {
+		const pos = this.eventPos(e);
+		const node = this.pickAt(pos.x, pos.y);
+		if (node) this.callbacks.onNodeDoubleClick?.(node.id);
 	};
 
 	private onContextMenu = (e: MouseEvent) => {
@@ -1291,6 +1314,14 @@ export class GraphCanvasRenderer {
 				ctx.beginPath();
 				ctx.arc(n.x, n.y, r * DEP_STYLE.haloScale, 0, Math.PI * 2);
 				ctx.stroke();
+				if (route.cursor === n.id) {
+					// The card's cursor: a second, wider and heavier ring.
+					ctx.globalAlpha = 1;
+					ctx.lineWidth = r * DEP_STYLE.haloWeight * 2.2;
+					ctx.beginPath();
+					ctx.arc(n.x, n.y, r * DEP_STYLE.haloScale * 1.35, 0, Math.PI * 2);
+					ctx.stroke();
+				}
 			}
 		}
 		// Arrows.

@@ -12,6 +12,7 @@
  */
 import Link from "next/link";
 import type { CardLink, NodeCard } from "@/src/core";
+import { RouteNav, type RouteNavModel } from "./graph-route-nav.tsx";
 
 const KIND_LABEL: Record<NodeCard["kind"], string> = {
 	domain: "Domain",
@@ -62,8 +63,11 @@ export function GraphCard({
 	card,
 	onFocus,
 	onSelectNode,
+	routeNav,
 }: {
 	card: NodeCard;
+	/** The selected work item's route stepper (details above show the cursor's node). */
+	routeNav?: RouteNavModel | null;
 	/** Frame the graph on these nodes (the section card's "focus"). */
 	onFocus: (ids: string[]) => void;
 	/** Jump to another node (focus + open its card). */
@@ -93,6 +97,8 @@ export function GraphCard({
 						</Field>
 					))}
 			</div>
+
+			{routeNav && <RouteNav nav={routeNav} />}
 
 			{card.parent && <LinkList title="Part of" links={[card.parent]} onSelectNode={onSelectNode} />}
 			<LinkList title="Depends on" links={card.dependencies} onSelectNode={onSelectNode} />

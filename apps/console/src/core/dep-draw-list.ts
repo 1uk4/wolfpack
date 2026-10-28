@@ -20,6 +20,8 @@ export interface DepRouteSelection {
 	edges: ReadonlySet<string>;
 	parallel: ReadonlySet<string>;
 	done: ReadonlySet<string>;
+	/** The node the card's cursor is on (drawn stronger than the rest of the route). */
+	cursor?: string | null;
 }
 
 export const edgeKey = (from: string, to: string): string => `${from}|${to}`;

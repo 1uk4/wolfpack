@@ -27,6 +27,10 @@
  */
 
 import type { DepRouteSelection } from "../src/core/dep-draw-list.ts";
+import { featureTaskModel, rawWorkId, routeForNode, toRouteSelection } from "../src/core/dep-route-adapter.ts";
+import { startCursor, type RouteCursor } from "../src/core/work-route.ts";
+import { TaskGraphOverlay } from "./task-graph.tsx";
+import type { RouteNavModel } from "./graph-route-nav.tsx";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SearchIcon, WaypointsIcon } from "lucide-react";
 import {
@@ -88,6 +92,16 @@ interface Selection {
 	 *  dismiss the card, so it never needs re-anchoring). */
 	anchor: { x: number; y: number };
 }
+
+/** A feature's task-graph overlay, built from the payload (double-click on a feature). */
+export function FeatureTaskOverlay({ graph, featureId, onClose, onSelectNode }: { graph: KbGraph; featureId: string; onClose: () => void; onSelectNode: (nodeId: string) => void }) {
+	const model = useMemo(() => featureTaskModel(graph, featureId), [graph, featureId]);
+	if (!model) return null;
+	return <TaskGraphOverlay model={model} onClose={onClose} onSelect={(taskId) => onSelectNode(`work:${taskId}`)} />;
+}
+
+/** Whether double-clicking this node opens a task-graph overlay. */
+export const opensTaskOverlay = (graph: KbGraph, nodeId: string): boolean => featureTaskModel(graph, nodeId) !== null;
 
 // ---- Chrome ---------------------------------------------------------------
 
@@ -168,7 +182,7 @@ export function GraphView({
 	focusId?: string | null;
 	onFocusHandled?: (nodeId: string) => void;
 	controllerRef?: React.MutableRefObject<GraphViewController | null>;
-	/** The selected dependency route (ticket 3 supplies it): bright arrows, dimmed shipped nodes. */
+	/** An externally supplied route; the selected node's own route wins. */
 	route?: DepRouteSelection | null;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -176,6 +190,11 @@ export function GraphView({
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const rendererRef = useRef<GraphCanvasRenderer | null>(null);
 	const [selected, setSelected] = useState<Selection | null>(null);
+	const [overlayId, setOverlayId] = useState<string | null>(null);
+	const graphRef = useRef(graph);
+	graphRef.current = graph;
+	// Programmatic pans (the route cursor following) must not dismiss the card.
+	const suppressCameraRef = useRef(false);
 
 	// Search: the query text; ⌘F (shortcut wave C) focuses it — the find
 	// event is surface-scoped, dispatched as lh:kbd-find (only this page
@@ -264,10 +283,13 @@ export function GraphView({
 			{
 				onSelect: (nodeId, pos) => setSelected({ id: nodeId, anchor: pos }),
 				onStageClick: () => setSelected(null),
+				onNodeDoubleClick: (nodeId) => {
+					if (opensTaskOverlay(graphRef.current, nodeId)) setOverlayId(nodeId);
+				},
 				// Any camera move detaches the card from its node — close it,
 				// and (debounced) remember where the camera stands.
 				onCameraMove: (t) => {
-					setSelected(null);
+					if (!suppressCameraRef.current) setSelected(null);
 					persistCamera(t);
 				},
 				// Live physics settled: remember the new rest state. The store
@@ -331,10 +353,40 @@ export function GraphView({
 		});
 	}, [canvasData, isEmpty, storedLoaded]);
 
+	// The selected work item's route (the Factory, entries etc. have none) and
+	// the card's cursor on it. The cursor restarts at the first unfinished
+	// step whenever the route is recomputed; clearing the selection clears both.
+	const selectedId = selected?.id ?? null;
+	const selectedRoute = useMemo(() => (selectedId ? routeForNode(graph, selectedId) : null), [graph, selectedId]);
+	const [cursorState, setCursorState] = useState<{ route: unknown; cursor: RouteCursor } | null>(null);
+	const cursor: RouteCursor | null = selectedRoute ? (cursorState?.route === selectedRoute ? cursorState.cursor : startCursor(selectedRoute)) : null;
+	const routeSelection = useMemo(() => {
+		if (!selectedRoute) return null;
+		const node = graph.nodes.find((n) => n.id === selectedId);
+		return toRouteSelection(selectedRoute, cursor, node?.domain);
+	}, [graph, selectedRoute, selectedId, cursor]);
+	const activeRoute = routeSelection ?? route;
+
 	// Route selection: just marks the frame dirty (like settings).
 	useEffect(() => {
-		rendererRef.current?.setRoute(route);
-	}, [route, canvasData, isEmpty, storedLoaded]);
+		rendererRef.current?.setRoute(activeRoute);
+	}, [activeRoute, canvasData, isEmpty, storedLoaded]);
+
+	// The camera follows the cursor when its node is off-screen; the card
+	// re-anchors under it.
+	const cursorNodeId = cursor?.node ? `work:${cursor.node}` : null;
+	useEffect(() => {
+		const renderer = rendererRef.current;
+		if (!renderer || !cursorNodeId) return;
+		suppressCameraRef.current = true;
+		try {
+			renderer.panIntoView(cursorNodeId);
+		} finally {
+			suppressCameraRef.current = false;
+		}
+		const anchor = renderer.nodeScreenPos(cursorNodeId);
+		if (anchor) setSelected((sel) => (sel ? { ...sel, anchor } : sel));
+	}, [cursorNodeId]);
 
 	// Feed #2 — settings: just marks the frame dirty. No rebuild, no
 	// re-layout, no camera touch. `isEmpty` in the deps: the renderer is
@@ -426,7 +478,22 @@ export function GraphView({
 	// Position the detail card: below the clicked node, flipped above near
 	// the bottom edge, clamped horizontally. Imperative (ref + layout effect,
 	// before paint) because the flip needs the card's measured height.
-	const card = useMemo(() => (selected ? describeNode(graph, selected.id) : null), [graph, selected]);
+	// With a route the card's details follow the cursor's node.
+	const card = useMemo(
+		() => (selected ? (describeNode(graph, cursorNodeId ?? selected.id) ?? describeNode(graph, selected.id)) : null),
+		[graph, selected, cursorNodeId],
+	);
+	const routeNav = useMemo<RouteNavModel | null>(() => {
+		if (!selectedRoute || !cursor) return null;
+		const byRaw = new Map(graph.nodes.map((n) => [rawWorkId(n.id) ?? "", n] as const));
+		return {
+			route: selectedRoute,
+			cursor,
+			label: (id) => byRaw.get(id)?.label ?? id,
+			stage: (id) => byRaw.get(id)?.stage ?? "",
+			onCursor: (next) => setCursorState({ route: selectedRoute, cursor: next }),
+		};
+	}, [graph, selectedRoute, cursor]);
 	useLayoutEffect(() => {
 		const el = cardRef.current;
 		const container = containerRef.current;
@@ -505,8 +572,20 @@ export function GraphView({
 						card={card}
 						onFocus={(ids) => focusNodes(ids, card.id)}
 						onSelectNode={(id) => focusNodeRef.current(id)}
+						routeNav={routeNav}
 					/>
 				</div>
+			)}
+			{overlayId && (
+				<FeatureTaskOverlay
+					graph={graph}
+					featureId={overlayId}
+					onClose={() => setOverlayId(null)}
+					onSelectNode={(id) => {
+						setOverlayId(null);
+						focusNodeRef.current(id);
+					}}
+				/>
 			)}
 		</div>
 	);

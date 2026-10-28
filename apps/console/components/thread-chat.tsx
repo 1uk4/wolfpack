@@ -10,6 +10,8 @@ import { ToolGroup, ToolRow } from "@/components/tool-row";
 import { lookupCard, lookupInteractionCard } from "@/components/card-registry";
 import { PINNED_CHECKLIST_RESERVE, PinnedChecklist, useChecklistDismissed } from "@/components/pinned-checklist";
 import { Separator } from "@/components/ui/separator";
+import { SubagentMessage } from "@/components/subagent-message";
+import { parseSubagentMessage } from "@/src/core/subagent-message";
 import { STRIP_ROW_PX, SubagentStrip, useSubagentChildren } from "@/components/subagent-strip";
 import { PanelHostProvider, RightPanelHost } from "@/components/panel-host";
 import { AttachmentChips, Composer } from "@/components/composer";
@@ -302,6 +304,10 @@ function ThreadChatInner({
 	const inputRef = useRef<HTMLTextAreaElement | null>(null);
 	const busy = status === "submitted" || status === "streaming";
 	const subagents = useSubagentChildren(wolf, slug, threadId);
+	const subagentOrigins = useMemo(
+		() => messages.map((m) => (m.role === "user" ? parseSubagentMessage(m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")) : undefined)),
+		[messages],
+	);
 
 	// Pasted, dropped or picked images: prechecked, then uploaded to the wolf at once (a chip tracks each, an error
 	// chip carries the reason), sent as refs with the next message.
@@ -406,7 +412,9 @@ function ThreadChatInner({
 								)}
 								{messages.map((m, mi) => (
 									<Fragment key={m.id || `m-${mi}`}>
-										{m.role === "user" ? (
+										{m.role === "user" && subagentOrigins[mi] ? (
+											<SubagentMessage origin={subagentOrigins[mi]!} children={subagents} wolf={wolf} />
+										) : m.role === "user" ? (
 											<div
 												data-testid="user-message"
 												className="my-2 w-full border-l-[calc(3ch-14px)] border-muted-foreground/30 bg-card py-1 pl-[14px] pr-4 font-ui text-xs"

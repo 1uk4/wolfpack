@@ -252,7 +252,7 @@ describe("graduate routes", () => {
     const a = await tw.client.startGraduationPreview!("testwolf", feature);
     const res = await fetch(`${tw.url}/v1/wolves/testwolf/work/${feature}/graduate/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "deadbeef0000" }) });
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: "busy", message: expect.stringContaining("preview") });
+    expect(await res.json()).toMatchObject({ code: "busy", message: expect.stringContaining("preview"), details: { kind: "preview" } });
     expect((await tw.client.startGraduationPreview!("testwolf", feature)).jobId).toBe(a.jobId);
     release();
     expect(await pollUntil(feature)).toMatchObject({ state: "preview_ready", jobId: a.jobId });

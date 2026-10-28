@@ -98,6 +98,8 @@ export interface GraduationConfirmResult {
   lateFolded: number;
   /** Conversations unbound from the item and its tasks. */
   unbound: number;
+  /** Non-blocking things that failed after the graduation happened. */
+  warnings?: string[];
 }
 
 export interface GraduationActions {

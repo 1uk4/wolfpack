@@ -23,7 +23,7 @@ import type {
 } from "@/src/core";
 
 export type KbFailureReason = "unavailable" | "not_found" | "error";
-export type KbResult<T> = { ok: true; data: T } | { ok: false; reason: KbFailureReason; message: string; code?: string };
+export type KbResult<T> = { ok: true; data: T } | { ok: false; reason: KbFailureReason; message: string; code?: string; details?: Record<string, string> };
 
 export interface KbGraphOptions {
 	domain?: string;
@@ -47,11 +47,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>>
 			return { ok: false, reason: "error", message: "response is not JSON" };
 		}
 	}
-	const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
+	const body = (await res.json().catch(() => null)) as { error?: string; code?: string; details?: Record<string, string> } | null;
 	const message = body?.error ?? `HTTP ${res.status}`;
 	const code = body?.code;
 	const reason: KbFailureReason = res.status === 409 ? "unavailable" : res.status === 404 ? "not_found" : "error";
-	return code ? { ok: false, reason, message, code } : { ok: false, reason, message };
+	const details = body?.details;
+	return { ok: false, reason, message, ...(code ? { code } : {}), ...(details ? { details } : {}) };
 }
 
 export function fetchWolves(): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean }[] }>> {

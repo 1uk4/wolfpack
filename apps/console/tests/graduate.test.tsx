@@ -679,20 +679,20 @@ describe("graduate store: jobs that cannot advance", () => {
 		await toReview(base);
 		let reads = 0;
 		const g = fakeGraduate({
-			startConfirm: async () => ({ ok: false, reason: "unavailable", code: "busy", message: "a preview of this feature is already running; wait for it to finish" }),
+			startConfirm: async () => ({ ok: false, reason: "unavailable", code: "busy", details: { kind: "preview" }, message: "thread a preview of this feature is busy" }),
 			status: async () => (++reads < 3 ? runningStatus("preview") : { ok: true, data: { state: "preview_ready", jobId: "j", preview: PREVIEW } }),
 		});
 		await graduateStore.confirm(g, "ready");
 		const cur = graduateStore.get("ready");
 		assert.equal(cur?.phase, "previewing");
-		assert.match((cur as { note?: string }).note ?? "", /a preview is already running/);
+		assert.match((cur as { note?: string }).note ?? "", /waiting for the running preview to finish/);
 		await wait("Review again", () => phaseOf() === "ready");
 		assert.ok(reads >= 3);
 	});
 	it("a preview refused as busy while a confirm runs follows the confirm to the graduation", async () => {
 		let reads = 0;
 		const g = fakeGraduate({
-			startPreview: async () => ({ ok: false, reason: "unavailable", code: "busy", message: "a confirm of this feature is already running; wait for it to finish" }),
+			startPreview: async () => ({ ok: false, reason: "unavailable", code: "busy", details: { kind: "confirm" }, message: "thread a confirm of this feature is busy" }),
 			status: async () => (++reads < 2 ? runningStatus("confirm") : { ok: true, data: { state: "graduated", jobId: "j", result: RESULT } }),
 		});
 		await graduateStore.startPreview(g, T, "hal");
@@ -728,6 +728,35 @@ describe("graduate store: jobs that cannot advance", () => {
 		assert.equal(calls, 5);
 		assert.equal(reads, 5, "no further reads");
 		assert.equal((graduateStore.get("ready") as { message: string }).message, "network down");
+	});
+	it("a status read that never settles times out and counts as a failed read", async () => {
+		graduateStore.readTimeoutMs = 10;
+		let reads = 0;
+		const g = fakeGraduate({ status: () => (reads++, new Promise(() => {})) });
+		try {
+			await graduateStore.startPreview(g, T, "hal");
+			await wait("the error", () => phaseOf() === "error");
+			assert.equal(reads, 5);
+			assert.match((graduateStore.get("ready") as { message: string }).message, /timed out/);
+		} finally {
+			graduateStore.readTimeoutMs = 15_000;
+		}
+	});
+	it("a busy answer without details falls back to the other kind instead of guessing from the words", async () => {
+		const g = fakeGraduate({
+			startPreview: async () => ({ ok: false, reason: "unavailable", code: "busy", message: "a preview mentioned in prose" }),
+			status: async () => runningStatus("confirm"),
+		});
+		await graduateStore.startPreview(g, T, "hal");
+		assert.equal(phaseOf(), "graduating");
+	});
+	it("a failed wolves() read is not cached for the next recover", async () => {
+		let calls = 0;
+		const g = fakeGraduate({ wolves: async () => { if (calls++ === 0) throw new Error("down"); return WOLVES; }, initial: { state: "preview_ready", preview: PREVIEW } });
+		await graduateStore.recover(g, T);
+		assert.equal(graduateStore.get("ready"), undefined);
+		await graduateStore.recover(g, T);
+		assert.equal(graduateStore.get("ready")?.phase, "ready");
 	});
 	it("a status read that throws counts as a failed read, never as an unhandled rejection", async () => {
 		const g = fakeGraduate({ status: async () => { throw new Error("socket hang up"); } });

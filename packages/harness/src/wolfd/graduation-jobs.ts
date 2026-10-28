@@ -73,7 +73,7 @@ export class GraduationJobs {
     const current = this.get(wolf, id);
     if (current?.state === "running") {
       if (current.kind === kind) return current;
-      throw new HttpError("busy", `a ${current.kind} of this feature is already running; wait for it to finish`);
+      throw new HttpError("busy", `a ${current.kind} of this feature is already running; wait for it to finish`, undefined, { kind: current.kind });
     }
     const job: GraduationJob = { jobId: randomUUID(), kind, state: "running", startedAt: new Date(this.now()).toISOString() };
     this.put(wolf, id, job);

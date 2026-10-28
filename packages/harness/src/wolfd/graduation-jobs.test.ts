@@ -23,7 +23,7 @@ describe("GraduationJobs", () => {
     const b = jobs.start("w1", "i", "preview", () => (runs++, d.promise), fail);
     expect(b).toEqual(a);
     expect(runs).toBe(1);
-    expect(() => jobs.start("w1", "i", "confirm", async () => ({ kind: "confirm", result }), fail)).toThrowError(expect.objectContaining({ code: "busy", message: expect.stringContaining("preview") }));
+    expect(() => jobs.start("w1", "i", "confirm", async () => ({ kind: "confirm", result }), fail)).toThrowError(expect.objectContaining({ code: "busy", message: expect.stringContaining("preview"), details: { kind: "preview" } }));
     expect(jobs.get("w1", "i")).toMatchObject({ state: "running", jobId: a.jobId });
     d.resolve({ kind: "preview", preview: preview(new Date().toISOString()) });
     await tick();

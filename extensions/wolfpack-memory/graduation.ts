@@ -97,14 +97,21 @@ export function createGraduation(deps: GraduationDeps) {
    * Step 2: check the token, then confirmGraduation (late drain, emit, graduate, archive: all or nothing), then unbind
    * every holder. `exceptRoot` is the calling conversation, which the caller unbinds itself.
    */
-  async function confirm(id: string, token: string, opts: { exceptRoot?: number } = {}): Promise<{ preview: GraduationPreview; done: ConfirmedGraduation; unbound: number[] }> {
+  async function confirm(id: string, token: string, opts: { exceptRoot?: number } = {}): Promise<{ preview: GraduationPreview; done: ConfirmedGraduation; unbound: number[]; warnings: string[] }> {
     try {
       const roots = needRoots();
       const p = await loadPreview(id, token);
       const done = await confirmGraduation({ client, roots, wolf: deps.wolfName, preview: p, ship: deps.ship, drain: deps.drain, engine: deps.engine() });
       await unlink(previewFile(token)).catch(() => { /* used once */ });
-      const unbound = afterGraduation(p, done, opts.exceptRoot);
-      return { preview: p, done, unbound };
+      // The graduation has happened (archived, token used): an unbind that fails is a warning, never an error, or the retry would find no token.
+      let unbound: number[] = [];
+      const warnings: string[] = [];
+      try {
+        unbound = afterGraduation(p, done, opts.exceptRoot);
+      } catch (e) {
+        warnings.push(`graduated, but unbinding the conversations failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return { preview: p, done, unbound, warnings };
     } catch (err) {
       throw asFailure(err);
     }
@@ -203,8 +210,8 @@ export function createGraduation(deps: GraduationDeps) {
       return toResult(await preview(id));
     },
     async confirm(id: string, token: string): Promise<GraduationConfirmResult> {
-      const { done, unbound } = await confirm(id, token);
-      return { entries: done.sent, archived: done.archived, lateFolded: done.lateFolded ?? 0, unbound: unbound.length };
+      const { done, unbound, warnings } = await confirm(id, token);
+      return { entries: done.sent, archived: done.archived, lateFolded: done.lateFolded ?? 0, unbound: unbound.length, ...(warnings.length ? { warnings } : {}) };
     },
     pendingPreview,
     observations,

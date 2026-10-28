@@ -699,7 +699,7 @@ export class WolfServer {
             const done = await actions.confirm(params.id, token);
             // The graduation has happened (all or nothing, archived): a thread that cannot be closed is a warning, never an error.
             let closedThreads: string[] = [];
-            const warnings: string[] = [];
+            const warnings: string[] = [...(done.warnings ?? [])];
             try {
               closedThreads = this.closeFeatureThreads([params.id, ...done.archived]);
             } catch (e) {
@@ -843,7 +843,7 @@ export class WolfServer {
   private sendError(res: ServerResponse, e: HttpError, req?: IncomingMessage): void {
     if (e.drain !== undefined && req) drainBounded(req, e.drain);
     res.writeHead(ERROR_HTTP_STATUS[e.code], { "Content-Type": "application/json", [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) });
-    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy" }));
+    res.end(JSON.stringify({ code: e.code, message: e.message, retryable: e.code === "busy" || e.code === "memory_busy", ...(e.details ? { details: e.details } : {}) }));
   }
 
   // ------------------------------------------------------------ state

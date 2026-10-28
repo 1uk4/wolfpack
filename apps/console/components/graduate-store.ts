@@ -46,6 +46,7 @@ const POLL_MS = 2000;
 /** Status reads that fail in a row before the job is reported as lost. */
 const MAX_READ_FAILURES = 5;
 /** The longest a poll waits for one job: the wolf's drain timeout (3 min) twice, plus a margin for the model and the Work API. */
+const READ_TIMEOUT_MS = 15_000;
 const DEADLINE_MS = 10 * 60 * 1000;
 
 type Failure = Extract<KbResult<unknown>, { ok: false }>;
@@ -54,6 +55,8 @@ const thrown = (e: unknown): Failure => ({ ok: false, reason: "error", message: 
 export class GraduateStore {
 	pollMs = POLL_MS;
 	deadlineMs = DEADLINE_MS;
+	/** One status read gives up after this long (a fetch that never settles counts as a failed read). */
+	readTimeoutMs = READ_TIMEOUT_MS;
 	/** Bumped by reset(): a recover() that started before it must not write after it. */
 	private epoch = 0;
 	private readonly jobs = new Map<string, GraduateJobState>();
@@ -107,14 +110,15 @@ export class GraduateStore {
 	 * with a note and keep polling it. A running preview ends in Review, a running confirm in the graduation.
 	 */
 	private adopt(client: GraduateClient, id: string, base: { wolf: string; title: string; preview?: GraduationPreview }, running: "preview" | "confirm"): void {
-		const note = `a ${running} is already running`;
+		const note = `waiting for the running ${running} to finish`;
 		const g = this.set(id, running === "preview" ? { phase: "previewing", wolf: base.wolf, title: base.title, note } : { phase: "graduating", wolf: base.wolf, title: base.title, ...(base.preview ? { preview: base.preview } : {}), note });
 		void this.poll(client, id, base.wolf, g);
 	}
 
-	/** The kind of job a refused start says is running ("a confirm of this feature is already running"). */
+	/** The kind of job a refused start says is running (the busy error's structured `details.kind`; `other` when absent). */
 	private static runningKind(res: Failure, other: "preview" | "confirm"): "preview" | "confirm" {
-		return /\bpreview\b/.test(res.message) ? "preview" : /\bconfirm\b/.test(res.message) ? "confirm" : other;
+		const kind = res.details?.kind;
+		return kind === "preview" || kind === "confirm" ? kind : other;
 	}
 
 	/** Start the preview job of a feature on `wolf`; the loader shows until the status reports it. */
@@ -207,9 +211,21 @@ export class GraduateStore {
 	private wolves(client: GraduateClient) {
 		const hit = this.wolvesMemo.get(client);
 		if (hit && Date.now() - hit.at < 5000) return hit.p;
-		const p = client.wolves().catch(() => []);
+		const p = client.wolves().catch(() => {
+			// A failed read is not cached: the next caller asks again.
+			this.wolvesMemo.delete(client);
+			return [];
+		});
 		this.wolvesMemo.set(client, { at: Date.now(), p });
 		return p;
+	}
+
+	private withTimeout<T>(p: Promise<T>): Promise<T> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error(`status read timed out after ${Math.round(this.readTimeoutMs / 1000)}s`)), this.readTimeoutMs);
+		});
+		return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 	}
 
 	private fail(id: string, base: { wolf: string; title: string; preview?: GraduationPreview }, during: "preview" | "confirm", res: Failure): void {
@@ -226,7 +242,7 @@ export class GraduateStore {
 		for (;;) {
 			let res: KbResult<GraduationStatus>;
 			try {
-				res = await client.status(wolf, id);
+				res = await this.withTimeout(client.status(wolf, id));
 			} catch (e) {
 				res = thrown(e);
 			}

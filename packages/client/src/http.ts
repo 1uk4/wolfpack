@@ -436,8 +436,8 @@ export class HttpConsoleClient implements ConsoleClient {
       }
     }
     if (!env.success) return new ProtocolError("engine_error", `HTTP ${res.status} without error envelope`, res.status >= 500);
-    const { code, message, retryable } = env.data;
-    if (code === "busy") return new BusyError(threadId ?? message);
+    const { code, message, retryable, details } = env.data;
+    if (code === "busy") return new BusyError(threadId ?? message, details);
     if (code === "not_found") return new NotFoundError(message);
     return new ProtocolError(code, message, retryable);
   }

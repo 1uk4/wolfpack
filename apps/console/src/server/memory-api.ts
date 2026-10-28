@@ -58,7 +58,10 @@ function errorCode(err: unknown): string | null {
 function failure(err: unknown): Response {
 	if (err instanceof Error) {
 		if (err.name === "NotFoundError") return json({ error: err.message, code: "not_found" }, 404);
-		if (err.name === "BusyError") return json({ error: err.message, code: "busy" }, 409);
+		if (err.name === "BusyError") {
+			const details = (err as Error & { details?: Record<string, string> }).details;
+			return json({ error: err.message, code: "busy", ...(details ? { details } : {}) }, 409);
+		}
 		if (err.name === "ProtocolError") {
 			const code = (err as Error & { code?: string }).code ?? "engine_error";
 			return json({ error: err.message, code }, STATUS_BY_CODE[code] ?? 502);

@@ -40,6 +40,8 @@ export const ErrorEnvelopeSchema = z.object({
   code: ErrorCodeSchema,
   message: z.string(),
   retryable: z.boolean(),
+  /** Additive, structured facts about the refusal (a graduation `busy` carries `{kind}`, the kind of job that is running). */
+  details: z.record(z.string(), z.string()).optional(),
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 

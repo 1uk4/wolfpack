@@ -178,7 +178,7 @@ export interface ConsoleClient {
 }
 
 export class BusyError extends Error {
-  constructor(public readonly threadId: string) {
+  constructor(public readonly threadId: string, public readonly details?: Record<string, string>) {
     super(`thread ${threadId} is busy`);
     this.name = "BusyError";
   }

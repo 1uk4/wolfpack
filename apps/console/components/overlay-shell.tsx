@@ -14,6 +14,21 @@ const reachable = (el: HTMLElement): boolean => {
 };
 
 /**
+ * The overlay's header band. In the Electron desktop app (macOS) the traffic lights sit over the page's top-left, so
+ * `lh-lights-gutter` pads the band clear of them (92px from the window edge: the -ml-4 cancels the overlay's p-4) and
+ * `lh-drag` makes it a window-drag region, as the sidebar header does; buttons and links inside stay clickable (the
+ * auto carve-out in globals.css). Both classes are inert in the browser.
+ */
+export const OVERLAY_HEADER_CLASS = "lh-drag lh-lights-gutter -ml-4 select-none";
+export function OverlayHeader({ children, className = "", ...rest }: { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
+	return (
+		<div {...rest} className={`${OVERLAY_HEADER_CLASS} ${className}`} data-overlay-header="">
+			{children}
+		</div>
+	);
+}
+
+/**
  * The full-screen overlay both the task graph and the subagent modal use: an opaque bg-background page with p-4, a
  * header row (the caller's `header`, then the close button), and the body below. It owns Esc (the one-Esc law), the
  * Tab focus trap, focus restored to the opener on close, the page's scroll locked behind, and aria-modal.
@@ -80,7 +95,7 @@ export function OverlayShell({
 		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
 	const close = (
-		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
+		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
 			<XIcon />
 		</Button>
 	);

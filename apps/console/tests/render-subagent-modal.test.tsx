@@ -325,7 +325,50 @@ describe("subagent modal", () => {
 	it("the header row is title, then Stop, then close", async () => {
 		await mount(fake({}));
 		const row = q('[data-testid="subagent-title"]')!.parentElement!;
-		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-stop", "subagent-modal-close"]);
+		assert.deepEqual([...row.children].map((c) => c.getAttribute("data-testid")), ["subagent-title", "subagent-meta", "subagent-stop", "subagent-modal-close"]);
+		assert.match(q('[data-testid="subagent-title"]')!.className, /truncate/);
+		assert.match(q('[data-testid="subagent-meta"]')!.className, /flex-wrap/);
+		assert.match(q('[data-testid="subagent-modal-close"]')!.className, /shrink-0/);
+	});
+
+	it("the header carries the traffic-lights gutter and drag classes (inert in the browser)", async () => {
+		await mount(fake({}));
+		const h = q('[data-testid="subagent-header"]')!;
+		assert.ok(h.classList.contains("lh-lights-gutter"));
+		assert.ok(h.classList.contains("lh-drag"));
+		assert.ok(h.contains(q('[data-testid="subagent-modal-close"]')));
+	});
+
+	it("two columns: the ledger is always present, the transcript and steer field share the right column", async () => {
+		await mount(fake({}));
+		const cols = q('[data-testid="subagent-columns"]')!;
+		assert.match(cols.className, /min-\[900px\]:flex-row/);
+		const ledger = q('[data-testid="subagent-ledger"]')!;
+		const right = q('[data-testid="subagent-transcript-column"]')!;
+		assert.equal(ledger.parentElement, cols);
+		assert.equal(right.parentElement, cols);
+		assert.equal(ledger.querySelectorAll('[data-testid="ledger-entry"]').length, 2);
+		assert.ok(ledger.querySelector("details") === null);
+		assert.ok(right.contains(q('[data-testid="subagent-transcript"]')));
+		assert.ok(right.contains(q('[data-testid="subagent-input"]')));
+		assert.ok(!ledger.contains(q('[data-testid="subagent-input"]')));
+		assert.ok(q('[data-testid="subagent-ledger-scroll"]') && q('[data-testid="subagent-transcript-scroll"]'));
+	});
+
+	it("an empty ledger still shows the column; a ledger entry expands on click", async () => {
+		const g = fake({});
+		g.state.ledger = [];
+		await mount(g);
+		assert.ok(q('[data-testid="subagent-ledger"]'));
+		assert.ok(q('[data-testid="subagent-ledger-empty"]'));
+		await act(async () => root?.unmount());
+		document.body.innerHTML = "";
+		await mount(fake({}));
+		const t = q('[data-testid="ledger-entry-text"]')!;
+		assert.match(t.className, /line-clamp-3/);
+		await act(async () => void t.dispatchEvent(new dom.window.Event("click", { bubbles: true })));
+		assert.doesNotMatch(q('[data-testid="ledger-entry-text"]')!.className, /line-clamp/);
+		assert.equal(q('[data-testid="ledger-entry-text"]')!.getAttribute("aria-expanded"), "true");
 	});
 
 	it("Tab wraps within the dialog, focus starts on close", async () => {
@@ -334,7 +377,8 @@ describe("subagent modal", () => {
 		const close = q('[data-testid="subagent-modal-close"]')!;
 		assert.equal(document.activeElement === close, true);
 		const focusables = [...dlg.querySelectorAll<HTMLElement>('button, a[href], textarea, input, select, summary, [tabindex="0"]')].filter((el) => {
-			const d = el.closest("details"); // the closed message field is not reachable, only its summary
+			if ((el as HTMLButtonElement).disabled) return false; // the empty Send button
+			const d = el.closest("details");
 			return !d || d.open || (el.tagName === "SUMMARY" && el.parentElement === d);
 		});
 		const last = focusables[focusables.length - 1]!;

@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import type { LedgerEntry, SubagentState, ThreadSummary } from "@wolfpack/client";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ToolGroup, ToolRow } from "@/components/tool-row";
@@ -44,20 +44,12 @@ function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSumma
 	const started = summary?.startedAt ? Date.parse(summary.startedAt) : undefined;
 	const ended = summary?.finishedAt ? Date.parse(summary.finishedAt) : now;
 	return (
-		<div className="mb-3 flex flex-col gap-1" data-testid="subagent-header">
-			<div className="flex items-center gap-3">
-				<div id={titleId} className="min-w-0 truncate font-sans text-sm font-medium" data-testid="subagent-title">
-					{summary ? summary.title : "Subagent"}
-				</div>
-				{stoppable && (
-					<button type="button" data-testid="subagent-stop" className="rounded border border-border px-2 py-0.5 text-xs hover:bg-accent" onClick={onStop}>
-						Stop
-					</button>
-				)}
-				{close}
+		<OverlayHeader className="mb-3 flex items-center gap-x-3 gap-y-1 pr-4" data-testid="subagent-header">
+			<div id={titleId} className="min-w-0 shrink truncate font-sans text-sm font-medium" title={summary?.title} data-testid="subagent-title">
+				{summary ? summary.title : "Subagent"}
 			</div>
 			{summary && (
-				<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
+				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted-foreground" data-testid="subagent-meta">
 					{summary.agent && <span data-testid="subagent-agent">{summary.agent}</span>}
 					{state && (
 						<span data-testid="subagent-state" data-state={state} className={`rounded-full border border-border px-1.5 ${STATE_CLASS[state]}`}>
@@ -73,36 +65,66 @@ function Header({ summary, now, titleId, close, onStop }: { summary: ThreadSumma
 					)}
 				</div>
 			)}
-		</div>
+			{stoppable && (
+				<button type="button" data-testid="subagent-stop" className={`shrink-0 rounded border border-border px-2 py-0.5 text-xs hover:bg-accent ${summary ? "" : "ml-auto"}`} onClick={onStop}>
+					Stop
+				</button>
+			)}
+			{close}
+		</OverlayHeader>
 	);
 }
 
-function Ledger({ entries }: { entries: readonly LedgerEntry[] | null }) {
-	if (entries === null)
-		return (
-			<div className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="subagent-ledger-missing">
-				This wolf has no subagent ledger.
-			</div>
-		);
-	if (entries.length === 0) return null;
+function LedgerEntryRow({ e }: { e: LedgerEntry }) {
+	const [open, setOpen] = useState(false);
 	return (
-		<details className="border-b border-border px-3 py-1.5 text-xs" data-testid="subagent-ledger" open>
-			<summary className="cursor-pointer text-muted-foreground">Ledger ({entries.length})</summary>
-			<ol className="mt-1 flex max-h-40 flex-col gap-1 overflow-y-auto">
-				{[...entries]
-					.sort((a, b) => a.id - b.id)
-					.map((e) => (
-						<li key={e.id} data-testid="ledger-entry" data-kind={e.kind} data-from={e.from} className="flex gap-2">
-							<span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-								{ledgerSender(e)} · {e.kind}
-							</span>
-							<span className="min-w-0 truncate" title={e.text}>
-								{e.text}
-							</span>
-						</li>
-					))}
-			</ol>
-		</details>
+		<li data-testid="ledger-entry" data-kind={e.kind} data-from={e.from} className="flex flex-col gap-0.5">
+			<div className="font-mono text-[11px] text-muted-foreground">
+				{ledgerSender(e)} · {e.kind}
+			</div>
+			<button
+				type="button"
+				data-testid="ledger-entry-text"
+				aria-expanded={open}
+				title={open ? "Collapse" : "Expand"}
+				className={`w-full whitespace-pre-wrap break-words text-left ${open ? "" : "line-clamp-3"}`}
+				onClick={() => setOpen((v) => !v)}
+			>
+				{e.text}
+			</button>
+		</li>
+	);
+}
+
+/** The ledger column: always visible, its own scroll; stacks above the transcript below 900px. */
+function Ledger({ entries }: { entries: readonly LedgerEntry[] | null }) {
+	return (
+		<aside
+			className="flex max-h-48 w-full shrink-0 flex-col border-b border-border min-[900px]:max-h-none min-[900px]:w-[340px] min-[900px]:border-b-0 min-[900px]:border-r"
+			data-testid="subagent-ledger"
+			aria-label="Ledger"
+		>
+			<div className="px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Ledger{entries ? ` (${entries.length})` : ""}</div>
+			<div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2 text-xs" data-testid="subagent-ledger-scroll">
+				{entries === null ? (
+					<div className="text-muted-foreground" data-testid="subagent-ledger-missing">
+						This wolf has no subagent ledger.
+					</div>
+				) : entries.length === 0 ? (
+					<div className="text-muted-foreground" data-testid="subagent-ledger-empty">
+						No hand-offs yet.
+					</div>
+				) : (
+					<ol className="flex flex-col gap-2.5">
+						{[...entries]
+							.sort((a, b) => a.id - b.id)
+							.map((e) => (
+								<LedgerEntryRow key={e.id} e={e} />
+							))}
+					</ol>
+				)}
+			</div>
+		</aside>
 	);
 }
 
@@ -184,7 +206,6 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 	// from the wrong guess is retried once the other way.
 	const hint = messageHint(busy ? "running" : state);
 	const [text, setText] = useState("");
-	const [expanded, setExpanded] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
 	const sending = useRef(false);
 	const post = (input: string, whenBusy: "steer" | "reject") =>
@@ -211,22 +232,21 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 		}
 	};
 	return (
-		<>
+		<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border min-[900px]:flex-row" data-testid="subagent-columns">
 			<Ledger entries={entries} />
-			<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-				<Transcript messages={messages} streaming={status === "streaming"} />
-				{error && (
-					<div data-testid="subagent-error" className="mt-2 flex justify-between rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs">
-						<span>{error.message}</span>
-						<button type="button" className="underline" onClick={clearError}>
-							Dismiss
-						</button>
-					</div>
-				)}
-			</div>
-			<details className="border-t border-border px-3 py-1.5 text-xs" data-testid="subagent-message" open={expanded} onToggle={(e) => setExpanded((e.currentTarget as HTMLDetailsElement).open)}>
-				<summary className="cursor-pointer text-muted-foreground">Message subagent</summary>
-				<div className="mt-1 flex flex-col gap-1">
+			<section className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="subagent-transcript-column" aria-label="Transcript">
+				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="subagent-transcript-scroll">
+					<Transcript messages={messages} streaming={status === "streaming"} />
+					{error && (
+						<div data-testid="subagent-error" className="mt-2 flex justify-between rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs">
+							<span>{error.message}</span>
+							<button type="button" className="underline" onClick={clearError}>
+								Dismiss
+							</button>
+						</div>
+					)}
+				</div>
+				<div className="flex flex-col gap-1 border-t border-border px-3 py-2 text-xs" data-testid="subagent-message">
 					<div data-testid="subagent-hint" data-mode={hint.mode} className="text-muted-foreground">
 						{hint.text}
 					</div>
@@ -237,6 +257,7 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 					)}
 					<textarea
 						data-testid="subagent-input"
+						aria-label="Message subagent"
 						className="min-h-14 w-full resize-none rounded border border-border bg-background p-1.5"
 						value={text}
 						onChange={(e) => setText(e.target.value)}
@@ -251,8 +272,8 @@ function Body({ wolf, slug, childThreadId, loaded, entries, onSettled }: { wolf:
 						{hint.mode === "steer" ? "Steer" : "Resume"}
 					</button>
 				</div>
-			</details>
-		</>
+			</section>
+		</div>
 	);
 }
 

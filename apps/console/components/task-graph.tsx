@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Handle, MarkerType, Position, ReactFlow, Controls, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import { CheckIcon, MaximizeIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { OverlayShell } from "@/components/overlay-shell";
+import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import { layoutTaskGraph, type TaskGraphModel, type TaskNode, type TaskStatus } from "@/src/core";
 
 type GraphModel = Extract<TaskGraphModel, { kind: "graph" }>;
@@ -267,8 +267,8 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 			closeTestId="task-graph-close"
 			onClose={onClose}
 			header={(close) => (
-				<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-					<span className="font-sans text-sm font-medium">{model.featureTitle}</span>
+				<OverlayHeader className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 pr-4">
+					<span className="min-w-0 truncate font-sans text-sm font-medium">{model.featureTitle}</span>
 					<span className="text-xs text-muted-foreground">{model.label}</span>
 					<ul className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground" aria-label="Legend">
 						{LEGEND.map((s) => (
@@ -280,7 +280,7 @@ export function TaskGraphOverlay({ model, onClose, onSelect }: { model: GraphMod
 						{model.boundId ? <li className="flex items-center gap-1"><span className="size-2 rounded-full ring-2 ring-yellow-400/80" aria-hidden />Current</li> : null}
 					</ul>
 					{close}
-				</div>
+				</OverlayHeader>
 			)}
 		>
 			<div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden rounded-xl border bg-background">

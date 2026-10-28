@@ -103,3 +103,91 @@ describe("route straightening moves the real nodes", () => {
 		assert.deepEqual([nodes[3]!.x, nodes[3]!.y], [200, 90], "the old route's target went home");
 	});
 });
+
+describe("dragging while a route is selected", () => {
+	// Canvas listeners are stubbed; call the handlers directly (camera k=1, origin 400,300).
+	const ev = (x: number, y: number) => ({ button: 0, clientX: x + 400, clientY: y + 300, pointerId: 1, preventDefault() {} });
+	const drag = async (r: any, id: string, to: [number, number] | null, from?: [number, number]) => {
+		const n = r.nodeById.get(id);
+		const [sx, sy] = from ?? [n.x, n.y];
+		r.onPointerDown(ev(sx, sy));
+		if (to) {
+			r.onPointerMove(ev(to[0], to[1]));
+			await pump();
+		}
+		r.onPointerUp(ev(to?.[0] ?? sx, to?.[1] ?? sy));
+		await pump();
+	};
+	const withSelect = async () => {
+		const s = await setup();
+		const selected: string[] = [];
+		const commits: any[] = [];
+		s.r.callbacks.onSelect = (id: string) => selected.push(id);
+		s.r.callbacks.onCommit = (p: any) => commits.push(p);
+		s.r.setRoute(sel([["a", "b"], ["t"]], "t"));
+		await pump();
+		return { ...s, selected, commits };
+	};
+	const steps = [["a", "b"], ["t"]];
+
+	it("dragging the selected node re-lays out the route on the new anchor", async () => {
+		const { r, nodes, selected, commits, routeTargetLayout } = await withSelect();
+		await drag(r, "t", [250, 200]);
+		const want = routeTargetLayout("fac:d", "t", { root: { x: 0, y: 0 }, target: { x: 250, y: 200 } }, steps);
+		for (const [id, p] of want) {
+			const n = nodes.find((x) => x.id === id)!;
+			assert.deepEqual([n.x, n.y], [p.x, p.y], id);
+			assert.ok(discs(r).some(([x, y]) => x === p.x && y === p.y), `disc of ${id} drawn at its target`);
+		}
+		assert.deepEqual(selected, [], "a drag does not select");
+		assert.deepEqual(commits, [{ t: { x: 250, y: 200 } }]);
+		assert.deepEqual([nodes[0]!.x, nodes[0]!.y], [0, 0], "the Factory stays pinned");
+	});
+	it("dragging another route node moves only it, and it stays", async () => {
+		const { r, nodes } = await withSelect();
+		const before = nodes.map((n) => [n.x, n.y]);
+		await drag(r, "a", [10, 10]);
+		assert.deepEqual([nodes[1]!.x, nodes[1]!.y], [10, 10]);
+		nodes.forEach((n, i) => { if (i !== 1) assert.deepEqual([n.x, n.y], before[i], n.id); });
+	});
+	it("a non-route node cannot be dragged while a route is selected", async () => {
+		const { r, nodes, selected } = await withSelect();
+		await drag(r, "u", [100, 100]);
+		assert.deepEqual([nodes[4]!.x, nodes[4]!.y], [300, -40]);
+		assert.deepEqual(selected, ["u"]);
+	});
+	it("the Factory cannot be dragged", async () => {
+		const { r, nodes } = await withSelect();
+		await drag(r, "fac:d", [90, 90]);
+		assert.deepEqual([nodes[0]!.x, nodes[0]!.y], [0, 0]);
+	});
+	it("click vs drag threshold", async () => {
+		const { r, nodes, selected } = await withSelect();
+		await drag(r, "t", [nodes[3]!.x + 2, nodes[3]!.y + 2]);
+		assert.deepEqual(selected, ["t"], "tiny movement is a click");
+		assert.ok(!r.routeDragging);
+		const far = await withSelect();
+		await drag(far.r, "t", [far.nodes[3]!.x + 30, far.nodes[3]!.y]);
+		assert.deepEqual(far.selected, [], "past the threshold is a drag");
+	});
+	it("deselect keeps the dragged selected node and eases the others back", async () => {
+		const { r, nodes } = await withSelect();
+		await drag(r, "t", [250, 200]);
+		await drag(r, "b", [-10, -10]);
+		r.setRoute(null);
+		// Stop the moment the ease lands (before the sim settles around t).
+		for (let i = 0; i < 100 && r.tween; i++) {
+			await new Promise((res) => setTimeout(res, 15));
+			const f = frames;
+			frames = [];
+			f.forEach((x) => x());
+		}
+		assert.deepEqual(nodes.slice(0, 3).map((n) => [n.x, n.y]), [[0, 0], [50, 80], [-60, 120]]);
+		assert.deepEqual(r.positions().get("t"), { x: 250, y: 200 }, "saved as t's normal position");
+		assert.equal(r.home.size, 0);
+		assert.ok(r.placed.has("t") && r.simActive, "sim reheats around the placed node");
+		for (let i = 0; i < 8; i++) await pump();
+		assert.deepEqual([nodes[3]!.x, nodes[3]!.y], [250, 200], "the placed node stays put while the sim settles");
+		assert.equal(r.placed.size, 0, "settled");
+	});
+});

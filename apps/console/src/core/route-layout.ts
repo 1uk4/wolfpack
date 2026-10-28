@@ -56,6 +56,25 @@ export function routeTargetLayout(
 	return out;
 }
 
+/**
+ * `routeTargetLayout` with user placements: a pinned target moves the line's
+ * far anchor; every other pinned node sits exactly where it was dropped
+ * (the Factory is never pinned). Re-run per frame while a node is dragged.
+ */
+export function routeDragLayout(
+	rootId: string,
+	targetId: string,
+	anchors: { root: RoutePoint; target: RoutePoint },
+	steps: ReadonlyArray<ReadonlyArray<string>>,
+	pins: ReadonlyMap<string, RoutePoint>,
+	lateralSpacing: number = ROUTE_LATERAL_SPACING,
+): Map<string, RoutePoint> {
+	const target = pins.get(targetId) ?? anchors.target;
+	const out = routeTargetLayout(rootId, targetId, { root: anchors.root, target }, steps, lateralSpacing);
+	for (const [id, p] of pins) if (id !== rootId && out.has(id)) out.set(id, { ...p });
+	return out;
+}
+
 /** The edges the layout/draw keep while a route is straightened: every edge
  *  touching a route member (other than the Factory) is a hierarchy link that
  *  would pull against the route, so it is dropped. A Factory's links to

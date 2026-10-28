@@ -86,3 +86,18 @@ describe("route drawn at the straightened positions", () => {
 		assert.equal(list.arrows.length, 2);
 	});
 });
+
+describe("routeDragLayout", () => {
+	it("a pinned target moves the far anchor; other pins sit where dropped; the Factory never moves", async () => {
+		const { routeDragLayout, routeTargetLayout } = await import("../src/core/route-layout.ts");
+		const steps = [["a", "b"], ["t"]];
+		const anchors = { root: { x: 0, y: 0 }, target: { x: 200, y: 0 } };
+		const pins = new Map([["t", { x: 0, y: 100 }], ["a", { x: 7, y: 7 }], ["fac:d", { x: 9, y: 9 }]]);
+		const out = routeDragLayout("fac:d", "t", anchors, steps, pins);
+		const base = routeTargetLayout("fac:d", "t", { root: anchors.root, target: { x: 0, y: 100 } }, steps);
+		assert.deepEqual(out.get("t"), { x: 0, y: 100 });
+		assert.deepEqual(out.get("a"), { x: 7, y: 7 });
+		assert.deepEqual(out.get("b"), base.get("b"));
+		assert.deepEqual(out.get("fac:d"), { x: 0, y: 0 });
+	});
+});

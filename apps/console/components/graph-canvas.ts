@@ -64,6 +64,7 @@ import {
 	createGraphSimulation,
 	easeInOut,
 	routeFilteredEdges,
+	routeDragLayout,
 	routeTargetLayout,
 	DEFAULT_PHYSICS_TUNING,
 	DEFAULT_REGION_TUNING,
@@ -667,6 +668,16 @@ export class GraphCanvasRenderer {
 	 *  normal position of every node displaced so far. */
 	private straighten: { key: string; members: ReadonlySet<string>; edges: CanvasEdge[] } | null = null;
 	private home = new Map<string, Pt>();
+	/** Route-node drops for this selection (graph id → world position). The
+	 *  dragged selected node is the line's far anchor; the rest stay put. */
+	private routePins = new Map<string, Pt>();
+	/** A route drag passed the click slop; the latest cursor world point is
+	 *  applied once per frame. */
+	private routeDragging = false;
+	private routeDragPt: Pt | null = null;
+	/** Selected nodes the user dropped: after the restore they pin while the
+	 *  sim settles around them, and their spot is saved as their normal one. */
+	private placed = new Set<string>();
 	private tween: { ids: string[]; from: Pt[]; to: Pt[]; start: number; ms: number; returning: Set<string> } | null = null;
 	private shaftsPath: Path2D = new Path2D();
 	private faintShaftsPath: Path2D = new Path2D();
@@ -813,6 +824,10 @@ export class GraphCanvasRenderer {
 		this.straighten = null;
 		this.tween = null;
 		this.home.clear();
+		this.routePins.clear();
+		this.placed.clear();
+		this.routeDragging = false;
+		this.routeDragPt = null;
 		this.buildSim();
 		if (this.route) this.applyStraighten(this.route, true);
 		this.geoVersion++; // new data → rebuild world geometry
@@ -905,6 +920,9 @@ export class GraphCanvasRenderer {
 			targets = routeTargetLayout(layout.root, layout.target, { root: homeOf(root), target: homeOf(tgt) }, layout.steps);
 		}
 		if (key === (this.straighten?.key ?? null)) return;
+		this.routePins.clear();
+		this.routeDragging = false;
+		this.routeDragPt = null;
 
 		// Settle any tween in flight where it is (home entries persist).
 		const dest = new Map<string, Pt>();
@@ -955,6 +973,47 @@ export class GraphCanvasRenderer {
 		// straightened, all links back afterwards.
 		this.simActive = false;
 		this.buildSim();
+		this.reheatPlaced();
+		this.geoVersion++;
+	}
+
+	/** Back on the normal map: let the sim settle around the nodes the user
+	 *  dropped (pinned meanwhile), then the settle commits the new rest state. */
+	private reheatPlaced(): void {
+		if (this.frozen || this.placed.size === 0) return;
+		for (const id of this.placed) {
+			const n = this.simById.get(id);
+			if (n) {
+				n.fx = n.x;
+				n.fy = n.y;
+			}
+		}
+		if (this.sim) {
+			this.sim.alpha(DRAG_ALPHA_TARGET);
+			this.simActive = true;
+			this.simMoved = true;
+		}
+	}
+
+	/** Apply the pending route-drag point: the dragged node follows the
+	 *  cursor and the route re-lays out on the new anchor (no tween). */
+	private advanceRouteDrag(id: string | null = this.dragId): void {
+		const pt = this.routeDragPt;
+		const layout = this.route?.layout;
+		if (!pt || !id || !layout || !this.straighten) return;
+		this.routeDragPt = null;
+		const root = this.nodeById.get(layout.root);
+		const tgt = this.nodeById.get(layout.target);
+		if (!root || !tgt) return;
+		this.routePins.set(id, pt);
+		const homeOf = (n: CanvasNode): Pt => this.home.get(n.id) ?? { x: n.x, y: n.y };
+		const out = routeDragLayout(layout.root, layout.target, { root: homeOf(root), target: homeOf(tgt) }, layout.steps, this.routePins);
+		for (const [id, p] of out) {
+			const n = this.nodeById.get(id);
+			if (!n) continue;
+			n.x = p.x;
+			n.y = p.y;
+		}
 		this.geoVersion++;
 	}
 
@@ -975,7 +1034,8 @@ export class GraphCanvasRenderer {
 		if (t < 1) return true;
 		for (const id of tw.returning) this.home.delete(id);
 		this.tween = null;
-		return false;
+		this.reheatPlaced();
+		return this.simActive;
 	}
 
 	/** The map is frozen while a route is straightened (or easing back). */
@@ -1118,6 +1178,27 @@ export class GraphCanvasRenderer {
 	private onPointerMove = (e: PointerEvent) => {
 		const pos = this.eventPos(e);
 		if (this.dragId) {
+			if (this.straighten) {
+				// Route selected: only its own nodes move (not the Factory);
+				// everything else is frozen. Click slop still gates the drag.
+				const layout = this.route?.layout;
+				const draggable = this.straighten.members.has(this.dragId) && layout !== undefined && this.dragId !== layout.root;
+				const far = this.dragOrigin !== null && Math.hypot(pos.x - this.dragOrigin.x, pos.y - this.dragOrigin.y) > CLICK_SLOP;
+				if (draggable && (this.routeDragging || far)) {
+					if (!this.routeDragging) {
+						this.routeDragging = true;
+						// A straighten tween in flight lands first.
+						if (this.tween) {
+							this.tween.start = -Infinity;
+							this.advanceTween();
+						}
+					}
+					const { x: tx, y: ty, k } = this.transform;
+					this.routeDragPt = { x: (pos.x - tx) / k, y: (pos.y - ty) / k };
+					this.markDirty();
+				}
+				return;
+			}
 			const n = this.simById.get(this.dragId);
 			if (n) {
 				const moved =
@@ -1194,6 +1275,10 @@ export class GraphCanvasRenderer {
 				n.fx = null;
 				n.fy = null;
 			}
+			if (this.routeDragging) {
+				this.releaseRouteDrag(id);
+				return;
+			}
 			if (this.simActive) {
 				// Real drag: the sim anneals to the new rest state; advanceSim
 				// detects the settle and schedules the commit.
@@ -1214,6 +1299,22 @@ export class GraphCanvasRenderer {
 		if (node) this.callbacks.onSelect(node.id, pos);
 		else this.callbacks.onStageClick();
 	};
+
+	/** A route drag ended: the node stays where it was dropped. The selected
+	 *  node's spot becomes its normal position (saved; the sim settles around
+	 *  it after deselect); other route nodes only stay for this selection. */
+	private releaseRouteDrag(id: string): void {
+		this.advanceRouteDrag(id);
+		this.routeDragging = false;
+		this.routeDragPt = null;
+		const drop = this.routePins.get(id);
+		if (drop && id === this.route?.layout?.target) {
+			this.home.set(id, { ...drop });
+			this.placed.add(id);
+			this.callbacks.onCommit({ [id]: { x: drop.x, y: drop.y } });
+		}
+		this.markDirty();
+	}
 
 	private onDoubleClick = (e: MouseEvent) => {
 		const pos = this.eventPos(e);
@@ -1293,6 +1394,7 @@ export class GraphCanvasRenderer {
 			this.lastTickAt = now;
 			const hoverAnim = this.advanceHover();
 			const zoomAnim = this.advanceZoom(dt);
+			this.advanceRouteDrag();
 			const simAnim = this.advanceSim();
 			const tweenAnim = this.advanceTween();
 			this.draw();
@@ -1330,6 +1432,14 @@ export class GraphCanvasRenderer {
 		// Settled (drag released long ago, alpha annealed away)?
 		if (!this.dragId && this.sim.alpha() < SIM_SETTLE_ALPHA) {
 			this.simActive = false;
+			for (const id of this.placed) {
+				const p = this.simById.get(id);
+				if (p) {
+					p.fx = null;
+					p.fy = null;
+				}
+			}
+			this.placed.clear();
 			this.scheduleCommit();
 			return false;
 		}

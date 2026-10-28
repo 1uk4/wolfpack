@@ -9,19 +9,20 @@ import { makeFixtureKb } from "./fixture.js";
 const base = makeFixtureKb();
 const roots = { kbBase: base };
 const ids = (g: ReturnType<typeof buildKbGraph>, kind?: string) => g.nodes.filter((n) => !kind || n.kind === kind).map((n) => n.id);
-const edgeSet = (g: ReturnType<typeof buildKbGraph>, kind: string) => g.edges.filter((e) => e.kind === kind).map((e) => `${e.source}>${e.target}${e.relation ? `:${e.relation}` : ""}`);
+const edgeSet = (g: ReturnType<typeof buildKbGraph>, kind: string) => g.edges.filter((e) => e.kind === kind).map((e) => `${e.source}>${e.target}`);
 
 describe("buildKbGraph: default layers", () => {
   const g = buildKbGraph(roots, { now: () => new Date("2026-01-01T00:00:00Z") });
   it("has domain, section, entry and open work nodes with prefixed ids and kind depths", () => {
     expect(ids(g, "domain")).toEqual(["dom:alpha", "dom:beta"]);
+    expect(ids(g, "factory")).toEqual(["fac:alpha"]);
     expect(ids(g, "section")).toEqual(["sec:sec-alpha-sub", "sec:sec-alpha-top"]);
     expect(ids(g, "entry")).toEqual(["ent:kb-alpha-AAA1111", "ent:kb-alpha-BBB2222", "ent:kb-alpha-CCC3333", "ent:kb-beta-DDD4444"]);
     expect(ids(g, "work")).toEqual(["work:work-alpha-CHILD11", "work:work-alpha-ROOT111"]);
-    expect(g.nodes.map((n) => [n.kind, n.depth]).filter((v, i, a) => a.findIndex((x) => x[0] === v[0]) === i)).toEqual([["domain", 0], ["section", 1], ["entry", 2], ["work", 3]]);
+    expect(g.nodes.map((n) => [n.kind, n.depth]).filter((v, i, a) => a.findIndex((x) => x[0] === v[0]) === i)).toEqual([["domain", 0], ["factory", 1], ["section", 1], ["entry", 2], ["work", 3]]);
     expect(g.generated).toBe("2026-01-01T00:00:00.000Z");
     expect(g.domain).toBeNull();
-    expect(g.layers).toEqual({ archivedWork: false, wikilinks: false, denTopics: false });
+    expect(g.layers).toEqual({ archivedWork: false, denTopics: false });
   });
   it("carries kind-specific fields", () => {
     const by = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
@@ -31,12 +32,13 @@ describe("buildKbGraph: default layers", () => {
     expect(by["work:work-alpha-CHILD11"]).toMatchObject({ stage: "in_build", workKind: "task" });
     expect(by["sec:sec-alpha-top"]).toMatchObject({ summary: "Top section", currency: "live" });
   });
-  it("builds hierarchy, partOf, dependsOn and related edges", () => {
+  it("builds the hierarchy (domain → factory → work) plus partOf and dependsOn, and no relation edges", () => {
     expect(edgeSet(g, "hierarchy")).toEqual([
       "dom:alpha>ent:kb-alpha-CCC3333",
+      "dom:alpha>fac:alpha",
       "dom:alpha>sec:sec-alpha-top",
-      "dom:alpha>work:work-alpha-ROOT111",
       "dom:beta>ent:kb-beta-DDD4444",
+      "fac:alpha>work:work-alpha-ROOT111",
       "sec:sec-alpha-sub>ent:kb-alpha-BBB2222",
       "sec:sec-alpha-top>ent:kb-alpha-AAA1111",
       "sec:sec-alpha-top>sec:sec-alpha-sub",
@@ -45,8 +47,8 @@ describe("buildKbGraph: default layers", () => {
     expect(edgeSet(g, "partOf")).toEqual(["work:work-alpha-CHILD11>work:work-alpha-ROOT111"]);
     // the archived dependency is not in this layer, so its edge is dropped (as is the one to a missing item)
     expect(edgeSet(g, "dependsOn")).toEqual([]);
-    expect(edgeSet(g, "related")).toEqual(["ent:kb-alpha-AAA1111>ent:kb-alpha-BBB2222:refines", "ent:kb-alpha-BBB2222>ent:kb-beta-DDD4444:see_also"]);
-    expect(edgeSet(g, "wikilink")).toEqual([]);
+    // entries relate to each other in the files (relations, [[wikilinks]]), but the graph draws none of it
+    expect(new Set(g.edges.map((e) => e.kind))).toEqual(new Set(["hierarchy", "partOf"]));
   });
   it("never dangles, never duplicates and is deterministic", () => {
     const idset = new Set(g.nodes.map((n) => n.id));
@@ -71,26 +73,20 @@ describe("buildKbGraph: toggles and filter", () => {
     expect(g.layers.archivedWork).toBe(true);
     expect(ids(buildKbGraph(roots), "work")).not.toContain("work:work-alpha-OLD1111");
   });
-  it("wikilinks adds body links to existing entries only, skipping code fences and unknown targets", () => {
-    const g = buildKbGraph(roots, { wikilinks: true });
-    expect(edgeSet(g, "wikilink")).toEqual(["ent:kb-alpha-AAA1111>ent:kb-alpha-BBB2222", "ent:kb-alpha-BBB2222>ent:kb-alpha-AAA1111"]);
-    expect(g.nodes).toEqual(buildKbGraph(roots).nodes);
-  });
-  it("denTopics adds only the supplied wolf's topics, linked to entries and work", () => {
+  it("denTopics adds only the supplied wolf's topics, with no relation edges", () => {
     const den = { wolf: "dewey", topics: [{ id: "caching", title: "Caching", summary: "s", updated: "2026-01-01", related: ["kb-alpha-AAA1111", "gone"], promotable: true }, { id: "work-alpha-ROOT111~notes", title: "Notes", summary: "", updated: "", related: ["caching"], promotable: false }] };
     expect(ids(buildKbGraph(roots, { den }), "den-topic")).toEqual([]);
     const g = buildKbGraph(roots, { den, denTopics: true });
     expect(ids(g, "den-topic")).toEqual(["den:dewey:caching", "den:dewey:work-alpha-ROOT111~notes"]);
     expect(g.nodes.find((n) => n.id === "den:dewey:caching")).toMatchObject({ kind: "den-topic", depth: 4, wolf: "dewey", promotable: true });
-    expect(edgeSet(g, "related")).toEqual(expect.arrayContaining(["den:dewey:caching>ent:kb-alpha-AAA1111:see_also", "den:dewey:work-alpha-ROOT111~notes>den:dewey:caching:see_also", "den:dewey:work-alpha-ROOT111~notes>work:work-alpha-ROOT111:work"]));
-    expect(g.edges.some((e) => e.target === "ent:gone")).toBe(false);
+    expect(g.edges.some((e) => e.source.startsWith("den:") || e.target.startsWith("den:"))).toBe(false);
   });
   it("domain filter keeps one domain, drops cross-domain edges, and lists all domains", () => {
-    const g = buildKbGraph(roots, { domain: "alpha", wikilinks: true });
+    const g = buildKbGraph(roots, { domain: "alpha" });
     expect(g.domain).toBe("alpha");
     expect(ids(g, "domain")).toEqual(["dom:alpha"]);
     expect(g.nodes.every((n) => n.domain === "alpha")).toBe(true);
-    expect(edgeSet(g, "related")).toEqual(["ent:kb-alpha-AAA1111>ent:kb-alpha-BBB2222:refines"]);
+    expect(ids(g, "factory")).toEqual(["fac:alpha"]);
     expect(g.domains.map((d) => d.name)).toEqual(["alpha", "beta"]);
   });
   it("an unknown or unsafe domain throws UnknownDomainError", () => {
@@ -154,15 +150,55 @@ describe("id consistency and edge cases", () => {
     expect(g.edges.some((e) => e.target === "ent:kb-alpha-AAA1111" && e.source.startsWith("dom:beta"))).toBe(false);
     expect(g.edges.some((e) => e.source === "ent:kb-alpha-AAA1111" && e.target === "ent:kb-beta-DDD4444")).toBe(false);
   });
-  it("work items in a partOf cycle attach to their domain", () => {
+  it("work items in a partOf cycle attach to the Factory", () => {
     const kb = makeFixtureKb();
     const w = (id: string, p: string) => put(join(kb, `domains/alpha/work/${id}.md`), `---\nid: ${id}\nnodeType: work\nstage: plan\npartOf: ${p}\n---\n`);
     w("work-alpha-CYC1111", "work-alpha-CYC2222");
     w("work-alpha-CYC2222", "work-alpha-CYC1111");
     const g = buildKbGraph({ kbBase: kb });
-    expect(g.edges).toContainEqual({ source: "dom:alpha", target: "work:work-alpha-CYC1111", kind: "hierarchy" });
-    expect(g.edges).toContainEqual({ source: "dom:alpha", target: "work:work-alpha-CYC2222", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:work-alpha-CYC1111", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:work-alpha-CYC2222", kind: "hierarchy" });
     expect(g.edges.filter((e) => e.kind === "partOf" && e.source.includes("CYC"))).toEqual([]);
+  });
+  it("a domain without work gets no Factory node", () => {
+    const g = buildKbGraph(roots);
+    expect(ids(g, "factory")).toEqual(["fac:alpha"]);
+    expect(g.edges.some((e) => e.target === "fac:beta")).toBe(false);
+  });
+  it("the archived Factory child hangs off its parent only with the archivedWork layer", () => {
+    const g = buildKbGraph(roots, { archivedWork: true });
+    expect(g.edges).toContainEqual({ source: "work:work-alpha-ROOT111", target: "work:work-alpha-OLD1111", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:work-alpha-ROOT111", kind: "hierarchy" });
+  });
+  it("work from the Work API replaces the work files: one Factory per domain, items parented by partOf", () => {
+    const kb = makeFixtureKb();
+    const work = [
+      { id: "w-feat", domain: "alpha", title: "Feature", kind: "feature", stage: "in_build" },
+      { id: "w-task", domain: "alpha", title: "Task", kind: "task", stage: "plan", partOf: "w-feat", dependsOn: ["w-feat"], assignee: "1uk4" },
+      { id: "w-old", domain: "alpha", title: "Old", stage: "archived" },
+      { id: "w-beta", domain: "beta", title: "Beta thing", stage: "idea" },
+      { id: "w-gone", domain: "nowhere", title: "Unknown domain" },
+    ];
+    const g = buildKbGraph({ kbBase: kb }, { work });
+    expect(ids(g, "work")).toEqual(["work:w-beta", "work:w-feat", "work:w-task"]);
+    expect(ids(g, "factory")).toEqual(["fac:alpha", "fac:beta"]);
+    expect(g.edges).toContainEqual({ source: "dom:alpha", target: "fac:alpha", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "dom:beta", target: "fac:beta", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:w-feat", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "fac:beta", target: "work:w-beta", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "work:w-feat", target: "work:w-task", kind: "hierarchy" });
+    expect(g.edges).toContainEqual({ source: "work:w-task", target: "work:w-feat", kind: "partOf" });
+    expect(g.nodes.find((n) => n.id === "work:w-task")).toMatchObject({ workKind: "task", stage: "plan", assignee: "1uk4", domain: "alpha" });
+    // none of the file items leak in
+    expect(ids(g, "work")).not.toContain("work:work-alpha-ROOT111");
+    // archived hidden by default, shown with the layer
+    expect(ids(buildKbGraph({ kbBase: kb }, { work, archivedWork: true }), "work")).toContain("work:w-old");
+    // an empty API answer means no work (not the files)
+    expect(ids(buildKbGraph({ kbBase: kb }, { work: [] }), "factory")).toEqual([]);
+  });
+  it("an item whose parent is missing from the API answer attaches to the Factory", () => {
+    const g = buildKbGraph({ kbBase: makeFixtureKb() }, { work: [{ id: "w1", domain: "alpha", partOf: "w-missing" }] });
+    expect(g.edges).toContainEqual({ source: "fac:alpha", target: "work:w1", kind: "hierarchy" });
   });
   it("domains.yaml colours are validated", () => {
     const kb = makeFixtureKb();

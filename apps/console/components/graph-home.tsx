@@ -114,7 +114,6 @@ function GraphHomeInner() {
 	const kb = useKbGraph(librarian, librarianLoading || !loaded, {
 		domain: forced.allDomains ? undefined : (settings.domain ?? undefined),
 		archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
-		wikilinks: settings.layers.wikilinks,
 		denTopics: settings.layers.denTopics || !!forced.denTopics,
 	});
 	const controllerRef = useRef<GraphViewController | null>(null);
@@ -172,8 +171,7 @@ function GraphHomeInner() {
 		view: {
 			layers: {
 				archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
-				wikilinks: settings.layers.wikilinks,
-				denTopics: settings.layers.denTopics || !!forced.denTopics,
+						denTopics: settings.layers.denTopics || !!forced.denTopics,
 			},
 			domain: forced.allDomains ? null : settings.domain,
 		},

@@ -41,7 +41,7 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 	const [tick, setTick] = useState(0);
 	const refetch = useCallback(() => setTick((t) => t + 1), []);
 	// A stable key for the query object (callers pass a fresh literal).
-	const queryKey = JSON.stringify([query.domain ?? null, !!query.archivedWork, !!query.wikilinks, !!query.denTopics]);
+	const queryKey = JSON.stringify([query.domain ?? null, !!query.archivedWork, !!query.denTopics]);
 	const queryRef = useRef(query);
 	queryRef.current = query;
 

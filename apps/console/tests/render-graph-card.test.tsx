@@ -27,11 +27,10 @@ const graph: KbGraph = {
 	],
 	edges: [
 		{ source: "sec:arch", target: "ent:e1", kind: "hierarchy" },
-		{ source: "ent:e1", target: "ent:e2", kind: "related", relation: "see_also" },
 		{ source: "work:w2", target: "work:w1", kind: "partOf" },
 		{ source: "work:w2", target: "ent:e1", kind: "dependsOn" },
 	],
-	layers: { archivedWork: false, wikilinks: false, denTopics: true },
+	layers: { archivedWork: false, denTopics: true },
 	domain: null,
 	domains: [{ name: "wolfpack", label: "Wolfpack" }],
 	generated: "2026-10-27T00:00:00.000Z",
@@ -41,9 +40,10 @@ const html = (id: string) =>
 	renderToStaticMarkup(createElement(GraphCard, { card: describeNode(graph, id)!, onFocus: () => {}, onSelectNode: () => {} }));
 
 describe("GraphCard", () => {
-	it("entry: title, summary, domain, section, maturity, related, and an Open link to the reader", () => {
+	it("entry: title, summary, domain, section, maturity, and an Open link to the reader", () => {
 		const h = html("ent:e1");
-		for (const text of ["Entry one", "First", "Wolfpack", "Architecture", "stable", "Entry two", "see also"]) assert.ok(h.includes(text), text);
+		for (const text of ["Entry one", "First", "Wolfpack", "Architecture", "stable"]) assert.ok(h.includes(text), text);
+		assert.ok(!h.includes("Related"), "no relation links on the card");
 		assert.ok(h.includes('href="/kb/entry/e1"'), "open → the entry reader");
 		assert.ok(h.includes(">Open<"));
 		assert.ok(!h.includes(">Focus<"));

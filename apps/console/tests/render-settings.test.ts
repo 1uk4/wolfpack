@@ -111,7 +111,7 @@ describe("sanitizeRenderSettings", () => {
 		const valid = {
 			sizeUnits: "world",
 			groupBy: "section",
-			layers: { archivedWork: true, wikilinks: false, denTopics: true },
+			layers: { archivedWork: true, denTopics: true },
 			domain: "wolfpack",
 			nodeSize: 4,
 			edgeWidth: 2,
@@ -223,7 +223,7 @@ describe("sanitizeRenderSettings", () => {
 describe("KB-graph view settings", () => {
 	test("defaults: group by domain, KB + open work only, no domain filter, depth anchor off", () => {
 		assert.equal(DEFAULT_RENDER_SETTINGS.groupBy, "domain");
-		assert.deepEqual(DEFAULT_RENDER_SETTINGS.layers, { archivedWork: false, wikilinks: false, denTopics: false });
+		assert.deepEqual(DEFAULT_RENDER_SETTINGS.layers, { archivedWork: false, denTopics: false });
 		assert.equal(DEFAULT_RENDER_SETTINGS.domain, null);
 		assert.equal(DEFAULT_RENDER_SETTINGS.physics.depthMode, "off");
 	});
@@ -236,7 +236,7 @@ describe("KB-graph view settings", () => {
 
 	test("layers: booleans only, missing keys keep their default", () => {
 		const s = sanitizeRenderSettings({ layers: { archivedWork: true, wikilinks: "yes", extra: true } });
-		assert.deepEqual(s.layers, { archivedWork: true, wikilinks: false, denTopics: false });
+		assert.deepEqual(s.layers, { archivedWork: true, denTopics: false });
 		assert.deepEqual(sanitizeRenderSettings({ layers: "all" }).layers, DEFAULT_RENDER_SETTINGS.layers);
 	});
 

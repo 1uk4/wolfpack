@@ -3,7 +3,7 @@
 /**
  * The graph's detail card — one body per node kind (the model is
  * describeNode in src/core/kb-graph-model.ts):
- *   entry     title, summary, domain, section, maturity, related + "open"
+ *   entry     title, summary, domain, section, maturity + "open"
  *   work      stage, parent, dependencies + "open"
  *   section   summary + "focus" (frames the section's entries)
  *   domain    counts
@@ -15,6 +15,7 @@ import type { CardLink, NodeCard } from "@/src/core";
 
 const KIND_LABEL: Record<NodeCard["kind"], string> = {
 	domain: "Domain",
+	factory: "Factory",
 	section: "Section",
 	entry: "Entry",
 	work: "Work",
@@ -51,7 +52,6 @@ function LinkList({
 					className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				>
 					<span className="min-w-0 flex-1 truncate">{l.label}</span>
-					{l.relation && <span className="shrink-0 text-[10px] text-muted-foreground">{l.relation.replace(/_/g, " ")}</span>}
 				</button>
 			))}
 		</div>
@@ -96,7 +96,6 @@ export function GraphCard({
 
 			{card.parent && <LinkList title="Part of" links={[card.parent]} onSelectNode={onSelectNode} />}
 			<LinkList title="Depends on" links={card.dependencies} onSelectNode={onSelectNode} />
-			<LinkList title="Related" links={card.related} onSelectNode={onSelectNode} />
 
 			{(card.openHref || card.focusIds) && (
 				<div className="mt-3 flex items-center gap-2">

@@ -7,10 +7,8 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readDomainRegistry } from "../shared/domain-registry.js";
 import { isSafeSegment } from "../shared/safe-path.js";
-import { wikilinkTargets } from "../shared/knowledgeLint.js";
-import { workIdOfTopic } from "../shared/workLinks.js";
 import type { KbRoots } from "../shared/paths.js";
-import { readDigestSections, readMarkdownDir, readRelations, str, strList, type DigestSection } from "./read.js";
+import { readDigestSections, readMarkdownDir, str, strList, type DigestSection } from "./read.js";
 import { KB_NODE_DEPTH, type KbGraph, type KbGraphDomain, type KbGraphEdge, type KbGraphLayers, type KbGraphNode } from "./types.js";
 
 /** A den topic as the builder needs it (the caller reads the den; kb does not depend on the memory package). */
@@ -28,13 +26,29 @@ export interface BuildKbGraphOptions {
   domain?: string;
   /** Include work items whose stage is `archived`. Default false. */
   archivedWork?: boolean;
-  /** Add entry -> entry edges for `[[wikilinks]]` in bodies. Default false. */
-  wikilinks?: boolean;
   /** Add den-topic nodes (needs `den`). Default false. */
   denTopics?: boolean;
   /** The den layer's source: one wolf's own topics. */
   den?: { wolf: string; topics: KbDenTopic[] };
+  /**
+   * Work items from the Work API (all domains; items of unknown domains are ignored). Unset: the items come from the
+   * KB's `domains/<d>/work/*.md` files instead (the fallback when the API is not reachable).
+   */
+  work?: KbWorkSource[];
   now?: () => Date;
+}
+
+/** A work item as the builder needs it: the Work API's item shape, or the same read from a work file. */
+export interface KbWorkSource {
+  id: string;
+  domain?: string;
+  title?: string;
+  kind?: string;
+  stage?: string;
+  partOf?: string | null;
+  dependsOn?: string[];
+  assignee?: string;
+  updated?: string;
 }
 
 export class UnknownDomainError extends Error {
@@ -71,7 +85,7 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
     ...(registry[name]?.color && COLOR.test(registry[name].color!) ? { color: registry[name].color } : {}),
   }));
   if (opts.domain !== undefined && !present.includes(opts.domain)) throw new UnknownDomainError(opts.domain);
-  const layers: KbGraphLayers = { archivedWork: opts.archivedWork === true, wikilinks: opts.wikilinks === true, denTopics: opts.denTopics === true };
+  const layers: KbGraphLayers = { archivedWork: opts.archivedWork === true, denTopics: opts.denTopics === true };
 
   const nodes = new Map<string, KbGraphNode>();
   const edges: KbGraphEdge[] = [];
@@ -79,9 +93,7 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
     if (!nodes.has(n.id)) nodes.set(n.id, { ...n, depth: KB_NODE_DEPTH[n.kind] });
   };
   const hierarchy = (source: string, target: string) => edges.push({ source, target, kind: "hierarchy" });
-  const entryBodies = new Map<string, string>();
-  const entryRelations: Array<{ id: string; kind: string; target: string }> = [];
-  const workLinks: Array<{ id: string; partOf?: string; dependsOn: string[]; domainNode: string }> = [];
+  const workLinks: Array<{ id: string; dependsOn: string[] }> = [];
 
   for (const domain of opts.domain ? [opts.domain] : present) {
     const dir = join(roots.kbBase, "domains", domain);
@@ -109,8 +121,6 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
         ...(str(e.meta.currency) ? { currency: str(e.meta.currency) } : {}),
         ...(str(e.meta.updated) ? { updated: str(e.meta.updated) } : {}),
       });
-      entryBodies.set(`ent:${id}`, e.body);
-      for (const r of readRelations(e.meta)) entryRelations.push({ id: `ent:${id}`, ...r });
     };
     const walk = (list: DigestSection[], parent: string) => {
       for (const s of list) {
@@ -138,13 +148,29 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
       hierarchy(domNode, `ent:${e.id}`);
     }
 
-    // Work items
-    const items = readMarkdownDir(join(dir, "work")).filter((w) => w.meta.nodeType === "work");
-    const live = items
-      .map((w) => ({ ...w, id: str(w.meta.id) ?? w.file.replace(/\.md$/, "") }))
-      .filter((w) => layers.archivedWork || w.meta.stage !== "archived");
+    // Work items: the Work API's when given, else the domain's work files. They hang off one Factory node per
+    // domain (dom -> fac -> root work; children under their partOf), like the KB website's graph.
+    const source: KbWorkSource[] = opts.work
+      ? opts.work.filter((w) => w.domain === domain)
+      : readMarkdownDir(join(dir, "work"))
+          .filter((w) => w.meta.nodeType === "work")
+          .map((w) => ({
+            id: str(w.meta.id) ?? w.file.replace(/\.md$/, ""),
+            title: str(w.meta.title),
+            kind: str(w.meta.kind),
+            stage: str(w.meta.stage),
+            partOf: str(w.meta.partOf),
+            dependsOn: strList(w.meta.dependsOn),
+            assignee: str(w.meta.assignee),
+            updated: str(w.meta.updated),
+          }));
+    const live = source.filter((w) => typeof w.id === "string" && w.id !== "" && (layers.archivedWork || w.stage !== "archived") && !nodes.has(`work:${w.id}`));
+    if (live.length === 0) continue;
+    const facNode = `fac:${domain}`;
+    addNode({ id: facNode, kind: "factory", label: "Factory", domain });
+    hierarchy(domNode, facNode);
     const ids = new Set(live.map((w) => w.id));
-    const parentOf = new Map(live.map((w) => [w.id, str(w.meta.partOf)]));
+    const parentOf = new Map(live.map((w) => [w.id, w.partOf || undefined]));
     const inCycle = (start: string) => {
       const walked = new Set<string>();
       for (let c = parentOf.get(start); c !== undefined && ids.has(c); c = parentOf.get(c)) {
@@ -155,25 +181,25 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
       return false;
     };
     for (const w of live) {
-      if (nodes.has(`work:${w.id}`)) continue; // owned by another domain: keep the first
-      const partOf = inCycle(w.id) ? undefined : str(w.meta.partOf);
+      if (nodes.has(`work:${w.id}`)) continue; // duplicate id: keep the first
+      const partOf = inCycle(w.id) ? undefined : w.partOf || undefined;
       addNode({
         id: `work:${w.id}`,
         kind: "work",
-        label: cap(str(w.meta.title) ?? w.id, 60),
+        label: cap(w.title || w.id, 60),
         domain,
-        workKind: str(w.meta.kind) ?? "task",
-        stage: str(w.meta.stage) ?? "plan",
-        ...(str(w.meta.assignee) ? { assignee: str(w.meta.assignee) } : {}),
-        ...(str(w.meta.updated) ? { updated: str(w.meta.updated) } : {}),
+        workKind: w.kind || "task",
+        stage: w.stage || "plan",
+        ...(w.assignee ? { assignee: w.assignee } : {}),
+        ...(w.updated ? { updated: w.updated } : {}),
       });
       if (partOf && ids.has(partOf)) {
         hierarchy(`work:${partOf}`, `work:${w.id}`);
         edges.push({ source: `work:${w.id}`, target: `work:${partOf}`, kind: "partOf" });
       } else {
-        hierarchy(domNode, `work:${w.id}`);
+        hierarchy(facNode, `work:${w.id}`);
       }
-      workLinks.push({ id: w.id, dependsOn: strList(w.meta.dependsOn), domainNode: domNode });
+      workLinks.push({ id: w.id, dependsOn: w.dependsOn ?? [] });
     }
   }
 
@@ -183,33 +209,21 @@ export function buildKbGraph(roots: Pick<KbRoots, "kbBase">, opts: BuildKbGraphO
     for (const t of [...topics].sort((a, b) => cmp(a.id, b.id))) {
       addNode({ id: denId(t.id), kind: "den-topic", label: cap(t.title || t.id, 60), wolf, ...(t.summary ? { summary: t.summary } : {}), ...(t.updated ? { updated: t.updated } : {}), promotable: t.promotable });
     }
-    for (const t of topics) {
-      for (const r of t.related) {
-        const target = nodes.has(denId(r)) ? denId(r) : `ent:${r}`;
-        edges.push({ source: denId(t.id), target, kind: "related", relation: "see_also" });
-      }
-      const w = workIdOfTopic(t.id);
-      if (w) edges.push({ source: denId(t.id), target: `work:${w}`, kind: "related", relation: "work" });
-    }
   }
 
   for (const w of workLinks) for (const dep of w.dependsOn) edges.push({ source: `work:${w.id}`, target: `work:${dep}`, kind: "dependsOn" });
-  for (const r of entryRelations) edges.push({ source: r.id, target: `ent:${r.target}`, kind: "related", relation: r.kind });
-  if (layers.wikilinks) {
-    for (const [id, body] of entryBodies) for (const t of wikilinkTargets(body)) edges.push({ source: id, target: `ent:${t}`, kind: "wikilink" });
-  }
 
   // Never dangle, never duplicate, always the same order.
   const seen = new Set<string>();
   const clean = edges
     .filter((e) => e.source !== e.target && nodes.has(e.source) && nodes.has(e.target))
     .filter((e) => {
-      const key = `${e.source}\0${e.target}\0${e.kind}\0${e.relation ?? ""}`;
+      const key = `${e.source}\0${e.target}\0${e.kind}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     })
-    .sort((a, b) => cmp(a.source, b.source) || cmp(a.target, b.target) || cmp(a.kind, b.kind) || cmp(a.relation ?? "", b.relation ?? ""));
+    .sort((a, b) => cmp(a.source, b.source) || cmp(a.target, b.target) || cmp(a.kind, b.kind));
 
   return {
     nodes: [...nodes.values()].sort((a, b) => a.depth - b.depth || cmp(a.id, b.id)),

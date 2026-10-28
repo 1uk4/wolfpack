@@ -73,8 +73,8 @@ describe("memory API: pass-through", () => {
 	it("kbGraph maps query params to options", async () => {
 		const calls: unknown[][] = [];
 		const api = createMemoryApi(stub({ getKbGraph: async (...a: unknown[]) => (calls.push(a), { nodes: [] }) }));
-		await api.kbGraph("lib", new URLSearchParams("domain=wolfpack&archivedWork=1&wikilinks=0&denTopics=true"));
-		assert.deepEqual(calls[0], ["lib", { domain: "wolfpack", archivedWork: true, wikilinks: false, denTopics: true }]);
+		await api.kbGraph("lib", new URLSearchParams("domain=wolfpack&archivedWork=1&denTopics=true"));
+		assert.deepEqual(calls[0], ["lib", { domain: "wolfpack", archivedWork: true, denTopics: true }]);
 		await api.kbGraph("lib", new URLSearchParams());
 		assert.deepEqual(calls[1], ["lib", {}]);
 	});

@@ -29,7 +29,7 @@ import type { KbGraph, KbGraphNode } from "../src/core/kb.ts";
 
 const node = (n: Partial<KbGraphNode> & Pick<KbGraphNode, "id" | "kind">): KbGraphNode => ({
 	label: n.id,
-	depth: ({ domain: 0, section: 1, entry: 2, work: 3, "den-topic": 4 } as const)[n.kind],
+	depth: ({ domain: 0, factory: 1, section: 1, entry: 2, work: 3, "den-topic": 4 } as const)[n.kind],
 	...n,
 });
 
@@ -39,6 +39,7 @@ function fixture(): KbGraph {
 		nodes: [
 			node({ id: "dom:wolfpack", kind: "domain", label: "Wolfpack", domain: "wolfpack" }),
 			node({ id: "dom:snapjack", kind: "domain", label: "Snapjack", domain: "snapjack" }),
+			node({ id: "fac:wolfpack", kind: "factory", label: "Factory", domain: "wolfpack" }),
 			node({ id: "sec:arch", kind: "section", label: "Architecture", domain: "wolfpack", sectionId: "arch", summary: "How it fits" }),
 			node({ id: "sec:arch-sub", kind: "section", label: "Memory", domain: "wolfpack", sectionId: "arch-sub" }),
 			node({ id: "ent:e1", kind: "entry", label: "Entry one", domain: "wolfpack", sectionId: "arch", summary: "First", maturity: "stable", entryKind: "decision" }),
@@ -59,14 +60,14 @@ function fixture(): KbGraph {
 			{ source: "dom:wolfpack", target: "ent:orphan", kind: "hierarchy" },
 			{ source: "work:w2", target: "work:w1", kind: "partOf" },
 			{ source: "work:w2", target: "work:w3", kind: "dependsOn" },
-			{ source: "ent:e1", target: "ent:e2", kind: "related", relation: "see_also" },
-			{ source: "ent:orphan", target: "ent:e1", kind: "related", relation: "refines" },
-			{ source: "ent:e1", target: "ent:e2", kind: "wikilink" },
-			{ source: "ent:e1", target: "ent:missing", kind: "wikilink" },
-			{ source: "ent:e1", target: "ent:e1", kind: "related" },
+			{ source: "dom:wolfpack", target: "fac:wolfpack", kind: "hierarchy" },
+			{ source: "fac:wolfpack", target: "work:w1", kind: "hierarchy" },
+			{ source: "work:w1", target: "work:w2", kind: "hierarchy" },
+			{ source: "ent:e1", target: "ent:missing", kind: "hierarchy" },
+			{ source: "ent:e1", target: "ent:e1", kind: "hierarchy" },
 			{ source: "dom:wolfpack", target: "sec:arch", kind: "hierarchy" },
 		],
-		layers: { archivedWork: true, wikilinks: true, denTopics: true },
+		layers: { archivedWork: true, denTopics: true },
 		domain: null,
 		domains: [
 			{ name: "wolfpack", label: "Wolfpack" },
@@ -239,13 +240,15 @@ describe("toCanvasData", () => {
 		assert.equal(w1.ring, WORK_RING_WEIGHT.in_build);
 	});
 
-	it("edges: dangling ends, self loops and duplicates are dropped; soft links are faint", () => {
-		assert.equal(data.edges.length, 10);
+	it("edges: only the structural hierarchy is drawn; dangling ends, self loops and duplicates are dropped", () => {
+		assert.equal(data.edges.length, 8);
 		assert.ok(!data.edges.some((e) => e.to === "ent:missing" || e.from === e.to));
 		assert.equal(data.edges.filter((e) => e.from === "dom:wolfpack" && e.to === "sec:arch").length, 1);
-		const faint = data.edges.filter((e) => e.faint);
-		assert.equal(faint.length, 3, "two related + one wikilink");
-		assert.equal(data.edges.filter((e) => !e.faint).length, 7, "structure edges stay solid");
+		// partOf mirrors the hierarchy and dependsOn is a cross-link: neither is drawn.
+		assert.ok(!data.edges.some((e) => e.from === "work:w2" && (e.to === "work:w1" || e.to === "work:w3")));
+		// the Factory hangs off its domain, root work off the Factory, child work off its parent
+		const has = (from: string, to: string) => data.edges.some((e) => e.from === from && e.to === to);
+		assert.ok(has("dom:wolfpack", "fac:wolfpack") && has("fac:wolfpack", "work:w1") && has("work:w1", "work:w2"));
 	});
 
 	it("depths follow the hierarchy; clusters follow groupBy", () => {
@@ -287,7 +290,7 @@ describe("describeNode (the detail cards)", () => {
 
 	it("unknown id → null", () => assert.equal(describeNode(g, "ent:nope"), null));
 
-	it("entry: title, summary, domain, section, maturity, related (both directions) + open", () => {
+	it("entry: title, summary, domain, section, maturity, + open", () => {
 		const c = describeNode(g, "ent:e1")!;
 		assert.equal(c.title, "Entry one");
 		assert.equal(c.summary, "First");
@@ -295,7 +298,6 @@ describe("describeNode (the detail cards)", () => {
 		assert.deepEqual(c.section, { id: "sec:arch", label: "Architecture" });
 		assert.equal(c.maturity, "stable");
 		assert.equal(c.entryKind, "decision");
-		assert.deepEqual(c.related.map((r) => [r.id, r.relation]), [["ent:e2", "see_also"], ["ent:orphan", "refines"]]);
 		assert.equal(c.openHref, "/kb/entry/e1");
 		assert.equal(c.focusIds, undefined);
 	});
@@ -327,7 +329,6 @@ describe("describeNode (the detail cards)", () => {
 		assert.equal(c.promotable, false);
 		assert.equal(c.summary, "private");
 		assert.equal(c.openHref, undefined);
-		assert.deepEqual(c.related, []);
 	});
 
 	it("domain: counts of what it holds", () => {
@@ -363,7 +364,7 @@ describe("parseFocusParam", () => {
 
 describe("focusRemedy", () => {
 	const view = (o: Partial<{ archivedWork: boolean; denTopics: boolean; domain: string | null }> = {}) => ({
-		layers: { archivedWork: o.archivedWork ?? false, wikilinks: false, denTopics: o.denTopics ?? false },
+		layers: { archivedWork: o.archivedWork ?? false, denTopics: o.denTopics ?? false },
 		domain: o.domain ?? null,
 	});
 	it("work ids ask for archived work, den ids for den topics, a filter for all domains", () => {
@@ -381,7 +382,7 @@ describe("focusRemedy", () => {
 
 describe("focusStep (the /?focus= flow)", () => {
 	const g = fixture();
-	const view = { layers: { archivedWork: false, wikilinks: false, denTopics: false }, domain: null as string | null };
+	const view = { layers: { archivedWork: false, denTopics: false }, domain: null as string | null };
 	const base = { focusId: "work:w9", graph: g, settled: true, view };
 
 	it("no param → idle", () => assert.deepEqual(focusStep({ ...base, focusId: null }), { kind: "idle" }));

@@ -145,7 +145,7 @@ export interface ConsoleClient {
   /** Dewey's pipeline view. Librarian only: other wolves reject (kb_unavailable). */
   getKbPipeline?(wolf: string): Promise<KbPipelineResponse>;
   /** The KB graph (librarian wolf only; rejects ProtocolError `kb_unavailable` elsewhere, NotFoundError for an unknown domain). Layers default off. */
-  getKbGraph?(wolf: string, opts?: { domain?: string; archivedWork?: boolean; wikilinks?: boolean; denTopics?: boolean }): Promise<KbGraph>;
+  getKbGraph?(wolf: string, opts?: { domain?: string; archivedWork?: boolean; denTopics?: boolean }): Promise<KbGraph>;
   /** One KB entry with its body, wikilinks and backlinks (librarian only). Rejects NotFoundError for an unknown entry. */
   getKbEntry?(wolf: string, id: string): Promise<KbEntryDetail>;
 }

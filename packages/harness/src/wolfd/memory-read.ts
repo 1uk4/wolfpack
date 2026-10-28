@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RECORD_HEADING, extractRecord, withoutRecord, readDenTopics, readTopics, readPendingSummary, observationIds, stripSources } from "@wolfpack/memory";
 import type { BoundWork, LastPromote, MemoryObservation, MemoryObservations, MemoryState, MemoryStatus, MemoryTopic, MemoryTopicRef, WorkChild, WorkRecordResponse } from "@wolfpack/protocol";
+import type { KbWorkSource } from "@wolfpack/kb/graph";
 import { DURABLE_SESSION_ID, getPoolStats, readPool } from "../memory/consolidation.js";
 
 /** What wolfd knows of this wolf's memory configuration (wolf.yaml, after the sandbox redirect). */
@@ -176,6 +177,36 @@ export async function fetchWorkItem(id: string, work: { endpoint?: string; token
     return { kind: "ok", item: data.item, body: data.body ?? "" };
   } catch (e) {
     return { kind: "error", message: (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 200) };
+  }
+}
+
+/**
+ * GET <endpoint>/work: every work item the API knows (all domains, archived included; the graph builder filters).
+ * Undefined when the API is unconfigured or unreachable, so the caller falls back to the KB work files.
+ */
+export async function fetchWorkSources(endpoint: string | undefined, token: string | undefined): Promise<KbWorkSource[] | undefined> {
+  const base = (endpoint ?? "").replace(/\/$/, "");
+  if (!base || !token) return undefined;
+  try {
+    const res = await fetch(`${base}/work`, { headers: { "X-API-Key": token }, signal: AbortSignal.timeout(WORK_TIMEOUT_MS) });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { items?: Array<ApiWorkItem & { assignee?: string }> };
+    if (!Array.isArray(data.items)) return undefined;
+    return data.items
+      .filter((w) => typeof w.id === "string" && typeof w.domain === "string")
+      .map((w) => ({
+        id: w.id,
+        domain: w.domain,
+        ...(w.title ? { title: w.title } : {}),
+        ...(w.kind ? { kind: w.kind } : {}),
+        ...(w.stage ? { stage: w.stage } : {}),
+        ...(w.partOf ? { partOf: w.partOf } : {}),
+        ...(Array.isArray(w.dependsOn) ? { dependsOn: w.dependsOn } : {}),
+        ...(w.assignee ? { assignee: w.assignee } : {}),
+        ...(w.updated ? { updated: w.updated } : {}),
+      }));
+  } catch {
+    return undefined;
   }
 }
 

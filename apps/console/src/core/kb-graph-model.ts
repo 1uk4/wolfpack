@@ -124,6 +124,8 @@ export function nodeStyle(node: Pick<KbGraphNode, "kind" | "stage">): NodeStyle 
 	switch (node.kind) {
 		case "domain":
 			return { radius: 3.2, shape: "disc", ring: 0, dim: false, labelGate: 0.5 };
+		case "factory":
+			return { radius: 2.4, shape: "disc", ring: 0, dim: false, labelGate: 0.6 };
 		case "section":
 			return { radius: 1.9, shape: "disc", ring: 0, dim: false, labelGate: 0.8 };
 		case "work":
@@ -148,9 +150,9 @@ export function nodeColor(node: Pick<KbGraphNode, "domain">, colors: ReadonlyMap
 
 // ─── Depth ──────────────────────────────────────────────────────────────────
 
-const KIND_DEPTH: Record<KbNodeKind, number> = { domain: 0, section: 1, entry: 2, work: 3, "den-topic": 4 };
+const KIND_DEPTH: Record<KbNodeKind, number> = { domain: 0, factory: 1, section: 1, entry: 2, work: 3, "den-topic": 4 };
 
-/** Hierarchy depth (domain 0 → section 1 → entry 2 → work 3 → den topic 4):
+/** Hierarchy depth (domain 0 → factory/section 1 → entry 2 → work 3 → den topic 4):
  *  the payload's own depth when sane, else the kind's. */
 export function depthOf(node: Pick<KbGraphNode, "kind" | "depth">): number {
 	const d = node.depth;
@@ -227,8 +229,6 @@ export interface KbCanvasNode extends NodeStyle {
 export interface KbCanvasEdge {
 	from: string;
 	to: string;
-	/** Drawn lighter (related / wikilink — soft associations, not structure). */
-	faint: boolean;
 }
 
 export interface KbCanvasData {
@@ -239,7 +239,10 @@ export interface KbCanvasData {
 	depths: Map<string, number>;
 }
 
-/** The payload → canvas data. Edges to missing endpoints and duplicates are
+/** The payload → canvas data. Only the structural hierarchy is drawn
+ *  (domain → section → entry, domain → factory → work → child work, den
+ *  topics): `partOf` mirrors it and `dependsOn` is a cross-link, shown on the
+ *  detail card instead. Edges to missing endpoints and duplicates are
  *  dropped; edge direction is irrelevant on the canvas (no arrowheads). */
 export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanvasData {
 	const colors = domainColors(graph);
@@ -255,11 +258,11 @@ export function toCanvasData(graph: KbGraph, opts: { groupBy: GroupBy }): KbCanv
 	const seen = new Set<string>();
 	const edges: KbCanvasEdge[] = [];
 	for (const e of graph.edges) {
-		if (e.source === e.target || !ids.has(e.source) || !ids.has(e.target)) continue;
+		if (e.kind !== "hierarchy" || e.source === e.target || !ids.has(e.source) || !ids.has(e.target)) continue;
 		const key = `${e.source}\u0000${e.target}\u0000${e.kind}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		edges.push({ from: e.source, to: e.target, faint: e.kind === "related" || e.kind === "wikilink" });
+		edges.push({ from: e.source, to: e.target });
 	}
 	return { nodes, edges, clusters: groupClusters(graph, opts.groupBy, colors), depths };
 }
@@ -291,8 +294,6 @@ export interface CardLink {
 	id: string;
 	label: string;
 	kind: KbNodeKind;
-	/** `related` edges: the relation kind (see_also, refines, ...). */
-	relation?: string;
 }
 
 export interface NodeCard {
@@ -311,8 +312,6 @@ export interface NodeCard {
 	wolf?: string;
 	promotable?: boolean;
 	updated?: string;
-	/** Entry: `related` edges, either direction. */
-	related: CardLink[];
 	/** Work: the item it is part of. */
 	parent: CardLink | null;
 	/** Work: the items it depends on. */
@@ -340,11 +339,11 @@ export function describeNode(graph: KbGraph, nodeId: string): NodeCard | null {
 	const byId = new Map(graph.nodes.map((n) => [n.id, n]));
 	const node = byId.get(nodeId);
 	if (!node) return null;
-	const link = (id: string, relation?: string): CardLink | null => {
+	const link = (id: string): CardLink | null => {
 		const n = byId.get(id);
-		return n ? { id, label: n.label, kind: n.kind, ...(relation ? { relation } : {}) } : null;
+		return n ? { id, label: n.label, kind: n.kind } : null;
 	};
-	const card: NodeCard = { id: node.id, kind: node.kind, title: node.label, related: [], parent: null, dependencies: [] };
+	const card: NodeCard = { id: node.id, kind: node.kind, title: node.label, parent: null, dependencies: [] };
 	if (node.summary) card.summary = node.summary;
 	if (node.domain) {
 		const d = graph.domains.find((x) => x.name === node.domain);
@@ -358,17 +357,6 @@ export function describeNode(graph: KbGraph, nodeId: string): NodeCard | null {
 		if (node.sectionId) {
 			const sec = byId.get(`sec:${node.sectionId}`);
 			if (sec) card.section = { id: sec.id, label: sec.label };
-		}
-		const seen = new Set<string>();
-		for (const e of graph.edges) {
-			if (e.kind !== "related") continue;
-			const other = e.source === node.id ? e.target : e.target === node.id ? e.source : null;
-			if (!other || other === node.id || seen.has(other)) continue;
-			const l = link(other, e.relation);
-			if (l) {
-				seen.add(other);
-				card.related.push(l);
-			}
 		}
 		const id = entryIdOfNode(node.id);
 		if (id) card.openHref = entryHref(id);

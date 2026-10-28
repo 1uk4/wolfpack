@@ -24,7 +24,6 @@ export type KbResult<T> = { ok: true; data: T } | { ok: false; reason: KbFailure
 export interface KbGraphOptions {
 	domain?: string;
 	archivedWork?: boolean;
-	wikilinks?: boolean;
 	denTopics?: boolean;
 }
 
@@ -86,7 +85,7 @@ export function openFeatureThread(wolf: string, workItemId: string): Promise<KbR
 export function fetchKbGraph(librarian: string, opts: KbGraphOptions = {}): Promise<KbResult<KbGraph>> {
 	const p = new URLSearchParams();
 	if (opts.domain) p.set("domain", opts.domain);
-	for (const k of ["archivedWork", "wikilinks", "denTopics"] as const) {
+	for (const k of ["archivedWork", "denTopics"] as const) {
 		if (opts[k] !== undefined) p.set(k, opts[k] ? "1" : "0");
 	}
 	const q = p.size ? `?${p}` : "";

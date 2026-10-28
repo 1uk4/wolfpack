@@ -75,11 +75,12 @@ describe("kb routes", { timeout: 30_000 }, () => {
     expect(g.domains).toEqual([{ name: "alpha", label: "Alpha Land", color: "#ff8800" }, { name: "beta", label: "Beta" }]);
 
     // each layer on its own, and the domain filter
-    const all = KbGraphSchema.parse(await (await get(url, `/v1/wolves/${name}/kb/graph?archivedWork=true&wikilinks=true&denTopics=true&domain=alpha`)).json());
-    expect(all.layers).toEqual({ archivedWork: true, wikilinks: true, denTopics: true });
+    const all = KbGraphSchema.parse(await (await get(url, `/v1/wolves/${name}/kb/graph?archivedWork=true&denTopics=true&domain=alpha`)).json());
+    expect(all.layers).toEqual({ archivedWork: true, denTopics: true });
     expect(all.domain).toBe("alpha");
     expect(all.nodes.some((n) => n.id === "work:work-alpha-OLD1111")).toBe(true);
-    expect(all.edges.some((e) => e.kind === "wikilink")).toBe(true);
+    expect(all.edges.every((e) => ["hierarchy", "partOf", "dependsOn"].includes(e.kind))).toBe(true);
+    expect(all.nodes.filter((n) => n.kind === "factory").map((n) => n.id)).toEqual(["fac:alpha"]);
 
     expect(hashTree(kb)).toEqual(before);
   });
@@ -91,7 +92,6 @@ describe("kb routes", { timeout: 30_000 }, () => {
     const g = KbGraphSchema.parse(await (await get(a.url, "/v1/wolves/dewey/kb/graph?denTopics=true")).json());
     expect(g.nodes.filter((n) => n.kind === "den-topic").map((n) => n.id)).toEqual(["den:dewey:caching", "den:dewey:secret"]);
     expect(g.nodes.find((n) => n.id === "den:dewey:secret")).toMatchObject({ wolf: "dewey", promotable: false });
-    expect(g.edges).toContainEqual({ source: "den:dewey:caching", target: "ent:kb-alpha-AAA1111", kind: "related", relation: "see_also" });
 
     // a second librarian with an empty den shows none of the first's topics
     const b = await boot({ name: "other", librarian: true, kb, withDen: false });
@@ -135,7 +135,7 @@ describe("kb routes", { timeout: 30_000 }, () => {
     const nope = await get(url, `/v1/wolves/${name}/kb/graph?domain=nope`);
     expect(nope.status).toBe(404);
     expect((await errorOf(nope)).code).toBe("not_found");
-    for (const q of ["wikilinks=1", "archivedWork=yes", "denTopics="]) {
+    for (const q of ["archivedWork=yes", "denTopics="]) {
       const r = await get(url, `/v1/wolves/${name}/kb/graph?${q}`);
       expect(r.status).toBe(400);
       expect((await errorOf(r)).code).toBe("invalid_request");
@@ -161,9 +161,9 @@ describe("kb routes", { timeout: 30_000 }, () => {
     dirs.push(kb);
     const { url, name } = await boot({ librarian: true, kb });
     const client = new HttpConsoleClient({ baseUrl: url });
-    const g = await client.getKbGraph(name, { domain: "alpha", wikilinks: true });
+    const g = await client.getKbGraph(name, { domain: "alpha" });
     expect(g.domain).toBe("alpha");
-    expect(g.layers.wikilinks).toBe(true);
+    expect(g.layers).toEqual({ archivedWork: false, denTopics: false });
     expect((await client.getKbEntry(name, "kb-alpha-AAA1111")).title).toBe("First");
     await expect(client.getKbEntry(name, "kb-alpha-nope")).rejects.toBeInstanceOf(NotFoundError);
     await expect(client.getKbGraph(name, { domain: "nope" })).rejects.toBeInstanceOf(NotFoundError);

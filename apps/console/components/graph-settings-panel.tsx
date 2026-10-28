@@ -187,7 +187,6 @@ export function GraphSettingsControl({
 							{(
 								[
 									["archivedWork", "Archived work"],
-									["wikilinks", "Wikilinks"],
 									["denTopics", "Den topics"],
 								] as const
 							).map(([key, label]) => (

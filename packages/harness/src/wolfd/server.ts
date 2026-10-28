@@ -41,7 +41,7 @@ import { disposeMemoryEvents, memoryEventsFor, type MemoryEventBus } from "../me
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { UnknownDomainError, buildKbGraph, readKbEntry } from "@wolfpack/kb/graph";
 import { readDenTopics } from "@wolfpack/memory";
-import { fetchWorkItem, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
+import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, readBound, readMemoryObservations, readMemoryStatus, readMemoryTopic, readWorkRecord, type MemoryReadConfig } from "./memory-read.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
 import { HttpError } from "./http-error.js";
@@ -571,8 +571,10 @@ export class WolfServer {
         // The den layer is this wolf's own den only, never another wolf's; with no den it reports itself off.
         const denTopics = flag("denTopics") && this.opts.den !== undefined;
         const den = denTopics && this.opts.den ? { wolf: this.name, topics: readDenTopics(this.opts.den) } : undefined;
+        // Work items come from the Work API; unreachable or unconfigured, the builder falls back to the KB work files.
+        const work = await fetchWorkSources(this.opts.work?.endpoint || process.env.WORK_ENDPOINT, this.opts.work?.token || process.env.WORK_TOKEN);
         try {
-          return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), wikilinks: flag("wikilinks"), denTopics, den }));
+          return this.json(res, 200, buildKbGraph(roots, { domain, archivedWork: flag("archivedWork"), denTopics, den, work }));
         } catch (e) {
           if (e instanceof UnknownDomainError) throw new HttpError("not_found", `domain ${e.domain}`);
           throw e;

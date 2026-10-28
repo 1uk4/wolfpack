@@ -50,10 +50,9 @@ export const GROUP_BY_OPTIONS: readonly GroupBy[] = ["domain", "section"];
  *  Open work and the KB itself are always on. */
 export interface GraphLayerToggles {
 	archivedWork: boolean;
-	wikilinks: boolean;
 	denTopics: boolean;
 }
-export const DEFAULT_GRAPH_LAYERS: GraphLayerToggles = { archivedWork: false, wikilinks: false, denTopics: false };
+export const DEFAULT_GRAPH_LAYERS: GraphLayerToggles = { archivedWork: false, denTopics: false };
 
 export interface GraphRenderSettings {
 	/** Semantic stamp for the size-unit pivot (2026-09-15): "world" =
@@ -115,7 +114,6 @@ export function sanitizeRenderSettings(raw: unknown): GraphRenderSettings {
 		groupBy: r.groupBy === "section" ? "section" : "domain",
 		layers: {
 			archivedWork: flag(layers.archivedWork, DEFAULT_GRAPH_LAYERS.archivedWork),
-			wikilinks: flag(layers.wikilinks, DEFAULT_GRAPH_LAYERS.wikilinks),
 			denTopics: flag(layers.denTopics, DEFAULT_GRAPH_LAYERS.denTopics),
 		},
 		domain: typeof r.domain === "string" && r.domain.trim() !== "" && r.domain.length <= 128 ? r.domain.trim() : null,

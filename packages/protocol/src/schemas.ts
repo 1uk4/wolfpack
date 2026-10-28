@@ -1020,10 +1020,10 @@ export type WorkRecordResponse = z.infer<typeof WorkRecordResponseSchema>;
 
 // ------------------------------------------------------------ KB graph
 
-export const KbNodeKindSchema = z.enum(["domain", "section", "entry", "work", "den-topic"]);
+export const KbNodeKindSchema = z.enum(["domain", "factory", "section", "entry", "work", "den-topic"]);
 export type KbNodeKind = z.infer<typeof KbNodeKindSchema>;
 
-/** One node. `id` is `dom:<domain>` | `sec:<sectionId>` | `ent:<entryId>` | `work:<workId>` | `den:<wolf>:<topicId>`. `depth` by kind: domain 0, section 1, entry 2, work 3, den topic 4. */
+/** One node. `id` is `dom:<domain>` | `fac:<domain>` | `sec:<sectionId>` | `ent:<entryId>` | `work:<workId>` | `den:<wolf>:<topicId>`. `depth` by kind: domain 0, factory 1, section 1, entry 2, work 3, den topic 4. */
 export const KbGraphNodeSchema = z.object({
   id: z.string(),
   kind: KbNodeKindSchema,
@@ -1045,22 +1045,20 @@ export const KbGraphNodeSchema = z.object({
 });
 export type KbGraphNode = z.infer<typeof KbGraphNodeSchema>;
 
-export const KbEdgeKindSchema = z.enum(["hierarchy", "partOf", "dependsOn", "related", "wikilink"]);
+export const KbEdgeKindSchema = z.enum(["hierarchy", "partOf", "dependsOn"]);
 export type KbEdgeKind = z.infer<typeof KbEdgeKindSchema>;
 
 export const KbGraphEdgeSchema = z.object({
   source: z.string(),
   target: z.string(),
   kind: KbEdgeKindSchema,
-  /** `related` only: the relation kind (see_also, refines, ...), or `work` for a den topic's work link. */
-  relation: z.string().optional(),
 });
 export type KbGraphEdge = z.infer<typeof KbGraphEdgeSchema>;
 
 export const KbGraphSchema = z.object({
   nodes: z.array(KbGraphNodeSchema),
   edges: z.array(KbGraphEdgeSchema),
-  layers: z.object({ archivedWork: z.boolean(), wikilinks: z.boolean(), denTopics: z.boolean() }),
+  layers: z.object({ archivedWork: z.boolean(), denTopics: z.boolean() }),
   /** The domain filter as applied; null = all. */
   domain: z.string().nullable(),
   domains: z.array(z.object({ name: z.string(), label: z.string(), color: z.string().optional() })),

@@ -294,10 +294,10 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("kbPipeline", { name: wolf }, ROUTES.kbPipeline.response.schema, undefined, wolf)) as KbPipelineResponse;
   }
 
-  async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; wikilinks?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {
+  async getKbGraph(wolf: string, opts: { domain?: string; archivedWork?: boolean; denTopics?: boolean } = {}): Promise<KbGraph> {
     const q = new URLSearchParams();
     if (opts.domain) q.set("domain", opts.domain);
-    for (const k of ["archivedWork", "wikilinks", "denTopics"] as const) if (opts[k] !== undefined) q.set(k, String(opts[k]));
+    for (const k of ["archivedWork", "denTopics"] as const) if (opts[k] !== undefined) q.set(k, String(opts[k]));
     const query = q.size ? `?${q}` : "";
     return (await this.json("getKbGraph", { name: wolf }, ROUTES.getKbGraph.response.schema, undefined, wolf, query)) as KbGraph;
   }

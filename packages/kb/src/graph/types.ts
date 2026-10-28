@@ -3,14 +3,14 @@
  * Mirrored by the zod schemas in @wolfpack/protocol (`KbGraphSchema`); a test parses the real builder output through them.
  */
 
-export type KbNodeKind = "domain" | "section" | "entry" | "work" | "den-topic";
+export type KbNodeKind = "domain" | "factory" | "section" | "entry" | "work" | "den-topic";
 
-/** Hierarchy depth by kind: domain 0, section 1, entry 2, work 3, den topic 4. */
+/** Hierarchy depth by kind: domain 0, factory 1, section 1, entry 2, work 3, den topic 4. */
 export type KbNodeDepth = 0 | 1 | 2 | 3 | 4;
-export const KB_NODE_DEPTH: Record<KbNodeKind, KbNodeDepth> = { domain: 0, section: 1, entry: 2, work: 3, "den-topic": 4 };
+export const KB_NODE_DEPTH: Record<KbNodeKind, KbNodeDepth> = { domain: 0, factory: 1, section: 1, entry: 2, work: 3, "den-topic": 4 };
 
 export interface KbGraphNode {
-  /** `dom:<domain>` | `sec:<sectionId>` | `ent:<entryId>` | `work:<workId>` | `den:<wolf>:<topicId>`. */
+  /** `dom:<domain>` | `fac:<domain>` | `sec:<sectionId>` | `ent:<entryId>` | `work:<workId>` | `den:<wolf>:<topicId>`. */
   id: string;
   kind: KbNodeKind;
   label: string;
@@ -38,20 +38,17 @@ export interface KbGraphNode {
   updated?: string;
 }
 
-export type KbEdgeKind = "hierarchy" | "partOf" | "dependsOn" | "related" | "wikilink";
+export type KbEdgeKind = "hierarchy" | "partOf" | "dependsOn";
 
 export interface KbGraphEdge {
-  /** `hierarchy`: parent → child (domain → section/orphan entry/root work, section → subsection/entry). `partOf`: child work → parent work. `dependsOn`: work → the work it depends on. `related`: entry → target as written in its relations. `wikilink`: entry whose body links → linked entry. */
+  /** `hierarchy`: parent → child (domain → section/orphan entry/factory, factory → root work, work → child work, section → subsection/entry). `partOf`: child work → parent work. `dependsOn`: work → the work it depends on. */
   source: string;
   target: string;
   kind: KbEdgeKind;
-  /** `related` only: the relation kind (see_also, refines, part_of, depends_on, ...). */
-  relation?: string;
 }
 
 export interface KbGraphLayers {
   archivedWork: boolean;
-  wikilinks: boolean;
   denTopics: boolean;
 }
 

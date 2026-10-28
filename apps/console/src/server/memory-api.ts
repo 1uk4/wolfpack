@@ -136,7 +136,7 @@ export function createMemoryApi(source: ClientSource) {
 			}
 		},
 
-		/** Query: `domain`, and the layer flags `archivedWork`, `wikilinks`, `denTopics` (`1`/`true`). */
+		/** Query: `domain`, and the layer flags `archivedWork`, `denTopics` (`1`/`true`). */
 		async kbGraph(librarian: string, params: URLSearchParams): Promise<Response> {
 			try {
 				const client = source();
@@ -144,7 +144,7 @@ export function createMemoryApi(source: ClientSource) {
 				const opts: Parameters<NonNullable<ConsoleClient["getKbGraph"]>>[1] = {};
 				const domain = params.get("domain");
 				if (domain) opts.domain = domain;
-				for (const k of ["archivedWork", "wikilinks", "denTopics"] as const) {
+				for (const k of ["archivedWork", "denTopics"] as const) {
 					const v = flag(params.get(k));
 					if (v !== undefined) opts[k] = v;
 				}

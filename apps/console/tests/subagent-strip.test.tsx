@@ -32,7 +32,6 @@ const { createActivityBridge } = await import("../src/server/needs-you-api.ts");
 const { SubagentModalProvider } = await import("../components/subagent-modal.tsx");
 const { SubagentStrip, SubagentStripView, useSubagentChildren } = await import("../components/subagent-strip.tsx");
 const { ActivitySection } = await import("../components/activity-dock.tsx");
-const { SubagentJobs } = await import("../components/subagent-jobs.tsx");
 const { SessionRow, SessionsSidebar } = await import("../components/sidebar.tsx");
 const { SidebarProvider } = await import("../components/sidebar.tsx");
 const { ServerEventsProvider } = await import("../components/server-events.tsx");
@@ -299,7 +298,7 @@ describe("the sidebar", () => {
 		assert.match(html, /ml-8/);
 		assert.match(html, /text-xs/);
 		assert.doesNotMatch(html.replace(/title="[^"]*"/, ""), /running · edit/); // no second line (the state is only a tooltip)
-		assert.match(html, /subagent-dot/);
+		assert.match(html, /braille-spinner/);
 	});
 
 	it("a feature row sits one step under Home with a guide line; Home does not", () => {
@@ -328,31 +327,26 @@ describe("the sidebar", () => {
 	});
 });
 
-describe("the job panel", () => {
-	const jobRows = [
-		{ id: "1uk4/home", title: "Home" },
-		child(1),
-		child(2, { state: "queued", queuePosition: 1, startedAt: undefined }),
-		child(3, { state: "done", finishedAt: ago(1000) }),
-	] as never[];
+describe("the compact subagent row", () => {
+	const html = (over: Partial<ThreadSummary>) => {
+		const r = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [child(1, over)] }])[0] as never;
+		return renderToStaticMarkup(<AppRouterContext.Provider value={{ push() {}, prefetch() {} } as never}><SessionRow chat={r} active={false} onOpen={() => {}} nested /></AppRouterContext.Provider>);
+	};
 
-	it("draws nothing without subagents", () => {
-		assert.equal(renderToStaticMarkup(<SubagentJobs rows={[{ id: "1uk4/home", title: "Home" }] as never[]} onOpen={() => {}} now={NOW} />), "");
+	it("the running row animates the braille glyph; waiting/queued stays still and muted", () => {
+		const run = html({});
+		assert.match(run, /braille-frame/);
+		assert.match(run, /data-frame="9"/);
+		const wait = html({ state: "queued", queuePosition: 1, startedAt: undefined });
+		assert.doesNotMatch(wait, /braille-frame/);
+		assert.match(wait, /braille-spinner/);
+		assert.match(wait, /text-muted-foreground\/60/);
+		assert.match(wait, /queued #1/); // full state in the tooltip
 	});
 
-	it("lists running and queued with the task link; settled ones are not listed anywhere", async () => {
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		root = createRoot(host);
-		const opened: string[] = [];
-		await act(async () => root!.render(<AppRouterContext.Provider value={{ push() {}, prefetch() {} } as never}><SubagentJobs rows={jobRows} onOpen={(j) => void opened.push((j as { id: string }).id)} now={NOW} /></AppRouterContext.Provider>)); 
-		assert.equal(qa('[data-testid="subagent-job"]').length, 2);
-		assert.match(q('[data-testid="subagent-jobs"]')!.textContent!, /queued #1/);
-		assert.equal(q('[data-testid="subagent-job-task"]')!.getAttribute("href"), "/kb/work/work-1");
-		assert.equal(q('[data-testid="subagent-jobs-done-toggle"]'), null);
-		assert.doesNotMatch(q('[data-testid="subagent-jobs"]')!.textContent!, /done|\bfailed\b/);
-		await click(qa('[data-testid="subagent-job"] button')[0]!);
-		assert.deepEqual(opened, ["1uk4/sub-1"]);
+	it("the task it serves is a link on the row, and the old Subagents panel is gone", () => {
+		assert.match(html({}), /href="\/kb\/work\/work-1"/);
+		assert.doesNotMatch(html({}), /subagent-jobs/);
 	});
 });
 
@@ -537,24 +531,6 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 	}
 	(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
 	const rowButton = (title: string) => qa("button").find((b) => b.textContent?.includes(title))!;
-
-	it("the job panel's onOpen opens the modal with the row's wolf", async () => {
-		const urls: string[] = [];
-		globalThis.fetch = (async (input: RequestInfo | URL) => (urls.push(new URL(String(input), "http://t").pathname), new Response("{}", { status: 404 }))) as typeof fetch;
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		root = createRoot(host);
-		const { useSubagentModal } = await import("../components/subagent-modal.tsx");
-		function Jobs() {
-			const { openSubagent } = useSubagentModal();
-			return <SubagentJobs rows={[child(1, { meta: "1uk4" } as never)] as never[]} onOpen={(j) => openSubagent((j as { id: string }).id, (j as { meta?: string }).meta)} now={NOW} />;
-		}
-		await act(async () => root!.render(<AppRouterContext.Provider value={{ push() {}, prefetch() {} } as never}><ServerEventsProvider connect={eventsSource}><SubagentModalProvider><Jobs /></SubagentModalProvider></ServerEventsProvider></AppRouterContext.Provider>));
-		await click(qa('[data-testid="subagent-job"] button')[0]!);
-		await settle();
-		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
-		assert.ok(urls.some((u) => u.startsWith("/api/wolves/1uk4/threads/sub-1")));
-	});
 
 	it("a sidebar child row click opens the modal and does not navigate", async () => {
 		const pushed: string[] = [];

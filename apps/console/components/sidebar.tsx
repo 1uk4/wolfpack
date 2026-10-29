@@ -7,7 +7,6 @@ import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
-import { SubagentJobs } from "@/components/subagent-jobs";
 import { useSubagentModal } from "@/components/subagent-modal";
 import { NeedsYouNotifier, NotifyToggle } from "@/components/needs-you";
 import { LhMark } from "@/components/lh-mark";
@@ -304,28 +303,43 @@ export function SessionRow({
 	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
 	const home = chat.kind === "home";
 	if (nested) {
-		// Compact subagent row: `name · agent`, one line, a small dot for running/waiting/queued.
-		const dot = chat.state === "running" ? "bg-primary" : "bg-muted-foreground/50";
+		// Compact subagent row: `name · agent`, one line. The braille glyph in front animates only while running
+		// (waiting/queued: the same glyph at rest, muted). The task it serves is a small link at the end.
+		const running = chat.state === "running";
 		return (
-			<button
-				type="button"
-				onClick={onOpen}
-				onContextMenu={onContextMenu}
-				data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
-				data-compact="true"
-				title={sessionMeta(chat)}
+			<div
 				className={cn(
-					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border py-0.5 pl-2 pr-2 text-left text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
+					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border pl-2 pr-2 text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
 					active && "bg-accent text-foreground",
 					kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 				)}
 			>
-				<span data-testid="subagent-dot" aria-label={stateLabel(chat)} className={cn("size-1.5 shrink-0 rounded-full", dot)} />
-				<span className="min-w-0 flex-1 truncate">
-					<span className="font-prose">{chat.title}</span>
-					<span> · {chat.agent ?? "agent"}</span>
-				</span>
-			</button>
+				<button
+					type="button"
+					onClick={onOpen}
+					onContextMenu={onContextMenu}
+					data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
+					data-compact="true"
+					data-state={chat.state ?? ""}
+					title={sessionMeta(chat)}
+					className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left"
+				>
+					{running ? (
+						<BrailleSpinner className="h-[1.25em] text-foreground" label={stateLabel(chat)} />
+					) : (
+						<BrailleSpinner still className="h-[1.25em] text-muted-foreground/60" label={stateLabel(chat)} />
+					)}
+					<span className="min-w-0 flex-1 truncate">
+						<span className="font-prose">{chat.title}</span>
+						<span> · {chat.agent ?? "agent"}</span>
+					</span>
+				</button>
+				{chat.taskId && (
+					<Link href={`/kb/work/${encodeURIComponent(chat.taskId)}`} data-testid="subagent-task-link" title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
+						task
+					</Link>
+				)}
+			</div>
 		);
 	}
 	return (
@@ -897,8 +911,6 @@ export function SessionsSidebar() {
 					    populates and grows when processes run. The session list is
 					    flex-1, so this pins to the bottom. Sidebar closed = the
 					    learner opted out (no ambient signal, user decision). */}
-					{/* The wolf's subagents (wolfd): running, queued and done, with the task each serves. */}
-					<SubagentJobs rows={chats ?? []} onOpen={(c) => openSubagent(c.id, c.meta)} />
 					{/* The legacy session-job feed: only drawn while a non-wolfd job runs. */}
 					<ActivitySection hideWhenEmpty />
 

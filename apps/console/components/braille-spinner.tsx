@@ -37,11 +37,14 @@ export const SPINNER_FRAMES = FRAMES.length;
 export function BrailleSpinner({
 	className,
 	label = "Working",
+	still = false,
 }: {
 	/** Sizing/position classes; height drives the scale (width is the cell's 1:2 aspect). */
 	className?: string;
 	/** The accessible name of the state this spinner announces. */
 	label?: string;
+	/** Frame 0 only, no animation: the same glyph at rest (a waiting/queued job). */
+	still?: boolean;
 }) {
 	return (
 		<svg
@@ -51,10 +54,10 @@ export function BrailleSpinner({
 			aria-label={label}
 			className={cn("h-3 w-auto shrink-0 text-foreground", className)}
 		>
-			{FRAMES.map((frame, k) => (
+			{(still ? FRAMES.slice(0, 1) : FRAMES).map((frame, k) => (
 				<g
 					key={k}
-					className="braille-frame"
+					className={still ? undefined : "braille-frame"}
 					data-frame={k}
 					style={{ animationDelay: `${k * SPINNER_FRAME_MS}ms` }}
 				>

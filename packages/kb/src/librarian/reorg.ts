@@ -28,7 +28,7 @@ import { withKbLock } from "./lock.js";
 import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, listEntryIds, currentTreeStart, fillMissingCentroids, engineNamer, type RebuildPlan } from "./rebuild.js";
 import { commitRebuild } from "./rebuild-commit.js";
 import { recoverAndRender } from "./rebuild-recover.js";
-import { enginePartitioner, fileSplitCache, type SplitCache } from "./llm-split.js";
+import { enginePartitioner, fileSplitCache, freshOrCached, type SplitCache } from "./llm-split.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -66,6 +66,10 @@ export interface ReorgOptions {
   approvedCrossMoves?: string[];
   /** Test seam: where LLM split proposals are cached (default: split-cache.json in the den-local dir, shared by --dry-run and --yes). */
   splitCache?: SplitCache;
+  /** With rebuild: ignore cached split proposals and ask the LLM again, overwriting the cache entries (for a dry run that wants new proposals). */
+  freshSplit?: boolean;
+  /** With rebuild: commit although some section's split was proposed afresh (a cache miss since the dry run) instead of by the proposal the owner reviewed. */
+  allowUncachedSplit?: boolean;
   /** With rebuild: commit although some section's split was decided by the k-means fallback (the LLM call failed). */
   allowKmeansFallback?: boolean;
   /** With rebuild: commit even if the new tree has fewer than half the current sections. */
@@ -569,7 +573,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
           domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves, approvedCrossMoves: opts.approvedCrossMoves,
-          partitioner: enginePartitioner(engine), splitCache: opts.splitCache ?? fileSplitCache(join(roots.denLocal, "split-cache.json")), diagnostics: opts.dryRun,
+          partitioner: enginePartitioner(engine), splitCache: freshOrCached(opts.splitCache ?? fileSplitCache(join(roots.denLocal, "split-cache.json")), !!opts.freshSplit), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,
         });
@@ -586,7 +590,13 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         // The proposals the owner approved were cached by the dry run (den-local split-cache.json, keyed by member set), so this
         // commit reproduces them. A miss means the member set changed since (or no dry run was done): say so.
         const asked = plan.judged.filter((j) => j.source === "llm" && j.cached === false);
-        if (asked.length) notify?.(`  ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again; the tree may differ from the approved proposal: ${asked.map((j) => j.id).join(", ")}`);
+        if (asked.length) {
+          const list = asked.map((j) => j.id).join(", ");
+          if (!opts.allowUncachedSplit) {
+            throw new Error(`rebuild: ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again and the tree may differ from the proposal you reviewed (${list}); aborting before any write. Re-run \`rebuild ${domain} --dry-run\`, review the new proposal, then \`--yes\`; or pass --allow-uncached-split to commit this plan as it is`);
+          }
+          notify?.(`  ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again; the tree may differ from the approved proposal (--allow-uncached-split): ${list}`);
+        }
         const fell = plan.judged.filter((j) => j.fallbackReason);
         if (fell.length && !opts.allowKmeansFallback) {
           throw new Error(`rebuild: ${fell.length} section(s) fell back to k-means because the LLM split proposal failed (${fell.map((j) => `${j.id}: ${j.fallbackReason}`).join("; ")}); aborting before any write. Re-run, or pass --allow-kmeans-fallback to accept the k-means grouping`);

@@ -45,6 +45,11 @@ export function fileSplitCache(path: string): SplitCache {
  */
 export const PROMPT_VERSION = "split-v1";
 
+/** `--fresh-split`: reads miss (so the LLM is asked again) but writes go through, overwriting the stored entries. */
+export function freshOrCached(cache: SplitCache, fresh: boolean): SplitCache {
+  return fresh ? { get: () => undefined, set: (k, v) => cache.set(k, v) } : cache;
+}
+
 /** Cache key: the prompt version, the domain and the SORTED member ids (titles are not part of the key). */
 export function splitCacheKey(domain: string, memberIds: string[]): string {
   return createHash("sha256").update(PROMPT_VERSION + "\u0000" + domain + "\u0000" + [...memberIds].sort().join("\u0000")).digest("hex").slice(0, 24);

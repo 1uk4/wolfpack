@@ -328,7 +328,7 @@ describe("k-means fallback gate on a real rebuild", () => {
 });
 
 describe("dry run and --yes share a file-backed split cache", () => {
-  it("--yes reproduces the approved dry-run plan without asking the LLM again; a changed entry set is re-asked and said so", async () => {
+  it("--yes reproduces the approved dry-run plan without asking the LLM again; a changed entry set aborts before any write unless --allow-uncached-split; --fresh-split bypasses and overwrites the cache", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } = await import("node:fs");
     const { reorg } = await import("./reorg.js");
     const base = mkdtempSync(join(tmpdir(), "kb-sharedcache-"));
@@ -363,13 +363,37 @@ describe("dry run and --yes share a file-backed split cache", () => {
       expect(dry.plans![0].state.sections.length).toBe(4);
       expect(JSON.parse(readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8")).filter((s: { domain: string }) => s.domain === "wp").length).toBe(4);
 
-      // a different entry set (one entry added) is a different cache key: --yes asks again and says so
+      // a different entry set (one entry added) is a different cache key: --yes aborts before any write, naming the fix
       const extra = { ...make([1], 77)[0], id: "e950", title: "late entry", vector: es[0].vector };
       put(extra); byTitle.set(extra.title, extra.vector);
-      const notes2: string[] = [];
-      await reorg({ ...common, rebuildFrom: "scratch", notify: (m) => notes2.push(m) });
+      const sectionsBefore = readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8");
+      await expect(reorg({ ...common })).rejects.toThrow(/not in the dry-run cache.*aborting before any write.*--dry-run.*--allow-uncached-split/);
+      expect(splitCalls).toBe(2); // it did ask (that is how it found out) ...
+      expect(readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8")).toBe(sectionsBefore); // ... but wrote nothing
+      expect(readFileSync(join(eDir, "e950.md"), "utf-8")).toContain("section: sec-wp-old000");
+      // the operator reviews a new dry run (which caches the new proposal), then --yes reproduces it with no ask
+      await reorg({ ...common, dryRun: true });
+      expect(splitCalls).toBe(2); // cached by the aborted run
+      await reorg({ ...common });
       expect(splitCalls).toBe(2);
-      expect(notes2.some((m) => /not in the dry-run cache, so the LLM was asked again/.test(m))).toBe(true);
+      // --allow-uncached-split commits an uncached plan, with the notice
+      const extra2 = { ...make([1], 78)[0], id: "e951", title: "later entry", vector: es[1].vector };
+      put(extra2); byTitle.set(extra2.title, extra2.vector);
+      const notes2: string[] = [];
+      await reorg({ ...common, allowUncachedSplit: true, notify: (m) => notes2.push(m) });
+      expect(splitCalls).toBe(3);
+      expect(notes2.some((m) => /not in the dry-run cache, so the LLM was asked again.*--allow-uncached-split/.test(m))).toBe(true);
+
+      // --fresh-split ignores cached proposals and overwrites them (dry run: no abort rule applies)
+      const before = splitCalls;
+      await reorg({ ...common, dryRun: true });
+      expect(splitCalls).toBe(before); // cached
+      await reorg({ ...common, dryRun: true, freshSplit: true });
+      expect(splitCalls).toBe(before + 1);
+      await reorg({ ...common, dryRun: true });
+      expect(splitCalls).toBe(before + 1); // the fresh answer was written back and is now what is cached
+      // and --yes with --fresh-split counts as uncached unless allowed
+      await expect(reorg({ ...common, freshSplit: true })).rejects.toThrow(/not in the dry-run cache/);
     } finally { rmSync(base, { recursive: true, force: true }); }
   }, 120_000);
 });

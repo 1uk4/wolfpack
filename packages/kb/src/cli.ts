@@ -20,6 +20,9 @@
  *                     Refinement moves apply only inside one top-level section; moves into another are
  *                     listed in the proposal and applied only with --apply-cross-moves (all) or
  *                     --approve-move <entryId> (repeatable: just those; the rest stay listed).
+ *                     --yes also aborts if any judged section was not in the dry-run split cache (the LLM was
+ *                     asked again, so the tree may differ from the proposal reviewed) unless --allow-uncached-split;
+ *                     --fresh-split ignores and overwrites cached proposals (for a dry run wanting new ones).
  *                     --yes aborts if any section's split fell back to k-means (LLM call failed) unless
  *                     --allow-kmeans-fallback; the proposal always lists fallbacks.
  *                     --yes commits after saving timestamped backups in the den-local dir:
@@ -479,7 +482,7 @@ async function cmdRebuild(): Promise<void> {
   }
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback] [--allow-uncached-split] [--fresh-split]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
     process.exit(1);
   }
 
@@ -508,6 +511,8 @@ async function cmdRebuild(): Promise<void> {
     rebuildFrom,
     allowCollapse: argv.includes("--allow-collapse"),
     allowKmeansFallback: argv.includes("--allow-kmeans-fallback"),
+    allowUncachedSplit: argv.includes("--allow-uncached-split"),
+    freshSplit: argv.includes("--fresh-split"),
     applyCrossMoves: argv.includes("--apply-cross-moves"),
     approvedCrossMoves: approvedMoves,
     dryRun,
@@ -606,7 +611,7 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <id>...] [--allow-kmeans-fallback] | rebuild --restore <ts> --yes\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <id>...] [--allow-kmeans-fallback] [--allow-uncached-split] [--fresh-split] | rebuild --restore <ts> --yes\n" +
   "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 

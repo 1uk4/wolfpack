@@ -16,10 +16,14 @@
   "dependencies": {
     "@wolfpack/kb": "*",
     "@wolfpack/memory": "*",
-    "@wolfpack/protocol": "*"
+    "@wolfpack/protocol": "*",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
+  },
+  "bin": {
+    "hubd": "dist/cli.js"
   }
 }

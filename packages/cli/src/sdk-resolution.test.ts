@@ -103,7 +103,7 @@ describe("harness bundle with the bridge", () => {
     const { stubBridgeSdkPlugin } = await import("./bundle.js");
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-bundle-"));
     try {
-      const entry = path.join(repoRoot, "packages/harness/src/wolfd/models.ts");
+      const entry = path.join(repoRoot, "packages/harness/src/providers/claude-bridge.ts");
       const file = path.join(out, "b.cjs");
       await esbuild.build({
         entryPoints: [entry], outfile: file, bundle: true, platform: "node", format: "cjs", target: "node20",
@@ -111,7 +111,7 @@ describe("harness bundle with the bridge", () => {
       });
       expect(fs.readFileSync(file, "utf8")).not.toMatch(/require\("@anthropic-ai\/claude-agent-sdk"\)/);
       // Loads from an empty dir with no NODE_PATH, i.e. without the SDK resolvable.
-      const res = execFileSync(process.execPath, ["-e", `const m=require(${JSON.stringify(file)});console.log("RESULT:"+typeof m.createBridgeModels)`], { cwd: out, env: { ...process.env, NODE_PATH: "" }, encoding: "utf8" });
+      const res = execFileSync(process.execPath, ["-e", `const m=require(${JSON.stringify(file)});console.log("RESULT:"+typeof m.claudeBridgeFactory)`], { cwd: out, env: { ...process.env, NODE_PATH: "" }, encoding: "utf8" });
       expect(res).toContain("RESULT:function");
     } finally {
       fs.rmSync(out, { recursive: true, force: true });

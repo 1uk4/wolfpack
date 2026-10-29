@@ -61,7 +61,7 @@ export interface StartWolfOptions {
   log?: (line: string) => void;
   /** @internal test seam: replaces the model registry derived from the transport (e.g. a scripted provider). */
   models?: Models;
-  /** @internal test seam: replaces the model provider's per-conversation release (default: the bridge's, or a no-op on the API). */
+  /** @internal test seam: replaces the model provider's per-conversation release (default: the registry's generic forget). */
   modelRelease?: (sessionId: string) => void;
   /**
    * @internal test seam: extra engine extensions installed beside the configured tools (e.g. generation hooks).
@@ -181,7 +181,7 @@ async function startConfigured(
   if (opts.socket) await prepareSocketPath(opts.socket);
 
   mkdirSync(config.den, { recursive: true });
-  const wolfModels = opts.models ? { models: opts.models, shutdown: () => {}, release: () => {} } : buildWolfModels(model, { cwd, env });
+  const wolfModels = opts.models ? { models: opts.models, dispose: () => {}, forget: () => {} } : buildWolfModels(table, { cwd, env });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
     ...(wolfModels.models ? { models: wolfModels.models } : {}),
     extensions,
@@ -250,7 +250,7 @@ async function startConfigured(
         releaseOwner: (taskId) => engine.conversations.releaseOwner(taskId),
         releaseModel: async (conversationId) => {
           const sessionId = await engine.conversations.providerSessionId(conversationId);
-          if (sessionId) (opts.modelRelease ?? wolfModels.release)(sessionId);
+          if (sessionId) (opts.modelRelease ?? wolfModels.forget)(sessionId);
         },
         createOwned: (ownerId, init) => engine.conversations.createOwned(ownerId, { ...desired, ...init }),
         resolveTier: (tier) => {
@@ -287,14 +287,14 @@ async function startConfigured(
         if (sweepTimer) clearInterval(sweepTimer);
         await server.close();
         await engine.close();
-        wolfModels.shutdown();
+        wolfModels.dispose();
         await sandbox?.close();
         restoreEnv();
       },
     };
   } catch (e) {
     await engine.close().catch(() => {});
-    wolfModels.shutdown();
+    wolfModels.dispose();
     throw e;
   }
 }

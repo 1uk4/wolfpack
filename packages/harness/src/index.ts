@@ -79,7 +79,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   const table = loadWolfModels(config);
   // On subscription, engine steps (memory, consolidation, KB sweep) run on the
   // Max plan through the Agent SDK; the main agent uses the pi-claude-bridge
-  // provider on the same plan (selectMainModel), with the API key as fallback.
+  // provider on the same plan (selectMainModel).
   if (table.transport === "subscription" && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     throw new Error(
       `${config.name} is on transport: subscription but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
@@ -100,11 +100,10 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
     mkdirSync(wolfDen, { recursive: true });
     console.log(`[harness] SANDBOX: den=${wolfDen} KB_OPS=${sandbox.resolved.kbOps} WORK_ENDPOINT=${sandbox.resolved.workEndpoint}`);
   }
-  // Main agent provider: Max subscription via the bridge, else the API key (also if the bridge fails to start).
+  // Main agent provider: whatever the main tier names (providers/index.ts); a provider that cannot start fails startup.
   let rootId: string | undefined;
   const mainModel = await selectMainModel({ table, cwd: wolfDen });
   console.log(`[harness] ${mainModel.line}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
-  if (mainModel.warning) console.warn(`[harness] ${mainModel.warning}`);
   const models = mainModel.models;
 
   // Registry with CodingTools + wolf identity + wolf extensions
@@ -317,7 +316,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
         await harness.close(context);
       } finally {
         // The conversation ended: close its parked claude child, then everything else the bridge holds.
-        try { if (rootId) mainModel.release(rootId); } finally { mainModel.shutdown(); }
+        try { if (rootId) mainModel.forget(rootId); } finally { mainModel.dispose(); }
         await sandbox?.close();
         restoreEnv();
       }

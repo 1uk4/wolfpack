@@ -31,7 +31,7 @@ describe("the real harness bundle", () => {
     expect(fs.readFileSync(built.wolfYamlPath, "utf8")).toMatch(/live: true/);
     expect((await smokeCheckBundle(built.harnessPath)).ok).toBe(true);
     const r = await smokeStartBundle(built);
-    expect(r.output).toMatch(/Main agent via API key \(transport api\)/);
+    expect(r.output).toMatch(/Main agent via anthropic/);
     expect(r.ok).toBe(true);
   }, 120_000);
 });
@@ -45,7 +45,7 @@ describe("the real harness bundle on subscription", () => {
     const built = await buildHarnessBundle({ name: "smokey", role: "tester", extensions: [], models: table }, "abc123");
     try {
       const r = await smokeStartBundle(built, { expectBridge: true });
-      expect(r.output).toContain("Main agent via Max subscription (claude-bridge)");
+      expect(r.output).toContain("Main agent via claude-bridge");
       expect(r.output).toContain("provider=claude-bridge");
       expect(r.ok).toBe(true);
     } finally {

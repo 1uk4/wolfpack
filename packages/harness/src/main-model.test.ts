@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { selectMainModel, startRoot } from "./main-model.js";
-import { createBridgeModels, guardProviderStreams } from "./wolfd/models.js";
+import { buildModelRegistry, guardProviderStreams } from "./wolfd/models.js";
 
 const MODEL = "claude-sonnet-5-5";
-const table = (transport: "api" | "subscription", model = MODEL) => ({ transport, tiers: { main: { model } } }) as never;
+const table = (provider: "anthropic" | "claude-bridge", model = MODEL) => ({ transport: provider === "anthropic" ? "api" : "subscription", tiers: { main: { model, provider, piProvider: provider, piModel: `${provider}/${model}` } } }) as never;
 
 /** A real pi-ai provider (so the registry's getModel works) with a one-model table and spy shutdown/release. */
 const fakeProvider = (ids: string[] = [MODEL], stream: () => never = () => { throw new Error("unused"); }) => {
@@ -14,108 +14,63 @@ const fakeProvider = (ids: string[] = [MODEL], stream: () => never = () => { thr
 };
 
 const base = { cwd: "/tmp", loadSdkQuery: async () => () => {} };
-const sub = { CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
+const seam = (createProvider: () => unknown) => ({ "claude-bridge": { createProvider } });
 
 describe("selectMainModel", () => {
-  it("subscription + token → the bridge, with the resolved SDK query injected", async () => {
+  it("bridge tier → the bridge, with the resolved SDK query injected", async () => {
     const createProviderFn = vi.fn(() => fakeProvider());
     const query = () => {};
-    const c = await selectMainModel({ ...base, loadSdkQuery: async () => query, table: table("subscription"), env: sub, createProvider: createProviderFn });
-    expect(c.via).toBe("bridge");
+    const c = await selectMainModel({ ...base, loadSdkQuery: async () => query, table: table("claude-bridge"), env: {}, seams: seam(createProviderFn) });
     expect(c.model).toEqual({ provider: "claude-bridge", modelId: MODEL });
-    expect(c.line).toBe("Main agent via Max subscription (claude-bridge)");
+    expect(c.line).toBe("Main agent via claude-bridge");
     expect((createProviderFn.mock.calls[0] as unknown[])[0]).toMatchObject({ queryFn: query });
   });
 
-  it("api transport → anthropic, bridge never created", async () => {
-    const createProviderFn = vi.fn(() => fakeProvider());
-    const c = await selectMainModel({ ...base, table: table("api"), env: { CLAUDE_CODE_OAUTH_TOKEN: "t" }, createProvider: createProviderFn });
-    expect(c.via).toBe("api");
+  it("anthropic tier → anthropic only; the SDK is never loaded and the bridge never created", async () => {
+    const loadSdkQuery = vi.fn(async () => () => {});
+    const createProviderFn = vi.fn();
+    const c = await selectMainModel({ ...base, loadSdkQuery, table: table("anthropic"), env: {}, seams: seam(createProviderFn) });
     expect(c.model).toEqual({ provider: "anthropic", modelId: MODEL });
-    expect(c.line).toBe("Main agent via API key (transport api)");
+    expect(c.models.getProvider("claude-bridge")).toBeUndefined();
+    expect(loadSdkQuery).not.toHaveBeenCalled();
     expect(createProviderFn).not.toHaveBeenCalled();
   });
 
-  it("subscription without a token → anthropic with the reason", async () => {
-    const createProviderFn = vi.fn(() => fakeProvider());
-    const c = await selectMainModel({ ...base, table: table("subscription"), env: {}, createProvider: createProviderFn });
-    expect(c.via).toBe("api");
-    expect(c.line).toContain("no CLAUDE_CODE_OAUTH_TOKEN");
-    expect(createProviderFn).not.toHaveBeenCalled();
+  it("a provider that fails to start fails startup (no silent spill onto the metered key)", async () => {
+    await expect(selectMainModel({ ...base, table: table("claude-bridge"), env: {}, seams: seam(() => { throw new Error("boom"); }) })).rejects.toThrow(/claude-bridge.*boom/);
+    await expect(selectMainModel({ ...base, loadSdkQuery: async () => { throw new Error("no sdk"); }, table: table("claude-bridge"), env: {} })).rejects.toThrow(/no sdk/);
   });
 
-  it("bridge init throws → anthropic with a warning", async () => {
-    const c = await selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => { throw new Error("boom"); } });
-    expect(c.via).toBe("api");
-    expect(c.model.provider).toBe("anthropic");
-    expect(c.warning).toContain("boom");
+  it("a main model id missing from the provider table is refused and the half-built provider is disposed", async () => {
+    const p = fakeProvider(["other-model"]);
+    await expect(selectMainModel({ ...base, table: table("claude-bridge"), env: {}, seams: seam(() => p) })).rejects.toThrow(/not in the claude-bridge model table/);
+    expect(p.shutdown).toHaveBeenCalledOnce();
   });
 
-  it("Agent SDK not loadable → anthropic with a warning", async () => {
-    const c = await selectMainModel({ ...base, loadSdkQuery: async () => { throw new Error("sdk missing"); }, table: table("subscription"), env: sub, createProvider: () => fakeProvider() });
-    expect(c.via).toBe("api");
-    expect(c.warning).toContain("sdk missing");
-  });
-
-  it("a main model id missing from the bridge table → anthropic with the reason, and the half-built bridge is shut down", async () => {
-    const provider = fakeProvider(["other-model"]);
-    const c = await selectMainModel({ ...base, table: table("subscription", "claude-unknown-9"), env: sub, createProvider: () => provider });
-    expect(c.via).toBe("api");
-    expect(c.model).toEqual({ provider: "anthropic", modelId: "claude-unknown-9" });
-    expect(c.line).toContain("claude-unknown-9");
-    expect(c.warning).toMatch(/not in the claude-bridge model table/);
-    expect(provider.shutdown).toHaveBeenCalledOnce();
-  });
-
-  it("release and shutdown reach the bridge; shutdown is idempotent; both are no-ops on the API", async () => {
-    const provider = fakeProvider();
-    const c = await selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => provider });
-    c.release("sess-1");
-    expect(provider.release).toHaveBeenCalledWith("sess-1");
-    c.shutdown(); c.shutdown();
-    expect(provider.shutdown).toHaveBeenCalledOnce();
-    const api = await selectMainModel({ ...base, table: table("api"), env: {} });
-    expect(() => { api.release("x"); api.shutdown(); }).not.toThrow();
-  });
-
-  it("while on the bridge, a stored provider \"anthropic\" ref resolves to the bridge model; after fallback it resolves on anthropic", async () => {
-    const c = await selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => fakeProvider() });
-    expect(c.models.getModel("anthropic", MODEL)?.provider).toBe("claude-bridge");
-    c.fallBackToApi("test");
-    expect(c.via).toBe("api");
-    expect(c.models.getModel("anthropic", MODEL)?.provider).toBe("anthropic");
-    expect(c.models.getModel("claude-bridge", MODEL)?.provider).toBe("anthropic"); // reverse alias
+  it("forget and dispose reach the provider", async () => {
+    const p = fakeProvider();
+    const c = await selectMainModel({ ...base, table: table("claude-bridge"), env: {}, seams: seam(() => p) });
+    c.forget("sess-1");
+    expect(p.release).toHaveBeenCalledWith("sess-1");
+    c.dispose();
+    expect(p.shutdown).toHaveBeenCalledOnce();
   });
 });
 
 describe("startRoot", () => {
-  const bridgeChoice = () => selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => fakeProvider() });
-
-  it("configure failure on the bridge → falls back to the API key and reconfigures on anthropic", async () => {
-    const c = await bridgeChoice();
-    const configure = vi.fn().mockRejectedValueOnce(new Error("model not found")).mockResolvedValue(undefined);
-    const warn = vi.fn();
-    await startRoot(c, async () => ({ configure }), undefined, {}, { warn });
-    expect(c.via).toBe("api");
-    expect(configure).toHaveBeenCalledTimes(2);
-    expect(configure.mock.calls[0]![0].model.provider).toBe("claude-bridge");
-    expect(configure.mock.calls[1]![0].model).toEqual({ provider: "anthropic", modelId: MODEL });
-    expect(warn.mock.calls.join("\n")).toMatch(/falling back to the API key/);
+  const choice = { model: { provider: "claude-bridge", modelId: MODEL } } as never;
+  it("opens on the chosen model and re-applies it with the thinking level", async () => {
+    const configure = vi.fn(async () => {});
+    const open = vi.fn(async () => ({ configure }));
+    await startRoot(choice, open, "low", "ctx");
+    expect(open).toHaveBeenCalledWith({ model: { provider: "claude-bridge", modelId: MODEL } });
+    expect(configure).toHaveBeenCalledWith({ model: { provider: "claude-bridge", modelId: MODEL }, thinkingLevel: "low" }, "ctx");
   });
-
-  it("opening the root on the bridge fails → falls back and opens again on anthropic", async () => {
-    const c = await bridgeChoice();
-    const open = vi.fn().mockRejectedValueOnce(new Error("no model")).mockResolvedValue({ configure: async () => {} });
-    await startRoot(c, open, undefined, {}, { warn: () => {} });
-    expect(open.mock.calls[1]![0].model.provider).toBe("anthropic");
-  });
-
-  it("a healthy bridge stays on the bridge", async () => {
-    const c = await bridgeChoice();
-    const configure = vi.fn().mockResolvedValue(undefined);
-    await startRoot(c, async () => ({ configure }), "low", {}, { warn: () => {} });
-    expect(c.via).toBe("bridge");
-    expect(configure).toHaveBeenCalledOnce();
+  it("a configure failure is logged, not fatal; an open failure propagates", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(startRoot(choice, async () => ({ configure: async () => { throw new Error("x"); } }), undefined, "ctx")).resolves.toBeDefined();
+    await expect(startRoot(choice, async () => { throw new Error("open"); }, undefined, "ctx")).rejects.toThrow("open");
+    err.mockRestore();
   });
 });
 
@@ -133,29 +88,10 @@ describe("guardProviderStreams: a throwing provider reports an error stream even
   });
 });
 
-describe("aliases", () => {
-  it("on the API, a stored claude-bridge ref resolves to the anthropic model with the same id (no token / api transport)", async () => {
-    for (const c of [await selectMainModel({ ...base, table: table("subscription"), env: {} }), await selectMainModel({ ...base, table: table("api"), env: {} })]) {
-      expect(c.via).toBe("api");
-      expect(c.models.getModel("claude-bridge", MODEL)?.provider).toBe("anthropic");
-    }
-  });
-
-  it("an alias miss warns naming provider and id, once, and returns undefined", async () => {
-    const warn = vi.fn();
-    const c = await selectMainModel({ ...base, table: table("subscription"), env: sub, createProvider: () => fakeProvider(), warn });
-    expect(c.models.getModel("anthropic", "claude-haiku-4-5-20251001")).toBeUndefined();
-    c.models.getModel("anthropic", "claude-haiku-4-5-20251001");
-    expect(warn).toHaveBeenCalledOnce();
-    expect(String(warn.mock.calls[0]![0])).toContain("anthropic/claude-haiku-4-5-20251001");
-    expect(String(warn.mock.calls[0]![0])).toContain("claude-bridge");
-  });
-});
-
-describe("guard through createBridgeModels", () => {
+describe("guard through the registry", () => {
   it("models.streamSimple on a bridge whose stream throws yields an error event", async () => {
     const provider = fakeProvider([MODEL], () => { throw new Error("spawn failed"); });
-    const b = createBridgeModels({ cwd: "/tmp", createProvider: () => provider });
+    const b = buildModelRegistry(["claude-bridge"], { cwd: "/tmp", seams: seam(() => provider) });
     const model = b.models.getModel("claude-bridge", MODEL)!;
     const s = (b.models as any).streamSimple(model, { messages: [] });
     const events: any[] = [];

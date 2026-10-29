@@ -119,8 +119,13 @@ const TRANSPORT_PROVIDERS: Record<Transport, { engine: string; pi: string }> = {
   api: { engine: "anthropic", pi: "anthropic" },
 };
 
+/** Engine provider for a pi provider id; ids not listed here are used as-is. */
+const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-bridge": "claude-agent-sdk" };
+
 export interface TierSetting {
   model?: string;
+  /** pi provider id for this tier (e.g. "claude-bridge", "anthropic", "openrouter"). Wins over the transport default. */
+  provider?: string;
   thinking?: string;
 }
 
@@ -149,6 +154,19 @@ export interface ResolvedTier {
   provider: string;
   /** pi model string: `<pi provider>/<id>`, without the thinking suffix. */
   piModel: string;
+  /** pi provider id (the `piModel` prefix). Absent in tables written before per-tier providers: use `tierPiProvider`. */
+  piProvider?: string;
+}
+
+/**
+ * The pi provider of a tier. Tables written before per-tier providers carry only `transport`: they map to the
+ * `piModel` prefix, else to the transport's provider, so legacy configs keep resolving.
+ */
+export function tierPiProvider(table: Pick<ModelTable, "transport">, tier: Pick<ResolvedTier, "piModel" | "piProvider">): string {
+  if (tier.piProvider) return tier.piProvider;
+  const slash = tier.piModel?.indexOf("/") ?? -1;
+  if (slash > 0) return tier.piModel.slice(0, slash);
+  return TRANSPORT_PROVIDERS[table.transport]?.pi ?? "anthropic";
 }
 
 export interface ModelTable {
@@ -228,11 +246,14 @@ export function resolveModelTable(input: ResolveInput): ModelTable {
       warnings.push(`${tier}: unknown model "${model}" (${modelSource}) — check for a typo`);
     }
 
+    // Provider: wolf tier > pack tier > the transport's default (legacy configs).
+    const piProvider = nonEmpty(wolfTier?.provider) ?? nonEmpty(packTier?.provider) ?? providers.pi;
     const resolved: ResolvedTier = {
       model,
       modelSource,
-      provider: providers.engine,
-      piModel: `${providers.pi}/${model}`,
+      provider: ENGINE_PROVIDER_FOR_PI[piProvider] ?? piProvider,
+      piModel: `${piProvider}/${model}`,
+      piProvider,
     };
 
     // Thinking: wolf > pack, each value checked against pi's levels.

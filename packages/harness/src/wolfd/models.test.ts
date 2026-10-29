@@ -4,45 +4,124 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import type { ClaudeBridgeProvider } from "pi-claude-bridge/core";
 import { Type } from "typebox";
 import { createClaudeBridgeProvider } from "pi-claude-bridge/core";
-import { buildWolfModels } from "./models.js";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveModelTable, resolveWolfModel, tierPiProvider } from "@wolfpack/engine";
+import { buildWolfModels, providersInUse } from "./models.js";
 
 const fakeProvider = () => {
   const base = createProvider({ id: "claude-bridge", auth: { check: async () => "test" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
   return Object.assign(base, { shutdown: vi.fn(), release: vi.fn(() => 0), liveQueries: 0 }) as unknown as ClaudeBridgeProvider;
 };
 
+const tier = (provider: string, model = "m") => ({ model, provider: provider === "claude-bridge" ? "claude-agent-sdk" : provider, piModel: `${provider}/${model}`, piProvider: provider });
+const table = (main: string, smart = main, fast = main, transport: "api" | "subscription" = "api") => ({ transport, tiers: { main: tier(main), smart: tier(smart), fast: tier(fast) } }) as never;
+/** Bridge seam: a fake provider factory, or the real bridge core with a fake SDK query. */
+const bridgeSeam = (createProvider: (o: any) => any) => ({ "claude-bridge": { createProvider } });
+const subModels = (env: NodeJS.ProcessEnv, createProvider: (o: any) => any) => buildWolfModels(table("claude-bridge"), { cwd: "/w", env, seams: bridgeSeam(createProvider) });
+
 describe("buildWolfModels", () => {
-  it("api transport: no custom registry (engine default anthropic provider)", () => {
+  it("anthropic-only tiers: no custom registry (engine default), bridge never created", () => {
     const create = vi.fn();
-    const m = buildWolfModels({ transport: "api", provider: "anthropic" }, { cwd: "/w", createProvider: create });
+    const m = buildWolfModels(table("anthropic"), { cwd: "/w", seams: bridgeSeam(create) });
     expect(m.models).toBeUndefined();
     expect(create).not.toHaveBeenCalled();
-    m.shutdown();
+    expect(() => { m.forget("s"); m.dispose(); }).not.toThrow();
   });
 
-  it("subscription transport: registry holds claude-bridge only, shutdown reaches the provider", () => {
+  it("bridge-only tiers: registry holds claude-bridge only; dispose and forget reach the bridge entry", () => {
     const provider = fakeProvider();
     const create = vi.fn(() => provider);
-    const env = { PATH: "/bin" };
-    const m = buildWolfModels({ transport: "subscription", provider: "claude-bridge" }, { cwd: "/w", env, createProvider: create });
+    const m = buildWolfModels(table("claude-bridge", "claude-bridge", "claude-bridge", "subscription"), { cwd: "/w", env: { PATH: "/bin" }, seams: bridgeSeam(create) });
+    expect(create).toHaveBeenCalledOnce();
     expect(create).toHaveBeenCalledWith({ cwd: "/w", env: { PATH: "/bin", ENABLE_TOOL_SEARCH: "false" } });
-    expect(m.models).toBeDefined();
     expect(m.models!.getProvider("claude-bridge")).toBe(provider);
     expect(m.models!.getProvider("anthropic")).toBeUndefined();
-    m.shutdown();
+    m.forget("sess-1");
+    expect(provider.release).toHaveBeenCalledWith("sess-1");
+    m.dispose();
     expect(provider.shutdown).toHaveBeenCalledOnce();
   });
 
-  it("release reaches the bridge provider with the session id; on the API transport it is a no-op", () => {
+  it("mixed providers per tier: one registry with both, built once each", () => {
     const provider = fakeProvider();
-    const sub = buildWolfModels({ transport: "subscription", provider: "claude-bridge" }, { cwd: "/w", createProvider: () => provider });
-    sub.release("sess-1");
-    expect(provider.release).toHaveBeenCalledWith("sess-1");
-    expect(() => buildWolfModels({ transport: "api", provider: "anthropic" }, { cwd: "/w" }).release("sess-1")).not.toThrow();
+    const create = vi.fn(() => provider);
+    const t = table("claude-bridge", "claude-bridge", "anthropic");
+    expect(providersInUse(t)).toEqual(["claude-bridge", "anthropic"]);
+    const m = buildWolfModels(t, { cwd: "/w", seams: bridgeSeam(create) });
+    expect(create).toHaveBeenCalledOnce();
+    expect(m.models!.getProvider("claude-bridge")).toBe(provider);
+    expect(m.models!.getProvider("anthropic")).toBeDefined();
+    m.forget("x"); // anthropic has no forget: a no-op for it, still reaches the bridge
+    expect(provider.release).toHaveBeenCalledWith("x");
   });
 
-  it("subscription transport with a mismatched provider id is refused", () => {
-    expect(() => buildWolfModels({ transport: "subscription", provider: "anthropic" }, { cwd: "/w", createProvider: vi.fn() })).toThrow(/claude-bridge/);
+  it("a tier config with no bridge never loads it, even with a bridge seam present", () => {
+    const create = vi.fn();
+    const m = buildWolfModels(table("anthropic", "anthropic", "openrouter"), { cwd: "/w", seams: bridgeSeam(create), factories: { anthropic: () => ({ provider: fakeProvider() as never }), openrouter: () => ({ provider: Object.assign(fakeProvider(), { id: "openrouter" }) as never }) } });
+    expect(create).not.toHaveBeenCalled();
+    expect(m.models).toBeDefined();
+  });
+
+  it("an unknown provider is refused naming the map; already-built providers are disposed", () => {
+    const dispose = vi.fn();
+    expect(() => buildWolfModels(table("anthropic", "nope"), { cwd: "/w", factories: { anthropic: () => ({ provider: fakeProvider() as never, dispose }) } })).toThrow(/no model provider "nope"/);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("legacy tables (transport only, no piProvider) resolve per transport", () => {
+    const legacy = (transport: "api" | "subscription", prefix?: string) => ({ transport, tiers: { main: { model: "m", piModel: prefix ? `${prefix}/m` : undefined }, smart: { model: "m", piModel: prefix ? `${prefix}/m` : undefined }, fast: { model: "m", piModel: prefix ? `${prefix}/m` : undefined } } }) as never;
+    expect(providersInUse(legacy("subscription", "claude-bridge"))).toEqual(["claude-bridge"]);
+    expect(providersInUse(legacy("api", "anthropic"))).toEqual(["anthropic"]);
+    expect(providersInUse(legacy("subscription"))).toEqual(["claude-bridge"]); // no piModel at all: the transport decides
+    expect(providersInUse(legacy("api"))).toEqual(["anthropic"]);
+  });
+});
+
+describe("resolveModelTable / resolveWolfModel: per-tier providers and legacy transport", () => {
+  const pack = (extra: object = {}) => ({ main: { model: "claude-opus-5-5" }, smart: { model: "claude-sonnet-5-5" }, fast: { model: "claude-haiku-5-5" }, transport: { local: "subscription", vps: "api" }, ...extra }) as never;
+  const cfg = { capability: {} } as never;
+
+  it("legacy transport config maps to per-tier providers", () => {
+    const sub = resolveModelTable({ pack: pack(), location: "local" });
+    expect(Object.values(sub.tiers).map((t) => tierPiProvider(sub, t))).toEqual(["claude-bridge", "claude-bridge", "claude-bridge"]);
+    expect(resolveWolfModel(cfg, "main", sub).provider).toBe("claude-bridge");
+    const api = resolveModelTable({ pack: pack(), location: "vps" });
+    expect(resolveWolfModel(cfg, "fast", api).provider).toBe("anthropic");
+  });
+
+  it("a tier's provider wins over the transport; others keep the default", () => {
+    const t = resolveModelTable({ pack: pack({ fast: { model: "claude-haiku-5-5", provider: "anthropic" } }), location: "local" });
+    expect(t.tiers.fast.piModel).toBe("anthropic/claude-haiku-5-5");
+    expect(t.tiers.fast.provider).toBe("anthropic");
+    expect(t.tiers.main.piModel).toBe("claude-bridge/claude-opus-5-5");
+    expect(providersInUse(t)).toEqual(["claude-bridge", "anthropic"]);
+    expect(resolveWolfModel(cfg, "fast", t).provider).toBe("anthropic");
+  });
+
+  it("a table file written before per-tier providers (no piProvider) still resolves", () => {
+    const old = { location: "local", transport: "subscription", transportSource: "pack", warnings: [], steps: {}, tiers: { main: { model: "claude-opus-5-5", provider: "claude-agent-sdk", piModel: "claude-bridge/claude-opus-5-5" }, smart: { model: "s", provider: "claude-agent-sdk", piModel: "claude-bridge/s" }, fast: { model: "f", provider: "claude-agent-sdk", piModel: "claude-bridge/f" } } } as never;
+    expect(resolveWolfModel(cfg, "main", old)).toMatchObject({ provider: "claude-bridge", piModel: "claude-bridge/claude-opus-5-5" });
+  });
+});
+
+describe("harness stays provider-agnostic", () => {
+  it("only providers/claude-bridge.ts imports or names the bridge (non-test sources)", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const hits: string[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const f = join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) && !f.endsWith(join("providers", "claude-bridge.ts"))) {
+          const code = readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+          if (/pi-claude-bridge|["'`]claude-bridge["'`]|createBridgeModels|sweepOrphans/.test(code)) hits.push(f.slice(root.length));
+        }
+      }
+    };
+    walk(root);
+    expect(hits).toEqual([]);
   });
 });
 
@@ -53,16 +132,13 @@ describe("bridge seam: tool schemas reach the model inline", () => {
       calls.push(args.options);
       return (async function* () {})();
     }) as any;
-    const m = buildWolfModels(
-      { transport: "subscription", provider: "claude-bridge" },
-      { cwd: "/w", env: { PATH: "/bin", ANTHROPIC_API_KEY: "x" }, createProvider: (o) => createClaudeBridgeProvider({ ...o, queryFn, checkAuth: false, sweepOrphans: false }) },
-    );
+    const m = subModels({ PATH: "/bin", ANTHROPIC_API_KEY: "x" }, (o) => createClaudeBridgeProvider({ ...o, queryFn, checkAuth: false, sweepOrphans: false }));
     const provider = m.models!.getProvider("claude-bridge") as any;
     const model = { id: "claude-haiku-4-5", name: "haiku", api: "claude-bridge", provider: "claude-bridge", baseUrl: "claude-bridge", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 8192 };
     const tools = [{ name: "task_bind", description: "Bind a work item", parameters: Type.Object({ id: Type.String() }) }];
     const s = provider.streamSimple(model, { systemPrompt: "sys", messages: [{ role: "user", content: "hi", timestamp: 0 }], tools }, {});
     for await (const _ of s) { /* drain */ }
-    m.shutdown();
+    m.dispose();
 
     expect(calls).toHaveLength(1);
     const o = calls[0];
@@ -85,14 +161,11 @@ describe("bridge seam: images reach the SDK query", () => {
       first = (async () => (await args.prompt[Symbol.asyncIterator]().next()).value)();
       return (async function* () {})();
     }) as any;
-    const m = buildWolfModels(
-      { transport: "subscription", provider: "claude-bridge" },
-      { cwd: "/w", env: { PATH: "/bin" }, createProvider: (o) => createClaudeBridgeProvider({ ...o, queryFn, checkAuth: false, sweepOrphans: false }) },
-    );
+    const m = subModels({ PATH: "/bin" }, (o) => createClaudeBridgeProvider({ ...o, queryFn, checkAuth: false, sweepOrphans: false }));
     const provider = m.models!.getProvider("claude-bridge") as any;
     const model = { id: "claude-haiku-4-5", name: "haiku", api: "claude-bridge", provider: "claude-bridge", baseUrl: "claude-bridge", reasoning: false, input: ["text", "image"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 8192 };
     for await (const _ of provider.streamSimple(model, { systemPrompt: "sys", messages, tools: [] }, {})) { /* drain */ }
-    m.shutdown();
+    m.dispose();
     return first;
   }
   const blocks = (msg: any) => msg.message.content.filter((b: any) => b.type === "image").map((b: any) => b.source.data);

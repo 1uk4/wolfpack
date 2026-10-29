@@ -1,4 +1,4 @@
-import { isTier, readModelTable, type ModelTable, type Tier, type ThinkingLevel, isThinkingLevel } from "../models.js";
+import { isTier, readModelTable, tierPiProvider, type ModelTable, type Tier, type ThinkingLevel, isThinkingLevel } from "../models.js";
 import type { WolfConfig } from "./schema.js";
 
 export class TierResolutionError extends Error {
@@ -17,7 +17,7 @@ export interface ResolvedWolfModel {
   modelId: string;
   thinking?: ThinkingLevel;
   transport: "api" | "subscription";
-  /** pi provider id for the transport ("anthropic" for api, "claude-bridge" for subscription). */
+  /** pi provider id of the tier (e.g. "anthropic", "claude-bridge"). */
   provider: string;
   piModel: string;
   /** True when wolf.yaml `tiers:` overrode the models file's model. */
@@ -39,7 +39,7 @@ export function resolveWolfModel(
   }
   const table = typeof modelsFile === "string" ? readModelTable(modelsFile) : modelsFile;
 
-  if (table.transport !== "api" && table.transport !== "subscription") {
+  if (table.transport !== undefined && table.transport !== "api" && table.transport !== "subscription") {
     throw new TierResolutionError(
       `Models file has unknown transport "${String(table.transport)}" — expected api|subscription`,
     );
@@ -59,8 +59,8 @@ export function resolveWolfModel(
   const modelId = override?.model ?? entry.model;
   const thinkingRaw = override?.thinking ?? entry.thinking;
   const thinking = isThinkingLevel(thinkingRaw) ? thinkingRaw : undefined;
-  // Subscription tables carry the engine provider ("claude-agent-sdk"); the wolf's pi provider is the piModel prefix.
-  const provider = table.transport === "subscription" ? entry.piModel.split("/")[0] : (entry.provider ?? "anthropic");
+  // The pi provider is per tier (piProvider / the piModel prefix); legacy tables fall back to the transport's.
+  const provider = tierPiProvider(table, entry);
 
   return {
     requestedTier: tier,

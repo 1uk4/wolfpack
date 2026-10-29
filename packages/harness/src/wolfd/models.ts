@@ -1,82 +1,71 @@
 /**
- * Engine model registry for a wolf's resolved transport. api: undefined (the engine's default anthropic provider,
- * which reads ANTHROPIC_API_KEY). subscription: a registry holding only the pi-claude-bridge provider — no anthropic
- * provider is registered, so a failed subscription turn can never fall over onto the metered key.
+ * Engine model registry built from the providers a wolf's tiers name (provider factory map, providers/index.ts).
+ * One registry, only the providers in use: a tier config without the bridge never loads it, and a subscription-only
+ * config never registers the metered anthropic provider, so a failed turn cannot fall over onto the metered key.
  */
-import { createModels } from "@earendil-works/pi-ai/models";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { createClaudeBridgeProvider, PROVIDER_ID, type ClaudeBridgeProvider, type ClaudeBridgeProviderOptions } from "pi-claude-bridge/core";
-import type { ResolvedWolfModel } from "@wolfpack/engine";
-import type { WolfEngineOptions } from "../engine/index.js";
+import { createModels, type Models } from "@earendil-works/pi-ai/models";
+import { tierPiProvider, TIERS, type ModelTable } from "@wolfpack/engine";
+import { PROVIDER_FACTORIES, guardProviderStreams, type ProviderContext, type ProviderFactory } from "../providers/index.js";
+
+export { guardProviderStreams };
 
 export interface WolfModels {
-  models?: WolfEngineOptions["models"];
-  /** Kills any parked SDK queries. Call on wolf shutdown. */
-  shutdown(): void;
-  /** Close the claude children parked for one conversation (its provider session id). No-op on the metered API transport. */
-  release(sessionId: string): void;
+  /** Undefined = the engine's default registry (anthropic only). */
+  models?: Models;
+  /** Release everything the providers hold. Call on wolf shutdown. */
+  dispose(): void;
+  /** A conversation (its provider session id) ended: providers that hold per-conversation state free it. */
+  forget(sessionId: string): void;
 }
 
 export interface BuildWolfModelsOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
-  /** Test seam; defaults to the real bridge provider factory. */
-  createProvider?: (opts: ClaudeBridgeProviderOptions) => ClaudeBridgeProvider;
+  /** Test seam: replaces/extends the factory map. */
+  factories?: Record<string, ProviderFactory>;
+  /** Per-provider test seams, handed to the factories. */
+  seams?: ProviderContext["seams"];
 }
 
-export const NO_TOOL_SEARCH = { ENABLE_TOOL_SEARCH: "false" } as const;
-
-/**
- * The bridge-only registry (provider + shutdown/release), shared by wolfd and the VPS harness so both pick the
- * provider the same way. Throws if the bridge cannot be created; callers decide whether that is fatal.
- */
-export function createBridgeModels(opts: BuildWolfModelsOptions & { queryFn?: ClaudeBridgeProviderOptions["queryFn"]; sweepOrphans?: boolean }): Required<WolfModels> {
-  // Env hygiene (stripping ANTHROPIC_API_KEY from the claude child) is done inside the bridge core.
-  // ENABLE_TOOL_SEARCH=false: the bridge runs claude with `tools: []`, which removes ToolSearch, yet Claude Code
-  // still defers MCP tool schemas behind it (the SDK's default for MCP servers). The model then sees task_bind etc.
-  // by name only and has no way to load the schema. Inline schemas for every tool the host hands us.
-  const provider = (opts.createProvider ?? createClaudeBridgeProvider)({
-    cwd: opts.cwd,
-    env: { ...(opts.env ?? process.env), ...NO_TOOL_SEARCH },
-    ...(opts.queryFn ? { queryFn: opts.queryFn } : {}),
-    ...(opts.sweepOrphans === false ? { sweepOrphans: false } : {}),
-  });
-  guardProviderStreams(provider, { provider: PROVIDER_ID });
-  const models = createModels();
-  models.setProvider(provider);
-  return { models, shutdown: () => provider.shutdown(), release: (sessionId) => void provider.release(sessionId) };
-}
-
-/**
- * A provider's stream() must report failure as an `error` stream event, never by throwing or rejecting: on the VPS
- * harness an unhandled rejection exits the process (crash loop). The bridge already maps SDK errors to error events;
- * this covers ONLY a synchronous throw out of stream()/streamSimple(). It does not catch a rejection from a detached
- * promise (the harness crash guard handles those after startup).
- */
-export function guardProviderStreams<P extends { stream: (...a: any[]) => any; streamSimple: (...a: any[]) => any }>(provider: P, ids: { provider: string; api?: string }): P {
-  const guard = (orig: (...a: any[]) => any) => (model: any, ...rest: any[]) => {
-    try {
-      return orig.call(provider, model, ...rest);
-    } catch (err) {
-      const out = createAssistantMessageEventStream();
-      const message = err instanceof Error ? err.message : String(err);
-      const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-      const error = { role: "assistant", content: [], api: model?.api ?? ids.api ?? ids.provider, provider: model?.provider ?? ids.provider, model: model?.id ?? "unknown", usage: zero, stopReason: "error", errorMessage: message, timestamp: Date.now() };
-      queueMicrotask(() => { out.push({ type: "error", reason: "error", error } as never); out.end(); });
-      return out;
-    }
-  };
-  provider.stream = guard(provider.stream);
-  provider.streamSimple = guard(provider.streamSimple);
-  return provider;
-}
-
-export function buildWolfModels(model: Pick<ResolvedWolfModel, "transport" | "provider">, opts: BuildWolfModelsOptions): WolfModels {
-  if (model.transport !== "subscription") return { shutdown: () => {}, release: () => {} };
-  if (model.provider !== PROVIDER_ID) {
-    throw new Error(`subscription transport resolved provider "${model.provider}", expected "${PROVIDER_ID}"`);
+/** Distinct pi providers the table's tiers use, in tier order. Legacy tables map through their transport. */
+export function providersInUse(table: Pick<ModelTable, "transport" | "tiers">): string[] {
+  const ids: string[] = [];
+  for (const t of TIERS) {
+    const entry = table.tiers[t];
+    if (!entry) continue;
+    const id = tierPiProvider(table, entry);
+    if (!ids.includes(id)) ids.push(id);
   }
-  return createBridgeModels(opts);
+  return ids;
 }
 
-export { PROVIDER_ID as BRIDGE_PROVIDER_ID };
+export function buildModelRegistry(providers: readonly string[], opts: BuildWolfModelsOptions): Required<Pick<WolfModels, "dispose" | "forget">> & { models: Models } {
+  const factories = opts.factories ?? PROVIDER_FACTORIES;
+  const ctx: ProviderContext = { cwd: opts.cwd, env: opts.env ?? process.env, ...(opts.seams ? { seams: opts.seams } : {}) };
+  const models = createModels();
+  const handles: Array<{ forget?(id: string): void; dispose?(): void }> = [];
+  try {
+    for (const id of providers) {
+      const factory = factories[id];
+      if (!factory) throw new Error(`no model provider "${id}" (known: ${Object.keys(factories).join(", ")}) — add a factory in providers/index.ts`);
+      const handle = factory(ctx);
+      handles.push(handle);
+      models.setProvider(handle.provider);
+    }
+  } catch (err) {
+    for (const h of handles) try { h.dispose?.(); } catch { /* best effort */ }
+    throw err;
+  }
+  return {
+    models,
+    dispose: () => { for (const h of handles) try { h.dispose?.(); } catch { /* best effort */ } },
+    forget: (sessionId) => { for (const h of handles) try { h.forget?.(sessionId); } catch { /* best effort */ } },
+  };
+}
+
+/** wolfd's registry: every tier's provider. Only anthropic → no custom registry (the engine's default). */
+export function buildWolfModels(table: Pick<ModelTable, "transport" | "tiers">, opts: BuildWolfModelsOptions): WolfModels {
+  const ids = providersInUse(table);
+  if (ids.every((id) => id === "anthropic")) return { dispose: () => {}, forget: () => {} };
+  return buildModelRegistry(ids, opts);
+}

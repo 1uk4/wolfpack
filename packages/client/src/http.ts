@@ -3,8 +3,10 @@ import {
   ErrorEnvelopeSchema,
   LAST_EVENT_ID_HEADER,
   PROTOCOL_VERSION,
+  ACTOR_HEADER,
   PROTOCOL_VERSION_HEADER,
   ROUTES,
+  type RouteDef,
   SSE_DONE,
   buildPath,
   parseMemoryEvent,
@@ -56,7 +58,10 @@ import {
 export interface HttpClientOptions {
   /** Server origin (optionally with a path prefix), e.g. `http://127.0.0.1:4100`. */
   baseUrl: string;
-  /** Acting identity. Reserved: the v1 wire has no actor field yet, so it is not sent. */
+  /**
+   * Acting identity. Sent as `X-Wolfpack-Actor` on hub requests only (see `hub`); wolf hosts get no actor on the wire. PROVISIONAL: the
+   * hub's shared key is the only authentication, the actor is asserted, not proven. A `system` actor is never sent (reserved for the hub).
+   */
   actor?: Actor;
   /**
    * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
@@ -419,14 +424,15 @@ export class HttpConsoleClient implements ConsoleClient {
   // ------------------------------------------------------------ plumbing
 
   private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
-    const route = ROUTES[name];
-    const hubRoute = name.startsWith("hub");
+    const route: RouteDef = ROUTES[name];
+    const hubRoute = route.scope === "hub";
     if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
     const origin = hubRoute ? this.hub!.base : this.base;
     const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, ...(hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      headers: { ...init.headers, ...(hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
+        ...(hubRoute && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
     throw await this.toError(res, threadId);

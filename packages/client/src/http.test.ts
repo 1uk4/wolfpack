@@ -279,6 +279,19 @@ describe("HttpConsoleClient hub work reads", () => {
     expect(seen.map((s) => s.url)).toEqual(["http://hub.invalid/v1/work?domain=x%20y&graduated=true", "http://hub.invalid/v1/work/work-x-1234567/record"]);
     expect(seen.every((s) => s.key === "sekret")).toBe(true);
   });
+  it("sends the configured actor as X-Wolfpack-Actor on hub requests only, never a system actor", async () => {
+    const seen: (string | null)[] = [];
+    const f: typeof fetch = async (input, init) => {
+      seen.push(new Request(input as string, init).headers.get("x-wolfpack-actor"));
+      return Response.json({ items: [] });
+    };
+    const hub = { baseUrl: "http://hub.invalid" };
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub, actor: { id: "system", kind: "system" }, fetch: f }).listWork("w", { domain: "x" });
+    await new HttpConsoleClient({ baseUrl: "http://wolf.invalid", actor: { id: "1uk4", kind: "wolf" }, fetch: f }).listWork("w", { domain: "x" });
+    expect(seen).toEqual([JSON.stringify({ id: "1uk4", kind: "wolf" }), null, null, null]);
+  });
   it("maps a hub not_found envelope to NotFoundError", async () => {
     const f: typeof fetch = async () => Response.json({ code: "not_found", message: "work item w", retryable: false }, { status: 404 });
     const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f });

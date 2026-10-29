@@ -15,6 +15,23 @@ const KEY = Symbol.for("wolfpack.console.client");
 
 type Holder = { [KEY]?: ConsoleClient };
 
+/** The work reads a hub can serve. */
+export type WorkReads = Pick<ConsoleClient, "listWork" | "getWorkRecord">;
+
+/**
+ * `base` with its work reads answered by `work`; every other member is `base`'s own (methods bound to it, so its internal state
+ * stays on it). A typed composition, not a patch: `base` is never mutated.
+ */
+export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleClient {
+	return new Proxy(base, {
+		get(target, prop) {
+			if (prop === "listWork" || prop === "getWorkRecord") return work[prop]?.bind(work);
+			const v = Reflect.get(target, prop, target) as unknown;
+			return typeof v === "function" ? v.bind(target) : v;
+		},
+	});
+}
+
 /**
  * Build a client from the environment (exported for tests; no singleton).
  *
@@ -27,13 +44,10 @@ export function createConsoleClient(env: Record<string, string | undefined> = pr
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
 	const hub = hubUrl ? { baseUrl: hubUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
 	if (baseUrl) return new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) });
-	const mock = new MockConsoleClient();
-	if (!hub) return mock;
-	// No wolf configured, a hub is: threads stay on the mock, work reads come from the hub.
-	const hubClient = new HttpConsoleClient({ baseUrl: hub.baseUrl, hub });
-	mock.listWork = (wolf, opts) => hubClient.listWork(wolf, opts);
-	mock.getWorkRecord = (wolf, id) => hubClient.getWorkRecord(wolf, id);
-	return mock;
+	if (!hub) return new MockConsoleClient();
+	// No wolf configured, a hub is: threads stay on the mock; work reads come from the hub. The reader's own baseUrl is the hub's
+	// and moot: the composition exposes only its two work reads, which target `hub` explicitly.
+	return composeWorkReads(new MockConsoleClient(), new HttpConsoleClient({ baseUrl: hub.baseUrl, hub }));
 }
 
 export function getConsoleClient(): ConsoleClient {

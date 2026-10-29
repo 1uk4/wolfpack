@@ -44,6 +44,14 @@ import {
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
 /** Request header carrying the client's protocol version (single integer). */
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
+/**
+ * `X-Wolfpack-Actor: {"id":"<id>","kind":"operator"|"wolf"}` (JSON): who a request to a HUB acts as. PROVISIONAL: the hub's shared
+ * `X-API-Key` is the only authentication, so the actor is ASSERTED by the client, not proven; do not treat it as an identity
+ * guarantee. Per-actor pairing (work-wolfpack-WRkevxL) replaces it. Rules (hubd): reads default to the `system` actor when it is
+ * absent; mutating routes REQUIRE it (400 `invalid_request` when missing); owner-only operations require kind `operator`
+ * (401 `unauthorized` otherwise); `system` is reserved for the hub's own jobs and a client asserting it is 400 `invalid_request`.
+ */
+export const ACTOR_HEADER = "X-Wolfpack-Actor";
 /** SSE resume: standard header, or the `?from=` query fallback. */
 export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 /** Terminator frame payload (`data: [DONE]`) sent when a stream ends at turn-end. */
@@ -74,6 +82,8 @@ export interface RouteDef {
   readonly method: HttpMethod;
   /** Path pattern; `:name` segments are URL-encoded path params (thread ids contain `/`). */
   readonly path: string;
+  /** `"hub"`: served by hubd (the pack authority), not by a wolf host. Absent = a wolf-host route. */
+  readonly scope?: "hub";
   /** JSON request body schema, if any. */
   readonly body?: z.ZodType;
   /** Success response: a JSON body schema, or an SSE stream of events. */
@@ -284,8 +294,8 @@ export const ROUTES = {
    * `listWork` / `getWorkRecord`. `?domain=` and `?graduated=` behave as for `listWork`; a missing domain is 400 `invalid_request`,
    * an unknown item is 404 `not_found`. Wolves keep serving the wolf-scoped routes.
    */
-  hubListWork: { method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
-  hubGetWorkRecord: { method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  hubListWork: { scope: "hub", method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
+  hubGetWorkRecord: { scope: "hub", method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

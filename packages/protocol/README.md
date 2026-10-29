@@ -113,7 +113,13 @@ Normative serving semantics (implemented by the stub, asserted by the contract):
   ```
 - Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
 
-Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?})`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
+### Hub routes (hubd) and the provisional actor
+
+Routes with `scope: "hub"` in `ROUTES` are served by hubd, the pack authority, not by a wolf host: `GET /v1/work?domain=[&graduated=true]` and `GET /v1/work/:id/record` (same response shapes as the wolf-scoped `listWork` / `getWorkRecord`). A hub requires `X-API-Key` (401 `unauthorized` otherwise).
+
+`X-Wolfpack-Actor: {"id","kind"}` (`ACTOR_HEADER`) names who a hub request acts as. It is **PROVISIONAL**: the shared key is the only authentication, so the actor is *asserted, not proven*; per-actor pairing (work-wolfpack-WRkevxL) replaces it. Reads default to the `system` actor when it is absent. Mutating routes require it (400 `invalid_request` when missing). Owner-only operations require kind `operator` (401 `unauthorized` otherwise). `system` is reserved for the hub's own internal jobs; a client asserting it is 400 `invalid_request`.
+
+Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?, wolfRuntime?, headers?})` (`wolfRuntime: false` skips the wolf-runtime groups, for hubd) and `runHubSuite`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
 
 ## Stepped and conditional cards
 

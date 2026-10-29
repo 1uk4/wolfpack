@@ -2,13 +2,14 @@
  * hubd: the pack authority. Serves the /v1 protocol's hub-scoped routes from a hub data directory. This ticket: work reads.
  * Later tickets slot into `dispatch` (work writes under the work-writer lock, claim, registry, /v1/events, ...).
  *
- * Auth: one shared X-API-Key; the acting identity comes from the protocol's actor (see `actorOf`).
+ * Auth: one shared X-API-Key; the acting identity comes from the protocol's actor (see `readActor` / `writeActor`; PROVISIONAL, asserted not proven).
  */
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  ACTOR_HEADER,
   ActorSchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
@@ -23,7 +24,6 @@ import { hubRoots } from "./layout.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 export const API_KEY_HEADER = "x-api-key";
-export const ACTOR_HEADER = "x-wolfpack-actor";
 
 export interface HubOptions {
   dataDir: string;
@@ -44,7 +44,7 @@ export interface HubServer {
   close(): Promise<void>;
 }
 
-class HubError extends Error {
+export class HubError extends Error {
   constructor(readonly code: ErrorCode, message: string) {
     super(message);
   }
@@ -53,18 +53,45 @@ class HubError extends Error {
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
-/** The actor of a request: `X-Wolfpack-Actor: {"id","kind"}` (JSON). Absent = the system. Malformed = invalid_request. */
-export function actorOf(req: IncomingMessage): Actor {
-  const raw = req.headers[ACTOR_HEADER];
-  if (typeof raw !== "string") return { id: "system", kind: "system" };
+const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
+
+/**
+ * The asserted actor of a request (`X-Wolfpack-Actor`, PROVISIONAL: the shared key is the only authentication, so this is
+ * asserted, not proven; see the protocol README). Absent = `undefined`. Malformed, or asserting `system` (reserved for hubd's
+ * own internal jobs; a client cannot claim it) = 400 `invalid_request`.
+ */
+export function assertedActor(req: Pick<IncomingMessage, "headers">): Actor | undefined {
+  const raw = req.headers[ACTOR_KEY];
+  if (typeof raw !== "string") return undefined;
+  let parsed: ReturnType<typeof ActorSchema.safeParse> | undefined;
   try {
-    const a = ActorSchema.safeParse(JSON.parse(raw));
-    if (a.success) return a.data;
+    parsed = ActorSchema.safeParse(JSON.parse(raw));
   } catch {
-    /* fallthrough */
+    parsed = undefined;
   }
-  throw new HubError("invalid_request", `bad ${ACTOR_HEADER}`);
+  if (!parsed?.success) throw new HubError("invalid_request", `bad ${ACTOR_HEADER}`);
+  if (parsed.data.kind === "system") throw new HubError("invalid_request", `${ACTOR_HEADER}: the system actor is reserved for the hub`);
+  return parsed.data;
 }
+
+/** The actor of a READ: the asserted one, else the `system` default. */
+export function readActor(req: Pick<IncomingMessage, "headers">): Actor {
+  return assertedActor(req) ?? SYSTEM_ACTOR;
+}
+
+/**
+ * The actor of a MUTATING route (work writes, claim, ...): an explicit actor is REQUIRED (400 `invalid_request` when missing).
+ * `ownerOnly` (owner-only operations) additionally requires kind `operator` (401 `unauthorized` otherwise).
+ */
+export function writeActor(req: Pick<IncomingMessage, "headers">, opts: { ownerOnly?: boolean } = {}): Actor {
+  const actor = assertedActor(req);
+  if (!actor) throw new HubError("invalid_request", `${ACTOR_HEADER} is required on this route`);
+  if (opts.ownerOnly && actor.kind !== "operator") throw new HubError("unauthorized", "this operation is owner-only (actor kind operator)");
+  return actor;
+}
+
+/** hubd's own identity for its internal jobs and unattributed reads; never accepted from a client. */
+export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -76,12 +103,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   if (!opts.apiKey) throw new Error("createHubServer: apiKey is required");
   const roots = hubRoots(opts.dataDir);
   mkdirSync(`${opts.dataDir}/ledger`, { recursive: true });
-  const expected = Buffer.from(opts.apiKey);
-
-  const authed = (req: IncomingMessage): boolean => {
-    const got = Buffer.from(String(req.headers[API_KEY_HEADER] ?? ""));
-    return got.length === expected.length && timingSafeEqual(got, expected);
-  };
+  // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
+  const digest = (v: string) => createHash("sha256").update(v).digest();
+  const expected = digest(opts.apiKey);
+  const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
 
   async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://hubd");
@@ -95,7 +120,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       if (!/^\d+$/.test(v.trim())) throw new HubError("invalid_request", `bad ${PROTOCOL_VERSION_HEADER}`);
       if (Number(v) !== PROTOCOL_VERSION) throw new HubError("version_mismatch", `server speaks protocol ${PROTOCOL_VERSION}, client sent ${v}`);
     }
-    actorOf(req); // validated for every request; writes (later tickets) record it on the ledger event
+    readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
     const { params } = m;
     switch (m.name) {
       case "listWolves":
@@ -122,7 +147,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
 
   const server: Server = createServer((req, res) => {
     dispatch(req, res).catch((e: unknown) => {
-      const err = e instanceof HubError ? e : new HubError("engine_error", e instanceof Error ? e.message : String(e));
+      if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
+      const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
       const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code) };
       if (!res.headersSent) send(res, ERROR_HTTP_STATUS[err.code], env);
       else res.end();

@@ -267,25 +267,72 @@ export function listRebuildBackups(roots: KbRoots): string[] {
     .sort();
 }
 
+export interface RestoreResult {
+  entriesRestored: number;
+  /** Entries whose old section no longer exists, placed on the nearest leaf of the restored tree. */
+  rehomed: string[];
+  /** Entries pointing at a section the restored tree lacks that could not be re-homed (no vector): listed for the operator. */
+  unresolved: string[];
+  /** Sections of the domain after the restore. */
+  sections: number;
+}
+
 /**
- * Restore the state before the rebuild stamped `stamp`: the sections snapshot is copied back and every
- * entry's `section:` line is set to its old value. Entries created since keep their line. Caller holds the KB lock.
- * (The ledger keeps the sections_replaced event; the snapshot file is what readers use.)
+ * Restore ONE domain to the state before the rebuild stamped `stamp`. Domain-scoped: only that domain's backed-up
+ * sections replace the current ones; every other domain's sections stay exactly as they are now (they may have changed
+ * since the backup). Every entry of the domain gets its old `section:` line back; an entry whose section is not in the
+ * restored tree (created since, or already dangling) is placed on the nearest leaf by vector when `vectorOf` knows it,
+ * and reported otherwise. A centroid-less sections_replaced event is appended so the ledger fold agrees. Caller holds the
+ * KB lock; rendering the registry/digest/INDEX is done by restoreAndRender (rebuild-recover.ts).
  */
-export function restoreRebuild(roots: KbRoots, stamp: string): { entriesRestored: number } {
+export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf"> = {}): RestoreResult {
   const backup = sectionsBackupFile(roots, stamp), map = rebuildOldValuesFile(roots, stamp);
   if (!existsSync(map)) throw new Error(`restore: no old-sections map for ${stamp}; known: ${listRebuildBackups(roots).join(", ") || "none"}`);
+  if (!existsSync(backup)) throw new Error(`restore: no sections backup for ${stamp}; refusing to restore entries without the tree they point into`);
   recoverRebuild(roots);
   const { domain, entries } = JSON.parse(readFileSync(map, "utf-8")) as { domain: string; entries: Record<string, string> };
+  let backed: Section[];
+  try { backed = JSON.parse(readFileSync(backup, "utf-8")) as Section[]; } catch { throw new Error(`restore: ${backup} is unparsable; nothing was changed`); }
+  const restored = backed.filter((s) => String(s.domain) === domain);
+  if (!restored.length) throw new Error(`restore: the backup holds no sections for domain "${domain}"; nothing was changed`);
+  const ids = new Set(restored.map((s) => String(s.id)));
+  const sf = sectionsFile(roots);
+  let current: Section[] = [];
+  if (existsSync(sf)) { try { const j = JSON.parse(readFileSync(sf, "utf-8")); if (Array.isArray(j)) current = j as Section[]; } catch { /* treated as empty: the other domains are folded below */ } }
+  const others = current.length ? current.filter((s) => String(s.domain) !== domain) : otherDomainSections(roots, domain);
+
+  const leaves = restored.filter((s) => !restored.some((c) => String(c.parent) === String(s.id)));
   const eDir = join(roots.kbBase, "domains", domain, "entries");
-  let n = 0;
-  for (const [id, sec] of Object.entries(entries)) {
+  const result: RestoreResult = { entriesRestored: 0, rehomed: [], unresolved: [], sections: restored.length };
+  const wanted = new Map<string, string>();
+  for (const f of entryFiles(eDir)) {
+    const id = f.slice(0, -3);
+    const raw = readFileSync(join(eDir, f), "utf-8");
+    const cur = String(parseFrontmatter(raw).fields.section ?? "");
+    const old = entries[id];
+    if (old && ids.has(old)) { wanted.set(id, old); continue; }
+    // not in the map, or its old section is gone: a section that exists in the restored tree stays; else nearest leaf
+    if (ids.has(cur)) continue;
+    const vec = hooks.vectorOf?.(id);
+    const usable = leaves.filter((l) => l.centroid && l.centroid.length > 0);
+    if (vec && usable.length) {
+      const best = usable.reduce((b, l) => (cosine(vec, l.centroid) > cosine(vec, b.centroid) ? l : b));
+      wanted.set(id, String(best.id));
+      result.rehomed.push(id);
+    } else {
+      result.unresolved.push(id);
+    }
+  }
+  for (const [id, sec] of wanted) {
     const file = join(eDir, `${id}.md`);
-    if (!existsSync(file) || !sec) continue;
     const raw = readFileSync(file, "utf-8");
     const next = withSectionLine(raw, sec);
-    if (next !== raw) { defaultWrite(file, next); n++; }
+    if (next !== raw) { defaultWrite(file, next); result.entriesRestored++; }
   }
-  if (existsSync(backup)) copyFileSync(backup, sectionsFile(roots));
-  return { entriesRestored: n };
+  // sections last, atomically (temp + rename), so a crash leaves entries restored and the new tree in place, re-runnable
+  writeSynced(tmpPath(sf), JSON.stringify([...others, ...restored], null, 2));
+  renameSync(tmpPath(sf), sf);
+  const snapshot = restored.map(({ centroid: _c, ...rest }) => rest) as unknown as Array<Record<string, unknown>>;
+  appendLedger(roots, [ev.sectionsReplaced(domain, snapshot)]);
+  return result;
 }

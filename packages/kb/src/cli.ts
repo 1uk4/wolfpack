@@ -64,7 +64,8 @@ import { listVersions, readVersion } from "./librarian/versions.js";
 import { EntryId } from "./schema/knowledge.js";
 import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
-import { listRebuildBackups, restoreRebuild } from "./librarian/rebuild-commit.js";
+import { listRebuildBackups } from "./librarian/rebuild-commit.js";
+import { restoreAndRender } from "./librarian/rebuild-recover.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
 import { countPending } from "./librarian/intake.js";
@@ -443,8 +444,13 @@ async function cmdRebuild(): Promise<void> {
     const release = acquireKbLock(roots);
     if (!release) { console.error("a sweep is running (sweep.lock held); retry when it finishes"); process.exit(1); }
     try {
-      const r = restoreRebuild(roots, restoreAt);
-      console.log(`restored ${r.entriesRestored} entry file(s) and the sections snapshot from ${restoreAt}`);
+      // vectors let an entry whose old section is gone be re-homed on the nearest leaf instead of only reported
+      const vecs = await buildEntryVectors(roots, foldRegistry(readLedger(roots)), createEmbedder(roots)).catch(() => []);
+      const byId = new Map(vecs.map((v) => [v.entryId, v.vector]));
+      const r = restoreAndRender(roots, restoreAt, { vectorOf: (id) => byId.get(id) });
+      console.log(`restored domain "${r.domain}" from ${restoreAt}: ${r.entriesRestored} entry file(s) rewritten, ${r.sections} section(s); other domains untouched; registry/digest/INDEX re-rendered`);
+      if (r.rehomed.length) console.log(`  re-homed on the nearest leaf (their section no longer exists): ${r.rehomed.join(", ")}`);
+      if (r.unresolved.length) console.log(`  NOT re-homed (no vector); they point at a missing section: ${r.unresolved.join(", ")}`);
     } finally { release(); }
     return;
   }

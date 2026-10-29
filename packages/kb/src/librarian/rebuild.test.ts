@@ -341,6 +341,56 @@ describe("commit safety", () => {
     expect(folded.map((s) => String(s.id)).sort()).toEqual(plan.state.sections.map((s) => String(s.id)).sort());
     expect(folded.some((s) => String(s.id) === "sec-wp-old000")).toBe(false);
   });
+
+  const mkSec = (id: string, domain: string, centroid: number[] = [], parent: string | null = null) =>
+    ({ id, domain, parent, depth: parent ? 1 : 0, label: id, title: id, centroid, memberCount: 0, childIds: [], summary: "", summaryHash: "", dirty: false, memberCountAtLastLabel: 0, created: "x", updated: "x" }) as any;
+
+  it("restore is domain-scoped: another domain changed after the backup is kept, entries get their old sections, and a vanished section is re-homed or reported", async () => {
+    const { writeSections } = await import("./sections.js");
+    const { restoreAndRender } = await import("./rebuild-recover.js");
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeSections(roots, [mkSec("sec-wp-old000", "wp", es[0].vector), mkSec("sec-other-aaaaaa", "other")]);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    commitRebuild(roots, plan);
+    const stamp = listRebuildBackups(roots)[0];
+    // after the backup: the other domain gains a section, and a new wp entry is filed in a section of the rebuilt tree
+    writeSections(roots, [...readSections(roots).filter((s) => s.domain === "wp"), mkSec("sec-other-aaaaaa", "other"), mkSec("sec-other-NEW111", "other")]);
+    put("late", String(plan.state.sections[0].id));
+    put("dangling", "sec-wp-nowhere");
+    const r = restoreAndRender(roots, stamp, { vectorOf: (id) => (id === "late" || id === "dangling" ? es[0].vector : undefined) });
+    // the other domain is exactly as it is NOW (both sections), the wp tree is the backed-up one
+    const now = readSections(roots);
+    expect(now.filter((s) => s.domain === "other").map((s) => s.id).sort()).toEqual(["sec-other-NEW111", "sec-other-aaaaaa"]);
+    expect(now.filter((s) => s.domain === "wp").map((s) => s.id)).toEqual(["sec-wp-old000"]);
+    for (const e of es) expect(sectionOf(e.id)).toBe("sec-wp-old000");
+    // entries whose section is not in the restored tree are re-homed on the nearest leaf
+    expect(r.rehomed.sort()).toEqual(["dangling", "late"]);
+    expect(sectionOf("late")).toBe("sec-wp-old000");
+    expect(sectionOf("dangling")).toBe("sec-wp-old000");
+    expect(r.unresolved).toEqual([]);
+    // the ledger fold agrees (no resurrection of the rebuilt tree) and keeps the other domain's ledger sections out of it
+    const folded = foldSections(readLedger(roots)).filter((s) => s.domain === "wp");
+    expect(folded.map((s) => String(s.id))).toEqual(["sec-wp-old000"]);
+    expect(folded[0].centroid).toEqual([]); // centroid-less event
+    // digest + index re-rendered for the domain
+    expect(existsSync(join(roots.kbBase, "domains", "wp", "INDEX.md"))).toBe(true);
+  });
+
+  it("restore reports (does not guess) entries it cannot re-home, and refuses without a sections backup", async () => {
+    const { writeSections } = await import("./sections.js");
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeSections(roots, [mkSec("sec-wp-old000", "wp", es[0].vector)]);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    commitRebuild(roots, plan);
+    const stamp = listRebuildBackups(roots)[0];
+    put("orphaned", "sec-wp-nowhere");
+    const r = restoreRebuild(roots, stamp); // no vectors
+    expect(r.unresolved).toEqual(["orphaned"]);
+    rmSync(join(roots.denLocal, `sections.json.pre-rebuild-${stamp}`));
+    expect(() => restoreRebuild(roots, stamp)).toThrow(/no sections backup/);
+  });
 });
 
 describe("id continuity and label re-ask", () => {

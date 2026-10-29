@@ -3,8 +3,9 @@
  * re-render the registry, digest and INDEX the commit would have rendered.
  * Shared by the sweep, the tick and the rebuild.
  */
+import { readFileSync } from "node:fs";
 import type { KbRoots } from "../shared/index.js";
-import { recoverRebuild, pendingJournalDomain } from "./rebuild-commit.js";
+import { recoverRebuild, pendingJournalDomain, restoreRebuild, rebuildOldValuesFile, type RestoreResult, type CommitHooks } from "./rebuild-commit.js";
 import { readLedger, foldRegistry } from "./ledger.js";
 import { renderRegistry } from "./registry.js";
 import { renderDomainDigest, renderDomainIndex } from "./domains.js";
@@ -19,4 +20,14 @@ export function recoverAndRender(roots: KbRoots, notify?: (msg: string) => void)
     if (domain) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
   }
   return n;
+}
+
+/** Restore one domain from a rebuild backup, then re-render the registry, digest and INDEX. Caller holds the KB lock. */
+export function restoreAndRender(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf"> = {}): RestoreResult & { domain: string } {
+  const r = restoreRebuild(roots, stamp, hooks);
+  const domain = JSON.parse(readFileSync(rebuildOldValuesFile(roots, stamp), "utf-8")).domain as string;
+  renderRegistry(roots, foldRegistry(readLedger(roots)));
+  renderDomainDigest(roots, domain);
+  renderDomainIndex(roots, domain);
+  return { ...r, domain };
 }

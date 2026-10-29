@@ -823,6 +823,22 @@ export function parseWolfEvent(input: unknown): ParsedWolfEvent {
   return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
 }
 
+// ------------------------------------------------------- hub events
+
+/**
+ * Hub-scoped pack events (`GET /v1/events`). `id` is minted by the hub (monotonic, positive) and is the SSE id (prefixed with the
+ * hub's boot id on the wire: `<boot>:<id>`). `work.changed` fires per hub ledger event; `kb.changed` per KB commit (entry ids);
+ * `wolf.presence` when a wolf registers/leaves (defined here; nothing emits it yet). `resync`: the cursor is too old, refetch.
+ */
+const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
+export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string() });
+export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()) });
+export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]) });
+export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync") });
+export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
+export type HubEvent = z.infer<typeof HubEventSchema>;
+export type HubEventType = HubEvent["type"];
+
 // ------------------------------------------------------- memory events
 
 /**

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ACTOR_HEADER, ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, buildPath, type ErrorCode } from "../index.js";
+import { ACTOR_HEADER, ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, HubEventSchema, buildPath, type ErrorCode } from "../index.js";
 
 export interface HubSuiteOptions {
   /** Headers every request carries (the hub's X-API-Key). */
@@ -201,6 +201,73 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         const res = await send("POST", buildPath("hubGraduateWork", { id: g.id }));
         expect(res.status).toBe(200);
         expect(((await res.json()) as { item: { graduated?: string } }).item.graduated).toBeTruthy();
+      });
+    });
+
+    describe("events", () => {
+      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+      type Frame = { id?: string; event: { type: string; id: number; itemId?: string; event?: string } };
+      /** Open /v1/events; `next(n)` resolves the next n data frames. */
+      async function open(headers: Record<string, string> = {}) {
+        const ctl = new AbortController();
+        const res = await fetch(baseUrl() + buildPath("hubEvents"), { headers: { ...options.headers, ...headers }, signal: ctl.signal });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toContain("text/event-stream");
+        const reader = res.body!.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        const next = async (n: number): Promise<Frame[]> => {
+          const out: Frame[] = [];
+          while (out.length < n) {
+            const i = buf.indexOf("\n\n");
+            if (i < 0) {
+              const r = await reader.read();
+              if (r.done) throw new Error("stream ended");
+              buf += dec.decode(r.value, { stream: true });
+              continue;
+            }
+            const chunk = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            const data = /^data: (.*)$/m.exec(chunk);
+            if (!data) continue; // comment / keepalive
+            out.push({ id: /^id: (.*)$/m.exec(chunk)?.[1], event: HubEventSchema.parse(JSON.parse(data[1])) as Frame["event"] });
+          }
+          return out;
+        };
+        return { next, close: () => ctl.abort() };
+      }
+      const create = async () => {
+        const res = await fetch(baseUrl() + buildPath("hubCreateWork"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...options.headers, ...op },
+          body: JSON.stringify({ kind: "task", domain: options.domain, title: "Events task", assignee: "1uk4" }),
+        });
+        expect(res.status).toBe(201);
+        return ((await res.json()) as { id: string }).id;
+      };
+
+      it("streams work.changed with an increasing sequence, and resumes from Last-Event-ID", async () => {
+        const live = await open();
+        const id = await create();
+        const [first] = await live.next(1);
+        expect(first.event).toMatchObject({ type: "work.changed", itemId: id });
+        expect(typeof first.event.event).toBe("string");
+        expect(first.id).toMatch(/^[0-9a-f]+:\d+$/);
+        live.close();
+        // Missed while disconnected:
+        const id2 = await create();
+        const resumed = await open({ "Last-Event-ID": first.id! });
+        const [got] = await resumed.next(1);
+        expect(got.event).toMatchObject({ type: "work.changed", itemId: id2 });
+        expect(got.event.id).toBeGreaterThan(first.event.id);
+        resumed.close();
+      });
+
+      it("a cursor the hub cannot replay (another boot) answers resync", async () => {
+        const s = await open({ "Last-Event-ID": "deadbeef:1" });
+        const [f] = await s.next(1);
+        expect(f.event.type).toBe("resync");
+        s.close();
       });
     });
 

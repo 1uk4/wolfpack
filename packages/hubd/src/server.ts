@@ -39,6 +39,7 @@ import {
   parseWolfId,
   type WorkAppendedListener,
 } from "./work-writes.js";
+import { createEventBus, DEFAULT_EVENT_BUFFER } from "./events.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 export const API_KEY_HEADER = "x-api-key";
@@ -58,6 +59,8 @@ export interface HubOptions {
    * that never resolves blocks EVERY write (and close()). Never set it in production.
    */
   writeGate?: () => Promise<void> | void;
+  /** Replay buffer size of GET /v1/events (events kept for Last-Event-ID resume). Default 1000. */
+  eventBufferSize?: number;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -66,6 +69,8 @@ export type { WorkAppendedListener };
 export interface HubServer {
   /** Subscribe to ledger appends made by work writes; returns an unsubscribe. Listener errors are swallowed (logged). */
   onWorkAppended(listener: WorkAppendedListener): () => void;
+  /** Publish a `kb.changed` event (entry ids) to /v1/events subscribers; the KB commit path calls this. */
+  emitKbChanged(entryIds: string[]): void;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -182,6 +187,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
+  const bus = createEventBus(opts.eventBufferSize ?? DEFAULT_EVENT_BUFFER);
+  writer.onAppended(({ events }) => bus.workAppended(events));
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
   let server!: Server;
@@ -268,6 +275,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const item = await writeWork(actor, () => unclaimItem(roots, params.id, actor));
           return send(res, 200, { item });
         }
+        case "hubEvents": {
+          const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
+          const cursor = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+          bus.attach(res, cursor || undefined, (fn) => req.on("close", fn));
+          return;
+        }
         case "hubGraduateWork": {
           const actor = writeActor(req);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
@@ -306,12 +319,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     roots,
     port,
     url: `http://${host}:${port}`,
+    emitKbChanged: (ids) => bus.emitKbChanged(ids),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         const drained = writer.close();
+        bus.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));
         server.closeIdleConnections?.();

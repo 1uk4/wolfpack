@@ -13,6 +13,7 @@ import {
   LedgerEntrySchema,
   MemoryEventSchema,
   WolfEventSchema,
+  HubEventSchema,
   MemoryStatusSchema,
   MemoryTopicSchema,
   MemoryObservationsSchema,
@@ -351,6 +352,13 @@ export const ROUTES = {
   hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  /**
+   * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
+   * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`
+   * replays from a bounded buffer, or answers `resync` when the cursor is older than the buffer (or from another hub boot).
+   * Keepalive comments; never ends with `[DONE]`.
+   */
+  hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

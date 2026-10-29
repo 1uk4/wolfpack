@@ -28,6 +28,7 @@ export function orchestratorRules(opts: OrchestratorRulesOptions): string {
 - review a diff or commits → reviewer
 - visualize a system or flow → visualizer
 - independent pieces → spawn in parallel
+Reuse before you spawn: for follow-ups on work a subagent already did (review fixes, iterations, retries, "also handle X"), message that subagent (subagent_message) so it keeps its context and branch; spawn fresh only for independent tasks.
 Stay in the main agent for: talking with the user, decisions and questions, work-item state (create/bind/stage/done), outward-facing actions that need confirmation (deploy, sync), small edits to a file already in context, reading one known section.
 Rule of thumb: if you need a conclusion from output, not the output itself, delegate.
 Brief for every task: goal; relevant paths/context; constraints (incl. files not to touch); done-when; exactly what to return.

@@ -6,7 +6,7 @@
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync, truncateSync } from "node:fs";
 import {
   appendWorkLedger,
   assignWork,
@@ -17,6 +17,7 @@ import {
   linkWork,
   loadWorkState,
   moveWork,
+  resolveWorkItem,
   noteWork,
   retitleWork,
   scheduleWork,
@@ -34,7 +35,7 @@ import {
 } from "@wolfpack/kb/client";
 import { now, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
-import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkRequest } from "@wolfpack/protocol";
+import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkOp, PatchWorkRequest } from "@wolfpack/protocol";
 
 /** One ledger line appended by a write, as parsed JSON (the WorkEvent shape; opaque here). */
 export type LedgerEvent = Record<string, unknown> & { type: string; id: string };
@@ -49,17 +50,42 @@ export type WorkOp =
   | { op: "link"; rel: string; target: string }
   | { op: "unlink"; rel: string; target: string }
   | { op: "body"; text: string }
+  | { op: "section"; name: SectionName; text: string }
   | { op: "standing"; value: boolean }
   | { op: "schedule"; scheduledFor: string | null; durationMinutes?: number };
 
-/** Ops only an operator may issue (PROVISIONAL: ticket 4 owns the final owner-only rules). */
+export type SectionName = "plan" | "notes";
+const SECTION_HEADING: Record<SectionName, string> = { plan: "## Plan", notes: "## Notes" };
+
+/** Ops only an operator may issue: whole-body replace and direct assignee writes. A non-operator gets 403 `forbidden`. */
 export function isOwnerOnlyOp(op: WorkOp): boolean {
   return op.op === "body" || op.op === "assign";
 }
 
+/** Replace one `## <Heading>` section of a body (up to the next level-2 heading). A missing section is added (Plan before Notes). */
+export function replaceSection(body: string, name: SectionName, text: string): string {
+  const heading = SECTION_HEADING[name];
+  const lines = body.split("\n");
+  const start = lines.findIndex((l) => l.trimEnd() === heading);
+  const block = [heading, "", ...(text.trim() ? [text.trim(), ""] : [])];
+  if (start >= 0) {
+    let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+    if (end < 0) end = lines.length;
+    return [...lines.slice(0, start), ...block, ...lines.slice(end)].join("\n").trim() + "\n";
+  }
+  const notes = name === "plan" ? lines.findIndex((l) => l.trimEnd() === SECTION_HEADING.notes) : -1;
+  if (notes >= 0) return [...lines.slice(0, notes), ...block, ...lines.slice(notes)].join("\n").trim() + "\n";
+  return [body.trim(), "", ...block].join("\n").trim() + "\n";
+}
 
-/** PATCH body -> ops. Exactly one field per request for now (the agent route silently took the first it saw). */
+
+/** PATCH body -> ops. A single-op body has exactly one field; a batch is `{ ops: [...] }`, each element a single-field op. */
 export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
+  if ("ops" in b && Array.isArray((b as { ops?: unknown }).ops)) return (b as { ops: PatchWorkOp[] }).ops.flatMap(normaliseOne);
+  return normaliseOne(b as PatchWorkOp);
+}
+
+function normaliseOne(b: PatchWorkOp): WorkOp[] {
   const ops: WorkOp[] = [];
   const nonEmpty = (name: string, v: string): string => {
     if (!v.trim()) throw new HubError("invalid_request", `${name} must not be empty`);
@@ -75,6 +101,17 @@ export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
   if (b.unlink !== undefined) ops.push({ op: "unlink", rel: b.unlink.rel, target: b.unlink.target });
   if (b.body !== undefined) ops.push({ op: "body", text: b.body });
   if (b.standing !== undefined) ops.push({ op: "standing", value: b.standing });
+  if (b.section !== undefined) {
+    const name = b.section.name.trim().toLowerCase();
+    if (name !== "plan" && name !== "notes") {
+      throw new HubError("invalid_request", `section must be "plan" or "notes" (the Record is generated from the ledger and cannot be edited)`);
+    }
+    // A heading inside the text would restructure the body (and could forge a Record/Log section).
+    if (/^#{1,2}[ \t]/m.test(b.section.text)) {
+      throw new HubError("invalid_request", "section text must not contain level-1 or level-2 headings");
+    }
+    ops.push({ op: "section", name, text: b.section.text });
+  }
   if (b.schedule !== undefined) {
     const s = b.schedule;
     ops.push({
@@ -84,16 +121,45 @@ export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
     });
   }
   if (ops.length === 0) {
-    throw new HubError("invalid_request", "no recognized update field. Use: stage, note, title, successCriteria, assignee, moveTo, link, unlink, body, schedule, standing");
+    throw new HubError("invalid_request", "no recognized update field. Use: stage, note, title, successCriteria, assignee, moveTo, link, unlink, body, section, schedule, standing");
   }
-  if (ops.length > 1) throw new HubError("invalid_request", "one field per PATCH request");
+  if (ops.length > 1) throw new HubError("invalid_request", "one field per op");
   return ops;
 }
 
 type Item = ReturnType<typeof createWork>["item"];
 
-/** Apply ops in order to one item. MUST be called inside the write queue. Returns the item as last written. */
+/**
+ * Apply ops in order to one item, ALL-OR-NOTHING. MUST be called inside the write queue (hubd is the sole ledger writer).
+ * The kb work-ops append per op, so atomicity is a rollback: note the ledger size and the item's body, and if any op throws,
+ * truncate the ledger back and re-materialise the touched items' files. A rolled-back batch leaves the ledger byte-identical.
+ */
 export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
+  const before = ledgerSize(roots);
+  const cur0 = loadWorkState(roots).get(id as never);
+  const body0 = cur0 ? resolveWorkItem(roots, cur0.domain as string, id)?.body : undefined;
+  try {
+    return applyOpsUnchecked(roots, id, ops);
+  } catch (e) {
+    try {
+      const touched = new Set<string>([id]);
+      for (const ev of readLedgerSince(roots, before).events) touched.add(ev.id);
+      truncateSync(workLedgerFile(roots), before);
+      const state = loadWorkState(roots);
+      for (const t of touched) {
+        const it = state.get(t as never);
+        if (!it) continue;
+        const body = t === id ? body0 : resolveWorkItem(roots, it.domain as string, t)?.body;
+        commitWorkItem(roots, it, body);
+      }
+    } catch (re) {
+      console.error("hubd: batch rollback failed:", re);
+    }
+    throw e;
+  }
+}
+
+function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {
   let item: Item | undefined;
   for (const o of ops) {
     switch (o.op) {
@@ -111,6 +177,14 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
         const cur = loadWorkState(roots).get(id as never);
         if (!cur) throw new Error(`work item ${id} not found`);
         commitWorkItem(roots, cur, o.text);
+        item = cur;
+        break;
+      }
+      case "section": {
+        const cur = loadWorkState(roots).get(id as never);
+        if (!cur) throw new Error(`work item ${id} not found`);
+        const body = resolveWorkItem(roots, cur.domain as string, id)?.body ?? "";
+        commitWorkItem(roots, cur, replaceSection(body, o.name, o.text));
         item = cur;
         break;
       }

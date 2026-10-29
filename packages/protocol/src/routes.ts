@@ -325,11 +325,11 @@ export const ROUTES = {
   /**
    * Hub work WRITES (hubd is the only ledger writer). Every one requires `X-Wolfpack-Actor` (400 `invalid_request` without).
    * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
-   * 409 `not_ready` (stage not advanceable), 401 `unauthorized` (`body` / `assignee` PATCH by a non-operator; provisional until the
-   * owner-only rules land).
+   * 409 `not_ready` (stage not advanceable), 403 `forbidden` (`body` / `assignee` PATCH by a non-operator).
    * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
-   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`) with EXACTLY ONE field: stage, note, title, successCriteria,
-   * moveTo, link, unlink, standing, schedule; operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
+   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`): one single-field op, or a batch `{ops:[...]}` (1..50 ops, all-or-nothing: validated
+   * first, appended under one lock, nothing appended if any op fails). Fields: stage, note, title, successCriteria,
+   * moveTo, link, unlink, standing, schedule, section ({name: "plan"|"notes", text}; the Record/Log is rejected); operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
    * rejected; `moveTo: null` un-parents (hierarchy rules still apply); `successCriteria: ""` clears it.
    * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.
    * `hubGraduateWork`: mark the item graduated on the ledger (the agent route's behaviour; no distill step).

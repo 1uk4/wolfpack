@@ -159,8 +159,8 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
 
       it("a non-operator body or assignee write is rejected", async () => {
         const c = await create();
-        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { body: "## Plan\n\nx" }, wolf), "unauthorized");
-        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" }, wolf), "unauthorized");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { body: "## Plan\n\nx" }, wolf), "forbidden");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" }, wolf), "forbidden");
         expect((await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" })).status).toBe(200);
       });
 

@@ -16,6 +16,8 @@ export const ErrorCodeSchema = z.enum([
   "busy",
   "not_found",
   "unauthorized",
+  /** The caller is identified but this operation is owner-only (actor kind operator). */
+  "forbidden",
   "version_mismatch",
   "engine_error",
   "invalid_request",
@@ -52,6 +54,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   busy: 409,
   not_found: 404,
   unauthorized: 401,
+  forbidden: 403,
   version_mismatch: 426,
   engine_error: 502,
   invalid_request: 400,

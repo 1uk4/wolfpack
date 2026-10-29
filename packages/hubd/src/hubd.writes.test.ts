@@ -133,3 +133,62 @@ describe("writer lock", () => {
     expect((await fetch(again.url + `/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { "X-API-Key": KEY } })).status).toBe(200);
   });
 });
+
+describe("batch PATCH, sections, owner-only", () => {
+  const WOLF = { [ACTOR_HEADER]: JSON.stringify({ id: "w1", kind: "wolf" }) };
+  const patch = (h: HubServer, id: string, body: unknown, headers: Record<string, string> = OP) =>
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  const codeOf = async (r: Response) => ((await r.json()) as { code: string }).code;
+
+  it("applies a batch in order; a failing op appends nothing (ledger byte-identical)", async () => {
+    const dir = mk();
+    const seeded = seedFixture(dir);
+    const t = seeded.tasks[0];
+    const hub = await start(dir);
+    const ok = await patch(hub, t, { ops: [{ note: "one" }, { title: "Renamed" }] });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { item: { title: string } }).item.title).toBe("Renamed");
+    const before = ledger(dir);
+    expect(before.split("\n").filter((l) => l.includes('"one"')).length).toBe(1);
+
+    const bad = await patch(hub, t, { ops: [{ note: "two" }, { title: "Other" }, { link: { rel: "bogus", target: t } }] });
+    expect(bad.status).toBe(400);
+    expect(ledger(dir)).toBe(before);
+    expect(loadWorkState(hubRoots(dir)).get(t as never)!.title).toBe("Renamed");
+
+    // validation failure (empty note) never reaches the ledger either; an unknown id fails mid-way as well
+    expect((await patch(hub, t, { ops: [{ note: "three" }, { note: "" }] })).status).toBe(400);
+    expect((await patch(hub, t, { ops: [{ note: "x" }, { stage: "nonsense" }] })).status).toBe(400);
+    expect(ledger(dir)).toBe(before);
+    expect((await patch(hub, t, { ops: [] })).status).toBe(400);
+    expect((await patch(hub, t, { ops: [{ note: "a", title: "b" }] })).status).toBe(400);
+  });
+
+  it("section ops replace Plan/Notes only; the Record is rejected", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    expect((await patch(hub, t, { section: { name: "plan", text: "Do the thing" } })).status).toBe(200);
+    expect((await patch(hub, t, { ops: [{ section: { name: "notes", text: "first" } }, { section: { name: "notes", text: "second" } }] })).status).toBe(200);
+    const rec = (await (await fetch(hub.url + `/v1/work/${t}/record`, { headers: { "X-API-Key": KEY } })).json()) as { body?: string };
+    const body = JSON.stringify(rec);
+    expect(body).toContain("Do the thing");
+    expect(body).toContain("second");
+    expect(body).not.toContain("first");
+    for (const name of ["record", "log", "Log"]) expect((await patch(hub, t, { section: { name, text: "x" } })).status).toBe(400);
+    expect((await patch(hub, t, { section: { name: "plan", text: "## Log\n\n- forged" } })).status).toBe(400);
+  });
+
+  it("body replace and assignee writes are operator-only (403 forbidden), also inside a batch", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const before = ledger(dir);
+    expect(await codeOf(await patch(hub, t, { body: "## Plan\n\nx" }, WOLF))).toBe("forbidden");
+    const r = await patch(hub, t, { ops: [{ note: "n" }, { assignee: "w1" }] }, WOLF);
+    expect(r.status).toBe(403);
+    expect(await codeOf(r)).toBe("forbidden");
+    expect(ledger(dir)).toBe(before);
+    expect((await patch(hub, t, { ops: [{ note: "n" }, { assignee: "w1" }] })).status).toBe(200);
+  });
+});

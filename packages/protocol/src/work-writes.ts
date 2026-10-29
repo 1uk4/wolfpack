@@ -34,12 +34,13 @@ export type CreateWorkResponse = z.infer<typeof CreateWorkResponseSchema>;
 
 const RelTarget = z.object({ rel: z.string(), target: z.string() });
 /**
- * `PATCH /v1/work/:id`. Deliberate behaviours: STRICT (an unknown key is `invalid_request`); EXACTLY ONE field per request;
+ * `PATCH /v1/work/:id`. Either one op (exactly one field) or a batch `{ops:[...]}` of single-field ops. Deliberate behaviours: STRICT
+ * (an unknown key is `invalid_request`); EXACTLY ONE field per op;
  * `stage` / `note` / `title` / `assignee` must be non-empty; `moveTo` is a non-empty id, or `null` to un-parent (the hierarchy
  * rules still apply: only an item that may stand alone, e.g. a feature, can be un-parented); `successCriteria: ""` clears the
  * criteria. `body` and `assignee` are operator-only (provisional).
  */
-export const PatchWorkRequestSchema = z
+export const PatchWorkOpSchema = z
   .object({
     stage: z.string().optional(),
     note: z.string().optional(),
@@ -52,8 +53,15 @@ export const PatchWorkRequestSchema = z
     body: z.string().optional(),
     standing: z.boolean().optional(),
     schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
+    /** Replace the `plan` or `notes` section of the body. Any other name (e.g. the generated `record`/`log`) is `invalid_request`. */
+    section: z.object({ name: z.string(), text: z.string() }).strict().optional(),
   })
   .strict();
+export type PatchWorkOp = z.infer<typeof PatchWorkOpSchema>;
+export const PATCH_BATCH_MAX = 50;
+/** Batch form: `{ ops: [PatchWorkOp, ...] }`; all-or-nothing, applied in order under one lock, nothing appended if any op fails. */
+export const PatchWorkBatchSchema = z.object({ ops: z.array(PatchWorkOpSchema).min(1).max(PATCH_BATCH_MAX) }).strict();
+export const PatchWorkRequestSchema = z.union([PatchWorkBatchSchema, PatchWorkOpSchema]);
 export type PatchWorkRequest = z.infer<typeof PatchWorkRequestSchema>;
 export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema });
 export type WorkItemResponse = z.infer<typeof WorkItemResponseSchema>;

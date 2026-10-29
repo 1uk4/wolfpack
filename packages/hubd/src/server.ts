@@ -115,12 +115,12 @@ export function readActor(req: Pick<IncomingMessage, "headers">): Actor {
 
 /**
  * The actor of a MUTATING route (work writes, claim, ...): an explicit actor is REQUIRED (400 `invalid_request` when missing).
- * `ownerOnly` (owner-only operations) additionally requires kind `operator` (401 `unauthorized` otherwise).
+ * `ownerOnly` (owner-only operations) additionally requires kind `operator` (403 `forbidden` otherwise).
  */
 export function writeActor(req: Pick<IncomingMessage, "headers">, opts: { ownerOnly?: boolean } = {}): Actor {
   const actor = assertedActor(req);
   if (!actor) throw new HubError("invalid_request", `${ACTOR_HEADER} is required on this route`);
-  if (opts.ownerOnly && actor.kind !== "operator") throw new HubError("unauthorized", "this operation is owner-only (actor kind operator)");
+  if (opts.ownerOnly && actor.kind !== "operator") throw new HubError("forbidden", "this operation is owner-only (actor kind operator)");
   return actor;
 }
 

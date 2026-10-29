@@ -82,7 +82,7 @@ describe("hubd actor (PROVISIONAL: asserted, not proven)", () => {
     expect(code(() => writeActor(req()))).toBe("invalid_request");
     expect(code(() => writeActor(req({ id: "system", kind: "system" })))).toBe("invalid_request");
     expect(writeActor(req({ id: "w", kind: "wolf" }))).toEqual({ id: "w", kind: "wolf" });
-    expect(code(() => writeActor(req({ id: "w", kind: "wolf" }), { ownerOnly: true }))).toBe("unauthorized");
+    expect(code(() => writeActor(req({ id: "w", kind: "wolf" }), { ownerOnly: true }))).toBe("forbidden");
     expect(code(() => writeActor(req(), { ownerOnly: true }))).toBe("invalid_request");
     expect(writeActor(req({ id: "me", kind: "operator" }), { ownerOnly: true })).toEqual({ id: "me", kind: "operator" });
   });

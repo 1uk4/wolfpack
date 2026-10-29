@@ -8,11 +8,13 @@
  *   status            read-only health + consistency dashboard (no writes):
  *                     sweep lock, inbox backlog, and file↔ledger drift per
  *                     domain. Start here when something looks off.
- *   sweep [--drain]   one tick: route → produce → commit one contribution, then
- *                     reorg the domains it touched. Add --drain to loop ticks
+ *   sweep [--drain]   one tick: route → produce → commit one contribution (places
+ *                     it top-down; no reorg unless WOLFPACK_KB_POST_SWEEP_REORG=1). Add --drain to loop ticks
  *                     until the inbox is empty, the sweep is paused by an
  *                     outage, or a tick makes no progress (manual/dev use).
  *   history <id>      list an entry's kept versions (`--show <timestamp>` prints one)
+ *   rebuild <domain> [--dry-run]  development baseline: rebuild one domain's section tree in
+ *                     memory; --dry-run writes only kb-rebuild-proposal.md in the cwd
  *   rebuild-vectors   wipe + re-embed the entry-vector cache (model change etc.)
  *
  * A den-local lock (sweep.lock) guarantees a single writer — a second sweep
@@ -424,11 +426,12 @@ async function cmdRebuild(): Promise<void> {
   const domain = argv.find((a) => !a.startsWith("--") && a !== "rebuild") ?? null;
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain>");
+    console.error("Usage: wolfpack-kb rebuild <domain> [--dry-run]");
     process.exit(1);
   }
 
-  console.log(`\n── rebuild: ${domain} (full section tree reconstruction) ──`);
+  const dryRun = argv.includes("--dry-run");
+  console.log(`\n── rebuild${dryRun ? " (dry-run: nothing is written to the KB)" : ""}: ${domain} (full section tree reconstruction) ──`);
 
   const engine = makeEngine();
   const result = await reorgFn({
@@ -436,8 +439,14 @@ async function cmdRebuild(): Promise<void> {
     roots,
     domains: [domain],
     rebuild: true,
+    dryRun,
+    proposalPath: dryRun ? join(process.cwd(), "kb-rebuild-proposal.md") : undefined,
     notify: (msg) => console.log(`  ${msg}`),
   });
+  if (dryRun && result.proposal) {
+    console.log(`\n${result.proposal}`);
+    console.log(`proposal written to ${join(process.cwd(), "kb-rebuild-proposal.md")}`);
+  }
 
   console.log(
     `\nrebuild done: ${result.placements} entries placed, ` +
@@ -526,7 +535,7 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all]\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> [--dry-run]\n" +
   "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 

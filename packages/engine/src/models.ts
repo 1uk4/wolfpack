@@ -120,7 +120,7 @@ const TRANSPORT_PROVIDERS: Record<Transport, { engine: string; pi: string }> = {
 };
 
 /** Engine provider for a pi provider id; ids not listed here are used as-is. */
-const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-bridge": "claude-agent-sdk" };
+const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-bridge": "claude-agent-sdk", "claude-stateless": "claude-agent-sdk" };
 
 /**
  * Engine providers that have an adapter (adapters/index.ts). Engine steps (memory, consolidation, KB sweep,

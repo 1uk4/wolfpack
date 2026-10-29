@@ -48,12 +48,13 @@
     "@earendil-works/pi-durable": "^1.4.0",
     "@wolfpack/agent": "*",
     "@wolfpack/agents": "*",
-    "@wolfpack/workspaces": "*",
     "@wolfpack/engine": "*",
     "@wolfpack/memory": "*",
     "@wolfpack/protocol": "*",
+    "@wolfpack/workspaces": "*",
     "grammy": "^1.21.0",
     "pi-claude-bridge": "github:1uk4/pi-claude-bridge#durable-core",
+    "pi-claude-bridge-stateless": "file:../../../../pi-claude-bridge",
     "yaml": "^2.6.0"
   },
   "devDependencies": {

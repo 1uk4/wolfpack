@@ -114,14 +114,14 @@ describe("resolveModelTable / resolveWolfModel: per-tier providers and legacy tr
 });
 
 describe("harness stays provider-agnostic", () => {
-  it("only providers/claude-bridge.ts imports or names the bridge (non-test sources)", () => {
+  it("only providers/claude-bridge.ts and claude-stateless.ts import or names the bridge (non-test sources)", () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "..");
     const hits: string[] = [];
     const walk = (d: string) => {
       for (const e of readdirSync(d, { withFileTypes: true })) {
         const f = join(d, e.name);
         if (e.isDirectory()) walk(f);
-        else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) && !f.endsWith(join("providers", "claude-bridge.ts"))) {
+        else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) && !f.endsWith(join("providers", "claude-bridge.ts")) && !f.endsWith(join("providers", "claude-stateless.ts"))) {
           const code = readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
           if (/pi-claude-bridge|["'`]claude-bridge["'`]|createBridgeModels|sweepOrphans/.test(code)) hits.push(f.slice(root.length));
         }

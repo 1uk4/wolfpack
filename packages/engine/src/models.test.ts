@@ -303,6 +303,10 @@ describe("per-tier providers and engine-step tiers", () => {
       expect(() => resolveModelTable({ pack: pack({ [tier]: { model: "x", provider: "openrouter" } }), location: "local" })).toThrow(/models\.(smart|fast)\.provider "openrouter" has no engine adapter/);
     }
   });
+  it("claude-stateless on an engine-step tier maps to the claude-agent-sdk adapter, like claude-bridge", () => {
+    const t = resolveModelTable({ pack: pack({ smart: { model: "claude-sonnet-5-5", provider: "claude-stateless" } }), location: "local" });
+    expect(t.tiers.smart).toMatchObject({ provider: "claude-agent-sdk", piProvider: "claude-stateless", piModel: "claude-stateless/claude-sonnet-5-5" });
+  });
   it("main may name any pi provider", () => {
     const t = resolveModelTable({ pack: pack({ main: { model: "x/y", provider: "openrouter" } }), location: "local" });
     expect(t.tiers.main.piModel).toBe("openrouter/x/y");

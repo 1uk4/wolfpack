@@ -69,6 +69,7 @@ describe("activityWolves", () => {
 		];
 		assert.deepEqual(activityWolves("lib", w), ["lib", "ada", "bob"]);
 		assert.deepEqual(activityWolves("lib", w, 2), ["lib", "ada"]);
+		assert.deepEqual(activityWolves(null, [{ name: "1uk4", status: "busy" }]), ["1uk4"]);
 		const many = Array.from({ length: 9 }, (_, i) => ({ name: `w${i}`, status: "online" }));
 		assert.deepEqual(activityWolves("lib", many), ["lib", "w0", "w1", "w2", "w3"]);
 	});

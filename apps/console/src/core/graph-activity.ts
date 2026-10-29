@@ -158,7 +158,7 @@ export function activityWolves(
 	const out: string[] = librarian ? [librarian] : [];
 	for (const w of wolves) {
 		if (out.length >= cap) break;
-		if (w.status === "online" && !out.includes(w.name)) out.push(w.name);
+		if (w.status !== "offline" && !out.includes(w.name)) out.push(w.name);
 	}
 	return out;
 }

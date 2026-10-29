@@ -43,7 +43,8 @@ export type WolfChoice =
 	| { kind: "pick"; online: string[] };
 
 export function graduationWolf(assignee: string | undefined, wolves: readonly { name: string; status: string }[]): WolfChoice {
-	const online = wolves.filter((w) => w.status === "online").map((w) => w.name);
+	// A busy wolf (mid-turn) still runs a graduation job; only "offline" is excluded.
+	const online = wolves.filter((w) => w.status !== "offline").map((w) => w.name);
 	if (assignee && online.includes(assignee)) return { kind: "assignee", wolf: assignee };
 	return { kind: "pick", online };
 }

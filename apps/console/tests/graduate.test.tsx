@@ -83,6 +83,8 @@ describe("graduationWolf", () => {
 	it("an offline assignee, a person or nobody means the owner picks among the online wolves", () => {
 		for (const a of ["forge", "1uk4", undefined]) assert.deepEqual(graduationWolf(a, wolves), { kind: "pick", online: ["hal", "lib"] });
 		assert.deepEqual(graduationWolf("hal", []), { kind: "pick", online: [] });
+		// a busy wolf (mid-turn) still runs the graduation
+		assert.deepEqual(graduationWolf("1uk4", [{ name: "1uk4", status: "busy" }]), { kind: "assignee", wolf: "1uk4" });
 	});
 });
 

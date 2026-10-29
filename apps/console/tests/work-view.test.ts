@@ -14,6 +14,8 @@ describe("workWolfCandidates", () => {
 	it("falls back to online wolves without a librarian; none online → empty", () => {
 		assert.deepEqual(workWolfCandidates(null, wolves), ["hal", "lib"]);
 		assert.deepEqual(workWolfCandidates(null, [{ name: "old", status: "offline" }]), []);
+		// a wolf mid-turn (busy) still serves the Work API
+		assert.deepEqual(workWolfCandidates(null, [{ name: "1uk4", status: "busy" }]), ["1uk4"]);
 	});
 });
 

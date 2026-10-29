@@ -10,11 +10,12 @@ export interface WolfLike {
 	librarian?: boolean;
 }
 
-/** Wolves to try for a work record, in order: the librarian, then every other online wolf. */
+/** Wolves to try for a work record, in order: the librarian, then every other reachable wolf (online or busy:
+ *  a wolf mid-turn still serves its Work API; only "offline" is skipped). */
 export function workWolfCandidates(librarian: string | null, wolves: readonly WolfLike[]): string[] {
 	const out: string[] = [];
 	if (librarian) out.push(librarian);
-	for (const w of wolves) if (w.status === "online" && !out.includes(w.name)) out.push(w.name);
+	for (const w of wolves) if (w.status !== "offline" && !out.includes(w.name)) out.push(w.name);
 	return out;
 }
 

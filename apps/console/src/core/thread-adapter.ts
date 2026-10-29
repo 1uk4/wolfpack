@@ -323,7 +323,7 @@ export function threadListItem(
 	wolf: string,
 	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
-): ChatListItem & { href: string; meta: string; needsYou: boolean } & Omit<ChildThread, "id" | "title"> {
+): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,

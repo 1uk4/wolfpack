@@ -398,15 +398,8 @@ export class ThreadRuntime {
     this.lastActivity = Date.now();
   }
 
-  /** Messages before this index predate the newest compaction (initial page never starts after it). */
-  private compactionIndex: number | undefined;
-
   private resetMessages(entries: EngineSnapshot["entries"]): void {
     this.messages = messagesFromEntries(entries);
-    // Index of the first message after the newest compaction marker in the snapshot (best effort: undefined when none is visible).
-    let marker = -1;
-    entries.forEach((e, i) => { if (/compaction/i.test(String(e.kind))) marker = i; });
-    this.compactionIndex = marker < 0 ? undefined : messagesFromEntries(entries.slice(0, marker + 1)).length;
     this.seenEntries = new Set(entries.map((e) => e.id));
     this.cards.reset(entries);
     // The first baseline (attach) announces nothing: a connection's baseline carries the pending cards.
@@ -579,7 +572,7 @@ export class ThreadRuntime {
       return list.length ? { attachments: list } : {};
     };
     const pendingCards = this.cards.pending();
-    const page = pageRange(this.messages, { ...opts, compactionIndex: this.compactionIndex, requiredCallIds: pendingCards.map((c) => c.callId) });
+    const page = pageRange(this.messages, { ...opts, requiredCallIds: pendingCards.map((c) => c.callId) });
     const messages = this.messages.slice(page.start, page.end).map((m) => ({
       ...m,
       // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.

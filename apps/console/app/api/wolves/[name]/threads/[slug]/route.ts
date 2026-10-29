@@ -9,7 +9,13 @@ export async function GET(
 	const { name, slug } = await ctx.params;
 	const url = new URL(req.url);
 	const rawLimit = url.searchParams.get("limit");
-	const limit = rawLimit !== null && Number.isInteger(Number(rawLimit)) && Number(rawLimit) > 0 ? Number(rawLimit) : undefined;
 	const before = url.searchParams.get("before") ?? undefined;
+	if (rawLimit !== null && !/^[1-9]\d*$/.test(rawLimit)) {
+		return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+	}
+	if (before !== undefined && rawLimit === null) {
+		return Response.json({ error: "before needs limit" }, { status: 400 });
+	}
+	const limit = rawLimit !== null ? Number(rawLimit) : undefined;
 	return threadApi().thread({ wolf: name, slug }, { ...(limit !== undefined ? { limit } : {}), ...(before ? { before } : {}) });
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { createEarlierScroll } from "@/components/earlier-scroll";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
@@ -188,7 +189,7 @@ function ThreadChatInner({
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
 	const pageRef = useRef<(json: unknown) => void>(() => {});
 	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev), (json) => pageRef.current(json)), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError, resumeStream, hasMore, loadingEarlier, loadEarlier } = useChatSession({
+	const { messages, status, error, send, steer, clearError, resumeStream, hasMore, loadingEarlier, earlierCount, loadEarlier } = useChatSession({
 		chatId: threadId,
 		initialMessages,
 		initialHasMore,
@@ -226,35 +227,34 @@ function ThreadChatInner({
 	// The scroll position is kept by measuring scrollHeight/scrollTop before the fetch and restoring the delta once the
 	// prepended rows are laid out (useLayoutEffect, before paint), so the message the operator was reading stays put.
 	const earlierRef = useRef<HTMLDivElement | null>(null);
-	const keepScroll = useRef<{ el: HTMLElement; height: number; top: number } | null>(null);
-	const showEarlier = useCallback(async () => {
+	const scrollKeep = useRef(createEarlierScroll()).current;
+	const showEarlier = useCallback(() => scrollKeep.run(scrollParent(earlierRef.current), () => loadEarlier()), [loadEarlier, scrollKeep]);
+	// Keyed on the count of paged-in rows (earlierCount), not the whole list: a streamed message never triggers a restore,
+	// and a page that adds no rows leaves nothing pending.
+	useLayoutEffect(() => scrollKeep.restore(), [earlierCount, scrollKeep]);
+	// The top trigger arms only after the list has been at the bottom once (the initial scroll-to-bottom must not look
+	// like "reached the top"), then stays armed: it is not rebuilt when streamed messages arrive.
+	const [atBottomOnce, setAtBottomOnce] = useState(false);
+	useEffect(() => {
+		if (atBottomOnce || !hasMore) return;
 		const el = scrollParent(earlierRef.current);
-		if (el) keepScroll.current = { el, height: el.scrollHeight, top: el.scrollTop };
-		const added = await loadEarlier();
-		if (!added) keepScroll.current = null;
-	}, [loadEarlier]);
-	useLayoutEffect(() => {
-		const k = keepScroll.current;
-		if (!k) return;
-		keepScroll.current = null;
-		k.el.scrollTop = k.top + (k.el.scrollHeight - k.height);
-	}, [messages.length]);
+		if (!el) return;
+		const check = () => {
+			if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) setAtBottomOnce(true);
+		};
+		check();
+		el.addEventListener("scroll", check, { passive: true });
+		return () => el.removeEventListener("scroll", check);
+	}, [atBottomOnce, hasMore]);
 	useEffect(() => {
 		const node = earlierRef.current;
-		if (!hasMore || !node || typeof IntersectionObserver === "undefined") return;
-		let io: IntersectionObserver | undefined;
-		// Armed a moment after mount/each page: the list first scrolls to the bottom, and the divider must not fire before that.
-		const arm = setTimeout(() => {
-			io = new IntersectionObserver((entries) => {
-				if (entries.some((e) => e.isIntersecting)) void showEarlier();
-			}, { root: scrollParent(node) });
-			io.observe(node);
-		}, 400);
-		return () => {
-			clearTimeout(arm);
-			io?.disconnect();
-		};
-	}, [hasMore, messages.length, showEarlier]);
+		if (!hasMore || !atBottomOnce || !node || typeof IntersectionObserver === "undefined") return;
+		const io = new IntersectionObserver((entries) => {
+			if (entries.some((e) => e.isIntersecting)) void showEarlier();
+		}, { root: scrollParent(node) });
+		io.observe(node);
+		return () => io.disconnect();
+	}, [hasMore, atBottomOnce, showEarlier]);
 	// An older page brings its own card calls (answered cards in history); pending cards are always in the newest page.
 	useEffect(() => {
 		pageRef.current = (json) => {

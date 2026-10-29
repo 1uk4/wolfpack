@@ -105,7 +105,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const q = new URLSearchParams();
     if (opts.limit !== undefined) q.set("limit", String(opts.limit));
     if (opts.before !== undefined) q.set("before", opts.before);
-    return (await this.json("getThread", { id: threadId }, ROUTES.getThread.response.schema, undefined, threadId, q.size ? `?${q}` : "")) as ThreadDetail;
+    return (await this.json("getThread", { id: threadId }, ROUTES.getThread.response.schema, undefined, threadId, q.toString() ? `?${q}` : "")) as ThreadDetail;
   }
 
   async listChildren(threadId: string): Promise<ThreadSummary[]> {

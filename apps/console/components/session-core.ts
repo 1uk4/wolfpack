@@ -71,6 +71,12 @@ export interface SessionTransport {
 	createWire(): (raw: Record<string, unknown>) => Record<string, unknown>[];
 }
 
+/** The sync response's own `hasMore` (a paged thread record), when it carries one. */
+function hasMoreOf(json: unknown): boolean | undefined {
+	const v = (json as { hasMore?: unknown } | null)?.hasMore;
+	return typeof v === "boolean" ? v : undefined;
+}
+
 export function legacyTransport(chatId: string): SessionTransport {
 	return {
 		submitUrl: "/api/chat",
@@ -266,6 +272,8 @@ export interface SessionState {
 	hasMore: boolean;
 	/** An older page is being fetched. */
 	loadingEarlier: boolean;
+	/** How many earlier (paged-in) messages precede the record: grows only when a page prepends rows. */
+	earlierCount: number;
 }
 
 /** One queued composer steer: the client-minted id (the upsert key) + text. */
@@ -320,6 +328,12 @@ export class SessionModel {
 	private older: LhMessage[] = [];
 	private hasMoreValue: boolean;
 	private loadingEarlierValue = false;
+	/** The view unmounted: late fetches must not touch state or notify. */
+	private disposed = false;
+
+	setDisposed(v: boolean): void {
+		this.disposed = v;
+	}
 	// The live turn's execution layer (view model mid-turn states):
 	private executions = new Map<string, LiveExecution>();
 	private streamingIds = new Set<string>();
@@ -367,6 +381,7 @@ export class SessionModel {
 			error: this.errorValue,
 			steerQueue: this.steerQueueValue,
 			hasMore: this.hasMoreValue,
+			earlierCount: this.older.length,
 			loadingEarlier: this.loadingEarlierValue,
 		};
 	}
@@ -375,10 +390,24 @@ export class SessionModel {
 	 * A fresh record (the newest page, or everything) becomes the base. Loaded messages the record no longer holds
 	 * (it is the newest page: it starts later than what the operator paged in) move to the earlier prefix, so a
 	 * settle sync never makes the history the operator scrolled into vanish.
+	 * GAP: when the record's first message is not among those loaded (a long reattach: more arrived than a page holds)
+	 * the loaded history no longer joins the record; the stale prefix is dropped and `hasMore` is true so Show earlier
+	 * refetches the missing stretch. `hasMore` comes from the sync response when it carries one; with a joined prefix the
+	 * prefix's own state (from its last page) stands.
 	 */
-	private swapBase(record: LhMessage[]): void {
-		const ids = new Set(record.map((m) => (m as { id?: string }).id));
-		this.older = [...this.older, ...this.base].filter((m) => !ids.has((m as { id?: string }).id));
+	private swapBase(record: LhMessage[], hasMore?: boolean): void {
+		const idOf = (m: LhMessage) => (m as { id?: string }).id;
+		const ids = new Set(record.map(idOf));
+		const firstId = record[0] ? idOf(record[0]) : undefined;
+		const loaded = [...this.older, ...this.base];
+		const joined = firstId === undefined || loaded.length === 0 || loaded.some((m) => idOf(m) === firstId);
+		if (joined) {
+			this.older = loaded.filter((m) => !ids.has(idOf(m)));
+			if (this.older.length === 0 && hasMore !== undefined) this.hasMoreValue = hasMore;
+		} else {
+			this.older = [];
+			this.hasMoreValue = hasMore ?? true;
+		}
 		this.base = record;
 	}
 
@@ -392,8 +421,10 @@ export class SessionModel {
 		let added = 0;
 		try {
 			const res = await this.fetch(this.transport.pageUrl(first.id, limit));
+			if (this.disposed) return 0;
 			if (res.ok) {
 				const json = await res.json();
+				if (this.disposed) return 0;
 				const page = this.transport.parseRecord(json);
 				if (page) {
 					const have = new Set([...this.older, ...this.base].map((m) => (m as { id?: string }).id));
@@ -409,9 +440,8 @@ export class SessionModel {
 		} catch {
 			/* the divider stays; the operator can retry */
 		} finally {
-			this.mutate(() => {
-				this.loadingEarlierValue = false;
-			});
+			this.loadingEarlierValue = false;
+			if (!this.disposed) this.onChange?.();
 		}
 		return added;
 	}
@@ -658,7 +688,7 @@ export class SessionModel {
 					const record = this.transport.parseRecord(json);
 					if (record) {
 						this.mutate(() => {
-							this.swapBase(record);
+							this.swapBase(record, hasMoreOf(json));
 							this.tail = [];
 						});
 						// A turn that ended before we attached is already in the record: replaying it would double its messages.
@@ -880,9 +910,9 @@ export class SessionModel {
 	}
 
 	/** Full snapshot swap (the idle settle sync — server canon). */
-	setMessages(record: LhMessage[]): void {
+	setMessages(record: LhMessage[], hasMore?: boolean): void {
 		this.mutate(() => {
-			this.swapBase(record);
+			this.swapBase(record, hasMore);
 			this.tail = [];
 			this.streamingMessageId = null; // the tail (and its slot) is gone
 		});
@@ -895,7 +925,7 @@ export class SessionModel {
 	 * optimistic entries the record has absorbed (their server-stamped
 	 * copies just landed; without this the input bubble would double).
 	 */
-	adoptRecord(record: LhMessage[]): void {
+	adoptRecord(record: LhMessage[], hasMore?: boolean): void {
 		const recordIds = new Set(record.map((m) => (m as { id?: string }).id));
 		// A paged record starts later than the base: only base messages from the record's first one on must still be in it.
 		const firstId = (record[0] as { id?: string } | undefined)?.id;
@@ -903,7 +933,7 @@ export class SessionModel {
 		const baseAbsorbed = this.base.slice(from).some((m) => !recordIds.has((m as { id?: string }).id));
 		if (baseAbsorbed) return; // not a pure append — the idle full sync is the net
 		this.mutate(() => {
-			this.swapBase(record);
+			this.swapBase(record, hasMore);
 			this.tail = this.tail.filter((m) => !absorbed(m, record));
 		});
 	}

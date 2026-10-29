@@ -18,10 +18,6 @@ describe("pageRange", () => {
   it("newest page is the last `limit`; cursor is its first id", () => {
     expect(pageRange(msgs(120), { limit: 50 })).toEqual({ start: 70, end: 120, hasMore: true, cursor: "m70" });
   });
-  it("everything since the newest compaction wins when larger", () => {
-    expect(pageRange(msgs(120), { limit: 50, compactionIndex: 20 })).toMatchObject({ start: 20, hasMore: true });
-    expect(pageRange(msgs(120), { limit: 50, compactionIndex: 100 })).toMatchObject({ start: 70 });
-  });
   it("widens to hold a pending card's message", () => {
     expect(pageRange(msgs(120, { 10: "c1" }), { limit: 50, requiredCallIds: ["c1"] })).toMatchObject({ start: 10 });
   });

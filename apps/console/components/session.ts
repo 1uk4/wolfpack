@@ -47,7 +47,9 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 	const [version, bump] = useReducer((n: number) => n + 1, 0);
 	useEffect(() => {
 		model.onChange = bump;
+		model.setDisposed(false);
 		return () => {
+			model.setDisposed(true);
 			model.onChange = undefined;
 		};
 	}, [model, bump]);
@@ -126,6 +128,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, ini
 	return {
 		messages: state.messages,
 		hasMore: state.hasMore,
+		earlierCount: state.earlierCount,
 		loadingEarlier: state.loadingEarlier,
 		loadEarlier,
 		nativeMessages: state.nativeMessages,

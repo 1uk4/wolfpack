@@ -1,6 +1,6 @@
 /** GET /v1/threads/:id paging on a real wolfd: default unchanged, newest page, older pages, bad limit. */
 import { afterEach, describe, expect, it } from "vitest";
-import { fauxAssistantMessage } from "./scripted-model.js";
+import { fauxAssistantMessage, fauxToolCall } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
 
 let tw: TestWolf | undefined;
@@ -38,8 +38,23 @@ describe("thread transcript paging", () => {
     expect((await tw.client.getThread(tw.home, { limit: 50 })).messages).toHaveLength(10);
   });
 
-  it("rejects a non-positive limit", async () => {
+  it("rejects a non-positive limit and a bare `before`", async () => {
     tw = await startTestWolf({ script: [] });
     await expect(tw.client.getThread(tw.home, { limit: 0 })).rejects.toThrow();
+    await expect(tw.client.getThread(tw.home, { before: "entry-1" })).rejects.toThrow();
+  });
+
+  it("a pending card's message is in the newest page and pendingCards is whole, however small the limit", async () => {
+    tw = await startTestWolf({
+      script: [fauxAssistantMessage("earlier"), fauxAssistantMessage([fauxToolCall("ask_user_question", { question: "Which branch?" })], { stopReason: "toolUse" })],
+    });
+    await tw.client.submit(tw.home, "first", { whenBusy: "reject" });
+    for await (const _ of tw.client.watch(tw.home));
+    await tw.client.submit(tw.home, "ask me", { whenBusy: "reject" });
+    for await (const _ of tw.client.watch(tw.home));
+    const page = await tw.client.getThread(tw.home, { limit: 1 });
+    expect(page.pendingCards).toHaveLength(1);
+    expect(page.messages.some((m) => m.tools?.some((t) => t.callId === page.pendingCards![0]!.callId))).toBe(true);
+    expect(page.hasMore).toBe(true);
   });
 });

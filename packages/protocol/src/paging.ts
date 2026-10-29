@@ -8,8 +8,6 @@ export interface PageOptions {
   limit?: number;
   /** Cursor: a message id; the page ends just before it (older messages). Absent = the newest page. */
   before?: string;
-  /** Index of the first message after the newest compaction; the newest page never starts later than this. */
-  compactionIndex?: number;
   /** Tool call ids of pending cards; the newest page always starts early enough to include their messages. */
   requiredCallIds?: readonly string[];
 }
@@ -24,8 +22,8 @@ export interface Page {
 }
 
 /**
- * Pure page maths over the full ordered message list. Newest page (`before` absent): the last `limit` messages, or
- * everything since the newest compaction, whichever is larger, extended further back to hold any pending card's message.
+ * Pure page maths over the full ordered message list. Newest page (`before` absent): the last `limit` messages,
+ * extended further back to hold any pending card's message.
  * Older pages (`before` set): exactly the `limit` messages before the cursor (unknown cursor = empty, no more).
  */
 export function pageRange(messages: readonly ThreadMessage[], opts: PageOptions): Page {
@@ -40,7 +38,6 @@ export function pageRange(messages: readonly ThreadMessage[], opts: PageOptions)
       start = Math.max(0, end - limit);
     } else {
       start = Math.max(0, n - limit);
-      if (opts.compactionIndex !== undefined) start = Math.min(start, Math.max(0, opts.compactionIndex));
       const need = new Set(opts.requiredCallIds ?? []);
       if (need.size) {
         const first = messages.findIndex((m) => m.tools?.some((t) => need.has(t.callId)));

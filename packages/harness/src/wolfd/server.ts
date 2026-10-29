@@ -609,7 +609,9 @@ export class WolfServer {
           limit = Number(rawLimit);
           if (!Number.isInteger(limit) || limit < 1) throw new HttpError("invalid_request", "limit must be a positive integer");
         }
-        const detail = this.checkThread(params.id).detail({ ...(limit !== undefined ? { limit } : {}), ...(url.searchParams.get("before") ? { before: url.searchParams.get("before")! } : {}) });
+        const before = url.searchParams.get("before");
+        if (before !== null && limit === undefined) throw new HttpError("invalid_request", "before needs limit");
+        const detail = this.checkThread(params.id).detail({ ...(limit !== undefined ? { limit } : {}), ...(before ? { before } : {}) });
         return this.json(res, 200, await this.withWorkspace(detail));
       }
       // ---- header git tree ----

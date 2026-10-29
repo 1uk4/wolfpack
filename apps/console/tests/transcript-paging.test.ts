@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SessionModel } from "../components/session-core.ts";
+import { createEarlierScroll } from "../components/earlier-scroll.ts";
 import { threadTransport, THREAD_PAGE_SIZE } from "../components/thread-transport.ts";
 import { createThreadApi } from "../src/server/thread-api.ts";
 import { threadMessagesToNative } from "../src/core/index.ts";
@@ -78,5 +79,76 @@ describe("transcript paging", () => {
 		const api = createThreadApi(() => client as never);
 		await api.thread({ wolf: "w", slug: "home" }, { limit: 50, before: "m9" });
 		assert.deepEqual(seen, [{ limit: 50, before: "m9" }]);
+	});
+
+	it("swapBase: a record that does not join the loaded history drops the stale prefix and reopens hasMore", async () => {
+		const m = new SessionModel({ chatId: "c", initialMessages: native(range(70, 120)), initialHasMore: true, transport: threadTransport("w", "home"), fetch: pagedFetch(120, []) });
+		await m.loadEarlier();
+		assert.equal(m.getState().earlierCount, 50);
+		// a long reattach: the newest page starts at 300, nothing loaded joins it
+		m.setMessages(native(range(300, 350)));
+		assert.equal(ids(m).length, 50);
+		assert.equal(ids(m)[0], "m300");
+		assert.equal(m.getState().earlierCount, 0);
+		assert.equal(m.getState().hasMore, true);
+	});
+
+	it("hasMore comes from the sync response when no earlier prefix is held", () => {
+		const m = new SessionModel({ chatId: "c", initialMessages: native(range(70, 120)), initialHasMore: true, transport: threadTransport("w", "home"), fetch: pagedFetch(120, []) });
+		m.setMessages(native(range(0, 30)), false); // the whole short transcript
+		assert.equal(m.getState().hasMore, false);
+		m.setMessages(native(range(0, 30)), true);
+		assert.equal(m.getState().hasMore, true);
+	});
+
+	it("resume sync takes hasMore from the record JSON", async () => {
+		const sseBody = "data: [DONE]\n\n";
+		const fetchFn = (async (url: string) => {
+			if (String(url).includes("/stream")) return new Response(sseBody, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+			return Response.json({ messages: range(0, 5), hasMore: false, busy: false });
+		}) as typeof fetch;
+		const m = new SessionModel({ chatId: "c", initialMessages: native(range(70, 120)), initialHasMore: true, transport: threadTransport("w", "home"), fetch: fetchFn });
+		await m.resumeStream(true, true);
+		assert.equal(m.getState().hasMore, false);
+		assert.equal(ids(m).length, 5);
+	});
+
+	it("loadEarlier after dispose neither changes state nor notifies", async () => {
+		let notified = 0;
+		const m = new SessionModel({ chatId: "c", initialMessages: native(range(70, 120)), initialHasMore: true, transport: threadTransport("w", "home"), fetch: pagedFetch(120, []), onChange: () => notified++ });
+		const p = m.loadEarlier();
+		m.setDisposed(true);
+		const before = notified;
+		assert.equal(await p, 0);
+		assert.equal(notified, before);
+		assert.equal(ids(m).length, 50);
+	});
+
+	it("scroll keeper: a second trigger mid-load is ignored and the first measurement survives", async () => {
+		const el = { scrollHeight: 1000, scrollTop: 0 };
+		const keep = createEarlierScroll();
+		let release!: (n: number) => void;
+		const first = keep.run(el, () => new Promise<number>((r) => (release = r)));
+		let secondLoads = 0;
+		el.scrollHeight = 1000;
+		await keep.run({ scrollHeight: 5, scrollTop: 5 }, async () => (secondLoads++, 0)); // ignored: busy
+		assert.equal(secondLoads, 0);
+		assert.equal(keep.pending, true);
+		el.scrollHeight = 1800; // 800px of prepended rows
+		release(10);
+		await first;
+		keep.restore();
+		assert.equal(el.scrollTop, 800);
+		assert.equal(keep.pending, false);
+	});
+
+	it("scroll keeper: an empty page drops the measurement, so a later unrelated restore does nothing", async () => {
+		const el = { scrollHeight: 1000, scrollTop: 40 };
+		const keep = createEarlierScroll();
+		await keep.run(el, async () => 0);
+		assert.equal(keep.pending, false);
+		el.scrollHeight = 1500;
+		keep.restore();
+		assert.equal(el.scrollTop, 40);
 	});
 });

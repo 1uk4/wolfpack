@@ -405,7 +405,10 @@ export class StubServer {
   private pagedDetail(t: ThreadState, url: URL): ThreadDetail {
     const full = this.detail(t);
     const rawLimit = url.searchParams.get("limit");
-    if (rawLimit === null) return full;
+    if (rawLimit === null) {
+      if (url.searchParams.has("before")) throw new HttpError("invalid_request", "before needs limit");
+      return full;
+    }
     const limit = Number(rawLimit);
     if (!Number.isInteger(limit) || limit < 1) throw new HttpError("invalid_request", "limit must be a positive integer");
     const page = pageRange(full.messages, { limit, before: url.searchParams.get("before") ?? undefined });

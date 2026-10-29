@@ -44,12 +44,16 @@ export function resolveHost(name: string, configPath = join(homedir(), ".wolfpac
   if (!/^[A-Za-z0-9.\-]+$/.test(h.address)) throw new Error(`host "${name}": suspicious address`);
   const user = typeof h.ssh?.user === "string" ? h.ssh.user : "root";
   if (!/^[a-z_][a-z0-9_-]*$/i.test(user)) throw new Error(`host "${name}": suspicious ssh user`);
-  const port = typeof h.ssh?.port === "number" ? h.ssh.port : 22;
+  const rawPort = h.ssh?.port;
+  const port = rawPort === undefined ? 22 : rawPort;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`cannot read or parse the wolfpack host config at ${configPath}`);
   return { name, address: h.address, user, port, identityFile: join(homedir(), ".ssh", "wolfpack") };
 }
 
+/** The `-e` value is split by rsync on whitespace with quote handling, so the identity path is double-quoted; quotes/backslashes in it are rejected. */
 export function sshCommand(h: RemoteHost): string {
-  return `ssh -i ${h.identityFile} -p ${h.port} -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=3`;
+  if (/["'\\\n\r]/.test(h.identityFile)) throw new Error("ssh identity file path contains quotes, backslashes or newlines");
+  return `ssh -i "${h.identityFile}" -p ${h.port} -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=3`;
 }
 
 /**

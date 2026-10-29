@@ -15,7 +15,12 @@ export interface CliArgs {
 }
 
 export const MIN_KEY_LENGTH = 16;
-export const isLoopback = (h: string) => h === "localhost" || h === "::1" || h === "[::1]" || /^127\./.test(h);
+/** Strict: `localhost`, `::1`/`[::1]`, or a dotted-quad 127.x.y.z with every octet <= 255. DNS names such as 127.evil.com are NOT loopback. */
+export const isLoopback = (h: string): boolean => {
+  if (h === "localhost" || h === "::1" || h === "[::1]") return true;
+  if (!/^127(\.\d{1,3}){3}$/.test(h)) return false;
+  return h.split(".").every((o) => Number(o) <= 255);
+};
 
 const USAGE = `usage:
   hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1]

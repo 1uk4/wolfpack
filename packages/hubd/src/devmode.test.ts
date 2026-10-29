@@ -2,12 +2,12 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { homedir as homedirForTest, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { main, parseArgs } from "./cli.js";
+import { isLoopback, main, parseArgs } from "./cli.js";
 
 const GOOD_KEY = "0123456789abcdef0123";
 import { createHubServer } from "./server.js";
 import {
-  assertNotLiveMirror, assertSafeDevDataDir, buildPullArgs, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
+  assertNotLiveMirror, assertSafeDevDataDir, buildPullArgs, sshCommand, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
   type PullRunner, type RemoteHost,
 } from "./snapshot.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -59,6 +59,12 @@ describe("hubd cli args", () => {
     for (const bad of ["99999", "0", "-1", "1.5", "abc"]) expect(() => parseArgs(["serve", "--data-dir", "/d", "--port", bad])).toThrow(/port/);
     expect(() => parseArgs(["serve", "--data-dir", "/d", "--api-key", "x"])).toThrow(/unknown/);
     expect(() => parseArgs(["serve", "--data-dir", "/d", "--snapshot", "h"])).toThrow(/unknown/);
+  });
+  it("isLoopback is strict", () => {
+    for (const ok of ["127.0.0.1", "127.255.255.254", "localhost", "::1", "[::1]"]) expect(isLoopback(ok)).toBe(true);
+    for (const bad of ["127.evil.com", "0.0.0.0", "127.0.0.256", "127.0.0", "127.0.0.1.evil.com", "128.0.0.1", "10.0.0.1", ""]) expect(isLoopback(bad)).toBe(false);
+    expect(() => parseArgs(["dev", "--snapshot", "h", "--host", "127.evil.com"])).toThrow(/allow-network/);
+    expect(parseArgs(["dev", "--snapshot", "h", "--host", "127.0.0.1"]).host).toBe("127.0.0.1");
   });
   it("requires HUBD_API_KEY of at least 16 characters", async () => {
     await expect(main(["serve", "--data-dir", "/d"], {})).rejects.toThrow(/HUBD_API_KEY is not set/);
@@ -179,7 +185,13 @@ describe("rsync args are pull-only", () => {
     expect(a.some((x) => x.startsWith("--delete") || x.startsWith("--remove"))).toBe(false);
     const e = a[a.indexOf("-e") + 1]!;
     expect(a).toContain("--timeout=60");
-    for (const o of ["IdentitiesOnly=yes", "IdentityAgent=none", "BatchMode=yes", "ConnectTimeout=5", "ServerAliveInterval=15", "ServerAliveCountMax=3", "-i /k/wolfpack"]) expect(e).toContain(o);
+    for (const o of ["IdentitiesOnly=yes", "IdentityAgent=none", "BatchMode=yes", "ConnectTimeout=5", "ServerAliveInterval=15", "ServerAliveCountMax=3", `-i "/k/wolfpack"`]) expect(e).toContain(o);
+  });
+  it("quotes an identity path with spaces in the -e string, and rejects quotes/backslashes", () => {
+    const h = { ...HOST, identityFile: "/Users/a b/.ssh/wolfpack" };
+    expect(sshCommand(h)).toContain('-i "/Users/a b/.ssh/wolfpack" -p 22');
+    expect(buildPullArgs(h, REMOTE_LEDGER, "/tmp/x")[buildPullArgs(h, REMOTE_LEDGER, "/tmp/x").indexOf("-e") + 1]).toContain('"/Users/a b/.ssh/wolfpack"');
+    for (const bad of ['/a"b/k', "/a'b/k", "/a\\b/k", "/a\nb/k"]) expect(() => sshCommand({ ...HOST, identityFile: bad })).toThrow(/identity file/);
   });
   it("refuses remote destinations, relative sources and mutating flags", () => {
     expect(() => buildPullArgs(HOST, REMOTE_LEDGER, "root@h:/var/wolfpack/x")).toThrow(/LOCAL/);
@@ -211,6 +223,14 @@ describe("host resolution", () => {
     expect(h).toMatchObject({ address: "10.1.2.3", user: "root", port: 22 });
     expect(JSON.stringify(h)).not.toContain("SECRET");
     expect(() => resolveHost("nope", cfg)).toThrow(/unknown host/);
+    for (const port of ["0", "65536", "-1", "22.5", '"22"', "abc", "null"]) {
+      const c = join(mk("hubd-port-"), "config.yaml");
+      writeFileSync(c, `hosts:\n  sfo-01:\n    address: 10.1.2.3\n    ssh:\n      user: root\n      port: ${port}\n`);
+      expect(() => resolveHost("sfo-01", c), `port ${port}`).toThrow(/cannot read or parse/);
+    }
+    const c2 = join(mk("hubd-port2-"), "config.yaml");
+    writeFileSync(c2, "hosts:\n  sfo-01:\n    address: 10.1.2.3\n    ssh:\n      port: 2222\n");
+    expect(resolveHost("sfo-01", c2).port).toBe(2222);
     const bad = join(mk("hubd-badcfg-"), "config.yaml");
     writeFileSync(bad, "hosts: [\n  apiKey: SECRET-VALUE: : {{\n");
     let msg = "";

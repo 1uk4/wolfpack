@@ -321,7 +321,7 @@ export function resolveThreadId(wolf: string, slug: string, threads: readonly { 
  *  renders it unchanged) + the route it opens and its meta line. */
 export function threadListItem(
 	wolf: string,
-	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you" } & Omit<ChildThread, "id" | "title">,
+	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
 ): ChatListItem & { href: string; meta: string; needsYou: boolean } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
@@ -337,6 +337,8 @@ export function threadListItem(
 		href: threadHref(wolf, thread.id),
 		meta: wolf,
 		needsYou: thread.status === "needs-you",
+		// A graduated feature's thread is read-only history: the sidebar files it under "Archived".
+		...(thread.closed ? { archived: true } : {}),
 		// A subagent's fields ride the row (the sidebar nests it under its parent, the job list reads its state).
 		...(thread.parentThreadId !== undefined ? { parentThreadId: thread.parentThreadId } : {}),
 		...(thread.agent !== undefined ? { agent: thread.agent } : {}),

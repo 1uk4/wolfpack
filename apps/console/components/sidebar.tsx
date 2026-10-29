@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import { NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, NetworkIcon, WorkflowIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { SubagentJobs } from "@/components/subagent-jobs";
 import { useSubagentModal } from "@/components/subagent-modal";
@@ -26,7 +26,7 @@ import { isChildThread, sidebarGroups, stateLabel, threadListItem, type ChatList
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -416,8 +416,13 @@ export function SessionsSidebar() {
 	/* Subagents nest under their parent thread and collapse once done (a per-parent "N done" toggle);
 	   they never sit at the top level. `shown` stays the flat walk order of the rows on screen. */
 	const [openParents, setOpenParents] = useState<ReadonlySet<string>>(() => new Set());
-	const groups = useMemo(() => (chats && ranked ? sidebarGroups(chats, ranked, query.trim() !== "", openParents) : null), [chats, ranked, query, openParents]);
-	const shown = useMemo(() => (groups ? groups.flatMap((g) => [g.top, ...g.kids]) : null), [groups]);
+	const [showArchived, setShowArchived] = useState(false);
+	/* Archived = graduated features (their thread is closed). They leave the main list for a collapsed section below it. */
+	const archived = useMemo(() => (ranked ?? []).filter((c) => c.archived), [ranked]);
+	const mainChats = useMemo(() => (chats ? chats.filter((c) => !c.archived) : null), [chats]);
+	const mainRanked = useMemo(() => (ranked ? ranked.filter((c) => !c.archived) : null), [ranked]);
+	const groups = useMemo(() => (mainChats && mainRanked ? sidebarGroups(mainChats, mainRanked, query.trim() !== "", openParents) : null), [mainChats, mainRanked, query, openParents]);
+	const shown = useMemo(() => (groups ? [...groups.flatMap((g) => [g.top, ...g.kids]), ...(showArchived || query.trim() ? archived : [])] : null), [groups, archived, showArchived, query]);
 
 	const refresh = useMemo(() => coalescedRefresh(async () => {
 		// In-flight coalesce (S6): event bursts may land several refresh
@@ -432,7 +437,7 @@ export function SessionsSidebar() {
 				wolves.wolves.map(async (w) => {
 					try {
 						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you" }[] };
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean }[] };
 						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
@@ -795,7 +800,7 @@ export function SessionsSidebar() {
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
-					) : shown.length === 0 ? (
+					) : shown.length === 0 && archived.length === 0 ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
@@ -831,28 +836,35 @@ export function SessionsSidebar() {
 							return [
 								row(g.top, false),
 								...g.kids.map((k) => row(k, true)),
-								...(g.toggle
-									? [
-											<button
-												key={`${g.top.id}:done`}
-												type="button"
-												data-testid="subagent-done-toggle"
-												aria-expanded={g.done === 0}
-												onClick={() =>
-													setOpenParents((prev) => {
-														const next = new Set(prev);
-														if (!next.delete(g.top.id)) next.add(g.top.id);
-														return next;
-													})
-												}
-												className="mb-0.5 ml-4 w-[calc(100%-1rem)] rounded-lg px-3 py-1 text-left text-xs text-muted-foreground hover:bg-accent"
-											>
-												{g.done > 0 ? `${g.done} done` : "Hide done"}
-											</button>,
-										]
-									: []),
 							];
 						})
+					)}
+					{archived.length > 0 && (
+						<>
+							<button
+								type="button"
+								data-testid="archived-toggle"
+								aria-expanded={showArchived || query.trim() !== ""}
+								onClick={() => setShowArchived((v) => !v)}
+								className="mt-2 flex w-full items-center gap-1 rounded-lg px-3 py-1 text-left text-xs uppercase tracking-widest text-muted-foreground/70 hover:bg-accent"
+							>
+								{showArchived || query.trim() ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+								Archived ({archived.length})
+							</button>
+							{(showArchived || query.trim() !== "") &&
+								archived.map((c) => (
+									<SessionRow
+										key={c.id}
+										chat={c}
+										active={pathname === itemHref(c)}
+										kbdSelected={shown?.indexOf(c) === kbdIndex}
+										onOpen={() => {
+											setKbdIndex(null);
+											openItem(c);
+										}}
+									/>
+								))}
+						</>
 					)}
 				</div>
 

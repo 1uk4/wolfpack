@@ -230,22 +230,19 @@ describe("the strip's done rows", () => {
 	const view = (expanded: boolean) =>
 		renderToStaticMarkup(<SubagentStripView items={kids} now={NOW} expanded={expanded} onToggle={() => {}} onOpen={() => {}} onStop={() => {}} />);
 
-	it("a settled row lingers, then folds into the N done toggle; expanding shows them all", () => {
+	it("a settled row lingers, then folds away with no N done row", () => {
 		const folded = view(false);
 		assert.equal((folded.match(/data-testid="subagent-row"/g) ?? []).length, 2); // the fresh done one and the running one
-		assert.match(folded, /2 done/);
+		assert.doesNotMatch(folded, /\d+ done|subagent-done-toggle/);
 		assert.equal((view(true).match(/data-testid="subagent-row"/g) ?? []).length, 4);
 	});
 
-	it("the toggle expands and collapses the strip", async () => {
+	it("the mounted strip has no done toggle", async () => {
 		const c = new SubClient();
 		c.kids = kids;
 		await mount(c);
 		assert.equal(qa('[data-testid="subagent-row"]').length, 2);
-		await click(q('[data-testid="subagent-done-toggle"]')!);
-		assert.equal(qa('[data-testid="subagent-row"]').length, 4);
-		await click(q('[data-testid="subagent-done-toggle"]')!);
-		assert.equal(qa('[data-testid="subagent-row"]').length, 2);
+		assert.equal(q('[data-testid="subagent-done-toggle"]'), null);
 	});
 
 	it("elapsed ticks while live and freezes at the finish time once settled", () => {
@@ -261,6 +258,12 @@ describe("the sidebar", () => {
 	const wire = (c: ThreadSummary) => c;
 	const rows = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [wire({ ...FIXTURE_THREAD, id: PARENT, title: "Home" }), child(1), child(2, { state: "done", finishedAt: ago(1000) }), child(3, { state: "failed", finishedAt: ago(1000) })] }]) as (ReturnType<typeof core.threadListItem>)[];
 
+	it("a closed (graduated) thread is marked archived", () => {
+		const [closed, open] = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [wire({ ...FIXTURE_THREAD, id: "1uk4/f1", title: "Done feature", closed: true }), wire({ ...FIXTURE_THREAD, id: "1uk4/f2", title: "Live feature" })] }]) as (ReturnType<typeof core.threadListItem>)[];
+		assert.equal(closed!.archived, true);
+		assert.equal(open!.archived, undefined);
+	});
+
 	it("rows carry a subagent's fields", () => {
 		const r = rows.find((x) => x.id === "1uk4/sub-1")!;
 		assert.equal(r.parentThreadId, PARENT);
@@ -268,22 +271,20 @@ describe("the sidebar", () => {
 		assert.equal(r.taskId, "work-1");
 	});
 
-	it("children nest under their parent, collapsed once done; never at the top level", () => {
+	it("children nest under their parent; settled ones are not listed; never at the top level", () => {
 		const groups = core.sidebarGroups(rows, rows, false, new Set());
 		assert.deepEqual(groups.map((g) => g.top.id), [PARENT]);
 		assert.deepEqual(groups[0]!.kids.map((k) => k.id), ["1uk4/sub-1"]);
-		assert.equal(groups[0]!.done, 2);
-		assert.ok(groups[0]!.toggle);
+		assert.equal(groups[0]!.done, 0);
+		assert.ok(!groups[0]!.toggle);
 		const open = core.sidebarGroups(rows, rows, false, new Set([PARENT]));
-		assert.deepEqual(open[0]!.kids.map((k) => k.id), ["1uk4/sub-1", "1uk4/sub-2", "1uk4/sub-3"]);
-		assert.equal(open[0]!.done, 0);
-		assert.ok(open[0]!.toggle);
+		assert.deepEqual(open[0]!.kids.map((k) => k.id), ["1uk4/sub-1"]);
 	});
 
-	it("a search finds a child under its parent without collapsing", () => {
-		const ranked = rows.filter((r) => r.title === "Task 2");
+	it("a search finds a live child under its parent, never a settled one", () => {
+		const ranked = rows.filter((r) => r.title === "Task 1" || r.title === "Task 2");
 		const groups = core.sidebarGroups(rows, ranked, true, new Set());
-		assert.deepEqual(groups.map((g) => [g.top.id, g.kids.map((k) => k.id)]), [[PARENT, ["1uk4/sub-2"]]]);
+		assert.deepEqual(groups.map((g) => [g.top.id, g.kids.map((k) => k.id)]), [[PARENT, ["1uk4/sub-1"]]]);
 	});
 
 	it("an orphan (its parent not listed) stays reachable at the top level", () => {
@@ -404,7 +405,7 @@ describe("the clock", () => {
 			assert.equal(qa('[data-testid="subagent-row"]').length, 3);
 			await act(async () => mock.timers.tick(DONE + 1_000));
 			assert.equal(qa('[data-testid="subagent-row"]').length, 2); // the done row folded away
-			assert.match(q('[data-testid="subagent-done-toggle"]')!.textContent!, /1 done/);
+			assert.equal(q('[data-testid="subagent-done-toggle"]'), null);
 		} finally {
 			liveClock = false;
 			mock.timers.reset();

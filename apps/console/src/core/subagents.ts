@@ -120,9 +120,9 @@ export function sidebarGroups<T extends { id: string; parentThreadId?: string; s
 	const byId = new Map(top.map((t) => [t.id, t]));
 	return order.map((id): SidebarGroup<T> => {
 		const kids = children.get(id) ?? [];
-		if (searching) return { top: byId.get(id)!, kids: kids.filter((k) => matched.has(k.id)), done: 0, toggle: false };
-		const settled = kids.filter(isSettled);
-		const open = expanded.has(id);
-		return { top: byId.get(id)!, kids: open ? kids : kids.filter((k) => !isSettled(k)), done: open ? 0 : settled.length, toggle: settled.length > 0 };
+		// Settled children are not listed at all (they stay reachable from the subagent jobs panel).
+		void expanded;
+		const live = kids.filter((k) => !isSettled(k));
+		return { top: byId.get(id)!, kids: searching ? live.filter((k) => matched.has(k.id)) : live, done: 0, toggle: false };
 	});
 }

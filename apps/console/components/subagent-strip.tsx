@@ -84,7 +84,8 @@ export function SubagentStripView({
 	onStop: (child: ChildThread) => void;
 }) {
 	if (items.length === 0) return null;
-	const { shown, done } = partitionChildren(items, now, expanded);
+	// No "N done" row: finished subagents are not listed here (`expanded` only serves previews/tests); they stay reachable from the sidebar's subagent jobs panel.
+	const { shown } = partitionChildren(items, now, expanded);
 	return (
 		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border bg-card text-xs shadow-sm">
 			{shown.map((c) => (
@@ -106,12 +107,6 @@ export function SubagentStripView({
 					)}
 				</div>
 			))}
-			{done.length > 0 && (
-				<button type="button" data-testid="subagent-done-toggle" aria-expanded={expanded} onClick={onToggle} className="flex w-full items-center gap-1 px-3 py-1 text-left text-muted-foreground hover:bg-accent">
-					{expanded ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
-					{done.length} done
-				</button>
-			)}
 		</div>
 	);
 }

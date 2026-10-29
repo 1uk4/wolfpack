@@ -20,7 +20,7 @@ import { SECTION_TREE, atomicWrite, parseFrontmatter } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { buildTreeBottomUp, enforceBranchingFactor } from "./section-tree.js";
+import { buildTreeBottomUp, enforceBranchingFactor, placeEntry } from "./section-tree.js";
 import { computeCentroid, type EntryWithVector } from "./hierarchy.js";
 import { cosine, type EntryVector } from "./embed.js";
 import { readSections, sectionsFile } from "./sections.js";
@@ -536,4 +536,92 @@ export function commitRebuild(roots: KbRoots, plan: RebuildPlan): { entriesWritt
 export function listRebuildTemps(roots: KbRoots, domain: string): string[] {
   const eDir = join(roots.kbBase, "domains", domain, "entries");
   return existsSync(eDir) ? readdirSync(eDir).filter((f) => f.endsWith(TMP)) : [];
+}
+
+// ── insert path: top-down placement + the local split rule ──────────────────
+
+/**
+ * The minimal insert-path repair: after an entry lands in `leafId`, apply the
+ * SAME split rule the rebuild uses (tree-rules.chooseSplit) to that leaf, then
+ * recursively to any section the split creates. Only the leaf, its new
+ * children and the centroids on the path to the root change; every other
+ * section is untouched. Returns the ids of sections created.
+ *
+ * Not yet done (deferred, see work-wolfpack-t800z3L): depth-weighted stability
+ * (ancestors never restructure here), labelling the new children, absorb /
+ * promote / collapse / branching cap on the path, and persistence.
+ */
+export function repairPath(
+  state: RebuildState, leafId: string, vec: Map<string, number[]>, domain: string,
+  rules: TreeRules = DEFAULT_RULES,
+): string[] {
+  const t = new Tree(state, vec, domain);
+  const created: string[] = [];
+  const queue = [leafId];
+  while (queue.length) {
+    const id = queue.shift()!;
+    const sec = state.sections.find((s) => String(s.id) === id);
+    if (!sec) continue;
+    const members = t.direct(id);
+    if (members.length <= rules.splitAbove) continue;
+    const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
+    if (!isSplit(d)) continue;
+    for (let g = 0; g < d.k; g++) {
+      const ids = members.filter((_, i) => d.labels[i] === g);
+      const child = t.newSection(sec, ids);
+      child.centroid = unit(meanVec(ids.map((e) => vec.get(e)!)));
+      for (const e of ids) state.assignment.set(e, String(child.id));
+      child.memberCount = ids.length;
+      child.depth = sec.depth + 1;
+      sec.childIds.push(child.id);
+      created.push(String(child.id));
+      queue.push(String(child.id));
+    }
+    sec.memberCount = members.filter((_, i) => d.labels[i] < 0).length;
+  }
+  return created;
+}
+
+/** Recompute centroid and counts for a section and its ancestors only. */
+function refreshPath(state: RebuildState, fromId: string, vec: Map<string, number[]>): void {
+  const t = new Tree(state, vec, "");
+  let cur: Section | undefined = state.sections.find((s) => String(s.id) === fromId);
+  while (cur) {
+    const vs = t.subtree(String(cur.id)).map((e) => vec.get(e)!).filter(Boolean);
+    if (vs.length) cur.centroid = unit(meanVec(vs));
+    cur.memberCount = t.direct(String(cur.id)).length;
+    const pid: string | null = cur.parent ? String(cur.parent) : null;
+    cur = pid ? state.sections.find((s) => String(s.id) === pid) : undefined;
+  }
+}
+
+/**
+ * Insert one entry the way a sweep does: descend from the roots by centroid
+ * (placeEntry), land in a section, then apply repairPath to that section.
+ * With no sections yet the entry founds the first root; an entry nothing is
+ * close to (placeEntry "_unplaced") goes to the nearest root, as the sweep
+ * would otherwise open a new section for it.
+ */
+export function insertEntry(
+  state: RebuildState, entry: RebuildEntry, vec: Map<string, number[]>, domain: string,
+  rules: TreeRules = DEFAULT_RULES,
+): string {
+  vec.set(entry.id, entry.vector);
+  const t = new Tree(state, vec, domain);
+  let target: string;
+  if (state.sections.length === 0) {
+    const root = t.newSection(null, [entry.id]);
+    target = String(root.id);
+  } else {
+    const placed = placeEntry(entry.vector, { kind: entry.kind ?? "fact", maturity: entry.maturity }, state.sections, entry.vector, new Map());
+    if (placed.sectionId === "_unplaced") {
+      const rs = state.sections.filter((s) => s.parent === null);
+      target = String(rs.reduce((b, r) => (cosine(entry.vector, r.centroid) > cosine(entry.vector, b.centroid) ? r : b)).id);
+    } else target = String(placed.sectionId);
+  }
+  state.assignment.set(entry.id, target);
+  refreshPath(state, target, vec);
+  repairPath(state, target, vec, domain, rules);
+  refreshPath(state, target, vec);
+  return target;
 }

@@ -315,7 +315,7 @@ export const SECTION_TREE = {
     nullAlpha: 0.05,
     /** Seed/bootstrap stability: mean ARI between re-clusterings must reach this. */
     minAri: 0.7,
-    stabilityRuns: 6,
+    stabilityRuns: 60,
     /** An entry whose silhouette is below this is a leftover (stays in the parent). */
     leftoverSilhouette: 0,
     /** A move needs the best other section to beat the own (leave-one-out) one by this much. */

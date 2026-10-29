@@ -228,10 +228,12 @@ function bestFit(Xc: Vec[], seed: number, rules: TreeRules, nInit: number): Fit 
 export function chooseSplit(
   vectors: Vec[],
   memberIds: string[],
-  rules: TreeRules = DEFAULT_RULES
+  rules: TreeRules = DEFAULT_RULES,
+  /** Evaluate the evidence even at or below splitAbove (eval/diagnostics only). */
+  opts: { ignoreSize?: boolean } = {}
 ): SplitDecision | SplitRejected {
   const n = vectors.length;
-  if (n <= rules.splitAbove) return { split: null, reason: "below-threshold" };
+  if (n <= rules.splitAbove && !opts.ignoreSize) return { split: null, reason: "below-threshold" };
   const base = hashSeed(rules.seed, ...[...memberIds].sort());
   const Xc = centre(vectors);
   const fit = bestFit(Xc, base, rules, rules.nInit);

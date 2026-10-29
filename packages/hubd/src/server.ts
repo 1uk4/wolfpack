@@ -12,7 +12,8 @@ import {
   ACTOR_HEADER,
   ActorSchema,
   CreateWorkRequestSchema,
-  PatchWorkRequestSchema,
+  PatchWorkBatchSchema,
+  PatchWorkOpSchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -283,7 +284,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "hubPatchWork": {
           let actor = writeActor(req);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-          const ops = normalisePatch(parseBody(PatchWorkRequestSchema, await readBody(req)));
+          // Pick the arm by shape so a malformed body reports the real issue, not a bare "invalid_union".
+          const raw = await readBody(req);
+          const isBatch = typeof raw === "object" && raw !== null && "ops" in raw;
+          const ops = normalisePatch(isBatch ? parseBody(PatchWorkBatchSchema, raw) : parseBody(PatchWorkOpSchema, raw));
           if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
           const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
           return send(res, 200, { item });

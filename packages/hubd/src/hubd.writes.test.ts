@@ -1,11 +1,12 @@
 /** Seam 2: ledger-level tests for hubd work writes: byte compatibility with direct work-ops, concurrency, the writer lock. */
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { createWork, loadWorkState, moveWork, noteWork, stageWork, graduateWork, deleteWork, setCriteria } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "./server.js";
+import { applyOps, assertSectionText, replaceSection } from "./work-writes.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
@@ -190,5 +191,121 @@ describe("batch PATCH, sections, owner-only", () => {
     expect(await codeOf(r)).toBe("forbidden");
     expect(ledger(dir)).toBe(before);
     expect((await patch(hub, t, { ops: [{ note: "n" }, { assignee: "w1" }] })).status).toBe(200);
+  });
+});
+
+describe("batch atomicity and sections (staged)", () => {
+  const WOLF = { [ACTOR_HEADER]: JSON.stringify({ id: "w1", kind: "wolf" }) };
+  const patch = (h: HubServer, id: string, body: unknown, headers: Record<string, string> = OP) =>
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  const mdFiles = (dir: string) => {
+    const root = join(dir, "kb", "base", "domains", FIXTURE_DOMAIN, "work");
+    return Object.fromEntries(readdirSync(root).filter((f) => f.endsWith(".md")).map((f) => [f, readFileSync(join(root, f), "utf8")]));
+  };
+
+  it("a failed batch leaves the ledger AND the .md files byte-identical, including an auto-shipped parent", async () => {
+    const dir = mk();
+    const seeded = seedFixture(dir);
+    const hub = await start(dir);
+    const ledgerBefore = ledger(dir);
+    const mdBefore = mdFiles(dir);
+    // Complete every child of the feature in one batch (would auto-ship the parent), then fail on the last op.
+    const kids = [...loadWorkState(hubRoots(dir)).values()].filter((w) => w.partOf === seeded.feature.id);
+    expect(kids.length).toBeGreaterThan(0);
+    const r = await patch(hub, kids[0].id as string, { ops: [{ stage: "shipped" }, { note: "x" }, { link: { rel: "bogus", target: "nope" } }] });
+    expect(r.status).toBe(400);
+    expect(ledger(dir)).toBe(ledgerBefore);
+    expect(mdFiles(dir)).toEqual(mdBefore);
+  });
+
+  it("a successful batch appends once and renders touched .md files; the scratch dir is gone", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const r = await patch(hub, t, { ops: [{ note: "n1" }, { section: { name: "plan", text: "P" } }, { note: "n2" }] });
+    expect(r.status).toBe(200);
+    expect(ledger(dir).split("\n").filter((l) => l.includes('"n1"') || l.includes('"n2"')).length).toBe(2);
+    expect(mdFiles(dir)[`${t}.md`]).toContain("## Plan\n\nP");
+  });
+
+  it("[section, failing op] leaves the body untouched; 51 ops are rejected", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const before = mdFiles(dir);
+    const r = await patch(hub, t, { ops: [{ section: { name: "plan", text: "changed" } }, { stage: "nonsense" }] });
+    expect(r.status).toBe(400);
+    expect(mdFiles(dir)).toEqual(before);
+    const many = await patch(hub, t, { ops: Array.from({ length: 51 }, () => ({ note: "x" })) });
+    expect(many.status).toBe(400);
+  });
+
+  it("failure injection: a crash after staging leaves nothing; after the append the ledger holds the whole batch", () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const roots = hubRoots(dir);
+    const ops = [{ op: "note", text: "a" }, { op: "note", text: "b" }] as const;
+    const before = ledger(dir);
+    const mdBefore = mdFiles(dir);
+    expect(() => applyOps(roots, t, [...ops], { afterStaged: () => { throw new Error("boom"); } })).toThrow("boom");
+    expect(ledger(dir)).toBe(before);
+    expect(mdFiles(dir)).toEqual(mdBefore);
+    // Crash (or render failure) after the single append: complete batch in the ledger, reported as engine_error, no partial state.
+    let err: unknown;
+    try { applyOps(roots, t, [...ops], { afterAppend: () => { throw new Error("disk"); } }); } catch (e) { err = e; }
+    expect((err as { code?: string }).code).toBe("engine_error");
+    const added = ledger(dir).slice(before.length).split("\n").filter(Boolean);
+    expect(added.length).toBe(2);
+    expect(readdirSync(tmpdir()).filter((f) => f.startsWith("hubd-stage-")).length).toBe(0);
+  });
+
+  it("a malformed single-op body is invalid_request with a real message (not a bare invalid_union)", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const r = await patch(hub, t, { stage: 5 });
+    expect(r.status).toBe(400);
+    const e = (await r.json()) as { code: string; message: string };
+    expect(e.code).toBe("invalid_request");
+    expect(e.message).toMatch(/stage/);
+    expect(e.message).not.toMatch(/invalid_union/);
+    expect((await patch(hub, t, { ops: "x" })).status).toBe(400);
+    expect((await patch(hub, t, { ops: [{ bogus: 1 }] })).status).toBe(400);
+  });
+
+  it("a non-operator batch with assignee is 403 forbidden", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const r = await patch(hub, t, { ops: [{ note: "n" }, { assignee: "w1" }] }, WOLF);
+    expect(r.status).toBe(403);
+  });
+});
+
+describe("section text and replaceSection", () => {
+  const bad = (t: string) => expect(() => assertSectionText(t)).toThrow();
+  it("rejects headings outside fences: indented, bare, setext, quoted, list-nested", () => {
+    for (const t of ["## Log", "   ## Log", "##", "# Title", "#\tx", "Log\n---", "Log\n===", "text\n  ---  ", "> ## Log", "- ## Log", "a\r\n## b"]) bad(t);
+    bad("```\nopen but never closed\n## x");
+  });
+  it("allows headings inside fences, thematic breaks after a blank line, deep indent and plain text", () => {
+    for (const t of ["```\n## Log\n```", "~~~md\n# h\n~~~", "para\n\n---\n\nmore", "    ## code", "####### seven", "#hashtag", "a ## b"]) expect(() => assertSectionText(t)).not.toThrow();
+  });
+  it("replaces a section up to the next heading, ignoring fenced '##'", () => {
+    const body = "## Plan\n\n```\n## not a heading\n```\nold\n\n## Notes\n\nkeep\n";
+    expect(replaceSection(body, "plan", "new")).toBe("## Plan\n\nnew\n\n## Notes\n\nkeep\n");
+    expect(replaceSection("## Plan\r\n\r\nold\r\n\r\n## Notes\r\n\r\nk\r\n", "notes", "z")).toBe("## Plan\n\nold\n\n## Notes\n\nz\n");
+  });
+  it("a fenced '## Plan' is not the heading; a setext heading ends the section", () => {
+    expect(replaceSection("```\n## Plan\n```\n\n## Notes\n\nn\n", "plan", "P")).toBe("```\n## Plan\n```\n\n## Plan\n\nP\n\n## Notes\n\nn\n");
+    expect(replaceSection("## Plan\n\nold\n\nOther\n---\n\nrest\n", "plan", "P")).toBe("## Plan\n\nP\n\nOther\n---\n\nrest\n");
+  });
+  it("a missing Plan goes before Notes; a missing Notes is appended; empty text leaves a bare heading", () => {
+    expect(replaceSection("## Notes\n\nn\n", "plan", "P")).toBe("## Plan\n\nP\n\n## Notes\n\nn\n");
+    expect(replaceSection("## Plan\n\np\n", "notes", "N")).toBe("## Plan\n\np\n\n## Notes\n\nN\n");
+    expect(replaceSection("## Plan\n\np\n\n## Notes\n\nn\n", "plan", "")).toBe("## Plan\n\n## Notes\n\nn\n");
+  });
+  it("duplicate headings are rejected", () => {
+    expect(() => replaceSection("## Plan\n\na\n\n## Plan\n\nb\n", "plan", "x")).toThrow(/more than one/);
   });
 });

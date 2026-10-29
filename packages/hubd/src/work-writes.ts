@@ -1,12 +1,17 @@
 /**
  * Work writes for hubd, ported from the agent Work API router (packages/agent/src/routes/work.ts) onto the kb work-ops, in-process.
  *
- * - A PATCH request is normalised into a list of ops (`normalisePatch`) and applied by ONE function (`applyOps`) that the server
- *   runs under the write queue; batch PATCH can feed the same function a longer list.
+ * - A PATCH request (one op, or a batch `{ops:[...]}`) is normalised into a list of ops (`normalisePatch`) and applied by ONE
+ *   function (`applyOps`) that the server runs under the write queue. A batch is all-or-nothing: it is staged in a scratch copy and
+ *   only appended to the real ledger (one appendFileSync) when every op succeeded.
+ * - `body` and `section` ops append NO ledger event (they rewrite the .md body only), so they neither bump `updated` nor fire a
+ *   work.changed event. Known gap, tracked as a follow-up; no new event type is added here.
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { closeSync, openSync, readSync, statSync, truncateSync } from "node:fs";
+import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   appendWorkLedger,
   assignWork,
@@ -17,8 +22,8 @@ import {
   linkWork,
   loadWorkState,
   moveWork,
-  resolveWorkItem,
   noteWork,
+  resolveWorkItem,
   retitleWork,
   scheduleWork,
   setCriteria,
@@ -33,7 +38,7 @@ import {
   type WorkEvent,
   type WorkId,
 } from "@wolfpack/kb/client";
-import { now, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
+import { now, workDir, workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
 import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkOp, PatchWorkRequest } from "@wolfpack/protocol";
 
@@ -62,27 +67,107 @@ export function isOwnerOnlyOp(op: WorkOp): boolean {
   return op.op === "body" || op.op === "assign";
 }
 
-/** Replace one `## <Heading>` section of a body (up to the next level-2 heading). A missing section is added (Plan before Notes). */
-export function replaceSection(body: string, name: SectionName, text: string): string {
-  const heading = SECTION_HEADING[name];
-  const lines = body.split("\n");
-  const start = lines.findIndex((l) => l.trimEnd() === heading);
-  const block = [heading, "", ...(text.trim() ? [text.trim(), ""] : [])];
-  if (start >= 0) {
-    let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
-    if (end < 0) end = lines.length;
-    return [...lines.slice(0, start), ...block, ...lines.slice(end)].join("\n").trim() + "\n";
-  }
-  const notes = name === "plan" ? lines.findIndex((l) => l.trimEnd() === SECTION_HEADING.notes) : -1;
-  if (notes >= 0) return [...lines.slice(0, notes), ...block, ...lines.slice(notes)].join("\n").trim() + "\n";
-  return [body.trim(), "", ...block].join("\n").trim() + "\n";
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const ATX_H12 = /^ {0,3}#{1,2}(?:[ \t]|$)/;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+const CONTAINER_PREFIX = /^(?: {0,3}>[ \t]?| {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
+
+/** CRLF / lone CR -> LF. The body is stored and compared with LF only. */
+function toLf(s: string): string {
+  return s.replace(/\r\n?/g, "\n");
 }
 
+/**
+ * Per line: is it inside a fenced code block (``` or ~~~, CommonMark rules: closing fence is the same char, at least as long,
+ * nothing else on the line). The fence lines themselves count as fenced. `unclosed` is true when the last fence never closes.
+ */
+function fenceMap(lines: string[]): { fenced: boolean[]; unclosed: boolean } {
+  const fenced: boolean[] = [];
+  let open: { ch: string; len: number } | undefined;
+  for (const l of lines) {
+    if (open) {
+      fenced.push(true);
+      const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(l);
+      if (m && m[1][0] === open.ch && m[1].length >= open.len) open = undefined;
+      continue;
+    }
+    const m = FENCE_OPEN.exec(l);
+    if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
+      open = { ch: m[1][0], len: m[1].length };
+      fenced.push(true);
+    } else fenced.push(false);
+  }
+  return { fenced, unclosed: open !== undefined };
+}
+
+/** Is line `i` (outside a fence) an H1/H2, ATX (also inside a quote / list-item prefix) or setext (underline under a text line)? */
+function isHeading12(lines: string[], fenced: boolean[], i: number): boolean {
+  if (fenced[i]) return false;
+  let l = lines[i];
+  for (let n = 0; n < 8; n++) {
+    if (ATX_H12.test(l)) return true;
+    const m = CONTAINER_PREFIX.exec(l);
+    if (!m) break;
+    l = l.slice(m[0].length);
+  }
+  // Setext: an underline right below a non-blank, non-fenced line turns that line into a heading. (After a blank line `---` is
+  // a thematic break and `===` plain text, both harmless.)
+  return i > 0 && !fenced[i - 1] && lines[i - 1].trim() !== "" && SETEXT_UNDERLINE.test(lines[i]);
+}
+
+/**
+ * Reject section text that could restructure the body. `stripGeneratedLog` cuts the body at a column-0 `## Log` + list item, and
+ * any CommonMark parser would see an H1/H2 (ATX with 0-3 spaces indent or a bare `##`, setext `Log\n---` / `Log\n===`) as a new
+ * section. Headings inside fenced code are legitimate content; an unclosed fence would swallow the next real heading, so it is refused.
+ */
+export function assertSectionText(text: string): void {
+  const lines = toLf(text).split("\n");
+  const { fenced, unclosed } = fenceMap(lines);
+  if (unclosed) throw new HubError("invalid_request", "section text has an unclosed code fence");
+  for (let i = 0; i < lines.length; i++) {
+    if (isHeading12(lines, fenced, i)) {
+      throw new HubError("invalid_request", `section text must not contain level-1 or level-2 headings (line ${i + 1}); put them in a code fence`);
+    }
+  }
+}
+
+/**
+ * Replace one `## <Heading>` section of a body, up to the next H1/H2 outside a code fence (or the end). Fence-aware for both the
+ * start and the end heading; CRLF is normalised to LF. A missing section is added (Plan before Notes, else appended). Duplicate
+ * headings are REJECTED (`invalid_request`): which one to replace would be a guess; an operator can fix the body with a `body` op.
+ */
+export function replaceSection(body: string, name: SectionName, text: string): string {
+  const heading = SECTION_HEADING[name];
+  const lines = toLf(body).split("\n");
+  const { fenced } = fenceMap(lines);
+  const at = (h: string) => lines.flatMap((l, i) => (!fenced[i] && new RegExp(`^ {0,3}${h}[ \\t]*$`).test(l) ? [i] : []));
+  const starts = at(heading);
+  if (starts.length > 1) throw new HubError("invalid_request", `the body has more than one "${heading}" heading; fix it with a body replace`);
+  const block = [heading, "", ...(text.trim() ? [toLf(text).trim(), ""] : [])];
+  const join_ = (parts: string[][]) => parts.flat().join("\n").trim() + "\n";
+  if (starts.length === 1) {
+    const start = starts[0];
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (isHeading12(lines, fenced, i)) {
+        // A setext heading starts at its text line, one above the underline.
+        end = !ATX_H12.test(lines[i]) && SETEXT_UNDERLINE.test(lines[i]) ? i - 1 : i;
+        break;
+      }
+    }
+    return join_([lines.slice(0, start), block, lines.slice(end)]);
+  }
+  const notes = name === "plan" ? at(SECTION_HEADING.notes) : [];
+  if (notes.length >= 1) return join_([lines.slice(0, notes[0]), block, lines.slice(notes[0])]);
+  const head = [...lines];
+  while (head.length && head[head.length - 1].trim() === "") head.pop();
+  return join_([head, head.length ? [""] : [], block]);
+}
 
 /** PATCH body -> ops. A single-op body has exactly one field; a batch is `{ ops: [...] }`, each element a single-field op. */
 export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
-  if ("ops" in b && Array.isArray((b as { ops?: unknown }).ops)) return (b as { ops: PatchWorkOp[] }).ops.flatMap(normaliseOne);
-  return normaliseOne(b as PatchWorkOp);
+  if ("ops" in b) return b.ops.flatMap(normaliseOne);
+  return normaliseOne(b);
 }
 
 function normaliseOne(b: PatchWorkOp): WorkOp[] {
@@ -106,10 +191,7 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
     if (name !== "plan" && name !== "notes") {
       throw new HubError("invalid_request", `section must be "plan" or "notes" (the Record is generated from the ledger and cannot be edited)`);
     }
-    // A heading inside the text would restructure the body (and could forge a Record/Log section).
-    if (/^#{1,2}[ \t]/m.test(b.section.text)) {
-      throw new HubError("invalid_request", "section text must not contain level-1 or level-2 headings");
-    }
+    assertSectionText(b.section.text); // a heading in the text would restructure the body (or forge the generated Log)
     ops.push({ op: "section", name, text: b.section.text });
   }
   if (b.schedule !== undefined) {
@@ -129,34 +211,78 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
 
 type Item = ReturnType<typeof createWork>["item"];
 
+/** TEST SEAM (failure injection): called inside a batch at the named stage; a throw simulates a crash/failure there. */
+export interface ApplyHooks {
+  /** After every op succeeded in the scratch copy, before anything touches the real ledger. */
+  afterStaged?: () => void;
+  /** After the single real ledger append, before the .md files are rendered. */
+  afterAppend?: () => void;
+}
+
 /**
- * Apply ops in order to one item, ALL-OR-NOTHING. MUST be called inside the write queue (hubd is the sole ledger writer).
- * The kb work-ops append per op, so atomicity is a rollback: note the ledger size and the item's body, and if any op throws,
- * truncate the ledger back and re-materialise the touched items' files. A rolled-back batch leaves the ledger byte-identical.
+ * Apply ops in order to one item. MUST be called inside the write queue (hubd is the sole ledger writer).
+ *
+ * One op runs directly (the kb op's own behaviour). A BATCH is staged: the item's domain work dir and the ledger are copied into
+ * a mkdtemp scratch root and ALL ops run there through the unchanged kb ops. Only if every op succeeded are the newly appended
+ * ledger bytes appended to the real ledger with ONE appendFileSync, then the .md of every touched item is rendered from the real
+ * folded state. A failing op just discards the scratch root: the real ledger and files were never touched, so nothing can be
+ * left half-done, even by a crash (a crash before the append leaves nothing; after it, the ledger, the source of truth, holds
+ * the whole batch and a stale .md is re-rendered by the next write to that item).
+ * Failures after staging (append / render) are `engine_error`, never the op's 4xx.
  */
-export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
-  const before = ledgerSize(roots);
+export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}): Item {
+  if (ops.length <= 1) return applyOpsUnchecked(roots, id, ops);
   const cur0 = loadWorkState(roots).get(id as never);
-  const body0 = cur0 ? resolveWorkItem(roots, cur0.domain as string, id)?.body : undefined;
+  if (!cur0) throw new Error(`work item ${id} not found`);
+  const domain = cur0.domain as string;
+  const scratchDir = mkdtempSync(join(tmpdir(), "hubd-stage-"));
   try {
-    return applyOpsUnchecked(roots, id, ops);
-  } catch (e) {
+    const scratch: KbRoots = { kbBase: join(scratchDir, "kb", "base"), opsRoot: join(scratchDir, "kb", "ops"), denLocal: scratchDir };
+    const realLedger = workLedgerFile(roots);
+    const realSize = ledgerSize(roots);
+    if (existsSync(realLedger)) {
+      mkdirSync(dirname(workLedgerFile(scratch)), { recursive: true });
+      cpSync(realLedger, workLedgerFile(scratch));
+    }
+    if (existsSync(workDir(roots, domain))) cpSync(workDir(roots, domain), workDir(scratch, domain), { recursive: true });
+    // The kb ops read only the ledger and the item .md files, and write only those (see report): scratch is a faithful sandbox.
+    const item = applyOpsUnchecked(scratch, id, ops);
+    hooks.afterStaged?.();
+
+    const bytes = readNewBytes(workLedgerFile(scratch), realSize);
+    // Every event id is "touched": the target, plus anything an op changed as a side effect (an auto-shipped parent feature).
+    const touched = new Set<string>([id]);
+    for (const ev of readLedgerSince(scratch, realSize).events) touched.add(ev.id);
     try {
-      const touched = new Set<string>([id]);
-      for (const ev of readLedgerSince(roots, before).events) touched.add(ev.id);
-      truncateSync(workLedgerFile(roots), before);
+      if (bytes.length > 0) {
+        mkdirSync(dirname(realLedger), { recursive: true });
+        appendFileSync(realLedger, bytes);
+      }
+      hooks.afterAppend?.();
       const state = loadWorkState(roots);
       for (const t of touched) {
-        const it = state.get(t as never);
-        if (!it) continue;
-        const body = t === id ? body0 : resolveWorkItem(roots, it.domain as string, t)?.body;
-        commitWorkItem(roots, it, body);
+        const real = state.get(t as never);
+        if (!real) continue;
+        const fresh = resolveWorkItem(scratch, real.domain as string, t);
+        if (!fresh) {
+          // The staged copy had no readable body: keep the existing real file if there is one, never render an undefined body.
+          if (resolveWorkItem(roots, real.domain as string, t) || existsSync(join(workDir(roots, real.domain as string), `${t}.md`))) continue;
+        }
+        commitWorkItem(roots, real, fresh?.body ?? "");
       }
-    } catch (re) {
-      console.error("hubd: batch rollback failed:", re);
+    } catch (e) {
+      console.error("hubd: batch commit failed after staging:", e);
+      throw new HubError("engine_error", "internal hub error");
     }
-    throw e;
+    return item;
+  } finally {
+    rmSync(scratchDir, { recursive: true, force: true });
   }
+}
+
+function readNewBytes(file: string, offset: number): Buffer {
+  const all = readFileSync(file);
+  return all.subarray(offset);
 }
 
 function applyOpsUnchecked(roots: KbRoots, id: string, ops: WorkOp[]): Item {

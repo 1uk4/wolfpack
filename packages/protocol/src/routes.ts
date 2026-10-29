@@ -327,10 +327,14 @@ export const ROUTES = {
    * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
    * 409 `not_ready` (stage not advanceable), 403 `forbidden` (`body` / `assignee` PATCH by a non-operator).
    * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
-   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`): one single-field op, or a batch `{ops:[...]}` (1..50 ops, all-or-nothing: validated
-   * first, appended under one lock, nothing appended if any op fails). Fields: stage, note, title, successCriteria,
-   * moveTo, link, unlink, standing, schedule, section ({name: "plan"|"notes", text}; the Record/Log is rejected); operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
+   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`): one single-field op, or a batch `{ops:[...]}` (1..50 ops,
+   * all-or-nothing: staged in a scratch copy, then appended to the ledger in one write; nothing is appended if any op fails).
+   * Fields: stage, note, title, successCriteria, moveTo, link, unlink, standing, schedule, section ({name: "plan"|"notes",
+   * text}; the generated Record/Log is rejected, as is text holding an H1/H2 outside a code fence or an unclosed fence, and a
+   * body with two of the same heading); operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
    * rejected; `moveTo: null` un-parents (hierarchy rules still apply); `successCriteria: ""` clears it.
+   * KNOWN GAP: `body` and `section` ops rewrite the .md only and append NO ledger event, so they do not bump `updated` and
+   * emit no work.changed (follow-up; no new event type here).
    * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.
    * `hubGraduateWork`: mark the item graduated on the ledger (the agent route's behaviour; no distill step).
    */

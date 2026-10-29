@@ -51,7 +51,8 @@ describe("runSweepTick", () => {
   } as unknown as Engine;
   const createEngine = vi.fn(() => engine);
   const alerts: string[] = [];
-  const tick = () => runSweepTick({ roots, createEngine, notify: () => {}, alert: (m) => void alerts.push(m), budgetMs: 1000 });
+  let reorgOn = false;
+  const tick = () => runSweepTick({ roots, postSweepReorg: reorgOn, createEngine, notify: () => {}, alert: (m) => void alerts.push(m), budgetMs: 1000 });
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -62,6 +63,7 @@ describe("runSweepTick", () => {
     fetchMock = vi.fn(async () => new Response(JSON.stringify({ embedding: [1, 0, 0] })));
     vi.stubGlobal("fetch", fetchMock);
     mode = "ok";
+    reorgOn = false;
     alerts.length = 0;
     reorgCalls.length = 0;
     createEngine.mockClear();
@@ -104,9 +106,31 @@ describe("runSweepTick", () => {
     expect(reorgCalls).toEqual([]);
   });
 
-  it("sweeps one item (oldest first) with one engine, then reorgs only the touched domains with the tick's embedder", async () => {
+  it("does not reorg by default: the sweep only places the new entry", async () => {
+    drop("a");
+    const t = await tick();
+    expect(t.sweep).toMatchObject({ processed: 1, created: 1 });
+    expect(reorgCalls).toEqual([]);
+    expect(t.reorg).toBeUndefined();
+    expect(readdirSync(join(roots.kbBase, "domains", "wp", "entries")).length).toBe(1);
+  });
+
+  it("WOLFPACK_KB_POST_SWEEP_REORG=1 enables the reorg when the option is unset", async () => {
+    vi.stubEnv("WOLFPACK_KB_POST_SWEEP_REORG", "1");
+    try {
+      drop("a");
+      const t = await runSweepTick({ roots, createEngine, notify: () => {}, budgetMs: 1000 });
+      expect(reorgCalls).toHaveLength(1);
+      expect(t.reorg).toBeDefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sweeps one item (oldest first) with one engine, then (reorg on) reorgs only the touched domains with the tick's embedder", async () => {
     drop("newer", "2026-10-10T02:00:00Z");
     drop("older", "2026-10-10T01:00:00Z");
+    reorgOn = true;
     const t = await tick();
     expect(t.sweep).toMatchObject({ processed: 1, created: 1, remaining: 1, touchedDomains: ["wp"] });
     expect(queued()).toEqual(["newer.md"]);
@@ -123,6 +147,18 @@ describe("runSweepTick", () => {
     const t = await tick();
     expect(t.sweep).toMatchObject({ created: 0, merged: 0, errors: 1 });
     expect(reorgCalls).toEqual([]);
+  });
+
+  it("compacts a bloated cache without a reorg", async () => {
+    const dir = vectorsDir(roots);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ model: EMBED.model, dim: 3, updated: "x" }));
+    const lines = Array.from({ length: 200 }, (_, i) => JSON.stringify({ hash: `sha256:gone${i}`, vec: [0, 1, 0] })).join("\n") + "\n";
+    writeFileSync(join(dir, "cache.jsonl"), lines);
+    drop("a");
+    await tick();
+    expect(reorgCalls).toEqual([]);
+    expect(readFileSync(join(dir, "cache.jsonl"), "utf-8")).not.toContain("sha256:gone0");
   });
 
   it("an infra error outside sweep (engine setup) enters backoff, alerts once, and keeps the item", async () => {
@@ -152,12 +188,13 @@ describe("runSweepTick", () => {
     expect(readBackoff(roots)).toBeNull();
   });
 
-  it("compacts the vector cache after a reorg, dropping vectors of entries that no longer exist", async () => {
+  it("compacts the vector cache (reorg on), dropping vectors of entries that no longer exist", async () => {
     const dir = vectorsDir(roots);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "meta.json"), JSON.stringify({ model: EMBED.model, dim: 3, updated: "x" }));
     writeFileSync(join(dir, "cache.jsonl"), JSON.stringify({ hash: "sha256:gone", vec: [0, 1, 0] }) + "\n");
     drop("a");
+    reorgOn = true;
     await tick();
     expect(reorgCalls).toHaveLength(1);
     expect(readFileSync(join(dir, "cache.jsonl"), "utf-8")).not.toContain("sha256:gone");

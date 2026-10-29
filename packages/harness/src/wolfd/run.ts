@@ -187,6 +187,7 @@ async function startConfigured(
     extensions,
     cwd,
     backup: true,
+    ...(config.compaction ? { compaction: config.compaction } : {}),
     onReport: (e) => log(`engine report: ${e instanceof Error ? e.message : String(e)}`),
   });
   if (engine.backup) log(`backed up session store to ${engine.backup.dir}`);

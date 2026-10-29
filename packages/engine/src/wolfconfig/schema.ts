@@ -71,6 +71,15 @@ export const WolfFileSchema = z.object({
   sandbox: z.union([z.boolean(), z.object({ root: z.string().min(1) }).passthrough()]).optional(),
   identity: z.string().min(1).optional(),
   prompts: z.object({ structuredOutput: z.union([z.string(), z.literal(false)]).optional() }).passthrough().optional(),
+  compaction: z
+    .object({
+      startAt: z.number().int().positive().optional(),
+      reserveTokens: z.number().int().nonnegative().optional(),
+      keepRecentTokens: z.number().int().nonnegative().optional(),
+      enabled: z.boolean().optional(),
+    })
+    .passthrough()
+    .optional(),
   memory: z
     .object({
       live: z.boolean().optional(),
@@ -105,6 +114,7 @@ export const KNOWN_TOP_LEVEL_KEYS: readonly string[] = [
   "sandbox",
   "identity",
   "prompts",
+  "compaction",
   "memory",
   "workspaces",
 ];
@@ -144,6 +154,8 @@ export interface WolfConfig {
     /** Replaces the default structured-output guidance; `false` removes the section. */
     structuredOutput?: PromptSection;
   };
+  /** Context compaction policy (wolf.yaml `compaction:`); unset = pi-durable's defaults. `startAt` is an absolute token count. */
+  compaction?: { startAt?: number; reserveTokens?: number; keepRecentTokens?: number; enabled?: boolean };
   memory: {
     /** Durable memory may write the live roots. Off unless explicitly set (fail closed). */
     live: boolean;

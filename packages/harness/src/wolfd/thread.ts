@@ -18,6 +18,7 @@ import {
   DEFAULT_THREAD_SETTINGS,
   type ThreadSettings,
   type ThreadTier,
+  type ThreadContext,
   type ThreadDetail,
   type ThreadEvent,
   type ThreadMessage,
@@ -174,6 +175,30 @@ export class ThreadRuntime {
     this.disarmWatchdog();
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
+  }
+
+  /**
+   * Context stats for the header chip (wire shape of GET .../context). `lastAt` becomes an ISO string.
+   */
+  async contextStats(): Promise<ThreadContext> {
+    const s = await this.conv.contextStats();
+    return {
+      tokens: Math.round(s.tokens),
+      ...(s.window ? { window: s.window } : {}),
+      ...(s.startAt !== undefined ? { startAt: s.startAt } : {}),
+      ...(s.waitAt !== undefined ? { waitAt: s.waitAt } : {}),
+      compactions: { count: s.compactions.count, ...(s.compactions.lastAt !== undefined ? { lastAt: new Date(s.compactions.lastAt).toISOString() } : {}) },
+      compacting: s.compacting,
+    };
+  }
+
+  /**
+   * Compact now. No busy check: pi-durable places the summary at the next boundary while a turn runs. Resolves once
+   * admitted; `onDone` runs when the compaction has finished (the server announces thread-updated then).
+   */
+  async compact(instructions: string | undefined, onDone: () => void): Promise<void> {
+    const { done } = await this.conv.compact(instructions);
+    void done.then(onDone, onDone);
   }
 
   /** Abort the running turn and wait until the pump has seen it end. */

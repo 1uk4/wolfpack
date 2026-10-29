@@ -554,6 +554,17 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectJson(await put(threadId, { tier: "main", autoShip: false }), ROUTES.putThreadSettings.response.schema);
     });
 
+    it("context + compact: stats answer the schema, compact is accepted (also with instructions), bad bodies are invalid_request, unknown thread is not_found", async () => {
+      const compact = (id: string, body: unknown) => post(buildPath("compactThread", { id }), body);
+      await expectError(await call(buildPath("getThreadContext", { id: "nope/nope" })), "not_found");
+      await expectError(await compact("nope/nope", {}), "not_found");
+      await expectError(await compact(threadId, { instructions: 5 }), "invalid_request");
+      const before = await expectJson(await call(buildPath("getThreadContext", { id: threadId })), ROUTES.getThreadContext.response.schema);
+      expect(before.compactions.count).toBeGreaterThanOrEqual(0);
+      await expectJson(await compact(threadId, {}), ROUTES.compactThread.response.schema);
+      await expectJson(await compact(threadId, { instructions: "keep the plan" }), ROUTES.compactThread.response.schema);
+    });
+
     // --- feature progress: bind ---
     it("bind: an unknown thread is not_found, a bad body or malformed id is invalid_request, a valid bind answers the schema", async () => {
       const bind = (id: string, body: unknown) => post(buildPath("bindThread", { id }), body);

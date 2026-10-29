@@ -364,6 +364,27 @@ export const ThreadSettingsResponseSchema = ThreadSettingsSchema.extend({
 });
 export type ThreadSettingsResponse = z.infer<typeof ThreadSettingsResponseSchema>;
 /** PUT body: the fields to change (at least one). */
+// ---- thread context stats + manual compaction ------------------------------------------------------------------------
+/** GET /v1/threads/:id/context. Thresholds are absolute token counts; absent when the model's window is unknown. */
+export const ThreadContextSchema = z.object({
+  /** Current context size (last assistant usage plus an estimate of what came after). */
+  tokens: z.number().int().nonnegative(),
+  /** The model's context window. */
+  window: z.number().int().positive().optional(),
+  /** The background summary starts past this many tokens (wolf.yaml `compaction.startAt`, else pi-durable's default). */
+  startAt: z.number().int().nonnegative().optional(),
+  /** A generation waits for a compaction past this (window - reserveTokens). */
+  waitAt: z.number().int().nonnegative().optional(),
+  compactions: z.object({ count: z.number().int().nonnegative(), /** ISO time of the newest one. */ lastAt: z.string().optional() }),
+  /** A compaction started by this wolf is in flight. */
+  compacting: z.boolean(),
+});
+export type ThreadContext = z.infer<typeof ThreadContextSchema>;
+export const CompactBodySchema = z.object({ instructions: z.string().max(4000).optional() });
+export type CompactBody = z.infer<typeof CompactBodySchema>;
+export const CompactAckSchema = z.object({ accepted: z.literal(true) });
+export type CompactAck = z.infer<typeof CompactAckSchema>;
+
 export const ThreadSettingsPatchSchema = ThreadSettingsSchema.partial().refine((p) => p.tier !== undefined || p.autoShip !== undefined, { message: "tier or autoShip is required" });
 export type ThreadSettingsPatch = z.infer<typeof ThreadSettingsPatchSchema>;
 // ---- /composer controls ---------------------------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import {
+  CompactionEntry,
   ConversationBusy,
   createRegistry,
   Harness,
@@ -21,6 +22,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { compactionSettings, contextTokens, thresholds, type CompactionConfig, type EngineContextStats } from "./compaction.js";
 import { cardAnswerEntry, type CardAnswerData } from "./cards.js";
 import { attachConversationReader } from "./conversation-reader.js";
 import { backupSessionStore, type BackupResult } from "./backup.js";
@@ -52,6 +54,8 @@ export interface WolfEngineOptions {
   backup?: boolean;
   /** Engine fault reports (task faults, session failures). */
   onReport?: (error: unknown) => void;
+  /** wolf.yaml `compaction:`. Unset: pi-durable's defaults. See compaction.ts. */
+  compaction?: CompactionConfig;
 }
 
 export interface ConfigureOptions {
@@ -95,6 +99,13 @@ export interface EngineConversation {
   /** Abort the running turn; resolves when idle. The event stream reports it (turn-end reason aborted). */
   abort(): Promise<void>;
   configure(opts: ConfigureOptions): Promise<void>;
+  /**
+   * Manual compaction (reason "manual"; extension beforeCompact hooks run first, inside pi-durable). Works while a turn
+   * runs. Resolves once admitted; `done` settles (never rejects) when the compaction task has finished.
+   */
+  compact(instructions?: string): Promise<{ taskId: string; done: Promise<void> }>;
+  /** Context size, window and compaction history. `compacting` covers manual compactions this process started. */
+  contextStats(): Promise<EngineContextStats & { compacting: boolean }>;
   /** Engine-native events; feed `batches` through mapEngineEvents (seed with `snapshot`). */
   watch(): Promise<EngineWatch>;
 }
@@ -149,6 +160,10 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
       registry,
       env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? defaultCwd }),
       onReport: opts.onReport,
+      ...((): { settings?: { compaction: NonNullable<ReturnType<typeof compactionSettings>> } } => {
+        const c = compactionSettings(models, opts.compaction);
+        return c ? { settings: { compaction: c } } : {};
+      })(),
     },
     ctx,
   );
@@ -172,8 +187,51 @@ export async function openWolfEngine(storagePath: string, opts: WolfEngineOption
     ...(c.instructions !== undefined ? { instructions: c.instructions } : {}),
   });
 
+  const compacting = new Map<string, number>();
+
   const wrap = (conv: Conversation): EngineConversation => ({
     id: String(conv.id),
+
+    async compact(instructions) {
+      const id = String(conv.id);
+      const taskId = await conv.compact(instructions, ctx);
+      compacting.set(id, (compacting.get(id) ?? 0) + 1);
+      const done = harness.waitForTask(taskId, ctx).then(
+        () => undefined,
+        () => undefined,
+      ).then(() => {
+        const n = (compacting.get(id) ?? 1) - 1;
+        if (n > 0) compacting.set(id, n);
+        else compacting.delete(id);
+      });
+      return { taskId: String(taskId), done };
+    },
+
+    async contextStats() {
+      const id = String(conv.id);
+      const view = await conv.context(ctx);
+      let count = 0;
+      let lastAt: number | undefined;
+      let cursor: Awaited<ReturnType<Conversation["entries"]>>["next"];
+      do {
+        const page = await conv.entries({ order: "descending" }, 200, cursor, ctx);
+        for (const e of page.items) {
+          if (!CompactionEntry.is(e)) continue;
+          count++;
+          if (lastAt === undefined) lastAt = (e.model?.[0] as { timestamp?: number } | undefined)?.timestamp;
+        }
+        cursor = page.next;
+      } while (cursor);
+      let window: number | undefined;
+      const ref = (await conv.agent(ctx)).model;
+      if (ref) window = models.getModel(ref.provider, ref.modelId)?.contextWindow;
+      return {
+        tokens: contextTokens(view.messages),
+        ...(window ? { window, ...thresholds(window, opts.compaction) } : {}),
+        compactions: { count, ...(lastAt !== undefined ? { lastAt } : {}) },
+        compacting: (compacting.get(id) ?? 0) > 0,
+      };
+    },
 
     async submit({ input, whenBusy, cardAnswers }) {
       let sub;

@@ -1,5 +1,5 @@
 import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, type ScriptStep } from "./fixture.js";
-import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse } from "@wolfpack/protocol";
+import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse, type ThreadContext } from "@wolfpack/protocol";
 import {
   BusyError,
   NotFoundError,
@@ -222,6 +222,16 @@ export class MockConsoleClient implements ConsoleClient {
   async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {
     this.get(threadId);
     return { ...DEFAULT_THREAD_SETTINGS, ...this.settings.get(threadId) };
+  }
+  readonly compactions = new Map<string, { count: number; lastAt?: string }>();
+  async getThreadContext(threadId: string): Promise<ThreadContext> {
+    this.get(threadId);
+    return { tokens: 12_000, window: 1_000_000, startAt: 200_000, waitAt: 983_616, compactions: this.compactions.get(threadId) ?? { count: 0 }, compacting: false };
+  }
+  async compactThread(threadId: string, _instructions?: string): Promise<void> {
+    this.get(threadId);
+    const c = this.compactions.get(threadId) ?? { count: 0 };
+    this.compactions.set(threadId, { count: c.count + 1, lastAt: new Date().toISOString() });
   }
   async putThreadSettings(threadId: string, patch: ThreadSettingsPatch): Promise<ThreadSettingsResponse> {
     this.get(threadId);

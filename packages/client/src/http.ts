@@ -11,6 +11,7 @@ import {
   parseThreadEvent,
   parseWolfEvent,
   type BindThreadResponse,
+  type ThreadContext,
   type ThreadSettingsPatch,
   type ThreadSettingsResponse,
   type RouteName,
@@ -163,6 +164,14 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async putThreadSettings(threadId: string, patch: ThreadSettingsPatch): Promise<ThreadSettingsResponse> {
     return (await this.json("putThreadSettings", { id: threadId }, ROUTES.putThreadSettings.response.schema, patch, threadId)) as ThreadSettingsResponse;
+  }
+
+  async getThreadContext(threadId: string): Promise<ThreadContext> {
+    return (await this.json("getThreadContext", { id: threadId }, ROUTES.getThreadContext.response.schema, undefined, threadId)) as ThreadContext;
+  }
+
+  async compactThread(threadId: string, instructions?: string): Promise<void> {
+    await this.json("compactThread", { id: threadId }, ROUTES.compactThread.response.schema, instructions ? { instructions } : {}, threadId);
   }
 
   // --- feature progress: bind ---

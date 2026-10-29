@@ -60,6 +60,37 @@ export class ScriptedEngine implements EngineConversation {
     this.id = opts.id ?? "scripted";
   }
 
+  /** Manual compactions requested (their instructions). */
+  readonly compactCalls: Array<string | undefined> = [];
+  /** A test holds the compaction open by setting this; compact()'s `done` waits for it. */
+  compactGate?: Promise<void>;
+  private compactingNow = 0;
+  private compactionCount = 0;
+  private compactionLastAt: number | undefined;
+  /** Context numbers contextStats() reports. */
+  tokens = 12_000;
+  window: number | undefined = 1_000_000;
+
+  async compact(instructions?: string): Promise<{ taskId: string; done: Promise<void> }> {
+    this.compactCalls.push(instructions);
+    this.compactingNow++;
+    const done = (this.compactGate ?? Promise.resolve()).then(() => {
+      this.compactingNow--;
+      this.compactionCount++;
+      this.compactionLastAt = Date.now();
+    });
+    return { taskId: String(this.compactCalls.length), done };
+  }
+
+  async contextStats() {
+    return {
+      tokens: this.tokens,
+      ...(this.window ? { window: this.window, startAt: this.window - 16384 - 32768, waitAt: this.window - 16384 } : {}),
+      compactions: { count: this.compactionCount, ...(this.compactionLastAt !== undefined ? { lastAt: this.compactionLastAt } : {}) },
+      compacting: this.compactingNow > 0,
+    };
+  }
+
   async configure(opts: ConfigureOptions): Promise<void> {
     this.configured.push(opts);
   }

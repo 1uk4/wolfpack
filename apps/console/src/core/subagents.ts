@@ -66,8 +66,8 @@ export function upsertChild<T extends { id: string }>(list: readonly T[], next: 
 	return i < 0 ? [...list, next] : list.map((c, n) => (n === i ? next : c));
 }
 
-/** A settled child stays in the strip this long, then folds into the "N done" toggle. */
-export const DONE_LINGER_MS = 30_000;
+/** A settled child leaves the strip at once: only active subagents are visible. */
+export const DONE_LINGER_MS = 0;
 
 /**
  * The strip's rows: live children and recently settled ones are `shown`; settled ones past the linger are `done`
@@ -96,10 +96,6 @@ export interface SidebarGroup<T> {
 	top: T;
 	/** The children to draw under `top` now. */
 	kids: T[];
-	/** Settled children behind the "N done" toggle (0 while expanded or searching). */
-	done: number;
-	/** The toggle is drawn when `top` has settled children and no search is running. */
-	toggle: boolean;
 }
 
 /** A subagent row: kind "subagent" or any parent. Such a row is NEVER top level in the sidebar. */
@@ -107,7 +103,12 @@ export function isSubRow(r: { kind?: string; parentThreadId?: string }): boolean
 	return r.kind === "subagent" || r.parentThreadId !== undefined;
 }
 
-type LayoutRow = { id: string; kind?: string; parentThreadId?: string; state?: SubagentState; archived?: boolean };
+/** The wolf a row belongs to: its `meta` (the wolf name on sidebar rows) or the id prefix (`<wolf>/<slug>`). */
+export function rowWolf(r: { id: string; meta?: string }): string {
+	return r.meta ?? (r.id.includes("/") ? r.id.split("/")[0]! : "");
+}
+
+type LayoutRow = { id: string; meta?: string; kind?: string; parentThreadId?: string; state?: SubagentState; archived?: boolean };
 
 /**
  * The sidebar layout: `groups` are the main (not archived) threads, `archived` the archived ones, each with its LIVE
@@ -119,8 +120,10 @@ type LayoutRow = { id: string; kind?: string; parentThreadId?: string; state?: S
 export function sidebarLayout<T extends LayoutRow>(all: readonly T[], ranked: readonly T[], searching: boolean): { groups: SidebarGroup<T>[]; archived: SidebarGroup<T>[] } {
 	const parents = all.filter((r) => !isSubRow(r));
 	const byId = new Map(parents.map((t) => [t.id, t]));
-	const home = parents.find((p) => p.kind === "home" && !p.archived);
-	const parentOf = (k: T): string | undefined => (k.parentThreadId !== undefined && byId.has(k.parentThreadId) ? k.parentThreadId : home?.id);
+	// Home is per wolf: an orphan subagent falls under ITS wolf's Home, never another wolf's.
+	const homes = new Map<string, string>();
+	for (const p of parents) if (p.kind === "home" && !p.archived && !homes.has(rowWolf(p))) homes.set(rowWolf(p), p.id);
+	const parentOf = (k: T): string | undefined => (k.parentThreadId !== undefined && byId.has(k.parentThreadId) ? k.parentThreadId : homes.get(rowWolf(k)));
 	const kidsOf = new Map<string, T[]>();
 	for (const k of all) {
 		if (!isSubRow(k) || isSettled(k)) continue;
@@ -135,12 +138,12 @@ export function sidebarLayout<T extends LayoutRow>(all: readonly T[], ranked: re
 	}
 	const mk = (id: string): SidebarGroup<T> => {
 		const kids = kidsOf.get(id) ?? [];
-		return { top: byId.get(id)!, kids: searching ? kids.filter((k) => matched.has(k.id)) : kids, done: 0, toggle: false };
+		return { top: byId.get(id)!, kids: searching ? kids.filter((k) => matched.has(k.id)) : kids, };
 	};
 	return { groups: order.filter((id) => !byId.get(id)!.archived).map(mk), archived: order.filter((id) => byId.get(id)!.archived).map(mk) };
 }
 
 /** The main groups of `sidebarLayout` (kept for callers that ignore the archive). */
-export function sidebarGroups<T extends LayoutRow>(all: readonly T[], ranked: readonly T[], searching: boolean, _expanded?: ReadonlySet<string>): SidebarGroup<T>[] {
+export function sidebarGroups<T extends LayoutRow>(all: readonly T[], ranked: readonly T[], searching: boolean): SidebarGroup<T>[] {
 	return sidebarLayout(all, ranked, searching).groups;
 }

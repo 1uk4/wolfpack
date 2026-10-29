@@ -106,6 +106,21 @@ describe("SessionRow", () => {
 	});
 });
 
+describe("Home row meta and compact row", () => {
+	const home = (o: Partial<ChatListItem> & Record<string, unknown>) => item({ kind: "home", meta: "1uk4", ...o } as Partial<ChatListItem>);
+	it("Home says orchestrator only when idle; Working… and needs you win", () => {
+		assert.match(render(home({})), />orchestrator</);
+		assert.match(render(home({ busy: true })), /Working…/);
+		assert.doesNotMatch(render(home({ busy: true })), />orchestrator</);
+		assert.match(render(home({ needsYou: true })), /needs you/);
+	});
+	it("the compact subagent task link is labelled", () => {
+		const html = renderToStaticMarkup(<SessionRow chat={item({ title: "Task 1", parentThreadId: "p", state: "running", taskId: "work-1" } as Partial<ChatListItem>)} active={false} onOpen={() => {}} nested />);
+		assert.match(html, /aria-label="Open task for Task 1"/);
+		assert.match(html, /data-testid="session-row"/);
+	});
+});
+
 describe("needs-you dot", () => {
 	const waiting = () => item({ needsYou: true } as Partial<ChatListItem>);
 	it("shows for a waiting thread you are not viewing", () => {

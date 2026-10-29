@@ -6,6 +6,7 @@
  */
 
 import { fuzzyScore } from "./fuzzy.ts";
+import { isSettled, type SubagentState } from "./subagents.ts";
 import { PIPELINE_HREF } from "./kb.ts";
 import type { KbGraphNode } from "./kb.ts";
 import { threadHref, threadLabel } from "./thread-adapter.ts";
@@ -83,8 +84,9 @@ export function wolfItems(wolves: readonly { name: string }[]): PaletteItem[] {
 	return wolves.map((w) => ({ id: `wolf:${w.name}`, kind: "wolf", label: w.name, href: `/wolf/${encodeURIComponent(w.name)}` }));
 }
 
-export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string }[]): PaletteItem[] {
-	return threads.map((t) => ({
+export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string; state?: SubagentState }[]): PaletteItem[] {
+	// Settled subagent threads are hidden here too; only active ones are visible anywhere.
+	return threads.filter((t) => !isSettled(t)).map((t) => ({
 		id: `thread:${wolf}:${t.id}`,
 		kind: "thread",
 		label: threadLabel(wolf, t) || "Untitled",

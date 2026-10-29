@@ -53,7 +53,7 @@ async function loadThreadItems(wolves: Wolves): Promise<PaletteItem[]> {
 		wolves.map(async (wolf) => {
 			try {
 				const res = await fetch(`/api/wolves/${encodeURIComponent(wolf.name)}/threads`, { cache: "no-store" });
-				const d = (await res.json()) as { threads: { id: string; title: string; kind?: string }[] };
+				const d = (await res.json()) as { threads: { id: string; title: string; kind?: string; state?: "queued" | "running" | "waiting" | "done" | "failed" | "stopped" }[] };
 				return threadItems(wolf.name, d.threads);
 			} catch {
 				return [];

@@ -184,7 +184,7 @@ describe("the status strip", () => {
 		await fire(child(9, { parentThreadId: "1uk4/other" }));
 		assert.equal(qa('[data-testid="subagent-row"]').length, 2);
 		await fire(child(1, { state: "stopped", finishedAt: ago(1000) }));
-		assert.ok(!qa('[data-testid="subagent-row"]')[0]!.querySelector('[data-testid="subagent-stop"]'));
+		assert.equal(qa('[data-testid="subagent-row"]').length, 1); // a settled child leaves at once
 	});
 
 	it("a reconnect refetches the children", async () => {
@@ -226,30 +226,26 @@ describe("the strip's done rows", () => {
 		child(3, { state: "failed", finishedAt: ago(20 * 60_000) }),
 		child(4),
 	];
-	const view = (expanded: boolean) =>
-		renderToStaticMarkup(<SubagentStripView items={kids} now={NOW} expanded={expanded} onToggle={() => {}} onOpen={() => {}} onStop={() => {}} />);
+	const view = () => renderToStaticMarkup(<SubagentStripView items={kids} now={NOW} onOpen={() => {}} onStop={() => {}} />);
 
-	it("a settled row lingers, then folds away with no N done row", () => {
-		const folded = view(false);
-		assert.equal((folded.match(/data-testid="subagent-row"/g) ?? []).length, 2); // the fresh done one and the running one
-		assert.doesNotMatch(folded, /\d+ done|subagent-done-toggle/);
-		assert.equal((view(true).match(/data-testid="subagent-row"/g) ?? []).length, 4);
+	it("a settled row leaves at once (no linger, no N done row); only live ones show", () => {
+		const html = view();
+		assert.equal((html.match(/data-testid="subagent-row"/g) ?? []).length, 1); // the running one
+		assert.doesNotMatch(html, /\d+ done|subagent-done-toggle/);
 	});
 
 	it("the mounted strip has no done toggle", async () => {
 		const c = new SubClient();
 		c.kids = kids;
 		await mount(c);
-		assert.equal(qa('[data-testid="subagent-row"]').length, 2);
+		assert.equal(qa('[data-testid="subagent-row"]').length, 1);
 		assert.equal(q('[data-testid="subagent-done-toggle"]'), null);
 	});
 
-	it("elapsed ticks while live and freezes at the finish time once settled", () => {
-		const at = (now: number) => renderToStaticMarkup(<SubagentStripView items={[child(1), child(2, { state: "done", startedAt: ago(100_000), finishedAt: ago(40_000) })]} now={now} expanded onToggle={() => {}} onOpen={() => {}} onStop={() => {}} />);
+	it("elapsed ticks while a child is live", () => {
+		const at = (now: number) => renderToStaticMarkup(<SubagentStripView items={[child(1)]} now={now} onOpen={() => {}} onStop={() => {}} />);
 		assert.match(at(NOW), /2m 05s/);
 		assert.match(at(NOW + 10_000), /2m 15s/);
-		assert.equal((at(NOW).match(/1m 00s/g) ?? []).length, 1);
-		assert.equal((at(NOW + 60_000).match(/1m 00s/g) ?? []).length, 1);
 	});
 });
 
@@ -271,24 +267,20 @@ describe("the sidebar", () => {
 	});
 
 	it("children nest under their parent; settled ones are not listed; never at the top level", () => {
-		const groups = core.sidebarGroups(rows, rows, false, new Set());
+		const groups = core.sidebarGroups(rows, rows, false);
 		assert.deepEqual(groups.map((g) => g.top.id), [PARENT]);
 		assert.deepEqual(groups[0]!.kids.map((k) => k.id), ["1uk4/sub-1"]);
-		assert.equal(groups[0]!.done, 0);
-		assert.ok(!groups[0]!.toggle);
-		const open = core.sidebarGroups(rows, rows, false, new Set([PARENT]));
-		assert.deepEqual(open[0]!.kids.map((k) => k.id), ["1uk4/sub-1"]);
 	});
 
 	it("a search finds a live child under its parent, never a settled one", () => {
 		const ranked = rows.filter((r) => r.title === "Task 1" || r.title === "Task 2");
-		const groups = core.sidebarGroups(rows, ranked, true, new Set());
+		const groups = core.sidebarGroups(rows, ranked, true);
 		assert.deepEqual(groups.map((g) => [g.top.id, g.kids.map((k) => k.id)]), [[PARENT, ["1uk4/sub-1"]]]);
 	});
 
 	it("a subagent whose parent is not listed is never a top-level row", () => {
 		const orphans = rows.filter((r) => r.id !== PARENT);
-		assert.equal(core.sidebarGroups(orphans, orphans, false, new Set()).length, 0);
+		assert.equal(core.sidebarGroups(orphans, orphans, false).length, 0);
 	});
 
 	it("a subagent row shows its agent, state and step, indented", () => {
@@ -426,7 +418,7 @@ describe("the fetch/event race", () => {
 });
 
 describe("the clock", () => {
-	it("elapsed ticks each second, a queued row does not, and a settled row folds when its linger passes", async () => {
+	it("elapsed ticks each second, a queued row does not, and a settled row is never shown", async () => {
 		mock.timers.enable({ apis: ["setInterval", "Date"], now: NOW });
 		liveClock = true;
 		try {
@@ -442,9 +434,9 @@ describe("the clock", () => {
 			await act(async () => mock.timers.tick(5_000));
 			assert.equal(text(0, "subagent-elapsed"), "5s");
 			assert.equal(text(1, "subagent-elapsed"), "—");
-			assert.equal(qa('[data-testid="subagent-row"]').length, 3);
+			assert.equal(qa('[data-testid="subagent-row"]').length, 2); // the done row is not listed
 			await act(async () => mock.timers.tick(DONE + 1_000));
-			assert.equal(qa('[data-testid="subagent-row"]').length, 2); // the done row folded away
+			assert.equal(qa('[data-testid="subagent-row"]').length, 2);
 			assert.equal(q('[data-testid="subagent-done-toggle"]'), null);
 		} finally {
 			liveClock = false;
@@ -518,14 +510,39 @@ describe("sidebarLayout: a subagent is never a top-level row", () => {
 	});
 });
 
+describe("sidebarLayout: Home is chosen per wolf", () => {
+	type R = { id: string; meta?: string; kind?: string; parentThreadId?: string; state?: "running" | "done"; archived?: boolean };
+	it("an orphan live subagent falls under its own wolf's Home, not the first Home", () => {
+		const rows: R[] = [
+			{ id: "a/home", meta: "a", kind: "home" },
+			{ id: "b/home", meta: "b", kind: "home" },
+			{ id: "b/sub", meta: "b", kind: "subagent", parentThreadId: "b/gone", state: "running" },
+			{ id: "c/sub", kind: "subagent", state: "running" }, // wolf c has no Home: dropped
+		];
+		const l = core.sidebarLayout(rows, rows, false);
+		assert.deepEqual(l.groups.map((g) => [g.top.id, g.kids.map((k) => k.id)]), [["a/home", []], ["b/home", ["b/sub"]]]);
+		// the wolf comes from the id prefix when there is no meta
+		const noMeta: R[] = [{ id: "a/home", kind: "home" }, { id: "b/home", kind: "home" }, { id: "b/s", kind: "subagent", state: "running" }];
+		assert.deepEqual(core.sidebarLayout(noMeta, noMeta, false).groups.map((g) => [g.top.id, g.kids.length]), [["a/home", 0], ["b/home", 1]]);
+		assert.equal(core.rowWolf({ id: "x/y" }), "x");
+	});
+});
+
+describe("palette hides settled subagent threads", () => {
+	it("keeps live and ordinary threads only", () => {
+		const items = core.threadItems("w", [{ id: "w/a", title: "A" }, { id: "w/b", title: "B", state: "running" }, { id: "w/c", title: "C", state: "done" }, { id: "w/d", title: "D", state: "failed" }, { id: "w/e", title: "E", state: "stopped" }]);
+		assert.deepEqual(items.map((i) => i.label), ["A", "B"]);
+	});
+});
+
 describe("subagent openers: the modal opens over the page, with the wolf the caller knows, no navigation", () => {
 	const wire = (n: number) => ({ ...child(n), status: "busy" });
-	async function mountSidebar(pushed: string[], urls: string[]) {
+	async function mountSidebar(pushed: string[], urls: string[], threads?: unknown[]) {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const u = new URL(String(input), "http://t");
 			urls.push(u.pathname);
 			if (u.pathname === "/api/wolves") return Response.json({ wolves: [{ name: "1uk4" }] });
-			if (u.pathname === "/api/wolves/1uk4/threads") return Response.json({ threads: [{ id: PARENT, title: "Home" }, wire(1)] });
+			if (u.pathname === "/api/wolves/1uk4/threads") return Response.json({ threads: threads ?? [{ id: PARENT, title: "Home" }, wire(1)] });
 			return new Response("{}", { status: 404 });
 		}) as typeof fetch;
 		const host = document.createElement("div");
@@ -581,5 +598,43 @@ describe("subagent openers: the modal opens over the page, with the wolf the cal
 		await settle();
 		assert.equal(q('[data-testid="subagent-view"]')!.getAttribute("data-child"), "1uk4/sub-1");
 		assert.deepEqual(pushed, []);
+	});
+
+	const archivedFeature = { id: "1uk4/f1", title: "Old feature", kind: "feature", closed: true };
+	const liveUnderArchived = { ...child(1), parentThreadId: "1uk4/f1" };
+
+	it("a live subagent under a collapsed Archived parent shows a running indicator on the toggle", async () => {
+		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature, liveUnderArchived]);
+		const toggle = q('[data-testid="archived-toggle"]')!;
+		assert.match(toggle.textContent!, /Archived \(1\)/);
+		assert.match(q('[data-testid="archived-running"]')!.textContent!, /1 running/);
+		await click(toggle);
+		assert.equal(q('[data-testid="archived-running"]'), null); // open: the row itself is visible
+		assert.ok(qa('[data-testid^="session-row"]').some((b) => b.textContent?.includes("Task 1")));
+	});
+
+	it("while searching, the Archived toggle is disabled", async () => {
+		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, archivedFeature]);
+		const input = q('[data-testid="session-search"]') as HTMLInputElement;
+		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, false);
+		const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
+		await act(async () => void (input as unknown as Record<string, { onChange: (e: unknown) => void }>)[key]!.onChange({ target: { value: "old" }, currentTarget: { value: "old" } }));
+		await settle(30);
+		assert.equal((q('[data-testid="archived-toggle"]') as HTMLButtonElement).disabled, true);
+	});
+
+	it("the kbd scroll targets session rows only (the archived toggle button does not shift the index)", async () => {
+		const scrolled: string[] = [];
+		(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = function (this: HTMLElement) {
+			scrolled.push(this.textContent ?? "");
+		};
+		await mountSidebar([], [], [{ id: PARENT, title: "Home", kind: "home" }, { id: "1uk4/f2", title: "Live feature", kind: "feature" }, archivedFeature]);
+		const input = q('[data-testid="session-search"]')!;
+		const key = Object.keys(input).find((k) => k.startsWith("__reactProps$"))!;
+		const press = (k: string) => act(async () => void (input as unknown as Record<string, { onKeyDown: (e: unknown) => void }>)[key]!.onKeyDown({ key: k, preventDefault() {}, currentTarget: { blur() {} } }));
+		await press("ArrowUp"); // wraps to the last walked row; Archived is collapsed so that is "Live feature"
+		await settle(30);
+		assert.match(scrolled.at(-1) ?? "", /Live feature/);
+		(dom.window.Element.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
 	});
 });

@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { isChildThread, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { isChildThread, isLive, rowWolf, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -337,7 +337,7 @@ export function SessionRow({
 					</span>
 				</button>
 				{chat.taskId && (
-					<Link href={`/kb/work/${encodeURIComponent(chat.taskId)}`} data-testid="subagent-task-link" title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
+					<Link href={`/kb/work/${encodeURIComponent(chat.taskId)}`} data-testid="subagent-task-link" aria-label={`Open task for ${chat.title}`} title="Open the task this serves" className="shrink-0 underline-offset-2 hover:underline">
 						task
 					</Link>
 				)}
@@ -373,7 +373,8 @@ export function SessionRow({
 					<span className="truncate">{chat.title}</span>
 				</span>
 				{(() => {
-					const meta = home ? "orchestrator" : sessionMeta(chat);
+					// Home says "orchestrator" only when idle; Working… / needs you win when they apply.
+					const meta = home && !chat.busy && !chat.needsYou && !chat.compacting && !chat.pendingQuestion ? "orchestrator" : sessionMeta(chat);
 					// Nothing to say (a feature without a branch): no line, so no empty gap.
 					return meta ? (
 						<span data-testid="session-meta" title={chat.branch && chat.kind === "feature" ? chat.branch : undefined} className="block truncate text-xs text-muted-foreground">{meta}</span>
@@ -463,23 +464,25 @@ export function SessionsSidebar() {
 		if (!q) return list;
 		return list
 			.map((c) => {
-				const scores = [fuzzyScore(q, c.title), c.alias ? fuzzyScore(q, c.alias) : null, c.branch ? fuzzyScore(q, c.branch) : null].filter((x): x is number => x !== null);
+				const scores = [fuzzyScore(q, c.title), c.alias ? fuzzyScore(q, c.alias) : null, c.branch ? fuzzyScore(q, c.branch) : null, c.kind === "home" ? fuzzyScore(q, "orchestrator") : null].filter((x): x is number => x !== null);
 				return { c, score: scores.length ? Math.max(...scores) : null };
 			})
 			.filter((r): r is { c: (typeof list)[number]; score: number } => r.score !== null)
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);
 	}, [chats, query]);
-	/* Subagents nest under their parent thread and collapse once done (a per-parent "N done" toggle);
-	   they never sit at the top level. `shown` stays the flat walk order of the rows on screen. */
-	const [openParents, setOpenParents] = useState<ReadonlySet<string>>(() => new Set());
+	/* Live subagents nest under their parent thread (settled ones are hidden); they never sit at the top level.
+	   `shown` stays the flat walk order of the rows on screen. */
 	const [showArchived, setShowArchived] = useState(false);
 	/* Archived = graduated features (their thread is closed). They leave the main list for a collapsed section below it. */
 	const layout = useMemo(() => (chats && ranked ? sidebarLayout(chats, ranked, query.trim() !== "") : null), [chats, ranked, query]);
 	const groups = layout?.groups ?? null;
 	const archived = layout?.archived ?? [];
 	const archivedOpen = showArchived || query.trim() !== "";
-	const hasHome = useMemo(() => (groups ?? []).some((g) => g.top.kind === "home"), [groups]);
+	// Home is per wolf: a feature is indented only under a Home of its own wolf.
+	const homeWolves = useMemo(() => new Set((groups ?? []).filter((g) => g.top.kind === "home").map((g) => rowWolf(g.top))), [groups]);
+	const searching = query.trim() !== "";
+	const archivedRunning = archived.reduce((n, g) => n + g.kids.filter(isLive).length, 0);
 	const flat = (gs: readonly { top: SessionItem; kids: SessionItem[] }[]) => gs.flatMap((g) => [g.top, ...g.kids]);
 	const shown = useMemo(() => (groups ? [...flat(groups), ...(archivedOpen ? flat(archived) : [])] : null), [groups, archived, archivedOpen]);
 
@@ -729,7 +732,7 @@ export function SessionsSidebar() {
 	// buttons, so the index matches).
 	useEffect(() => {
 		if (kbdIndex === null) return;
-		listRef.current?.querySelectorAll("button")[kbdIndex]?.scrollIntoView({ block: "nearest" });
+		listRef.current?.querySelectorAll('[data-testid^="session-row"]')[kbdIndex]?.scrollIntoView({ block: "nearest" });
 	}, [kbdIndex]);
 
 	useEffect(() => {
@@ -895,7 +898,7 @@ export function SessionsSidebar() {
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && hasHome))
+						groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && homeWolves.has(rowWolf(g.top))))
 					)}
 					{archived.length > 0 && (
 						<>
@@ -903,11 +906,18 @@ export function SessionsSidebar() {
 								type="button"
 								data-testid="archived-toggle"
 								aria-expanded={archivedOpen}
+								// A search forces the section open, so the toggle is inert (and drops its chevron) meanwhile.
+								disabled={searching}
 								onClick={() => setShowArchived((v) => !v)}
-								className="mt-2 flex w-full items-center gap-1 rounded-lg px-3 py-1 text-left text-xs uppercase tracking-widest text-muted-foreground/70 hover:bg-accent"
+								className="mt-2 flex w-full items-center gap-1 rounded-lg px-3 py-1 text-left text-xs uppercase tracking-widest text-muted-foreground/70 hover:bg-accent disabled:pointer-events-none"
 							>
-								{archivedOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+								{searching ? <span className="size-3" /> : archivedOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
 								Archived ({archived.length})
+								{archivedRunning > 0 && !archivedOpen && (
+									<span data-testid="archived-running" className="ml-1 flex items-center gap-1 normal-case tracking-normal text-foreground">
+										· <BrailleSpinner className="h-[1.25em]" label="running" /> {archivedRunning} running
+									</span>
+								)}
 							</button>
 							{archivedOpen && archived.flatMap((g) => renderGroup(g, true))}
 						</>

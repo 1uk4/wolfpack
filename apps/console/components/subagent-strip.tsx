@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BotIcon, ChevronDownIcon, ChevronRightIcon, SquareIcon } from "lucide-react";
+import { BotIcon, SquareIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { useSubagentModal } from "@/components/subagent-modal";
@@ -71,21 +71,17 @@ function useNow(items: readonly ChildThread[], nowProp?: number): number {
 export function SubagentStripView({
 	items,
 	now,
-	expanded,
-	onToggle,
 	onOpen,
 	onStop,
 }: {
 	items: readonly ChildThread[];
 	now: number;
-	expanded: boolean;
-	onToggle: () => void;
 	onOpen: (child: ChildThread) => void;
 	onStop: (child: ChildThread) => void;
 }) {
 	if (items.length === 0) return null;
-	// No "N done" row: finished subagents are not listed here (`expanded` only serves previews/tests); they stay reachable from the sidebar's subagent jobs panel.
-	const { shown } = partitionChildren(items, now, expanded);
+	// Only active subagents are visible: a settled one leaves at once (DONE_LINGER_MS is 0) and is not listed anywhere.
+	const { shown } = partitionChildren(items, now, false);
 	return (
 		<div data-testid="subagent-strip" className="pointer-events-auto mb-2 overflow-hidden rounded-xl border bg-card text-xs shadow-sm">
 			{shown.map((c) => (
@@ -117,7 +113,6 @@ export function SubagentStripView({
  */
 export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: string; slug: string; items: readonly ChildThread[]; now?: number }) {
 	const { openSubagent } = useSubagentModal();
-	const [expanded, setExpanded] = useState(false);
 	const now = useNow(items, nowProp);
 	const open = useCallback((c: ChildThread) => openSubagent(c.id, wolf), [openSubagent, wolf]);
 	const [stopError, setStopError] = useState<string | null>(null);
@@ -138,7 +133,7 @@ export function SubagentStrip({ wolf, slug, items, now: nowProp }: { wolf: strin
 	);
 	return (
 		<>
-			<SubagentStripView items={items} now={now} expanded={expanded} onToggle={() => setExpanded((v) => !v)} onOpen={open} onStop={(c) => void stop(c)} />
+			<SubagentStripView items={items} now={now} onOpen={open} onStop={(c) => void stop(c)} />
 			{stopError && (
 				<div data-testid="subagent-stop-error" className="pointer-events-auto mb-2 text-xs text-destructive">
 					{stopError}

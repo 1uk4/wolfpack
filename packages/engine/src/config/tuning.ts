@@ -321,7 +321,7 @@ export const SECTION_TREE = {
     /** A move needs the best other section to beat the own (leave-one-out) one by this much. */
     misplacedMargin: 0.05,
     /** LLM-proposed split: a category survives with at least this share of leave-one-out-coherent members (and >= minGroup of them). */
-    llmMinCoherence: 0.8,
+    llmMinCoherence: 0.7,
     /** Child label restating the parent: token Jaccard at or above this. */
     restateJaccard: 0.6,
     /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */

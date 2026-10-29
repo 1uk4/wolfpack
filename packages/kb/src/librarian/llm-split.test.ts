@@ -37,7 +37,7 @@ describe("validatePartition (vectors validate, never assign)", () => {
     expect(isPartition(d)).toBe(true);
     if (isPartition(d)) { expect(d.k).toBe(3); expect(d.leftovers).toEqual([]); expect(d.names).toEqual(names); }
   });
-  it("a member that sits with the wrong category becomes a leftover; the category survives at >= 80% coherence", () => {
+  it("a member that sits with the wrong category becomes a leftover; the category survives at >= 70% coherence", () => {
     const es = make([8, 8, 6]);
     const idx = (c: number) => es.flatMap((e, i) => (cluster(e.id, [8, 8, 6]) === c ? [i] : []));
     // put one cluster-1 entry into category 0
@@ -59,6 +59,25 @@ describe("validatePartition (vectors validate, never assign)", () => {
       expect(d.categories[2].why === "low-share" || d.categories[2].why === "too-few-coherent").toBe(true);
       expect(d.leftovers.sort((a, b) => a - b)).toEqual([...mixA, ...mixB].sort((a, b) => a - b));
     }
+  });
+  it("the bar is .7: a category with 7 of 10 coherent members survives, 6 of 10 does not", () => {
+    const es = make([10, 10, 6]);
+    const idx = (c: number) => es.flatMap((e, i) => (cluster(e.id, [10, 10, 6]) === c ? [i] : []));
+    const run = (strays: number) => {
+      // `strays` members of cluster 0 are filed under category 1 (so cluster 0 keeps 10 - strays coherent ones)
+      const c0 = idx(0), c1 = idx(1);
+      const cat0 = [...c0.slice(strays), ...c1.slice(0, 0)];
+      const cat1 = [...c1, ...c0.slice(0, strays)];
+      // category 0 is 10 - strays long; build the "10 with N wrong" case on category 1 instead
+      return validatePartition(es.map((e) => e.vector), { names: ["A", "B", "C"], members: [cat0, cat1, idx(2)], doesntFit: [] });
+    };
+    const d3 = run(3), d4 = run(4);
+    expect(isPartition(d3) && d3.categories.map((c) => c.kept)).toEqual([true, true, true]);
+    expect(isPartition(d4) && d4.categories.map((c) => c.kept)).toEqual([true, true, true]);
+    // 13 proposed in B, 10 coherent = 77%: kept at .7 (it would be dropped at .8)
+    expect(isPartition(d3) && d3.categories[1].share).toBeCloseTo(10 / 13, 5);
+    expect(isPartition(d3) && d3.categories[1].share).toBeGreaterThanOrEqual(0.7);
+    expect(isPartition(d3) && d3.categories[1].share).toBeLessThan(0.8);
   });
   it("fewer than two surviving categories: no split", () => {
     const es = make(SIZES);

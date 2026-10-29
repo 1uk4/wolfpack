@@ -5,7 +5,7 @@
  * (the insert path grows a leaf one entry at a time) the stub answers with the same categorisation restricted to
  * the members present; an entry it never categorised goes to "doesn't fit".
  *
- * Tree shapes B produces (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
+ * Tree shapes B produces at llmMinCoherence .7 (identical to .8 on these fixtures: every dropped category is far below .7) (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
  *   Console Chat (30)        3 groups of 4/5/5 (14 entries) + 16 leftovers   (two categories dropped: 4/7 and 1/4 coherent)
  *   Work Item Tracking (14)  2 groups of 3/3 (6 entries)    + 8 leftovers    (three categories dropped or too small)
  *   Graduation (9)           not judged (<= splitAbove); with the size gate off: 2 groups of 3/4 + 2 leftovers

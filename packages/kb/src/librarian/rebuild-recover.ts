@@ -24,7 +24,7 @@ export function recoverAndRender(roots: KbRoots, notify?: (msg: string) => void)
 }
 
 /** Restore one domain from a rebuild backup, then re-render the registry, digest and INDEX. Caller holds the KB lock. */
-export function restoreAndRender(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf"> = {}): RestoreResult & { domain: string } {
+export function restoreAndRender(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf" | "notify" | "rename"> = {}): RestoreResult & { domain: string } {
   const r = restoreRebuild(roots, stamp, hooks);
   const domain = JSON.parse(readFileSync(rebuildOldValuesFile(roots, stamp), "utf-8")).domain as string;
   renderRegistry(roots, foldRegistry(readLedger(roots)));

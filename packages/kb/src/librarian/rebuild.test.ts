@@ -377,6 +377,55 @@ describe("commit safety", () => {
     expect(existsSync(join(roots.kbBase, "domains", "wp", "INDEX.md"))).toBe(true);
   });
 
+  it("restore recomputes memberCount from the entries as they are now and marks the restored sections dirty", async () => {
+    const { writeSections } = await import("./sections.js");
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeSections(roots, [mkSec("sec-wp-old000", "wp", es[0].vector)]);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    commitRebuild(roots, plan);
+    const stamp = listRebuildBackups(roots)[0];
+    put("late", "sec-wp-old000"); // created after the backup
+    restoreRebuild(roots, stamp);
+    const [sec] = readSections(roots).filter((s) => s.domain === "wp");
+    expect(sec.memberCount).toBe(es.length + 1);
+    expect(sec.dirty).toBe(true);
+  });
+
+  it("restore writes the ledger event BEFORE the snapshot; if the snapshot write fails it says to re-run, and the re-run completes", async () => {
+    const { writeSections } = await import("./sections.js");
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeSections(roots, [mkSec("sec-wp-old000", "wp", es[0].vector)]);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    commitRebuild(roots, plan);
+    const stamp = listRebuildBackups(roots)[0];
+    const failing = () => { throw new Error("disk full"); };
+    expect(() => restoreRebuild(roots, stamp, { rename: failing })).toThrow(/ledger was updated but writing .* failed \(disk full\); re-run `rebuild --restore/);
+    // the ledger already says "restored", the snapshot still holds the rebuilt tree, no temp is left behind
+    expect(foldSections(readLedger(roots)).filter((s) => s.domain === "wp").map((s) => String(s.id))).toEqual(["sec-wp-old000"]);
+    expect(readSections(roots).filter((s) => s.domain === "wp").map((s) => String(s.id)).sort()).toEqual(plan.state.sections.map((s) => String(s.id)).sort());
+    expect(existsSync(join(roots.denLocal, "sections", ".rebuild-tmp-_sections.json.tmp"))).toBe(false);
+    restoreRebuild(roots, stamp); // the re-run completes it
+    expect(readSections(roots).filter((s) => s.domain === "wp").map((s) => String(s.id))).toEqual(["sec-wp-old000"]);
+  });
+
+  it("when sections.json is unparsable and the other domains are folded from the ledger, the commit warns that they have no centroids", async () => {
+    const { writeSections } = await import("./sections.js");
+    const { appendLedger } = await import("./ledger.js");
+    const { ev } = await import("../shared/index.js");
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeSections(roots, [mkSec("sec-wp-old000", "wp", es[0].vector)]);
+    appendLedger(roots, [ev.sectionCreated({ sectionId: "sec-other-aaaaaa", domain: "other", parent: null, label: "o" })]);
+    writeFileSync(join(roots.denLocal, "sections", "_sections.json"), "{ broken");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    const notes: string[] = [];
+    commitRebuild(roots, plan, { notify: (m) => notes.push(m) });
+    expect(notes.some((m) => /folded from the ledger and have NO centroids/.test(m))).toBe(true);
+    expect(readSections(roots).some((s) => s.domain === "other")).toBe(true);
+  });
+
   it("restore reports (does not guess) entries it cannot re-home, and refuses without a sections backup", async () => {
     const { writeSections } = await import("./sections.js");
     const es = all();

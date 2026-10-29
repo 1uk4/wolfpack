@@ -25,6 +25,7 @@ import type { Section } from "../schema/knowledge.js";
 import { sectionsFile, foldSections } from "./sections.js";
 import { appendLedger, readLedger } from "./ledger.js";
 import { cosine } from "./tree-rules.js";
+import { groupOf } from "./anchors.js";
 import type { RebuildPlan } from "./rebuild.js";
 
 /** Pure: the entry file text with its `section:` line set. */
@@ -140,7 +141,7 @@ export const entryFiles = (eDir: string) =>
   existsSync(eDir) ? readdirSync(eDir).filter((f) => f.endsWith(".md") && !f.startsWith(".")).sort() : [];
 
 /** The sections of the OTHER domains, never silently dropped: from the snapshot, else folded from the ledger, else abort. */
-function otherDomainSections(roots: KbRoots, domain: string): Section[] {
+function otherDomainSections(roots: KbRoots, domain: string, notify?: (msg: string) => void): Section[] {
   const sf = sectionsFile(roots);
   let all: Section[] | null = null;
   if (existsSync(sf)) {
@@ -148,6 +149,7 @@ function otherDomainSections(roots: KbRoots, domain: string): Section[] {
   }
   if (all) return all.filter((s) => String(s.domain) !== domain);
   const folded = foldSections(readLedger(roots)).filter((s) => String(s.domain) !== domain);
+  if (folded.length) notify?.(`rebuild: ${sf} is ${existsSync(sf) ? "unparsable" : "missing"}; the other domains' ${folded.length} section(s) were folded from the ledger and have NO centroids until a bootstrap recomputes them (the next reorg/rebuild does)`);
   const dRoot = join(roots.kbBase, "domains");
   const missing = existsSync(dRoot)
     ? readdirSync(dRoot).filter((d) => d !== domain && entryFiles(join(dRoot, d, "entries")).length > 0 && !folded.some((s) => String(s.domain) === d))
@@ -216,7 +218,7 @@ export function commitRebuild(roots: KbRoots, plan: RebuildPlan, hooks: CommitHo
   for (const [id, sec] of target) if (!newIds.has(sec)) throw new Error(`rebuild: ${id} would point at ${sec}, which is not in the new tree; aborting`);
 
   // ── the other domains' trees must survive the snapshot rewrite ──
-  const others = otherDomainSections(roots, plan.domain);
+  const others = otherDomainSections(roots, plan.domain, hooks.notify);
 
   // ── timestamped backups ──
   const stamp = backupStamp();
@@ -285,7 +287,7 @@ export interface RestoreResult {
  * and reported otherwise. A centroid-less sections_replaced event is appended so the ledger fold agrees. Caller holds the
  * KB lock; rendering the registry/digest/INDEX is done by restoreAndRender (rebuild-recover.ts).
  */
-export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf"> = {}): RestoreResult {
+export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<CommitHooks, "vectorOf" | "notify" | "rename"> = {}): RestoreResult {
   const backup = sectionsBackupFile(roots, stamp), map = rebuildOldValuesFile(roots, stamp);
   if (!existsSync(map)) throw new Error(`restore: no old-sections map for ${stamp}; known: ${listRebuildBackups(roots).join(", ") || "none"}`);
   if (!existsSync(backup)) throw new Error(`restore: no sections backup for ${stamp}; refusing to restore entries without the tree they point into`);
@@ -299,7 +301,7 @@ export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<Commit
   const sf = sectionsFile(roots);
   let current: Section[] = [];
   if (existsSync(sf)) { try { const j = JSON.parse(readFileSync(sf, "utf-8")); if (Array.isArray(j)) current = j as Section[]; } catch { /* treated as empty: the other domains are folded below */ } }
-  const others = current.length ? current.filter((s) => String(s.domain) !== domain) : otherDomainSections(roots, domain);
+  const others = current.length ? current.filter((s) => String(s.domain) !== domain) : otherDomainSections(roots, domain, hooks.notify);
 
   const leaves = restored.filter((s) => !restored.some((c) => String(c.parent) === String(s.id)));
   const eDir = join(roots.kbBase, "domains", domain, "entries");
@@ -329,10 +331,27 @@ export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<Commit
     const next = withSectionLine(raw, sec);
     if (next !== raw) { defaultWrite(file, next); result.entriesRestored++; }
   }
-  // sections last, atomically (temp + rename), so a crash leaves entries restored and the new tree in place, re-runnable
-  writeSynced(tmpPath(sf), JSON.stringify([...others, ...restored], null, 2));
-  renameSync(tmpPath(sf), sf);
+  // The restored sections' counts come from the entries as they are NOW (some were created or re-homed since the backup),
+  // and they are marked dirty so the next label pass re-checks their names.
+  const counts = new Map<string, number>();
+  for (const f of entryFiles(eDir)) {
+    const raw = readFileSync(join(eDir, f), "utf-8");
+    if (groupOf(raw)) continue;
+    const sec = String(parseFrontmatter(raw).fields.section ?? "");
+    if (sec) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+  }
+  for (const s of restored) { s.memberCount = counts.get(String(s.id)) ?? 0; s.dirty = true; }
+  // Ledger event FIRST, then the snapshot rename: if the process dies between them, the ledger already says "restored"
+  // and re-running the restore (idempotent: same entries, same snapshot) completes the snapshot. If the ledger append
+  // itself fails nothing else was written yet, apart from the entry lines, which a re-run puts back the same way.
   const snapshot = restored.map(({ centroid: _c, ...rest }) => rest) as unknown as Array<Record<string, unknown>>;
   appendLedger(roots, [ev.sectionsReplaced(domain, snapshot)]);
+  try {
+    writeSynced(tmpPath(sf), JSON.stringify([...others, ...restored], null, 2));
+    (hooks.rename ?? renameSync)(tmpPath(sf), sf);
+  } catch (err) {
+    rmSync(tmpPath(sf), { force: true });
+    throw new Error(`restore: the ledger was updated but writing ${sf} failed (${err instanceof Error ? err.message : err}); re-run \`rebuild --restore ${stamp} --yes\` to finish`);
+  }
   return result;
 }

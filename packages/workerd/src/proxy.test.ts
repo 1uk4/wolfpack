@@ -44,6 +44,11 @@ describe("workerd proxy", () => {
     expect(body.wolves.map((w: { name: string; librarian?: boolean }) => [w.name, w.librarian])).toEqual([["alpha", false], ["beta", true], ["gamma", false]]);
   });
 
+  it("passes kbReadable through the aggregate (omitted when the wolf does not report it)", async () => {
+    const body = await (await fetch(`${base}/v1/wolves`)).json();
+    expect(body.wolves.map((w: { name: string; kbReadable?: boolean }) => [w.name, w.kbReadable])).toEqual([["alpha", true], ["beta", undefined], ["gamma", undefined]]);
+  });
+
   it("forwards the memory status, topic and work record routes unchanged (path params and query)", async () => {
     for (const n of ["alpha", "beta"]) {
       expect(await (await fetch(`${base}/v1/wolves/${n}/memory?thread=${encodeURIComponent(`${n}/home`)}`)).json()).toEqual({ served_by: n, query: `?thread=${encodeURIComponent(`${n}/home`)}` });

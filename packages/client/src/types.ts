@@ -213,6 +213,8 @@ export class ProtocolError extends Error {
     public readonly code: ErrorCode,
     message: string,
     public readonly retryable: boolean,
+    /** Structured facts from the error envelope (a hub `conflict` carries `{holder}`). */
+    public readonly details?: Record<string, string>,
   ) {
     super(message);
     this.name = "ProtocolError";

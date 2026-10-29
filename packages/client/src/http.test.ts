@@ -297,6 +297,20 @@ describe("HttpConsoleClient hub work reads", () => {
     const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f });
     await expect(c.getWorkRecord("any", "work-x-1234567")).rejects.toBeInstanceOf(NotFoundError);
   });
+  it("hub claim posts to /claim and a conflict envelope keeps its details on the ProtocolError", async () => {
+    const seen: string[] = [];
+    const f: typeof fetch = async (u, init) => {
+      seen.push(`${init?.method} ${String(u)}`);
+      return Response.json({ code: "conflict", message: "already claimed: w is held by w1", retryable: false, details: { holder: "w1" } }, { status: 409 });
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, actor: { id: "w2", kind: "wolf" }, fetch: f });
+    const e = await c.claimWork("work-x-1234567").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ProtocolError);
+    expect((e as ProtocolError).code).toBe("conflict");
+    expect((e as ProtocolError).details).toEqual({ holder: "w1" });
+    await c.releaseWork("work-x-1234567").catch(() => undefined);
+    expect(seen).toEqual(["POST http://hub.invalid/v1/work/work-x-1234567/claim", "POST http://hub.invalid/v1/work/work-x-1234567/unclaim"]);
+  });
   it("without a hub, work reads still use the wolf-scoped routes", async () => {
     const c = make();
     await expect(c.listWork("1uk4", { domain: "x" })).rejects.toBeInstanceOf(ProtocolError); // stub: no Work API

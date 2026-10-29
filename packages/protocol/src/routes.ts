@@ -341,7 +341,11 @@ export const ROUTES = {
    * work.assigned + work.bound (and work.staged approved -> in_build in the same append). Idempotent for the same holder.
    * Targets: features and bindable tasks/issues/spikes (loose Inbox items or feature children). 409 `conflict` (`details.holder`)
    * when held by another wolf, or when the item's feature is; 400 `invalid_request` for idea/initiative/container items or items
-   * still in stage idea/plan. `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone.
+   * not in stage approved or in_build (idea, plan, feasibility and the terminal stages are refused). Inheritance runs both ways: a
+   * child of a held feature, and a feature with a held child, are 409. An actor id that is not a valid wolf id is 400.
+   * LEGACY: an old work.bound with no matching work.unbound reads as held (last writer wins, no origin filter); an operator clears it
+   * with unclaim. task_bind outside the hub can displace a hub claim until wolves are repointed (JPhfaEL / cutover).
+   * `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone.
    * 409 `conflict` for any other actor. No timeout or presence expiry.
    */
   hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
-import { createWork, loadWorkState, stageWork } from "@wolfpack/kb/client";
+import { appendWorkLedger, createWork, loadWorkState, stageWork } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "./server.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -103,5 +103,63 @@ describe("hub claim", () => {
     expect((await s.claim(id, as("w2"))).status).toBe(200);
     expect((await s.unclaim(id, as("1uk4", "operator"))).status).toBe(200);
     expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBeNull();
+  });
+
+  it("a bad actor id is 400 on claim and unclaim; an operator id passes WolfId and can claim", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    expect((await s.claim(id, as("Bad_Id"))).status).toBe(400);
+    expect((await s.unclaim(id, as("Bad_Id"))).status).toBe(400);
+    expect((await s.claim(id, as("1uk4", "operator"))).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("1uk4");
+  });
+
+  it("an unknown id is 404 on claim and unclaim", async () => {
+    const s = await setup();
+    expect((await s.claim("work-wolfpack-nope0000", as("w1"))).status).toBe(404);
+    expect((await s.unclaim("work-wolfpack-nope0000", as("w1"))).status).toBe(404);
+  });
+
+  it("only approved and in_build are claimable: plan and feasibility before, shipped and archived after", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    expect((await s.claim(id, as("w1"))).status).toBe(400); // plan
+    stageWork(s.roots, id, "feasibility");
+    expect((await s.claim(id, as("w1"))).status).toBe(400);
+    stageWork(s.roots, id, "approved");
+    expect((await s.claim(id, as("w1"))).status).toBe(200);
+    stageWork(s.roots, id, "shipped");
+    expect((await s.claim(id, as("w1"))).status).toBe(400);
+    stageWork(s.roots, id, "archived");
+    expect((await s.claim(id, as("w1"))).status).toBe(400);
+  });
+
+  it("inheritance runs both ways: a held child blocks its feature, a held feature blocks its child", async () => {
+    const s = await setup();
+    const f = s.seeded.feature.id;
+    const [t1, t2] = s.seeded.tasks;
+    stageWork(s.roots, f, "approved");
+    stageWork(s.roots, t1, "approved");
+    expect((await s.claim(t1, as("w1"))).status).toBe(200);
+    const r = await s.claim(f, as("w2"));
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { details: { holder: string } }).details.holder).toBe("w1");
+    expect((await s.claim(f, as("w1"))).status).toBe(200); // the child's holder may take the feature
+    stageWork(s.roots, t2, "approved");
+    expect((await s.claim(t2, as("w2"))).status).toBe(409); // now the feature is held by w1
+  });
+
+  it("a legacy work.bound with no unbound reads as held: B gets 409, operator unclaim clears it, B then claims", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    appendWorkLedger(s.roots, [{ type: "work.bound", id: id as never, at: "2026-09-01 10:00", wolf: "wolf-a" as never }]);
+    const r = await s.claim(id, as("wolf-b"));
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { details: { holder: string } }).details.holder).toBe("wolf-a");
+    expect((await s.unclaim(id, as("1uk4", "operator"))).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBeNull();
+    expect((await s.claim(id, as("wolf-b"))).status).toBe(200);
   });
 });

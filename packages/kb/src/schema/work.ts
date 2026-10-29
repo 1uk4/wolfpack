@@ -262,7 +262,9 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
         }
         break;
       case "work.bound":
-        // Also informational for work memory; additionally records the holder (hub claim).
+        // Also informational for work memory; additionally records the holder (hub claim). LAST WRITER WINS, no origin filter:
+        // a legacy bound with no matching unbound reads as held; an operator clears it with a hub unclaim. A bind from outside
+        // the hub can displace a hub claim until wolves are repointed (JPhfaEL / cutover).
         next.boundBy = e.wolf;
         break;
       case "work.unbound":

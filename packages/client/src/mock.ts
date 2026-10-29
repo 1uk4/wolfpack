@@ -271,6 +271,8 @@ export class MockConsoleClient implements ConsoleClient {
   async claimWork(workId: string): Promise<WorkItemResponse> {
     const w = this.claimTarget(workId);
     if (w.kind !== "feature" && w.kind !== "task" && w.kind !== "issue" && w.kind !== "spike") throw new ProtocolError("invalid_request", `a ${w.kind} cannot be claimed`, false);
+    if ((w as { container?: boolean }).container) throw new ProtocolError("invalid_request", "a holding container cannot be claimed", false);
+    if (["idea", "plan", "feasibility", "shipped", "live", "archived", "done"].includes(w.stage)) throw new ProtocolError("invalid_request", `${workId} is in stage ${w.stage}; only approved or in_build items can be claimed`, false);
     for (const id of [workId, w.partOf ?? ""]) {
       const holder = this.claims.get(id);
       if (holder && holder !== this.claimActor.id) throw new ProtocolError("conflict", `already claimed: ${id} is held by ${holder}`, false);

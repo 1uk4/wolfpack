@@ -490,7 +490,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const { code, message, retryable, details } = env.data;
     if (code === "busy") return new BusyError(threadId ?? message, details);
     if (code === "not_found") return new NotFoundError(message);
-    return new ProtocolError(code, message, retryable);
+    return new ProtocolError(code, message, retryable, details);
   }
 }
 

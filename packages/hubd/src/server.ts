@@ -36,6 +36,7 @@ import {
   graduateItem,
   isOwnerOnlyOp,
   normalisePatch,
+  parseWolfId,
   type WorkAppendedListener,
 } from "./work-writes.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
@@ -255,13 +256,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         case "hubClaimWork": {
           const actor = writeActor(req);
-          if (actor.kind === "system") throw new HubError("invalid_request", "bad actor");
+          const wolf = parseWolfId(actor);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-          const item = await writeWork(actor, () => claimItem(roots, params.id, actor.id));
+          const item = await writeWork(actor, () => claimItem(roots, params.id, wolf));
           return send(res, 200, { item });
         }
         case "hubUnclaimWork": {
           const actor = writeActor(req);
+          parseWolfId(actor);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
           const item = await writeWork(actor, () => unclaimItem(roots, params.id, actor));
           return send(res, 200, { item });

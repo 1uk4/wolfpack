@@ -13,7 +13,7 @@
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
 import { patchSourceProperties, sourceDiffers, withSourceProperties } from "./source-props.js";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
@@ -22,7 +22,7 @@ import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js"
 import { drainInbox, countPending } from "./intake.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
-import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
+import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
 import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
@@ -310,8 +310,31 @@ export function emptyResult(): SweepResult {
   };
 }
 
-/** Contexts that already logged the oversized-parent notice (once per sweep). */
-const oversizedLogged = new WeakSet<object>();
+/**
+ * Parents (sections with children) whose DIRECT entries outgrew the split threshold, across ALL domains with a tree. The
+ * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
+ * Called once per sweep. Grouped entries follow their holder and are not counted.
+ */
+export function oversizedParents(roots: KbRoots, sections: Section[]): string[] {
+  const out: string[] = [];
+  for (const domain of new Set(sections.map((s) => String(s.domain)))) {
+    const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
+    if (!withKids.size) continue;
+    const counts = new Map<string, number>();
+    const dir = join(roots.kbBase, "domains", domain, "entries");
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".md") || f.startsWith(".")) continue;
+      let raw: string;
+      try { raw = readFileSync(join(dir, f), "utf-8"); } catch { continue; }
+      if (groupOf(raw)) continue;
+      const sec = String(parseFrontmatter(raw).fields.section ?? "");
+      if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+    }
+    for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
+  }
+  return out;
+}
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
@@ -361,6 +384,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
   // Section tree, folded from the ledger / _sections.json.
   let sections: Section[] = readSections(roots);
+  {
+    const big = oversizedParents(roots, sections);
+    if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
+  }
 
   const batch: KbEvent[] = [];
   const result = emptyResult();
@@ -684,14 +711,6 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             if (!sectionMembers.has(entrySec)) sectionMembers.set(entrySec, []);
             sectionMembers.get(entrySec)!.push({ entryId: ev.entryId, sectionId: entrySec as SectionId, vector: ev.vector });
           }
-        }
-        // Once per sweep: parents whose DIRECT entries (leftovers kept by the stay-in-parent rule) have outgrown the split
-        // threshold. The sweep never reorganises, so this is the signal that a rebuild is due.
-        if (!oversizedLogged.has(ctx)) {
-          oversizedLogged.add(ctx);
-          const withKids = new Set(sections.filter((s) => s.domain === domain && s.parent).map((s) => String(s.parent)));
-          const big = [...sectionMembers].filter(([id, m]) => withKids.has(id) && m.length > DEFAULT_RULES.splitAbove).map(([id, m]) => `${id} (${m.length})`);
-          if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
         }
         const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain && !anchors.grouped.has(e.entryId)).map((e) => e.vector));
         // placeEntry descends from the roots of its first section's domain, so it

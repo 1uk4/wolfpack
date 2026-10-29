@@ -108,4 +108,22 @@ describe("sweep: logs parents whose direct entries outgrew the split threshold (
     expect(hits).toHaveLength(1);
     expect(hits[0]).toContain("sec-personal-parent (11)");
   });
+
+  it("checks every domain with a tree, even when the item touches a different one (once per sweep)", async () => {
+    const other = (id: string, parent: string | null) => ({ ...sec(id, parent), domain: "snapjack" }) as Section;
+    writeSections(roots, [sec("sec-personal-p", null), sec("sec-personal-k", "sec-personal-p"), other("sec-snapjack-p", null), other("sec-snapjack-k", "sec-snapjack-p")]);
+    const sdir = join(roots.kbBase, "domains", "snapjack", "entries");
+    mkdirSync(sdir, { recursive: true });
+    for (let i = 0; i < 12; i++) {
+      const id = `kb-snapjack-E${String(i).padStart(6, "0")}`;
+      writeFileSync(join(sdir, `${id}.md`), `---\nid: ${id}\ntitle: ${id}\ndomain: snapjack\nsummary: s\nsection: sec-snapjack-p\n---\n\nbody\n`);
+    }
+    writeFileSync(join(roots.opsRoot, "inbox", "w1", "x-abc.md"),
+      ["---", "from: w1", "den_topic_id: x", "change: create", "content_hash: sha256:abc", "prev_hash: null", "domain_hint: personal", "submitted: 2026-10-20T01:00:00Z", "---", "", "text", ""].join("\n"));
+    const notes: string[] = [];
+    await sweep({ engine, roots, loadEntryVectors: async () => [], notify: (m) => notes.push(m) });
+    const hits = notes.filter((m) => /a rebuild is due/.test(m));
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toContain("sec-snapjack-p (12)");
+  });
 });

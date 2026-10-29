@@ -14,7 +14,7 @@ Run from the repo root (turbo):
 | `npm run dev` | Console dev server on http://localhost:3000 (mock-backed). No Electron. |
 | `npm run dev -w @wolfpack/desktop` | Console on :3210, then Electron. Run in your own terminal. |
 | `npm run verify` | `turbo run build typecheck lint test`, cached, all workspaces. Run before committing. |
-| `npm run build` | `tsc --build` (legacy root build). |
+| `npm run build` | `tsc --build` (legacy root build). A bare root `tsc --build` leaves `packages/hubd/dist/cli.js` without its exec bit: run `npm run build -w @wolfpack/hubd` to restore it, or use `node dist/cli.js`. |
 | `npx vitest run` | Root vitest run for the packages. |
 
 Packages have no linter yet (`lint` is a no-op echo). The console lints with eslint, including its import-law rules.

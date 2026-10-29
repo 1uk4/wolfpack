@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHubServer } from "./server.js";
-import { assertSafeDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
+import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
   command: "serve" | "dev";
@@ -61,7 +61,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     log(`!!! WARNING: dev mode is binding to ${args.host} (--allow-network). This serves a COPY OF PRODUCTION DATA to the network, protected only by the shared API key. !!!`);
   let dataDir: string;
   if (args.command === "dev") {
-    dataDir = assertSafeDataDir(args.dataDir ?? defaultDevDataDir());
+    dataDir = assertSafeDevDataDir(args.dataDir ?? defaultDevDataDir());
     if (args.snapshot) {
       log(`hubd dev: pulling read-only snapshot of ${args.snapshot} into ${dataDir}`);
       const m = await takeSnapshot({ host: args.snapshot, dataDir });
@@ -71,7 +71,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "none") throw new Error(`${dataDir} has no DEV-SNAPSHOT marker; refusing to treat it as a dev snapshot`);
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
-  } else dataDir = args.dataDir!;
+  } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
   const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);

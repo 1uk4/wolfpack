@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir as homedirForTest, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main, parseArgs } from "./cli.js";
@@ -7,7 +7,7 @@ import { main, parseArgs } from "./cli.js";
 const GOOD_KEY = "0123456789abcdef0123";
 import { createHubServer } from "./server.js";
 import {
-  assertSafeDataDir, buildPullArgs, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
+  assertNotLiveMirror, assertSafeDevDataDir, buildPullArgs, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
   type PullRunner, type RemoteHost,
 } from "./snapshot.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -89,48 +89,48 @@ describe("data-dir guards", () => {
   mkdirSync(join(home, "wolves/sfo-01/hal/den"), { recursive: true });
   mkdirSync(join(home, "wolves/local/1uk4/den"), { recursive: true });
   it("refuses live knowledge, wolf dens and /var/wolfpack", () => {
-    expect(() => assertSafeDataDir(join(home, "wolves/knowledge"), home)).toThrow(/knowledge/);
-    expect(() => assertSafeDataDir(join(home, "wolves/knowledge/base/x"), home)).toThrow(/knowledge/);
-    expect(() => assertSafeDataDir(join(home, "wolves/sfo-01/hal/den/kb"), home)).toThrow(/den/);
-    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/den"), home)).toThrow(/den/);
-    expect(() => assertSafeDataDir("/var/wolfpack/kb/work", home)).toThrow(/wolfpack/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/knowledge"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/knowledge/base/x"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/sfo-01/hal/den/kb"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/local/1uk4/den"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir("/var/wolfpack/kb/work", home)).toThrow(/wolfpack/);
   });
   it("refuses a den at any depth (e.g. a stateless wolf's den)", () => {
     mkdirSync(join(home, "wolves/local/1uk4/claude-stateless/den/sessions"), { recursive: true });
-    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/den"), home)).toThrow(/den/);
-    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/den/sessions/x"), home)).toThrow(/den/);
-    expect(() => assertSafeDataDir(join(home, "wolves/a/b/c/d/den/e"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/local/1uk4/claude-stateless/den"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/local/1uk4/claude-stateless/den/sessions/x"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/a/b/c/d/den/e"), home)).toThrow(/den/);
     // a name that merely contains "den" is fine
-    expect(assertSafeDataDir(join(home, "wolves/hidden/garden/x"), home)).toContain("garden");
+    expect(assertSafeDevDataDir(join(home, "wolves/hidden/garden/x"), home)).toContain("garden");
   });
   it("refuses /private/var/wolfpack", () => {
-    expect(() => assertSafeDataDir("/private/var/wolfpack/kb", home)).toThrow(/wolfpack/);
+    expect(() => assertSafeDevDataDir("/private/var/wolfpack/kb", home)).toThrow(/wolfpack/);
   });
   it.runIf(process.platform === "darwin")("compares case-insensitively on darwin", () => {
-    expect(() => assertSafeDataDir(join(home, "wolves/KNOWLEDGE/x"), home)).toThrow(/knowledge/);
-    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/DEN/x"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/KNOWLEDGE/x"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDevDataDir(join(home, "wolves/local/1uk4/claude-stateless/DEN/x"), home)).toThrow(/den/);
   });
   it("returns the realpath", () => {
     const base = mk("hubd-real-");
     const link = join(base, "ln");
     symlinkSync(realpathSync(base), link);
-    expect(assertSafeDataDir(join(link, "sub"), home)).toBe(join(realpathSync.native(base), "sub"));
+    expect(assertSafeDevDataDir(join(link, "sub"), home)).toBe(join(realpathSync.native(base), "sub"));
   });
   it("refuses a symlink pointing out of a safe dir into a live tree", () => {
     const safe = join(home, ".wolfpack/hubd-dev/safe");
     mkdirSync(safe, { recursive: true });
     symlinkSync(join(home, "wolves/local/1uk4/den"), join(safe, "to-den"));
     symlinkSync(join(home, "wolves/knowledge/base"), join(safe, "to-kb"));
-    expect(() => assertSafeDataDir(join(safe, "to-den", "x"), home)).toThrow(/den/);
-    expect(() => assertSafeDataDir(join(safe, "to-kb"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDevDataDir(join(safe, "to-den", "x"), home)).toThrow(/den/);
+    expect(() => assertSafeDevDataDir(join(safe, "to-kb"), home)).toThrow(/knowledge/);
   });
   it("refuses a symlink into a den", () => {
     const link = join(home, "link");
     symlinkSync(join(home, "wolves/knowledge"), link);
-    expect(() => assertSafeDataDir(join(link, "new"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDevDataDir(join(link, "new"), home)).toThrow(/knowledge/);
   });
   it("allows a fresh dir elsewhere", () => {
-    expect(assertSafeDataDir(join(home, ".wolfpack/hubd-dev/t1"), home)).toContain("hubd-dev");
+    expect(assertSafeDevDataDir(join(home, ".wolfpack/hubd-dev/t1"), home)).toContain("hubd-dev");
   });
   it("takeSnapshot refuses an unsafe or foreign non-empty dir", async () => {
     await expect(takeSnapshot({ host: "x", dataDir: join(home, "wolves/knowledge/b"), home, hostInfo: HOST, run: async () => ({ code: 0, stderr: "" }) })).rejects.toThrow(/knowledge/);
@@ -142,7 +142,31 @@ describe("data-dir guards", () => {
     const d = defaultDevDataDir(new Date("2026-10-29T12:00:00Z"), home);
     expect(d.startsWith(join(home, ".wolfpack", "hubd-dev"))).toBe(true);
     expect(d.startsWith(join(home, "wolves"))).toBe(false);
-    expect(() => assertSafeDataDir(d, home)).not.toThrow();
+    expect(() => assertSafeDevDataDir(d, home)).not.toThrow();
+  });
+});
+
+describe("serve guard (assertNotLiveMirror) vs dev guard (assertSafeDevDataDir)", () => {
+  const home = mk("hubd-home2-");
+  mkdirSync(join(home, "wolves/knowledge/base"), { recursive: true });
+  mkdirSync(join(home, "wolves/local/1uk4/claude-stateless/den"), { recursive: true });
+  it("both refuse live knowledge and dens at any depth", () => {
+    for (const guard of [assertNotLiveMirror, assertSafeDevDataDir]) {
+      expect(() => guard(join(home, "wolves/knowledge/base/x"), home)).toThrow(/knowledge/);
+      expect(() => guard(join(home, "wolves/local/1uk4/claude-stateless/den/s"), home)).toThrow(/den/);
+      expect(() => guard(join(home, ".wolfpack/hub"), home)).not.toThrow();
+    }
+  });
+  it("only the dev guard refuses /var/wolfpack and /private/var/wolfpack", () => {
+    expect(() => assertSafeDevDataDir("/var/wolfpack/hub", home)).toThrow(/wolfpack/);
+    expect(() => assertSafeDevDataDir("/private/var/wolfpack/hub", home)).toThrow(/wolfpack/);
+    expect(() => assertNotLiveMirror("/var/wolfpack/hub", home)).not.toThrow();
+  });
+  it("hubd serve applies the live-mirror guard before binding", async () => {
+    const real = join(homedirForTest(), "wolves");
+    // main() uses the real home; a path under it is refused without touching anything (no server starts, nothing is created)
+    await expect(main(["serve", "--data-dir", join(real, "knowledge", "hubd-test-never-created")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/knowledge/);
+    await expect(main(["serve", "--data-dir", join(real, "local", "x", "den", "hubd-test-never-created")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/den/);
   });
 });
 

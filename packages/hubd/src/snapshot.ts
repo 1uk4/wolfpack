@@ -64,12 +64,11 @@ export function buildPullArgs(h: RemoteHost, remotePath: string, localDest: stri
   return ["-rt", "--timeout=60", "--no-owner", "--no-group", "--chmod=u+rwX", "-e", sshCommand(h), source, localDest];
 }
 
-/**
- * Refuses data dirs inside live trees: ~/wolves/knowledge, ANY `den` segment anywhere under ~/wolves, and /var/wolfpack
- * (and /private/var/wolfpack). Symlinks of the deepest existing ancestor are resolved (realpath.native); the resolved
- * path is what is checked AND returned. Comparison is case-insensitive on darwin.
- */
-export function assertSafeDataDir(dir: string, home = homedir()): string {
+const foldCase = (p: string) => (process.platform === "darwin" ? p.toLowerCase() : p);
+const isWithin = (p: string, root: string) => foldCase(p) === foldCase(root) || foldCase(p).startsWith(foldCase(root) + sep);
+
+/** Absolute path with symlinks of the deepest existing ancestor resolved (realpath.native), plus the not-yet-existing tail. */
+function resolveReal(dir: string): { abs: string; real: string } {
   const abs = resolve(dir);
   let probe = abs;
   const tail: string[] = [];
@@ -77,21 +76,37 @@ export function assertSafeDataDir(dir: string, home = homedir()): string {
     tail.unshift(probe.slice(dirname(probe).length + 1));
     probe = dirname(probe);
   }
-  const real = join(realpathSync.native(probe), ...tail);
-  const fold = (p: string) => (process.platform === "darwin" ? p.toLowerCase() : p);
-  const within = (p: string, root: string) => fold(p) === fold(root) || fold(p).startsWith(fold(root) + sep);
+  return { abs, real: join(realpathSync.native(probe), ...tail) };
+}
+
+/**
+ * Check 1, for BOTH `hubd serve` and `hubd dev`: a hub must never be pointed at a live Syncthing mirror or a den.
+ * Refuses ~/wolves/knowledge/** and ANY `den` segment anywhere under ~/wolves. Symlinks are resolved; the resolved path is
+ * what is checked AND returned. Case-insensitive on darwin. Deliberately does NOT refuse /var/wolfpack (a real VPS hub may live there).
+ */
+export function assertNotLiveMirror(dir: string, home = homedir()): string {
+  const { abs, real } = resolveReal(dir);
   const wolvesRaw = join(home, "wolves");
   const wolvesRoots = new Set([wolvesRaw, existsSync(wolvesRaw) ? realpathSync.native(wolvesRaw) : wolvesRaw]);
   for (const p of new Set([abs, real])) {
-    for (const live of ["/var/wolfpack", "/private/var/wolfpack"]) if (within(p, live)) throw new Error(`refusing data dir inside ${live}: ${p}`);
     for (const wolves of wolvesRoots) {
-      if (!within(p, wolves)) continue;
-      if (within(p, join(wolves, "knowledge"))) throw new Error(`refusing data dir inside live knowledge: ${p}`);
-      const segments = fold(p).slice(fold(wolves).length).split(sep);
-      if (segments.includes("den")) throw new Error(`refusing data dir inside a wolf den: ${p}`);
+      if (!isWithin(p, wolves)) continue;
+      if (isWithin(p, join(wolves, "knowledge"))) throw new Error(`refusing data dir inside live knowledge: ${p}`);
+      if (foldCase(p).slice(foldCase(wolves).length).split(sep).includes("den")) throw new Error(`refusing data dir inside a wolf den: ${p}`);
     }
   }
   return real;
+}
+
+/**
+ * Check 2, `hubd dev` only: everything in assertNotLiveMirror, plus /var/wolfpack and /private/var/wolfpack (dev snapshots are
+ * production-data copies and must never land in the live host tree). Returns the resolved path.
+ */
+export function assertSafeDevDataDir(dir: string, home = homedir()): string {
+  const { abs, real } = resolveReal(dir);
+  for (const p of new Set([abs, real]))
+    for (const live of ["/var/wolfpack", "/private/var/wolfpack"]) if (isWithin(p, live)) throw new Error(`refusing data dir inside ${live}: ${p}`);
+  return assertNotLiveMirror(dir, home);
 }
 
 export function defaultDevDataDir(now = new Date(), home = homedir()): string {
@@ -155,7 +170,7 @@ export function snapshotState(dataDir: string): SnapshotState {
  * incomplete snapshot (a complete one holds local writes that a re-pull would overwrite: use a fresh dir).
  */
 export async function takeSnapshot(opts: SnapshotOptions): Promise<SnapshotManifest> {
-  const dataDir = assertSafeDataDir(opts.dataDir, opts.home);
+  const dataDir = assertSafeDevDataDir(opts.dataDir, opts.home);
   if (existsSync(dataDir) && readdirSync(dataDir).length > 0) {
     const state = snapshotState(dataDir);
     if (state === "none") throw new Error(`data dir ${dataDir} is non-empty and not a hubd dev snapshot`);

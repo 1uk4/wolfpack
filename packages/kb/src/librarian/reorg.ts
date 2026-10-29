@@ -25,6 +25,7 @@ import { createEmbedder, buildEntryVectors, cosine, type Embedder, type EntryVec
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
 import { withKbLock } from "./lock.js";
+import { planRebuild, renderProposal, commitRebuild, loadRebuildEntries, engineNamer, type RebuildPlan } from "./rebuild.js";
 
 /**
  * Shared state threaded through every rebuild phase. `sections` is NOT in
@@ -62,6 +63,8 @@ export interface ReorgOptions {
   rebuild?: boolean;
   /** No disk writes, no ledger appends, no LLM labeling — logging only. */
   dryRun?: boolean;
+  /** With rebuild + dryRun: where to write the proposal markdown. */
+  proposalPath?: string;
   /** Treat every section as dirty (re-label all, not just changed ones). */
   resummarizeAll?: boolean;
   notify?: (msg: string) => void;
@@ -76,6 +79,9 @@ export interface ReorgResult {
   domains: string[];
   /** Set when a full rebuild was performed */
   rebuilt?: boolean;
+  /** Rebuild: the planned trees and the proposal markdown. */
+  plans?: RebuildPlan[];
+  proposal?: string;
 }
 
 function mkSectionId(domain: string): SectionId {
@@ -531,37 +537,34 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const events: KbEvent[] = [];
   const result: ReorgResult = { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
 
-  // Full bottom-up rebuild mode
+  // Full rebuild: planned entirely in memory per domain, then ONE commit.
   if (opts.rebuild) {
-    const rctx: RebuildCtx = {
-      opts, domainsRoot, allVectors, result,
-      allAssignments: new Map(),
-      stConfig: SECTION_TREE,
-    };
-
-    // 1. Build the tree.
     for (const domain of domains) {
-      sections = await rebuildBootstrapDomain(domain, sections, rctx);
+      const entries = loadRebuildEntries(domainsRoot, domain, allVectors);
+      if (entries.length === 0) { notify?.(`rebuild: ${domain} — no entries, skipping`); continue; }
+      notify?.(`rebuild: ${domain} (${entries.length} entries)`);
+      const plan = await planRebuild({ domain, entries, namer: engineNamer(engine), notify });
+      result.splits += plan.splitChildren.size;
+      result.placements += plan.state.assignment.size;
+      result.labelsUpdated += plan.state.sections.length;
+      result.rebuilt = true;
+      result.domains.push(domain);
+      result.plans = [...(result.plans ?? []), plan];
+      const proposal = renderProposal(plan);
+      result.proposal = (result.proposal ?? "") + proposal;
+      if (opts.dryRun) continue;
+      const { entriesWritten } = commitRebuild(roots, plan);
+      notify?.(`  committed: ${entriesWritten} entry file(s) rewritten, ${plan.state.sections.length} sections`);
     }
-    sections = rebuildAbsorbSingletonRoots(sections, rctx);
-    sections = mergeSimilarRoots(sections, allVectors, result.domains, result, notify);
-    for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
-    await rebuildPostSplit(sections, rctx);
-    sections = rebuildFinalAbsorb(sections, rctx);
-    sections = promoteDominantChildren(sections, result.domains, domainsRoot, result, notify, opts.dryRun);
-    for (const d of result.domains) reconcileMemberCounts(sections, d, join(domainsRoot, d, "entries"));
-
-    // 2. Name the final tree (single bottom-up pass; grouping nodes sampled
-    //    from descendant entries via the labeler's weighted-child fallback).
-    await rebuildLabelAfter(sections, rctx);
-
-    rerenderRegistry(roots, opts.dryRun);
-    repinGroups(roots, domains, opts.dryRun);
-    persistDomains(roots, sections, result.domains, opts.dryRun);
-
-    notify?.(opts.dryRun
-      ? `rebuild dry-run: ${result.placements} would be placed, ${result.labelsUpdated} would be labeled`
-      : `rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
+    if (opts.dryRun) {
+      if (opts.proposalPath && result.proposal) writeFileSync(opts.proposalPath, result.proposal);
+      notify?.(`rebuild dry-run: ${result.placements} entries planned, nothing written`);
+      return result;
+    }
+    rerenderRegistry(roots, false);
+    repinGroups(roots, domains, false);
+    for (const domain of result.domains) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
+    notify?.(`rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
     return result;
   }
 
@@ -597,301 +600,6 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
 // ════════════════════════════════════════════════════════════════════════════
 // Rebuild phases
 // ════════════════════════════════════════════════════════════════════════════
-
-/** Phase 1 — run buildTreeBottomUp per domain, write assignments, mark dirty. */
-async function rebuildBootstrapDomain(
-  domain: string,
-  sections: Section[],
-  ctx: RebuildCtx,
-): Promise<Section[]> {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  const domainVectors = allVectors.filter((v) => v.domain === domain);
-  if (domainVectors.length === 0) {
-    notify?.(`rebuild: ${domain} — no entries, skipping`);
-    return sections;
-  }
-  notify?.(`rebuild: ${domain} (${domainVectors.length} entries)`);
-  const domainCentroid = computeCentroid(domainVectors.map((v) => v.vector));
-  const entries: EntryWithVector[] = domainVectors.map((v) => ({
-    entryId: v.entryId,
-    sectionId: "" as SectionId,
-    vector: v.vector,
-  }));
-  // Entry metadata for abstraction scoring during clustering.
-  const entryMeta = new Map<string, { kind?: string; maturity?: string }>();
-  const entriesPath = join(domainsRoot, domain, "entries");
-  if (existsSync(entriesPath)) {
-    for (const f of readdirSync(entriesPath).filter((x) => x.endsWith(".md"))) {
-      const { fields } = parseFrontmatter(readFileSync(join(entriesPath, f), "utf-8"));
-      entryMeta.set(f.replace(/\.md$/, ""), {
-        kind: fields.kind ? String(fields.kind) : undefined,
-        maturity: fields.maturity ? String(fields.maturity) : undefined,
-      });
-    }
-  }
-  const treeResult = buildTreeBottomUp(entries, domain, domainCentroid, undefined, entryMeta);
-  notify?.(`  built ${treeResult.sections.length} sections`);
-
-  // Replace the old tree for this domain in place.
-  sections = sections.filter((s) => s.domain !== domain);
-  sections.push(...treeResult.sections);
-
-  const eDir = join(domainsRoot, domain, "entries");
-  let placed = 0;
-  for (const [entryId, sectionId] of treeResult.assignments) {
-    if (writeEntrySection(eDir, entryId, sectionId, opts.dryRun)) placed++;
-  }
-  notify?.(`  placed ${placed} entries into leaf sections`);
-  for (const sec of treeResult.sections) sec.dirty = true;
-
-  result.placements += placed;
-  result.rebuilt = true;
-  result.domains.push(domain);
-  allAssignments.set(domain, treeResult.assignments);
-  return sections;
-}
-
-/**
- * Phase 2 — absorb singleton roots (below the minRootRatio floor) into
- * their nearest neighbor. Stops before the domain drops below 2 roots.
- */
-function rebuildAbsorbSingletonRoots(
-  sections: Section[],
-  ctx: RebuildCtx,
-): Section[] {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  for (const domain of result.domains) {
-    const domVecs = allVectors.filter((v) => v.domain === domain);
-    const totalEntries = domVecs.length;
-    const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
-    const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-    const eDir = join(domainsRoot, domain, "entries");
-
-    for (const root of domainRoots) {
-      const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-      if (currentRoots.length <= 2) break;
-      if (root.memberCount >= minEntries) continue;
-      if (root.childIds.length > 0) continue;
-
-      const neighbors = domainRoots.filter(
-        (r) => r.id !== root.id && (r.memberCount >= minEntries || r.childIds.length > 0),
-      );
-      if (neighbors.length === 0) continue;
-
-      let bestNeighbor = neighbors[0];
-      let bestSim = -1;
-      for (const n of neighbors) {
-        const sim = cosine(root.centroid, n.centroid);
-        if (sim > bestSim) { bestSim = sim; bestNeighbor = n; }
-      }
-
-      notify?.(`  absorb: "${root.title || root.id}" (${root.memberCount}) → "${bestNeighbor.title || bestNeighbor.id}"`);
-
-      const findLeaves = (parentId: SectionId): Section[] => {
-        const children = sections.filter((s) => s.parent === parentId);
-        if (children.length === 0) {
-          const sec = sections.find((s) => s.id === parentId);
-          return sec && sec.childIds.length === 0 ? [sec] : [];
-        }
-        return children.flatMap((c) => (c.childIds.length === 0 ? [c] : findLeaves(c.id)));
-      };
-
-      const domAssignments = allAssignments.get(domain) ?? new Map();
-      for (const [entryId, secId] of domAssignments) {
-        if (secId !== root.id) continue;
-        const neighborLeaves = findLeaves(bestNeighbor.id);
-        let targetSec = bestNeighbor.id;
-        if (neighborLeaves.length > 0) {
-          const entryVec = domVecs.find((v) => v.entryId === entryId)?.vector;
-          if (entryVec) {
-            let best = neighborLeaves[0];
-            let bs = -1;
-            for (const l of neighborLeaves) {
-              const sim = cosine(entryVec, l.centroid);
-              if (sim > bs) { bs = sim; best = l; }
-            }
-            targetSec = best.id;
-            best.memberCount++;
-          }
-        } else {
-          bestNeighbor.memberCount++;
-        }
-        domAssignments.set(entryId, targetSec);
-        writeEntrySection(eDir, entryId, targetSec, opts.dryRun);
-      }
-
-      // Safety: catch any entries whose frontmatter still points at root but
-      // weren't in allAssignments (e.g. new entries added since buildTreeBottomUp).
-      const strays = entriesPointingAt(eDir, root.id);
-      if (strays.length > 0) {
-        notify?.(`    reassigning ${strays.length} stray entries from absorbed root "${root.id}" → "${bestNeighbor.id}"`);
-        for (const eid of strays) writeEntrySection(eDir, eid, bestNeighbor.id, opts.dryRun);
-        bestNeighbor.memberCount += strays.length;
-      }
-
-      sections = sections.filter((s) => s.id !== root.id);
-      result.merges++;
-    }
-  }
-  return sections;
-}
-
-/**
- * Final phase — label every dirty section in a single bottom-up pass.
- * Grouping nodes (0 direct entries) fall back to weighted sampling of
- * descendant entry titles so the LLM has real content to generalize from.
- * Runs AFTER post-split and final-absorb so the tree shape is final.
- */
-async function rebuildLabelAfter(
-  sections: Section[],
-  ctx: RebuildCtx,
-): Promise<void> {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  for (const domain of result.domains) {
-    const eDir = join(domainsRoot, domain, "entries");
-    const dirtySections = sections
-      .filter((s) => s.domain === domain && s.dirty)
-      .sort((a, b) => b.depth - a.depth);
-    notify?.(`  labeling ${dirtySections.length} sections (depth ${Math.max(...dirtySections.map(s => s.depth))} → 0)...`);
-
-    for (const sec of dirtySections) {
-      const memberInfo: SectionMember[] = readDirectMembersFromDisk(eDir, sec.id);
-
-      // For wrappers (0 direct members), weight-sample from each child's
-      // descendants so all branches contribute to the label prompt.
-      if (memberInfo.length === 0 && sec.childIds.length > 0) {
-        const collectEntriesFromSection = (sectionId: SectionId, max: number): SectionMember[] => {
-          const result: SectionMember[] = [];
-          if (existsSync(eDir)) {
-            for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-              if (result.length >= max) break;
-              const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-              if (!fields.group && String(fields.section ?? "") === String(sectionId)) {
-                result.push({
-                  title: String(fields.title ?? f.replace(/\.md$/, "")),
-                  summary: fields.summary ? String(fields.summary) : undefined,
-                });
-              }
-            }
-          }
-          for (const child of sections.filter((s) => s.parent === sectionId)) {
-            if (result.length >= max) break;
-            result.push(...collectEntriesFromSection(child.id, max - result.length));
-          }
-          return result;
-        };
-        const childSecs = sec.childIds
-          .map((cid) => sections.find((s) => s.id === cid))
-          .filter(Boolean) as Section[];
-        const totalWeight = childSecs.reduce((sum, c) => sum + Math.max(c.memberCount, 1), 0);
-        const maxSamples = 10;
-        for (const child of childSecs) {
-          const quota = Math.max(1, Math.round((Math.max(child.memberCount, 1) / totalWeight) * maxSamples));
-          memberInfo.push(...collectEntriesFromSection(child.id, quota));
-        }
-      }
-
-      if (opts.dryRun && memberInfo.length > 0) {
-        notify?.(`  would label: ${sec.id} (${memberInfo.length} members)`);
-      } else if (memberInfo.length > 0 && sec.depth <= stConfig.llmNamingMaxDepth) {
-        const ok = await llmLabelSection({
-          engine, sec, memberInfo, sections, domain,
-          withContext: true, touchUpdated: true, bubbleUp: false, notify,
-        });
-        if (ok) result.labelsUpdated++;
-      } else if (memberInfo.length > 0) {
-        const shortTitles = memberInfo.slice(0, 3).map((m) => {
-          const t = m.title.split(":")[0].split("—")[0].split("–")[0].trim();
-          return t.length > 40 ? t.slice(0, 37) + "..." : t;
-        });
-        sec.title = shortTitles.join(", ");
-        sec.dirty = false;
-        (sec as any).memberCountAtLastLabel = sec.memberCount;
-        notify?.(`  auto-titled: ${sec.id} → "${sec.title}"`);
-        result.labelsUpdated++;
-      }
-    }
-  }
-}
-
-/**
- * Phase 3 — any leaf still over splitThreshold gets split again into a
- * 2-child grouping. The parent keeps its id but goes to 0 direct members.
- */
-async function rebuildPostSplit(
-  sections: Section[],
-  ctx: RebuildCtx,
-): Promise<void> {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  for (const domain of result.domains) {
-    const domCentroid = computeCentroid(allVectors.filter((v) => v.domain === domain).map((v) => v.vector));
-    const eDir = join(domainsRoot, domain, "entries");
-    let changed = true;
-    while (changed) {
-      changed = false;
-      // Split any section whose DIRECT entries exceed splitThreshold — not
-      // just leaves. A root that gained children via rebuildMergeSimilarRoots
-      // still needs its own oversized direct-entry pile split; before this
-      // filter was `childIds.length === 0`, which skipped exactly that case.
-      for (const sec of [...sections].filter((s) => s.domain === domain && s.memberCount > stConfig.splitThreshold)) {
-        const members: EntryWithVector[] = [];
-        if (existsSync(eDir)) {
-          for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-            const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-            if (String(fields.section ?? "") === String(sec.id)) {
-              const v = allVectors.find((av) => av.entryId === f.replace(/\.md$/, ""));
-              if (v) members.push({ entryId: v.entryId, sectionId: sec.id, vector: v.vector });
-            }
-          }
-        }
-        if (members.length <= stConfig.splitThreshold) continue;
-        const sr = splitAsParentChild(sec, members, domCentroid, sections);
-        if (!sr) continue;
-
-        // Skip splits that would orphan a semantic outlier (e.g. 8+1). An
-        // imbalanced split just wraps a well-formed section + a stray in a
-        // fresh grouping node that the LLM can't name coherently. Leaving
-        // the section slightly oversized is better than a lopsided wrapper.
-        const minSide = Math.min(sr.parentMembers.length, sr.childMembers.length);
-        if (minSide < stConfig.splitMinBalance) {
-          notify?.(`  skip post-split: ${sec.id} (${members.length}) — imbalanced ${sr.parentMembers.length}+${sr.childMembers.length} < min ${stConfig.splitMinBalance}`);
-          continue;
-        }
-
-        const childAId = mkSectionId(domain);
-        const childBId = sr.childSection.id;
-        notify?.(`  post-split: ${sec.id} (${members.length}) -> ${childAId}(${sr.parentMembers.length}) + ${childBId}(${sr.childMembers.length})`);
-
-        const centroidA = computeCentroid(sr.parentMembers.map((m) => m.vector));
-        sections.push(mkChildSection({
-          id: childAId, domain,
-          parent: sec.id, depth: sec.depth + 1,
-          centroid: centroidA, memberCount: sr.parentMembers.length,
-        }));
-
-        // Child B was pre-built by splitAsParentChild; attach + mark dirty.
-        sr.childSection.parent = sec.id;
-        sr.childSection.depth = sec.depth + 1;
-        sr.childSection.dirty = true;
-        sections.push(sr.childSection);
-
-        // Parent becomes a pure grouping node.
-        sec.childIds.push(childAId, childBId);
-        sec.memberCount = 0;
-        sec.dirty = true;
-
-        for (const m of sr.parentMembers) writeEntrySection(eDir, m.entryId, childAId, opts.dryRun);
-        for (const [entryId, newSecId] of sr.reassignment) writeEntrySection(eDir, entryId, newSecId, opts.dryRun);
-        result.splits++;
-        changed = true;
-      }
-    }
-  }
-}
 
 /**
  * Phase 4 — final sweep for singleton roots created by post-split. Looser

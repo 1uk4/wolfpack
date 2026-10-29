@@ -1,0 +1,207 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { Engine } from "@wolfpack/engine";
+import { reorg } from "./reorg.js";
+import {
+  planRebuild, commitRebuild, recoverRebuild, rebuildJournalFile, renderProposal, withSectionLine,
+  listRebuildTemps, type RebuildEntry, type Namer,
+} from "./rebuild.js";
+import { readSections } from "./sections.js";
+import { rng, hashSeed } from "./tree-rules.js";
+import type { KbRoots } from "../shared/index.js";
+
+const DIM = 24;
+/** n entries around one direction `axis`, on top of a shared offset; `sub` adds substructure axes. */
+export function synth(prefix: string, groups: Array<{ axis: number; n: number }>, seed = 3): RebuildEntry[] {
+  const r = rng(seed);
+  const out: RebuildEntry[] = [];
+  let i = 0;
+  for (const g of groups) {
+    for (let k = 0; k < g.n; k++, i++) {
+      const v = Array.from({ length: DIM }, (_, d) => (d === 0 ? 3 : 0) + (d === g.axis ? 1.2 : 0) + (r() + r() + r() - 1.5) * 0.12);
+      out.push({ id: `${prefix}${String(i).padStart(3, "0")}`, title: `${prefix} entry ${i}`, summary: `about ${g.axis}`, vector: v });
+    }
+  }
+  return out;
+}
+
+let counter = 0;
+const uniqueNamer: Namer = async () => ({ title: `Topic ${++counter} ${["alpha", "beta", "gamma", "delta", "kappa", "omega", "sigma", "theta"][counter % 8]}${counter}`, summary: `sum ${counter}` });
+
+const plain = (plan: Awaited<ReturnType<typeof planRebuild>>) =>
+  JSON.stringify({ s: plan.state.sections.map((s) => [s.id, s.parent, s.depth, s.memberCount]), a: [...plan.state.assignment].sort() });
+
+describe("planRebuild (in memory)", () => {
+  const data = () => synth("e", [{ axis: 1, n: 9 }, { axis: 2, n: 9 }, { axis: 3, n: 9 }, { axis: 4, n: 5 }]);
+
+  it("assigns every entry exactly once to an existing section and keeps counts consistent", async () => {
+    const plan = await planRebuild({ domain: "wp", entries: data(), namer: uniqueNamer });
+    const ids = new Set(plan.state.sections.map((s) => String(s.id)));
+    expect(plan.state.assignment.size).toBe(32);
+    for (const sid of plan.state.assignment.values()) expect(ids.has(sid)).toBe(true);
+    for (const s of plan.state.sections) {
+      const direct = [...plan.state.assignment.values()].filter((x) => x === String(s.id)).length;
+      expect(s.memberCount).toBe(direct);
+      expect(s.title).not.toBe("");
+      for (const c of s.childIds) expect(plan.state.sections.find((x) => x.id === c)?.parent).toBe(s.id);
+    }
+  });
+
+  it("is deterministic: the same entries give the same tree and ids, whatever the input order", async () => {
+    const a = await planRebuild({ domain: "wp", entries: data(), namer: uniqueNamer });
+    const b = await planRebuild({ domain: "wp", entries: data().reverse(), namer: uniqueNamer });
+    expect(plain(b)).toBe(plain(a));
+  });
+
+  it("splits an oversized section into hash-id children and keeps leftovers in the parent", async () => {
+    // 24 clear entries in 3 groups plus 2 strays that fit nowhere
+    const entries = [...synth("g", [{ axis: 1, n: 8 }, { axis: 2, n: 8 }, { axis: 3, n: 8 }]), ...synth("x", [{ axis: 9, n: 1 }], 11), ...synth("y", [{ axis: 15, n: 1 }], 12)];
+    const plan = await planRebuild({ domain: "wp", entries, namer: uniqueNamer });
+    // whatever the shape, no section exceeds the split threshold unless its split was rejected
+    for (const s of plan.state.sections) {
+      if (s.memberCount > 10) expect(plan.rejected.some((r) => r.sectionId === String(s.id))).toBe(true);
+    }
+    for (const [child, parent] of plan.splitChildren) {
+      expect(child).toMatch(/^sec-wp-[A-Za-z0-9]{6}$/);
+      expect(plan.state.sections.find((s) => String(s.id) === parent)).toBeDefined();
+    }
+    for (const [sid, left] of plan.leftovers) {
+      const sec = plan.state.sections.find((s) => String(s.id) === sid)!;
+      expect(sec.memberCount).toBeGreaterThanOrEqual(left.length); // the parent is not zeroed
+      for (const e of left) expect(plan.state.assignment.get(e)).toBe(sid);
+    }
+  });
+
+  /** One oversized root holding everything: exercises the gated split directly. */
+  const oneRoot = (entries: RebuildEntry[]) => {
+    const sec = { id: "sec-wp-root00", domain: "wp", parent: null, depth: 0, label: "root", title: "", centroid: [], memberCount: entries.length, childIds: [], summary: "", summaryHash: "", dirty: true, memberCountAtLastLabel: 0, created: "x", updated: "x" } as any;
+    return { sections: [sec], assignment: new Map(entries.map((e) => [e.id, "sec-wp-root00"])) };
+  };
+  const big = () => [...synth("g", [{ axis: 1, n: 9 }, { axis: 2, n: 9 }, { axis: 3, n: 9 }]), ...synth("x", [{ axis: 9, n: 1 }], 11)];
+
+  it("splits one oversized section into its real groups; the root keeps its id", async () => {
+    const entries = big();
+    const plan = await planRebuild({ domain: "wp", entries, namer: uniqueNamer, start: oneRoot(entries) });
+    expect(plan.splitChildren.size).toBe(3);
+    const root = plan.state.sections.find((s) => String(s.id) === "sec-wp-root00")!;
+    expect(root.childIds.length).toBe(3);
+    for (const k of root.childIds) expect(plan.state.sections.find((s) => s.id === k)!.memberCount).toBe(9);
+    // the stray fits no group: it stays a direct entry of the parent (not zeroed)
+    expect(plan.leftovers.get("sec-wp-root00")).toEqual(["x000"]);
+    expect(root.memberCount).toBe(1);
+    expect(renderProposal(plan)).toContain("1 leftover");
+  });
+
+  it("rejects a split whose child label restates the parent", async () => {
+    const entries = big();
+    const same: Namer = async () => ({ title: "Same Thing", summary: "s" });
+    const bad = await planRebuild({ domain: "wp", entries, namer: same, start: oneRoot(entries) });
+    expect(bad.splitChildren.size).toBe(0);
+    expect(bad.rejected.some((r) => r.reason === "child-label-restates-parent")).toBe(true);
+    expect(bad.state.sections.length).toBe(1);
+    expect(bad.state.assignment.size).toBe(28);
+    expect(bad.leftovers.size).toBe(0);
+  });
+
+  it("leaves structureless oversized sections whole and says why", async () => {
+    const r = rng(5);
+    const noise: RebuildEntry[] = Array.from({ length: 14 }, (_, i) => ({ id: `n${i}`, title: `n${i}`, vector: Array.from({ length: DIM }, () => r() - 0.5) }));
+    const plan = await planRebuild({ domain: "wp", entries: noise, namer: uniqueNamer, start: oneRoot(noise) });
+    expect(plan.splitChildren.size).toBe(0);
+    expect(plan.rejected[0]).toMatchObject({ sectionId: "sec-wp-root00", n: 14 });
+  });
+
+  it("a failing namer falls back to auto titles and is listed", async () => {
+    const boom: Namer = async () => { throw new Error("llm down"); };
+    const plan = await planRebuild({ domain: "wp", entries: data(), namer: boom });
+    expect(plan.unnamed.length).toBeGreaterThan(0);
+    expect(plan.state.sections.every((s) => s.title !== "")).toBe(true);
+  });
+
+  it("renders a proposal with the tree and the sections it lists", async () => {
+    const plan = await planRebuild({ domain: "wp", entries: data(), namer: uniqueNamer });
+    const md = renderProposal(plan);
+    expect(md).toContain("# KB rebuild proposal: wp");
+    expect(md).toContain("## Leftovers");
+    expect(md).toContain("## Moves");
+    expect(md).toContain("## Rejected");
+    for (const s of plan.state.sections) expect(md).toContain(String(s.id));
+  });
+});
+
+describe("commitRebuild / dry-run on disk", () => {
+  let base: string;
+  let roots: KbRoots;
+  const eDir = () => join(roots.kbBase, "domains", "wp", "entries");
+  const snapshot = () => Object.fromEntries(readdirSync(eDir()).sort().map((f) => [f, readFileSync(join(eDir(), f), "utf-8")]));
+  const writeEntries = (es: RebuildEntry[]) => {
+    mkdirSync(eDir(), { recursive: true });
+    for (const e of es) writeFileSync(join(eDir(), `${e.id}.md`), `---\nid: ${e.id}\ntitle: ${e.title}\ndomain: wp\nsummary: ${e.summary}\nsection: sec-wp-old000\n---\n\nbody ${e.id}\n`);
+  };
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "kb-rebuild-"));
+    roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    mkdirSync(roots.denLocal, { recursive: true });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); rmSync(base, { recursive: true, force: true }); });
+
+  const entries = () => synth("e", [{ axis: 1, n: 9 }, { axis: 2, n: 9 }, { axis: 3, n: 6 }]);
+
+  it("commits entries then sections once, leaves no temp or journal, and a second commit is a no-op", async () => {
+    const es = entries();
+    writeEntries(es);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    const { entriesWritten } = commitRebuild(roots, plan);
+    expect(entriesWritten).toBe(es.length);
+    for (const e of es) expect(readFileSync(join(eDir(), `${e.id}.md`), "utf-8")).toContain(`section: ${plan.state.assignment.get(e.id)}`);
+    expect(readSections(roots).map((s) => s.id).sort()).toEqual(plan.state.sections.map((s) => s.id).sort());
+    expect(listRebuildTemps(roots, "wp")).toEqual([]);
+    expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+    expect(commitRebuild(roots, plan).entriesWritten).toBe(0);
+  });
+
+  it("recoverRebuild finishes a commit interrupted after its journal", () => {
+    mkdirSync(eDir(), { recursive: true });
+    const final = join(eDir(), "a.md");
+    writeFileSync(final, "old");
+    writeFileSync(final + ".rebuild-tmp", "new");
+    writeFileSync(rebuildJournalFile(roots), JSON.stringify({ version: 1, domain: "wp", at: "x", renames: [{ tmp: final + ".rebuild-tmp", final }] }));
+    expect(recoverRebuild(roots)).toBe(1);
+    expect(readFileSync(final, "utf-8")).toBe("new");
+    expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+    expect(recoverRebuild(roots)).toBe(0);
+  });
+
+  it("withSectionLine sets or inserts the section line", () => {
+    expect(withSectionLine("---\ndomain: wp\nsection: a\n---\n", "b")).toContain("section: b");
+    expect(withSectionLine("---\ndomain: wp\n---\n", "b")).toBe("---\ndomain: wp\nsection: b\n---\n");
+  });
+
+  it("rebuild --dry-run through reorg writes nothing to the KB and writes the proposal", async () => {
+    const es = entries();
+    writeEntries(es);
+    const byText = new Map(es.map((e) => [e.title, e.vector]));
+    const embedder = { embed: async (text: string) => { for (const [t, v] of byText) if (text.includes(t)) return v; return new Array(DIM).fill(0.1); } };
+    let n = 0;
+    const engine = {
+      call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }) =>
+        schema.parse(step === "sectionSummary" ? { summary: `summary ${++n}` } : { title: `Label ${++n}` })),
+      usage: { summarize: () => ({}) },
+    } as unknown as Engine;
+    const before = snapshot();
+    const proposalPath = join(base, "kb-rebuild-proposal.md");
+    const res = await reorg({ engine, roots, embedder: embedder as any, domains: ["wp"], rebuild: true, dryRun: true, proposalPath });
+    expect(res.rebuilt).toBe(true);
+    expect(snapshot()).toEqual(before); // entry files byte-identical
+    expect(existsSync(join(roots.denLocal, "sections"))).toBe(false); // no sections snapshot
+    expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+    expect(listRebuildTemps(roots, "wp")).toEqual([]);
+    const md = readFileSync(proposalPath, "utf-8");
+    expect(md).toContain("# KB rebuild proposal: wp");
+    expect(md).toContain("Nothing was written");
+    // labels were produced (dry-run runs the full flow)
+    expect(engine.call).toHaveBeenCalled();
+  });
+});

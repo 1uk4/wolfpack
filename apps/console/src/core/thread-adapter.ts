@@ -319,15 +319,22 @@ export function resolveThreadId(wolf: string, slug: string, threads: readonly { 
 
 /** A sidebar row for a thread: the existing ChatListItem shape (so SessionRow
  *  renders it unchanged) + the route it opens and its meta line. */
+/** What a thread is called in the console: the Home thread (wire kind "home", never its title) is the wolf, its orchestrator. */
+export function threadLabel(wolf: string, thread: { kind?: string; title: string }): string {
+	return thread.kind === "home" ? wolf : thread.title;
+}
+
 export function threadListItem(
 	wolf: string,
 	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
-): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; kind?: string } & Omit<ChildThread, "id" | "title"> {
+): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; kind?: string; alias?: string } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,
-		title: thread.title,
+		title: threadLabel(wolf, thread),
+		// The server title ("Home") still matches a search.
+		...(thread.kind === "home" ? { alias: thread.title } : {}),
 		createdAt: now,
 		updatedAt: now,
 		messageCount: 0,

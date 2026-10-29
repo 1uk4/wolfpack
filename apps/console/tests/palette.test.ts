@@ -52,6 +52,8 @@ describe("item building", () => {
 		const t = threadItems("1uk4", [{ id: "1uk4/home", title: "Home" }])[0]!;
 		assert.equal(t.href, "/wolf/1uk4/thread/home");
 		assert.equal(t.hint, "1uk4");
+		assert.equal(t.label, "Home"); // no kind on the wire: the title stands
+		assert.equal(threadItems("1uk4", [{ id: "1uk4/home", title: "Home", kind: "home" }])[0]!.label, "1uk4");
 	});
 	it("graph nodes: only entries and work, linked by focus param", () => {
 		const items = graphItems([

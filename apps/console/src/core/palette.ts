@@ -8,7 +8,7 @@
 import { fuzzyScore } from "./fuzzy.ts";
 import { PIPELINE_HREF } from "./kb.ts";
 import type { KbGraphNode } from "./kb.ts";
-import { threadHref } from "./thread-adapter.ts";
+import { threadHref, threadLabel } from "./thread-adapter.ts";
 
 export type PaletteKind = "command" | "wolf" | "thread" | "entry" | "work";
 
@@ -83,11 +83,11 @@ export function wolfItems(wolves: readonly { name: string }[]): PaletteItem[] {
 	return wolves.map((w) => ({ id: `wolf:${w.name}`, kind: "wolf", label: w.name, href: `/wolf/${encodeURIComponent(w.name)}` }));
 }
 
-export function threadItems(wolf: string, threads: readonly { id: string; title: string }[]): PaletteItem[] {
+export function threadItems(wolf: string, threads: readonly { id: string; title: string; kind?: string }[]): PaletteItem[] {
 	return threads.map((t) => ({
 		id: `thread:${wolf}:${t.id}`,
 		kind: "thread",
-		label: t.title || "Untitled",
+		label: threadLabel(wolf, t) || "Untitled",
 		hint: wolf,
 		href: threadHref(wolf, t.id),
 	}));

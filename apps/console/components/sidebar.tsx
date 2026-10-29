@@ -26,7 +26,7 @@ import { isChildThread, sidebarLayout, stateLabel, threadListItem, type ChatList
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -302,6 +302,7 @@ export function SessionRow({
 }) {
 	// The thread you are looking at needs no mark: you are already there.
 	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
+	const home = chat.kind === "home";
 	if (nested) {
 		// Compact subagent row: `name · agent`, one line, a small dot for running/waiting/queued.
 		const dot = chat.state === "running" ? "bg-primary" : "bg-muted-foreground/50";
@@ -351,8 +352,11 @@ export function SessionRow({
 				    the meta line below stays JetBrains Mono (machine data). One
 				    rule, finally applied to the picker too (owner, typography
 				    round): mono = chrome, Source Sans = human words. */}
-				<span className="block truncate font-prose text-(length:--lh-prose-size)">{chat.title}</span>
-				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
+				<span className="flex items-center gap-1.5 truncate font-prose text-(length:--lh-prose-size)">
+					{home && <WorkflowIcon data-testid="orchestrator-icon" aria-label="Orchestrator" className="size-[1em] shrink-0 text-muted-foreground" />}
+					<span className="truncate">{chat.title}</span>
+				</span>
+				<span className="block text-xs text-muted-foreground">{home ? "orchestrator" : sessionMeta(chat)}</span>
 			</span>
 		</button>
 	);
@@ -436,7 +440,10 @@ export function SessionsSidebar() {
 		if (!list) return list;
 		if (!q) return list;
 		return list
-			.map((c) => ({ c, score: fuzzyScore(q, c.title) }))
+			.map((c) => {
+				const scores = [fuzzyScore(q, c.title), c.alias ? fuzzyScore(q, c.alias) : null].filter((x): x is number => x !== null);
+				return { c, score: scores.length ? Math.max(...scores) : null };
+			})
 			.filter((r): r is { c: (typeof list)[number]; score: number } => r.score !== null)
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);

@@ -311,6 +311,20 @@ describe("the sidebar", () => {
 	it("the kind rides the list row", () => {
 		const [h] = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [wire({ ...FIXTURE_THREAD, id: "1uk4/home", title: "Home", kind: "home" })] }]) as (ReturnType<typeof core.threadListItem>)[];
 		assert.equal(h!.kind, "home");
+		assert.equal(h!.title, "1uk4"); // labelled by the wolf, found by kind not title
+		assert.equal(h!.alias, "Home");
+	});
+
+	it("the Home row shows the wolf with an orchestrator icon; search finds it by wolf name and by home", () => {
+		const [h] = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [wire({ ...FIXTURE_THREAD, id: "1uk4/home", title: "Home", kind: "home" })] }]) as (ReturnType<typeof core.threadListItem>)[];
+		const html = renderToStaticMarkup(<SessionRow chat={h!} active={false} onOpen={() => {}} />);
+		assert.match(html, /orchestrator-icon/);
+		assert.match(html, />1uk4</);
+		assert.match(html, />orchestrator</);
+		assert.doesNotMatch(html, />Home</);
+		assert.notEqual(core.fuzzyScore("1uk", h!.title), null);
+		assert.notEqual(core.fuzzyScore("home", h!.alias!), null);
+		assert.equal(core.threadLabel("1uk4", { kind: "feature", title: "Home" }), "Home"); // by kind, not title
 	});
 });
 

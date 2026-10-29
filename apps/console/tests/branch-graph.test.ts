@@ -4,7 +4,7 @@ import { buildBranchGraph, type RawCommit } from "../src/core/branch-graph.ts";
 import { parseLog } from "../src/server/branch-graph.ts";
 
 /** newest-first log from "sha:parent,parent:subject" shorthand */
-const log = (...rows: string[]): RawCommit[] => rows.map((r) => { const [sha, p, subject = sha] = r.split(":"); return { sha: sha!, parents: p ? p.split(",") : [], subject }; });
+const log = (...rows: string[]): RawCommit[] => rows.map((r) => { const [sha = "", p, subject = sha] = r.split(":"); return { sha, parents: p ? p.split(",") : [], subject }; });
 const laneOf = (g: ReturnType<typeof buildBranchGraph>, sha: string) => g.lanes[g.commits.find((c) => c.sha === sha)!.lane]!.name;
 
 describe("buildBranchGraph", () => {

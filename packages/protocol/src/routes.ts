@@ -41,6 +41,14 @@ import {
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
+import {
+  CreateWorkRequestSchema,
+  CreateWorkResponseSchema,
+  DeleteWorkResponseSchema,
+  PatchWorkRequestSchema,
+  WorkItemResponseSchema,
+} from "./work-writes.js";
+
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
 /** Request header carrying the client's protocol version (single integer). */
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
@@ -57,7 +65,7 @@ export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 /** Terminator frame payload (`data: [DONE]`) sent when a stream ends at turn-end. */
 export const SSE_DONE = "[DONE]";
 
-export type HttpMethod = "GET" | "POST" | "PUT";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Wire bodies: the path carries the identifier, so it is dropped from the body. */
 export const SubmitBodySchema = SubmitRequestSchema.omit({ threadId: true });
@@ -319,6 +327,21 @@ export const ROUTES = {
    * `contributions/<wolf>/_bad/` with a `.reason.txt`).
    */
   submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
+  /**
+   * Hub work WRITES (hubd is the only ledger writer). Every one requires `X-Wolfpack-Actor` (400 `invalid_request` without).
+   * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
+   * 409 `not_ready` (stage not advanceable), 401 `unauthorized` (`body` / `assignee` PATCH by a non-operator; provisional until the
+   * owner-only rules land).
+   * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
+   * `hubPatchWork`: ONE field per request: stage, note, title, successCriteria, moveTo, link, unlink, standing, schedule;
+   * operator-only: body, assignee.
+   * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.
+   * `hubGraduateWork`: mark the item graduated on the ledger (the agent route's behaviour; no distill step).
+   */
+  hubCreateWork: { scope: "hub", method: "POST", path: "/v1/work", body: CreateWorkRequestSchema, response: { kind: "json", schema: CreateWorkResponseSchema }, status: [201], error: err },
+  hubPatchWork: { scope: "hub", method: "PATCH", path: "/v1/work/:id", body: PatchWorkRequestSchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubDeleteWork: { scope: "hub", method: "DELETE", path: "/v1/work/:id", response: { kind: "json", schema: DeleteWorkResponseSchema }, status: [200], error: err },
+  hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

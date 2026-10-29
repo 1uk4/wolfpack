@@ -20,8 +20,27 @@ import {
   type ErrorEnvelope,
 } from "@wolfpack/protocol";
 import type { KbRoots } from "@wolfpack/kb/shared";
+import { acquireWorkWriterLock } from "@wolfpack/engine";
+import {
+  CreateWorkRequestSchema,
+  PatchWorkRequestSchema,
+} from "@wolfpack/protocol";
+import { HubError } from "./errors.js";
 import { hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
+import {
+  WriteQueue,
+  applyOps,
+  createItem,
+  deleteItem,
+  graduateItem,
+  isOwnerOnlyOp,
+  ledgerSize,
+  mapWorkError,
+  normalisePatch,
+  readLedgerSince,
+  type LedgerEvent,
+} from "./work-writes.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 export const API_KEY_HEADER = "x-api-key";
@@ -36,7 +55,12 @@ export interface HubOptions {
   host?: string;
 }
 
+/** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
+export type WorkAppendedListener = (batch: { actor: Actor; events: LedgerEvent[] }) => void;
+
 export interface HubServer {
+  /** Subscribe to ledger appends made by work writes; returns an unsubscribe. Listener errors are swallowed (logged). */
+  onWorkAppended(listener: WorkAppendedListener): () => void;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -45,11 +69,7 @@ export interface HubServer {
   close(): Promise<void>;
 }
 
-export class HubError extends Error {
-  constructor(readonly code: ErrorCode, message: string) {
-    super(message);
-  }
-}
+export { HubError };
 
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
@@ -94,6 +114,29 @@ export function writeActor(req: Pick<IncomingMessage, "headers">, opts: { ownerO
 /** hubd's own identity for its internal jobs and unattributed reads; never accepted from a client. */
 export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
 
+const MAX_BODY = 16 * 1024 * 1024;
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let n = 0;
+  for await (const c of req) {
+    n += (c as Buffer).length;
+    if (n > MAX_BODY) throw new HubError("invalid_request", "request body too large");
+    chunks.push(c as Buffer);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new HubError("invalid_request", "body is not valid JSON");
+  }
+}
+function parseBody<T>(schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: { issues: { path: PropertyKey[]; message: string }[] } } }, raw: unknown): T {
+  const r = schema.safeParse(raw);
+  if (r.success) return r.data;
+  throw new HubError("invalid_request", r.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; "));
+}
+
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text) });
@@ -104,6 +147,35 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   if (!opts.apiKey) throw new Error("createHubServer: apiKey is required");
   const roots = hubRoots(opts.dataDir);
   mkdirSync(`${opts.dataDir}/ledger`, { recursive: true });
+  // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
+  // dataDir throws here (SandboxError, with a clear message).
+  const writerLock = acquireWorkWriterLock(opts.dataDir);
+  const queue = new WriteQueue();
+  const listeners = new Set<WorkAppendedListener>();
+  /**
+   * Run one work write under the in-process queue. Appended ledger bytes are diffed after the section and handed to the
+   * listeners, in order, whether or not the section threw after appending.
+   */
+  const writeWork = <T>(actor: Actor, fn: () => T): Promise<T> =>
+    queue.run(() => {
+      const before = ledgerSize(roots);
+      try {
+        return fn();
+      } catch (e) {
+        throw mapWorkError(e);
+      } finally {
+        const { events } = readLedgerSince(roots, before);
+        if (events.length > 0) {
+          for (const l of listeners) {
+            try {
+              l({ actor, events });
+            } catch (e) {
+              console.error("hubd: work listener failed:", e);
+            }
+          }
+        }
+      }
+    });
   // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
   const digest = (v: string) => createHash("sha256").update(v).digest();
   const expected = digest(opts.apiKey);
@@ -150,6 +222,32 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           throw e;
         }
       }
+      case "hubCreateWork": {
+        const actor = writeActor(req);
+        const body = parseBody(CreateWorkRequestSchema, await readJson(req));
+        const out = await writeWork(actor, () => createItem(roots, body));
+        return send(res, 201, out);
+      }
+      case "hubPatchWork": {
+        let actor = writeActor(req);
+        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+        const ops = normalisePatch(parseBody(PatchWorkRequestSchema, await readJson(req)));
+        if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
+        const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
+        return send(res, 200, { item });
+      }
+      case "hubDeleteWork": {
+        const actor = writeActor(req);
+        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+        const deleted = await writeWork(actor, () => deleteItem(roots, params.id));
+        return send(res, 200, { deleted });
+      }
+      case "hubGraduateWork": {
+        const actor = writeActor(req);
+        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+        const item = await writeWork(actor, () => graduateItem(roots, params.id));
+        return send(res, 200, { item });
+      }
       default:
         // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.
         throw new HubError("not_found", `${m.name} is served by a wolf host, not the hub`);
@@ -169,6 +267,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, host, () => resolve());
+  }).catch((e: unknown) => {
+    writerLock.release();
+    throw e;
   });
   const port = (server.address() as AddressInfo).port;
   return {
@@ -176,10 +277,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     roots,
     port,
     url: `http://${host}:${port}`,
+    onWorkAppended(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();
-        server.close(() => resolve());
+        // Let in-flight writes finish, then free the writer lock.
+        server.close(() => void queue.run(() => writerLock.release()).then(() => resolve()));
       }),
   };
 }

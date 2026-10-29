@@ -105,6 +105,78 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       });
     });
 
+    describe("work writes", () => {
+      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const send = (method: string, path: string, body?: unknown, actor: Record<string, string> | undefined = op) =>
+        fetch(baseUrl() + path, {
+          method,
+          headers: { "Content-Type": "application/json", ...options.headers, ...actor },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      const create = async (extra: Record<string, unknown> = {}) => {
+        const res = await send("POST", buildPath("hubCreateWork"), { kind: "task", domain: options.domain, title: "Suite task", assignee: "1uk4", ...extra });
+        expect(res.status).toBe(201);
+        return ROUTES.hubCreateWork.response.schema.parse(await res.json()) as { id: string; item: { title: string } };
+      };
+      const record = async (id: string) => (await (await call(buildPath("hubGetWorkRecord", { id }))).json()) as { stage: string; title: string; plan: string; log?: string[] };
+
+      it("POST /v1/work creates an item that reads back", async () => {
+        const c = await create();
+        expect(c.item.title).toBe("Suite task");
+        expect((await record(c.id)).title).toBe("Suite task");
+      });
+
+      it("PATCH stage / note / title change the item", async () => {
+        const c = await create({ successCriteria: "done when done" });
+        const id = c.id;
+        const patch = (body: unknown, actor?: Record<string, string>) => send("PATCH", buildPath("hubPatchWork", { id }), body, actor);
+        const st = await patch({ stage: "in_build" });
+        expect(st.status).toBe(200);
+        ROUTES.hubPatchWork.response.schema.parse(await st.json());
+        expect((await patch({ note: "hello from the suite" })).status).toBe(200);
+        expect((await patch({ title: "Renamed" }, wolf)).status).toBe(200);
+        const rec = await record(id);
+        expect(rec.stage).toBe("in_build");
+        expect(rec.title).toBe("Renamed");
+      });
+
+      it("a placement violation is rejected (invalid_request) and an unadvanceable stage is not_ready", async () => {
+        await expectError(await send("POST", buildPath("hubCreateWork"), { kind: "initiative", domain: options.domain, title: "x", assignee: "1uk4", partOf: options.record().id }), "invalid_request");
+        const c = await create(); // no success criteria
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { stage: "in_build" }), "not_ready");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: "work-nope-zzzzzzz" }), { note: "x" }), "not_found");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), {}), "invalid_request");
+      });
+
+      it("a missing actor is rejected on every write route", async () => {
+        const c = await create();
+        await expectError(await send("POST", buildPath("hubCreateWork"), { kind: "task", domain: options.domain, title: "t", assignee: "a" }, {}), "invalid_request");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { note: "n" }, {}), "invalid_request");
+        await expectError(await send("DELETE", buildPath("hubDeleteWork", { id: c.id }), undefined, {}), "invalid_request");
+        await expectError(await send("POST", buildPath("hubGraduateWork", { id: c.id }), undefined, {}), "invalid_request");
+      });
+
+      it("a non-operator body or assignee write is rejected", async () => {
+        const c = await create();
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { body: "## Plan\n\nx" }, wolf), "unauthorized");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" }, wolf), "unauthorized");
+        expect((await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" })).status).toBe(200);
+      });
+
+      it("DELETE removes the item; POST graduate marks it graduated", async () => {
+        const c = await create();
+        const del = await send("DELETE", buildPath("hubDeleteWork", { id: c.id }));
+        expect(del.status).toBe(200);
+        expect(ROUTES.hubDeleteWork.response.schema.parse(await del.json())).toEqual({ deleted: [c.id] });
+        await expectError(await call(buildPath("hubGetWorkRecord", { id: c.id })), "not_found");
+        const g = await create();
+        const res = await send("POST", buildPath("hubGraduateWork", { id: g.id }));
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { item: { graduated?: string } }).item.graduated).toBeTruthy();
+      });
+    });
+
     describe.runIf(options.auth !== false)("auth", () => {
       it("a missing or wrong key is 401 unauthorized", async () => {
         const path = `${buildPath("hubListWork")}?domain=${options.domain}`;

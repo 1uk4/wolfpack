@@ -209,6 +209,42 @@ describe("durable task_done ship gate (confirm card)", () => {
     await tw.submit("go");
     expect(items.get(t.id)!.stage).toBe("shipped");
   });
+
+  it("thread composer toggle: off asks with the multi card; on ships without a card; read per call", async () => {
+    const [a, b] = [add({ kind: "task", title: "A" }), add({ kind: "task", title: "B" })];
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { ids: [a.id, b.id] })),
+      toolUse(fauxToolCall("task_done", { ids: [a.id, b.id] })),
+      fauxAssistantMessage("shipped"),
+    ]);
+    // default (off): ONE multi-select card, nothing shipped
+    await tw.submit("finish both");
+    const d0 = await tw.client.getThread(tw.home);
+    expect(d0.pendingCards).toHaveLength(1);
+    expect(d0.pendingCards![0].card.fields[0]).toMatchObject({ id: "ships", kind: "multi" });
+    expect(items.get(a.id)!.stage).toBe("approved");
+
+    // flipped on in the composer: the very next task_done in this thread ships both, no card
+    await tw.client.putThreadSettings!(tw.home, { autoShip: true });
+    await tw.submit("try again");
+    expect(items.get(a.id)!.stage).toBe("shipped");
+    expect(items.get(b.id)!.stage).toBe("shipped");
+    const d1 = await tw.client.getThread(tw.home);
+    expect(d1.pendingCards ?? []).toHaveLength(0);
+    expect(d1.settings).toEqual({ tier: "main", autoShip: true });
+  });
+
+  it("the toggle belongs to its thread: another thread still asks", async () => {
+    const t = add({ kind: "task", title: "Other thread" });
+    tw = await wolf([toolUse(fauxToolCall("task_done", { id: t.id })), fauxAssistantMessage("asked")]);
+    await tw.client.putThreadSettings!(tw.home, { autoShip: true });
+    const feature = await tw.client.createThread!("testwolf", { kind: "feature", workItemId: "work-wolfpack-feat0001" });
+    expect((await tw.client.getThreadSettings!(feature.id)).autoShip).toBe(false);
+    await tw.client.submit(feature.id, "finish", { whenBusy: "reject" });
+    for await (const _ of tw.client.watch(feature.id));
+    expect((await tw.client.getThread(feature.id)).pendingCards).toHaveLength(1);
+    expect(items.get(t.id)!.stage).toBe("approved");
+  });
 });
 
 describe("structured yes detection", () => {

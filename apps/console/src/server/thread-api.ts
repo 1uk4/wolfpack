@@ -254,6 +254,34 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** The thread's composer settings (tier, auto-ship) with the model each tier resolves to: `GET /v1/threads/:id/settings`. */
+		async getSettings(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getThreadSettings) return json({ error: "this client has no thread settings" }, 501);
+				return json(await client.getThreadSettings(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Change the thread's settings (body `{tier?, autoShip?}`, at least one): `PUT /v1/threads/:id/settings`. */
+		async putSettings(ref: ThreadRef, req: Request): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.putThreadSettings) return json({ error: "this client has no thread settings" }, 501);
+				const body = (await req.json().catch(() => null)) as { tier?: unknown; autoShip?: unknown } | null;
+				const tierOk = body?.tier === undefined || body.tier === "main" || body.tier === "smart" || body.tier === "fast";
+				const autoOk = body?.autoShip === undefined || typeof body.autoShip === "boolean";
+				if (!body || !tierOk || !autoOk || (body.tier === undefined && body.autoShip === undefined)) {
+					return json({ error: "body must be {tier?: main|smart|fast, autoShip?: boolean} with at least one" }, 400);
+				}
+				return json(await client.putThreadSettings(await resolve(client, ref), { ...(body.tier !== undefined ? { tier: body.tier as "main" | "smart" | "fast" } : {}), ...(body.autoShip !== undefined ? { autoShip: body.autoShip as boolean } : {}) }));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		// --- feature progress: bind ---
 		/** Bind the thread's conversation to a work item: the console's side of `POST /v1/threads/:id/bind` (body `{workItemId}`). */
 		async bind(ref: ThreadRef, req: Request): Promise<Response> {

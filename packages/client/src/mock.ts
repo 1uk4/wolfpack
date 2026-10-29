@@ -1,5 +1,5 @@
 import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, type ScriptStep } from "./fixture.js";
-import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES } from "@wolfpack/protocol";
+import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse } from "@wolfpack/protocol";
 import {
   BusyError,
   NotFoundError,
@@ -216,6 +216,18 @@ export class MockConsoleClient implements ConsoleClient {
     this.emitActivity({ type: "card-settled", threadId, callId, outcome: "dismissed", closed: "skipped" });
     this.emitActivity({ type: "thread-status", threadId, status: this.statusOf(t) });
     return { messageId: `card-${callId}`, disposition: "started" };
+  }
+
+  readonly settings = new Map<string, ThreadSettings>();
+  async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {
+    this.get(threadId);
+    return { ...DEFAULT_THREAD_SETTINGS, ...this.settings.get(threadId) };
+  }
+  async putThreadSettings(threadId: string, patch: ThreadSettingsPatch): Promise<ThreadSettingsResponse> {
+    this.get(threadId);
+    const next = { ...DEFAULT_THREAD_SETTINGS, ...this.settings.get(threadId), ...patch };
+    this.settings.set(threadId, next);
+    return next;
   }
 
   // --- feature progress: bind ---

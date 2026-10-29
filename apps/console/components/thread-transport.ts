@@ -24,6 +24,11 @@ export function cardSkipUrl(wolf: string, slug: string, callId: string): string 
 	return `${threadBase(wolf, slug)}/cards/${encodeURIComponent(callId)}/skip`;
 }
 
+/** Where the composer controls GET / PUT the thread's settings (tier, auto-ship). */
+export function settingsUrl(wolf: string, slug: string): string {
+	return `${threadBase(wolf, slug)}/settings`;
+}
+
 // --- feature progress: bind ---
 /** Where the bind icon POSTs `{workItemId}`. */
 export function bindUrl(wolf: string, slug: string): string {

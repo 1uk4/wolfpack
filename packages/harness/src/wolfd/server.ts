@@ -26,7 +26,11 @@ import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
+  ThreadSettingsPatchSchema,
   matchRoute,
+  type ThreadSettings,
+  type ThreadSettingsResponse,
+  type ThreadTier,
   type ConsolidateResponse,
   type ErrorCode,
   type GraduationResult,
@@ -55,8 +59,8 @@ import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
 import { ThreadRuntime, type WolfEventDraft } from "./thread.js";
 import { SubagentManager, type SubagentOptions } from "./subagents.js";
-import { readFeatureClosed } from "@wolfpack/memory";
-import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadThreads, removeThread, saveThread, unbindConversation } from "./threads.js";
+import { readFeatureClosed, writeThreadAutoShip } from "@wolfpack/memory";
+import { bindFeature, featureInfo, featureThreadId, findBindingHolder, loadHomeSettings, loadThreads, removeThread, saveHomeSettings, saveThread, setThreadSettings, settingsOfSaved, unbindConversation } from "./threads.js";
 
 export interface WolfServerOptions {
   /** Wolf name: used as the protocol wolf id/name and in the thread id `<name>/home`. */
@@ -91,6 +95,8 @@ export interface WolfServerOptions {
   /** How long git answers behind `workspace` stay cached. Default 5000. */
   gitCacheMs?: number;
   // ---- /header git tree ----
+  /** The model each tier resolves to on this wolf (a hint shown beside the tier picker). */
+  tierModels?: Partial<Record<ThreadTier, string>>;
   /** Called with faults the pump cannot surface over HTTP. */
   onError?: (error: unknown) => void;
 }
@@ -99,6 +105,8 @@ export interface WolfServerOptions {
 export interface ThreadConversations {
   create(): Promise<EngineConversation>;
   get(id: string): Promise<EngineConversation | undefined>;
+  /** Switch a conversation to a model tier (configure with the tier's resolved model). Unset: no tier switching. */
+  setTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
 const WOLF_EVENT_BUFFER = 256;
@@ -180,7 +188,7 @@ export class WolfServer {
       );
       if (bridge) bridge.manager = this.subagents;
     }
-    this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home" }, opts.conversation);
+    this.makeThread({ id: this.homeId, wolf: this.name, kind: "home", title: "Home", ...(opts.den ? { settings: loadHomeSettings(opts.den) } : {}) }, opts.conversation);
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         if (!res.headersSent) {
@@ -204,6 +212,7 @@ export class WolfServer {
   /** Attach every thread's watcher (home, then the persisted feature threads) and start pumping. Call before listen(). */
   async attach(): Promise<void> {
     await this.home.attach();
+    this.mirrorAutoShip(this.home);
     // A store with history already has its home thread: createThread then answers 200, not 201.
     this.homeCreated = this.home.hadHistory;
     const { den, conversations } = this.opts;
@@ -216,8 +225,9 @@ export class WolfServer {
           this.opts.onError?.(new Error(`thread ${saved.id}: conversation ${saved.conversationId} is gone`));
           continue;
         }
-        const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId };
+        const summary: ThreadSummary = { id: saved.id, wolf: this.name, kind: "feature", title: saved.title, boundWorkItem: saved.workItemId, settings: settingsOfSaved(saved) };
         const t = this.makeThread(summary, conv);
+        this.mirrorAutoShip(t);
         const reason = saved.closedReason ?? (await this.closedReasonOf(saved.workItemId, Number(saved.conversationId)));
         if (reason) this.markClosed(t, reason);
         try {
@@ -283,10 +293,38 @@ export class WolfServer {
       closing: () => this.closing,
       emitWolf: (d) => this.emitWolf(d),
       onError: (e) => this.opts.onError?.(e),
+      applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
     });
     this.threads.set(summary.id, t);
     this.subagents?.watchShips(t);
     return t;
+  }
+
+  /**
+   * The extension reads a conversation's auto-ship flag from a file next to its binding (the registry here is wolfd's own
+   * copy); written at boot and on every change, so task_done decides per thread, per call.
+   */
+  private mirrorAutoShip(t: ThreadRuntime): void {
+    const den = this.opts.den;
+    if (!den || t.isChild || !/^\d+$/.test(t.conv.id)) return;
+    try {
+      writeThreadAutoShip(den, Number(t.conv.id), t.settings.autoShip);
+    } catch (e) {
+      this.opts.onError?.(e);
+    }
+  }
+
+  private settingsResponse(t: ThreadRuntime): ThreadSettingsResponse {
+    const models = this.opts.tierModels;
+    return { ...t.settings, ...(models ? { models } : {}) };
+  }
+
+  /** Persist a thread's settings: on its registry entry (feature), else in the home settings file. */
+  private persistSettings(t: ThreadRuntime, s: ThreadSettings): void {
+    const den = this.opts.den;
+    if (!den) return;
+    if (t.summary.kind === "home") saveHomeSettings(den, s);
+    else if (!setThreadSettings(den, t.summary.id, s, (e) => this.opts.onError?.(e))) throw new HttpError("invalid_request", `thread ${t.summary.id} keeps no settings`);
   }
 
   /** Read-only history: a graduated feature's thread keeps its messages, refuses new ones. */
@@ -488,6 +526,28 @@ export class WolfServer {
         const status = this.homeCreated ? 200 : 201;
         this.homeCreated = true;
         return this.json(res, status, await this.withWorkspace(this.home.threadSummary()));
+      }
+      case "getThreadSettings":
+        return this.json(res, 200, this.settingsResponse(this.checkThread(params.id)));
+      case "putThreadSettings": {
+        const t = this.checkThread(params.id);
+        const body = ThreadSettingsPatchSchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {tier?: main|smart|fast, autoShip?: boolean} with at least one");
+        if (t.isChild || t.summary.kind === "process") throw new HttpError("invalid_request", `a ${t.summary.kind} thread has no composer settings`);
+        const prev = t.settings;
+        const next: ThreadSettings = { ...prev, ...body.data };
+        if (next.tier !== prev.tier && !this.opts.conversations?.setTier) throw new HttpError("invalid_request", "this wolf cannot switch model tiers");
+        // Record first (a refused save changes nothing), then apply; a refused configure puts the old record back.
+        this.persistSettings(t, next);
+        try {
+          await t.applySettings(next);
+        } catch (e) {
+          try { this.persistSettings(t, prev); } catch { /* best effort */ }
+          throw new HttpError("engine_error", `could not switch to the ${next.tier} tier: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        this.mirrorAutoShip(t);
+        this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+        return this.json(res, 200, this.settingsResponse(t));
       }
       // --- feature progress: bind ---
       case "bindThread": {

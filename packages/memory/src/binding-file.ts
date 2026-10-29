@@ -40,6 +40,35 @@ export function writeBindingFile(den: string, cid: number, b: StoredBinding | nu
   }
 }
 
+/**
+ * Per-conversation composer settings the extension reads on every call (wolfd writes them when the operator flips the
+ * thread's auto-ship toggle, and again at boot from its own registry):
+ *   <den>/factory/conversations/<cid>/thread-settings.json  {autoShip}
+ * A missing or unreadable file means the defaults (auto-ship off).
+ */
+const threadSettingsFile = (den: string, cid: number) => join(conversationsDir(den), String(cid), "thread-settings.json");
+
+export function readThreadAutoShip(den: string, cid: number): boolean {
+  try {
+    return (JSON.parse(readFileSync(threadSettingsFile(den, cid), "utf-8")) as { autoShip?: unknown } | null)?.autoShip === true;
+  } catch {
+    return false;
+  }
+}
+
+export function writeThreadAutoShip(den: string, cid: number, autoShip: boolean): void {
+  const file = threadSettingsFile(den, cid);
+  mkdirSync(join(conversationsDir(den), String(cid)), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify({ autoShip }));
+    renameSync(tmp, file);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* already gone */ }
+    throw err;
+  }
+}
+
 /** Another lineage root on this wolf that holds `workId`, or undefined. Only integer directory names count. */
 export function findHolder(den: string, workId: string, exceptRoot?: number): number | undefined {
   let dirs: string[] = [];

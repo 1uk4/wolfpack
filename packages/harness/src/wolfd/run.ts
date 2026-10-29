@@ -10,7 +10,8 @@
  * Listener precedence here (library): socket option > port option > serve.port > ephemeral TCP. (The wolfd bin
  * resolves flags + config into these options; see bin/wolfd.ts.)
  * Agent state is only rewritten when it differs from what config + context say (configure appends a history entry).
- * Tier switching via configure is not wired yet (main tier only).
+ * Tiers: each thread has a saved model tier (main/smart/fast; composer controls, see threads.ts). A thread's conversation is
+ * configured with its tier's model at boot/resume (reconcile) and on a tier change (ThreadConversations.setTier).
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -30,6 +31,7 @@ import {
   type ThinkingLevel,
   type WolfEngine,
 } from "../engine/index.js";
+import type { ThreadTier } from "@wolfpack/protocol";
 import { resolveWorkspacesRoot } from "@wolfpack/workspaces";
 import { parse as parseYaml } from "yaml";
 import { adaptToDurable } from "../adapters/durable.js";
@@ -44,7 +46,7 @@ import type { SweepManager, SweepWorkerConfig } from "../sweep-worker.js";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { patchProcessEnv, startSandbox, type RunningSandbox, type StartWorkServer } from "./sandbox.js";
 import { prepareSocketPath } from "./socket.js";
-import { loadThreads, setThreadWorkspace } from "./threads.js";
+import { loadHomeSettings, loadThreads, setThreadWorkspace, settingsOfSaved } from "./threads.js";
 
 export interface StartWolfOptions {
   /** Path to wolf.yaml. */
@@ -197,8 +199,15 @@ async function startConfigured(
       cwd,
       instructions: context.instructions,
     };
+    // A tier's model for configure. A tier the table lacks falls back to main (resolveWolfModel), so this never throws for main|smart|fast.
+    const modelFor = (tier: ThreadTier): Pick<ConfigureOptions, "model" | "thinkingLevel"> => {
+      const m = resolveWolfModel(config, tier, table);
+      return { model: { provider: m.provider, modelId: m.modelId }, thinkingLevel: m.thinking ? (m.thinking as ThinkingLevel) : null };
+    };
+    const withTier = (base: ConfigureOptions, tier: ThreadTier): ConfigureOptions => (tier === "main" ? base : { ...base, ...modelFor(tier) });
+    const homeTier = loadHomeSettings(config.den).tier;
     const conversation = await engine.conversations.root(desired);
-    await reconcile(conversation, desired);
+    await reconcile(conversation, withTier(desired, homeTier));
 
     const server = new WolfServer({
       name: config.identity.name,
@@ -218,11 +227,14 @@ async function startConfigured(
             setThreadWorkspace(config.den, saved.id, undefined);
             workspace = undefined;
           }
-          if (conv) await reconcile(conv, workspace ? { ...desired, cwd: workspace.path, instructions: contextFor(workspace.path).instructions } : desired);
+          const want = workspace ? { ...desired, cwd: workspace.path, instructions: contextFor(workspace.path).instructions } : desired;
+          if (conv) await reconcile(conv, withTier(want, saved ? settingsOfSaved(saved).tier : "main"));
           return conv;
         },
+        setTier: (conv, tier) => conv.configure(modelFor(tier)),
       },
       den: config.den,
+      tierModels: Object.fromEntries((["main", "smart", "fast"] as const).map((t) => [t, resolveWolfModel(config, t, table).modelId])),
       subagents: {
         bridge: subagentBridge,
         wolfHome: dirname(config.file),

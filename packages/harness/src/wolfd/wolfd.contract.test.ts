@@ -13,7 +13,7 @@ const server = new WolfServer({
   name: "scripted",
   den,
   conversation: new ScriptedEngine({ delayMs: 15 }),
-  conversations: { create: async () => new ScriptedEngine({ delayMs: 15, id: `scripted-feature-${++made}` }), get: async () => undefined },
+  conversations: { create: async () => new ScriptedEngine({ delayMs: 15, id: `scripted-feature-${++made}` }), get: async () => undefined, setTier: (conv, tier) => conv.configure({ model: { provider: "scripted", modelId: tier } }) },
 });
 let url = "";
 beforeAll(async () => {

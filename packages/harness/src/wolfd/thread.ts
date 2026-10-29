@@ -15,6 +15,9 @@ import {
   type CardClosed,
   type InFlightPartial,
   type SubmitAck,
+  DEFAULT_THREAD_SETTINGS,
+  type ThreadSettings,
+  type ThreadTier,
   type ThreadDetail,
   type ThreadEvent,
   type ThreadMessage,
@@ -52,6 +55,8 @@ export interface ThreadHost {
   closing(): boolean;
   emitWolf(draft: WolfEventDraft): void;
   onError(error: unknown): void;
+  /** Switch a conversation to a model tier (engine configure). Unset: tiers are not switchable on this wolf. */
+  applyTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
 }
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
@@ -84,6 +89,10 @@ export class ThreadRuntime {
   /** The engine already had history when this thread was attached (a restart): the thread existed before. */
   hadHistory = false;
 
+  /** Composer settings. A tier change made while a turn runs waits in `pendingTier` and is applied when the turn ends. */
+  settings: ThreadSettings;
+  private pendingTier?: ThreadTier;
+
   /** Called for every event this thread emits (a subagent's manager watches its child's turns through it). */
   private readonly observers = new Set<(ev: ThreadEvent) => void>();
 
@@ -94,6 +103,30 @@ export class ThreadRuntime {
     private readonly host: ThreadHost,
   ) {
     this.cards = new CardTracker(summary.id);
+    this.settings = summary.settings ?? { ...DEFAULT_THREAD_SETTINGS };
+  }
+
+  /**
+   * Adopt new settings. The tier is applied to the conversation now when no turn is running (or being resumed by an
+   * answer); otherwise from the next turn on: the running turn finishes on the model it started with. Throws when the
+   * engine refuses the configure (the settings stay as they were).
+   */
+  async applySettings(next: ThreadSettings): Promise<void> {
+    if (next.tier !== this.settings.tier) {
+      if (this.running || this.answering > 0) this.pendingTier = next.tier;
+      else {
+        await this.host.applyTier?.(this.conv, next.tier);
+        this.pendingTier = undefined;
+      }
+    }
+    this.settings = next;
+  }
+
+  private flushPendingTier(): void {
+    const tier = this.pendingTier;
+    if (!tier) return;
+    this.pendingTier = undefined;
+    this.host.applyTier?.(this.conv, tier)?.catch((e) => this.host.onError(e));
   }
 
   /** Attach the single watcher and start pumping. */
@@ -315,7 +348,10 @@ export class ThreadRuntime {
     const actor: Actor = draft.type === "turn-start" ? OPERATOR : draft.type === "error" ? SYSTEM : { id: this.host.name, kind: "wolf" };
     const full = stampEvent(draft, { threadId: this.summary.id, id: ++this.seq, actor });
     this.buffer.push(full);
-    if (draft.type === "turn-end") this.running = null;
+    if (draft.type === "turn-end") {
+      this.running = null;
+      this.flushPendingTier();
+    }
     for (const s of [...this.subs]) s(full);
     for (const o of [...this.observers]) {
       try {
@@ -357,7 +393,7 @@ export class ThreadRuntime {
   }
 
   threadSummary(): ThreadSummary {
-    return { ...this.summary, status: this.status(), ...this.boundItemField() };
+    return { ...this.summary, status: this.status(), ...this.boundItemField(), ...(this.isChild ? {} : { settings: this.settings }) };
   }
 
   // --- feature progress: bound item ---

@@ -28,7 +28,11 @@ import {
   type ThreadSummary,
   type WolfSummary,
   GraduationConfirmBodySchema,
+  DEFAULT_THREAD_SETTINGS,
+  ThreadSettingsPatchSchema,
 } from "../schemas.js";
+
+const STUB_TIER_MODELS = { main: "stub-main", smart: "stub-smart", fast: "stub-fast" };
 
 export type ScriptStep =
   | { kind: "thinking"; text: string }
@@ -260,6 +264,18 @@ export class StubServer {
         if (!AnswerCardBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {answers}");
         // The stub's scripted turns raise no cards: every card id is unknown.
         throw new HttpError("not_found", `card ${params.callId}`);
+      }
+      case "getThreadSettings": {
+        const t = this.thread(params.id);
+        return this.json(res, 200, { ...DEFAULT_THREAD_SETTINGS, ...t.summary.settings, models: STUB_TIER_MODELS });
+      }
+      case "putThreadSettings": {
+        const t = this.thread(params.id);
+        const body = ThreadSettingsPatchSchema.safeParse(await readJson(req));
+        if (!body.success) throw new HttpError("invalid_request", "body must be {tier?: main|smart|fast, autoShip?: boolean} with at least one");
+        if (t.summary.kind === "subagent") throw new HttpError("invalid_request", "a subagent thread's model comes from its profile");
+        t.summary.settings = { ...DEFAULT_THREAD_SETTINGS, ...t.summary.settings, ...body.data };
+        return this.json(res, 200, { ...t.summary.settings, models: STUB_TIER_MODELS });
       }
       // --- feature progress: bind ---
       case "bindThread": {

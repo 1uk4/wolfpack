@@ -11,6 +11,8 @@ import {
   parseThreadEvent,
   parseWolfEvent,
   type BindThreadResponse,
+  type ThreadSettingsPatch,
+  type ThreadSettingsResponse,
   type RouteName,
 } from "@wolfpack/protocol";
 import {
@@ -153,6 +155,14 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async skipCard(threadId: string, callId: string): Promise<SubmitAck> {
     return (await this.json("skipCard", { id: threadId, callId }, ROUTES.skipCard.response.schema, undefined, threadId)) as SubmitAck;
+  }
+
+  async getThreadSettings(threadId: string): Promise<ThreadSettingsResponse> {
+    return (await this.json("getThreadSettings", { id: threadId }, ROUTES.getThreadSettings.response.schema, undefined, threadId)) as ThreadSettingsResponse;
+  }
+
+  async putThreadSettings(threadId: string, patch: ThreadSettingsPatch): Promise<ThreadSettingsResponse> {
+    return (await this.json("putThreadSettings", { id: threadId }, ROUTES.putThreadSettings.response.schema, patch, threadId)) as ThreadSettingsResponse;
   }
 
   // --- feature progress: bind ---

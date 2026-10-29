@@ -57,6 +57,7 @@ import {
   writeUnboundNotice,
   HttpWorkRecordStore,
   type WorkRecordStore,
+  readThreadAutoShip,
 } from "@wolfpack/memory";
 import {
   type BindingScope,
@@ -81,7 +82,7 @@ type WorkItemStage = typeof STAGE_ORDER[number];
 export interface TasksConfig {
   /**
    * Ship policy. `true`: task_done ships without asking. `false`: it always asks (when someone can answer).
-   * Unset: from WOLFPACK_TASK_SHIP (`auto`, else confirm). A confirm policy raises a confirm card in an interactive
+   * Unset: WOLFPACK_TASK_SHIP=auto ships everywhere, else the thread's auto-ship toggle (composer; default off = confirm). A confirm policy raises a confirm card in an interactive
    * thread and ships on the user's yes; it ships at once when headless (see `canAsk`).
    */
   autoShip?: boolean;
@@ -245,7 +246,11 @@ export default function createTasksExtension(
   const { wolfDen, wolfName, domains } = context;
 
   const env = context.env ?? process.env;
-  const autoShip = config.autoShip ?? resolveShipPolicy(env) === "auto";
+  // Ship policy: `config.autoShip` wins when set (tests). Else WOLFPACK_TASK_SHIP=auto is a wolf-wide override that ships
+  // everywhere; otherwise the thread's own composer toggle decides, read per call (wolfd keeps it in
+  // <den>/factory/conversations/<cid>/thread-settings.json, so a flip applies to the very next task_done).
+  const envAuto = resolveShipPolicy(env) === "auto";
+  const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
   const client = makeClient(context.env);
 
   // ── Ship confirmation ───────────────────────────────────────────────────
@@ -349,7 +354,7 @@ export default function createTasksExtension(
    */
   async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, ids: string[], titleOf: (id: string) => Promise<string>): Promise<GateVerdict> {
     const listed = ids.join(", ");
-    if (autoShip || !(await canAsk(ctx))) {
+    if (autoShipFor(ctx) || !(await canAsk(ctx))) {
       return args.confirm === true
         ? { hold: { content: [{ type: "text", text: `Confirmation required to ship ${listed}. Call task_done again with confirm: false to ship.` }] }, ship: [], notShipped: [] }
         : { ship: ids, notShipped: [] };

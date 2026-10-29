@@ -68,6 +68,7 @@ export function Composer({
 	onPickFiles,
 	chips,
 	enterSends,
+	controls,
 }: {
 	busy: boolean;
 	value: string;
@@ -94,6 +95,8 @@ export function Composer({
 	/** Keyboard Enter sends even when the button state says Stop (a live dictation while a turn runs: Enter
 	 *  finishes it and steers the spoken text; the button stays Stop). Absent: Enter follows the button. */
 	enterSends?: boolean;
+	/** Per-thread controls (model tier, auto-ship), shown beside the send button. */
+	controls?: React.ReactNode;
 }) {
 	const act = (viaEnter = false) => {
 		const action = viaEnter && enterSends ? "send" : enterAction({ busy, canSend });
@@ -171,6 +174,7 @@ export function Composer({
 					rows={1}
 					className="field-sizing-content lh-input max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 				/>
+				{controls}
 				{/* The button follows the text (owner report 2026-10-03): while
 					 a turn runs WITH text typed it stays the SEND affordance
 					 (click = steer — steering must be clickable, not Enter-only);

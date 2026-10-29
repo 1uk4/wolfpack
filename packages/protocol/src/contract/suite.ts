@@ -534,6 +534,26 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await skip(threadId), "not_found");
     });
 
+    it("settings: defaults, PUT merges and persists, bad bodies are invalid_request, unknown thread is not_found", async () => {
+      const put = (id: string, body: unknown) => call(buildPath("putThreadSettings", { id }), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      await expectError(await call(buildPath("getThreadSettings", { id: "nope/nope" })), "not_found");
+      await expectError(await put("nope/nope", { tier: "fast" }), "not_found");
+      const before = await expectJson(await call(buildPath("getThreadSettings", { id: threadId })), ROUTES.getThreadSettings.response.schema);
+      expect(before).toMatchObject({ tier: "main", autoShip: false });
+      await expectError(await put(threadId, {}), "invalid_request");
+      await expectError(await put(threadId, { tier: "huge" }), "invalid_request");
+      await expectError(await put(threadId, { autoShip: "yes" }), "invalid_request");
+      const one = await expectJson(await put(threadId, { autoShip: true }), ROUTES.putThreadSettings.response.schema);
+      expect(one).toMatchObject({ tier: "main", autoShip: true });
+      const two = await expectJson(await put(threadId, { tier: "fast" }), ROUTES.putThreadSettings.response.schema);
+      expect(two).toMatchObject({ tier: "fast", autoShip: true });
+      const read = await expectJson(await call(buildPath("getThreadSettings", { id: threadId })), ROUTES.getThreadSettings.response.schema);
+      expect(read).toMatchObject({ tier: "fast", autoShip: true });
+      const detail = await expectJson(await call(buildPath("getThread", { id: threadId })), ROUTES.getThread.response.schema);
+      expect(detail.settings).toEqual({ tier: "fast", autoShip: true });
+      await expectJson(await put(threadId, { tier: "main", autoShip: false }), ROUTES.putThreadSettings.response.schema);
+    });
+
     // --- feature progress: bind ---
     it("bind: an unknown thread is not_found, a bad body or malformed id is invalid_request, a valid bind answers the schema", async () => {
       const bind = (id: string, body: unknown) => post(buildPath("bindThread", { id }), body);

@@ -21,6 +21,8 @@ import {
   SubmitAckSchema,
   SubmitRequestSchema,
   ThreadDetailSchema,
+  ThreadSettingsPatchSchema,
+  ThreadSettingsResponseSchema,
   ThreadEventSchema,
   ThreadSummarySchema,
   WolfSummarySchema,
@@ -44,7 +46,7 @@ export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 /** Terminator frame payload (`data: [DONE]`) sent when a stream ends at turn-end. */
 export const SSE_DONE = "[DONE]";
 
-export type HttpMethod = "GET" | "POST";
+export type HttpMethod = "GET" | "POST" | "PUT";
 
 /** Wire bodies: the path carries the identifier, so it is dropped from the body. */
 export const SubmitBodySchema = SubmitRequestSchema.omit({ threadId: true });
@@ -159,6 +161,17 @@ export const ROUTES = {
     status: [200],
     error: err,
   },
+  /**
+   * The thread's composer settings: model tier (`main|smart|fast`) and auto-ship. `models` hints which model each tier
+   * resolves to on this wolf. Defaults `{tier: "main", autoShip: false}`. 404 `not_found` for an unknown thread.
+   */
+  getThreadSettings: { method: "GET", path: "/v1/threads/:id/settings", response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
+  /**
+   * Change the thread's settings (body: `tier` and/or `autoShip`; the rest is kept). Persisted: survives a wolf restart.
+   * A tier change applies from the next turn (a running turn finishes on its model). Answers the new settings.
+   * 400 `invalid_request` for a bad body or a subagent thread (its model comes from its profile), 404 `not_found` for an unknown thread.
+   */
+  putThreadSettings: { method: "PUT", path: "/v1/threads/:id/settings", body: ThreadSettingsPatchSchema, response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
   // --- feature progress: bind ---
   /**
    * Bind the thread's conversation to a work item (task, issue or spike), the way the agent's `task_bind` does: same

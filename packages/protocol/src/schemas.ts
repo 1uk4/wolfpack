@@ -345,6 +345,29 @@ export const ThreadWorkspaceSchema = z.object({
 export type ThreadWorkspace = z.infer<typeof ThreadWorkspaceSchema>;
 // ---- /header git tree ---------------------------------------------------------------------------------------------
 
+// ---- composer controls: per-thread settings ------------------------------------------------------------------------
+/** The wolf's model tiers a thread can run on (the actual models come from the wolf's models.json). */
+export const ThreadTierSchema = z.enum(["main", "smart", "fast"]);
+export type ThreadTier = z.infer<typeof ThreadTierSchema>;
+export const THREAD_TIERS = ThreadTierSchema.options;
+/** Per-thread composer settings. Persisted by the wolf; the defaults are `main` and auto-ship off. */
+export const ThreadSettingsSchema = z.object({
+  tier: ThreadTierSchema,
+  /** true: task_done ships in this thread without raising a ship card. false: it asks (one multi-select card). */
+  autoShip: z.boolean(),
+});
+export type ThreadSettings = z.infer<typeof ThreadSettingsSchema>;
+export const DEFAULT_THREAD_SETTINGS: ThreadSettings = { tier: "main", autoShip: false };
+/** What GET/PUT settings answer: the settings plus the model each tier resolves to (a hint for the picker). */
+export const ThreadSettingsResponseSchema = ThreadSettingsSchema.extend({
+  models: z.object({ main: z.string().optional(), smart: z.string().optional(), fast: z.string().optional() }).optional(),
+});
+export type ThreadSettingsResponse = z.infer<typeof ThreadSettingsResponseSchema>;
+/** PUT body: the fields to change (at least one). */
+export const ThreadSettingsPatchSchema = ThreadSettingsSchema.partial().refine((p) => p.tier !== undefined || p.autoShip !== undefined, { message: "tier or autoShip is required" });
+export type ThreadSettingsPatch = z.infer<typeof ThreadSettingsPatchSchema>;
+// ---- /composer controls ---------------------------------------------------------------------------------------------
+
 export const ThreadSummarySchema = z.object({
   id: z.string(),
   wolf: z.string(),
@@ -382,6 +405,8 @@ export const ThreadSummarySchema = z.object({
    */
   boundItem: z.string().optional(),
   // --- end feature progress ---
+  /** Additive (composer controls): the thread's model tier and auto-ship toggle. Absent on subagent threads and older servers (= defaults). */
+  settings: ThreadSettingsSchema.optional(),
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 

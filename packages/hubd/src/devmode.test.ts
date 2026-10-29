@@ -1,11 +1,13 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main, parseArgs } from "./cli.js";
+
+const GOOD_KEY = "0123456789abcdef0123";
 import { createHubServer } from "./server.js";
 import {
-  assertSafeDataDir, buildPullArgs, DEV_MARKER, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
+  assertSafeDataDir, buildPullArgs, defaultDevDataDir, DEV_MARKER, snapshotState, REMOTE_KB_DOMAINS, REMOTE_LEDGER, resolveHost, SNAPSHOT_MANIFEST, takeSnapshot,
   type PullRunner, type RemoteHost,
 } from "./snapshot.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -54,12 +56,30 @@ describe("hubd cli args", () => {
     expect(() => parseArgs([])).toThrow();
     expect(() => parseArgs(["serve"])).toThrow(/data-dir/);
     expect(() => parseArgs(["dev"])).toThrow();
-    expect(() => parseArgs(["serve", "--data-dir", "/d", "--port", "99999"])).toThrow(/port/);
+    for (const bad of ["99999", "0", "-1", "1.5", "abc"]) expect(() => parseArgs(["serve", "--data-dir", "/d", "--port", bad])).toThrow(/port/);
     expect(() => parseArgs(["serve", "--data-dir", "/d", "--api-key", "x"])).toThrow(/unknown/);
     expect(() => parseArgs(["serve", "--data-dir", "/d", "--snapshot", "h"])).toThrow(/unknown/);
   });
-  it("requires HUBD_API_KEY", async () => {
-    await expect(main(["serve", "--data-dir", "/d"], {})).rejects.toThrow(/HUBD_API_KEY/);
+  it("requires HUBD_API_KEY of at least 16 characters", async () => {
+    await expect(main(["serve", "--data-dir", "/d"], {})).rejects.toThrow(/HUBD_API_KEY is not set/);
+    await expect(main(["serve", "--data-dir", "/d"], { HUBD_API_KEY: "short" })).rejects.toThrow(/at least 16/);
+  });
+  it("dev on a non-loopback host needs --allow-network, and warns loudly", async () => {
+    expect(() => parseArgs(["dev", "--snapshot", "h", "--host", "0.0.0.0"])).toThrow(/allow-network/);
+    expect(() => parseArgs(["dev", "--data-dir", "/d", "--host", "192.168.1.5"])).toThrow(/allow-network/);
+    expect(parseArgs(["dev", "--snapshot", "h", "--host", "0.0.0.0", "--allow-network"]).allowNetwork).toBe(true);
+    expect(parseArgs(["dev", "--snapshot", "h", "--host", "localhost"]).allowNetwork).toBe(false);
+    expect(() => parseArgs(["serve", "--data-dir", "/d", "--allow-network"])).toThrow(/unknown/);
+    const logs: string[] = [];
+    // the warning is logged before anything is pulled; the missing marker then stops the run (no network, no server)
+    await expect(main(["dev", "--data-dir", mk("hubd-net-"), "--host", "0.0.0.0", "--allow-network"], { HUBD_API_KEY: GOOD_KEY }, (m) => logs.push(m))).rejects.toThrow(/DEV-SNAPSHOT/);
+    expect(logs.join("\n")).toMatch(/WARNING.*PRODUCTION DATA/);
+  });
+  it("is an executable-style bin: shebang in the source, chmod in the build script", () => {
+    expect(readFileSync(new URL("./cli.ts", import.meta.url), "utf8").startsWith("#!/usr/bin/env node\n")).toBe(true);
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { bin: Record<string, string>; scripts: Record<string, string> };
+    expect(pkg.bin.hubd).toBe("dist/cli.js");
+    expect(pkg.scripts.build).toMatch(/chmodSync\('dist\/cli\.js', ?0o755\)/);
   });
 });
 
@@ -75,6 +95,35 @@ describe("data-dir guards", () => {
     expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/den"), home)).toThrow(/den/);
     expect(() => assertSafeDataDir("/var/wolfpack/kb/work", home)).toThrow(/wolfpack/);
   });
+  it("refuses a den at any depth (e.g. a stateless wolf's den)", () => {
+    mkdirSync(join(home, "wolves/local/1uk4/claude-stateless/den/sessions"), { recursive: true });
+    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/den"), home)).toThrow(/den/);
+    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/den/sessions/x"), home)).toThrow(/den/);
+    expect(() => assertSafeDataDir(join(home, "wolves/a/b/c/d/den/e"), home)).toThrow(/den/);
+    // a name that merely contains "den" is fine
+    expect(assertSafeDataDir(join(home, "wolves/hidden/garden/x"), home)).toContain("garden");
+  });
+  it("refuses /private/var/wolfpack", () => {
+    expect(() => assertSafeDataDir("/private/var/wolfpack/kb", home)).toThrow(/wolfpack/);
+  });
+  it.runIf(process.platform === "darwin")("compares case-insensitively on darwin", () => {
+    expect(() => assertSafeDataDir(join(home, "wolves/KNOWLEDGE/x"), home)).toThrow(/knowledge/);
+    expect(() => assertSafeDataDir(join(home, "wolves/local/1uk4/claude-stateless/DEN/x"), home)).toThrow(/den/);
+  });
+  it("returns the realpath", () => {
+    const base = mk("hubd-real-");
+    const link = join(base, "ln");
+    symlinkSync(realpathSync(base), link);
+    expect(assertSafeDataDir(join(link, "sub"), home)).toBe(join(realpathSync.native(base), "sub"));
+  });
+  it("refuses a symlink pointing out of a safe dir into a live tree", () => {
+    const safe = join(home, ".wolfpack/hubd-dev/safe");
+    mkdirSync(safe, { recursive: true });
+    symlinkSync(join(home, "wolves/local/1uk4/den"), join(safe, "to-den"));
+    symlinkSync(join(home, "wolves/knowledge/base"), join(safe, "to-kb"));
+    expect(() => assertSafeDataDir(join(safe, "to-den", "x"), home)).toThrow(/den/);
+    expect(() => assertSafeDataDir(join(safe, "to-kb"), home)).toThrow(/knowledge/);
+  });
   it("refuses a symlink into a den", () => {
     const link = join(home, "link");
     symlinkSync(join(home, "wolves/knowledge"), link);
@@ -89,6 +138,12 @@ describe("data-dir guards", () => {
     writeFileSync(join(d, "f"), "x");
     await expect(takeSnapshot({ host: "x", dataDir: d, hostInfo: HOST, run: async () => ({ code: 0, stderr: "" }) })).rejects.toThrow(/non-empty/);
   });
+  it("the default dev data dir is outside ~/wolves and passes the guard", () => {
+    const d = defaultDevDataDir(new Date("2026-10-29T12:00:00Z"), home);
+    expect(d.startsWith(join(home, ".wolfpack", "hubd-dev"))).toBe(true);
+    expect(d.startsWith(join(home, "wolves"))).toBe(false);
+    expect(() => assertSafeDataDir(d, home)).not.toThrow();
+  });
 });
 
 describe("rsync args are pull-only", () => {
@@ -99,7 +154,8 @@ describe("rsync args are pull-only", () => {
     expect(a.filter((x) => /^[^ ]+@[^ ]+:/.test(x))).toHaveLength(1); // exactly one remote operand: the source
     expect(a.some((x) => x.startsWith("--delete") || x.startsWith("--remove"))).toBe(false);
     const e = a[a.indexOf("-e") + 1]!;
-    for (const o of ["IdentitiesOnly=yes", "IdentityAgent=none", "BatchMode=yes", "ConnectTimeout=5", "-i /k/wolfpack"]) expect(e).toContain(o);
+    expect(a).toContain("--timeout=60");
+    for (const o of ["IdentitiesOnly=yes", "IdentityAgent=none", "BatchMode=yes", "ConnectTimeout=5", "ServerAliveInterval=15", "ServerAliveCountMax=3", "-i /k/wolfpack"]) expect(e).toContain(o);
   });
   it("refuses remote destinations, relative sources and mutating flags", () => {
     expect(() => buildPullArgs(HOST, REMOTE_LEDGER, "root@h:/var/wolfpack/x")).toThrow(/LOCAL/);
@@ -107,8 +163,7 @@ describe("rsync args are pull-only", () => {
     expect(() => buildPullArgs(HOST, REMOTE_LEDGER, "rel/dir")).toThrow(/LOCAL/);
     expect(() => buildPullArgs(HOST, "var/x", "/tmp/x")).toThrow(/absolute/);
     expect(() => buildPullArgs(HOST, "/x; rm -rf /", "/tmp/x")).toThrow(/unsafe/);
-    expect(() => buildPullArgs(HOST, REMOTE_LEDGER, "/tmp/x", ["--delete"])).toThrow(/forbidden/);
-    expect(() => buildPullArgs(HOST, REMOTE_LEDGER, "/tmp/x", ["--remove-source-files"])).toThrow(/forbidden/);
+    expect(buildPullArgs.length).toBe(3); // no caller-supplied flags
   });
   it("takeSnapshot only ever issues rsync pulls", async () => {
     const dataDir = join(mk("hubd-p-"), "snap");
@@ -118,7 +173,7 @@ describe("rsync args are pull-only", () => {
     for (const c of calls) {
       expect(c[0]).toBe("rsync");
       expect(c.at(-2)).toMatch(/^root@100\.64\.0\.9:\/var\/wolfpack\//);
-      expect(c.at(-1)!.startsWith(dataDir)).toBe(true);
+      expect(c.at(-1)!.startsWith(realpathSync.native(dirname(dataDir)))).toBe(true);
       expect(c.join(" ")).not.toMatch(/--delete|--remove/);
     }
   });
@@ -132,6 +187,12 @@ describe("host resolution", () => {
     expect(h).toMatchObject({ address: "10.1.2.3", user: "root", port: 22 });
     expect(JSON.stringify(h)).not.toContain("SECRET");
     expect(() => resolveHost("nope", cfg)).toThrow(/unknown host/);
+    const bad = join(mk("hubd-badcfg-"), "config.yaml");
+    writeFileSync(bad, "hosts: [\n  apiKey: SECRET-VALUE: : {{\n");
+    let msg = "";
+    try { resolveHost("sfo-01", bad); } catch (e) { msg = String((e as Error).message); }
+    expect(msg).toMatch(/cannot read or parse/);
+    expect(msg).not.toContain("SECRET-VALUE");
   });
 });
 
@@ -139,7 +200,7 @@ describe("snapshot, manifest, and serving over HTTP", () => {
   it("pulls a fixture, writes manifest + marker, serves GET /v1/work", async () => {
     const dataDir = join(mk("hubd-s-"), "snap");
     const m = await takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(makeRemote(), []), now: () => new Date("2026-10-29T12:00:00Z") });
-    expect(m).toMatchObject({ sourceHost: "sfo-01", takenAt: "2026-10-29T12:00:00.000Z", remotePaths: { ledger: REMOTE_LEDGER, kbDomains: REMOTE_KB_DOMAINS } });
+    expect(m).toMatchObject({ complete: true, sourceHost: "sfo-01", takenAt: "2026-10-29T12:00:00.000Z", remotePaths: { ledger: REMOTE_LEDGER, kbDomains: REMOTE_KB_DOMAINS } });
     expect(m.fileCount).toBeGreaterThan(1);
     expect(m.ledgerSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.parse(readFileSync(join(dataDir, SNAPSHOT_MANIFEST), "utf8")).ledgerSha256).toBe(m.ledgerSha256);
@@ -156,13 +217,41 @@ describe("snapshot, manifest, and serving over HTTP", () => {
     }
   });
   it("re-serving requires the marker", async () => {
-    await expect(main(["dev", "--data-dir", mk("hubd-nomark-")], { HUBD_API_KEY: "k" }, () => {})).rejects.toThrow(/DEV-SNAPSHOT/);
+    await expect(main(["dev", "--data-dir", mk("hubd-nomark-")], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/DEV-SNAPSHOT/);
   });
-  it("a failed pull surfaces the error", async () => {
+  it("a failed pull leaves an incomplete snapshot: marker first, complete:false, re-serve refused, retry allowed", async () => {
     const dataDir = join(mk("hubd-f-"), "snap");
-    await expect(takeSnapshot({ host: "x", dataDir, hostInfo: HOST, run: async () => ({ code: 255, stderr: "ssh: unreachable" }) })).rejects.toThrow(/unreachable/);
+    const remote = makeRemote();
+    let n = 0;
+    const flaky: PullRunner = async (cmd, args) => {
+      if (++n === 2) return { code: 255, stderr: "ssh: connection lost" };
+      return fakeRemote(remote, [])(cmd, args);
+    };
+    await expect(takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: flaky })).rejects.toThrow(/connection lost/);
+    expect(existsSync(join(dataDir, DEV_MARKER))).toBe(true);
+    expect(JSON.parse(readFileSync(join(dataDir, SNAPSHOT_MANIFEST), "utf8")).complete).toBe(false);
+    expect(snapshotState(dataDir)).toBe("incomplete");
+    await expect(main(["dev", "--data-dir", dataDir], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/INCOMPLETE/);
+    // retry into the same dir is allowed because it is incomplete
+    const m = await takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(remote, []) });
+    expect(m.complete).toBe(true);
+    expect(snapshotState(dataDir)).toBe("complete");
   });
-  it("homedir default is not under wolves", () => {
-    expect(join(homedir(), ".wolfpack/hubd-dev")).not.toContain("/wolves/");
+  it("the marker exists before the first pull starts", async () => {
+    const dataDir = join(mk("hubd-m-"), "snap");
+    let seen: boolean | undefined;
+    await expect(
+      takeSnapshot({ host: "x", dataDir, hostInfo: HOST, run: async () => { seen = existsSync(join(dataDir, DEV_MARKER)); return { code: 1, stderr: "x" }; } }),
+    ).rejects.toThrow();
+    expect(seen).toBe(true);
+  });
+  it("refuses to re-pull into a complete snapshot (local writes are never overwritten)", async () => {
+    const dataDir = join(mk("hubd-c-"), "snap");
+    const remote = makeRemote();
+    await takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(remote, []) });
+    const calls: string[][] = [];
+    await expect(takeSnapshot({ host: "sfo-01", dataDir, hostInfo: HOST, run: fakeRemote(remote, calls) })).rejects.toThrow(/complete snapshot.*fresh/);
+    expect(calls).toHaveLength(0);
+    await expect(main(["dev", "--snapshot", "sfo-01", "--data-dir", dataDir], { HUBD_API_KEY: GOOD_KEY }, () => {})).rejects.toThrow(/complete snapshot/);
   });
 });

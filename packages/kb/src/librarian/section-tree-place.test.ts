@@ -67,4 +67,27 @@ describe("placeEntry: stay in the parent unless coherent with a child", () => {
     const m = new Map(members); m.set("root", left.slice(0, 2));
     expect(chooseChild(vecOf(5), sections[0], [sections[1], sections[2]], sections, m)).toBeNull();
   });
+
+  it("a parent with 0-2 direct entries whose children are ALL below the isolation threshold keeps the entry (no _unplaced)", () => {
+    const far = unitv(Array.from({ length: DIM }, (_, d) => (d === 9 ? 1 : 0)));
+    const farA = { ...sections[1], centroid: far } as Section;
+    const farB = { ...sections[2], centroid: unitv(Array.from({ length: DIM }, (_, d) => (d === 10 ? 1 : 0))) } as Section;
+    const secs = [sections[0], farA, farB];
+    const v = vecOf(1);
+    for (const nDirect of [0, 1, 2]) {
+      const m = new Map(members);
+      if (nDirect === 0) m.delete("root"); else m.set("root", left.slice(0, nDirect));
+      expect(chooseChild(v, secs[0], [secs[1], secs[2]], secs, m), `${nDirect} direct`).toBeNull(); // rule not applicable
+      const r = placeEntry(v, { kind: "fact" }, secs, v, m);
+      expect(r.sectionId, `${nDirect} direct`).toBe("root");
+    }
+  });
+
+  it("a tie between the best child and the leftover group stays in the parent", () => {
+    // the parent's direct entries are the same vectors as child A's: identical centroids, so no child is strictly closer
+    const twin = kidA.map((e, i) => ent(`t${i}`, "root", e.vector));
+    const m = new Map(members); m.set("root", twin);
+    const v = vecOf(1);
+    expect(chooseChild(v, sections[0], [sections[1], sections[2]], sections, m)).toBe("parent");
+  });
 });

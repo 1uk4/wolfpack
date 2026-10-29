@@ -545,11 +545,9 @@ export function placeEntry(
 
     // Continue descending. A child chosen by the coherence rule that the next level then rejects as _unplaced (below the
     // isolation threshold) must not send the entry to the classify fallback / a NEW root: it already fits this parent.
-    if (pick) {
-      const below = descend([pick], currentDepth + 1);
-      return below.sectionId === "_unplaced" ? { sectionId: bestSection.id, fit: bestSim, depth: currentDepth } : below;
-    }
-    return descend(children, currentDepth + 1);
+    // The same holds when the rule did not apply (pick === null: few or no direct entries) and every child is below the threshold.
+    const below = descend(pick ? [pick] : children, currentDepth + 1);
+    return below.sectionId === "_unplaced" ? { sectionId: bestSection.id, fit: bestSim, depth: currentDepth } : below;
   }
 
   return descend(roots, 0);

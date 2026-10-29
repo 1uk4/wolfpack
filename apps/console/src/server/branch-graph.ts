@@ -28,6 +28,17 @@ export interface GraphWorkspace {
 
 /** The branch graph of a workspace: base, wolf branch, current branch and its `<branch>--*` subagent branches. */
 export async function workspaceGraph(ws: GraphWorkspace, wolf: string, git: GitRunner = runGit): Promise<BranchGraph> {
+	try {
+		return await workspaceGraphUnsafe(ws, wolf, git);
+	} catch (err) {
+		// A git timeout (execFile kills the child) draws an empty graph rather than failing the popover.
+		const e = err as { killed?: boolean; signal?: string; code?: string };
+		if (e?.killed || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT") return { lanes: [], commits: [] };
+		throw err;
+	}
+}
+
+async function workspaceGraphUnsafe(ws: GraphWorkspace, wolf: string, git: GitRunner): Promise<BranchGraph> {
 	const heads = new Map<string, string>();
 	for (const line of (await git(ws.toplevel, ["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])).split("\n")) {
 		const [name, sha] = line.split("\0");
@@ -41,7 +52,8 @@ export async function workspaceGraph(ws: GraphWorkspace, wolf: string, git: GitR
 		seen.add(name);
 		refs.push({ name, kind, tip });
 	};
-	add(ws.base ?? ["stable", "main"].find((b) => heads.has(b)), "base");
+	// A base that is not a local head (e.g. origin/stable) falls back to stable, then main.
+	add(ws.base && heads.has(ws.base) ? ws.base : ["stable", "main"].find((b) => heads.has(b)), "base");
 	add(`wolf/${wolf}`, "wolf");
 	add(ws.branch, "feature");
 	const subs = [...heads.keys()].filter((n) => n.startsWith(`${ws.branch}--`)).sort();

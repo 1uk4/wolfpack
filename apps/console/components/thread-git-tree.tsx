@@ -6,7 +6,7 @@ import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
 import { BranchGraphView } from "@/components/branch-graph";
-import type { BranchGraph } from "@/src/core/branch-graph";
+import type { BranchGraph } from "@/src/core";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 
 /** The header's repo · base → branch label (a home thread has no base). */

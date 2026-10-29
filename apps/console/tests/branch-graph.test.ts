@@ -81,4 +81,22 @@ describe("workspaceGraph (real repo)", () => {
 		assert.deepEqual(graph.lanes.map((l) => l.name), ["main", "feat/x", "feat/x--sub-1"]);
 		assert.deepEqual(graph.commits.map((c) => c.subject), ["root", "f1", "s1"]);
 	});
+
+	it("a base that is not a local head (origin/stable) falls back to stable", async () => {
+		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
+		const git = async (_cwd: string, args: string[]) => {
+			if (args[0] === "for-each-ref") return "stable\0s1\nfeat/x\0f1\n";
+			return "f1\0s1\0feat\ns1\0\0root\n";
+		};
+		const graph = await workspaceGraph({ toplevel: "/x", branch: "feat/x", base: "origin/stable" }, "w", git);
+		assert.deepEqual(graph.lanes.map((l) => l.name), ["stable", "feat/x"]);
+	});
+
+	it("a git timeout gives an empty graph; other errors still throw", async () => {
+		const { workspaceGraph } = await import("../src/server/branch-graph.ts");
+		const timeout = async () => { throw Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }); };
+		assert.deepEqual(await workspaceGraph({ toplevel: "/x", branch: "b" }, "w", timeout), { lanes: [], commits: [] });
+		const boom = async () => { throw new Error("not a repo"); };
+		await assert.rejects(workspaceGraph({ toplevel: "/x", branch: "b" }, "w", boom), /not a repo/);
+	});
 });

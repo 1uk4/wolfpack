@@ -1,6 +1,6 @@
 "use client";
 
-import type { BranchGraph } from "@/src/core/branch-graph";
+import type { BranchGraph } from "@/src/core";
 
 const STEP = 36;
 const LANE_H = 30;

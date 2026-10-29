@@ -118,3 +118,29 @@ describe("harness bundle with the bridge", () => {
     }
   });
 });
+
+describe("harness bundle: pi-coding-agent stub for the bridge packages", () => {
+  it("stubs @earendil-works/pi-coding-agent for importers under pi-claude-bridge and pi-claude-bridge-stateless (git install layout)", async () => {
+    const { stubBridgeSdkPlugin } = await import("./bundle.js");
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-pca-"));
+    try {
+      const nm = path.join(out, "node_modules");
+      // A real pi-coding-agent whose config.js dies at load under CJS, as the real one does.
+      fs.mkdirSync(path.join(nm, "@earendil-works", "pi-coding-agent"), { recursive: true });
+      fs.writeFileSync(path.join(nm, "@earendil-works", "pi-coding-agent", "package.json"), '{"name":"@earendil-works/pi-coding-agent","main":"index.js"}');
+      fs.writeFileSync(path.join(nm, "@earendil-works", "pi-coding-agent", "index.js"), 'throw new Error("real pi-coding-agent was bundled");');
+      for (const dir of ["pi-claude-bridge", "pi-claude-bridge-stateless"]) {
+        fs.mkdirSync(path.join(nm, dir, "dist"), { recursive: true });
+        fs.writeFileSync(path.join(nm, dir, "dist", "skills.js"), 'import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent"; export const f = formatSkillsForPrompt;');
+        const file = path.join(out, `${dir}.cjs`);
+        await esbuild.build({
+          entryPoints: [path.join(nm, dir, "dist", "skills.js")], outfile: file, bundle: true, platform: "node", format: "cjs", target: "node20",
+          plugins: [stubBridgeSdkPlugin()], logLevel: "silent",
+        });
+        expect(execFileSync(process.execPath, ["-e", `console.log("RESULT:"+typeof require(${JSON.stringify(file)}).f)`], { cwd: out, encoding: "utf8" })).toContain("RESULT:function");
+      }
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+});

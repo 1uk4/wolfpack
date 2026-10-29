@@ -54,7 +54,7 @@
     "@wolfpack/workspaces": "*",
     "grammy": "^1.21.0",
     "pi-claude-bridge": "github:1uk4/pi-claude-bridge#durable-core",
-    "pi-claude-bridge-stateless": "file:../../../../pi-claude-bridge",
+    "pi-claude-bridge-stateless": "git+file:///Users/lukaflores/wolves/local/1uk4/workspaces/pi-claude-bridge#stateless-core",
     "yaml": "^2.6.0"
   },
   "devDependencies": {

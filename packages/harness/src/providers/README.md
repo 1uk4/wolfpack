@@ -45,12 +45,14 @@ Subagent and memory paths do not require thinking or prompt caching: thinking is
 
 `claude-stateless` (`providers/claude-stateless.ts`) is the same Max-subscription transport as `claude-bridge`, but each
 model round is one short-lived Agent SDK query over a resumable session file instead of a parked child. Both stay
-installed; `claude-bridge` stays the default. It needs `CLAUDE_CODE_OAUTH_TOKEN` like claude-bridge. State lives under the
-wolf den: `<den>/claude-stateless/sessions` (session files, the fixed CLI cwd) and `<den>/claude-stateless/debug.log`
-(JSON lines, always on). It reuses claude-bridge's model table (same ids).
+installed; `claude-bridge` stays the default. It needs `CLAUDE_CODE_OAUTH_TOKEN` like claude-bridge. State lives in a
+state dir next to the den, NOT in it (the den is Syncthing-synced on VPS wolves): `<dirname(WOLF_DEN)>/claude-stateless/<basename(WOLF_DEN)>/`
+holds `sessions/` (session files, the fixed CLI cwd) and `debug.log` (JSON lines, always on). wolfd sets `WOLF_DEN`; the
+factory throws without it. It reuses claude-bridge's model table (same ids).
 
-> The dependency `pi-claude-bridge-stateless` is a LOCAL path (`file:` clone, branch `stateless-core`). It must become a
-> pushed git ref before any VPS deploy.
+> The dependency `pi-claude-bridge-stateless` is a LOCAL git ref (`git+file:///…/workspaces/pi-claude-bridge#stateless-core`,
+> commit pinned in the lockfile, dist built by the fork's `prepare`). It works on this machine only: it must become a pushed
+> `github:` ref before any VPS deploy.
 
 **Who uses which tier.** Subagents take their tier from the agent profile's `model:` frontmatter, else the `model` argument
 of the spawn call, else **`smart`** (`subagents.ts`: `params.model ?? def.model ?? "smart"`). Nothing is subagent-only:
@@ -69,7 +71,8 @@ models:
 Resolved `models.json` tiers: `main` stays `claude-bridge/claude-opus-5-5`, `smart` becomes
 `{ "model": "claude-sonnet-5-5", "provider": "claude-agent-sdk", "piProvider": "claude-stateless", "piModel": "claude-stateless/claude-sonnet-5-5" }`.
 Agents whose profile says `model: main` or `fast` (or a spawn with `model: "main"`) still run on claude-bridge. The owner can
-also pick the smart tier for a thread; that thread then runs stateless too (accepted for the trial). Roll back by deleting the
+also pick the smart tier for a thread; that thread then runs stateless too (accepted for the trial). `fast` is untouched in step 1. Memory
+steps on `smart` go through the engine's SDK adapter (`claude-agent-sdk`), not the stateless bridge. Roll back by deleting the
 `smart` line.
 
 **Step 2: threads too** (home and feature threads run on `main`):

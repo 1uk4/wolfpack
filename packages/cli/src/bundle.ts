@@ -483,7 +483,7 @@ export function stubBridgeSdkPlugin(): esbuild.Plugin {
       // never calls. Bundled, pi-coding-agent's config.js runs fileURLToPath(import.meta.url) at load, which is undefined
       // in CJS and crashes the harness. Stub it for the bridge only.
       build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, (args) =>
-        /[\\/]pi-claude-bridge[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
+        /[\\/]pi-claude-bridge(?:-stateless)?[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
       );
       build.onLoad({ filter: /.*/, namespace: "bridge-pca-stub" }, () => ({
         contents: 'export function formatSkillsForPrompt() { throw new Error("claude-bridge: pi-coding-agent is not available in the harness bundle"); }',

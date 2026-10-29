@@ -294,8 +294,23 @@ describe("the sidebar", () => {
 
 	it("a subagent row shows its agent, state and step, indented", () => {
 		const html = renderToStaticMarkup(<SessionRow chat={rows.find((r) => r.id === "1uk4/sub-1")!} active={false} onOpen={() => {}} nested />);
-		assert.match(html, /worker · running · edit/);
-		assert.match(html, /ml-4/);
+		assert.match(html, />Task 1<\/span><span> · worker</);
+		assert.match(html, /data-compact="true"/);
+		assert.match(html, /ml-8/);
+		assert.match(html, /text-xs/);
+		assert.doesNotMatch(html.replace(/title="[^"]*"/, ""), /running · edit/); // no second line (the state is only a tooltip)
+		assert.match(html, /subagent-dot/);
+	});
+
+	it("a feature row sits one step under Home with a guide line; Home does not", () => {
+		const feat = { ...rows.find((r) => r.id === PARENT)!, kind: "feature" };
+		assert.match(renderToStaticMarkup(<SessionRow chat={feat} active={false} onOpen={() => {}} indented />), /ml-4[^"]*border-l/);
+		assert.doesNotMatch(renderToStaticMarkup(<SessionRow chat={{ ...feat, kind: "home" }} active={false} onOpen={() => {}} />), /ml-4/);
+	});
+
+	it("the kind rides the list row", () => {
+		const [h] = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [wire({ ...FIXTURE_THREAD, id: "1uk4/home", title: "Home", kind: "home" })] }]) as (ReturnType<typeof core.threadListItem>)[];
+		assert.equal(h!.kind, "home");
 	});
 });
 
@@ -311,7 +326,7 @@ describe("the job panel", () => {
 		assert.equal(renderToStaticMarkup(<SubagentJobs rows={[{ id: "1uk4/home", title: "Home" }] as never[]} onOpen={() => {}} now={NOW} />), "");
 	});
 
-	it("lists running and queued with the task link; done ones sit behind a toggle", async () => {
+	it("lists running and queued with the task link; settled ones are not listed anywhere", async () => {
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		root = createRoot(host);
@@ -320,8 +335,8 @@ describe("the job panel", () => {
 		assert.equal(qa('[data-testid="subagent-job"]').length, 2);
 		assert.match(q('[data-testid="subagent-jobs"]')!.textContent!, /queued #1/);
 		assert.equal(q('[data-testid="subagent-job-task"]')!.getAttribute("href"), "/kb/work/work-1");
-		await click(q('[data-testid="subagent-jobs-done-toggle"]')!);
-		assert.equal(qa('[data-testid="subagent-job"]').length, 3);
+		assert.equal(q('[data-testid="subagent-jobs-done-toggle"]'), null);
+		assert.doesNotMatch(q('[data-testid="subagent-jobs"]')!.textContent!, /done|\bfailed\b/);
 		await click(qa('[data-testid="subagent-job"] button')[0]!);
 		assert.deepEqual(opened, ["1uk4/sub-1"]);
 	});

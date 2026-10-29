@@ -2,22 +2,20 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BotIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { BotIcon } from "lucide-react";
 import { BrailleSpinner } from "@/components/braille-spinner";
-import { elapsedMs, formatChildElapsed, isChildThread, isLive, isSettled, stateLabel, type ChildThread } from "@/src/core";
+import { elapsedMs, formatChildElapsed, isChildThread, isLive, stateLabel, type ChildThread } from "@/src/core";
 
 type Job = ChildThread & { meta?: string };
 
 /**
  * The job panel (sidebar, above Settings): every subagent of every wolf, from wolfd's thread list: live ones first
- * (running, waiting, queued), settled ones behind a "N done" toggle. Each row opens the child's thread and links the
+ * (running, waiting, queued); settled ones are not listed (visibility only, the data stays). Each row opens the child's thread and links the
  * task it serves. Draws nothing while there are no subagents. This is what the legacy activity feed was for wolfd wolves.
  */
 export function SubagentJobs<T extends Job>({ rows, onOpen, now: nowProp }: { rows: readonly T[]; onOpen: (job: T) => void; now?: number }) {
 	const jobs = rows.filter(isChildThread);
 	const live = jobs.filter(isLive);
-	const done = jobs.filter(isSettled);
-	const [showDone, setShowDone] = useState(false);
 	const [now, setNow] = useState(() => nowProp ?? Date.now());
 	useEffect(() => {
 		if (nowProp !== undefined || live.length === 0) return;
@@ -25,7 +23,7 @@ export function SubagentJobs<T extends Job>({ rows, onOpen, now: nowProp }: { ro
 		const t = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(t);
 	}, [live.length, nowProp]);
-	if (jobs.length === 0) return null;
+	if (live.length === 0) return null;
 	const at = nowProp ?? now;
 	const row = (j: T) => (
 		<div key={j.id} data-testid="subagent-job" data-state={j.state ?? ""} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs hover:bg-accent">
@@ -54,13 +52,6 @@ export function SubagentJobs<T extends Job>({ rows, onOpen, now: nowProp }: { ro
 			</div>
 			<div className="flex max-h-[30dvh] flex-col overflow-y-auto">
 				{live.map(row)}
-				{done.length > 0 && (
-					<button type="button" data-testid="subagent-jobs-done-toggle" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)} className="flex items-center gap-1 px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent">
-						{showDone ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
-						{done.length} done
-					</button>
-				)}
-				{showDone && done.map(row)}
 			</div>
 		</section>
 	);

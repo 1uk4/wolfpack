@@ -26,7 +26,7 @@ import { isChildThread, sidebarGroups, stateLabel, threadListItem, type ChatList
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -285,10 +285,13 @@ export function SessionRow({
 	kbdSelected = false,
 	onContextMenu,
 	nested = false,
+	indented = false,
 }: {
 	chat: SessionItem;
-	/** A subagent row under its parent: indented. */
+	/** A subagent row under its feature: two steps in, compact single line. */
 	nested?: boolean;
+	/** A feature thread (or archived one) under Home: one step in, with a left guide line. */
+	indented?: boolean;
 	active: boolean;
 	onOpen: () => void;
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
@@ -299,6 +302,31 @@ export function SessionRow({
 }) {
 	// The thread you are looking at needs no mark: you are already there.
 	if (active && chat.needsYou) chat = { ...chat, needsYou: false };
+	if (nested) {
+		// Compact subagent row: `name · agent`, one line, a small dot for running/waiting/queued.
+		const dot = chat.state === "running" ? "bg-primary" : "bg-muted-foreground/50";
+		return (
+			<button
+				type="button"
+				onClick={onOpen}
+				onContextMenu={onContextMenu}
+				data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
+				data-compact="true"
+				title={sessionMeta(chat)}
+				className={cn(
+					"relative mb-px ml-8 flex w-[calc(100%-2rem)] items-center gap-1.5 rounded-md border-l border-border py-0.5 pl-2 pr-2 text-left text-xs leading-5 text-muted-foreground transition-colors hover:bg-accent",
+					active && "bg-accent text-foreground",
+					kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
+				)}
+			>
+				<span data-testid="subagent-dot" aria-label={stateLabel(chat)} className={cn("size-1.5 shrink-0 rounded-full", dot)} />
+				<span className="min-w-0 flex-1 truncate">
+					<span className="font-prose">{chat.title}</span>
+					<span> · {chat.agent ?? "agent"}</span>
+				</span>
+			</button>
+		);
+	}
 	return (
 		<button
 			type="button"
@@ -307,7 +335,7 @@ export function SessionRow({
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			className={cn(
 				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
-				nested && "ml-4 w-[calc(100%-1rem)] py-1.5",
+				indented && "ml-4 w-[calc(100%-1rem)] border-l border-border rounded-l-none",
 				active && "bg-accent",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
@@ -422,6 +450,7 @@ export function SessionsSidebar() {
 	const mainChats = useMemo(() => (chats ? chats.filter((c) => !c.archived) : null), [chats]);
 	const mainRanked = useMemo(() => (ranked ? ranked.filter((c) => !c.archived) : null), [ranked]);
 	const groups = useMemo(() => (mainChats && mainRanked ? sidebarGroups(mainChats, mainRanked, query.trim() !== "", openParents) : null), [mainChats, mainRanked, query, openParents]);
+	const hasHome = useMemo(() => (groups ?? []).some((g) => g.top.kind === "home"), [groups]);
 	const shown = useMemo(() => (groups ? [...groups.flatMap((g) => [g.top, ...g.kids]), ...(showArchived || query.trim() ? archived : [])] : null), [groups, archived, showArchived, query]);
 
 	const refresh = useMemo(() => coalescedRefresh(async () => {
@@ -437,7 +466,7 @@ export function SessionsSidebar() {
 				wolves.wolves.map(async (w) => {
 					try {
 						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean }[] };
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string }[] };
 						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update
@@ -807,7 +836,7 @@ export function SessionsSidebar() {
 					) : (
 						groups!.flatMap((g) => {
 							let i = shown.indexOf(g.top);
-							const row = (c: SessionItem, nested: boolean) => {
+							const row = (c: SessionItem, nested: boolean, indented = false) => {
 								const at = i++;
 								return renamingId === c.id ? (
 									<RenameRow
@@ -821,6 +850,7 @@ export function SessionsSidebar() {
 										key={c.id}
 										chat={c}
 										nested={nested}
+										indented={indented}
 										active={pathname === itemHref(c)}
 										kbdSelected={at === kbdIndex}
 										onOpen={() => {
@@ -834,7 +864,7 @@ export function SessionsSidebar() {
 								);
 							};
 							return [
-								row(g.top, false),
+								row(g.top, false, g.top.kind !== "home" && hasHome),
 								...g.kids.map((k) => row(k, true)),
 							];
 						})
@@ -856,6 +886,7 @@ export function SessionsSidebar() {
 									<SessionRow
 										key={c.id}
 										chat={c}
+										indented
 										active={pathname === itemHref(c)}
 										kbdSelected={shown?.indexOf(c) === kbdIndex}
 										onOpen={() => {

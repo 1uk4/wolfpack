@@ -3,7 +3,7 @@ import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { parseHTML } from "linkedom";
 
@@ -92,16 +92,33 @@ describe("middleTruncate", () => {
 		assert.ok(out.includes("…"));
 		assert.ok(out.startsWith("feat/ASNQg") && out.endsWith("tail"));
 	});
+	it("boundaries at the default 56, odd max, and max 1", () => {
+		const n56 = "a".repeat(56);
+		assert.equal(middleTruncate(n56), n56);
+		const out57 = middleTruncate("b".repeat(57));
+		assert.equal(out57.length, 56);
+		assert.equal(out57, `${"b".repeat(28)}…${"b".repeat(27)}`);
+		const odd = middleTruncate("0123456789".repeat(6), 55);
+		assert.equal(odd.length, 55);
+		assert.equal(odd.indexOf("…"), 27);
+		assert.equal(middleTruncate("abc", 1), "…");
+	});
 });
 
 describe("ThreadGitRow", () => {
+	let fetchCalls = 0;
+	beforeEach(() => {
+		fetchCalls = 0;
+	});
 	async function mountRow(workspace: ThreadWorkspace | undefined) {
-		globalThis.fetch = threadFetch(new GitClient(STATUS));
+		const inner = threadFetch(new GitClient(STATUS));
+		globalThis.fetch = ((...a: Parameters<typeof fetch>) => (fetchCalls++, inner(...a))) as typeof fetch;
 		const host = document.createElement("div");
 		document.body.appendChild(host);
 		root = createRoot(host);
 		await act(async () => root!.render(<ThreadGitRow wolf={FIXTURE_THREAD.wolf} slug={FIXTURE_THREAD.id.slice(FIXTURE_THREAD.wolf.length + 1)} threadId={FIXTURE_THREAD.id} workspace={workspace} />));
 		await settle();
+		return host;
 	}
 	it("puts the tree in its own second-row element", async () => {
 		await mountRow(WS);
@@ -114,9 +131,10 @@ describe("ThreadGitRow", () => {
 		assert.equal(q('[data-testid="git-tree-popover"]') !== null, true);
 	});
 	it("a non-git thread has no second row", async () => {
-		await mountRow(undefined);
+		const host = await mountRow(undefined);
 		assert.equal(q('[data-testid="thread-header-row2"]') === null, true);
-		assert.equal(document.body.innerHTML, "<div></div>");
+		assert.equal(host.innerHTML, "");
+		assert.equal(fetchCalls, 0);
 	});
 });
 

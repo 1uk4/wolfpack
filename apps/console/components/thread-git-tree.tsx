@@ -18,6 +18,7 @@ export const BRANCH_MAX_CHARS = 56;
 /** Elide the middle of a long name: `feat/abc…ents-x`. Short names pass through. */
 export function middleTruncate(name: string, max = BRANCH_MAX_CHARS): string {
 	if (name.length <= max) return name;
+	if (max < 2) return "…";
 	const keep = max - 1;
 	const head = Math.ceil(keep / 2);
 	return `${name.slice(0, head)}…${name.slice(name.length - (keep - head))}`;
@@ -98,22 +99,24 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 	if (!workspace) return null;
 	const branch = status?.branch ?? workspace.branch;
 	return (
-		<div ref={rootRef} className="relative min-w-0 max-w-full shrink" data-testid="git-tree">
+		<div ref={rootRef} className="relative min-w-0 shrink" data-testid="git-tree">
 			<button
 				type="button"
 				data-testid="git-tree-button"
 				aria-expanded={open}
 				aria-haspopup="dialog"
+				aria-label={gitTreeLabel({ ...workspace, branch })}
+				title={gitTreeLabel({ ...workspace, branch })}
 				onClick={() => setOpen((v) => !v)}
 				className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent"
 			>
 				<GitBranchIcon className="size-3 shrink-0" />
-				<span data-testid="git-tree-label" className="flex min-w-0 items-center whitespace-pre font-mono">
-					<span title={workspace.repo} className="shrink-0 text-foreground/80">{workspace.repo}</span>
+				<span data-testid="git-tree-label" className="flex min-w-0 items-center overflow-hidden whitespace-pre font-mono">
+					<span title={workspace.repo} className="min-w-0 shrink truncate text-foreground/80">{workspace.repo}</span>
 					<span className="shrink-0 text-muted-foreground/60">{" · "}</span>
 					{workspace.base && (
 						<>
-							<span data-testid="git-tree-base" title={workspace.base} className="shrink-0 rounded border border-border px-1">{middleTruncate(workspace.base)}</span>
+							<span data-testid="git-tree-base" title={workspace.base} className="min-w-0 shrink truncate rounded border border-border px-1">{middleTruncate(workspace.base)}</span>
 							<span data-testid="git-tree-arrow" aria-hidden className="shrink-0 text-foreground/70">{" → "}</span>
 						</>
 					)}
@@ -215,7 +218,7 @@ export function ThreadGitRow(props: { wolf: string; slug: string; threadId: stri
 	if (!props.workspace) return null;
 	return (
 		<div data-testid="thread-header-row2" className="flex h-7 shrink-0 items-center border-b border-border/60 px-3">
-			<ThreadGitTree {...props} />
+			<ThreadGitTree wolf={props.wolf} slug={props.slug} threadId={props.threadId} workspace={props.workspace} refreshKey={props.refreshKey} />
 		</div>
 	);
 }

@@ -1,9 +1,12 @@
 "use client";
 
 /** A KB entry page body (/kb/entry/[id]): breadcrumb, frontmatter facts, body with live wikilinks, related + backlinks. */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRightIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronRightIcon, XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useWorkView } from "@/components/work-view-entry";
 import { KbMarkdown } from "@/components/kb-markdown";
 import { fetchKbEntry, type KbResult } from "@/components/kb-client";
 import { TopBar } from "@/components/top-bar";
@@ -32,7 +35,13 @@ export function entryReaderState(res: KbResult<KbEntryDetail>): EntryReaderState
 	return { kind: "error", message: res.message };
 }
 
-export function EntryReader({ id }: { id: string }) {
+export interface ReaderOverlayProps {
+	onClose: () => void;
+	/** Left offset (px): the Work column's width when it is split beside the reader. */
+	left: number;
+}
+
+export function EntryReader({ id, overlay }: { id: string; overlay?: ReaderOverlayProps }) {
 	const { kbSource, loading } = useLibrarian();
 	const librarian = kbSource?.name ?? null;
 	const [fetched, setFetched] = useState<{ id: string; state: EntryReaderState } | null>(null);
@@ -52,16 +61,52 @@ export function EntryReader({ id }: { id: string }) {
 	if (loading) state = { kind: "loading" };
 	else if (!librarian) state = { kind: "unavailable" };
 	else state = fetched?.id === id ? fetched.state : { kind: "loading" };
-	return <EntryReaderView id={id} state={state} />;
+	return <EntryReaderView id={id} state={state} overlay={overlay} />;
+}
+
+/**
+ * The reader as an OVERLAY (the /kb/entry/[id] route): drawn over the graph, which stays mounted behind it, and to the
+ * right of the Work column when the Work list is split. Esc / X remove only the reader (back to "/"); the Work list's
+ * own state is untouched. Esc is claimed in the capture phase so the Work overlay's document listener does not also act.
+ */
+export function EntryReaderOverlay({ id }: { id: string }) {
+	const router = useRouter();
+	const work = useWorkView();
+	const close = useCallback(() => router.push("/"), [router]);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [close]);
+	const left = work.isOpen && work.selection ? work.colWidth : 0;
+	return <EntryReader id={id} overlay={{ onClose: close, left }} />;
 }
 
 /** Presentational half (SSR-testable). */
-export function EntryReaderView({ id, state }: { id: string; state: EntryReaderState }) {
+export function EntryReaderView({ id, state, overlay }: { id: string; state: EntryReaderState; overlay?: ReaderOverlayProps }) {
 	const entry = state.kind === "ready" ? state.entry : null;
 	return (
-		<div className="flex h-dvh flex-col" data-testid="entry-reader" data-entry={id} data-state={state.kind}>
+		<div
+			className={overlay ? "fixed inset-y-0 right-0 z-[60] flex flex-col bg-background" : "flex h-dvh flex-col"}
+			style={overlay ? { left: overlay.left } : undefined}
+			role={overlay ? "dialog" : undefined}
+			aria-label={overlay ? "Entry reader" : undefined}
+			data-testid="entry-reader"
+			data-entry={id}
+			data-state={state.kind}
+		>
 			<TopBar>
 				<h1 className="min-w-0 truncate font-title text-3xl tracking-tight">{entry?.title ?? id}</h1>
+				{overlay && (
+					<Button size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid="entry-reader-close" onClick={overlay.onClose}>
+						<XIcon />
+					</Button>
+				)}
 			</TopBar>
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-3xl px-6 py-8">

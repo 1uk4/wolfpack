@@ -11,6 +11,8 @@ import type { AddressInfo } from "node:net";
 import {
   ACTOR_HEADER,
   ActorSchema,
+  CreateWorkRequestSchema,
+  PatchWorkRequestSchema,
   ERROR_HTTP_STATUS,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_HEADER,
@@ -21,25 +23,18 @@ import {
 } from "@wolfpack/protocol";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
-import {
-  CreateWorkRequestSchema,
-  PatchWorkRequestSchema,
-} from "@wolfpack/protocol";
 import { HubError } from "./errors.js";
 import { hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
-  WriteQueue,
   applyOps,
   createItem,
+  createWorkWriter,
   deleteItem,
   graduateItem,
   isOwnerOnlyOp,
-  ledgerSize,
-  mapWorkError,
   normalisePatch,
-  readLedgerSince,
-  type LedgerEvent,
+  type WorkAppendedListener,
 } from "./work-writes.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
@@ -53,10 +48,14 @@ export interface HubOptions {
   port?: number;
   /** Default 127.0.0.1. */
   host?: string;
+  /** Max time to receive a request body, ms. Default 10000. */
+  bodyTimeoutMs?: number;
+  /** TEST SEAM: awaited inside the write queue before each work write runs. */
+  writeGate?: () => Promise<void> | void;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
-export type WorkAppendedListener = (batch: { actor: Actor; events: LedgerEvent[] }) => void;
+export type { WorkAppendedListener };
 
 export interface HubServer {
   /** Subscribe to ledger appends made by work writes; returns an unsubscribe. Listener errors are swallowed (logged). */
@@ -114,22 +113,44 @@ export function writeActor(req: Pick<IncomingMessage, "headers">, opts: { ownerO
 /** hubd's own identity for its internal jobs and unattributed reads; never accepted from a client. */
 export const SYSTEM_ACTOR: Actor = { id: "system", kind: "system" };
 
-const MAX_BODY = 16 * 1024 * 1024;
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let n = 0;
-  for await (const c of req) {
-    n += (c as Buffer).length;
-    if (n > MAX_BODY) throw new HubError("invalid_request", "request body too large");
-    chunks.push(c as Buffer);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text.trim()) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new HubError("invalid_request", "body is not valid JSON");
-  }
+/** Per-route request body cap; later routes (KB commits) pass their own. */
+export const WORK_BODY_LIMIT = 2 * 1024 * 1024;
+
+/**
+ * Read a JSON body. Called only AFTER auth/route/actor checks (dispatch authenticates before any route case reads a body).
+ * Rejects early on Content-Length, checks the running size before buffering each chunk, and gives up after `timeoutMs`.
+ * An oversized or timed-out request is drained/dropped so the error response can be delivered.
+ */
+function readJson(req: IncomingMessage, o: { maxBytes: number; timeoutMs: number }): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers["content-length"]);
+    const fail = (e: HubError, drain: boolean) => {
+      clearTimeout(timer);
+      req.removeAllListeners("data");
+      if (drain) req.resume();
+      reject(e);
+    };
+    const timer = setTimeout(() => fail(new HubError("invalid_request", "timed out reading the request body"), false), o.timeoutMs);
+    if (Number.isFinite(declared) && declared > o.maxBytes) return fail(new HubError("invalid_request", `request body too large (limit ${o.maxBytes} bytes)`), true);
+    const chunks: Buffer[] = [];
+    let n = 0;
+    req.on("data", (c: Buffer) => {
+      if (n + c.length > o.maxBytes) return fail(new HubError("invalid_request", `request body too large (limit ${o.maxBytes} bytes)`), true);
+      n += c.length;
+      chunks.push(c);
+    });
+    req.once("error", () => fail(new HubError("invalid_request", "request aborted"), false));
+    req.once("end", () => {
+      clearTimeout(timer);
+      const text = Buffer.concat(chunks).toString("utf8");
+      if (!text.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        reject(new HubError("invalid_request", "body is not valid JSON"));
+      }
+    });
+  });
 }
 function parseBody<T>(schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: { issues: { path: PropertyKey[]; message: string }[] } } }, raw: unknown): T {
   const r = schema.safeParse(raw);
@@ -150,142 +171,126 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
-  const queue = new WriteQueue();
-  const listeners = new Set<WorkAppendedListener>();
-  /**
-   * Run one work write under the in-process queue. Appended ledger bytes are diffed after the section and handed to the
-   * listeners, in order, whether or not the section threw after appending.
-   */
-  const writeWork = <T>(actor: Actor, fn: () => T): Promise<T> =>
-    queue.run(() => {
-      const before = ledgerSize(roots);
-      try {
-        return fn();
-      } catch (e) {
-        throw mapWorkError(e);
-      } finally {
-        const { events } = readLedgerSince(roots, before);
-        if (events.length > 0) {
-          for (const l of listeners) {
-            try {
-              l({ actor, events });
-            } catch (e) {
-              console.error("hubd: work listener failed:", e);
-            }
+  const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
+  const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
+  const writeWork = writer.write;
+  let server!: Server;
+  let port = 0;
+  const host = opts.host ?? "127.0.0.1";
+  try {
+    // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
+    const digest = (v: string) => createHash("sha256").update(v).digest();
+    const expected = digest(opts.apiKey);
+    const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
+
+    async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+      const url = new URL(req.url ?? "/", "http://hubd");
+      res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
+      if (!authed(req)) throw new HubError("unauthorized", "missing or wrong X-API-Key");
+      const m = matchRoute(req.method ?? "GET", url.pathname);
+      if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
+      if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
+      const v = req.headers[PROTOCOL_VERSION_HEADER.toLowerCase()];
+      if (typeof v === "string") {
+        if (!/^\d+$/.test(v.trim())) throw new HubError("invalid_request", `bad ${PROTOCOL_VERSION_HEADER}`);
+        if (Number(v) !== PROTOCOL_VERSION) throw new HubError("version_mismatch", `server speaks protocol ${PROTOCOL_VERSION}, client sent ${v}`);
+      }
+      readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
+      const { params } = m;
+      switch (m.name) {
+        case "listWolves":
+          // The hub is not a wolf host. (The registry ticket makes this the pack's wolf list.)
+          return send(res, 200, { wolves: [] });
+        case "hubListWork": {
+          const domain = url.searchParams.get("domain");
+          if (!domain) throw new HubError("invalid_request", "domain is required");
+          const flag = url.searchParams.get("graduated");
+          if (flag !== null && flag !== "true" && flag !== "false") throw new HubError("invalid_request", "graduated must be true or false");
+          return send(res, 200, listWorkItems(roots, domain, flag === "true"));
+        }
+        case "hubGetWorkRecord": {
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const rec = readWorkRecordFor(roots, params.id);
+          if (!rec) throw new HubError("not_found", `work item ${params.id}`);
+          return send(res, 200, rec);
+        }
+        case "submitContribution": {
+          const actor = writeActor(req);
+          try {
+            const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res));
+            return send(res, stored.duplicate ? 200 : 201, stored);
+          } catch (e) {
+            if (e instanceof ContributionError) throw new HubError(e.code, e.message);
+            throw e;
           }
         }
-      }
-    });
-  // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
-  const digest = (v: string) => createHash("sha256").update(v).digest();
-  const expected = digest(opts.apiKey);
-  const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
-
-  async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? "/", "http://hubd");
-    res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
-    if (!authed(req)) throw new HubError("unauthorized", "missing or wrong X-API-Key");
-    const m = matchRoute(req.method ?? "GET", url.pathname);
-    if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
-    if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
-    const v = req.headers[PROTOCOL_VERSION_HEADER.toLowerCase()];
-    if (typeof v === "string") {
-      if (!/^\d+$/.test(v.trim())) throw new HubError("invalid_request", `bad ${PROTOCOL_VERSION_HEADER}`);
-      if (Number(v) !== PROTOCOL_VERSION) throw new HubError("version_mismatch", `server speaks protocol ${PROTOCOL_VERSION}, client sent ${v}`);
-    }
-    readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
-    const { params } = m;
-    switch (m.name) {
-      case "listWolves":
-        // The hub is not a wolf host. (The registry ticket makes this the pack's wolf list.)
-        return send(res, 200, { wolves: [] });
-      case "hubListWork": {
-        const domain = url.searchParams.get("domain");
-        if (!domain) throw new HubError("invalid_request", "domain is required");
-        const flag = url.searchParams.get("graduated");
-        if (flag !== null && flag !== "true" && flag !== "false") throw new HubError("invalid_request", "graduated must be true or false");
-        return send(res, 200, listWorkItems(roots, domain, flag === "true"));
-      }
-      case "hubGetWorkRecord": {
-        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-        const rec = readWorkRecordFor(roots, params.id);
-        if (!rec) throw new HubError("not_found", `work item ${params.id}`);
-        return send(res, 200, rec);
-      }
-      case "submitContribution": {
-        const actor = writeActor(req);
-        try {
-          const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res));
-          return send(res, stored.duplicate ? 200 : 201, stored);
-        } catch (e) {
-          if (e instanceof ContributionError) throw new HubError(e.code, e.message);
-          throw e;
+        case "hubCreateWork": {
+          const actor = writeActor(req);
+          const body = parseBody(CreateWorkRequestSchema, await readBody(req));
+          const out = await writeWork(actor, () => createItem(roots, body));
+          return send(res, 201, out);
         }
+        case "hubPatchWork": {
+          let actor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const ops = normalisePatch(parseBody(PatchWorkRequestSchema, await readBody(req)));
+          if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
+          const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
+          return send(res, 200, { item });
+        }
+        case "hubDeleteWork": {
+          const actor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const deleted = await writeWork(actor, () => deleteItem(roots, params.id));
+          return send(res, 200, { deleted });
+        }
+        case "hubGraduateWork": {
+          const actor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const item = await writeWork(actor, () => graduateItem(roots, params.id));
+          return send(res, 200, { item });
+        }
+        default:
+          // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.
+          throw new HubError("not_found", `${m.name} is served by a wolf host, not the hub`);
       }
-      case "hubCreateWork": {
-        const actor = writeActor(req);
-        const body = parseBody(CreateWorkRequestSchema, await readJson(req));
-        const out = await writeWork(actor, () => createItem(roots, body));
-        return send(res, 201, out);
-      }
-      case "hubPatchWork": {
-        let actor = writeActor(req);
-        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-        const ops = normalisePatch(parseBody(PatchWorkRequestSchema, await readJson(req)));
-        if (ops.some(isOwnerOnlyOp)) actor = writeActor(req, { ownerOnly: true });
-        const item = await writeWork(actor, () => applyOps(roots, params.id, ops));
-        return send(res, 200, { item });
-      }
-      case "hubDeleteWork": {
-        const actor = writeActor(req);
-        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-        const deleted = await writeWork(actor, () => deleteItem(roots, params.id));
-        return send(res, 200, { deleted });
-      }
-      case "hubGraduateWork": {
-        const actor = writeActor(req);
-        if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-        const item = await writeWork(actor, () => graduateItem(roots, params.id));
-        return send(res, 200, { item });
-      }
-      default:
-        // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.
-        throw new HubError("not_found", `${m.name} is served by a wolf host, not the hub`);
     }
-  }
 
-  const server: Server = createServer((req, res) => {
-    dispatch(req, res).catch((e: unknown) => {
-      if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
-      const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
-      const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code) };
-      if (!res.headersSent) send(res, ERROR_HTTP_STATUS[err.code], env);
-      else res.end();
+    server = createServer((req, res) => {
+      dispatch(req, res).catch((e: unknown) => {
+        if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
+        const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
+        const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code) };
+        if (!res.headersSent) send(res, ERROR_HTTP_STATUS[err.code], env);
+        else res.end();
+      });
     });
-  });
-  const host = opts.host ?? "127.0.0.1";
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(opts.port ?? 0, host, () => resolve());
-  }).catch((e: unknown) => {
-    writerLock.release();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(opts.port ?? 0, host, () => resolve());
+    });
+    port = (server.address() as AddressInfo).port;
+
+  } catch (e) {
+    // Anything between acquire and listening failed: free the lock so a retry (or the next hubd) can start.
+    void writer.close();
     throw e;
-  });
-  const port = (server.address() as AddressInfo).port;
+  }
   return {
     dataDir: opts.dataDir,
     roots,
     port,
     url: `http://${host}:${port}`,
-    onWorkAppended(listener) {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
-    },
+    onWorkAppended: (listener) => writer.onAppended(listener),
     close: () =>
       new Promise<void>((resolve) => {
-        server.closeAllConnections?.();
-        // Let in-flight writes finish, then free the writer lock.
-        server.close(() => void queue.run(() => writerLock.release()).then(() => resolve()));
+        // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
+        const drained = writer.close();
+        // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
+        server.close(() => void drained.then(() => resolve()));
+        server.closeIdleConnections?.();
+        // 3. last resort for a stuck client: force-close after a grace period.
+        setTimeout(() => server.closeAllConnections?.(), 5_000).unref();
       }),
   };
 }

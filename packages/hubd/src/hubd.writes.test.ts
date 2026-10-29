@@ -81,6 +81,8 @@ describe("ledger byte compatibility", () => {
     const appendedB = normalise(lb.slice(before.length));
     expect(appendedA.length).toBeGreaterThan(5);
     expect(appendedA).toEqual(appendedB);
+    // Every appended `at` has the same shape as the ones kb writes (and the pre-existing lines).
+    for (const line of la.slice(before.length).split("\n").filter(Boolean)) expect((JSON.parse(line) as { at: string }).at).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d$/);
     for (const line of la.slice(before.length).split("\n").filter(Boolean)) JSON.parse(line);
   });
 });

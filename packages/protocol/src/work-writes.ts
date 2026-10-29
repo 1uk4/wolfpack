@@ -18,7 +18,7 @@ export const WorkWriteItemSchema = z
 export type WorkWriteItem = z.infer<typeof WorkWriteItemSchema>;
 
 export const CreateWorkRequestSchema = z.object({
-  kind: z.string().min(1),
+  kind: z.enum(WORK_KINDS),
   domain: z.string().min(1),
   title: z.string().min(1),
   assignee: z.string().min(1),
@@ -34,22 +34,26 @@ export type CreateWorkResponse = z.infer<typeof CreateWorkResponseSchema>;
 
 const RelTarget = z.object({ rel: z.string(), target: z.string() });
 /**
- * `PATCH /v1/work/:id`: exactly ONE field per request for now (the agent Work API's semantics). `body` and `assignee` are
- * operator-only. `moveTo: null` un-parents.
+ * `PATCH /v1/work/:id`. Deliberate behaviours: STRICT (an unknown key is `invalid_request`); EXACTLY ONE field per request;
+ * `stage` / `note` / `title` / `assignee` must be non-empty; `moveTo` is a non-empty id, or `null` to un-parent (the hierarchy
+ * rules still apply: only an item that may stand alone, e.g. a feature, can be un-parented); `successCriteria: ""` clears the
+ * criteria. `body` and `assignee` are operator-only (provisional).
  */
-export const PatchWorkRequestSchema = z.object({
+export const PatchWorkRequestSchema = z
+  .object({
   stage: z.string().optional(),
   note: z.string().optional(),
   title: z.string().optional(),
   successCriteria: z.string().optional(),
   assignee: z.string().optional(),
-  moveTo: z.string().nullable().optional(),
+  moveTo: z.string().min(1).nullable().optional(),
   link: RelTarget.optional(),
   unlink: RelTarget.optional(),
   body: z.string().optional(),
   standing: z.boolean().optional(),
   schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
-});
+  })
+  .strict();
 export type PatchWorkRequest = z.infer<typeof PatchWorkRequestSchema>;
 export const WorkItemResponseSchema = z.object({ item: WorkWriteItemSchema });
 export type WorkItemResponse = z.infer<typeof WorkItemResponseSchema>;

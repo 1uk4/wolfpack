@@ -27,7 +27,7 @@ import {
 } from "@wolfpack/kb/client";
 import { workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
-import type { CreateWorkRequest, PatchWorkRequest } from "@wolfpack/protocol";
+import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkRequest } from "@wolfpack/protocol";
 
 /** One ledger line appended by a write, as parsed JSON (the WorkEvent shape; opaque here). */
 export type LedgerEvent = Record<string, unknown> & { type: string; id: string };
@@ -50,7 +50,6 @@ export function isOwnerOnlyOp(op: WorkOp): boolean {
   return op.op === "body" || op.op === "assign";
 }
 
-export { HubError as WorkWriteError };
 
 /** PATCH body -> ops. Exactly one field per request for now (the agent route silently took the first it saw). */
 export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
@@ -84,7 +83,7 @@ export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
   return ops;
 }
 
-type Item = ReturnType<typeof loadWorkState> extends Map<unknown, infer V> ? V : never;
+type Item = ReturnType<typeof createWork>["item"];
 
 /** Apply ops in order to one item. MUST be called inside the write queue. Returns the item as last written. */
 export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
@@ -115,7 +114,8 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
 }
 
 export function createItem(roots: KbRoots, req: CreateWorkRequest) {
-  const r = createWork(roots, req as unknown as CreateWorkInput);
+  // The schema validates `kind` as an enum; `stage` is a free string here and is validated by the ledger event schema.
+  const r = createWork(roots, req as CreateWorkInput);
   return { id: r.id as string, item: r.item };
 }
 export function deleteItem(roots: KbRoots, id: string): string[] {
@@ -126,14 +126,33 @@ export function graduateItem(roots: KbRoots, id: string) {
   return graduateWork(roots, id).item;
 }
 
-/** Map a work-ops failure to a protocol error. Unknown shapes (fs errors, bugs) become `engine_error` with a generic message. */
+/**
+ * The whitelist of kb work-ops guard messages hubd maps to protocol codes. Every pattern is anchored. Anything unmatched is an
+ * `engine_error` with a generic message (detail logged server-side). kb work-ops error types are deliberately NOT changed (sfo-01
+ * runs that code), so a reworded guard message fails the per-message tests in hubd.writes.test.ts instead of silently degrading.
+ */
+export const GUARD_MESSAGES: readonly { name: string; re: RegExp; code: ErrorCode }[] = [
+  { name: "not found", re: /^work item \S+ not found$/, code: "not_found" },
+  { name: "unknown parent", re: /^parent work item \S+ not found$/, code: "invalid_request" },
+  { name: "placement (create/move)", re: /^Cannot (?:create|move) "[\s\S]*": [\s\S]+$/, code: "invalid_request" },
+  { name: "container cannot be moved", re: /^[\s\S]+ is a holding container and cannot be moved$/, code: "invalid_request" },
+  { name: "own parent", re: /^an item cannot be its own parent$/, code: "invalid_request" },
+  { name: "standing (non-initiative)", re: /^[\s\S]+ is an? \w+; only an initiative can be standing$/, code: "invalid_request" },
+  { name: "dependency scope/cycle", re: /^Cannot add dependency: [\s\S]+$/, code: "invalid_request" },
+  { name: "unsupported link rel", re: /^work items only link to each other \([\s\S]*\); "[\s\S]*" is not supported$/, code: "invalid_request" },
+  { name: "invalid event", re: /^Invalid work\.[a-z]+ event for \S+ \u2014 [\s\S]+$/, code: "invalid_request" },
+  { name: "not advanceable (criteria)", re: /^task \S+ needs a success_criteria before advancing past "plan"$/, code: "not_ready" },
+  { name: "never ships", re: /^[\s\S]+ is a holding container and never ships$/, code: "not_ready" },
+];
+
+/** Map a work-ops failure to a protocol error via GUARD_MESSAGES. Everything else is `engine_error` (generic message, detail logged). */
 export function mapWorkError(e: unknown): HubError {
   if (e instanceof HubError) return e;
-  if (!(e instanceof Error) || typeof (e as NodeJS.ErrnoException).code === "string") return new HubError("engine_error", "internal hub error");
-  const m = e.message;
-  if (/^work item \S+ not found$/.test(m)) return new HubError("not_found", m);
-  if (/needs a success_criteria before advancing|never ships/.test(m)) return new HubError("not_ready", m);
-  return new HubError("invalid_request", m);
+  const m = e instanceof Error && typeof (e as NodeJS.ErrnoException).code !== "string" ? e.message : undefined;
+  const hit = m === undefined ? undefined : GUARD_MESSAGES.find((g) => g.re.test(m));
+  if (hit) return new HubError(hit.code, m!);
+  console.error("hubd: unmapped work write failure:", e);
+  return new HubError("engine_error", "internal hub error");
 }
 
 /** Serialises async/sync critical sections in this process, in arrival order; a failed section does not poison the queue. */
@@ -182,4 +201,90 @@ export function ledgerSize(roots: KbRoots): number {
   } catch {
     return 0;
   }
+}
+
+export interface WorkWriterOptions {
+  roots: KbRoots;
+  /** Releases the cross-process writer lock; called once, after the last queued write. */
+  release: () => void;
+  /** TEST SEAM: awaited inside the queue before each write runs (lets a test hold a write in flight). */
+  gate?: () => Promise<void> | void;
+}
+
+export type WorkAppendedListener = (batch: { actor: Actor; events: LedgerEvent[] }) => void;
+
+/**
+ * The one entry for work mutations: serialises them in the in-process queue and fires the post-append hook.
+ *
+ * Close protocol: `close()` sets `closing` (new writes get a retryable `busy` error), queued writes drain, THEN the lock is
+ * released. No write can run after release: admission is checked synchronously at enqueue time and the release is itself queued.
+ */
+export function createWorkWriter(opts: WorkWriterOptions) {
+  const { roots } = opts;
+  const queue = new WriteQueue();
+  const listeners = new Set<WorkAppendedListener>();
+  let closing = false;
+  let released = false;
+
+  const write = <T>(actor: Actor, fn: () => T): Promise<T> => {
+    if (closing) return Promise.reject(new HubError("busy", "hub is shutting down; retry against the restarted hub"));
+    return queue.run(async () => {
+      if (released) throw new HubError("busy", "hub is shut down");
+      await opts.gate?.();
+      let before: number | undefined;
+      try {
+        before = ledgerSize(roots);
+      } catch (e) {
+        console.error("hubd: ledger size probe failed:", e);
+      }
+      let result: T | undefined;
+      let failure: HubError | undefined;
+      try {
+        result = fn();
+      } catch (e) {
+        failure = mapWorkError(e);
+      }
+      // The hook diff must never mask the write's own result or error. It also runs when the op threw after appending.
+      // INVARIANT: hubd is the SOLE writer of the ledger (writer lock + this queue), so every byte appended between `before` and
+      // now belongs to this write; with any other writer the diff would misattribute their events to this actor.
+      if (before !== undefined) {
+        try {
+          const { events } = readLedgerSince(roots, before);
+          if (events.length > 0) {
+            for (const l of listeners) {
+              try {
+                l({ actor, events });
+              } catch (e) {
+                console.error("hubd: work listener failed:", e);
+              }
+            }
+          }
+        } catch (e) {
+          console.error("hubd: post-append hook failed:", e);
+        }
+      }
+      if (failure) throw failure;
+      return result as T;
+    });
+  };
+
+  return {
+    write,
+    onAppended(l: WorkAppendedListener): () => void {
+      listeners.add(l);
+      return () => void listeners.delete(l);
+    },
+    /** Stop admitting writes, drain the queue, release the lock. Idempotent. */
+    close(): Promise<void> {
+      closing = true;
+      return queue.run(() => {
+        if (released) return;
+        released = true;
+        opts.release();
+      });
+    },
+    get closing(): boolean {
+      return closing;
+    },
+  };
 }

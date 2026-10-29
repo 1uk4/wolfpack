@@ -41,13 +41,7 @@ import {
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
-import {
-  CreateWorkRequestSchema,
-  CreateWorkResponseSchema,
-  DeleteWorkResponseSchema,
-  PatchWorkRequestSchema,
-  WorkItemResponseSchema,
-} from "./work-writes.js";
+import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
 /** Request header carrying the client's protocol version (single integer). */
@@ -333,8 +327,9 @@ export const ROUTES = {
    * 409 `not_ready` (stage not advanceable), 401 `unauthorized` (`body` / `assignee` PATCH by a non-operator; provisional until the
    * owner-only rules land).
    * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
-   * `hubPatchWork`: ONE field per request: stage, note, title, successCriteria, moveTo, link, unlink, standing, schedule;
-   * operator-only: body, assignee.
+   * `hubPatchWork`: STRICT body (unknown key = `invalid_request`) with EXACTLY ONE field: stage, note, title, successCriteria,
+   * moveTo, link, unlink, standing, schedule; operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
+   * rejected; `moveTo: null` un-parents (hierarchy rules still apply); `successCriteria: ""` clears it.
    * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.
    * `hubGraduateWork`: mark the item graduated on the ledger (the agent route's behaviour; no distill step).
    */

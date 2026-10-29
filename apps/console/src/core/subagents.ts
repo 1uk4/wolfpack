@@ -102,27 +102,45 @@ export interface SidebarGroup<T> {
 	toggle: boolean;
 }
 
+/** A subagent row: kind "subagent" or any parent. Such a row is NEVER top level in the sidebar. */
+export function isSubRow(r: { kind?: string; parentThreadId?: string }): boolean {
+	return r.kind === "subagent" || r.parentThreadId !== undefined;
+}
+
+type LayoutRow = { id: string; kind?: string; parentThreadId?: string; state?: SubagentState; archived?: boolean };
+
 /**
- * The sidebar as groups: top-level threads, each with its children nested under it. Children collapse once settled
- * (behind a per-parent "N done" toggle; `expanded` holds the opened parents) and never appear at the top level while
- * their parent is listed. `ranked` is the (searched) list in display order: with `searching`, only matching rows show
- * (a parent with a matching child shows too) and nothing is collapsed.
+ * The sidebar layout: `groups` are the main (not archived) threads, `archived` the archived ones, each with its LIVE
+ * subagents nested. Settled subagents are dropped (visibility only). A live subagent nests under its parent whether
+ * the parent is in the main list or archived; with the parent missing it nests under Home; with no Home it is dropped.
+ * It is never a top-level row. `ranked` is the (searched) list in display order: with `searching`, only matching rows
+ * show (a parent with a matching child shows too).
  */
-export function sidebarGroups<T extends { id: string; parentThreadId?: string; state?: SubagentState }>(all: readonly T[], ranked: readonly T[], searching: boolean, expanded: ReadonlySet<string>): SidebarGroup<T>[] {
-	const { top, children } = nestChildren(all);
-	const topIds = new Set(top.map((t) => t.id));
+export function sidebarLayout<T extends LayoutRow>(all: readonly T[], ranked: readonly T[], searching: boolean): { groups: SidebarGroup<T>[]; archived: SidebarGroup<T>[] } {
+	const parents = all.filter((r) => !isSubRow(r));
+	const byId = new Map(parents.map((t) => [t.id, t]));
+	const home = parents.find((p) => p.kind === "home" && !p.archived);
+	const parentOf = (k: T): string | undefined => (k.parentThreadId !== undefined && byId.has(k.parentThreadId) ? k.parentThreadId : home?.id);
+	const kidsOf = new Map<string, T[]>();
+	for (const k of all) {
+		if (!isSubRow(k) || isSettled(k)) continue;
+		const pid = parentOf(k);
+		if (pid !== undefined) kidsOf.set(pid, [...(kidsOf.get(pid) ?? []), k]);
+	}
 	const matched = new Set(ranked.map((r) => r.id));
 	const order: string[] = [];
 	for (const r of ranked) {
-		const key = topIds.has(r.id) ? r.id : r.parentThreadId;
-		if (key !== undefined && topIds.has(key) && !order.includes(key)) order.push(key);
+		const key = isSubRow(r) ? (isSettled(r) ? undefined : parentOf(r)) : r.id;
+		if (key !== undefined && byId.has(key) && !order.includes(key)) order.push(key);
 	}
-	const byId = new Map(top.map((t) => [t.id, t]));
-	return order.map((id): SidebarGroup<T> => {
-		const kids = children.get(id) ?? [];
-		// Settled children are not listed at all (they stay reachable from the subagent jobs panel).
-		void expanded;
-		const live = kids.filter((k) => !isSettled(k));
-		return { top: byId.get(id)!, kids: searching ? live.filter((k) => matched.has(k.id)) : live, done: 0, toggle: false };
-	});
+	const mk = (id: string): SidebarGroup<T> => {
+		const kids = kidsOf.get(id) ?? [];
+		return { top: byId.get(id)!, kids: searching ? kids.filter((k) => matched.has(k.id)) : kids, done: 0, toggle: false };
+	};
+	return { groups: order.filter((id) => !byId.get(id)!.archived).map(mk), archived: order.filter((id) => byId.get(id)!.archived).map(mk) };
+}
+
+/** The main groups of `sidebarLayout` (kept for callers that ignore the archive). */
+export function sidebarGroups<T extends LayoutRow>(all: readonly T[], ranked: readonly T[], searching: boolean, _expanded?: ReadonlySet<string>): SidebarGroup<T>[] {
+	return sidebarLayout(all, ranked, searching).groups;
 }

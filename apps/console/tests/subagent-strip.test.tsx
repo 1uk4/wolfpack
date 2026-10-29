@@ -287,9 +287,9 @@ describe("the sidebar", () => {
 		assert.deepEqual(groups.map((g) => [g.top.id, g.kids.map((k) => k.id)]), [[PARENT, ["1uk4/sub-1"]]]);
 	});
 
-	it("an orphan (its parent not listed) stays reachable at the top level", () => {
+	it("a subagent whose parent is not listed is never a top-level row", () => {
 		const orphans = rows.filter((r) => r.id !== PARENT);
-		assert.equal(core.sidebarGroups(orphans, orphans, false, new Set()).length, 3);
+		assert.equal(core.sidebarGroups(orphans, orphans, false, new Set()).length, 0);
 	});
 
 	it("a subagent row shows its agent, state and step, indented", () => {
@@ -451,11 +451,45 @@ describe("the legacy activity section", () => {
 	});
 });
 
-describe("sidebarGroups is defensive", () => {
-	it("a child whose parent is itself a child, or missing from the list, is not lost or crashing", () => {
-		const rows = [{ id: "a" }, { id: "b", parentThreadId: "a" }, { id: "c", parentThreadId: "b" }, { id: "d", parentThreadId: "gone" }];
-		assert.deepEqual(core.sidebarGroups(rows, rows, false, new Set()).map((g) => g.top.id), ["a", "c", "d"]);
-		assert.doesNotThrow(() => core.sidebarGroups(rows, [{ id: "zzz", parentThreadId: "nope" }], true, new Set()));
+describe("sidebarLayout: a subagent is never a top-level row", () => {
+	type R = { id: string; kind?: string; parentThreadId?: string; state?: "running" | "waiting" | "queued" | "done" | "failed" | "stopped"; archived?: boolean };
+	const home: R = { id: "home", kind: "home" };
+	const feat: R = { id: "feat", kind: "feature", archived: true };
+	const live: R = { id: "live", kind: "subagent", parentThreadId: "gone", state: "running" };
+	const ids = (gs: { top: R; kids: R[] }[]) => gs.map((g) => [g.top.id, g.kids.map((k) => k.id)]);
+
+	it("defensive: odd parents never crash or surface as rows", () => {
+		const rows: R[] = [{ id: "a" }, { id: "b", parentThreadId: "a" }, { id: "c", parentThreadId: "b" }, { id: "d", parentThreadId: "gone" }];
+		assert.deepEqual(core.sidebarGroups(rows, rows, false).map((g) => g.top.id), ["a"]);
+		assert.doesNotThrow(() => core.sidebarGroups(rows, [{ id: "zzz", parentThreadId: "nope" }], true));
+	});
+
+	it("(a) a closed parent whose children are settled shows none of them anywhere", () => {
+		const rows: R[] = [home, feat, ...["done", "failed", "stopped"].map((st, i): R => ({ id: `k${i}`, kind: "subagent", parentThreadId: "feat", state: st as R["state"] }))];
+		const l = core.sidebarLayout(rows, rows, false);
+		assert.deepEqual(ids(l.groups), [["home", []]]);
+		assert.deepEqual(ids(l.archived), [["feat", []]]);
+		const q = core.sidebarLayout(rows, rows, true);
+		assert.deepEqual([...ids(q.groups), ...ids(q.archived)], [["home", []], ["feat", []]]);
+	});
+
+	it("(b) a missing parent with a settled child shows nothing", () => {
+		const rows: R[] = [home, { id: "x", kind: "subagent", parentThreadId: "gone", state: "done" }];
+		assert.deepEqual(ids(core.sidebarLayout(rows, rows, false).groups), [["home", []]]);
+		assert.deepEqual(core.sidebarLayout([{ id: "x", kind: "subagent", parentThreadId: "gone", state: "failed" }], [{ id: "x", kind: "subagent", state: "failed" }], true), { groups: [], archived: [] });
+	});
+
+	it("(c) a live child of an archived parent nests under it, not top level; a live orphan falls under Home", () => {
+		const k: R = { id: "k", kind: "subagent", parentThreadId: "feat", state: "running" };
+		const rows: R[] = [home, feat, k, live];
+		const l = core.sidebarLayout(rows, rows, false);
+		assert.deepEqual(ids(l.archived), [["feat", ["k"]]]);
+		assert.deepEqual(ids(l.groups), [["home", ["live"]]]);
+		// no Home: the orphan is dropped, never promoted
+		assert.deepEqual(core.sidebarLayout([live], [live], false), { groups: [], archived: [] });
+		// a subagent without a parentThreadId is still never top level
+		const bare: R = { id: "bare", kind: "subagent", state: "running" };
+		assert.deepEqual(ids(core.sidebarLayout([home, bare], [home, bare], false).groups), [["home", ["bare"]]]);
 	});
 });
 

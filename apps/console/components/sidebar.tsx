@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { coalescedRefresh, foldWolfThreads, fuzzyScore } from "@/src/core";
 import { useServerEvent, useServerResync } from "@/components/server-events";
-import { isChildThread, sidebarGroups, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
+import { isChildThread, sidebarLayout, stateLabel, threadListItem, type ChatListItem, type ChildThread } from "@/src/core";
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
@@ -446,12 +446,44 @@ export function SessionsSidebar() {
 	const [openParents, setOpenParents] = useState<ReadonlySet<string>>(() => new Set());
 	const [showArchived, setShowArchived] = useState(false);
 	/* Archived = graduated features (their thread is closed). They leave the main list for a collapsed section below it. */
-	const archived = useMemo(() => (ranked ?? []).filter((c) => c.archived), [ranked]);
-	const mainChats = useMemo(() => (chats ? chats.filter((c) => !c.archived) : null), [chats]);
-	const mainRanked = useMemo(() => (ranked ? ranked.filter((c) => !c.archived) : null), [ranked]);
-	const groups = useMemo(() => (mainChats && mainRanked ? sidebarGroups(mainChats, mainRanked, query.trim() !== "", openParents) : null), [mainChats, mainRanked, query, openParents]);
+	const layout = useMemo(() => (chats && ranked ? sidebarLayout(chats, ranked, query.trim() !== "") : null), [chats, ranked, query]);
+	const groups = layout?.groups ?? null;
+	const archived = layout?.archived ?? [];
+	const archivedOpen = showArchived || query.trim() !== "";
 	const hasHome = useMemo(() => (groups ?? []).some((g) => g.top.kind === "home"), [groups]);
-	const shown = useMemo(() => (groups ? [...groups.flatMap((g) => [g.top, ...g.kids]), ...(showArchived || query.trim() ? archived : [])] : null), [groups, archived, showArchived, query]);
+	const flat = (gs: readonly { top: SessionItem; kids: SessionItem[] }[]) => gs.flatMap((g) => [g.top, ...g.kids]);
+	const shown = useMemo(() => (groups ? [...flat(groups), ...(archivedOpen ? flat(archived) : [])] : null), [groups, archived, archivedOpen]);
+
+	const renderGroup = (g: { top: SessionItem; kids: SessionItem[] }, indented: boolean) => {
+							const row = (c: SessionItem, nested: boolean, indented = false) => {
+								const at = shown!.indexOf(c);
+								return renamingId === c.id ? (
+									<RenameRow
+										key={c.id}
+										chat={c}
+										onCommit={(next) => void commitRename(c.id, next)}
+										onCancel={() => setRenamingId(null)}
+									/>
+								) : (
+									<SessionRow
+										key={c.id}
+										chat={c}
+										nested={nested}
+										indented={indented}
+										active={pathname === itemHref(c)}
+										kbdSelected={at === kbdIndex}
+										onOpen={() => {
+											setKbdIndex(null);
+											openItem(c);
+										}}
+										// Thread rows have no management menu (rename/delete/export are
+										// legacy chat-record actions; the client has no such calls yet).
+										onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
+									/>
+								);
+							};
+		return [row(g.top, false, indented), ...g.kids.map((k) => row(k, true))];
+	};
 
 	const refresh = useMemo(() => coalescedRefresh(async () => {
 		// In-flight coalesce (S6): event bursts may land several refresh
@@ -834,67 +866,21 @@ export function SessionsSidebar() {
 							{query.trim() ? "No sessions match." : "No sessions yet."}
 						</div>
 					) : (
-						groups!.flatMap((g) => {
-							let i = shown.indexOf(g.top);
-							const row = (c: SessionItem, nested: boolean, indented = false) => {
-								const at = i++;
-								return renamingId === c.id ? (
-									<RenameRow
-										key={c.id}
-										chat={c}
-										onCommit={(next) => void commitRename(c.id, next)}
-										onCancel={() => setRenamingId(null)}
-									/>
-								) : (
-									<SessionRow
-										key={c.id}
-										chat={c}
-										nested={nested}
-										indented={indented}
-										active={pathname === itemHref(c)}
-										kbdSelected={at === kbdIndex}
-										onOpen={() => {
-											setKbdIndex(null);
-											openItem(c);
-										}}
-										// Thread rows have no management menu (rename/delete/export are
-										// legacy chat-record actions; the client has no such calls yet).
-										onContextMenu={c.href ? undefined : (e) => openContext(e, c)}
-									/>
-								);
-							};
-							return [
-								row(g.top, false, g.top.kind !== "home" && hasHome),
-								...g.kids.map((k) => row(k, true)),
-							];
-						})
+						groups!.flatMap((g) => renderGroup(g, g.top.kind !== "home" && hasHome))
 					)}
 					{archived.length > 0 && (
 						<>
 							<button
 								type="button"
 								data-testid="archived-toggle"
-								aria-expanded={showArchived || query.trim() !== ""}
+								aria-expanded={archivedOpen}
 								onClick={() => setShowArchived((v) => !v)}
 								className="mt-2 flex w-full items-center gap-1 rounded-lg px-3 py-1 text-left text-xs uppercase tracking-widest text-muted-foreground/70 hover:bg-accent"
 							>
-								{showArchived || query.trim() ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+								{archivedOpen ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
 								Archived ({archived.length})
 							</button>
-							{(showArchived || query.trim() !== "") &&
-								archived.map((c) => (
-									<SessionRow
-										key={c.id}
-										chat={c}
-										indented
-										active={pathname === itemHref(c)}
-										kbdSelected={shown?.indexOf(c) === kbdIndex}
-										onOpen={() => {
-											setKbdIndex(null);
-											openItem(c);
-										}}
-									/>
-								))}
+							{archivedOpen && archived.flatMap((g) => renderGroup(g, true))}
 						</>
 					)}
 				</div>

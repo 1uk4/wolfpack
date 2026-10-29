@@ -8,6 +8,7 @@
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import {
+  appendWorkLedger,
   assignWork,
   commitWorkItem,
   createWork,
@@ -23,8 +24,12 @@ import {
   setStanding,
   stageWork,
   unlinkWork,
+  isBindable,
+  resolveWorkItem,
   type CreateWorkInput,
+  type WorkEvent,
 } from "@wolfpack/kb/client";
+import { now } from "@wolfpack/kb/shared";
 import { workLedgerFile, type KbRoots } from "@wolfpack/kb/shared";
 import { HubError } from "./errors.js";
 import type { Actor, CreateWorkRequest, ErrorCode, PatchWorkRequest } from "@wolfpack/protocol";
@@ -111,6 +116,51 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[]): Item {
   }
   if (!item) throw new Error(`work item ${id} not found`);
   return item;
+}
+
+const conflict = (id: string, holder: string, why: string) =>
+  new HubError("conflict", `${why}: ${id} is held by ${holder}`, { holder });
+
+/**
+ * Claim: compare-and-set. MUST run inside the write queue (the check and the append are then atomic w.r.t. other hub writes).
+ * Holder = the folded `boundBy`. Succeeds when unheld or already held by `wolf`; children inherit their feature's holder.
+ * Appends work.assigned + work.bound (+ work.staged approved -> in_build) in ONE ledger append.
+ */
+export function claimItem(roots: KbRoots, id: string, wolf: string): Item {
+  const items = loadWorkState(roots);
+  const item = items.get(id as never);
+  if (!item) throw new Error(`work item ${id} not found`);
+  if (item.container) throw new HubError("invalid_request", "a holding container cannot be claimed");
+  if (item.kind !== "feature" && !isBindable(item)) throw new HubError("invalid_request", `a ${item.kind} cannot be claimed (features, tasks, issues and spikes only)`);
+  if (item.stage === "idea" || item.stage === "plan") throw new HubError("invalid_request", `${id} is in stage ${item.stage}; only approved or later items can be claimed`);
+  if (item.graduated) throw new HubError("invalid_request", `${id} is graduated`);
+  if (item.boundBy && item.boundBy !== wolf) throw conflict(id, item.boundBy, "already claimed");
+  const parent = item.partOf ? items.get(item.partOf) : undefined;
+  if (parent && parent.kind === "feature" && parent.boundBy && parent.boundBy !== wolf) {
+    throw conflict(id, parent.boundBy, `its feature ${parent.id}`);
+  }
+  const at = now();
+  const events: WorkEvent[] = [];
+  if (item.assignee !== wolf) events.push({ type: "work.assigned", id: item.id, at, assignee: wolf as never });
+  if (item.boundBy !== wolf) events.push({ type: "work.bound", id: item.id, at, wolf: wolf as never });
+  if (item.stage === "approved") events.push({ type: "work.staged", id: item.id, at, to: "in_build" });
+  if (events.length === 0) return item;
+  appendWorkLedger(roots, events);
+  const updated = loadWorkState(roots).get(item.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return updated;
+}
+
+/** Unclaim: the holder or an operator appends work.unbound; the stage and assignee stay. Inside the write queue. */
+export function unclaimItem(roots: KbRoots, id: string, actor: Actor): Item {
+  const item = loadWorkState(roots).get(id as never);
+  if (!item) throw new Error(`work item ${id} not found`);
+  if (!item.boundBy) return item;
+  if (actor.kind !== "operator" && actor.id !== item.boundBy) throw conflict(id, item.boundBy, "only the holder or the owner can release");
+  appendWorkLedger(roots, [{ type: "work.unbound", id: item.id, at: now(), wolf: item.boundBy }]);
+  const updated = loadWorkState(roots).get(item.id)!;
+  commitWorkItem(roots, updated, resolveWorkItem(roots, item.domain as string, id)?.body);
+  return updated;
 }
 
 export function createItem(roots: KbRoots, req: CreateWorkRequest) {

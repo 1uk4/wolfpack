@@ -38,6 +38,7 @@ const STATUS_BY_CODE: Record<string, number> = {
 	thread_closed: 409,
 	not_ready: 409,
 	preview_stale: 409,
+	conflict: 409,
 };
 
 export const PING_INTERVAL_MS = 25_000;

@@ -24,6 +24,7 @@ import {
   type WolfSummary,
   type WorkListResponse,
   type WorkRecordResponse,
+  type WorkItemResponse,
 } from "./types.js";
 
 export interface MockOptions {
@@ -256,6 +257,33 @@ export class MockConsoleClient implements ConsoleClient {
 
   async listWork(_wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
     return { items: FIXTURE_WORK.filter((w) => w.domain === opts.domain && (opts.graduated || (w.graduated === undefined && w.stage !== "archived"))).map((w) => ({ ...w })) };
+  }
+
+  // --- hub claim (in-memory; mirrors the hub's compare-and-set) ---
+  /** Who claim/release act as (the real client sends its actor). Tests may change it. */
+  claimActor: { id: string; kind: "wolf" | "operator" } = { id: "mock-wolf", kind: "wolf" };
+  readonly claims = new Map<string, string>();
+  private claimTarget(workId: string) {
+    const w = FIXTURE_WORK.find((x) => x.id === workId);
+    if (!w) throw new NotFoundError(`work item ${workId}`);
+    return w;
+  }
+  async claimWork(workId: string): Promise<WorkItemResponse> {
+    const w = this.claimTarget(workId);
+    if (w.kind !== "feature" && w.kind !== "task" && w.kind !== "issue" && w.kind !== "spike") throw new ProtocolError("invalid_request", `a ${w.kind} cannot be claimed`, false);
+    for (const id of [workId, w.partOf ?? ""]) {
+      const holder = this.claims.get(id);
+      if (holder && holder !== this.claimActor.id) throw new ProtocolError("conflict", `already claimed: ${id} is held by ${holder}`, false);
+    }
+    this.claims.set(workId, this.claimActor.id);
+    return { item: { id: w.id, title: w.title, kind: w.kind, stage: w.stage === "approved" ? "in_build" : w.stage, domain: w.domain, assignee: this.claimActor.id, partOf: w.partOf, boundBy: this.claimActor.id } };
+  }
+  async releaseWork(workId: string): Promise<WorkItemResponse> {
+    const w = this.claimTarget(workId);
+    const holder = this.claims.get(workId);
+    if (holder && this.claimActor.kind !== "operator" && holder !== this.claimActor.id) throw new ProtocolError("conflict", `only the holder or the owner can release: ${workId} is held by ${holder}`, false);
+    this.claims.delete(workId);
+    return { item: { id: w.id, title: w.title, kind: w.kind, stage: w.stage, domain: w.domain, partOf: w.partOf, boundBy: null } };
   }
 
   async getWorkRecord(_wolf: string, workId: string): Promise<WorkRecordResponse> {

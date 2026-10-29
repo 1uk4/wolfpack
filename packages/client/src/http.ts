@@ -33,6 +33,7 @@ import {
   type MemoryTopic,
   type MemoryObservations,
   type WorkRecordResponse,
+  type WorkItemResponse,
   type GraduationJob,
   type GraduationObservations,
   type GraduationStatus,
@@ -346,6 +347,16 @@ export class HttpConsoleClient implements ConsoleClient {
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
     if (this.hub) return (await this.json("hubGetWorkRecord", { id: workId }, ROUTES.hubGetWorkRecord.response.schema)) as WorkRecordResponse;
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
+  }
+
+  async claimWork(workId: string): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);
+    return (await this.json("hubClaimWork", { id: workId }, ROUTES.hubClaimWork.response.schema)) as WorkItemResponse;
+  }
+
+  async releaseWork(workId: string): Promise<WorkItemResponse> {
+    if (!this.hub) throw new ProtocolError("invalid_request", "releaseWork needs a hub client", false);
+    return (await this.json("hubUnclaimWork", { id: workId }, ROUTES.hubUnclaimWork.response.schema)) as WorkItemResponse;
   }
 
   async startGraduationPreview(wolf: string, workId: string): Promise<GraduationJob> {

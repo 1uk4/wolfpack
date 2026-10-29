@@ -92,6 +92,8 @@ export const WorkItem = z.object({
   /** Length of the block in minutes. Null when unscheduled; defaults to 60
    *  when `scheduledFor` is set without an explicit duration (enforced in ops). */
   durationMinutes: z.number().int().positive().nullable().default(null),
+  /** The wolf holding this item (folded from work.bound / work.unbound); absent until first bound. Additive; not rendered to the .md. */
+  boundBy: WolfId.nullable().optional(),
   log: z.array(WorkLogEntry).default([]),
   created: IsoDate,
   updated: IsoDate,
@@ -260,9 +262,12 @@ export function foldWork(events: WorkEvent[]): Map<WorkId, WorkItem> {
         }
         break;
       case "work.bound":
+        // Also informational for work memory; additionally records the holder (hub claim).
+        next.boundBy = e.wolf;
+        break;
       case "work.unbound":
-        // Informational events for work memory - no state change needed
-        // The work memory system listens for these to track active sessions
+        // Only the current holder's unbind releases (a stale unbind from a former holder is ignored).
+        if (cur.boundBy === e.wolf) next.boundBy = null;
         break;
       case "work.summarized":
         next.summary = e.summary;

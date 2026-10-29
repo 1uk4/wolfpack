@@ -28,6 +28,8 @@ import { hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
   applyOps,
+  claimItem,
+  unclaimItem,
   createItem,
   createWorkWriter,
   deleteItem,
@@ -251,6 +253,19 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const deleted = await writeWork(actor, () => deleteItem(roots, params.id));
           return send(res, 200, { deleted });
         }
+        case "hubClaimWork": {
+          const actor = writeActor(req);
+          if (actor.kind === "system") throw new HubError("invalid_request", "bad actor");
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const item = await writeWork(actor, () => claimItem(roots, params.id, actor.id));
+          return send(res, 200, { item });
+        }
+        case "hubUnclaimWork": {
+          const actor = writeActor(req);
+          if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
+          const item = await writeWork(actor, () => unclaimItem(roots, params.id, actor));
+          return send(res, 200, { item });
+        }
         case "hubGraduateWork": {
           const actor = writeActor(req);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
@@ -267,7 +282,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       dispatch(req, res).catch((e: unknown) => {
         if (!(e instanceof HubError)) console.error(`hubd: ${req.method} ${req.url} failed:`, e); // detail stays server-side
         const err = e instanceof HubError ? e : new HubError("engine_error", "internal hub error");
-        const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code) };
+        const env: ErrorEnvelope = { code: err.code, message: err.message, retryable: retryable(err.code), ...(err.details ? { details: err.details } : {}) };
         if (!res.headersSent) send(res, ERROR_HTTP_STATUS[err.code], env);
         else res.end();
       });

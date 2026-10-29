@@ -336,6 +336,16 @@ export const ROUTES = {
   hubCreateWork: { scope: "hub", method: "POST", path: "/v1/work", body: CreateWorkRequestSchema, response: { kind: "json", schema: CreateWorkResponseSchema }, status: [201], error: err },
   hubPatchWork: { scope: "hub", method: "PATCH", path: "/v1/work/:id", body: PatchWorkRequestSchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubDeleteWork: { scope: "hub", method: "DELETE", path: "/v1/work/:id", response: { kind: "json", schema: DeleteWorkResponseSchema }, status: [200], error: err },
+  /**
+   * `hubClaimWork`: compare-and-set under the writer queue. The actor (a wolf, or the operator) becomes the holder: appends
+   * work.assigned + work.bound (and work.staged approved -> in_build in the same append). Idempotent for the same holder.
+   * Targets: features and bindable tasks/issues/spikes (loose Inbox items or feature children). 409 `conflict` (`details.holder`)
+   * when held by another wolf, or when the item's feature is; 400 `invalid_request` for idea/initiative/container items or items
+   * still in stage idea/plan. `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone.
+   * 409 `conflict` for any other actor. No timeout or presence expiry.
+   */
+  hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a

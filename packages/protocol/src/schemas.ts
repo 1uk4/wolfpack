@@ -33,6 +33,8 @@ export const ErrorCodeSchema = z.enum([
   "not_ready",
   /** Graduation: the preview token is unknown, used, expired or for another item. Preview again. */
   "preview_stale",
+  /** Hub claim: the item (or its feature) is held by another wolf; `details.holder` names it. */
+  "conflict",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
@@ -60,6 +62,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   thread_closed: 409,
   not_ready: 409,
   preview_stale: 409,
+  conflict: 409,
 };
 
 // ---------------------------------------------------------------- cards

@@ -164,6 +164,33 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         expect((await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { assignee: "w1" })).status).toBe(200);
       });
 
+      it("claim is a compare-and-set naming the holder; unclaim is holder-or-owner", async () => {
+        const w2 = { "X-Wolfpack-Actor": JSON.stringify({ id: "w2", kind: "wolf" }) };
+        const c = await create({ successCriteria: "claimed in the suite" });
+        const stage = (to: string) => send("PATCH", buildPath("hubPatchWork", { id: c.id }), { stage: to });
+        const claim = (actor: Record<string, string>) => send("POST", buildPath("hubClaimWork", { id: c.id }), undefined, actor);
+        const unclaim = (actor: Record<string, string>) => send("POST", buildPath("hubUnclaimWork", { id: c.id }), undefined, actor);
+        expect((await stage("approved")).status).toBe(200);
+        const ok = await claim(wolf);
+        expect(ok.status).toBe(200);
+        const body = ROUTES.hubClaimWork.response.schema.parse(await ok.json());
+        expect(body.item.stage).toBe("in_build");
+        expect(body.item.assignee).toBe("w1");
+        expect((await claim(wolf)).status).toBe(200); // same holder: idempotent
+        const lost = await claim(w2);
+        expect(lost.status).toBe(409);
+        const env = (await lost.json()) as { code: string; message: string; details?: { holder?: string } };
+        expect(env.code).toBe("conflict");
+        expect(env.message).toContain("w1");
+        expect(env.details?.holder).toBe("w1");
+        await expectError(await unclaim(w2), "conflict");
+        expect((await unclaim(wolf)).status).toBe(200);
+        expect((await record(c.id)).stage).toBe("in_build");
+        expect((await claim(w2)).status).toBe(200);
+        expect((await unclaim(op)).status).toBe(200); // the owner may release anyone's claim
+        await expectError(await send("POST", buildPath("hubClaimWork", { id: c.id }), undefined, {}), "invalid_request");
+      });
+
       it("DELETE removes the item; POST graduate marks it graduated", async () => {
         const c = await create();
         const del = await send("DELETE", buildPath("hubDeleteWork", { id: c.id }));

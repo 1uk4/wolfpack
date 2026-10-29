@@ -246,3 +246,83 @@ describe("rebuild and insert path with an LLM partitioner", () => {
     expect(part.mock.calls.length).toBe(calls); // second pass: all cache hits (or nothing above threshold)
   });
 });
+
+describe("proposal hardening", () => {
+  const es = make(SIZES);
+  it("a malformed cached proposal is a cache miss: the partitioner is asked again and the cache is overwritten", async () => {
+    const bad: unknown[] = [{ categories: "nope", doesntFit: [] }, { categories: [{ name: 3, ids: [] }], doesntFit: [] }, { categories: [], doesntFit: [1] }, null, 7, {}];
+    for (const entry of bad) {
+      const cache = memorySplitCache();
+      const key = splitCacheKey("wp", es.map((e) => e.id));
+      cache.set(key, entry as SplitProposal);
+      const part = vi.fn(async () => ideal(es));
+      const notes: string[] = [];
+      const v = await judgeSplit({ partitioner: part, cache, notify: (m) => notes.push(m) }, { domain: "wp", parentTitle: "P", members: members(es) });
+      expect(part).toHaveBeenCalledTimes(1);
+      expect(v.cached).toBe(false);
+      expect(v.decision?.k).toBe(3);
+      expect(notes.some((m) => /malformed/.test(m))).toBe(true);
+      expect(cache.get(key)).toEqual(ideal(es)); // overwritten with a good one
+    }
+  });
+  it("a partitioner returning a malformed answer counts as a failure (k-means fallback), and is not cached", async () => {
+    const cache = memorySplitCache();
+    const v = await judgeSplit({ partitioner: (async () => ({ categories: null, doesntFit: [] })) as never, cache }, { domain: "wp", parentTitle: "P", members: members(make([8, 8, 8])) });
+    expect(v.source).toBe("kmeans");
+    expect(v.fallbackReason).toMatch(/malformed/);
+    expect(cache.get(splitCacheKey("wp", make([8, 8, 8]).map((e) => e.id)))).toBeUndefined();
+  });
+  it("PROMPT_VERSION is part of the cache key", async () => {
+    const { PROMPT_VERSION } = await import("./llm-split.js");
+    const { createHash } = await import("node:crypto");
+    const legacy = createHash("sha256").update("wp\u0000a\u0000b").digest("hex").slice(0, 24);
+    expect(PROMPT_VERSION).toMatch(/^split-v\d+$/);
+    expect(splitCacheKey("wp", ["a", "b"])).not.toBe(legacy);
+  });
+  it("at most llmMaxCategories (5) categories are honoured: further ones are reported over-limit and their members are leftovers", () => {
+    const e7 = make([4, 4, 4, 4, 4, 4, 4]);
+    const idx = (c: number) => e7.flatMap((e, i) => (cluster(e.id, [4, 4, 4, 4, 4, 4, 4]) === c ? [i] : []));
+    const d = validatePartition(e7.map((e) => e.vector), { names: ["a", "b", "c", "d", "e", "f", "g"], members: [0, 1, 2, 3, 4, 5, 6].map(idx), doesntFit: [] });
+    expect(isPartition(d)).toBe(true);
+    if (isPartition(d)) {
+      expect(d.k).toBe(5);
+      expect(d.categories.slice(5).map((c) => [c.kept, c.why, c.size])).toEqual([[false, "over-limit", 4], [false, "over-limit", 4]]);
+      expect(d.leftovers.sort((a, b) => a - b)).toEqual([...idx(5), ...idx(6)].sort((a, b) => a - b));
+    }
+  });
+});
+
+describe("k-means fallback gate on a real rebuild", () => {
+  it("the proposal lists fallbacks; a non-dry rebuild aborts before any write unless allowKmeansFallback", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync, existsSync } = await import("node:fs");
+    const { reorg } = await import("./reorg.js");
+    const base = mkdtempSync(join(tmpdir(), "kb-fallback-"));
+    try {
+      const roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+      const eDir = join(roots.kbBase, "domains", "wp", "entries");
+      mkdirSync(eDir, { recursive: true }); mkdirSync(roots.denLocal, { recursive: true });
+      const es = make([8, 8, 8]);
+      for (const e of es) writeFileSync(join(eDir, `${e.id}.md`), `---\nid: ${e.id}\ntitle: ${e.title}\ndomain: wp\nsummary: ${e.summary}\nsection: sec-wp-old000\n---\n\nbody\n`);
+      const byTitle = new Map(es.map((e) => [e.title, e.vector]));
+      const embedder = { embed: async (text: string) => { for (const [t, v] of byTitle) if (text.includes(t)) return v; return new Array(DIM).fill(0.1); } };
+      const engine = {
+        call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+          if (step === "splitSection") throw new Error("overloaded");
+          return schema.parse(step === "sectionSummary" ? { summary: "s" } : { title: `Label ${Math.random().toString(36).slice(2, 6)}` });
+        }),
+        usage: { summarize: () => ({}) },
+      } as never;
+      const snap = () => Object.fromEntries(readdirSync(eDir).sort().map((f) => [f, readFileSync(join(eDir, f), "utf-8")]));
+      const before = snap();
+      const dry = await reorg({ engine, roots, embedder: embedder as never, domains: ["wp"], rebuild: true, dryRun: true, rebuildFrom: "scratch" });
+      expect(dry.proposal).toContain("## k-means fallbacks (the LLM proposal failed)");
+      expect(dry.proposal).toMatch(/decided by k-means because the LLM call failed/);
+      expect(dry.proposal).toContain("overloaded");
+      await expect(reorg({ engine, roots, embedder: embedder as never, domains: ["wp"], rebuild: true, rebuildFrom: "scratch" })).rejects.toThrow(/fell back to k-means.*aborting before any write/);
+      expect(snap()).toEqual(before);
+      expect(existsSync(join(roots.denLocal, "sections"))).toBe(false);
+      await reorg({ engine, roots, embedder: embedder as never, domains: ["wp"], rebuild: true, rebuildFrom: "scratch", allowKmeansFallback: true });
+      expect(existsSync(join(roots.denLocal, "sections", "_sections.json"))).toBe(true);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }, 120_000);
+});

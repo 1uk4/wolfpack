@@ -401,7 +401,7 @@ export interface CategoryReport {
   coherent: number;
   share: number;
   kept: boolean;
-  why?: "too-few-coherent" | "low-share";
+  why?: "too-few-coherent" | "low-share" | "over-limit";
 }
 export interface PartitionDecision {
   /** Group index per input vector (-1 = leftover: stays in the parent). */
@@ -429,7 +429,10 @@ export function validatePartition(
 ): PartitionDecision | PartitionRejected {
   const n = vectors.length;
   const seen = new Set<number>();
-  const cats = proposal.members.map((ms) => ms.filter((i) => i >= 0 && i < n && !seen.has(i) && (seen.add(i), true)));
+  // At most llmMaxCategories categories are honoured (the prompt asks for 2-5); the rest are reported as dropped and their
+  // members stay leftovers, so a runaway answer cannot fragment a section.
+  const members = proposal.members.map((ms, c) => (c < rules.llmMaxCategories ? ms : []));
+  const cats = members.map((ms) => ms.filter((i) => i >= 0 && i < n && !seen.has(i) && (seen.add(i), true)));
   const X = centre(vectors);
   const cents = cats.map((ms) => (ms.length ? unit(meanVec(ms.map((i) => X[i]))) : null));
   const reports: CategoryReport[] = [];
@@ -445,10 +448,11 @@ export function validatePartition(
       if (own > other) good.push(i);
     }
     const share = ms.length ? good.length / ms.length : 0;
-    const kept = good.length >= rules.minGroup && share >= rules.llmMinCoherence;
+    const overLimit = c >= rules.llmMaxCategories;
+    const kept = !overLimit && good.length >= rules.minGroup && share >= rules.llmMinCoherence;
     reports.push({
-      name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length, coherent: good.length, share, kept,
-      why: kept ? undefined : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
+      name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length || (proposal.members[c]?.length ?? 0), coherent: good.length, share, kept,
+      why: kept ? undefined : overLimit ? "over-limit" : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
     });
     coherentSets.push(kept ? good : []);
   });

@@ -322,6 +322,8 @@ export const SECTION_TREE = {
     misplacedMargin: 0.05,
     /** LLM-proposed split: a category survives with at least this share of leave-one-out-coherent members (and >= minGroup of them). */
     llmMinCoherence: 0.7,
+    /** At most this many categories are taken from one LLM answer (the prompt asks for 2-5); further ones are ignored and their members become leftovers. */
+    llmMaxCategories: 5,
     /** Child label restating the parent: token Jaccard at or above this. */
     restateJaccard: 0.6,
     /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */

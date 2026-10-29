@@ -104,6 +104,8 @@ export interface RebuildPlan {
     id: string; n: number; outcome: "split" | "kept" | "below-threshold";
     /** Who proposed the grouping: the LLM (vectors validated it), k-means (fallback), or nobody. */
     source?: "llm" | "kmeans" | "none";
+    /** Set when the LLM proposal failed and k-means decided instead. */
+    fallbackReason?: string;
     /** Per-category coherence, doesn't-fit and k-means diagnostics, as proposal lines. */
     notes?: string[];
   }>;
@@ -377,11 +379,11 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       const notes = verdictNotes(verdict, byEntry);
       if (!verdict.decision) {
         plan.rejected.push({ sectionId: id, n: members.length, reason: verdict.reason ?? "no-split", detail: verdict.kmeans && "detail" in verdict.kmeans ? verdict.kmeans.detail : undefined });
-        plan.judged.push({ id, n: members.length, outcome: "kept", source: verdict.source, notes });
+        plan.judged.push({ id, n: members.length, outcome: "kept", source: verdict.source, fallbackReason: verdict.fallbackReason, notes });
         continue;
       }
       const d = verdict.decision;
-      plan.judged.push({ id, n: members.length, outcome: "split", source: verdict.source, notes });
+      plan.judged.push({ id, n: members.length, outcome: "split", source: verdict.source, fallbackReason: verdict.fallbackReason, notes });
       for (let g = 0; g < d.k; g++) {
         const ids = members.filter((_, i) => d.labels[i] === g);
         const child = t.newSection(sec, ids);
@@ -662,6 +664,13 @@ export function renderProposal(plan: RebuildPlan): string {
   if (!plan.crossMoves.length) lines.push("none");
   else lines.push("Not applied: the better target is under a different top-level section. Re-run with `--apply-cross-moves` to apply.", "");
   for (const m of plan.crossMoves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (similarity to own section ${m.own.toFixed(2)}, to the target ${m.better.toFixed(2)}; top level: ${secTitle(rootTitleId(plan, m.from))} → ${secTitle(rootTitleId(plan, m.to))})`);
+  const fallbacks = plan.judged.filter((j) => j.fallbackReason);
+  lines.push("", "## k-means fallbacks (the LLM proposal failed)", "");
+  if (!fallbacks.length) lines.push("none");
+  else {
+    lines.push(`> **${fallbacks.length} section(s) were decided by k-means because the LLM call failed.** A real run (\`--yes\`) aborts unless \`--allow-kmeans-fallback\` is given; re-run the dry run to ask again.`, "");
+    for (const j of fallbacks) lines.push(`- ${secTitle(j.id)} \`${j.id}\` (${j.n} direct): ${j.outcome === "split" ? "split" : "kept whole"} by k-means; reason: ${j.fallbackReason}`);
+  }
   lines.push("", "## Judged by the split rule", "");
   const judgedNow = plan.judged.filter((j) => j.outcome !== "below-threshold");
   if (!judgedNow.length) lines.push("none");

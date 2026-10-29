@@ -61,6 +61,8 @@ export interface ReorgOptions {
   rebuildFrom?: "current" | "scratch";
   /** With rebuild: also apply refinement moves into another top-level section (default: only listed for approval). */
   applyCrossMoves?: boolean;
+  /** With rebuild: commit although some section's split was decided by the k-means fallback (the LLM call failed). */
+  allowKmeansFallback?: boolean;
   /** With rebuild: commit even if the new tree has fewer than half the current sections. */
   allowCollapse?: boolean;
   /** With rebuild + dryRun: where to write the proposal markdown (the only file a dry-run rebuild writes). */
@@ -576,6 +578,10 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         // Recorded before the commit so the re-render below also covers a commit that fails midway.
         result.domains.push(domain);
         if (opts.dryRun) continue;
+        const fell = plan.judged.filter((j) => j.fallbackReason);
+        if (fell.length && !opts.allowKmeansFallback) {
+          throw new Error(`rebuild: ${fell.length} section(s) fell back to k-means because the LLM split proposal failed (${fell.map((j) => `${j.id}: ${j.fallbackReason}`).join("; ")}); aborting before any write. Re-run, or pass --allow-kmeans-fallback to accept the k-means grouping`);
+        }
         const { entriesWritten, orphansPlaced } = await withKbLock(
           roots,
           async () => commitRebuild(roots, plan, { vectorOf: (id) => vectorById.get(id), allowCollapse: opts.allowCollapse, notify }),

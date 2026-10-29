@@ -39,9 +39,25 @@ export function fileSplitCache(path: string): SplitCache {
     set: (k, v) => { data[k] = v; mkdirSync(dirname(path), { recursive: true }); atomicWrite(path, JSON.stringify(data)); },
   };
 }
-/** Cache key: the domain and the SORTED member ids (titles are not part of the key). */
+/**
+ * Bump when SPLIT_SECTION_SYSTEM or the prompt layout in proposeSplit changes: cached answers were produced under the old
+ * prompt, so they must not be served for the new one (the version is part of the cache key).
+ */
+export const PROMPT_VERSION = "split-v1";
+
+/** Cache key: the prompt version, the domain and the SORTED member ids (titles are not part of the key). */
 export function splitCacheKey(domain: string, memberIds: string[]): string {
-  return createHash("sha256").update(domain + "\u0000" + [...memberIds].sort().join("\u0000")).digest("hex").slice(0, 24);
+  return createHash("sha256").update(PROMPT_VERSION + "\u0000" + domain + "\u0000" + [...memberIds].sort().join("\u0000")).digest("hex").slice(0, 24);
+}
+
+/** A well-formed proposal: categories is an array of {name: string, ids: string[]}, doesntFit an array of strings. Anything else (a hand-edited or old cache file) is a cache miss. */
+export function isValidProposal(p: unknown): p is SplitProposal {
+  if (!p || typeof p !== "object") return false;
+  const { categories, doesntFit } = p as { categories?: unknown; doesntFit?: unknown };
+  if (!Array.isArray(categories) || !Array.isArray(doesntFit)) return false;
+  if (!doesntFit.every((x) => typeof x === "string")) return false;
+  return categories.every((c) => !!c && typeof c === "object" && typeof (c as { name?: unknown }).name === "string"
+    && Array.isArray((c as { ids?: unknown }).ids) && (c as { ids: unknown[] }).ids.every((x) => typeof x === "string"));
 }
 export const enginePartitioner = (engine: Engine): Partitioner => ({ parentTitle, members }) => proposeSplit(engine, parentTitle, members);
 
@@ -92,10 +108,16 @@ export async function judgeSplit(
 
   const key = splitCacheKey(args.domain, ids);
   let proposal = deps.cache?.get(key);
+  if (proposal !== undefined && !isValidProposal(proposal)) {
+    deps.notify?.("cached split proposal is malformed; treating it as a cache miss");
+    proposal = undefined;
+  }
   const cached = !!proposal;
   if (!proposal) {
     try {
-      proposal = await deps.partitioner({ parentTitle: args.parentTitle, members: members.map(({ id, title, summary }) => ({ id, title, summary })) });
+      const fresh = await deps.partitioner({ parentTitle: args.parentTitle, members: members.map(({ id, title, summary }) => ({ id, title, summary })) });
+      if (!isValidProposal(fresh)) throw new Error("the proposal is malformed (categories/doesntFit)");
+      proposal = fresh;
       deps.cache?.set(key, proposal);
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);

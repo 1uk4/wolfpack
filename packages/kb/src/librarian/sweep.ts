@@ -26,6 +26,7 @@ import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
 import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
+import { DEFAULT_RULES } from "./tree-rules.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { resolveAliasedEntry, survivorOf } from "./alias.js";
@@ -304,6 +305,9 @@ export function emptyResult(): SweepResult {
     unclassified: 0, touchedDomains: [], failures: [], parked: [], remaining: 0,
   };
 }
+
+/** Contexts that already logged the oversized-parent notice (once per sweep). */
+const oversizedLogged = new WeakSet<object>();
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
@@ -672,6 +676,14 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
             if (!sectionMembers.has(entrySec)) sectionMembers.set(entrySec, []);
             sectionMembers.get(entrySec)!.push({ entryId: ev.entryId, sectionId: entrySec as SectionId, vector: ev.vector });
           }
+        }
+        // Once per sweep: parents whose DIRECT entries (leftovers kept by the stay-in-parent rule) have outgrown the split
+        // threshold. The sweep never reorganises, so this is the signal that a rebuild is due.
+        if (!oversizedLogged.has(ctx)) {
+          oversizedLogged.add(ctx);
+          const withKids = new Set(sections.filter((s) => s.domain === domain && s.parent).map((s) => String(s.parent)));
+          const big = [...sectionMembers].filter(([id, m]) => withKids.has(id) && m.length > DEFAULT_RULES.splitAbove).map(([id, m]) => `${id} (${m.length})`);
+          if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
         }
         const domainCentroid = computeCentroid(entryVectors.filter((e) => e.domain === domain && !anchors.grouped.has(e.entryId)).map((e) => e.vector));
         // placeEntry descends from the roots of its first section's domain, so it

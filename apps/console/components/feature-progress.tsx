@@ -1,7 +1,9 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, Maximize2Icon } from "lucide-react";
+import { OverlayHeader, OverlayShell } from "@/components/overlay-shell";
 import { useOptionalMemoryEvents } from "@/components/memory-events";
 import { usePanelHost } from "@/components/panel-host";
 import { PlanGraphView } from "@/components/plan-graph-view";
@@ -14,7 +16,8 @@ type Model = Extract<FeatureGraph, { kind: "graph" }>;
 /**
  * THE PINNED FEATURE GRAPH: at the top of a thread bound to a feature (or to one of its tasks). Folded (the default) it is
  * one line, "<feature> · 4/9 done"; open it is the feature's show_graph-style graph (the shared PlanGraphView), the
- * thread's bound task highlighted, capped at 40vh and draggable (pan, no zoom). A node click opens the Status panel on that task.
+ * thread's bound task highlighted, capped at 40vh, a free-pan canvas (drag, re-center, no zoom) with done / skipped tasks as thin bars, and a full-screen button
+ * that opens the same canvas in a modal. A node click opens the Status panel on that task.
  * Data is live from the Work API (no model input): see useFeatureProgress. The open/folded state is kept per thread.
  */
 
@@ -180,10 +183,17 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 	const [open, setOpenState] = useState(() => isProgressOpen(threadId));
 	const panelId = useId();
 	const panels = usePanelHost();
+	const [full, setFull] = useState(false);
 	const setOpen = (v: boolean) => {
 		setProgressOpen(threadId, v);
 		setOpenState(v);
 	};
+	const openTask = (id: string) => {
+		setFull(false); // the modal covers the page: close it so the Status panel is visible
+		// next tick: the shell's focus restore (to the full-screen button) runs on unmount and must not steal the panel's focus
+		setTimeout(() => void panels.openPanel("memory", { taskId: id, nonce: Date.now() }), 0);
+	};
+	const titleId = `${panelId}-full`;
 	return (
 		<div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex max-h-full flex-col" data-testid="feature-progress" data-expanded={open} data-feature-id={model.featureId}>
 			<div className="mx-auto flex min-h-0 w-full max-w-[46rem] flex-col px-4 pt-2">
@@ -210,7 +220,27 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 					{open && (
 						<div id={panelId} role="region" aria-label={`${model.title} graph`} data-testid="feature-progress-panel" className="max-h-[40vh] min-h-0 overflow-hidden border-t p-3">
 							{model.graph.nodes.length > 0 ? (
-								<PlanGraphView draggable graph={model.graph} highlightId={model.boundId} label={`Task graph: ${model.title}`} onNodeClick={(id) => void panels.openPanel("memory", { taskId: id, nonce: Date.now() })} />
+								<PlanGraphView
+									draggable
+									collapseDone
+									orderByStatus
+									graph={model.graph}
+									highlightId={model.boundId}
+									label={`Task graph: ${model.title}`}
+									onNodeClick={openTask}
+									toolbar={
+										<button
+											type="button"
+											data-testid="feature-progress-fullscreen"
+											aria-label="Full screen"
+											title="Full screen"
+											onClick={() => setFull(true)}
+											className="inline-flex size-6 items-center justify-center rounded-md border bg-card/90 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+										>
+											<Maximize2Icon className="size-3.5" aria-hidden />
+										</button>
+									}
+								/>
 							) : (
 								<p className="text-xs text-muted-foreground" data-testid="feature-progress-empty">
 									No tasks yet.
@@ -220,6 +250,28 @@ export function FeatureProgressPanel({ threadId, model, busy }: FeatureProgressP
 					)}
 				</div>
 			</div>
+			{full && open && typeof document !== "undefined" &&
+				createPortal(
+				<OverlayShell
+					labelledBy={titleId}
+					testId="feature-progress-modal"
+					closeTestId="feature-progress-modal-close"
+					onClose={() => setFull(false)}
+					header={(close) => (
+						<OverlayHeader className="flex items-center gap-2 pb-3">
+							<h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium">
+								{featureStrip(model)}
+							</h2>
+							{close}
+						</OverlayHeader>
+					)}
+				>
+					<div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border" data-testid="feature-progress-modal-body">
+						<PlanGraphView draggable collapseDone orderByStatus fill graph={model.graph} highlightId={model.boundId} label={`Task graph: ${model.title}`} onNodeClick={openTask} />
+					</div>
+				</OverlayShell>,
+				document.body,
+			)}
 		</div>
 	);
 }

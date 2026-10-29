@@ -5,6 +5,7 @@
  * (the insert path grows a leaf one entry at a time) the stub answers with the same categorisation restricted to
  * the members present; an entry it never categorised goes to "doesn't fit".
  *
+ * Inserts vs rebuild (stay-in-parent placement rule): Work Item Tracking ARI .76 (passes), Console Chat .32 (known gap, below).
  * Tree shapes B produces at llmMinCoherence .7 (identical to .8 on these fixtures: every dropped category is far below .7) (rebuild from one root, default rules; "k" groups + leftovers kept in the parent):
  *   Console Chat (30)        3 groups of 4/5/5 (14 entries) + 16 leftovers   (two categories dropped: 4/7 and 1/4 coherent)
  *   Work Item Tracking (14)  2 groups of 3/3 (6 entries)    + 8 leftovers    (three categories dropped or too small)
@@ -114,8 +115,9 @@ describe("B: rebuild shapes", () => {
 describe("B: acceptance — one-by-one inserts vs rebuild", () => {
   const namer = async () => ({ title: `T${Math.random()}`, summary: "s" });
   const cases: Array<[string, Fx[], boolean]> = [
-    // [name, entries, equivalent]. Measured ARI of inserts vs rebuild: Console Chat .38, Work Item Tracking .36, the rest 1.00.
-    ["Console Chat (30)", set(CONSOLE), false], ["Work Item Tracking (14)", set(WORK), false], ["Graduation (9)", set(GRAD), true],
+    // [name, entries, equivalent]. Measured ARI of inserts vs rebuild with the stay-in-parent placement rule:
+    // Work Item Tracking .76 (was .36), Console Chat .32 (was .38), the rest 1.00.
+    ["Console Chat (30)", set(CONSOLE), false], ["Work Item Tracking (14)", set(WORK), true], ["Graduation (9)", set(GRAD), true],
     ["Game Tracking (9)", set(GAME), true], ["grab bag (14)", F.grabBag, true],
   ];
   async function run(fx: Fx[]) {
@@ -133,12 +135,11 @@ describe("B: acceptance — one-by-one inserts vs rebuild", () => {
   }
 
   for (const [name, fx, equivalent] of cases) {
-    // KNOWN GAP (work-wolfpack-t800z3L): for the two fixtures that split, the insert path diverges from the rebuild.
-    // The rebuild keeps the entries the LLM did not categorise (Console 16/30, Work 8/14) as direct entries of the parent.
-    // The insert path splits as soon as a leaf passes 10 entries, on the members present, and every LATER entry then
-    // descends to its nearest child by centroid (placeEntry has no "fits no child" outcome), so the leftovers are
-    // absorbed into the groups (Work: 5 + 5 + 4 instead of 8 + 3 + 3). Closing it needs a placement rule that can
-    // leave an entry in the parent. The test is `fails` so it flags the day this starts to pass.
+    // KNOWN GAP (work-wolfpack-t800z3L), Console Chat only: the rebuild judges all 30 entries at once (groups 5/4/5 + 16 left in the
+    // parent). The insert path splits when the leaf first passes 10 entries, on the members present then; the "Interaction cards"
+    // category has too few coherent members at that moment to survive, so its entries are absorbed by the neighbouring child
+    // (17/5/8 instead of 16/5/4/5), and a child of 8 is never re-judged (<= splitAbove). Closing it needs re-judging a parent's
+    // subtree as it grows (ancestor repair / depth-weighted stability), the deferred repairPath work. `it.fails` flags the day it passes.
     (equivalent ? it : it.fails)(`${name}: inserts group like the rebuild (ARI >= .7)`, async () => {
       expect((await run(fx)).ari, name).toBeGreaterThanOrEqual(0.7);
     }, 300_000);

@@ -26,6 +26,7 @@ import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
 import { enforceBranchingFactor, placeEntry } from "./section-tree.js";
 import type { EntryVector } from "./embed.js";
+import type { EntryWithVector } from "./hierarchy.js";
 import { collapseGuardFires } from "./rebuild-commit.js";
 import { judgeSplit, memorySplitCache, type Partitioner, type SplitCache, type SplitVerdict } from "./llm-split.js";
 import { anchorOf, groupOf } from "./anchors.js";
@@ -808,7 +809,15 @@ export async function insertEntry(
     const root = t.newSection(null, [entry.id]);
     target = String(root.id);
   } else {
-    const placed = placeEntry(entry.vector, { kind: entry.kind ?? "fact", maturity: entry.maturity }, state.sections, entry.vector, new Map());
+    // direct members per section (grouped entries are not in the state's counts), for the stay-in-parent rule
+    const members = new Map<string, EntryWithVector[]>();
+    for (const [id, sid] of state.assignment) {
+      const v = vec.get(id);
+      if (!v) continue;
+      if (!members.has(sid)) members.set(sid, []);
+      members.get(sid)!.push({ entryId: id, sectionId: sid as SectionId, vector: v });
+    }
+    const placed = placeEntry(entry.vector, { kind: entry.kind ?? "fact", maturity: entry.maturity }, state.sections, entry.vector, members);
     if (placed.sectionId === "_unplaced") {
       const rs = state.sections.filter((s) => s.parent === null);
       target = String(rs.reduce((b, r) => (cosine(entry.vector, r.centroid) > cosine(entry.vector, b.centroid) ? r : b)).id);

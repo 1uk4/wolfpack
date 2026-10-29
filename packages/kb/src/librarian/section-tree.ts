@@ -9,7 +9,7 @@ import { SECTION_TREE } from "@wolfpack/engine";
 import { cosine, type Vector } from "./embed.js";
 import { computeCentroid, type EntryWithVector } from "./hierarchy.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { hashSectionId, hashSeed, rng } from "./tree-rules.js";
+import { hashSectionId, hashSeed, rng, unit as unitVec, meanVec, cosine as trueCosine } from "./tree-rules.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
@@ -538,11 +538,54 @@ export function placeEntry(
       return { sectionId: bestSection.id, fit: bestSim, depth: currentDepth };
     }
 
+    // Stay-in-parent rule: with direct entries of its own (the "leftover group"), the parent keeps the entry unless it
+    // is coherent with one child (see chooseChild).
+    const pick = chooseChild(entryVector, bestSection, children, sections, sectionMembers);
+    if (pick === "parent") return { sectionId: bestSection.id, fit: bestSim, depth: currentDepth };
+
     // Continue descending
-    return descend(children, currentDepth + 1);
+    return descend(pick ? [pick] : children, currentDepth + 1);
   }
 
   return descend(roots, 0);
+}
+
+/**
+ * The stay-in-parent rule, the same coherence test tree-rules.validatePartition applies to a proposed split:
+ * the parent's subtree vectors are centred, each child's subtree is a group, and the parent's DIRECT entries are
+ * the leftover group. The entry (centred the same way) goes into a child only if that child's centroid is the
+ * closest of the children AND closer than the leftover group's; otherwise it stays a direct entry of the parent.
+ *
+ * Returns the child to descend into, "parent" to stay, or null when the rule cannot be applied (the parent has no
+ * direct entries to be the leftover group, or no member vectors are known): the caller then descends by centroid.
+ */
+export function chooseChild(
+  entryVector: Vector,
+  parent: Section,
+  children: Section[],
+  sections: Section[],
+  sectionMembers: Map<string, EntryWithVector[]>
+): Section | "parent" | null {
+  const direct = (sectionMembers.get(String(parent.id)) ?? []).map((m) => m.vector);
+  if (direct.length === 0) return null;
+  const subtree = (id: string): Vector[] => [
+    ...(sectionMembers.get(id) ?? []).map((m) => m.vector),
+    ...sections.filter((s) => String(s.parent) === id).flatMap((c) => subtree(String(c.id))),
+  ];
+  const groups = children.map((c) => ({ child: c, vecs: subtree(String(c.id)) })).filter((g) => g.vecs.length > 0);
+  if (groups.length === 0) return null;
+  const all = [...direct, ...groups.flatMap((g) => g.vecs)];
+  const mean = meanVec(all);
+  const centred = (v: Vector) => unitVec(v.map((x, i) => x - mean[i]));
+  const centroidOf = (vs: Vector[]) => unitVec(meanVec(vs.map(centred)));
+  const x = centred(entryVector);
+  const leftSim = trueCosine(centroidOf(direct), x);
+  let best: Section | null = null, bestSim = -Infinity;
+  for (const g of groups) {
+    const s = trueCosine(centroidOf(g.vecs), x);
+    if (s > bestSim) { bestSim = s; best = g.child; }
+  }
+  return best && bestSim > leftSim ? best : "parent";
 }
 
 // ════════════════════════════════════════════════════════════════════════════

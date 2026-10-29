@@ -9,7 +9,7 @@ import { SECTION_TREE } from "@wolfpack/engine";
 import { cosine, type Vector } from "./embed.js";
 import { computeCentroid, type EntryWithVector } from "./hierarchy.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { hashSectionId, hashSeed, rng, unit as unitVec, meanVec, cosine as trueCosine } from "./tree-rules.js";
+import { hashSectionId, hashSeed, rng, unit as unitVec, meanVec, cosine as trueCosine, DEFAULT_RULES } from "./tree-rules.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
@@ -543,8 +543,13 @@ export function placeEntry(
     const pick = chooseChild(entryVector, bestSection, children, sections, sectionMembers);
     if (pick === "parent") return { sectionId: bestSection.id, fit: bestSim, depth: currentDepth };
 
-    // Continue descending
-    return descend(pick ? [pick] : children, currentDepth + 1);
+    // Continue descending. A child chosen by the coherence rule that the next level then rejects as _unplaced (below the
+    // isolation threshold) must not send the entry to the classify fallback / a NEW root: it already fits this parent.
+    if (pick) {
+      const below = descend([pick], currentDepth + 1);
+      return below.sectionId === "_unplaced" ? { sectionId: bestSection.id, fit: bestSim, depth: currentDepth } : below;
+    }
+    return descend(children, currentDepth + 1);
   }
 
   return descend(roots, 0);
@@ -567,7 +572,9 @@ export function chooseChild(
   sectionMembers: Map<string, EntryWithVector[]>
 ): Section | "parent" | null {
   const direct = (sectionMembers.get(String(parent.id)) ?? []).map((m) => m.vector);
-  if (direct.length === 0) return null;
+  // The direct entries are a competing group only when there are enough of them to have a meaningful centroid (minGroup,
+  // as in validatePartition); with fewer, the old rule (descend by centroid) applies.
+  if (direct.length < DEFAULT_RULES.minGroup) return null;
   const subtree = (id: string): Vector[] => [
     ...(sectionMembers.get(id) ?? []).map((m) => m.vector),
     ...sections.filter((s) => String(s.parent) === id).flatMap((c) => subtree(String(c.id))),
@@ -585,6 +592,8 @@ export function chooseChild(
     const s = trueCosine(centroidOf(g.vecs), x);
     if (s > bestSim) { bestSim = s; best = g.child; }
   }
+  // NaN case: a zero vector (entry equal to the section mean after centring) gives cosine 0, never NaN (tree-rules.cosine
+  // guards zero norms), so `bestSim > leftSim` is a plain comparison; a tie stays in the parent.
   return best && bestSim > leftSim ? best : "parent";
 }
 

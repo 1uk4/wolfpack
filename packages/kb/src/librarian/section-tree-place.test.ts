@@ -50,4 +50,21 @@ describe("placeEntry: stay in the parent unless coherent with a child", () => {
     expect(place(v).sectionId).toBe(place(v).sectionId);
     expect(JSON.stringify([...members])).toBe(before);
   });
+
+  it("a chosen child that the next level rejects as _unplaced (centroid below the isolation threshold) leaves the entry in the parent, not unplaced", () => {
+    const far = unitv(Array.from({ length: DIM }, (_, d) => (d === 9 ? 1 : 0)));
+    const farKid = { ...sections[1], centroid: far } as Section;
+    const secs = [sections[0], farKid, sections[2]];
+    const v = vecOf(1);
+    // the coherence rule picks kid A ...
+    expect(chooseChild(v, secs[0], [secs[1], secs[2]], secs, members)).toBe(farKid);
+    // ... whose stored centroid is nowhere near the entry; the result must still be a placement
+    const r = placeEntry(v, { kind: "fact" }, secs, v, members);
+    expect(r.sectionId).toBe("root");
+  });
+
+  it("fewer than minGroup direct entries do not form a competing group: old behaviour (null)", () => {
+    const m = new Map(members); m.set("root", left.slice(0, 2));
+    expect(chooseChild(vecOf(5), sections[0], [sections[1], sections[2]], sections, m)).toBeNull();
+  });
 });

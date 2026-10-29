@@ -7,8 +7,9 @@
  * Flow (top-down, the same gated rule the insert path uses): the CURRENT tree (`start`, the
  * default: top sections hardly ever change) or ONE root holding every entry (from scratch) → level by level, misplacement refinement among the sections that exist
  * (anywhere in the domain, every move listed), then each section above splitAbove is judged once by
- * tree-rules.chooseSplit (stability gate, minGroup; leftovers stay in the parent; no stable
- * substructure → the section stays whole, even above the soft range) → seeded branching cap
+ * judgeSplit (llm-split.ts: an LLM proposes 2-5 categories plus "doesn't fit", the vectors validate
+ * them and may drop members or categories; k-means only when the LLM call fails; leftovers stay in the
+ * parent; no coherent grouping → the section stays whole, even above the soft range) → seeded branching cap
  * (its wrappers are labelled and judged like split children) →
  * id continuity with the old tree → ONE top-down, sibling-aware label pass that re-asks, then
  * folds back, a split child whose label restates the parent. Grouped (`group:`) entries take no part:
@@ -26,10 +27,11 @@ import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
 import { enforceBranchingFactor, placeEntry } from "./section-tree.js";
 import type { EntryVector } from "./embed.js";
 import { collapseGuardFires } from "./rebuild-commit.js";
+import { judgeSplit, memorySplitCache, type Partitioner, type SplitCache, type SplitVerdict } from "./llm-split.js";
 import { anchorOf, groupOf } from "./anchors.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
 import {
-  DEFAULT_RULES, cosine, chooseSplit, findMisplaced, hashSectionId, isSplit, restatesParent, unit, meanVec,
+  DEFAULT_RULES, cosine, findMisplaced, hashSectionId, restatesParent, unit, meanVec,
   type TreeRules,
 } from "./tree-rules.js";
 
@@ -64,6 +66,8 @@ export interface NamerContext {
   siblingSummaries: string[];
   /** Titles the answer must not restate (set when re-asking after a restating label). */
   forbidden?: string[];
+  /** The title is already chosen (the LLM's split category name): only the summary is asked for. */
+  fixedTitle?: string;
 }
 export type Namer = (ctx: NamerContext) => Promise<{ title: string; summary: string }>;
 
@@ -87,7 +91,15 @@ export interface RebuildPlan {
   /** Sections the branching cap created to group siblings. */
   capWrappers: Set<string>;
   /** Every section the split rule looked at, in order, with the outcome. */
-  judged: Array<{ id: string; n: number; outcome: "split" | "kept" | "below-threshold" }>;
+  judged: Array<{
+    id: string; n: number; outcome: "split" | "kept" | "below-threshold";
+    /** Who proposed the grouping: the LLM (vectors validated it), k-means (fallback), or nobody. */
+    source?: "llm" | "kmeans" | "none";
+    /** Per-category coherence, doesn't-fit and k-means diagnostics, as proposal lines. */
+    notes?: string[];
+  }>;
+  /** Initial titles from the LLM's category names (new split children). */
+  initialTitles: Map<string, string>;
   /** How the plan started. */
   from: "current" | "scratch";
   /** Section count of the tree being replaced (for the collapse guard). */
@@ -100,6 +112,7 @@ export interface RebuildPlan {
 export function engineNamer(engine: Engine): Namer {
   return async (c) => {
     const summary = await sectionSummary(engine, c.members, { depth: c.depth, maxDepth: c.maxDepth });
+    if (c.fixedTitle) return { title: c.fixedTitle, summary };
     const title = await labelSection(engine, summary, {
       sampleTitles: c.members.map((m) => m.title),
       depth: c.depth,
@@ -210,6 +223,12 @@ export interface PlanOptions {
   start?: RebuildState;
   /** Grouped entry → holder entry. They take no part in clustering; they are pinned to the holder's section. */
   grouped?: Map<string, string>;
+  /** Proposes a split for an oversized section (an LLM); vectors validate it. Without one, or if it fails, k-means decides. */
+  partitioner?: Partitioner;
+  /** Caches proposals by member set (default: in memory for this plan). */
+  splitCache?: SplitCache;
+  /** Also run k-means beside the LLM partition, for the proposal. */
+  diagnostics?: boolean;
   /** The domain's current sections: new sections matching one by member overlap keep its id, title and summary. */
   oldSections?: Section[];
 }
@@ -249,6 +268,25 @@ function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, 
   }
 }
 
+/** Proposal lines for one judged section: who proposed the grouping, per-category coherence, doesn't-fit, k-means. */
+function verdictNotes(v: SplitVerdict, byEntry: Map<string, RebuildEntry>): string[] {
+  const out: string[] = [];
+  if (v.source === "llm") {
+    out.push(`grouping proposed by the LLM${v.cached ? " (cached)" : ""}; vectors validated it`);
+    for (const c of v.categories ?? []) {
+      out.push(`  - "${c.name}": ${c.size} proposed, ${c.coherent} coherent (${Math.round(c.share * 100)}%) → ${c.kept ? "kept" : `dropped (${c.why})`}`);
+    }
+    if (v.doesntFit?.length) out.push(`  - doesn't fit: ${v.doesntFit.map((i) => byEntry.get(i)?.title ?? i).join("; ")}`);
+    if (!v.decision && v.reason) out.push(`  → no split: ${v.reason}`);
+  } else if (v.source === "kmeans") {
+    out.push(`grouping from k-means${v.fallbackReason ? ` (the LLM proposal failed: ${v.fallbackReason})` : ""}`);
+  }
+  if (v.kmeans && v.source === "llm") {
+    out.push("k-means diagnostic: " + ("split" in v.kmeans ? `no split (${v.kmeans.reason})` : `k=${v.kmeans.k}, p=${v.kmeans.p.toFixed(3)}, stability=${v.kmeans.stability.toFixed(2)}, ${v.kmeans.leftovers.length} leftover`));
+  }
+  return out;
+}
+
 export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const { domain, namer, notify } = opts;
   const rules = opts.rules ?? DEFAULT_RULES;
@@ -260,7 +298,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const plan: RebuildPlan = {
     domain, entries, state: { sections: [], assignment: new Map() },
     moves: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
-    grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [],
+    grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [], initialTitles: new Map(),
     from: opts.start ? "current" : "scratch",
     oldSectionCount: opts.oldSections ? oldDomain.length : undefined,
   };
@@ -293,6 +331,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
 
   // 2. Level by level: refine placement among the sections that exist, then judge each
   //    not-yet-judged section once. Sections with no stable substructure stay whole.
+  const judgeDeps = { partitioner: opts.partitioner, cache: opts.splitCache ?? memorySplitCache(), rules, diagnostics: opts.diagnostics, notify };
   const judged = new Set<string>();
   const exempt = new Set<string>(); // leftovers: flagged as fitting nowhere, never "moved" by refinement
   for (let level = 0; level < 32; level++) {
@@ -304,18 +343,24 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       judged.add(id);
       const members = t.direct(id);
       if (members.length <= rules.splitAbove) { plan.judged.push({ id, n: members.length, outcome: "below-threshold" }); continue; }
-      const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
-      if (!isSplit(d)) {
-        plan.rejected.push({ sectionId: id, n: members.length, reason: d.reason, detail: d.detail });
-        plan.judged.push({ id, n: members.length, outcome: "kept" });
+      const verdict = await judgeSplit(judgeDeps, {
+        domain, parentTitle: sec.title,
+        members: members.map((m) => ({ id: m, title: byEntry.get(m)!.title, summary: byEntry.get(m)!.summary, vector: vec.get(m)! })),
+      });
+      const notes = verdictNotes(verdict, byEntry);
+      if (!verdict.decision) {
+        plan.rejected.push({ sectionId: id, n: members.length, reason: verdict.reason ?? "no-split", detail: verdict.kmeans && "detail" in verdict.kmeans ? verdict.kmeans.detail : undefined });
+        plan.judged.push({ id, n: members.length, outcome: "kept", source: verdict.source, notes });
         continue;
       }
-      plan.judged.push({ id, n: members.length, outcome: "split" });
+      const d = verdict.decision;
+      plan.judged.push({ id, n: members.length, outcome: "split", source: verdict.source, notes });
       for (let g = 0; g < d.k; g++) {
         const ids = members.filter((_, i) => d.labels[i] === g);
         const child = t.newSection(sec, ids);
         for (const e of ids) state.assignment.set(e, String(child.id));
         plan.splitChildren.set(String(child.id), id);
+        if (d.names?.[g]) plan.initialTitles.set(String(child.id), d.names[g]);
       }
       const left = members.filter((_, i) => d.labels[i] < 0);
       if (left.length) { plan.leftovers.set(id, [...(plan.leftovers.get(id) ?? []), ...left]); for (const e of left) exempt.add(e); }
@@ -390,6 +435,7 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
   plan.splitChildren = new Map([...plan.splitChildren].map(([k, v]) => [R(k), R(v)]));
   for (const r of plan.rejected) r.sectionId = R(r.sectionId);
   for (const j of plan.judged) j.id = R(j.id);
+  plan.initialTitles = new Map([...plan.initialTitles].map(([k, v]) => [R(k), v]));
   plan.capWrappers = new Set([...plan.capWrappers].map(R));
   for (const m of plan.moves) { m.from = R(m.from); m.to = R(m.to); }
   for (const oid of map.values()) {
@@ -442,7 +488,7 @@ async function labelTree(
       const members = sample(sec);
       try {
         if (sec.depth > SECTION_TREE.llmNamingMaxDepth) throw new Error("auto");
-        const r = await namer({ members, depth: sec.depth, maxDepth, domain: plan.domain, parentTitle: parent?.title, siblingSummaries: done.slice(), forbidden });
+        const r = await namer({ members, depth: sec.depth, maxDepth, domain: plan.domain, parentTitle: parent?.title, siblingSummaries: done.slice(), forbidden, fixedTitle: forbidden ? undefined : plan.initialTitles.get(String(sec.id)) });
         sec.title = r.title.trim() || autoTitle(members);
         sec.summary = r.summary;
       } catch (err) {
@@ -562,7 +608,10 @@ export function renderProposal(plan: RebuildPlan): string {
   lines.push("", "## Judged by the split rule", "");
   const judgedNow = plan.judged.filter((j) => j.outcome !== "below-threshold");
   if (!judgedNow.length) lines.push("none");
-  for (const j of judgedNow) lines.push(`- ${secTitle(j.id)} \`${j.id}\` (${j.n} direct): ${j.outcome === "split" ? "split" : "kept whole"}`);
+  for (const j of judgedNow) {
+    lines.push(`- ${secTitle(j.id)} \`${j.id}\` (${j.n} direct): ${j.outcome === "split" ? "split" : "kept whole"}`);
+    for (const n of j.notes ?? []) lines.push(`  ${n}`);
+  }
   const below = plan.judged.length - judgedNow.length;
   if (below) lines.push(`- ${below} section(s) at or below the split threshold were not judged`);
   lines.push("", "## Rejected / not split", "");
@@ -626,25 +675,31 @@ export function loadGrouped(domainsRoot: string, domain: string): Map<string, st
  * (ancestors never restructure here), labelling the new children, absorb /
  * promote / collapse / branching cap on the path, and persistence.
  */
-export function repairPath(
+export async function repairPath(
   state: RebuildState, leafId: string, vec: Map<string, number[]>, domain: string,
-  rules: TreeRules = DEFAULT_RULES,
-): string[] {
+  rules: TreeRules = DEFAULT_RULES, ctx: RepairContext = {},
+): Promise<string[]> {
   const t = new Tree(state, vec, domain);
   const created: string[] = [];
   const queue = [leafId];
+  const deps = { partitioner: ctx.partitioner, cache: ctx.cache, rules, notify: ctx.notify };
   while (queue.length) {
     const id = queue.shift()!;
     const sec = state.sections.find((s) => String(s.id) === id);
     if (!sec) continue;
     const members = t.direct(id);
     if (members.length <= rules.splitAbove) continue;
-    const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
-    if (!isSplit(d)) continue;
+    const v = await judgeSplit(deps, {
+      domain, parentTitle: sec.title,
+      members: members.map((m) => ({ id: m, title: ctx.info?.get(m)?.title ?? m, summary: ctx.info?.get(m)?.summary, vector: vec.get(m)! })),
+    });
+    if (!v.decision) continue;
+    const d = v.decision;
     for (let g = 0; g < d.k; g++) {
       const ids = members.filter((_, i) => d.labels[i] === g);
       const child = t.newSection(sec, ids);
       child.centroid = unit(meanVec(ids.map((e) => vec.get(e)!)));
+      if (d.names?.[g]) child.title = d.names[g]; // initial title; the real label pass is deferred
       for (const e of ids) state.assignment.set(e, String(child.id));
       child.memberCount = ids.length;
       child.depth = sec.depth + 1;
@@ -655,6 +710,14 @@ export function repairPath(
     sec.memberCount = members.filter((_, i) => d.labels[i] < 0).length;
   }
   return created;
+}
+
+/** What the insert path needs besides vectors: a partitioner and cache (else k-means), and titles for the proposer. */
+export interface RepairContext {
+  partitioner?: Partitioner;
+  cache?: SplitCache;
+  info?: Map<string, { title: string; summary?: string }>;
+  notify?: (msg: string) => void;
 }
 
 /** Recompute centroid and counts for a section and its ancestors only. */
@@ -677,11 +740,12 @@ function refreshPath(state: RebuildState, fromId: string, vec: Map<string, numbe
  * close to (placeEntry "_unplaced") goes to the nearest root, as the sweep
  * would otherwise open a new section for it.
  */
-export function insertEntry(
+export async function insertEntry(
   state: RebuildState, entry: RebuildEntry, vec: Map<string, number[]>, domain: string,
-  rules: TreeRules = DEFAULT_RULES,
-): string {
+  rules: TreeRules = DEFAULT_RULES, ctx: RepairContext = {},
+): Promise<string> {
   vec.set(entry.id, entry.vector);
+  ctx.info?.set(entry.id, { title: entry.title, summary: entry.summary });
   const t = new Tree(state, vec, domain);
   let target: string;
   if (state.sections.length === 0) {
@@ -696,7 +760,7 @@ export function insertEntry(
   }
   state.assignment.set(entry.id, target);
   refreshPath(state, target, vec);
-  repairPath(state, target, vec, domain, rules);
+  await repairPath(state, target, vec, domain, rules, ctx);
   refreshPath(state, target, vec);
   return target;
 }

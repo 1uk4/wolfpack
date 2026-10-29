@@ -2,8 +2,8 @@
  * summarize — confined section-summary LLM call for crystallize + digest.
  */
 import type { Engine } from "@wolfpack/engine";
-import { SECTION_SUMMARY_SYSTEM, LABEL_SECTION_SYSTEM, HIERARCHY } from "@wolfpack/engine";
-import { SectionSummarySchema, LabelSectionSchema } from "../shared/index.js";
+import { SECTION_SUMMARY_SYSTEM, LABEL_SECTION_SYSTEM, SPLIT_SECTION_SYSTEM, HIERARCHY } from "@wolfpack/engine";
+import { SectionSummarySchema, LabelSectionSchema, SplitSectionSchema } from "../shared/index.js";
 
 /** One member entry of a section, as fed to sectionSummary. */
 export interface SectionMember {
@@ -83,4 +83,26 @@ export async function labelSection(
   });
 
   return result.title;
+}
+
+/** One member of an oversized section, as fed to proposeSplit. */
+export interface SplitMember { id: string; title: string; summary?: string }
+/** The model's proposed division, by entry id. */
+export interface SplitProposal { categories: Array<{ name: string; ids: string[] }>; doesntFit: string[] }
+
+/**
+ * Ask for 2-5 categories (plus a doesn't-fit bucket) for an oversized section. Deterministic inputs: members
+ * in id order, one fixed prompt, no sampling parameters (Claude 5 rejects temperature). The caller caches the
+ * answer by member set, so the same set is never asked twice.
+ */
+export async function proposeSplit(engine: Engine, parentTitle: string, members: SplitMember[]): Promise<SplitProposal> {
+  const ordered = [...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const prompt = [
+    `Parent section: ${JSON.stringify(parentTitle || "(root of the domain)")}`,
+    "",
+    "Entries:",
+    JSON.stringify(ordered.map((m) => ({ id: m.id, title: m.title, summary: m.summary?.trim().slice(0, 240) ?? "" }))),
+  ].join("\n");
+  const r = await engine.call("splitSection", SplitSectionSchema, { system: SPLIT_SECTION_SYSTEM, prompt });
+  return { categories: r.categories.map((c) => ({ name: c.name.trim(), ids: c.ids })), doesntFit: r.doesnt_fit ?? [] };
 }

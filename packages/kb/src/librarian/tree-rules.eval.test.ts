@@ -131,7 +131,7 @@ const labelsOf = (st: RebuildState, ids: string[]) => {
 const insertAll = async (order: RebuildEntry[]) => {
   const st: RebuildState = { sections: [], assignment: new Map() };
   const vec = new Map<string, number[]>();
-  for (const e of order) { insertEntry(st, e, vec, "wp"); await yieldLoop(); }
+  for (const e of order) { await insertEntry(st, e, vec, "wp"); await yieldLoop(); }
   return { st, vec };
 };
 /** Tolerance: adjusted Rand index between the groupings of the two trees >= 0.7 (the same bar as the seed-stability gate:
@@ -167,7 +167,7 @@ describe("acceptance: one-by-one inserts ≈ top-down rebuild (work-wolfpack-t80
       // second run: repairing every section again creates and changes nothing
       const snap = () => JSON.stringify({ s: a.st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...a.st.assignment].sort() });
       const before = snap();
-      for (const s of [...a.st.sections]) expect(repairPath(a.st, String(s.id), a.vec, "wp")).toEqual([]);
+      for (const s of [...a.st.sections]) expect(await repairPath(a.st, String(s.id), a.vec, "wp")).toEqual([]);
       expect(snap()).toBe(before);
       // and rebuilding again from the rebuilt tree changes nothing either
       const again = await planRebuild({ domain: "wp", entries, namer, start: reb.state, oldSections: reb.state.sections });

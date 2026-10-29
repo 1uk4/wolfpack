@@ -37,6 +37,13 @@ export const LabelSectionSchema = z.object({
 });
 export type LabelSection = z.infer<typeof LabelSectionSchema>;
 
+/** splitSection — an LLM-proposed division of an oversized section (vectors validate it afterwards). */
+export const SplitSectionSchema = z.object({
+  categories: z.array(z.object({ name: z.string(), ids: z.array(z.string()) })),
+  doesnt_fit: z.array(z.string()).default([]),
+});
+export type SplitSection = z.infer<typeof SplitSectionSchema>;
+
 /** matchSubject — which candidate entry is the contribution's subject, or "new". */
 export const MatchSubjectSchema = z.object({
   /** A candidate entry id, or the literal string "new". */

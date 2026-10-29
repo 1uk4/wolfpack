@@ -124,7 +124,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     const vec = new Map(base.map((e) => [e.id, e.vector]));
     const before = st.sections.map((s) => String(s.id)).sort();
     for (const e of held) {
-      const sec = insertEntry(st, e, vec, "wp");
+      const sec = await insertEntry(st, e, vec, "wp");
       const mates = [...st.assignment].filter(([id, x]) => x === sec && id !== e.id).map(([id]) => clusterOf(id));
       expect(mates.length).toBeGreaterThan(0);
       expect(mates.every((c) => c === clusterOf(e.id)), `${e.id} landed among clusters ${[...new Set(mates)]}`).toBe(true);
@@ -133,7 +133,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     expect(st.sections.map((s) => String(s.id)).sort()).toEqual(before); // nothing crossed the split threshold
     const snap = () => JSON.stringify({ s: st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...st.assignment].sort() });
     const snapshot = snap();
-    for (const s of [...st.sections]) { expect(repairPath(st, String(s.id), vec, "wp")).toEqual([]); await yieldLoop(); }
+    for (const s of [...st.sections]) { expect(await repairPath(st, String(s.id), vec, "wp")).toEqual([]); await yieldLoop(); }
     expect(snap()).toBe(snapshot);
   }, 600_000);
 
@@ -145,7 +145,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     const reb = await planRebuild({ domain: "wp", entries: es, namer: unique });
     const st: RebuildState = { sections: [], assignment: new Map() };
     const vec = new Map<string, number[]>();
-    for (const e of es) { insertEntry(st, e, vec, "wp"); await yieldLoop(); }
+    for (const e of es) { await insertEntry(st, e, vec, "wp"); await yieldLoop(); }
     const lab = (x: RebuildState) => { const m = new Map<string, number>(); return ids.map((i) => { const y = x.assignment.get(i)!; if (!m.has(y)) m.set(y, m.size); return m.get(y)!; }); };
     expect(ari(lab(reb.state), lab(st))).toBeGreaterThanOrEqual(0.7);
   }, 1_200_000);

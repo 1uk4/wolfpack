@@ -220,6 +220,7 @@ function bestFit(Xc: Vec[], seed: number, rules: TreeRules, nInit: number): Fit 
 }
 
 /**
+ * K-MEANS split: the FALLBACK when the LLM proposal fails (llm-split.ts judgeSplit), and a diagnostic.
  * Decide whether (and how) to split a section's members. Deterministic.
  * Gates: size above splitAbove; centred best-silhouette beats a permutation
  * null (p < nullAlpha); the partition is stable across seeds and bootstraps
@@ -385,3 +386,82 @@ export function restatesParent(child: string, parent: string, rules: TreeRules =
   const union = new Set([...c, ...p]).size;
   return inter / union >= rules.restateJaccard;
 }
+
+// ── validating an LLM-proposed partition ─────────────────────────────────────
+
+/** A proposed division by member index: category names, their members, and the "doesn't fit" bucket. */
+export interface ProposedPartition { names: string[]; members: number[][]; doesntFit: number[] }
+
+export interface CategoryReport {
+  name: string;
+  size: number;
+  /** Members closer to their own category's (leave-one-out) centroid than to every other category's. */
+  coherent: number;
+  share: number;
+  kept: boolean;
+  why?: "too-few-coherent" | "low-share";
+}
+export interface PartitionDecision {
+  /** Group index per input vector (-1 = leftover: stays in the parent). */
+  labels: number[];
+  k: number;
+  /** The LLM's names for the surviving groups, in group order. */
+  names: string[];
+  categories: CategoryReport[];
+  leftovers: number[];
+}
+export interface PartitionRejected { split: null; reason: string; categories: CategoryReport[]; leftovers?: number[] }
+
+/**
+ * Vectors VALIDATE a proposed partition; they never assign. The section's vectors are centred (the shared
+ * direction removed), then for every member: it is coherent if it is closer to its own category's centroid
+ * (leave-one-out) than to every other category's. Incoherent members become leftovers. A category survives
+ * only with >= minGroup coherent members and a coherent share >= llmMinCoherence; the members of a dropped
+ * category become leftovers too, as do "doesn't fit" members. Fewer than two surviving categories: no split.
+ * A member listed in several categories counts for the first; one listed nowhere is "doesn't fit".
+ */
+export function validatePartition(
+  vectors: Vec[],
+  proposal: ProposedPartition,
+  rules: TreeRules = DEFAULT_RULES
+): PartitionDecision | PartitionRejected {
+  const n = vectors.length;
+  const seen = new Set<number>();
+  const cats = proposal.members.map((ms) => ms.filter((i) => i >= 0 && i < n && !seen.has(i) && (seen.add(i), true)));
+  const X = centre(vectors);
+  const cents = cats.map((ms) => (ms.length ? unit(meanVec(ms.map((i) => X[i]))) : null));
+  const reports: CategoryReport[] = [];
+  const coherentSets: number[][] = [];
+  cats.forEach((ms, c) => {
+    const good: number[] = [];
+    for (const i of ms) {
+      const rest = ms.filter((j) => j !== i);
+      if (rest.length === 0) continue;
+      const own = cosine(unit(meanVec(rest.map((j) => X[j]))), X[i]);
+      let other = -Infinity;
+      cents.forEach((cc, d) => { if (d !== c && cc) other = Math.max(other, cosine(cc, X[i])); });
+      if (own > other) good.push(i);
+    }
+    const share = ms.length ? good.length / ms.length : 0;
+    const kept = good.length >= rules.minGroup && share >= rules.llmMinCoherence;
+    reports.push({
+      name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length, coherent: good.length, share, kept,
+      why: kept ? undefined : good.length < rules.minGroup ? "too-few-coherent" : "low-share",
+    });
+    coherentSets.push(kept ? good : []);
+  });
+  const survivors = reports.map((r, c) => (r.kept ? c : -1)).filter((c) => c >= 0);
+  if (survivors.length < 2) {
+    return { split: null, reason: survivors.length === 0 ? "no-coherent-category" : "fewer-than-two-categories", categories: reports };
+  }
+  const labels = new Array<number>(n).fill(-1);
+  survivors.forEach((c, g) => { for (const i of coherentSets[c]) labels[i] = g; });
+  return {
+    labels,
+    k: survivors.length,
+    names: survivors.map((c) => reports[c].name),
+    categories: reports,
+    leftovers: labels.flatMap((l, i) => (l < 0 ? [i] : [])),
+  };
+}
+export const isPartition = (d: PartitionDecision | PartitionRejected): d is PartitionDecision => !("split" in d);

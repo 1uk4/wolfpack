@@ -28,6 +28,7 @@ import { withKbLock } from "./lock.js";
 import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, listEntryIds, currentTreeStart, fillMissingCentroids, engineNamer, type RebuildPlan } from "./rebuild.js";
 import { commitRebuild } from "./rebuild-commit.js";
 import { recoverAndRender } from "./rebuild-recover.js";
+import { enginePartitioner, memorySplitCache } from "./llm-split.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -559,6 +560,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
           domain, entries, namer: engineNamer(engine), notify, start,
+          partitioner: enginePartitioner(engine), splitCache: memorySplitCache(), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,
         });

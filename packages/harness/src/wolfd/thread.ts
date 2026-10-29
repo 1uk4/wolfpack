@@ -70,7 +70,12 @@ export interface ThreadHost {
   stallTimeoutMs?: number;
 }
 
-/** Default silence (ms) before a running turn counts as stalled. Above the bridge's own 90 s idle timeout. */
+/**
+ * Default silence (ms) before a running turn counts as stalled. Deliberately above the bridge's own 90 s idle timeout:
+ * the bridge kills a silent round (including a long non-streamed fallback) at 90 s and pi-durable retries it, so this
+ * watchdog only needs to fire when the bridge itself is wedged. The retry's events (model-error record, new
+ * generation / run start) are engine events and count as activity, so an error + retry at ~90 s does not trip it.
+ */
 export const DEFAULT_STALL_TIMEOUT_MS = 120_000;
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
@@ -89,9 +94,9 @@ export class ThreadRuntime {
   /** Owner steers/follow-ups the engine accepted as queued (submission id -> what was sent), until placed or withdrawn. */
   private readonly ownerQueued = new Map<number, { text: string; refs: readonly AttachmentRef[] }>();
   /** Submission ids the engine has placed (or finished): a submit that returns late must not track these. */
-  private readonly placedIds = new Set<number>();
+  private readonly settledIds = new Map<number, { status: string; reason?: string }>();
   /** Owner messages withdrawn by an abort, waiting to be re-submitted as the next turn (original order). */
-  private withdrawn: Array<{ text: string; refs: readonly AttachmentRef[] }> = [];
+  private withdrawn: Array<{ text: string; refs: readonly AttachmentRef[]; tries?: number }> = [];
   private resubmitting = false;
   private lastActivity = Date.now();
   private toolsInFlight = new Set<string>();
@@ -233,7 +238,9 @@ export class ThreadRuntime {
   }
 
   private applyBatchInner(batch: readonly EngineEvent[]): void {
-    if (batch.length > 0) this.lastActivity = Date.now();
+    // Activity = anything from the model, a tool or the run (incl. a retry's error record / new generation). Queued
+    // submission records and snapshots are not: an owner typing into a hung turn must not keep it alive.
+    if (batch.some((e) => e.type !== "snapshot" && !(e.type === "submission" && (e as { record?: { status?: string } }).record?.status === "queued"))) this.lastActivity = Date.now();
     for (const ev of batch) {
       if (ev.type === "tool_execution_start") this.toolsInFlight.add(String((ev as { toolCallId?: unknown }).toolCallId));
       else if (ev.type === "tool_execution_end") this.toolsInFlight.delete(String((ev as { toolCallId?: unknown }).toolCallId));
@@ -262,14 +269,15 @@ export class ThreadRuntime {
   private trackOwnerRecord(r: { id: unknown; status: string; reason?: string }): void {
     const id = Number(r.id);
     if (r.status === "queued") return;
-    if (r.status === "unanswered") {
-      const kept = this.ownerQueued.get(id);
-      this.ownerQueued.delete(id);
-      if (kept && r.reason === "aborted") this.withdrawn.push(kept);
+    const kept = this.ownerQueued.get(id);
+    this.ownerQueued.delete(id);
+    if (kept) {
+      if (r.status === "unanswered" && r.reason === "aborted") this.withdrawn.push(kept);
       return;
     }
-    this.placedIds.add(id);
-    this.ownerQueued.delete(id);
+    // Not tracked (yet): a submit() may still be awaiting the engine. Remember the outcome for it, bounded.
+    this.settledIds.set(id, { status: r.status, ...(r.reason ? { reason: r.reason } : {}) });
+    if (this.settledIds.size > 200) this.settledIds.delete(this.settledIds.keys().next().value as number);
   }
 
   /** After an abort settled (nothing running), send the withdrawn owner messages as one next message. */
@@ -279,11 +287,17 @@ export class ThreadRuntime {
     this.withdrawn = [];
     this.resubmitting = true;
     const text = items.map((i) => i.text).join("\n\n");
-    const refs = items.flatMap((i) => [...i.refs]);
+    const refs = [...new Map(items.flatMap((i) => [...i.refs]).map((r) => [r.id, r])).values()];
+    const tries = Math.max(0, ...items.map((i) => i.tries ?? 0));
     // Deferred: the batch that ended the turn is still being applied.
     setTimeout(() => {
-      this.submit(text, "followUp", refs)
-        .catch((e) => this.host.onError(e))
+      this.submit(text, "followUp", refs, { resubmit: true })
+        .catch((e) => {
+          this.host.onError(e);
+          const turnId = this.running?.turnId;
+          this.emit({ type: "error", ...(turnId ? { turnId } : {}), message: `Could not re-send your message after the abort${tries < 1 ? " (will retry once)" : ""}: ${JSON.stringify(text)}` });
+          if (tries < 1) this.withdrawn.unshift({ text, refs, tries: tries + 1 });
+        })
         .finally(() => {
           this.resubmitting = false;
           this.maybeResubmit();
@@ -316,7 +330,8 @@ export class ThreadRuntime {
     if (this.toolsInFlight.size > 0) return this.armWatchdog(limit);
     const idle = Date.now() - this.lastActivity;
     if (idle < limit) return this.armWatchdog(limit - idle);
-    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it; queued messages will follow.` });
+    const follow = this.ownerQueued.size > 0 || this.withdrawn.length > 0;
+    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it.${follow ? " Queued messages will follow." : ""}` });
     void this.abort()
       .catch((e) => this.host.onError(e))
       .finally(() => {
@@ -340,6 +355,9 @@ export class ThreadRuntime {
     } else {
       this.running = { turnId };
     }
+    // A tool still executing in the snapshot (reattach / resync) must not look like model silence.
+    this.toolsInFlight = new Set(((snap as unknown as { tools?: Array<{ callId: string; status?: string }> }).tools ?? []).filter((t) => t.status !== "done").map((t) => t.callId));
+    this.lastActivity = Date.now();
   }
 
   private resetMessages(entries: EngineSnapshot["entries"]): void {
@@ -525,13 +543,13 @@ export class ThreadRuntime {
     return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
   }
 
-  async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean } = {}): Promise<SubmitAck> {
+  async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean; resubmit?: boolean } = {}): Promise<SubmitAck> {
     const before = this.turnStarts;
     const textOnly = text;
     // At a turn boundary (nothing running) an operator/card message carries one coalesced notice of what changed on the
     // bound item. Machine submits (subagent deliveries) leave it for the next one. A slow Work API means no notice.
     let notice: PendingNotice | undefined;
-    if (!this.running && !this.isChild && !opts.internal && this.host.taskNotice) {
+    if (!this.running && !this.isChild && !opts.internal && !opts.resubmit && this.host.taskNotice) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         notice = await Promise.race([
@@ -571,7 +589,16 @@ export class ThreadRuntime {
     notice?.commit();
     if (!opts.internal && (r.disposition === "steered" || r.disposition === "queued")) {
       const id = Number(r.messageId);
-      if (Number.isFinite(id) && !this.placedIds.has(id)) this.ownerQueued.set(id, { text: textOnly, refs });
+      if (Number.isFinite(id)) {
+        const settled = this.settledIds.get(id);
+        this.settledIds.delete(id);
+        if (!settled) this.ownerQueued.set(id, { text: textOnly, refs });
+        else if (settled.status === "unanswered" && settled.reason === "aborted") {
+          // The withdrawal was pumped before this submit returned.
+          this.withdrawn.push({ text: textOnly, refs });
+          this.maybeResubmit();
+        }
+      }
     }
     if (refs.length > 0 && this.host.den) {
       try {

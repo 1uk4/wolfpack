@@ -41,17 +41,17 @@ const RelTarget = z.object({ rel: z.string(), target: z.string() });
  */
 export const PatchWorkRequestSchema = z
   .object({
-  stage: z.string().optional(),
-  note: z.string().optional(),
-  title: z.string().optional(),
-  successCriteria: z.string().optional(),
-  assignee: z.string().optional(),
-  moveTo: z.string().min(1).nullable().optional(),
-  link: RelTarget.optional(),
-  unlink: RelTarget.optional(),
-  body: z.string().optional(),
-  standing: z.boolean().optional(),
-  schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
+    stage: z.string().optional(),
+    note: z.string().optional(),
+    title: z.string().optional(),
+    successCriteria: z.string().optional(),
+    assignee: z.string().optional(),
+    moveTo: z.string().min(1).nullable().optional(),
+    link: RelTarget.optional(),
+    unlink: RelTarget.optional(),
+    body: z.string().optional(),
+    standing: z.boolean().optional(),
+    schedule: z.object({ scheduledFor: z.string().nullable(), durationMinutes: z.number().nullable().optional() }).optional(),
   })
   .strict();
 export type PatchWorkRequest = z.infer<typeof PatchWorkRequestSchema>;

@@ -1,6 +1,6 @@
 /** Guard-message whitelist, PATCH parity, body limits, close/write races and hook ordering for hubd work writes. */
 import { request } from "node:http";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -296,5 +296,28 @@ describe("post-append hook", () => {
     await closed;
     await w2.close();
     expect(releases).toBe(1);
+  });
+});
+
+describe("startup failure and probe failure", () => {
+  it("a createHubServer that fails after acquiring the lock releases it synchronously: an immediate retry succeeds", async () => {
+    const dir = mk();
+    const other = mk();
+    const blocker = await start(other); // holds a port
+    await expect(createHubServer({ dataDir: dir, apiKey: KEY, port: blocker.port })).rejects.toThrow(/EADDRINUSE/);
+    servers.push(await createHubServer({ dataDir: dir, apiKey: KEY })); // no wait between the reject and the retry
+  });
+
+  it("a non-ENOENT stat failure skips the hook diff (no replay of the ledger) and does not affect the write", async () => {
+    const dir = mk();
+    // `ledger` is a file, so statting <dir>/ledger/work-events.jsonl fails with ENOTDIR (not ENOENT).
+    writeFileSync(join(dir, "ledger"), "x");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const writer = createWorkWriter({ roots: hubRoots(dir), release: () => {} });
+    const heard = vi.fn();
+    writer.onAppended(heard);
+    await expect(writer.write({ id: "x", kind: "operator" }, () => 7)).resolves.toBe(7);
+    expect(heard).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalled();
   });
 });

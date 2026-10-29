@@ -50,7 +50,10 @@ export interface HubOptions {
   host?: string;
   /** Max time to receive a request body, ms. Default 10000. */
   bodyTimeoutMs?: number;
-  /** TEST SEAM: awaited inside the write queue before each work write runs. */
+  /**
+   * @internal TEST-ONLY seam: awaited inside the write queue before each work write runs. The queue is single-file, so a gate
+   * that never resolves blocks EVERY write (and close()). Never set it in production.
+   */
   writeGate?: () => Promise<void> | void;
 }
 
@@ -126,7 +129,11 @@ function readJson(req: IncomingMessage, o: { maxBytes: number; timeoutMs: number
     const declared = Number(req.headers["content-length"]);
     const fail = (e: HubError, drain: boolean) => {
       clearTimeout(timer);
+      // Detach everything so nothing (e.g. `end`) parses the partial chunks afterwards.
       req.removeAllListeners("data");
+      req.removeAllListeners("end");
+      req.removeAllListeners("error");
+      req.on("error", () => {}); // a late socket error must not become an unhandled 'error' event
       if (drain) req.resume();
       reject(e);
     };
@@ -270,10 +277,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       server.listen(opts.port ?? 0, host, () => resolve());
     });
     port = (server.address() as AddressInfo).port;
-
   } catch (e) {
-    // Anything between acquire and listening failed: free the lock so a retry (or the next hubd) can start.
-    void writer.close();
+    // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
+    // that retries the moment this rejects must not still see it held.
+    server?.close();
+    writerLock.release();
     throw e;
   }
   return {
@@ -282,6 +290,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     port,
     url: `http://${host}:${port}`,
     onWorkAppended: (listener) => writer.onAppended(listener),
+    /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;

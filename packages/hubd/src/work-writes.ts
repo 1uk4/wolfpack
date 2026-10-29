@@ -195,11 +195,13 @@ export function readLedgerSince(roots: KbRoots, offset: number): { events: Ledge
   return { events, end: size };
 }
 
+/** Current ledger size; a missing ledger is 0. Any other stat failure (EACCES, EIO, ...) throws, so the hook skips its diff. */
 export function ledgerSize(roots: KbRoots): number {
   try {
     return statSync(workLedgerFile(roots)).size;
-  } catch {
-    return 0;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw e;
   }
 }
 

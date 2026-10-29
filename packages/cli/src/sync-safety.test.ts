@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import { stubBridgeSdkPlugin } from "./bundle.js";
 import { smokeCheckBundle, watchAfterRestart, type WolfWatchClient } from "./sync-safety.js";
 
 describe("smokeCheckBundle (a): a bundle that crashes at load is caught before upload", () => {
@@ -47,7 +48,7 @@ describe("smokeCheckBundle (a): a bundle that crashes at load is caught before u
     await esbuild.build({
       entryPoints: [path.join(repoRoot, "packages/harness/src/bin/harness.ts")],
       outfile: out, bundle: true, platform: "node", format: "cjs", target: "node20",
-      external: ["@anthropic-ai/claude-agent-sdk", "grammy"], logLevel: "silent",
+      external: ["@anthropic-ai/claude-agent-sdk", "grammy"], plugins: [stubBridgeSdkPlugin()], logLevel: "silent",
     });
     const r = await smokeCheckBundle(out);
     expect(r.output).toContain("ok");

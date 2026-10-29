@@ -479,6 +479,16 @@ export function stubBridgeSdkPlugin(): esbuild.Plugin {
         contents: 'export function query() { throw new Error("claude-bridge: the Agent SDK query function must be injected (queryFn)"); }',
         loader: "js",
       }));
+      // The stateless bridge's skills.ts imports pi-coding-agent for formatSkillsForPrompt, which the stateless provider
+      // never calls. Bundled, pi-coding-agent's config.js runs fileURLToPath(import.meta.url) at load, which is undefined
+      // in CJS and crashes the harness. Stub it for the bridge only.
+      build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, (args) =>
+        /[\\/]pi-claude-bridge[\\/]/.test(args.importer) ? { path: "pi-coding-agent-stub", namespace: "bridge-pca-stub" } : undefined,
+      );
+      build.onLoad({ filter: /.*/, namespace: "bridge-pca-stub" }, () => ({
+        contents: 'export function formatSkillsForPrompt() { throw new Error("claude-bridge: pi-coding-agent is not available in the harness bundle"); }',
+        loader: "js",
+      }));
     },
   };
 }

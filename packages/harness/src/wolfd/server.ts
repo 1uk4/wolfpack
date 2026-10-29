@@ -75,6 +75,8 @@ export interface WolfServerOptions {
   subagents?: SubagentOptions & { bridge?: { manager?: SubagentManager } };
   /** How long submit/abort wait for the event pump to observe the effect. Default 5000. */
   settleTimeoutMs?: number;
+  /** Stall watchdog: abort a running turn silent for this many ms (no model events, no tool running). Default 120000; 0 disables. */
+  stallTimeoutMs?: number;
   /** The wolf's den: its MemoryEvent bus feeds `GET /v1/wolves/:name/events`. Omitted: that stream stays empty. */
   den?: string;
   /** Whether the memory extension is installed on this wolf; picks the `memory_unavailable` message. Unset: generic. */
@@ -291,6 +293,7 @@ export class WolfServer {
       name: this.name,
       den: this.opts.den,
       settleMs: this.settleMs,
+      ...(this.opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: this.opts.stallTimeoutMs } : {}),
       closing: () => this.closing,
       emitWolf: (d) => this.emitWolf(d),
       onError: (e) => this.opts.onError?.(e),

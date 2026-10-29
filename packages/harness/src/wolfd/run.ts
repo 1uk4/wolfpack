@@ -209,8 +209,10 @@ async function startConfigured(
     const conversation = await engine.conversations.root(desired);
     await reconcile(conversation, withTier(desired, homeTier));
 
+    const stallEnv = Number(env.WOLFPACK_STALL_TIMEOUT_MS);
     const server = new WolfServer({
       name: config.identity.name,
+      ...(env.WOLFPACK_STALL_TIMEOUT_MS !== undefined && Number.isFinite(stallEnv) && stallEnv >= 0 ? { stallTimeoutMs: stallEnv } : {}),
       workspace: cwd, // header git tree: the home thread's git workspace
       conversation,
       // Feature threads: fresh ownerless conversations configured like home (reconciled again when reopened).

@@ -63,7 +63,15 @@ export interface ThreadHost {
   taskNotice?(conversationId: string): Promise<PendingNotice>;
   /** How long a submit waits for the notice before sending without it. Default 1500. */
   taskNoticeDeadlineMs?: number;
+  /**
+   * Stall watchdog: a running turn with no engine event for this long (ms) while no tool is executing is reported
+   * (an `error` thread event) and aborted. Default 120000; 0 disables.
+   */
+  stallTimeoutMs?: number;
 }
+
+/** Default silence (ms) before a running turn counts as stalled. Above the bridge's own 90 s idle timeout. */
+export const DEFAULT_STALL_TIMEOUT_MS = 120_000;
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
 const SYSTEM: Actor = { id: "wolfd", kind: "system" };
@@ -78,6 +86,16 @@ export class ThreadRuntime {
   private turnStarts = 0;
   private messages: ThreadMessage[] = [];
   private queuedInputs = new Set<number>();
+  /** Owner steers/follow-ups the engine accepted as queued (submission id -> what was sent), until placed or withdrawn. */
+  private readonly ownerQueued = new Map<number, { text: string; refs: readonly AttachmentRef[] }>();
+  /** Submission ids the engine has placed (or finished): a submit that returns late must not track these. */
+  private readonly placedIds = new Set<number>();
+  /** Owner messages withdrawn by an abort, waiting to be re-submitted as the next turn (original order). */
+  private withdrawn: Array<{ text: string; refs: readonly AttachmentRef[] }> = [];
+  private resubmitting = false;
+  private lastActivity = Date.now();
+  private toolsInFlight = new Set<string>();
+  private stallTimer?: ReturnType<typeof setTimeout>;
   private seenEntries = new Set<EngineSnapshot["entries"][number]["id"]>();
   private readonly subs = new Set<Sub>();
   private readonly waiters = new Set<() => void>();
@@ -148,6 +166,7 @@ export class ThreadRuntime {
   }
 
   async close(): Promise<void> {
+    this.disarmWatchdog();
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
   }
@@ -214,7 +233,10 @@ export class ThreadRuntime {
   }
 
   private applyBatchInner(batch: readonly EngineEvent[]): void {
+    if (batch.length > 0) this.lastActivity = Date.now();
     for (const ev of batch) {
+      if (ev.type === "tool_execution_start") this.toolsInFlight.add(String((ev as { toolCallId?: unknown }).toolCallId));
+      else if (ev.type === "tool_execution_end") this.toolsInFlight.delete(String((ev as { toolCallId?: unknown }).toolCallId));
       if (ev.type === "snapshot") this.resetMessages(ev.entries);
       else if ((ev.type === "message_end" || ev.type === "tool_execution_end") && ev.entry && !this.seenEntries.has(ev.entry.id)) {
         this.seenEntries.add(ev.entry.id);
@@ -231,8 +253,77 @@ export class ThreadRuntime {
       if (ev.type !== "submission" || ev.record.type !== "input") continue;
       if (ev.record.status === "queued") this.queuedInputs.add(Number(ev.record.id));
       else this.queuedInputs.delete(Number(ev.record.id));
+      this.trackOwnerRecord(ev.record as { id: unknown; status: string; reason?: string });
     }
+    this.maybeResubmit();
   }
+
+  /** Keep owner messages: a queued one that the engine withdraws (abort) is remembered, a placed one is forgotten. */
+  private trackOwnerRecord(r: { id: unknown; status: string; reason?: string }): void {
+    const id = Number(r.id);
+    if (r.status === "queued") return;
+    if (r.status === "unanswered") {
+      const kept = this.ownerQueued.get(id);
+      this.ownerQueued.delete(id);
+      if (kept && r.reason === "aborted") this.withdrawn.push(kept);
+      return;
+    }
+    this.placedIds.add(id);
+    this.ownerQueued.delete(id);
+  }
+
+  /** After an abort settled (nothing running), send the withdrawn owner messages as one next message. */
+  private maybeResubmit(): void {
+    if (this.withdrawn.length === 0 || this.running || this.resubmitting || this.host.closing()) return;
+    const items = this.withdrawn;
+    this.withdrawn = [];
+    this.resubmitting = true;
+    const text = items.map((i) => i.text).join("\n\n");
+    const refs = items.flatMap((i) => [...i.refs]);
+    // Deferred: the batch that ended the turn is still being applied.
+    setTimeout(() => {
+      this.submit(text, "followUp", refs)
+        .catch((e) => this.host.onError(e))
+        .finally(() => {
+          this.resubmitting = false;
+          this.maybeResubmit();
+        });
+    }, 0);
+  }
+
+  // --- stall watchdog ---
+  private stallMs(): number {
+    return this.host.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+  }
+
+  private armWatchdog(delay = this.stallMs()): void {
+    clearTimeout(this.stallTimer);
+    if (this.stallMs() <= 0 || this.host.closing()) return;
+    this.stallTimer = setTimeout(() => this.checkStall(), Math.max(delay, 1));
+    this.stallTimer.unref?.();
+  }
+
+  private disarmWatchdog(): void {
+    clearTimeout(this.stallTimer);
+    this.stallTimer = undefined;
+  }
+
+  private checkStall(): void {
+    const turn = this.running;
+    if (!turn || this.host.closing()) return;
+    const limit = this.stallMs();
+    // A tool task running (a long bash command) is not silence from the model: check again later.
+    if (this.toolsInFlight.size > 0) return this.armWatchdog(limit);
+    const idle = Date.now() - this.lastActivity;
+    if (idle < limit) return this.armWatchdog(limit - idle);
+    this.emit({ type: "error", turnId: turn.turnId, message: `Turn stalled: no activity for ${Math.round(idle / 1000)}s. Aborting it; queued messages will follow.` });
+    void this.abort()
+      .catch((e) => this.host.onError(e))
+      .finally(() => {
+        if (this.running?.turnId === turn.turnId) this.armWatchdog(limit);
+      });
+  }
+  // --- end stall watchdog ---
 
   /** Re-base thread state on an engine snapshot. `initial`: synthesize the in-flight turn into the buffer. */
   private rebase(snap: EngineSnapshot, initial: boolean): void {
@@ -350,12 +441,17 @@ export class ThreadRuntime {
       this.buffer = [];
       this.running = { turnId: draft.turnId };
       this.turnStarts++;
+      this.lastActivity = Date.now();
+      this.toolsInFlight.clear();
+      this.armWatchdog();
     }
     const actor: Actor = draft.type === "turn-start" ? OPERATOR : draft.type === "error" ? SYSTEM : { id: this.host.name, kind: "wolf" };
     const full = stampEvent(draft, { threadId: this.summary.id, id: ++this.seq, actor });
     this.buffer.push(full);
     if (draft.type === "turn-end") {
       this.running = null;
+      this.disarmWatchdog();
+      this.toolsInFlight.clear();
       this.flushPendingTier();
     }
     for (const s of [...this.subs]) s(full);
@@ -431,6 +527,7 @@ export class ThreadRuntime {
 
   async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean } = {}): Promise<SubmitAck> {
     const before = this.turnStarts;
+    const textOnly = text;
     // At a turn boundary (nothing running) an operator/card message carries one coalesced notice of what changed on the
     // bound item. Machine submits (subagent deliveries) leave it for the next one. A slow Work API means no notice.
     let notice: PendingNotice | undefined;
@@ -472,6 +569,10 @@ export class ThreadRuntime {
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
     notice?.commit();
+    if (!opts.internal && (r.disposition === "steered" || r.disposition === "queued")) {
+      const id = Number(r.messageId);
+      if (Number.isFinite(id) && !this.placedIds.has(id)) this.ownerQueued.set(id, { text: textOnly, refs });
+    }
     if (refs.length > 0 && this.host.den) {
       try {
         recordSubmission(this.host.den, this.summary.id, r.messageId, refs);

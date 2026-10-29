@@ -1,7 +1,8 @@
 /** Context stats + manual compaction over /v1 on a real engine with a scripted model; wolf.yaml compaction policy pass-through. */
 import { afterEach, describe, expect, it } from "vitest";
 import { adaptToDurable } from "../adapters/durable.js";
-import { backgroundTokensFor, compactionSettings, thresholds } from "../engine/compaction.js";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
+import { backgroundTokensFor, compactionSettings, contextTokens, DEFAULT_BACKGROUND_TOKENS, DEFAULT_RESERVE_TOKENS, thresholds } from "../engine/compaction.js";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "./scripted-model.js";
 import { startTestWolf, type TestWolf } from "./test-wolf.js";
@@ -28,6 +29,30 @@ describe("compaction policy", () => {
     expect(backgroundTokensFor(100_000, 16384, 90_000)).toBe(32768);
     expect(thresholds(1_000_000, { startAt: 200_000 })).toEqual({ startAt: 200_000, waitAt: 1_000_000 - 16384 });
     expect(thresholds(1_000_000, undefined)).toEqual({ startAt: 1_000_000 - 16384 - 32768, waitAt: 1_000_000 - 16384 });
+  });
+
+  it("defaults match pi-durable; enabled:false omits startAt overrides and thresholds", async () => {
+    expect(DEFAULT_RESERVE_TOKENS).toBe(DEFAULT_COMPACTION_POLICY.reserveTokens);
+    expect(DEFAULT_BACKGROUND_TOKENS).toBe(DEFAULT_COMPACTION_POLICY.backgroundTokens);
+    const { models } = (await import("./scripted-model.js")).createScriptedModel([]);
+    expect(compactionSettings(models, { startAt: 1000, enabled: false })).toEqual({ enabled: false });
+    expect(thresholds(1_000_000, { startAt: 1000, enabled: false })).toEqual({});
+  });
+
+  it("contextTokens ignores usage from before the head marker", () => {
+    const usage = (n: number) => ({ input: n, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: n, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+    const asst = (n: number, text: string) => ({ role: "assistant", content: [{ type: "text", text }], usage: usage(n), stopReason: "stop" }) as never;
+    const old = asst(900_000, "old tail");
+    const summary = { role: "user", content: "summary", timestamp: 0 } as never;
+    const fresh = asst(7_000, "fresh");
+    const view = {
+      head: { id: 5 },
+      entries: [{ id: 5 }, { id: 3 }, { id: 6 }],
+      contributions: [[summary], [old], [fresh]],
+      messages: [summary, old, fresh],
+    };
+    expect(contextTokens(view)).toBe(7_000);
+    expect(contextTokens({ ...view, entries: view.entries.slice(0, 2), contributions: view.contributions.slice(0, 2), messages: [summary, old] })).toBeLessThan(100);
   });
 
   it("passes the block to Harness.open settings: modelOverrides per registered model; absent block = no settings", async () => {
@@ -100,6 +125,41 @@ describe("context stats and manual compact", () => {
   });
 });
 
+describe("real engine: tokens after compaction, automatic compactions", () => {
+  // The faux provider derives usage from the prompt size, so a big first input gives the early assistant message a big usage.
+  it("does not keep reporting the old usage of a kept-tail assistant message after a compaction", async () => {
+    tw = await startTestWolf({
+      script: [fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("SUMMARY-TEXT")],
+      yaml: "compaction:\n  keepRecentTokens: 1\n",
+    });
+    await tw.submit("x".repeat(100_000));
+    await tw.submit("second");
+    const before = await tw.client.getThreadContext!(tw.home);
+    expect(before.tokens).toBeGreaterThanOrEqual(25_000);
+    await tw.client.compactThread!(tw.home);
+    const after = await until(() => tw!.client.getThreadContext!(tw!.home), (c) => c.compactions.count === 1 && !c.compacting);
+    expect(after.tokens).toBeLessThan(15_000);
+  });
+
+  it("reports compacting for an automatic (background) compaction", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    tw = await startTestWolf({
+      script: [fauxAssistantMessage("one"), fauxAssistantMessage("two"), async () => { await gate; return fauxAssistantMessage("SUMMARY-TEXT"); }],
+      yaml: "compaction:\n  startAt: 40000\n  keepRecentTokens: 1\n",
+    });
+    await tw.submit("x".repeat(100_000));
+    expect((await tw.client.getThreadContext!(tw.home)).compacting).toBe(false);
+    void tw.submit("y".repeat(100_000)).catch(() => {});
+    const during = await until(() => tw!.client.getThreadContext!(tw!.home), (c) => c.compacting);
+    expect(during.compacting).toBe(true);
+    await new Promise((r) => setTimeout(r, 500));
+    release();
+    const after = await until(() => tw!.client.getThreadContext!(tw!.home), (c) => !c.compacting && c.compactions.count === 1);
+    expect(after.compactions.count).toBe(1);
+  }, 20_000);
+});
+
 describe("context/compact routes on a scripted engine", () => {
   it("compacts while a turn runs (home and feature), passes instructions, reports compacting until done, bad bodies are rejected", async () => {
     const { mkdtempSync, rmSync } = await import("node:fs");
@@ -134,6 +194,21 @@ describe("context/compact routes on a scripted engine", () => {
       const done = await until(() => ctx("w/home"), (c) => c.compacting === false);
       expect(done.compactions.count).toBe(1);
       expect(typeof done.compactions.lastAt).toBe("string");
+
+      // a second request while one is in flight returns the same compaction; a failure is reported in the stats
+      home.compactFail = "boom";
+      let rel2!: () => void;
+      home.compactGate = new Promise<void>((r) => (rel2 = r));
+      await post("w/home", {});
+      await post("w/home", {});
+      expect(home.compactCalls).toEqual(["keep decisions", undefined]);
+      rel2();
+      const failed = await until(() => ctx("w/home"), (c) => c.compacting === false);
+      expect(failed.compactError).toBe("boom");
+      expect(failed.compactions.count).toBe(1);
+      // an empty body is {}
+      home.compactGate = undefined;
+      expect((await fetch(`${url}/v1/threads/w%2Fhome/compact`, { method: "POST" })).status).toBe(200);
 
       const f = await (await fetch(`${url}/v1/wolves/w/threads`, { method: "POST", body: JSON.stringify({ kind: "feature", workItemId: "work-wolfpack-feat0001" }) })).json();
       expect((await post(f.id, {})).status).toBe(200);

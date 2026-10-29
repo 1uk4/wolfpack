@@ -560,7 +560,7 @@ export class WolfServer {
         return this.json(res, 200, await this.checkThread(params.id).contextStats());
       case "compactThread": {
         const t = this.checkThread(params.id);
-        const body = CompactBodySchema.safeParse(await readJson(req));
+        const body = CompactBodySchema.safeParse((await readJson(req)) ?? {});
         if (!body.success) throw new HttpError("invalid_request", "body must be {instructions?: string}");
         const announce = () => this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
         try {

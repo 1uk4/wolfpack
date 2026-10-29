@@ -303,6 +303,7 @@ export function createThreadApi(source: ClientSource) {
 				if (!body || typeof body !== "object" || (body.instructions !== undefined && typeof body.instructions !== "string")) {
 					return json({ error: "body must be {instructions?: string}" }, 400);
 				}
+				if (typeof body.instructions === "string" && body.instructions.length > 4000) return json({ error: "instructions are limited to 4000 characters" }, 400);
 				await client.compactThread(await resolve(client, ref), body.instructions || undefined);
 				return json({ accepted: true });
 			} catch (err) {

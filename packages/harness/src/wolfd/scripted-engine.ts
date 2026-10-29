@@ -71,15 +71,26 @@ export class ScriptedEngine implements EngineConversation {
   tokens = 12_000;
   window: number | undefined = 1_000_000;
 
-  async compact(instructions?: string): Promise<{ taskId: string; done: Promise<void> }> {
+  /** A test sets this to make the next compaction fail. */
+  compactFail?: string;
+  private inflight?: { taskId: string; done: Promise<{ status: "ok" | "failed"; error?: string }> };
+
+  async compact(instructions?: string): Promise<{ taskId: string; done: Promise<{ status: "ok" | "failed"; error?: string }> }> {
+    if (this.inflight) return this.inflight;
     this.compactCalls.push(instructions);
     this.compactingNow++;
-    const done = (this.compactGate ?? Promise.resolve()).then(() => {
+    const fail = this.compactFail;
+    this.compactFail = undefined;
+    const done = (this.compactGate ?? Promise.resolve()).then((): { status: "ok" | "failed"; error?: string } => {
       this.compactingNow--;
+      this.inflight = undefined;
+      if (fail) return { status: "failed", error: fail };
       this.compactionCount++;
       this.compactionLastAt = Date.now();
+      return { status: "ok" };
     });
-    return { taskId: String(this.compactCalls.length), done };
+    this.inflight = { taskId: String(this.compactCalls.length), done };
+    return this.inflight;
   }
 
   async contextStats() {

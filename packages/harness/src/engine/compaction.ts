@@ -8,6 +8,8 @@
  */
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Message } from "@earendil-works/pi-ai";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
+import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 
 export interface CompactionConfig {
   /** Absolute context size (tokens) at which the background summary starts. */
@@ -17,9 +19,9 @@ export interface CompactionConfig {
   enabled?: boolean;
 }
 
-/** pi-durable's defaults (DEFAULT_COMPACTION_POLICY); mirrored here for the derivation and the thresholds. */
-export const DEFAULT_RESERVE_TOKENS = 16384;
-export const DEFAULT_BACKGROUND_TOKENS = 32768;
+/** pi-durable's defaults, used for the derivation and the thresholds. */
+export const DEFAULT_RESERVE_TOKENS = DEFAULT_COMPACTION_POLICY.reserveTokens;
+export const DEFAULT_BACKGROUND_TOKENS = DEFAULT_COMPACTION_POLICY.backgroundTokens;
 
 export interface CompactionSettingsOut {
   enabled?: boolean;
@@ -40,11 +42,12 @@ export function compactionSettings(models: Models, cfg: CompactionConfig | undef
     ...(cfg.reserveTokens !== undefined ? { reserveTokens: cfg.reserveTokens } : {}),
     ...(cfg.keepRecentTokens !== undefined ? { keepRecentTokens: cfg.keepRecentTokens } : {}),
   };
-  if (cfg.startAt !== undefined) {
+  if (cfg.startAt !== undefined && cfg.enabled !== false) {
     const reserve = cfg.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
     const overrides: Record<string, { backgroundTokens: number }> = {};
     for (const m of models.getModels()) {
-      if (typeof m.contextWindow === "number" && m.contextWindow > 0) overrides[`${m.provider}/${m.id}`] = { backgroundTokens: backgroundTokensFor(m.contextWindow, reserve, cfg.startAt) };
+      if (typeof m.contextWindow !== "number" || m.contextWindow <= 0) console.warn(`[compaction] ${m.provider}/${m.id}: no context window, no startAt override`);
+      else overrides[`${m.provider}/${m.id}`] = { backgroundTokens: backgroundTokensFor(m.contextWindow, reserve, cfg.startAt) };
     }
     if (Object.keys(overrides).length) out.modelOverrides = overrides;
   }
@@ -63,27 +66,37 @@ export interface EngineContextStats {
 }
 
 /** The effective thresholds for a model window under `cfg`. */
-export function thresholds(window: number, cfg: CompactionConfig | undefined): { startAt: number; waitAt: number } {
+export function thresholds(window: number, cfg: CompactionConfig | undefined): { startAt?: number; waitAt?: number } {
+  if (cfg?.enabled === false) return {};
   const reserve = cfg?.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
   const background = cfg?.startAt !== undefined ? backgroundTokensFor(window, reserve, cfg.startAt) : DEFAULT_BACKGROUND_TOKENS;
   return { startAt: Math.max(0, window - reserve - background), waitAt: Math.max(0, window - reserve) };
 }
 
-/** Rough token estimate for messages (chars / 4). */
-export function estimateTokens(messages: readonly Message[]): number {
-  let chars = 0;
-  for (const m of messages) chars += JSON.stringify((m as { content?: unknown }).content ?? "").length;
-  return Math.ceil(chars / 4);
-}
-
-/** Context size from the model context: the newest assistant message's usage plus an estimate of the messages after it. */
-export function contextTokens(messages: readonly Message[]): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: string; usage?: { totalTokens?: number; input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; stopReason?: string };
-    if (m.role !== "assistant" || !m.usage || m.stopReason === "aborted" || m.stopReason === "error") continue;
-    const u = m.usage;
-    const total = u.totalTokens || (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
-    if (total > 0) return total + estimateTokens(messages.slice(i + 1));
+/**
+ * Context size of a view, mirroring pi-durable's `estimateContext` (not exported): trust the usage of the newest
+ * assistant message appended AFTER the head marker (its request included the compaction summary); an assistant message
+ * kept in the tail from before the compaction still reports the old, huge context and is ignored. Messages after the
+ * measured one (or all of them when none qualifies) are estimated.
+ */
+export function contextTokens(view: {
+  head: { id: number } | undefined;
+  entries: readonly { id: number }[];
+  contributions: readonly (readonly Message[])[];
+  messages: readonly Message[];
+}): number {
+  const after = view.head?.id ?? Number.NEGATIVE_INFINITY;
+  let measured: Message | undefined;
+  for (let i = view.entries.length - 1; i >= 0 && measured === undefined; i--) {
+    if (view.entries[i]!.id <= after) continue;
+    const msgs = view.contributions[i]!;
+    for (let j = msgs.length - 1; j >= 0 && measured === undefined; j--) {
+      const m = msgs[j]!;
+      if (m.role === "assistant" && calculateContextTokens(m.usage) > 0) measured = m;
+    }
   }
-  return estimateTokens(messages);
+  const from = measured === undefined ? 0 : view.messages.lastIndexOf(measured) + 1;
+  let tokens = measured?.role === "assistant" ? calculateContextTokens(measured.usage) : 0;
+  for (const m of view.messages.slice(from)) tokens += estimateMessageTokens(m);
+  return tokens;
 }

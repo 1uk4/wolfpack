@@ -32,6 +32,7 @@ export function pastStartAt(c: ThreadContext): boolean {
 
 const REFRESH_GAP_MS = 1000;
 const POLL_MS = 1500;
+const HARD_TIMEOUT_MS = 120_000;
 
 /**
  * The thread's context stats: fetched on mount, when a turn ends (`refreshKey`), on a thread-updated of this thread
@@ -52,12 +53,12 @@ export function useThreadContext(wolf: string, slug: string, threadId: string, r
 		last.current = Date.now();
 		try {
 			const res = await fetch(contextUrl(wolf, slug));
+			const w = watch.current;
+			if (w) w.polls++;
 			if (!res.ok || n !== seq.current) return;
 			const next = (await res.json()) as ThreadContext;
 			setCtx(next);
-			const w = watch.current;
 			if (w) {
-				w.polls++;
 				if (next.compacting) w.seen = true;
 				if (!next.compacting && (w.seen || next.compactions.count !== w.count || w.polls >= 3)) {
 					watch.current = null;
@@ -94,14 +95,23 @@ export function useThreadContext(wolf: string, slug: string, threadId: string, r
 	useEffect(() => {
 		if (!inFlight) return;
 		const t = setInterval(refresh, POLL_MS);
-		return () => clearInterval(t);
+		// Hard stop: a compaction that never reports done must not leave the button stuck.
+		const stop = setTimeout(() => {
+			watch.current = null;
+			setInFlight(false);
+			setError("Compaction did not finish in time");
+		}, HARD_TIMEOUT_MS);
+		return () => {
+			clearInterval(t);
+			clearTimeout(stop);
+		};
 	}, [inFlight, refresh]);
 	useOptionalServerEvent("thread-updated", (p) => {
 		if (p.wolf === wolf && p.thread.id === threadId) refresh();
 	});
 
 	const compact = useCallback(
-		async (instructions?: string) => {
+		async (instructions?: string): Promise<boolean> => {
 			setError(undefined);
 			setInFlight(true);
 			watch.current = { count: ctx?.compactions.count ?? 0, seen: false, polls: 0 };
@@ -109,16 +119,18 @@ export function useThreadContext(wolf: string, slug: string, threadId: string, r
 				const res = await fetch(compactUrl(wolf, slug), { method: "POST", body: JSON.stringify(instructions?.trim() ? { instructions: instructions.trim() } : {}) });
 				if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
 				refresh();
+				return true;
 			} catch (e) {
 				watch.current = null;
 				setInFlight(false);
 				setError(e instanceof Error ? e.message : String(e));
+				return false;
 			}
 		},
 		[wolf, slug, ctx, refresh],
 	);
 
-	return { ctx, compacting: inFlight || ctx?.compacting === true, error, compact };
+	return { ctx, compacting: inFlight || ctx?.compacting === true, error: error ?? (ctx?.compactError ? `Compaction failed: ${ctx.compactError}` : undefined), compact };
 }
 
 /** A small bar: tokens filled, ticks at the background threshold (startAt), the wait threshold and the window's end. */
@@ -195,7 +207,7 @@ export function ThreadContextChip({ wolf, slug, threadId, refreshKey }: { wolf: 
 						type="button"
 						data-testid="context-compact"
 						disabled={compacting}
-						onClick={() => void compact(instructions).then(() => setInstructions(""))}
+						onClick={() => void compact(instructions).then((ok) => ok && setInstructions(""))}
 						className="flex items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 hover:bg-accent disabled:opacity-60"
 					>
 						{compacting ? (

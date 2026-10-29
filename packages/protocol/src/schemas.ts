@@ -378,6 +378,8 @@ export const ThreadContextSchema = z.object({
   compactions: z.object({ count: z.number().int().nonnegative(), /** ISO time of the newest one. */ lastAt: z.string().optional() }),
   /** A compaction started by this wolf is in flight. */
   compacting: z.boolean(),
+  /** The last manual compaction failed with this error (cleared when the next one starts). */
+  compactError: z.string().optional(),
 });
 export type ThreadContext = z.infer<typeof ThreadContextSchema>;
 export const CompactBodySchema = z.object({ instructions: z.string().max(4000).optional() });

@@ -280,6 +280,13 @@ export const ROUTES = {
   listWork: { method: "GET", path: "/v1/wolves/:name/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   getWorkRecord: { method: "GET", path: "/v1/wolves/:name/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
+   * Hub-scoped work reads (served by hubd, the pack authority; no wolf in the path). Same response shapes as the wolf-scoped
+   * `listWork` / `getWorkRecord`. `?domain=` and `?graduated=` behave as for `listWork`; a missing domain is 400 `invalid_request`,
+   * an unknown item is 404 `not_found`. Wolves keep serving the wolf-scoped routes.
+   */
+  hubListWork: { method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
+  hubGetWorkRecord: { method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start
    * while a preview for the item is running returns that job (409 `busy` while a confirm runs). Nothing is sent or archived (the wolf folds the item's pending

@@ -1,0 +1,25 @@
+{
+  "name": "@wolfpack/hubd",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"no lint configured for @wolfpack/hubd\"",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/hubd/src"
+  },
+  "dependencies": {
+    "@wolfpack/kb": "*",
+    "@wolfpack/memory": "*",
+    "@wolfpack/protocol": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

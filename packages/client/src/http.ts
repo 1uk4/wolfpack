@@ -58,6 +58,11 @@ export interface HttpClientOptions {
   baseUrl: string;
   /** Acting identity. Reserved: the v1 wire has no actor field yet, so it is not sent. */
   actor?: Actor;
+  /**
+   * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
+   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
+   */
+  hub?: { baseUrl: string; apiKey?: string };
   /** Injectable fetch (tests, auth wrappers). Defaults to global fetch. */
   fetch?: typeof fetch;
   /** Consecutive failed stream reconnects tolerated before giving up. Default 5. */
@@ -75,6 +80,7 @@ interface Frame {
 export class HttpConsoleClient implements ConsoleClient {
   readonly actor?: Actor;
   private readonly base: string;
+  private readonly hub?: { base: string; apiKey?: string };
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
@@ -82,6 +88,7 @@ export class HttpConsoleClient implements ConsoleClient {
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.actor = opts.actor;
+    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), apiKey: opts.hub.apiKey };
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
@@ -327,10 +334,12 @@ export class HttpConsoleClient implements ConsoleClient {
 
   async listWork(wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
     const query = `?domain=${encodeURIComponent(opts.domain)}${opts.graduated ? "&graduated=true" : ""}`;
+    if (this.hub) return (await this.json("hubListWork", {}, ROUTES.hubListWork.response.schema, undefined, undefined, query)) as WorkListResponse;
     return (await this.json("listWork", { name: wolf }, ROUTES.listWork.response.schema, undefined, wolf, query)) as WorkListResponse;
   }
 
   async getWorkRecord(wolf: string, workId: string): Promise<WorkRecordResponse> {
+    if (this.hub) return (await this.json("hubGetWorkRecord", { id: workId }, ROUTES.hubGetWorkRecord.response.schema)) as WorkRecordResponse;
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
   }
 
@@ -411,10 +420,13 @@ export class HttpConsoleClient implements ConsoleClient {
 
   private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
     const route = ROUTES[name];
-    const res = await this.fetchFn(this.base + buildPath(name, params) + query, {
+    const hubRoute = name.startsWith("hub");
+    if (hubRoute && !this.hub) throw new ProtocolError("engine_error", `${name} needs a hub (HttpClientOptions.hub)`, false);
+    const origin = hubRoute ? this.hub!.base : this.base;
+    const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      headers: { ...init.headers, ...(hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
     throw await this.toError(res, threadId);

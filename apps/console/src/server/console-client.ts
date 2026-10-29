@@ -15,10 +15,25 @@ const KEY = Symbol.for("wolfpack.console.client");
 
 type Holder = { [KEY]?: ConsoleClient };
 
-/** Build a client from the environment (exported for tests; no singleton). */
+/**
+ * Build a client from the environment (exported for tests; no singleton).
+ *
+ *   WOLFPACK_API_URL   a wolf's /v1 (otherwise the mock)
+ *   WOLFPACK_HUB_URL   a hubd /v1: work reads (list + record) go there instead of the wolf (optional)
+ *   WOLFPACK_HUB_KEY   the hub's X-API-Key (optional)
+ */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
-	return baseUrl ? new HttpConsoleClient({ baseUrl }) : new MockConsoleClient();
+	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
+	const hub = hubUrl ? { baseUrl: hubUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+	if (baseUrl) return new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) });
+	const mock = new MockConsoleClient();
+	if (!hub) return mock;
+	// No wolf configured, a hub is: threads stay on the mock, work reads come from the hub.
+	const hubClient = new HttpConsoleClient({ baseUrl: hub.baseUrl, hub });
+	mock.listWork = (wolf, opts) => hubClient.listWork(wolf, opts);
+	mock.getWorkRecord = (wolf, id) => hubClient.getWorkRecord(wolf, id);
+	return mock;
 }
 
 export function getConsoleClient(): ConsoleClient {

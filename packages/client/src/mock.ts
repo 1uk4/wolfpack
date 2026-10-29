@@ -1,4 +1,4 @@
-import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, type ScriptStep } from "./fixture.js";
+import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, FIXTURE_WORK, FIXTURE_WORK_RECORDS, type ScriptStep } from "./fixture.js";
 import { pageRange, ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse, type ThreadContext } from "@wolfpack/protocol";
 import {
   BusyError,
@@ -22,6 +22,8 @@ import {
   type UploadOptions,
   type WatchOptions,
   type WolfSummary,
+  type WorkListResponse,
+  type WorkRecordResponse,
 } from "./types.js";
 
 export interface MockOptions {
@@ -251,6 +253,16 @@ export class MockConsoleClient implements ConsoleClient {
     return { threadId, workItemId };
   }
   // --- end feature progress ---
+
+  async listWork(_wolf: string, opts: { domain: string; graduated?: boolean }): Promise<WorkListResponse> {
+    return { items: FIXTURE_WORK.filter((w) => w.domain === opts.domain && (opts.graduated || (w.graduated === undefined && w.stage !== "archived"))).map((w) => ({ ...w })) };
+  }
+
+  async getWorkRecord(_wolf: string, workId: string): Promise<WorkRecordResponse> {
+    const r = FIXTURE_WORK_RECORDS[workId];
+    if (!r) throw new NotFoundError(`work item ${workId}`);
+    return structuredClone(r);
+  }
 
   async listCards(wolf: string): Promise<PendingCard[]> {
     if (wolf !== FIXTURE_WOLF.id) throw new NotFoundError(`wolf ${wolf}`);

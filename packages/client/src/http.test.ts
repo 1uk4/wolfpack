@@ -263,3 +263,29 @@ describe("children and ledger", () => {
     await expect(c.getLedger(home)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
+
+describe("HttpConsoleClient hub work reads", () => {
+  it("goes to the hub's /v1/work routes with the API key; other calls keep using baseUrl", async () => {
+    const seen: { url: string; key: string | null }[] = [];
+    const f: typeof fetch = async (input, init) => {
+      const req = new Request(input as string, init);
+      seen.push({ url: req.url, key: req.headers.get("x-api-key") });
+      if (req.url.includes("/record")) return Response.json({ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", plan: "p", record: "" });
+      return Response.json({ items: [{ id: "work-x-1234567", title: "T", kind: "task", stage: "plan", domain: "x", dependsOn: [] }] });
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid/", apiKey: "sekret" }, fetch: f });
+    expect((await c.listWork("any", { domain: "x y", graduated: true })).items).toHaveLength(1);
+    expect((await c.getWorkRecord("any", "work-x-1234567")).title).toBe("T");
+    expect(seen.map((s) => s.url)).toEqual(["http://hub.invalid/v1/work?domain=x%20y&graduated=true", "http://hub.invalid/v1/work/work-x-1234567/record"]);
+    expect(seen.every((s) => s.key === "sekret")).toBe(true);
+  });
+  it("maps a hub not_found envelope to NotFoundError", async () => {
+    const f: typeof fetch = async () => Response.json({ code: "not_found", message: "work item w", retryable: false }, { status: 404 });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f });
+    await expect(c.getWorkRecord("any", "work-x-1234567")).rejects.toBeInstanceOf(NotFoundError);
+  });
+  it("without a hub, work reads still use the wolf-scoped routes", async () => {
+    const c = make();
+    await expect(c.listWork("1uk4", { domain: "x" })).rejects.toBeInstanceOf(ProtocolError); // stub: no Work API
+  });
+});

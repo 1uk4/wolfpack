@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [{ "path": "../protocol" }, { "path": "../kb" }, { "path": "../memory" }],
+  "include": ["src"],
+  "exclude": ["**/*.test.ts", "src/testing/**"]
+}

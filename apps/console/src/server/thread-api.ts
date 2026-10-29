@@ -16,6 +16,7 @@
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_SUBMIT, ATTACHMENT_NAME_HEADER, NotFoundError, type AttachmentRef, type CardAnswers, type ConsoleClient, type SnapshotEvent, type ThreadEvent, type WhenBusy } from "@wolfpack/client";
 import { ATTACHMENT_IMAGE_TYPES } from "@wolfpack/protocol/attachments";
 import { resolveThreadId } from "../core/thread-adapter.ts";
+import { workspaceGraph } from "./branch-graph.ts";
 import { getConsoleClient } from "./console-client.ts";
 
 export type ClientSource = () => ConsoleClient;
@@ -315,6 +316,18 @@ export function createThreadApi(source: ClientSource) {
 				const client = source();
 				if (!client.getWorkspaceStatus) return json({ error: "this wolf has no git workspaces" }, 404);
 				return json(await client.getWorkspaceStatus(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+		/** The branch graph (lanes + commits) of a thread's workspace, from read-only git. 404 when the thread has no git workspace. */
+		async workspaceGraph(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				const id = await resolve(client, ref);
+				const ws = (await client.listThreads(ref.wolf)).find((t) => t.id === id)?.workspace;
+				if (!ws) return json({ error: "this thread has no git workspace" }, 404);
+				return json(await workspaceGraph(ws, ref.wolf));
 			} catch (err) {
 				return failure(err);
 			}

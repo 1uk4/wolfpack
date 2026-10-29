@@ -5,6 +5,8 @@ import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { threadBase } from "@/components/thread-transport";
+import { BranchGraphView } from "@/components/branch-graph";
+import type { BranchGraph } from "@/src/core/branch-graph";
 import type { ThreadWorkspace, WorkspaceStatus } from "@wolfpack/client";
 
 /** The header's repo · base → branch label (a home thread has no base). */
@@ -76,6 +78,27 @@ export function useWorkspaceStatus(wolf: string, slug: string, threadId: string,
 	return status;
 }
 
+/** The branch graph for the popover: fetched while it is open and again when the git status changes. */
+function useBranchGraph(wolf: string, slug: string, enabled: boolean, status: WorkspaceStatus | undefined): BranchGraph | undefined {
+	const [graph, setGraph] = useState<BranchGraph>();
+	useEffect(() => {
+		if (!enabled) return;
+		let live = true;
+		void (async () => {
+			try {
+				const res = await fetch(`${threadBase(wolf, slug)}/workspace/graph`);
+				if (res.ok && live) setGraph((await res.json()) as BranchGraph);
+			} catch {
+				/* the graph is a preview; the list below still works */
+			}
+		})();
+		return () => {
+			live = false;
+		};
+	}, [wolf, slug, enabled, status]);
+	return graph;
+}
+
 async function copyPath(text: string): Promise<boolean> {
 	try {
 		await navigator.clipboard.writeText(text);
@@ -95,6 +118,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState(false);
 	const rootRef = useRef<HTMLDivElement>(null);
+	const graph = useBranchGraph(wolf, slug, open, status);
 	usePopoverDismiss(rootRef, open, () => setOpen(false));
 	if (!workspace) return null;
 	const branch = status?.branch ?? workspace.branch;
@@ -185,6 +209,12 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 									))
 								)}
 							</section>
+							{graph && graph.commits.length > 0 && (
+								<section data-testid="git-tree-graph">
+									<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Branches</div>
+									<BranchGraphView graph={graph} />
+								</section>
+							)}
 							<section data-testid="git-tree-commits">
 								<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Recent commits</div>
 								{status.commits.map((c) => (

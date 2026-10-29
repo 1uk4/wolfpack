@@ -172,40 +172,69 @@ describe("runSweepTick", () => {
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
   });
 
-  it("a recovery that keeps failing never stops the tick: notify, carry on, and quarantine the journal after 3 failures", async () => {
+  const badJournal = () => {
     const tmp = join(roots.denLocal, "stale.tmp");
     mkdirSync(roots.denLocal, { recursive: true });
     writeFileSync(tmp, "x");
     // renaming into a directory that does not exist throws ENOENT on every attempt
-    const journal = JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [], renames: [{ tmp, final: join(base, "no", "such", "dir", "f") }] });
-    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), journal);
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [], renames: [{ tmp, final: join(base, "no", "such", "dir", "f") }] }));
+  };
+
+  it("while a journal is present and recovery fails the run is SKIPPED (paused), counted once per run, and quarantined after 3 runs", async () => {
+    badJournal();
+    drop("a");
     const notes: string[] = [];
     const run = () => runSweepTick({ roots, createEngine, notify: (m) => notes.push(m), budgetMs: 1000 });
     for (let i = 1; i <= 2; i++) {
-      expect((await run()).outcome).toBe("idle"); // no throw
+      const t = await run();
+      expect(t.outcome).toBe("backoff");
+      expect(t.sweep.paused).toMatch(new RegExp(`\\(${i}/3\\)`));
+      expect(t.sweep.processed).toBe(0);
+      expect(t.sweep.remaining).toBe(1); // the item waits; nothing was placed
+      expect(queued()).toEqual(["a.md"]);
+      expect(createEngine).not.toHaveBeenCalled();
       expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(true);
-      expect(notes.at(-1)).toMatch(new RegExp(`failed \\(${i}/3\\)`));
+      expect(notes.at(-1)).toMatch(new RegExp(`failed \\(${i}/3\\).*skipped`));
     }
-    expect((await run()).outcome).toBe("idle");
+    // the 3rd failed RUN quarantines the journal and is itself skipped
+    const third = await run();
+    expect(third.outcome).toBe("backoff");
+    expect(third.sweep.paused).toMatch(/quarantined/);
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.bad"))).toBe(true);
-    expect(notes.at(-1)).toMatch(/3 times in a row.*\.rebuild-journal\.bad/);
-    // a later tick is quiet
-    notes.length = 0;
-    await run();
-    expect(notes).toEqual([]);
+    expect(third.sweep.journalBad).toMatch(/quarantined rebuild journal/);
+    expect(queued()).toEqual(["a.md"]);
+    // the next run proceeds, and keeps reporting the .bad file until an operator removes it
+    const next = await run();
+    expect(next.outcome).toBe("ran");
+    expect(next.sweep).toMatchObject({ processed: 1, created: 1 });
+    expect(next.sweep.journalBad).toMatch(/\.rebuild-journal\.bad/);
+    rmSync(join(roots.denLocal, ".rebuild-journal.bad"));
+    drop("b");
+    expect((await run()).sweep.journalBad).toBeUndefined();
   });
 
-  it("a failing recovery does not stop the sweep from processing the item", async () => {
-    const tmp = join(roots.denLocal, "stale.tmp");
-    mkdirSync(roots.denLocal, { recursive: true });
-    writeFileSync(tmp, "x");
-    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [], renames: [{ tmp, final: join(base, "no", "such", "dir", "f") }] }));
+  it("sweep() entered directly (no tick) also skips while recovery fails, and counts one attempt per call", async () => {
+    badJournal();
     drop("a");
+    const { sweep } = await import("./sweep.js");
     const notes: string[] = [];
-    const t = await runSweepTick({ roots, createEngine, notify: (m) => notes.push(m), budgetMs: 1000 });
-    expect(t.sweep).toMatchObject({ processed: 1, created: 1 });
-    expect(notes.some((m) => /recovery failed/.test(m))).toBe(true);
+    const r = await sweep({ engine: { call: vi.fn(), usage: { summarize: () => ({}) } } as unknown as Engine, roots, loadEntryVectors: async () => [], notify: (m) => notes.push(m) });
+    expect(r.paused).toMatch(/\(1\/3\)/);
+    expect(r.processed).toBe(0);
+    expect(queued()).toEqual(["a.md"]);
+    expect(readFileSync(join(roots.denLocal, ".rebuild-recover-failures"), "utf-8")).toBe("1");
+  });
+
+  it("an unreadable journal is quarantined at once and the run is skipped with the .bad note", async () => {
+    mkdirSync(roots.denLocal, { recursive: true });
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), "{ not json");
+    drop("a");
+    const t = await tick();
+    expect(t.outcome).toBe("backoff");
+    expect(t.sweep.journalBad).toBeDefined();
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.bad"))).toBe(true);
+    expect(queued()).toEqual(["a.md"]);
   });
 
   it("an infra error outside sweep (engine setup) enters backoff, alerts once, and keeps the item", async () => {

@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
 import { rebuildJournalFile } from "./rebuild-commit.js";
-import { tryRecoverAndRender } from "./rebuild-recover.js";
+import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -71,6 +71,8 @@ export interface SweepTickResult {
  */
 export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const result = await runTick(opts);
+  const bad = badJournalNote(opts.roots);
+  if (bad && !result.sweep.journalBad) result.sweep = { ...result.sweep, journalBad: bad };
   await sendWorkLinks(opts);
   return result;
 }
@@ -91,9 +93,12 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots } = opts;
 
   // Finish a rebuild that crashed after its journal, before anything else (the check is one stat; idempotent).
+  // While a journal is present and recovery fails the run is SKIPPED (paused): placing entries into a half-committed
+  // tree would make it worse. The tick is one attempt; the sweep is not called, so it cannot count a second one.
   if (existsSync(rebuildJournalFile(roots))) {
     try {
-      await withKbLock(roots, async () => { tryRecoverAndRender(roots, opts.notify); });
+      const failed = await withKbLock(roots, async () => tryRecoverAndRender(roots, opts.notify).failed);
+      if (failed) return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: failed, journalBad: badJournalNote(roots) } };
     } catch (err) {
       if (!(err instanceof KbLockBusy)) throw err;
     }

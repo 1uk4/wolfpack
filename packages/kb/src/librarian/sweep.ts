@@ -19,7 +19,7 @@ import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
-import { drainInbox } from "./intake.js";
+import { drainInbox, countPending } from "./intake.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
 import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
@@ -33,7 +33,7 @@ import { resolveAliasedEntry, survivorOf } from "./alias.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
-import { tryRecoverAndRender } from "./rebuild-recover.js";
+import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import {
   commitEntry,
   readEntryMarkdown,
@@ -112,6 +112,8 @@ export interface SweepResult {
   /** Set when the tick did no work because of an outage: skipped inside the
    *  backoff window, or an infrastructure error just started/extended it. */
   paused?: string;
+  /** Set while a quarantined rebuild journal (.rebuild-journal.bad) is present: an operator must look at it. */
+  journalBad?: string;
 }
 
 /** Turn a thrown error — especially a ZodError — into a short, readable reason.
@@ -291,7 +293,9 @@ function clampFit(x: number): number {
  */
 export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   try {
-    return await withKbLock(ctx.roots, () => sweepUnlocked(ctx));
+    const r = await withKbLock(ctx.roots, () => sweepUnlocked(ctx));
+    const bad = badJournalNote(ctx.roots);
+    return bad && !r.journalBad ? { ...r, journalBad: bad } : r;
   } catch (err) {
     if (!(err instanceof KbLockBusy)) throw err;
     ctx.notify?.("sweep: skipped, the KB is busy (a reorg or rebuild is running)");
@@ -312,7 +316,11 @@ const oversizedLogged = new WeakSet<object>();
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
   // A rebuild that crashed after its journal is finished first, under the lock (idempotent; a no-op without a journal).
-  tryRecoverAndRender(roots, ctx.notify);
+  const recovery = tryRecoverAndRender(roots, ctx.notify);
+  if (recovery.failed) {
+    // Never place entries into a tree that may be half-committed: skip the run, the inbox waits.
+    return { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
+  }
   const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
   // One contribution per run, oldest first. The timer fires every minute, so the

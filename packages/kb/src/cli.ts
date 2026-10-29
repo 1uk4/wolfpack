@@ -426,12 +426,20 @@ async function cmdRebuild(): Promise<void> {
   const domain = argv.find((a) => !a.startsWith("--") && a !== "rebuild") ?? null;
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain> [--dry-run]");
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes)");
     process.exit(1);
   }
 
   const dryRun = argv.includes("--dry-run");
-  console.log(`\n── rebuild${dryRun ? " (dry-run: nothing is written to the KB)" : ""}: ${domain} (full section tree reconstruction) ──`);
+  if (!dryRun && !argv.includes("--yes")) {
+    console.error(
+      `rebuild rewrites the section: line of every entry in "${domain}" and replaces its whole section tree.\n` +
+      `Preview it with:  wolfpack-kb rebuild ${domain} --dry-run\n` +
+      `Then run it with: wolfpack-kb rebuild ${domain} --yes   (backs up sections.json first)`
+    );
+    process.exit(2);
+  }
+  console.log(`\n── rebuild${dryRun ? " (dry-run: no KB file is written; LLM label calls are made and the vector cache may be warmed)" : ""}: ${domain} (full section tree reconstruction) ──`);
 
   const engine = makeEngine();
   const result = await reorgFn({
@@ -536,7 +544,7 @@ async function cmdHistory(): Promise<void> {
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
   "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> [--dry-run]\n" +
-  "  rebuild <domain> | retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
+  "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 
 async function main(): Promise<void> {

@@ -322,6 +322,8 @@ export const SECTION_TREE = {
     misplacedMargin: 0.05,
     /** Child label restating the parent: token Jaccard at or above this. */
     restateJaccard: 0.6,
+    /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */
+    reuseJaccard: 0.5,
     /** Fixed base seed (combined with a hash of the member ids). */
     seed: 1337,
   },

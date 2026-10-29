@@ -1,7 +1,7 @@
 /**
  * KB Sweep Manager — runs the shared sweep tick (runSweepTick, the same one the
  * kb CLI runs) asynchronously in the background. "Running" covers the whole
- * tick, post-sweep reorg included.
+ * tick (the post-sweep reorg is off by default).
  *
  * The tick runs on the main event loop but is fully async/await,
  * so it doesn't block Telegram responses (which are I/O-bound).
@@ -93,7 +93,7 @@ export class SweepManager {
     return { kbBase: this.config.kbBase, opsRoot: this.config.kbOps, denLocal: this.config.denLocal };
   }
 
-  /** True for the whole tick: the sweep AND the post-sweep reorg. */
+  /** True for the whole tick (the sweep, plus the post-sweep reorg when enabled). */
   isRunning(): boolean {
     return this.status.state === "running";
   }

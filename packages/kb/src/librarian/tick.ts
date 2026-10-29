@@ -9,7 +9,9 @@
  * for the domains the item touched, then vector-cache upkeep. One engine and one embedder serve the
  * whole tick.
  */
+import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
+import { recoverRebuild, rebuildJournalFile } from "./rebuild-commit.js";
 import type { KbRoots } from "../shared/index.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -86,6 +88,15 @@ async function sendWorkLinks(opts: SweepTickOptions): Promise<void> {
 
 async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots } = opts;
+
+  // Finish a rebuild that crashed after its journal, before anything else (idempotent; the check is one stat).
+  if (existsSync(rebuildJournalFile(roots))) {
+    try {
+      await withKbLock(roots, async () => { const n = recoverRebuild(roots); opts.notify?.(`recovered an interrupted rebuild (${n} file(s) finished)`); });
+    } catch (err) {
+      if (!(err instanceof KbLockBusy)) throw err;
+    }
+  }
 
   const waitMs = backoffRemainingMs(roots);
   if (waitMs > 0) {

@@ -161,6 +161,18 @@ describe("runSweepTick", () => {
     expect(readFileSync(join(dir, "cache.jsonl"), "utf-8")).not.toContain("sha256:gone0");
   });
 
+  it("finishes an interrupted rebuild (journal left behind) before anything else, even with an empty inbox", async () => {
+    const final = join(roots.kbBase, "domains", "wp", "entries", "a.md");
+    writeFileSync(final, "old");
+    writeFileSync(join(roots.kbBase, "domains", "wp", "entries", ".rebuild-tmp-a.md.tmp"), "new");
+    mkdirSync(roots.denLocal, { recursive: true });
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 2, domain: "wp", at: "x", renames: [{ tmp: join(roots.kbBase, "domains", "wp", "entries", ".rebuild-tmp-a.md.tmp"), final }] }));
+    const t = await tick();
+    expect(t.outcome).toBe("idle");
+    expect(readFileSync(final, "utf-8")).toBe("new");
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
+  });
+
   it("an infra error outside sweep (engine setup) enters backoff, alerts once, and keeps the item", async () => {
     drop("a");
     createEngine.mockImplementation(() => {

@@ -125,6 +125,8 @@ describe("hashSectionId / restatesParent", () => {
   it("catches restated parents and allows real subtopics", () => {
     expect(restatesParent("Console Chat", "Console Chat and Integrations")).toBe(true);
     expect(restatesParent("Chat Console Features", "Console Chat Features")).toBe(true);
+    // a narrower child is not a restatement
+    expect(restatesParent("Shipping Policy", "Task Creation Workflow and Shipping Policy")).toBe(false);
     expect(restatesParent("Discord Tooling", "Console Chat and Integrations")).toBe(false);
     expect(restatesParent("Subagent Side Panel", "Console Chat and Integrations")).toBe(false);
   });

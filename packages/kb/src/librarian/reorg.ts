@@ -19,27 +19,14 @@ import {
   type EntryWithVector,
 } from "./hierarchy.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
-import { buildTreeBottomUp, splitAsParentChild, placeEntry, checkInvariants } from "./section-tree.js";
+import { splitAsParentChild, placeEntry, checkInvariants } from "./section-tree.js";
 import { SECTION_TREE } from "@wolfpack/engine";
 import { createEmbedder, buildEntryVectors, cosine, type Embedder, type EntryVector } from "./embed.js";
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
 import { withKbLock } from "./lock.js";
-import { planRebuild, renderProposal, commitRebuild, loadRebuildEntries, engineNamer, type RebuildPlan } from "./rebuild.js";
-
-/**
- * Shared state threaded through every rebuild phase. `sections` is NOT in
- * here because phases that filter the array need to return a replacement;
- * everything else (result, allAssignments) is mutated in place.
- */
-interface RebuildCtx {
-  opts: ReorgOptions;
-  domainsRoot: string;
-  allVectors: EntryVector[];
-  result: ReorgResult;
-  allAssignments: Map<string, Map<string, SectionId>>;
-  stConfig: typeof SECTION_TREE;
-}
+import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, engineNamer, type RebuildPlan } from "./rebuild.js";
+import { commitRebuild, recoverRebuild } from "./rebuild-commit.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -61,9 +48,14 @@ export interface ReorgOptions {
   touchedSections?: Set<string>;
   /** Full bottom-up rebuild of the section tree (agglomerative clustering) */
   rebuild?: boolean;
-  /** No disk writes, no ledger appends, no LLM labeling — logging only. */
+  /**
+   * Incremental reorg: no disk writes, no ledger appends, no LLM labeling.
+   * With `rebuild`: the full flow runs, labels included, so LLM calls ARE made
+   * and the embedder may add vectors to its cache; no entry file, sections
+   * snapshot or ledger line is written.
+   */
   dryRun?: boolean;
-  /** With rebuild + dryRun: where to write the proposal markdown. */
+  /** With rebuild + dryRun: where to write the proposal markdown (the only file a dry-run rebuild writes). */
   proposalPath?: string;
   /** Treat every section as dirty (re-label all, not just changed ones). */
   resummarizeAll?: boolean;
@@ -462,6 +454,7 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
 
 async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
+  if (!opts.dryRun) recoverRebuild(roots);
   const domainsRoot = join(roots.kbBase, "domains");
   if (!existsSync(domainsRoot)) {
     return { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
@@ -537,34 +530,45 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const events: KbEvent[] = [];
   const result: ReorgResult = { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
 
-  // Full rebuild: planned entirely in memory per domain, then ONE commit.
+  // Full rebuild: planned entirely in memory per domain, then ONE commit per domain.
   if (opts.rebuild) {
-    for (const domain of domains) {
-      const entries = loadRebuildEntries(domainsRoot, domain, allVectors);
-      if (entries.length === 0) { notify?.(`rebuild: ${domain} — no entries, skipping`); continue; }
-      notify?.(`rebuild: ${domain} (${entries.length} entries)`);
-      const plan = await planRebuild({ domain, entries, namer: engineNamer(engine), notify });
-      result.splits += plan.splitChildren.size;
-      result.placements += plan.state.assignment.size;
-      result.labelsUpdated += plan.state.sections.length;
-      result.rebuilt = true;
-      result.domains.push(domain);
-      result.plans = [...(result.plans ?? []), plan];
-      const proposal = renderProposal(plan);
-      result.proposal = (result.proposal ?? "") + proposal;
-      if (opts.dryRun) continue;
-      const { entriesWritten } = commitRebuild(roots, plan);
-      notify?.(`  committed: ${entriesWritten} entry file(s) rewritten, ${plan.state.sections.length} sections`);
+    if (!opts.dryRun) recoverRebuild(roots);
+    const vectorById = new Map(allVectors.map((v) => [v.entryId, v.vector]));
+    try {
+      for (const domain of domains) {
+        const entries = loadRebuildEntries(domainsRoot, domain, allVectors);
+        if (entries.length === 0) { notify?.(`rebuild: ${domain} — no entries, skipping`); continue; }
+        notify?.(`rebuild: ${domain} (${entries.length} entries)`);
+        const plan = await planRebuild({
+          domain, entries, namer: engineNamer(engine), notify,
+          grouped: loadGrouped(domainsRoot, domain),
+          oldSections: sections.filter((s) => String(s.domain) === domain),
+        });
+        result.splits += plan.splitChildren.size;
+        result.placements += plan.state.assignment.size;
+        result.labelsUpdated += plan.state.sections.length - plan.reused.size;
+        result.rebuilt = true;
+        result.plans = [...(result.plans ?? []), plan];
+        result.proposal = (result.proposal ?? "") + renderProposal(plan);
+        if (opts.dryRun) { result.domains.push(domain); continue; }
+        const { entriesWritten, orphansPlaced } = commitRebuild(roots, plan, { vectorOf: (id) => vectorById.get(id) });
+        result.domains.push(domain);
+        notify?.(`  committed: ${entriesWritten} entry file(s) rewritten, ${plan.state.sections.length} sections` + (orphansPlaced.length ? `, ${orphansPlaced.length} orphan(s) placed by similarity` : ""));
+      }
+    } finally {
+      // Domains already committed must get a consistent registry/digest/index even if a later one failed.
+      if (!opts.dryRun && result.domains.length > 0) {
+        rerenderRegistry(roots, false);
+        repinGroups(roots, result.domains, false);
+        for (const domain of result.domains) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
+      }
     }
     if (opts.dryRun) {
       if (opts.proposalPath && result.proposal) writeFileSync(opts.proposalPath, result.proposal);
-      notify?.(`rebuild dry-run: ${result.placements} entries planned, nothing written`);
+      notify?.(`rebuild dry-run: ${result.placements} entries planned; no entry, sections or ledger file was written (LLM label calls were made and the vector cache may have been warmed)`);
       return result;
     }
-    rerenderRegistry(roots, false);
-    repinGroups(roots, domains, false);
-    for (const domain of result.domains) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
-    notify?.(`rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections labeled`);
+    notify?.(`rebuild done: ${result.placements} entries placed, ${result.labelsUpdated} sections newly labeled`);
     return result;
   }
 
@@ -600,72 +604,6 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
 // ════════════════════════════════════════════════════════════════════════════
 // Rebuild phases
 // ════════════════════════════════════════════════════════════════════════════
-
-/**
- * Phase 4 — final sweep for singleton roots created by post-split. Looser
- * member count (direct + descendants) and looser neighbor filter than the
- * first absorb; both pre-existing differences preserved.
- */
-/** Exported for tests. */
-export function rebuildFinalAbsorb(
-  sections: Section[],
-  ctx: RebuildCtx,
-): Section[] {
-  const { opts, domainsRoot, allVectors, result, allAssignments, stConfig } = ctx;
-  const { engine, notify } = opts;
-  for (const domain of result.domains) {
-    const domVecs = allVectors.filter((v) => v.domain === domain);
-    const totalEntries = domVecs.length;
-    const minEntries = Math.max(2, Math.ceil(totalEntries * stConfig.minRootRatio));
-    const eDir = join(domainsRoot, domain, "entries");
-    const domainRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-    // Entries in a section's whole subtree. Post-split can nest a root's
-    // entries several levels down, leaving the root and its children with 0
-    // direct members; counting one level made such a root look empty.
-    const totalFor = (sec: Section): number =>
-      sec.memberCount + sections.filter((s) => s.parent === sec.id).reduce((sum, c) => sum + totalFor(c), 0);
-    for (const root of domainRoots) {
-      const currentRoots = sections.filter((s) => s.domain === domain && s.parent === null);
-      if (currentRoots.length <= 2) break;
-      const actualMembers = totalFor(root);
-      if (actualMembers >= minEntries) continue;
-      if (root.childIds.length > 0 && actualMembers > 1) continue;
-      const neighbors = domainRoots.filter((r) => r.id !== root.id);
-      if (neighbors.length === 0) continue;
-      let bestN = neighbors[0];
-      let bestS = -1;
-      for (const n of neighbors) {
-        const sim = cosine(root.centroid, n.centroid);
-        if (sim > bestS) { bestS = sim; bestN = n; }
-      }
-      notify?.(`  final absorb: "${root.title || root.id}" (${actualMembers}) -> "${bestN.title || bestN.id}"`);
-      // The whole subtree goes: its few entries (actualMembers < minEntries)
-      // move to bestN and every section under root is dropped, so nothing is
-      // left pointing at a deleted parent.
-      const descendantIds = new Set<string>();
-      const addDesc = (pid: SectionId) => {
-        descendantIds.add(String(pid));
-        for (const s of sections) if (s.parent === pid) addDesc(s.id);
-      };
-      addDesc(root.id);
-      if (existsSync(eDir)) {
-        for (const f of readdirSync(eDir).filter((x) => x.endsWith(".md"))) {
-          const { fields } = parseFrontmatter(readFileSync(join(eDir, f), "utf-8"));
-          const cur = String(fields.section ?? "");
-          if (descendantIds.has(cur)) {
-            const eid = f.replace(/\.md$/, "");
-            if (writeEntrySection(eDir, eid, bestN.id, opts.dryRun)) {
-              bestN.memberCount++;
-            }
-          }
-        }
-      }
-      sections = sections.filter((s) => !descendantIds.has(String(s.id)));
-      result.merges++;
-    }
-  }
-  return sections;
-}
 
 /**
  * Collapse root pairs with centroid cosine > rootMergeSimilarity. The smaller

@@ -86,6 +86,14 @@ export const ev = {
     childIds,
   }),
 
+  /** A rebuild replaced the domain's tree: folds as "drop every section of the domain, take this snapshot". */
+  sectionsReplaced: (domain: string, sections: Array<Record<string, unknown>>): KbEvent => ({
+    t: "sections_replaced",
+    ...stamp(),
+    domain,
+    sections,
+  }),
+
   entryPlaced: (f: {
     entryId: string;
     sectionId: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -8,8 +8,9 @@ import {
   planRebuild, commitRebuild, recoverRebuild, rebuildJournalFile, renderProposal, withSectionLine,
   listRebuildTemps, type RebuildEntry, type Namer,
 } from "./rebuild.js";
-import { readSections } from "./sections.js";
-import { rng, hashSeed } from "./tree-rules.js";
+import { readSections, foldSections } from "./sections.js";
+import { readLedger } from "./ledger.js";
+import { rng } from "./tree-rules.js";
 import type { KbRoots } from "../shared/index.js";
 
 const DIM = 24;
@@ -203,5 +204,167 @@ describe("commitRebuild / dry-run on disk", () => {
     expect(md).toContain("Nothing was written");
     // labels were produced (dry-run runs the full flow)
     expect(engine.call).toHaveBeenCalled();
+  });
+});
+
+describe("commit safety", () => {
+  let base: string;
+  let roots: KbRoots;
+  const eDir = () => join(roots.kbBase, "domains", "wp", "entries");
+  const file = (id: string) => join(eDir(), `${id}.md`);
+  const put = (id: string, section: string, extra = "") => {
+    mkdirSync(eDir(), { recursive: true });
+    writeFileSync(file(id), `---\nid: ${id}\ntitle: ${id}\ndomain: wp\nsummary: s\nsection: ${section}\n${extra}---\n\nbody\n`);
+  };
+  const sectionOf = (id: string) => /^section: (.+)$/m.exec(readFileSync(file(id), "utf-8"))![1];
+  const all = () => synth("e", [{ axis: 1, n: 9 }, { axis: 2, n: 9 }, { axis: 3, n: 6 }]);
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "kb-commit-"));
+    roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+    mkdirSync(roots.denLocal, { recursive: true });
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+  const snapshot = () => Object.fromEntries(readdirSync(eDir()).sort().map((f) => [f, readFileSync(join(eDir(), f), "utf-8")]));
+
+  it("an orphan entry (not in the plan) is placed on the nearest new leaf by vector", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    put("orphan", "sec-wp-gone00");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    const ov = es[0].vector.map((x) => x + 0.001);
+    const res = commitRebuild(roots, plan, { vectorOf: (id) => (id === "orphan" ? ov : undefined) });
+    expect(res.orphansPlaced).toEqual(["orphan"]);
+    const ids = new Set(plan.state.sections.map((s) => String(s.id)));
+    expect(ids.has(sectionOf("orphan"))).toBe(true);
+    const leaves = plan.state.sections.filter((s) => !plan.state.sections.some((c) => c.parent === s.id));
+    const dotn = (a: number[], b: number[]) => a.reduce((t, x, i) => t + x * b[i], 0) / (Math.hypot(...a) * Math.hypot(...b));
+    const nearest = leaves.reduce((b, l) => (dotn(ov, l.centroid) > dotn(ov, b.centroid) ? l : b));
+    expect(sectionOf("orphan")).toBe(String(nearest.id));
+    for (const f of readdirSync(eDir())) expect(ids.has(sectionOf(f.slice(0, -3)))).toBe(true);
+  });
+
+  it("an orphan that cannot be placed aborts the commit before anything is written", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    put("orphan", "sec-wp-gone00");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    const before = snapshot();
+    expect(() => commitRebuild(roots, plan)).toThrow(/orphan.*aborting/);
+    expect(snapshot()).toEqual(before);
+    expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+    expect(readSections(roots)).toEqual([]);
+  });
+
+  it("an entry outside the plan that already points into the new tree is kept", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    const sid = String(plan.state.sections[0].id);
+    put("parked", sid);
+    expect(commitRebuild(roots, plan).orphansPlaced).toEqual([]);
+    expect(sectionOf("parked")).toBe(sid);
+  });
+
+  it("grouped entries are planned into their holder's section and covered by the commit", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    put("kid", "sec-wp-old000");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer, grouped: new Map([["kid", es[3].id]]) });
+    expect(plan.state.assignment.has("kid")).toBe(false); // not clustered, not counted
+    commitRebuild(roots, plan);
+    expect(sectionOf("kid")).toBe(plan.state.assignment.get(es[3].id));
+  });
+
+  it("crash injection: renames fail after N calls, the journal remains, recovery finishes it, and sections.json and the entries agree", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    for (const failAfter of [0, 3, 10]) {
+      for (const e of es) put(e.id, "sec-wp-old000");
+      rmSync(rebuildJournalFile(roots), { force: true });
+      let calls = 0;
+      const rename = (a: string, b: string) => { if (calls++ >= failAfter) throw new Error("disk gone"); renameSync(a, b); };
+      expect(() => commitRebuild(roots, plan, { rename })).toThrow(/disk gone/);
+      expect(existsSync(rebuildJournalFile(roots))).toBe(true);
+      expect(recoverRebuild(roots)).toBe(es.length + 1 - failAfter);
+      expect(recoverRebuild(roots)).toBe(0); // idempotent
+      expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+      expect(listRebuildTemps(roots, "wp")).toEqual([]);
+      const ids = new Set(readSections(roots).map((s) => String(s.id)));
+      expect(ids).toEqual(new Set(plan.state.sections.map((s) => String(s.id))));
+      for (const e of es) { expect(sectionOf(e.id)).toBe(plan.state.assignment.get(e.id)); expect(ids.has(sectionOf(e.id))).toBe(true); }
+    }
+  });
+
+  it("writes the pre-rebuild backups and the old-values map, and the ledger snapshot stops the old tree being resurrected", async () => {
+    const es = all();
+    for (const e of es) put(e.id, "sec-wp-old000");
+    writeFileSync(join(roots.denLocal, "x"), "");
+    const { writeSections } = await import("./sections.js");
+    const old = { id: "sec-wp-old000", domain: "wp", parent: null, depth: 0, label: "o", title: "Old", centroid: [], memberCount: 0, childIds: [], summary: "", summaryHash: "", dirty: false, memberCountAtLastLabel: 0, created: "x", updated: "x" } as any;
+    writeSections(roots, [old]);
+    const { appendLedger } = await import("./ledger.js");
+    const { ev } = await import("../shared/index.js");
+    appendLedger(roots, [ev.sectionCreated({ sectionId: "sec-wp-old000", domain: "wp", parent: null, label: "o" })]);
+    const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
+    commitRebuild(roots, plan);
+    expect(JSON.parse(readFileSync(join(roots.denLocal, "sections.json.pre-rebuild"), "utf-8"))[0].id).toBe("sec-wp-old000");
+    const oldVals = JSON.parse(readFileSync(join(roots.denLocal, ".rebuild-old-sections.json"), "utf-8"));
+    expect(oldVals.entries[es[0].id]).toBe("sec-wp-old000");
+    const folded = foldSections(readLedger(roots));
+    expect(folded.map((s) => String(s.id)).sort()).toEqual(plan.state.sections.map((s) => String(s.id)).sort());
+    expect(folded.some((s) => String(s.id) === "sec-wp-old000")).toBe(false);
+  });
+});
+
+describe("id continuity and label re-ask", () => {
+  const oneRoot = (entries: RebuildEntry[]) => {
+    const sec = { id: "sec-wp-root00", domain: "wp", parent: null, depth: 0, label: "root", title: "", centroid: [], memberCount: entries.length, childIds: [], summary: "", summaryHash: "", dirty: true, memberCountAtLastLabel: 0, created: "x", updated: "x" } as any;
+    return { sections: [sec], assignment: new Map(entries.map((e) => [e.id, "sec-wp-root00"])) };
+  };
+  const big = () => [...synth("g", [{ axis: 1, n: 9 }, { axis: 2, n: 9 }, { axis: 3, n: 9 }]), ...synth("x", [{ axis: 9, n: 1 }], 11)];
+
+  it("sections matching an old one by member overlap keep its id, title and summary and are not re-labelled", async () => {
+    const entries = big();
+    const first = await planRebuild({ domain: "wp", entries, namer: uniqueNamer, start: oneRoot(entries) });
+    // pretend the first plan is what is on disk now
+    const onDisk = entries.map((e) => ({ ...e, section: first.state.assignment.get(e.id)! }));
+    let asked = 0;
+    const counting: Namer = async () => { asked++; return { title: "Brand New", summary: "n" }; };
+    const second = await planRebuild({ domain: "wp", entries: onDisk, namer: counting, start: oneRoot(entries), oldSections: first.state.sections });
+    expect(asked).toBe(0);
+    expect(second.reused.size).toBe(first.state.sections.length);
+    expect(second.state.sections.map((s) => [s.id, s.title]).sort()).toEqual(first.state.sections.map((s) => [s.id, s.title]).sort());
+    expect(renderProposal(second)).toContain("[reused]");
+  });
+
+  it("unmatched sections get fresh hash ids and an LLM label", async () => {
+    const entries = big();
+    const plan = await planRebuild({ domain: "wp", entries, namer: uniqueNamer, start: oneRoot(entries), oldSections: [] });
+    expect(plan.reused.size).toBe(0);
+    expect(renderProposal(plan)).toContain("[new]");
+  });
+
+  it("a restating child label is re-asked once with the parent forbidden; only a child that still restates folds back", async () => {
+    const entries = big();
+    const forbiddenSeen: string[][] = [];
+    const order: string[] = [];
+    const namer: Namer = async (c) => {
+      if (c.forbidden) forbiddenSeen.push(c.forbidden);
+      if (!c.parentTitle) return { title: "Console Chat Tools", summary: "root" };
+      const key = c.members[0].title;
+      if (!order.includes(key)) order.push(key);
+      const i = order.indexOf(key);
+      if (i === 0) return c.forbidden ? { title: "Subagent Panel", summary: "fixed" } : { title: "Console Chat Tools", summary: "restates" };
+      if (i === 1) return { title: "Console Chat Tools", summary: "stubborn" }; // restates, and keeps restating when re-asked
+      return { title: "Graduation Flow", summary: "fine" };
+    };
+    const plan = await planRebuild({ domain: "wp", entries, namer, start: oneRoot(entries) });
+    expect(forbiddenSeen.length).toBeGreaterThanOrEqual(2);
+    expect(forbiddenSeen[0]).toContain("Console Chat Tools");
+    expect(plan.rejected.filter((r) => r.reason === "child-label-restates-parent")).toHaveLength(1);
+    expect(plan.splitChildren.size).toBe(2); // two kept, one folded back
+    expect(plan.state.assignment.size).toBe(28);
+    for (const sid of plan.state.assignment.values()) expect(plan.state.sections.some((s) => String(s.id) === sid)).toBe(true);
   });
 });

@@ -57,7 +57,7 @@ export async function sectionSummary(
 export async function labelSection(
   engine: Engine,
   summary: string,
-  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[]; depth?: number; maxDepth?: number; domain?: string } = {}
+  context: { sampleTitles?: string[]; parentTitle?: string; siblingSummaries?: string[]; depth?: number; maxDepth?: number; domain?: string; forbiddenTitles?: string[] } = {}
 ): Promise<string> {
   const { sampleTitles = [], parentTitle, siblingSummaries = [], domain } = context;
   const bounded = sampleTitles.slice(0, HIERARCHY.maxChildSummaries);
@@ -65,6 +65,7 @@ export async function labelSection(
   const prompt = [
     domain ? `Domain: ${domain} (do NOT include this word as a prefix in the title)` : "",
     parentTitle ? `Parent section title: ${parentTitle}` : "",
+    context.forbiddenTitles?.length ? `Do NOT title this section anything like: ${context.forbiddenTitles.map((t) => `"${t}"`).join(", ")}. Name what is specific to this group.` : "",
     sibs.length ? "Sibling sections (make THIS title distinct from these):" : "",
     ...sibs.map((s) => `- ${s}`),
     sibs.length || parentTitle || domain ? "" : "",

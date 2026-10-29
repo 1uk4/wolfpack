@@ -372,13 +372,16 @@ const STOP = new Set(["and", "the", "of", "a", "an", "for", "to", "in", "on", "w
 const tokens = (s: string) =>
   new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t && !STOP.has(t)).map((t) => t.replace(/s$/, "")));
 
-/** True when a child label just restates its parent (equal, contained, or near-identical token sets). */
+/**
+ * True when a child label just restates its parent: the same words, or a
+ * token overlap at or above restateJaccard. A narrower child ("Shipping Policy"
+ * under "Task Creation Workflow and Shipping Policy") is NOT a restatement.
+ */
 export function restatesParent(child: string, parent: string, rules: TreeRules = DEFAULT_RULES): boolean {
   const c = tokens(child), p = tokens(parent);
   if (c.size === 0) return true;
   if (p.size === 0) return false;
   const inter = [...c].filter((t) => p.has(t)).length;
   const union = new Set([...c, ...p]).size;
-  if (inter === c.size) return true; // every child word already in the parent name
   return inter / union >= rules.restateJaccard;
 }

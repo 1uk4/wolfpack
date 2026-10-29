@@ -32,6 +32,7 @@ import { resolveAliasedEntry, survivorOf } from "./alias.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
+import { recoverRebuild } from "./rebuild-commit.js";
 import {
   commitEntry,
   readEntryMarkdown,
@@ -306,6 +307,8 @@ export function emptyResult(): SweepResult {
 
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
+  // A rebuild that crashed after its journal is finished first, under the lock (idempotent; a no-op without a journal).
+  recoverRebuild(roots);
   const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
   // One contribution per run, oldest first. The timer fires every minute, so the

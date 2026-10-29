@@ -98,6 +98,8 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   if (existsSync(rebuildJournalFile(roots))) {
     try {
       const failed = await withKbLock(roots, async () => tryRecoverAndRender(roots, opts.notify).failed);
+      // outcome "backoff" is used on purpose WITHOUT touching the backoff state (backoff.json): it is the existing "did no work, retry next
+      // run" outcome; setting real backoff state would delay the retry by minutes and raise outage alerts for a local file problem.
       if (failed) return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: failed, journalBad: badJournalNote(roots) } };
     } catch (err) {
       if (!(err instanceof KbLockBusy)) throw err;

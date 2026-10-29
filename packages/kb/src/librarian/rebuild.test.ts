@@ -169,11 +169,11 @@ describe("commitRebuild / dry-run on disk", () => {
     writeFileSync(final, "---\ndomain: wp\nsection: old\n---\nbody EDITED AFTER THE PLAN\n");
     writeFileSync(join(eDir(), ".rebuild-tmp-s.json.tmp"), "[]");
     writeFileSync(rebuildJournalFile(roots), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [{ path: final, section: "sec-wp-new" }], renames: [{ tmp: join(eDir(), ".rebuild-tmp-s.json.tmp"), final: join(eDir(), "s.json") }] }));
-    expect(recoverRebuild(roots)).toBe(2);
+    expect(recoverRebuild(roots)).toEqual({ n: 2, quarantined: false });
     // the CURRENT file text is kept; only the section line changes
     expect(readFileSync(final, "utf-8")).toBe("---\ndomain: wp\nsection: sec-wp-new\n---\nbody EDITED AFTER THE PLAN\n");
     expect(existsSync(rebuildJournalFile(roots))).toBe(false);
-    expect(recoverRebuild(roots)).toBe(0);
+    expect(recoverRebuild(roots)).toEqual({ n: 0, quarantined: false });
   });
 
   it("an unreadable journal is moved to .rebuild-journal.bad, stale temps are removed, and the notify fires once", () => {
@@ -181,13 +181,23 @@ describe("commitRebuild / dry-run on disk", () => {
     writeFileSync(join(eDir(), ".rebuild-tmp-a.md.tmp"), "x");
     writeFileSync(rebuildJournalFile(roots), "{ not json");
     const notes: string[] = [];
-    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toBe(0);
+    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toEqual({ n: 0, quarantined: true });
     expect(existsSync(rebuildJournalFile(roots))).toBe(false);
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.bad"))).toBe(true);
     expect(listRebuildTemps(roots, "wp")).toEqual([]);
     expect(notes).toHaveLength(1);
-    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toBe(0);
+    // a stale .bad file must not turn a no-op recovery into "quarantined"
+    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toEqual({ n: 0, quarantined: false });
     expect(notes).toHaveLength(1);
+  });
+
+  it("a rename that does not take effect is not reported as quarantined: recoverRebuild throws 'quarantine failed' and the journal stays", () => {
+    mkdirSync(eDir(), { recursive: true });
+    writeFileSync(rebuildJournalFile(roots), "{ not json");
+    expect(() => recoverRebuild(roots, { rename: () => { /* pretends to succeed, moves nothing */ } })).toThrow(/quarantine failed/);
+    expect(existsSync(rebuildJournalFile(roots))).toBe(true);
+    expect(() => recoverRebuild(roots, { rename: () => { throw new Error("EXDEV"); } })).toThrow(/EXDEV/);
+    expect(existsSync(rebuildJournalFile(roots))).toBe(true);
   });
 
   it("withSectionLine sets or inserts the section line", () => {
@@ -311,8 +321,8 @@ describe("commit safety", () => {
       expect(() => commitRebuild(roots, plan, { writeFile, ...(c.failRename ? { rename } : {}) })).toThrow(/disk gone/);
       expect(existsSync(rebuildJournalFile(roots))).toBe(true);
       const written = Math.min(c.failWriteAfter, es.length);
-      expect(recoverRebuild(roots)).toBe(es.length - written + 1);
-      expect(recoverRebuild(roots)).toBe(0); // idempotent
+      expect(recoverRebuild(roots).n).toBe(es.length - written + 1);
+      expect(recoverRebuild(roots)).toEqual({ n: 0, quarantined: false }); // idempotent
       expect(existsSync(rebuildJournalFile(roots))).toBe(false);
       expect(listRebuildTemps(roots, "wp")).toEqual([]);
       const ids = new Set(readSections(roots).map((s) => String(s.id)));

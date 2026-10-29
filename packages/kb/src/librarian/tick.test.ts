@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "@wolfpack/engine";
@@ -196,7 +196,15 @@ describe("runSweepTick", () => {
       expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(true);
       expect(notes.at(-1)).toMatch(new RegExp(`failed \\(${i}/3\\).*skipped`));
     }
-    // the 3rd failed RUN quarantines the journal and is itself skipped
+    // a 3rd failed run with a YOUNG journal is skipped but not quarantined (it waits for the journal to be 10 minutes old)
+    const young = await run();
+    expect(young.outcome).toBe("backoff");
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(true);
+    expect(young.sweep.paused).toMatch(/\(3\/3\)/);
+    expect(notes.at(-1)).toMatch(/10 minutes old/);
+    const old = new Date(Date.now() - 11 * 60_000);
+    utimesSync(join(roots.denLocal, ".rebuild-journal.json"), old, old);
+    // the next failed run quarantines the journal and is itself skipped
     const third = await run();
     expect(third.outcome).toBe("backoff");
     expect(third.sweep.paused).toMatch(/quarantined/);

@@ -68,7 +68,7 @@ import { EntryId } from "./schema/knowledge.js";
 import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
 import { listRebuildBackups, rebuildJournalFile } from "./librarian/rebuild-commit.js";
-import { restoreAndRender, badJournalNote } from "./librarian/rebuild-recover.js";
+import { restoreAndRender, badJournalNote, recoveryPausedNote } from "./librarian/rebuild-recover.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
 import { countPending } from "./librarian/intake.js";
@@ -311,7 +311,9 @@ async function cmdStatus(): Promise<void> {
   );
   const badJournal = badJournalNote(roots);
   if (badJournal) console.log(`  ⛔ rebuild: ${badJournal}`);
-  if (existsSync(rebuildJournalFile(roots))) console.log(`  ⚠ rebuild: an unfinished rebuild journal is present; the next sweep/tick finishes it (and skips the run if it cannot)`);
+  const paused = recoveryPausedNote(roots);
+  if (paused) console.log(`  ⛔ rebuild: ${paused}`);
+  else if (existsSync(rebuildJournalFile(roots))) console.log(`  ⚠ rebuild: an unfinished rebuild journal is present; the next sweep/tick finishes it (and skips the run if it cannot)`);
   const parkedItems = listParked(roots);
   if (parkedItems.length) {
     console.log(`  ⛔ parked: ${parkedItems.length} — ${parkedItems.map((p) => `${p.wolf}/${p.file}`).join(", ")} (wolfpack-kb unpark)`);

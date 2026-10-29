@@ -116,20 +116,29 @@ function removeStaleTemps(roots: KbRoots): void {
  * Returns the writes completed. An unreadable journal is moved to .rebuild-journal.bad,
  * stale temps are deleted, and `notify` is told once.
  */
-export function recoverRebuild(roots: KbRoots, hooks: CommitHooks = {}): number {
+export interface RecoverResult {
+  /** Writes finished. */
+  n: number;
+  /** True only when THIS call moved an unreadable journal to .rebuild-journal.bad (a stale .bad file proves nothing). */
+  quarantined: boolean;
+}
+
+export function recoverRebuild(roots: KbRoots, hooks: CommitHooks = {}): RecoverResult {
   const jf = rebuildJournalFile(roots);
-  if (!existsSync(jf)) return 0;
+  if (!existsSync(jf)) return { n: 0, quarantined: false };
   let j: Journal;
   try {
     j = JSON.parse(readFileSync(jf, "utf-8")) as Journal;
     if (j.version !== 3 || !Array.isArray(j.entries) || !Array.isArray(j.renames)) throw new Error("unsupported journal");
   } catch (err) {
-    renameSync(jf, rebuildBadJournalFile(roots));
+    (hooks.rename ?? renameSync)(jf, rebuildBadJournalFile(roots));
+    // A rename that did not take effect (or a hook that pretends) must not be reported as quarantined: check the journal is gone.
+    if (existsSync(jf)) throw new Error("quarantine failed: the journal is still present after the rename");
     removeStaleTemps(roots);
     hooks.notify?.(`rebuild journal unreadable (${err instanceof Error ? err.message : err}); moved to ${rebuildBadJournalFile(roots)} and stale temp files removed. Check the KB with \`status\`; restore with \`rebuild --restore\` if needed`);
-    return 0;
+    return { n: 0, quarantined: true };
   }
-  return finish(roots, j, hooks);
+  return { n: finish(roots, j, hooks), quarantined: false };
 }
 
 /** The domain of a pending journal, if any (for re-rendering after recovery). */
@@ -165,7 +174,7 @@ function otherDomainSections(roots: KbRoots, domain: string, notify?: (msg: stri
  * check fails. `plan.fileIds` (the entry files the plan was made from) must match the directory now.
  */
 export function commitRebuild(roots: KbRoots, plan: RebuildPlan, hooks: CommitHooks = {}): { entriesWritten: number; orphansPlaced: string[] } {
-  recoverRebuild(roots, hooks);
+  if (recoverRebuild(roots, hooks).quarantined) throw new Error("rebuild: an unreadable journal from an earlier rebuild was just quarantined (.rebuild-journal.bad); aborting. Check the KB with `status` and re-run");
   const eDir = join(roots.kbBase, "domains", plan.domain, "entries");
   const newIds = new Set(plan.state.sections.map((s) => String(s.id)));
   if (newIds.size !== plan.state.sections.length) throw new Error("rebuild: duplicate section ids in the plan; aborting");
@@ -291,7 +300,7 @@ export function restoreRebuild(roots: KbRoots, stamp: string, hooks: Pick<Commit
   const backup = sectionsBackupFile(roots, stamp), map = rebuildOldValuesFile(roots, stamp);
   if (!existsSync(map)) throw new Error(`restore: no old-sections map for ${stamp}; known: ${listRebuildBackups(roots).join(", ") || "none"}`);
   if (!existsSync(backup)) throw new Error(`restore: no sections backup for ${stamp}; refusing to restore entries without the tree they point into`);
-  recoverRebuild(roots);
+  if (recoverRebuild(roots).quarantined) throw new Error("restore: an unreadable rebuild journal was just quarantined (.rebuild-journal.bad); check the KB with `status`, then re-run the restore");
   const { domain, entries } = JSON.parse(readFileSync(map, "utf-8")) as { domain: string; entries: Record<string, string> };
   let backed: Section[];
   try { backed = JSON.parse(readFileSync(backup, "utf-8")) as Section[]; } catch { throw new Error(`restore: ${backup} is unparsable; nothing was changed`); }

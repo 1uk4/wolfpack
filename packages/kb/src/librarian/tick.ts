@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
 import { rebuildJournalFile } from "./rebuild-commit.js";
-import { recoverAndRender } from "./rebuild-recover.js";
+import { tryRecoverAndRender } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -93,7 +93,7 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   // Finish a rebuild that crashed after its journal, before anything else (the check is one stat; idempotent).
   if (existsSync(rebuildJournalFile(roots))) {
     try {
-      await withKbLock(roots, async () => { recoverAndRender(roots, opts.notify); });
+      await withKbLock(roots, async () => { tryRecoverAndRender(roots, opts.notify); });
     } catch (err) {
       if (!(err instanceof KbLockBusy)) throw err;
     }

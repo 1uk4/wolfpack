@@ -172,6 +172,42 @@ describe("runSweepTick", () => {
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
   });
 
+  it("a recovery that keeps failing never stops the tick: notify, carry on, and quarantine the journal after 3 failures", async () => {
+    const tmp = join(roots.denLocal, "stale.tmp");
+    mkdirSync(roots.denLocal, { recursive: true });
+    writeFileSync(tmp, "x");
+    // renaming into a directory that does not exist throws ENOENT on every attempt
+    const journal = JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [], renames: [{ tmp, final: join(base, "no", "such", "dir", "f") }] });
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), journal);
+    const notes: string[] = [];
+    const run = () => runSweepTick({ roots, createEngine, notify: (m) => notes.push(m), budgetMs: 1000 });
+    for (let i = 1; i <= 2; i++) {
+      expect((await run()).outcome).toBe("idle"); // no throw
+      expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(true);
+      expect(notes.at(-1)).toMatch(new RegExp(`failed \\(${i}/3\\)`));
+    }
+    expect((await run()).outcome).toBe("idle");
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.bad"))).toBe(true);
+    expect(notes.at(-1)).toMatch(/3 times in a row.*\.rebuild-journal\.bad/);
+    // a later tick is quiet
+    notes.length = 0;
+    await run();
+    expect(notes).toEqual([]);
+  });
+
+  it("a failing recovery does not stop the sweep from processing the item", async () => {
+    const tmp = join(roots.denLocal, "stale.tmp");
+    mkdirSync(roots.denLocal, { recursive: true });
+    writeFileSync(tmp, "x");
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [], renames: [{ tmp, final: join(base, "no", "such", "dir", "f") }] }));
+    drop("a");
+    const notes: string[] = [];
+    const t = await runSweepTick({ roots, createEngine, notify: (m) => notes.push(m), budgetMs: 1000 });
+    expect(t.sweep).toMatchObject({ processed: 1, created: 1 });
+    expect(notes.some((m) => /recovery failed/.test(m))).toBe(true);
+  });
+
   it("an infra error outside sweep (engine setup) enters backoff, alerts once, and keeps the item", async () => {
     drop("a");
     createEngine.mockImplementation(() => {

@@ -326,3 +326,50 @@ describe("k-means fallback gate on a real rebuild", () => {
     } finally { rmSync(base, { recursive: true, force: true }); }
   }, 120_000);
 });
+
+describe("dry run and --yes share a file-backed split cache", () => {
+  it("--yes reproduces the approved dry-run plan without asking the LLM again; a changed entry set is re-asked and said so", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } = await import("node:fs");
+    const { reorg } = await import("./reorg.js");
+    const base = mkdtempSync(join(tmpdir(), "kb-sharedcache-"));
+    try {
+      const roots = { kbBase: join(base, "base"), opsRoot: join(base, "ops"), denLocal: join(base, "den") };
+      const eDir = join(roots.kbBase, "domains", "wp", "entries");
+      mkdirSync(eDir, { recursive: true }); mkdirSync(roots.denLocal, { recursive: true });
+      const es = make([8, 8, 8]);
+      const put = (e: RebuildEntry) => writeFileSync(join(eDir, `${e.id}.md`), `---\nid: ${e.id}\ntitle: ${e.title}\ndomain: wp\nsummary: ${e.summary}\nsection: sec-wp-old000\n---\n\nbody\n`);
+      for (const e of es) put(e);
+      const byTitle = new Map(es.map((e) => [e.title, e.vector]));
+      const embedder = { embed: async (text: string) => { for (const [t, v] of byTitle) if (text.includes(t)) return v; return new Array(DIM).fill(0.1); } };
+      let splitCalls = 0;
+      const engine = {
+        call: vi.fn(async (step: string, schema: { parse: (v: unknown) => unknown }) => {
+          if (step === "splitSection") {
+            splitCalls++;
+            return schema.parse({ categories: [0, 1, 2].map((c) => ({ name: names[c], ids: es.filter((e) => cluster(e.id, [8, 8, 8]) === c).map((e) => e.id) })), doesnt_fit: [] });
+          }
+          return schema.parse(step === "sectionSummary" ? { summary: "s" } : { title: `Label ${Math.random().toString(36).slice(2, 6)}` });
+        }),
+        usage: { summarize: () => ({}) },
+      } as never;
+      const common = { engine, roots, embedder: embedder as never, domains: ["wp"], rebuild: true, rebuildFrom: "scratch" as const };
+      const dry = await reorg({ ...common, dryRun: true });
+      expect(splitCalls).toBe(1);
+      expect(existsSync(join(roots.denLocal, "split-cache.json"))).toBe(true);
+      const notes: string[] = [];
+      await reorg({ ...common, notify: (m) => notes.push(m) });
+      expect(splitCalls).toBe(1); // served from the dry run's cache
+      expect(notes.some((m) => /LLM was asked again/.test(m))).toBe(false);
+      expect(dry.plans![0].state.sections.length).toBe(4);
+      expect(JSON.parse(readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8")).filter((s: { domain: string }) => s.domain === "wp").length).toBe(4);
+
+      // a different entry set (one entry added) is a different cache key: --yes asks again and says so
+      const extra = { ...make([1], 77)[0], id: "e950", title: "late entry", vector: es[0].vector };
+      put(extra); byTitle.set(extra.title, extra.vector);
+      const notes2: string[] = [];
+      await reorg({ ...common, rebuildFrom: "scratch", notify: (m) => notes2.push(m) });
+      expect(splitCalls).toBe(2);
+      expect(notes2.some((m) => /not in the dry-run cache, so the LLM was asked again/.test(m))).toBe(true);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  }, 120_000);
+});

@@ -110,6 +110,8 @@ export interface RebuildPlan {
     source?: "llm" | "kmeans" | "none";
     /** Set when the LLM proposal failed and k-means decided instead. */
     fallbackReason?: string;
+    /** The LLM proposal came from the split cache (the dry run the owner approved) rather than a fresh call. */
+    cached?: boolean;
     /** Per-category coherence, doesn't-fit and k-means diagnostics, as proposal lines. */
     notes?: string[];
   }>;
@@ -389,11 +391,11 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       const notes = verdictNotes(verdict, byEntry);
       if (!verdict.decision) {
         plan.rejected.push({ sectionId: id, n: members.length, reason: verdict.reason ?? "no-split", detail: verdict.kmeans && "detail" in verdict.kmeans ? verdict.kmeans.detail : undefined });
-        plan.judged.push({ id, n: members.length, outcome: "kept", source: verdict.source, fallbackReason: verdict.fallbackReason, notes });
+        plan.judged.push({ id, n: members.length, outcome: "kept", source: verdict.source, fallbackReason: verdict.fallbackReason, cached: verdict.cached, notes });
         continue;
       }
       const d = verdict.decision;
-      plan.judged.push({ id, n: members.length, outcome: "split", source: verdict.source, fallbackReason: verdict.fallbackReason, notes });
+      plan.judged.push({ id, n: members.length, outcome: "split", source: verdict.source, fallbackReason: verdict.fallbackReason, cached: verdict.cached, notes });
       for (let g = 0; g < d.k; g++) {
         const ids = members.filter((_, i) => d.labels[i] === g);
         const child = t.newSection(sec, ids);
@@ -651,7 +653,7 @@ export function renderProposal(plan: RebuildPlan): string {
   } else if (plan.oldSectionCount !== undefined) {
     lines.push(`Collapse guard: not triggered (${plan.oldSectionCount} sections now, ${plan.state.sections.length} proposed).`, "");
   }
-  lines.push("A dry run still makes LLM label calls and may add vectors to the embedding cache; it changes no entry file, no sections file and no ledger.", "");
+  lines.push("A dry run still makes LLM label calls and may add vectors to the embedding cache; it changes no entry file, no sections file and no ledger (it does save the LLM split answers in the den-local split-cache.json, which a later `--yes` reuses).", "");
   lines.push("## Tree", "");
   const walk = (s: Section, indent: string) => {
     const direct = t.direct(String(s.id));

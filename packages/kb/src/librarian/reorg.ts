@@ -28,7 +28,7 @@ import { withKbLock } from "./lock.js";
 import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, listEntryIds, currentTreeStart, fillMissingCentroids, engineNamer, type RebuildPlan } from "./rebuild.js";
 import { commitRebuild } from "./rebuild-commit.js";
 import { recoverAndRender } from "./rebuild-recover.js";
-import { enginePartitioner, memorySplitCache } from "./llm-split.js";
+import { enginePartitioner, fileSplitCache, type SplitCache } from "./llm-split.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -54,7 +54,8 @@ export interface ReorgOptions {
    * Incremental reorg: no disk writes, no ledger appends, no LLM labeling.
    * With `rebuild`: the full flow runs, labels included, so LLM calls ARE made
    * and the embedder may add vectors to its cache; no entry file, sections
-   * snapshot or ledger line is written.
+   * snapshot or ledger line is written (the LLM split proposals are cached in the
+   * den-local split-cache.json so that a later --yes reproduces the approved plan).
    */
   dryRun?: boolean;
   /** With rebuild: start from the current tree (default; only oversized sections are judged) or from one root. */
@@ -63,6 +64,8 @@ export interface ReorgOptions {
   applyCrossMoves?: boolean;
   /** With rebuild: apply only these cross-section moves (entry ids); the rest stay listed as needing approval. */
   approvedCrossMoves?: string[];
+  /** Test seam: where LLM split proposals are cached (default: split-cache.json in the den-local dir, shared by --dry-run and --yes). */
+  splitCache?: SplitCache;
   /** With rebuild: commit although some section's split was decided by the k-means fallback (the LLM call failed). */
   allowKmeansFallback?: boolean;
   /** With rebuild: commit even if the new tree has fewer than half the current sections. */
@@ -566,7 +569,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
           domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves, approvedCrossMoves: opts.approvedCrossMoves,
-          partitioner: enginePartitioner(engine), splitCache: memorySplitCache(), diagnostics: opts.dryRun,
+          partitioner: enginePartitioner(engine), splitCache: opts.splitCache ?? fileSplitCache(join(roots.denLocal, "split-cache.json")), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,
         });
@@ -580,6 +583,10 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         // Recorded before the commit so the re-render below also covers a commit that fails midway.
         result.domains.push(domain);
         if (opts.dryRun) continue;
+        // The proposals the owner approved were cached by the dry run (den-local split-cache.json, keyed by member set), so this
+        // commit reproduces them. A miss means the member set changed since (or no dry run was done): say so.
+        const asked = plan.judged.filter((j) => j.source === "llm" && j.cached === false);
+        if (asked.length) notify?.(`  ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again; the tree may differ from the approved proposal: ${asked.map((j) => j.id).join(", ")}`);
         const fell = plan.judged.filter((j) => j.fallbackReason);
         if (fell.length && !opts.allowKmeansFallback) {
           throw new Error(`rebuild: ${fell.length} section(s) fell back to k-means because the LLM split proposal failed (${fell.map((j) => `${j.id}: ${j.fallbackReason}`).join("; ")}); aborting before any write. Re-run, or pass --allow-kmeans-fallback to accept the k-means grouping`);

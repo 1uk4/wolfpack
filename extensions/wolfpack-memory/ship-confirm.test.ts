@@ -90,6 +90,7 @@ const wolf = (script: Parameters<typeof startTestWolf>[0]["script"], tasks: Task
     },
   });
 
+const answerShips = (w: TestWolf, callId: string, picked: string[]) => w.client.answerCard!(w.home, callId, { ships: { value: picked } } as CardAnswers);
 const answer = (w: TestWolf, callId: string, confirm: boolean) => w.client.answerCard!(w.home, callId, { confirm: { value: confirm } } as CardAnswers);
 
 describe("durable task_done ship gate (confirm card)", () => {
@@ -181,12 +182,15 @@ describe("durable task_done ship gate (confirm card)", () => {
     expect(items.get(t.id)!.stage).toBe("approved");
   });
 
-  it("a different task gets its own card", async () => {
+  it("parallel calls for different tasks fold into ONE multi card", async () => {
     const a = add({ kind: "task", title: "A" });
     const b = add({ kind: "task", title: "B" });
-    tw = await wolf([toolUse(fauxToolCall("task_done", { id: a.id }), fauxToolCall("task_done", { id: b.id }))]);
+    tw = await wolf([toolUse(fauxToolCall("task_done", { id: a.id }), fauxToolCall("task_done", { id: b.id })), fauxAssistantMessage("unreachable")]);
     await tw.submit("go");
-    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(2);
+    const d = await tw.client.getThread(tw.home);
+    expect(d.pendingCards).toHaveLength(1);
+    expect(d.pendingCards![0].card.fields[0]).toMatchObject({ kind: "multi", options: [{ value: a.id }, { value: b.id }] });
+    expect(tw.scripted.faux.state.callCount).toBe(1);
   });
 
   it("auto policy (WOLFPACK_TASK_SHIP=auto) ships at once, no card", async () => {
@@ -380,5 +384,121 @@ describe("headless: no conversation behind the tool", () => {
     expect(r.card).toBeUndefined();
     expect(r.content[0].text).toContain(`Shipped: ${t.id}`);
     expect(items.get(t.id)!.stage).toBe("shipped");
+  });
+});
+
+describe("task_done with several ids (one multi-select card)", () => {
+  const three = () => [add({ kind: "task", title: "One" }), add({ kind: "task", title: "Two" }), add({ kind: "task", title: "Three" })];
+
+  it("raises ONE multi card for 3 ids: an option per task, all ticked, at least one", async () => {
+    const ts = three();
+    const ids = ts.map((x) => x.id);
+    tw = await wolf([toolUse(fauxToolCall("task_done", { ids })), fauxAssistantMessage("unreachable")]);
+    await tw.submit("ship them");
+    const d = await tw.client.getThread(tw.home);
+    expect(d.status).toBe("needs-you");
+    expect(d.pendingCards).toHaveLength(1);
+    const card = d.pendingCards![0].card;
+    expect(card.tool).toBe("task_done");
+    expect(card.fields).toHaveLength(1);
+    expect(card.fields[0]).toMatchObject({
+      id: "ships",
+      kind: "multi",
+      label: "Ship these 3 tasks?",
+      default: ids,
+      min: 1,
+      options: ts.map((x) => ({ value: x.id, label: `${x.title} (${x.id})` })),
+    });
+    expect(ts.every((x) => items.get(x.id)!.stage === "approved")).toBe(true);
+  });
+
+  it("a subset answer ships only the subset; the rest are reported as not shipped", async () => {
+    const [a, b, c] = three();
+    const ids = [a.id, b.id, c.id];
+    let report = "";
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { ids })),
+      () => toolUse(fauxToolCall("task_done", { ids, confirm: false })),
+      (context) => {
+        report = toolText(context as never);
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    await tw.submit("ship them");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    await answerShips(tw, p.callId, [a.id, c.id]);
+    await drain(tw);
+    expect(items.get(a.id)!.stage).toBe("shipped");
+    expect(items.get(b.id)!.stage).toBe("approved");
+    expect(items.get(c.id)!.stage).toBe("shipped");
+    expect(report).toContain(`Shipped: ${a.id}`);
+    expect(report).toContain(`Not shipped: ${b.id}`);
+    expect((await tw.client.getThread(tw.home)).status).toBe("idle");
+  });
+
+  it("an unanswered (dismissed) card ships nothing: confirm:false re-asks with a fresh card", async () => {
+    const ids = three().map((x) => x.id);
+    tw = await wolf([toolUse(fauxToolCall("task_done", { ids })), fauxAssistantMessage("again"), toolUse(fauxToolCall("task_done", { ids, confirm: false })), fauxAssistantMessage("unreachable")]);
+    await tw.submit("go");
+    await tw.submit("never mind"); // dismisses the card
+    await tw.submit("ok now ship"); // the model re-calls without any answer
+    expect(ids.every((id) => items.get(id)!.stage === "approved")).toBe(true);
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1); // a fresh question, nothing shipped
+  });
+
+  it("a stale yes cannot be reused: shipped ids are re-asked after being re-opened", async () => {
+    const [a, b] = three();
+    const ids = [a.id, b.id];
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { ids })),
+      () => toolUse(fauxToolCall("task_done", { ids, confirm: false })),
+      fauxAssistantMessage("shipped"),
+      toolUse(fauxToolCall("task_done", { ids, confirm: false })),
+      fauxAssistantMessage("unreachable"),
+    ]);
+    await tw.submit("go");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    await answerShips(tw, p.callId, ids);
+    await drain(tw);
+    expect(items.get(a.id)!.stage).toBe("shipped");
+    expect(items.get(b.id)!.stage).toBe("shipped");
+    items.get(a.id)!.stage = "approved";
+    items.get(b.id)!.stage = "approved";
+    await tw.submit("ship again");
+    expect(items.get(a.id)!.stage).toBe("approved");
+    expect(items.get(b.id)!.stage).toBe("approved");
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
+  });
+
+  it("a yes for one picked task cannot ship an id that was not on the card", async () => {
+    const [a, b, c] = three();
+    tw = await wolf([
+      toolUse(fauxToolCall("task_done", { ids: [a.id, b.id] })),
+      () => toolUse(fauxToolCall("task_done", { ids: [a.id, b.id, c.id], confirm: false })),
+      fauxAssistantMessage("unreachable"),
+    ]);
+    await tw.submit("go");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    await answerShips(tw, p.callId, [a.id, b.id]);
+    await drain(tw);
+    expect(items.get(c.id)!.stage).toBe("approved");
+    expect(items.get(a.id)!.stage).toBe("approved"); // c needs asking first: nothing ships this call
+    expect((await tw.client.getThread(tw.home)).pendingCards).toHaveLength(1);
+  });
+
+  it("a single id in ids keeps the plain confirm card", async () => {
+    const [a] = three();
+    tw = await wolf([toolUse(fauxToolCall("task_done", { ids: [a.id] }))]);
+    await tw.submit("go");
+    const [p] = (await tw.client.getThread(tw.home)).pendingCards!;
+    expect(p.card.fields[0]).toMatchObject({ id: "confirm", kind: "confirm", label: `Ship "One" (${a.id})?` });
+  });
+
+  it("auto policy ships all ids at once, no card", async () => {
+    const ts = three();
+    tw = await wolf([toolUse(fauxToolCall("task_done", { ids: ts.map((x) => x.id) })), fauxAssistantMessage("done")], {}, { WOLFPACK_TASK_SHIP: "auto" });
+    await tw.submit("go");
+    expect(ts.every((x) => items.get(x.id)!.stage === "shipped")).toBe(true);
+    expect((await tw.client.getThread(tw.home)).pendingCards ?? []).toHaveLength(0);
   });
 });

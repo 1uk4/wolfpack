@@ -19,6 +19,7 @@ import {
   type ToolResult,
 } from "@wolfpack/harness/extension";
 import { confirmCard } from "@wolfpack/harness/engine";
+import type { Card } from "@wolfpack/protocol";
 import { drainWorkObservations } from "@wolfpack/harness/memory";
 import {
   type WorkItem,
@@ -266,57 +267,163 @@ export default function createTasksExtension(
   /** First line of a successful ship result; the spent-yes check reads it back. */
   const shippedLine = (id: string) => `Shipped: ${id}`;
 
-  /** The card's one field label is the exact key: it carries the id and the title at ask time. */
+  /** Single-id card: its one field label is the exact key; it carries the id and the title at ask time. */
   const shipLabel = (title: string, id: string) => `Ship "${title}" (${id})?`;
   const shipCard = (title: string, id: string) =>
     confirmCard({ tool: "task_done", question: shipLabel(title, id), confirmLabel: "Ship", rejectLabel: "Not yet" });
-  const firstLine = (m: { message: { content?: unknown } }): string => {
+  /** Several ids: ONE card with a multi field, one option per task (value = id), all ticked, at least one. */
+  const SHIPS_FIELD = "ships";
+  const optionLabel = (title: string, id: string) => `${title} (${id})`;
+  const shipsCard = (entries: { id: string; title: string }[]): Card => ({
+    tool: "task_done",
+    fields: [
+      {
+        id: SHIPS_FIELD,
+        kind: "multi",
+        label: `Ship these ${entries.length} tasks?`,
+        options: entries.map((e) => ({ value: e.id, label: optionLabel(e.title, e.id) })),
+        default: entries.map((e) => e.id),
+        min: 1,
+      },
+    ],
+  });
+  const textLines = (m: { message: { content?: unknown } }): string[] => {
     const c = m.message.content;
-    const block = Array.isArray(c) ? (c as { type?: string; text?: string }[]).find((x) => x?.type === "text" && typeof x.text === "string") : undefined;
-    const text = typeof c === "string" ? c : (block?.text ?? "");
-    return text.split("\n")[0];
+    const blocks = Array.isArray(c) ? (c as { type?: string; text?: string }[]).filter((x) => x?.type === "text" && typeof x.text === "string").map((x) => x.text as string) : [typeof c === "string" ? c : ""];
+    return blocks.flatMap((x) => x.split("\n"));
   };
 
-  /** Raised in this round, before the card reaches the transcript (parallel calls of one round): conversation:item -> label. */
-  const raisedThisRound = new Map<string, { label: string; at: number }>();
+  /** Raised in this round, before the card reaches the transcript (late parallel calls): conversation:item -> time. */
+  const raisedThisRound = new Map<string, { title: string; at: number }>();
   /** Parallel calls of one round land within milliseconds; an older entry whose card never reached the transcript is stale. */
   const ROUND_MS = 30_000;
+  /** Calls of one round start together: the first waits this long for its siblings, then raises ONE card for all of them. */
+  const FOLD_MS = 100;
+  /** Open fold window per conversation: the ids (-> title) the leader call will put on its card. */
+  const folding = new Map<string, Map<string, string>>();
 
-  /** The newest ship card for `id` at this title, from the structured transcript. */
-  const shipCardFor = (ctx: ToolContext, id: string, title: string) => ctx.conversation!.latestCard!("task_done", (c) => c.fields.length === 1 && c.fields[0].label === shipLabel(title, id));
+  type ShipState = "approved" | "declined" | "pending" | "none";
 
   /**
-   * Decide a task_done on `id`: undefined = ship now, else the result to return instead.
-   * Ship now when the policy is auto or nobody can answer (an explicit confirm: true keeps the legacy "call again"
-   * text). Otherwise ship only on confirm: false backed by a yes on the newest matching card that no ship has used
-   * yet; anything else raises (or re-points at) the card.
+   * Where `id` stands in the newest card that asks about it at this title: a single confirm card, or an option of a
+   * multi ships card. "approved" needs an answered yes/pick that no ship has used yet (a yes is spent once a ship of
+   * this id followed it); "declined" is an answered card that left it out (or said no).
    */
-  async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, id: string, titleOf: () => Promise<string>): Promise<ToolResult | undefined> {
-    if (autoShip || !(await canAsk(ctx))) {
-      return args.confirm === true
-        ? { content: [{ type: "text", text: `Confirmation required to ship ${id}. Call task_done again with confirm: false to ship.` }] }
-        : undefined;
-    }
-    const title = await titleOf();
-    const found = await shipCardFor(ctx, id, title);
+  async function shipState(ctx: ToolContext, id: string, title: string, confirmFalse: boolean): Promise<ShipState> {
+    const single = shipLabel(title, id);
+    const multi = optionLabel(title, id);
+    const found = await ctx.conversation!.latestCard!("task_done", (c) => {
+      if (c.fields.length !== 1) return false;
+      const f = c.fields[0];
+      if (f.kind === "multi") return f.id === SHIPS_FIELD && f.options.some((o) => o.value === id && o.label === multi);
+      return f.label === single;
+    });
     const round = `${ctx.conversationId}:${id}`;
     const marker = raisedThisRound.get(round);
     // The transcript has the card now (any status), or the marker aged out without one: drop it.
     if (found || (marker && Date.now() - marker.at > ROUND_MS)) raisedThisRound.delete(round);
-    if (found?.status === "answered" && args.confirm === false) {
-      const yes = (found.answers?.confirm as { value?: unknown } | undefined)?.value === true;
-      // A yes is spent once a ship of this id followed it.
-      const spent = found.laterResults.some((m) => firstLine(m) === shippedLine(id));
-      if (yes && !spent) return undefined;
+    if (!found) return raisedThisRound.get(round)?.title === title ? "pending" : "none";
+    if (found.status === "pending") return "pending";
+    if (found.status !== "answered") return "none";
+    const ans = found.answers?.[found.card.fields[0].id] as { value?: unknown } | undefined;
+    const yes = found.card.fields[0].kind === "multi" ? Array.isArray(ans?.value) && (ans!.value as unknown[]).includes(id) : ans?.value === true;
+    if (!yes) return "declined";
+    if (!confirmFalse) return "none";
+    return found.laterResults.some((m) => textLines(m).includes(shippedLine(id))) ? "none" : "approved";
+  }
+
+  interface GateVerdict {
+    /** Return this instead of shipping. */
+    hold?: ToolResult;
+    /** Ids cleared to ship now. */
+    ship: string[];
+    /** Ids the user left out of their answer. */
+    notShipped: string[];
+  }
+
+  /**
+   * Decide a task_done on `ids`. Ship all when the policy is auto or nobody can answer (an explicit confirm: true keeps
+   * the legacy "call again" text). Otherwise ship only on confirm: false, and only ids with a yes on their newest card
+   * that no ship has used yet; ids with no card are asked about in ONE card (one confirm for a single id, one
+   * multi-select for several), and parallel calls of the same round fold into that card.
+   */
+  async function shipGate(ctx: ToolContext, args: { confirm?: boolean }, ids: string[], titleOf: (id: string) => Promise<string>): Promise<GateVerdict> {
+    const listed = ids.join(", ");
+    if (autoShip || !(await canAsk(ctx))) {
+      return args.confirm === true
+        ? { hold: { content: [{ type: "text", text: `Confirmation required to ship ${listed}. Call task_done again with confirm: false to ship.` }] }, ship: [], notShipped: [] }
+        : { ship: ids, notShipped: [] };
     }
-    if (found?.status === "pending" || (!found && raisedThisRound.get(round)?.label === shipLabel(title, id))) {
-      return { content: [{ type: "text", text: `The user was already asked whether to ship ${id}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true };
+    const conv = String(ctx.conversationId);
+    const titles = new Map<string, string>();
+    for (const id of ids) titles.set(id, await titleOf(id));
+    const states = new Map<string, ShipState>();
+    for (const id of ids) states.set(id, await shipState(ctx, id, titles.get(id)!, args.confirm === false));
+    const of = (s: ShipState) => ids.filter((id) => states.get(id) === s);
+    if (of("pending").length) {
+      return { hold: { content: [{ type: "text", text: `The user was already asked whether to ship ${of("pending").join(", ")}; their answer is pending. Do not ask again: your turn ends here.` }], endTurn: true }, ship: [], notShipped: [] };
     }
-    raisedThisRound.set(round, { label: shipLabel(title, id), at: Date.now() });
+    const ask = of("none").concat(of("approved").length ? [] : of("declined"));
+    if (!ask.length) return { ship: of("approved"), notShipped: of("declined") };
+    // Parallel calls of one round fold into one card: the first call that needs to ask opens a window (checked and
+    // set without an await in between), later ones add their ids and end; the first raises the card for them all.
+    const open = folding.get(conv);
+    if (open) {
+      for (const id of ask) open.set(id, titles.get(id)!);
+      return { hold: { content: [{ type: "text", text: `Folded into the ship question raised by another task_done call of this round (${ask.join(", ")}). Do not ask again: your turn ends here.` }], endTurn: true }, ship: [], notShipped: [] };
+    }
+    const batch = new Map<string, string>(ask.map((id) => [id, titles.get(id)!]));
+    folding.set(conv, batch);
+    await new Promise((r) => setTimeout(r, FOLD_MS));
+    folding.delete(conv);
+    const entries = [...batch].map(([id, title]) => ({ id, title }));
+    const now = Date.now();
+    for (const e of entries) raisedThisRound.set(`${ctx.conversationId}:${e.id}`, { title: e.title, at: now });
+    const many = entries.length > 1;
+    const idList = entries.map((e) => e.id).join(", ");
     return {
-      content: [{ type: "text", text: `Asked the user to confirm shipping ${id}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.` }],
-      card: shipCard(title, id),
+      hold: {
+        content: [{
+          type: "text",
+          text: many
+            ? `Asked the user which of ${idList} to ship (one card). Your turn ends here. When they answer, call task_done once more with ids [${idList}] and confirm: false: only the ones they picked ship.`
+            : `Asked the user to confirm shipping ${idList}. Your turn ends here. If they answer yes, call task_done again with confirm: false to ship it; if no, do not ship.`,
+        }],
+        card: many ? shipsCard(entries) : shipCard(entries[0].title, entries[0].id),
+      },
+      ship: [],
+      notShipped: [],
     };
+  }
+
+  type TaskDoneArgs = { confirm?: boolean; bindNext?: boolean; id?: string; ids?: string[] };
+
+  /** task_done: one id or several (`ids`), default the bound task. */
+  async function taskDone(ctx: ToolContext, args: TaskDoneArgs): Promise<ToolResult> {
+    const binding = await readBinding(ctx);
+    const wanted = [...new Set([...(args.ids ?? []), ...(args.id ? [args.id] : [])].filter((x) => typeof x === "string" && x))];
+    if (!wanted.length) {
+      if (!binding) return { content: [{ type: "text", text: "No task bound. Use task_bind first." }], isError: true };
+      wanted.push(binding.taskId);
+    }
+    // Bound to a finished feature: nothing to ship, it waits for graduation.
+    if (binding && binding.featureId === binding.taskId && wanted.includes(binding.taskId)) {
+      return {
+        content: [{ type: "text", text: `Bound to the feature ${binding.taskId}, not to a task. It is ready to graduate when all its tasks are done: use task_graduate.` }],
+        isError: true,
+      };
+    }
+    const verdict = await shipGate(ctx, args, wanted, async (id) => (await findItem(id))?.item.title ?? id);
+    if (verdict.hold) return verdict.hold;
+    const blocks: string[] = [];
+    let failed = 0;
+    for (const id of verdict.ship) {
+      const r = await shipOne(ctx, args, id, binding);
+      if (r.isError) failed++;
+      blocks.push(r.content.map((c) => (c as { text?: string }).text ?? "").join("\n"));
+    }
+    if (verdict.notShipped.length) blocks.push(verdict.notShipped.map((id) => `Not shipped: ${id} (the user did not select it)`).join("\n"));
+    return { content: [{ type: "text", text: blocks.join("\n\n") }], ...(failed && failed === verdict.ship.length ? { isError: true } : {}) };
   }
 
   // ── Cache: sections read sync, tools write async ────────────────────────
@@ -516,6 +623,93 @@ export default function createTasksExtension(
     } catch (err) {
       return `\nShipped, but unbinding the other conversations bound to it failed: ${err instanceof Error ? err.message : err}`;
     }
+  }
+
+  /** Ship `id` (no confirmation here: the caller gated it). The bound task also advances the binding. */
+  async function shipOne(ctx: ToolContext, args: { bindNext?: boolean }, id: string, binding: ActiveBinding | null): Promise<ToolResult> {
+    if (id !== binding?.taskId) {
+            try {
+              const shippedOther = await ship(id);
+              const unbindNote = await unbindOthersOf(ctx, id, shippedOther.title);
+              return {
+                content: [{ type: "text", text: heads(shippedLine(id), { id: id, title: shippedOther.title }, boundRef(binding)) + unbindNote }],
+              };
+            } catch (err) {
+              return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
+            }
+          }
+    if (!binding) return { content: [{ type: "text", text: "No task bound. Use task_bind first." }], isError: true };
+    try {
+            // Ship the task
+            await ship(binding.taskId);
+            
+            const found = await findItem(binding.taskId);
+            const result: string[] = [shippedLine(binding.taskId)];
+
+            // Find next sibling if requested; with none left, stay on the finished
+            // feature (or on the finished loose task) until it is graduated.
+            
+            const all = await client.query({ domain: binding.domain });
+            const parentItem = found?.item.partOf ? all.find((i) => i.id === found.item.partOf) : undefined;
+            const realFeature = parentItem && parentItem.kind === "feature" && !parentItem.container ? parentItem : undefined;
+            const shippedItem = await client.get(binding.taskId);
+            const unbindNote = await unbindOthersOf(ctx, binding.taskId, shippedItem.title);
+            if (unbindNote) result.push(unbindNote.trim());
+            if (!realFeature) {
+              // A shipped loose task is complete: nobody stays bound to it. Graduating it is still the owner's call.
+              if (readyToGraduate(shippedItem, all)) {
+                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
+              }
+              if (await clearBinding(ctx)) clearCache(binding.taskId);
+              else result.push(STAYS_BOUND);
+            } else {
+              const siblings = args.bindNext !== false ? await getChildren(binding.domain, realFeature.id as string) : [];
+              const next = siblings.find(s => s.id !== binding.taskId && !isComplete(s));
+              if (next) {
+                const refused = await writeBinding(ctx, next.id, binding.domain, await recordFeatureId(client, next));
+                if (refused) {
+                  // Nothing was written: don't leave the binding on the finished item.
+                  if (await clearBinding(ctx)) {
+                    clearCache(binding.taskId);
+                    result.push(`Not bound to next [${next.id}]: ${refused} Unbound.`);
+                  } else result.push(`Not bound to next [${next.id}]: ${refused} ${STAYS_BOUND}`);
+                } else {
+                  await writeCache(next);
+                  await syncFeatureStage(client, next).catch(() => {});
+                  result.push(`Bound to next: [${next.id}] ${next.title}`);
+                }
+              } else if (readyToGraduate(realFeature, all)) {
+                const refused = await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
+                if (refused) {
+                  if (await clearBinding(ctx)) clearCache(binding.taskId);
+                  result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                } else {
+                  await writeCache(realFeature);
+                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
+                  result.push(readyBoundReply(realFeature));
+                }
+              } else if (await clearBinding(ctx)) {
+                clearCache(binding.taskId);
+                result.push("No more tasks in this feature. Unbound.");
+              } else {
+                result.push(`No more tasks in this feature. ${STAYS_BOUND}`);
+              }
+            }
+
+            // The shipped task is complete: say it plainly when this conversation is no longer bound to it.
+            const after = await readConversationBinding(ctx);
+            if (!after.readOnly && after.binding?.workId !== binding.taskId) result.splice(1, 0, completeLine(shippedItem.title, binding.taskId));
+
+            return {
+              content: [{ type: "text", text: result.join("\n") }],
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
+              isError: true,
+            };
+          }
   }
 
   return defineExtension({
@@ -1033,118 +1227,17 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       defineTool({
         name: "task_done",
         raisesCard: true,
-        description: "Ship the active task and optionally bind to the next unfinished sibling." + ID_NOTE + " Shipping another item leaves your binding as it is.",
+        description:
+          "Ship the active task and optionally bind to the next unfinished sibling." + ID_NOTE + " Shipping another item leaves your binding as it is." +
+          " To ship SEVERAL tasks, call task_done ONCE with ids: [...] (never one call per task, never parallel calls): the user then answers a single multi-select card, and after their answer you call task_done again with the same ids and confirm: false; only the ones they picked ship, the rest are reported as not shipped.",
         parameters: Type.Object({
           confirm: Type.Optional(Type.Boolean({ description: "Override auto-ship policy" })),
           bindNext: Type.Optional(Type.Boolean({ description: "Auto-bind to next unfinished sibling (default: true)" })),
           id: Type.Optional(Type.String({ description: "Work item to ship (default: the bound one)" })),
+          ids: Type.Optional(Type.Array(Type.String(), { description: "Several work items to ship at once, confirmed with ONE multi-select card. Combined with id when both are given." })),
         }),
-        async execute(args: { confirm?: boolean; bindNext?: boolean; id?: string }, ctx: ToolContext): Promise<ToolResult> {
-          const binding = await readBinding(ctx);
-          if (args.id && args.id !== binding?.taskId) {
-            const held = await shipGate(ctx, args, args.id, async () => (await findItem(args.id!))?.item.title ?? args.id!);
-            if (held) return held;
-            try {
-              const shippedOther = await ship(args.id);
-              const unbindNote = await unbindOthersOf(ctx, args.id, shippedOther.title);
-              return {
-                content: [{ type: "text", text: heads(shippedLine(args.id!), { id: args.id, title: shippedOther.title }, boundRef(binding)) + unbindNote }],
-              };
-            } catch (err) {
-              return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }], isError: true };
-            }
-          }
-          if (!binding) {
-            return {
-              content: [{ type: "text", text: "No task bound. Use task_bind first." }],
-              isError: true,
-            };
-          }
-
-          // Bound to a finished feature: nothing to ship, it waits for graduation.
-          if (binding.featureId === binding.taskId) {
-            return {
-              content: [{ type: "text", text: `Bound to the feature ${binding.taskId}, not to a task. It is ready to graduate when all its tasks are done: use task_graduate.` }],
-              isError: true,
-            };
-          }
-
-          const held = await shipGate(ctx, args, binding.taskId, async () => (await findItem(binding.taskId))?.item.title ?? binding.taskId);
-          if (held) return held;
-
-          
-          
-          try {
-            // Ship the task
-            await ship(binding.taskId);
-            
-            const found = await findItem(binding.taskId);
-            const result: string[] = [shippedLine(binding.taskId)];
-
-            // Find next sibling if requested; with none left, stay on the finished
-            // feature (or on the finished loose task) until it is graduated.
-            const bindNext = args.bindNext ?? true;
-            const all = await client.query({ domain: binding.domain });
-            const parentItem = found?.item.partOf ? all.find((i) => i.id === found.item.partOf) : undefined;
-            const realFeature = parentItem && parentItem.kind === "feature" && !parentItem.container ? parentItem : undefined;
-            const shippedItem = await client.get(binding.taskId);
-            const unbindNote = await unbindOthersOf(ctx, binding.taskId, shippedItem.title);
-            if (unbindNote) result.push(unbindNote.trim());
-            if (!realFeature) {
-              // A shipped loose task is complete: nobody stays bound to it. Graduating it is still the owner's call.
-              if (readyToGraduate(shippedItem, all)) {
-                result.push(`🎓 "${shippedItem.title}" is done and ready to graduate on its own (task_graduate previews it; the user decides). Tell the user.`);
-              }
-              if (await clearBinding(ctx)) clearCache(binding.taskId);
-              else result.push(STAYS_BOUND);
-            } else {
-              const siblings = bindNext ? await getChildren(binding.domain, realFeature.id as string) : [];
-              const next = siblings.find(s => s.id !== binding.taskId && !isComplete(s));
-              if (next) {
-                const refused = await writeBinding(ctx, next.id, binding.domain, await recordFeatureId(client, next));
-                if (refused) {
-                  // Nothing was written: don't leave the binding on the finished item.
-                  if (await clearBinding(ctx)) {
-                    clearCache(binding.taskId);
-                    result.push(`Not bound to next [${next.id}]: ${refused} Unbound.`);
-                  } else result.push(`Not bound to next [${next.id}]: ${refused} ${STAYS_BOUND}`);
-                } else {
-                  await writeCache(next);
-                  await syncFeatureStage(client, next).catch(() => {});
-                  result.push(`Bound to next: [${next.id}] ${next.title}`);
-                }
-              } else if (readyToGraduate(realFeature, all)) {
-                const refused = await writeBinding(ctx, realFeature.id as string, binding.domain, realFeature.id as string);
-                if (refused) {
-                  if (await clearBinding(ctx)) clearCache(binding.taskId);
-                  result.push(`Not bound to the feature [${realFeature.id}]: ${refused}`);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
-                } else {
-                  await writeCache(realFeature);
-                  result.push(`🎓 All tasks under "${realFeature.title}" are done: it is ready to graduate (task_graduate previews it; the user decides). Tell the user.`);
-                  result.push(readyBoundReply(realFeature));
-                }
-              } else if (await clearBinding(ctx)) {
-                clearCache(binding.taskId);
-                result.push("No more tasks in this feature. Unbound.");
-              } else {
-                result.push(`No more tasks in this feature. ${STAYS_BOUND}`);
-              }
-            }
-
-            // The shipped task is complete: say it plainly when this conversation is no longer bound to it.
-            const after = await readConversationBinding(ctx);
-            if (!after.readOnly && after.binding?.workId !== binding.taskId) result.splice(1, 0, completeLine(shippedItem.title, binding.taskId));
-
-            return {
-              content: [{ type: "text", text: result.join("\n") }],
-            };
-          } catch (err) {
-            return {
-              content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : err}` }],
-              isError: true,
-            };
-          }
+        async execute(args: TaskDoneArgs, ctx: ToolContext): Promise<ToolResult> {
+          return taskDone(ctx, args);
         },
       }),
 

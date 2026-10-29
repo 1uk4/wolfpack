@@ -603,7 +603,13 @@ export class WolfServer {
         return this.json(res, 200, { entries });
       }
       case "getThread": {
-        const detail = this.checkThread(params.id).detail();
+        const rawLimit = url.searchParams.get("limit");
+        let limit: number | undefined;
+        if (rawLimit !== null) {
+          limit = Number(rawLimit);
+          if (!Number.isInteger(limit) || limit < 1) throw new HttpError("invalid_request", "limit must be a positive integer");
+        }
+        const detail = this.checkThread(params.id).detail({ ...(limit !== undefined ? { limit } : {}), ...(url.searchParams.get("before") ? { before: url.searchParams.get("before")! } : {}) });
         return this.json(res, 200, await this.withWorkspace(detail));
       }
       // ---- header git tree ----

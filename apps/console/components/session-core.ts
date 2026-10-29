@@ -51,6 +51,10 @@ export interface SessionTransport {
 	 *  with a local echo, instead of the legacy /steer queue route. */
 	steersViaSubmit?: boolean;
 	recordUrl: string;
+	/** Paged transcript fetch: the `limit` messages before message id `before` (absent: transport does not page). */
+	/** Raw JSON of a loaded older page (side data such as card calls). */
+	onPage?: (json: unknown) => void;
+	pageUrl?: (before: string, limit: number) => string;
 	/** Raw record JSON → native messages (null: shape not recognized). */
 	parseRecord(json: unknown): LhMessage[] | null;
 	/** The record says no turn is running: it already holds everything a replay would add (a late attach to a finished turn). */
@@ -258,6 +262,10 @@ export interface SessionState {
 	 *  the messages (the drain's verbatim events upsert the real card) —
 	 *  visibleQueuedSteers is the pure fold. */
 	steerQueue: SteerQueueItem[];
+	/** Transcript paging: older messages exist on the server beyond those loaded. */
+	hasMore: boolean;
+	/** An older page is being fetched. */
+	loadingEarlier: boolean;
 }
 
 /** One queued composer steer: the client-minted id (the upsert key) + text. */
@@ -281,6 +289,8 @@ export function visibleQueuedSteers(
 export interface SessionModelOptions extends SessionModelDeps {
 	chatId: string;
 	initialMessages: LhMessage[];
+	/** The seeded messages are only the newest page; older ones load through `loadEarlier`. */
+	initialHasMore?: boolean;
 	/** Fires on every state change (the hook re-renders). */
 	onChange?: () => void;
 	/** The reattach settled terminal (turn-settled): no turn running, the
@@ -306,6 +316,10 @@ export class SessionModel {
 	// at every full sync; the write-ahead absorbs the optimistic entries.
 	private base: LhMessage[];
 	private tail: LhMessage[] = [];
+	/** Paged-in earlier messages, oldest first: everything before `base` that the record (a newest page) no longer holds. */
+	private older: LhMessage[] = [];
+	private hasMoreValue: boolean;
+	private loadingEarlierValue = false;
 	// The live turn's execution layer (view model mid-turn states):
 	private executions = new Map<string, LiveExecution>();
 	private streamingIds = new Set<string>();
@@ -323,6 +337,7 @@ export class SessionModel {
 		this.chatId = opts.chatId;
 		this.transport = opts.transport ?? legacyTransport(opts.chatId);
 		this.base = opts.initialMessages;
+		this.hasMoreValue = opts.initialHasMore ?? false;
 		// BOUND: the browser's native fetch is a Window method — storing it
 		// unbound makes every call throw "Illegal invocation" in the browser
 		// (Node's undici doesn't care, so the tests never saw it). Always go
@@ -344,14 +359,61 @@ export class SessionModel {
 			this.statusValue === "submitted" || this.statusValue === "streaming"
 				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds }
 				: undefined;
-		const all = [...this.base, ...withoutEchoes(this.base, this.tail)];
+		const all = [...this.older, ...this.base, ...withoutEchoes(this.base, this.tail)];
 		return {
 			messages: projectView(all, live),
 			nativeMessages: all,
 			status: this.statusValue,
 			error: this.errorValue,
 			steerQueue: this.steerQueueValue,
+			hasMore: this.hasMoreValue,
+			loadingEarlier: this.loadingEarlierValue,
 		};
+	}
+
+	/**
+	 * A fresh record (the newest page, or everything) becomes the base. Loaded messages the record no longer holds
+	 * (it is the newest page: it starts later than what the operator paged in) move to the earlier prefix, so a
+	 * settle sync never makes the history the operator scrolled into vanish.
+	 */
+	private swapBase(record: LhMessage[]): void {
+		const ids = new Set(record.map((m) => (m as { id?: string }).id));
+		this.older = [...this.older, ...this.base].filter((m) => !ids.has((m as { id?: string }).id));
+		this.base = record;
+	}
+
+	/** Load the next older page; resolves to how many messages were added (0: nothing more / failed). */
+	async loadEarlier(limit = 50): Promise<number> {
+		const first = (this.older[0] ?? this.base[0]) as { id?: string } | undefined;
+		if (!this.hasMoreValue || this.loadingEarlierValue || !first?.id || !this.transport.pageUrl) return 0;
+		this.mutate(() => {
+			this.loadingEarlierValue = true;
+		});
+		let added = 0;
+		try {
+			const res = await this.fetch(this.transport.pageUrl(first.id, limit));
+			if (res.ok) {
+				const json = await res.json();
+				const page = this.transport.parseRecord(json);
+				if (page) {
+					const have = new Set([...this.older, ...this.base].map((m) => (m as { id?: string }).id));
+					const fresh = page.filter((m) => !have.has((m as { id?: string }).id));
+					added = fresh.length;
+					this.transport.onPage?.(json);
+					this.mutate(() => {
+						this.older = [...fresh, ...this.older];
+						this.hasMoreValue = (json as { hasMore?: unknown }).hasMore === true;
+					});
+				}
+			}
+		} catch {
+			/* the divider stays; the operator can retry */
+		} finally {
+			this.mutate(() => {
+				this.loadingEarlierValue = false;
+			});
+		}
+		return added;
 	}
 
 	get status(): SessionStatus {
@@ -596,7 +658,7 @@ export class SessionModel {
 					const record = this.transport.parseRecord(json);
 					if (record) {
 						this.mutate(() => {
-							this.base = record;
+							this.swapBase(record);
 							this.tail = [];
 						});
 						// A turn that ended before we attached is already in the record: replaying it would double its messages.
@@ -820,7 +882,7 @@ export class SessionModel {
 	/** Full snapshot swap (the idle settle sync — server canon). */
 	setMessages(record: LhMessage[]): void {
 		this.mutate(() => {
-			this.base = record;
+			this.swapBase(record);
 			this.tail = [];
 			this.streamingMessageId = null; // the tail (and its slot) is gone
 		});
@@ -835,10 +897,13 @@ export class SessionModel {
 	 */
 	adoptRecord(record: LhMessage[]): void {
 		const recordIds = new Set(record.map((m) => (m as { id?: string }).id));
-		const baseAbsorbed = this.base.some((m) => !recordIds.has((m as { id?: string }).id));
+		// A paged record starts later than the base: only base messages from the record's first one on must still be in it.
+		const firstId = (record[0] as { id?: string } | undefined)?.id;
+		const from = Math.max(0, this.base.findIndex((m) => (m as { id?: string }).id === firstId));
+		const baseAbsorbed = this.base.slice(from).some((m) => !recordIds.has((m as { id?: string }).id));
 		if (baseAbsorbed) return; // not a pure append — the idle full sync is the net
 		this.mutate(() => {
-			this.base = record;
+			this.swapBase(record);
 			this.tail = this.tail.filter((m) => !absorbed(m, record));
 		});
 	}

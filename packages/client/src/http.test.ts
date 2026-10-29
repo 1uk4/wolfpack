@@ -70,6 +70,17 @@ describe("HttpConsoleClient", () => {
     expect(seen.every((v) => v === "1")).toBe(true);
   });
 
+  it("getThread pages through the limit/before query", async () => {
+    const urls: string[] = [];
+    const c = make({ fetch: async (input, init) => (urls.push(String(input)), fetch(input, init)) });
+    const id = await homeThread(c);
+    const page = await c.getThread(id, { limit: 5 });
+    expect(page.hasMore).toBe(false);
+    await c.getThread(id, { limit: 5, before: "x" });
+    expect(urls.some((u) => u.endsWith("?limit=5"))).toBe(true);
+    expect(urls.some((u) => u.endsWith("?limit=5&before=x"))).toBe(true);
+  });
+
   it("auto-resumes across a dropped connection without gaps or duplicates", async () => {
     const plain = make();
     const id = await homeThread(plain);

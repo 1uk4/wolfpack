@@ -24,16 +24,18 @@ export interface UseChatSessionOptions {
 	initialMessages: LhMessage[];
 	/** Reattach on mount: a turn is running server-side with no live view. */
 	initiallyInFlight?: boolean;
+	/** The initial messages are only the newest page (see SessionModel.loadEarlier). */
+	initialHasMore?: boolean;
 	/** Turn traffic routes (default: the legacy pi routes). */
 	transport?: SessionTransport;
 }
 
-export function useChatSession({ chatId, initialMessages, initiallyInFlight, transport }: UseChatSessionOptions) {
+export function useChatSession({ chatId, initialMessages, initiallyInFlight, initialHasMore, transport }: UseChatSessionOptions) {
 	// The model is per-mount (chatId-keyed component); onChange forces the
 	// re-render. The ref pattern keeps it stable across renders.
 	const modelRef = useRef<SessionModel | null>(null);
 	if (modelRef.current === null) {
-		modelRef.current = new SessionModel({ chatId, initialMessages, transport });
+		modelRef.current = new SessionModel({ chatId, initialMessages, initialHasMore, transport });
 	}
 	const model = modelRef.current;
 	// The render VERSION — bumped by every model change, so the state memo
@@ -115,6 +117,7 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, tra
 	);
 	const setMessages = useCallback((record: LhMessage[]) => model.setMessages(record), [model]);
 	const adoptRecord = useCallback((record: LhMessage[]) => model.adoptRecord(record), [model]);
+	const loadEarlier = useCallback((limit?: number) => model.loadEarlier(limit), [model]);
 	const stop = useCallback(() => model.stop(), [model]);
 	const clearError = useCallback(() => model.clearError(), [model]);
 	// skipIfRecordIdle: attaching on a hint (a busy event) that may be late — a finished turn is already in the record.
@@ -122,6 +125,9 @@ export function useChatSession({ chatId, initialMessages, initiallyInFlight, tra
 
 	return {
 		messages: state.messages,
+		hasMore: state.hasMore,
+		loadingEarlier: state.loadingEarlier,
+		loadEarlier,
 		nativeMessages: state.nativeMessages,
 		status: state.status,
 		error: state.error,

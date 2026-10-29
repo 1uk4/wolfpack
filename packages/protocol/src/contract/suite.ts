@@ -222,6 +222,21 @@ export function runContractSuite(baseUrl: () => string, options: ContractOptions
       await expectError(await post(buildPath("abort", { id: "nope/nope" }), {}), "not_found");
     });
 
+    it("GET thread pages: no limit = all; limit = newest page with hasMore/cursor; before = the older page", async () => {
+      const all = await getThread(threadId);
+      expect(all.hasMore).toBeUndefined();
+      if (all.messages.length < 2) return;
+      const limit = 1;
+      const newest = expectJson(await call(`${buildPath("getThread", { id: threadId })}?limit=${limit}`), ROUTES.getThread.response.schema);
+      const page = await newest;
+      expect(page.messages.map((m) => m.id)).toEqual(all.messages.slice(-limit).map((m) => m.id));
+      expect(page.hasMore).toBe(all.messages.length > limit);
+      expect(page.cursor).toBe(page.messages[0]!.id);
+      const older = await expectJson(await call(`${buildPath("getThread", { id: threadId })}?limit=${limit}&before=${encodeURIComponent(page.cursor!)}`), ROUTES.getThread.response.schema);
+      expect(older.messages.map((m) => m.id)).toEqual(all.messages.slice(-limit - 1, -1).map((m) => m.id));
+      await expectError(await call(`${buildPath("getThread", { id: threadId })}?limit=0`), "invalid_request");
+    });
+
     it("unknown routes are not_found envelopes", async () => {
       await expectError(await call("/v1/nothing"), "not_found");
     });

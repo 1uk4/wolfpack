@@ -1,5 +1,5 @@
 import { FIXTURE_SCRIPT, FIXTURE_THREAD, FIXTURE_WOLF, type ScriptStep } from "./fixture.js";
-import { ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse, type ThreadContext } from "@wolfpack/protocol";
+import { pageRange, ATTACHMENT_IMAGE_TYPES, ATTACHMENT_MAX_BYTES, DEFAULT_THREAD_SETTINGS, type ThreadSettings, type ThreadSettingsPatch, type ThreadSettingsResponse, type ThreadContext } from "@wolfpack/protocol";
 import {
   BusyError,
   NotFoundError,
@@ -137,12 +137,15 @@ export class MockConsoleClient implements ConsoleClient {
     }
   }
 
-  async getThread(threadId: string): Promise<ThreadDetail> {
+  async getThread(threadId: string, opts: { limit?: number; before?: string } = {}): Promise<ThreadDetail> {
     const t = this.get(threadId);
+    const pending = this.pendingCards.filter((p) => p.threadId === threadId);
+    const page = pageRange(t.messages, { ...opts, requiredCallIds: pending.map((p) => p.callId) });
     return {
       ...t.summary,
       status: this.statusOf(t),
-      messages: t.messages.map((m) => ({ ...m })),
+      messages: t.messages.slice(page.start, page.end).map((m) => ({ ...m })),
+      ...(opts.limit !== undefined ? { hasMore: page.hasMore, ...(page.cursor ? { cursor: page.cursor } : {}) } : {}),
       busy: t.running !== null,
       lastEventId: t.seq,
       ...(this.pendingCards.some((p) => p.threadId === threadId) ? { pendingCards: this.pendingCards.filter((p) => p.threadId === threadId) } : {}),

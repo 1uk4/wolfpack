@@ -8,6 +8,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  pageRange,
   SSE_DONE,
   type Actor,
   type AttachmentRef,
@@ -397,8 +398,15 @@ export class ThreadRuntime {
     this.lastActivity = Date.now();
   }
 
+  /** Messages before this index predate the newest compaction (initial page never starts after it). */
+  private compactionIndex: number | undefined;
+
   private resetMessages(entries: EngineSnapshot["entries"]): void {
     this.messages = messagesFromEntries(entries);
+    // Index of the first message after the newest compaction marker in the snapshot (best effort: undefined when none is visible).
+    let marker = -1;
+    entries.forEach((e, i) => { if (/compaction/i.test(String(e.kind))) marker = i; });
+    this.compactionIndex = marker < 0 ? undefined : messagesFromEntries(entries.slice(0, marker + 1)).length;
     this.seenEntries = new Set(entries.map((e) => e.id));
     this.cards.reset(entries);
     // The first baseline (attach) announces nothing: a connection's baseline carries the pending cards.
@@ -563,21 +571,24 @@ export class ThreadRuntime {
   }
   // --- end feature progress ---
 
-  detail(): ThreadDetail {
+  /** `opts.limit` absent = the whole transcript; see `pageRange` for the paging rules. Only the page is copied/serialised. */
+  detail(opts: { limit?: number; before?: string } = {}): ThreadDetail {
     const den = this.host.den;
     const attachmentsOf = (m: ThreadMessage) => {
       const list = den && m.role === "user" ? attachmentsInText(den, this.summary.id, m.text) : [];
       return list.length ? { attachments: list } : {};
     };
-    const messages = this.messages.map((m) => ({
+    const pendingCards = this.cards.pending();
+    const page = pageRange(this.messages, { ...opts, compactionIndex: this.compactionIndex, requiredCallIds: pendingCards.map((c) => c.callId) });
+    const messages = this.messages.slice(page.start, page.end).map((m) => ({
       ...m,
       // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
       ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
       ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
       ...attachmentsOf(m),
     }));
-    const pendingCards = this.cards.pending();
-    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
+    const paged = opts.limit !== undefined ? { hasMore: page.hasMore, ...(page.cursor ? { cursor: page.cursor } : {}) } : {};
+    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}), ...paged };
   }
 
   async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean; resubmit?: boolean } = {}): Promise<SubmitAck> {

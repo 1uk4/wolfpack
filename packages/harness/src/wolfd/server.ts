@@ -359,6 +359,7 @@ export class WolfServer {
       if (t.summary.kind === "feature" && t.summary.boundWorkItem && workItemIds.includes(t.summary.boundWorkItem)) {
         this.markClosed(t, GRADUATED_MESSAGE);
         closed.push(t.summary.id);
+        closed.push(...(this.subagents?.closeChildrenOf(t.summary.id) ?? []));
       }
     }
     return closed;

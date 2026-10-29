@@ -290,7 +290,32 @@ export class SubagentManager {
       tokens: r.tokens,
       ...(r.taskId ? { taskId: r.taskId } : {}),
       ...(r.state === "queued" ? { queuePosition: this.positionOf(r) } : {}),
+      ...this.closedOf(r),
     };
+  }
+
+  /**
+   * A child is closed (read-only, archived) once its parent thread is closed AND it has settled. Derived, never stored:
+   * a running child is left alone and closes when it settles; a restart or a graduation from before this rule closes
+   * the children of an already closed parent with no migration. Nothing is deleted.
+   */
+  private closedOf(r: ChildRecord): { closed: true; closedReason: string } | Record<string, never> {
+    if (r.state !== "done" && r.state !== "failed" && r.state !== "stopped") return {};
+    const parent = this.port.thread(r.parentThreadId)?.summary;
+    return parent?.closed ? { closed: true, closedReason: parent.closedReason ?? "Its feature has graduated." } : {};
+  }
+
+  /**
+   * The parent thread was closed: re-announce its children (nested ones after their parents) so settled ones show as
+   * closed. Returns the ids of the children now closed. Idempotent.
+   */
+  closeChildrenOf(parentThreadId: string): string[] {
+    const out: string[] = [];
+    for (const r of this.records.filter((o) => o.parentThreadId === parentThreadId)) {
+      this.announce(r);
+      if (this.port.thread(r.id)?.summary.closed) out.push(r.id, ...this.closeChildrenOf(r.id));
+    }
+    return out;
   }
 
   /** 1-based place in the queue. */

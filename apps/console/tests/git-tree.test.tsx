@@ -161,13 +161,15 @@ describe("ThreadGitTree", () => {
 		await click(q('[data-testid="git-tree-button"]')!);
 		const pop = q('[data-testid="git-tree-popover"]')!;
 		assert.ok(pop);
-		assert.equal(q('[data-testid="git-tree-path"]')!.textContent, WS.path);
-		assert.ok(q('[data-testid="git-tree-copy"]'));
-		assert.match(q('[data-testid="git-tree-branch"]')!.textContent!, /feat\/abc1234-console \(from console\)/);
+		assert.equal(q('[data-testid="git-tree-path"]'), null);
+		assert.equal(q('[data-testid="git-tree-copy"]')!.getAttribute("title"), WS.path);
+		assert.match(q('[data-testid="git-tree-title"]')!.textContent!, /feat\/abc1234-console/);
+		assert.match(q('[data-testid="git-tree-branch"]')!.textContent!, /feat\/abc1234-console ← console/);
 		const dirty = q('[data-testid="git-tree-dirty-files"]')!.textContent!;
 		assert.match(dirty, /src\/a\.ts/);
 		assert.match(dirty, /new\.txt/);
-		const commits = q('[data-testid="git-tree-commits"]')!.textContent!;
+		assert.match(dirty, /2 files changed/);
+		const commits = q('[data-testid="git-tree-commits"]')!.textContent!; // fallback list when no graph
 		assert.match(commits, /aaaaaaa.*add a/);
 		assert.match(commits, /initial/);
 		assert.match(q('[data-testid="git-tree-children"]')!.textContent!, /Task 1[\s\S]*feat\/abc1234-console--task-1/);

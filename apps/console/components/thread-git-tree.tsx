@@ -113,7 +113,7 @@ async function copyPath(text: string): Promise<boolean> {
  * opens the popover (path with copy, branch, dirty files, last commits, running subagents' worktrees). Draws nothing
  * for a thread without a git workspace.
  */
-export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown }) {
+export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey, title }: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown; title?: string }) {
 	const status = useWorkspaceStatus(wolf, slug, threadId, workspace !== undefined, refreshKey);
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState(false);
@@ -123,7 +123,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 	if (!workspace) return null;
 	const branch = status?.branch ?? workspace.branch;
 	return (
-		<div ref={rootRef} className="relative min-w-0 shrink" data-testid="git-tree">
+		<div ref={rootRef} className="min-w-0 shrink" data-testid="git-tree">
 			<button
 				type="button"
 				data-testid="git-tree-button"
@@ -168,75 +168,83 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 				)}
 			</button>
 			{open && (
-				<div role="dialog" aria-label="Git workspace" data-testid="git-tree-popover" className="absolute left-0 top-full z-50 mt-1 flex w-96 max-w-[90vw] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
-					<div className="flex items-center gap-1.5">
-						<span data-testid="git-tree-path" className="min-w-0 flex-1 break-all font-mono">
-							{workspace.path}
-						</span>
-						<button
-							type="button"
-							data-testid="git-tree-copy"
-							aria-label="Copy path"
-							className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
-							onClick={() => {
-								void copyPath(workspace.path).then((ok) => {
-									setCopied(ok);
-									if (ok) setTimeout(() => setCopied(false), 1500);
-								});
-							}}
-						>
-							{copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-						</button>
-					</div>
-					<div data-testid="git-tree-branch" className="font-mono text-muted-foreground">
-						{branch}
-						{workspace.base ? ` (from ${workspace.base})` : ""}
-					</div>
-					{!status ? (
-						<div className="text-muted-foreground">Loading…</div>
-					) : (
-						<>
-							<section data-testid="git-tree-dirty-files">
-								<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Changes</div>
-								{status.dirty.length === 0 ? (
-									<div className="text-muted-foreground">clean</div>
+				<div className="absolute inset-x-0 top-full z-50 mt-1 px-3" data-testid="git-tree-popover-wrap">
+					<div role="dialog" aria-label="Git workspace" data-testid="git-tree-popover" className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs shadow-lg">
+						<div className="flex items-center gap-1.5">
+							<span data-testid="git-tree-title" className="min-w-0 truncate text-sm font-medium text-foreground">
+								{title ?? branch}
+							</span>
+							<button
+								type="button"
+								data-testid="git-tree-copy"
+								aria-label="Copy path"
+								title={workspace.path}
+								className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
+								onClick={() => {
+									void copyPath(workspace.path).then((ok) => {
+										setCopied(ok);
+										if (ok) setTimeout(() => setCopied(false), 1500);
+									});
+								}}
+							>
+								{copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+							</button>
+						</div>
+						<div data-testid="git-tree-branch" title={branch} className="truncate font-mono text-muted-foreground">
+							{middleTruncate(branch)}
+							{workspace.base ? ` ← ${workspace.base}` : ""}
+						</div>
+						{!status ? (
+							<div className="text-muted-foreground">Loading…</div>
+						) : (
+							<>
+								{graph && graph.commits.length > 0 ? (
+									<section data-testid="git-tree-graph" className="py-1">
+										<BranchGraphView graph={graph} />
+									</section>
 								) : (
-									status.dirty.map((f) => (
-										<div key={f.path} className="flex gap-2 font-mono">
-											<span className="w-5 shrink-0 whitespace-pre text-muted-foreground">{f.status}</span>
-											<span className="min-w-0 break-all">{f.path}</span>
-										</div>
-									))
+									status.commits.length > 0 && (
+										<section data-testid="git-tree-commits">
+											{status.commits.slice(0, 5).map((c) => (
+												<div key={c.sha} className="flex gap-2">
+													<span className="shrink-0 font-mono text-muted-foreground">{c.sha.slice(0, 7)}</span>
+													<span className="min-w-0 truncate">{c.subject}</span>
+												</div>
+											))}
+										</section>
+									)
 								)}
-							</section>
-							{graph && graph.commits.length > 0 && (
-								<section data-testid="git-tree-graph">
-									<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Branches</div>
-									<BranchGraphView graph={graph} />
+								<section data-testid="git-tree-dirty-files" className="font-mono">
+									{status.dirty.length === 0 ? (
+										<span className="text-muted-foreground">Changes: clean</span>
+									) : (
+										<details>
+											<summary className="cursor-pointer text-muted-foreground">
+												Changes: {status.dirty.length} {status.dirty.length === 1 ? "file" : "files"} changed
+											</summary>
+											{status.dirty.map((f) => (
+												<div key={f.path} className="flex gap-2">
+													<span className="w-5 shrink-0 whitespace-pre text-muted-foreground">{f.status}</span>
+													<span className="min-w-0 break-all">{f.path}</span>
+												</div>
+											))}
+										</details>
+									)}
 								</section>
-							)}
-							<section data-testid="git-tree-commits">
-								<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Recent commits</div>
-								{status.commits.map((c) => (
-									<div key={c.sha} className="flex gap-2">
-										<span className="shrink-0 font-mono text-muted-foreground">{c.sha.slice(0, 7)}</span>
-										<span className="min-w-0 truncate">{c.subject}</span>
-									</div>
-								))}
-							</section>
-							{status.children.length > 0 && (
-								<section data-testid="git-tree-children">
-									<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Subagent worktrees</div>
-									{status.children.map((c) => (
-										<div key={c.threadId} className="flex flex-col">
-											<span>{c.name}</span>
-											<span className="break-all font-mono text-muted-foreground">{c.branch}</span>
-										</div>
-									))}
-								</section>
-							)}
-						</>
-					)}
+								{status.children.length > 0 && (
+									<section data-testid="git-tree-children">
+										<div className="mb-0.5 uppercase tracking-widest text-muted-foreground/70">Subagent worktrees</div>
+										{status.children.map((c) => (
+											<div key={c.threadId} className="flex flex-col">
+												<span>{c.name}</span>
+												<span className="break-all font-mono text-muted-foreground">{c.branch}</span>
+											</div>
+										))}
+									</section>
+								)}
+							</>
+						)}
+					</div>
 				</div>
 			)}
 		</div>
@@ -244,11 +252,11 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 }
 
 /** The header's second row: the git tree on its own full-width line; renders nothing (no gap) for a non-git thread. */
-export function ThreadGitRow(props: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown }) {
+export function ThreadGitRow(props: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown; title?: string }) {
 	if (!props.workspace) return null;
 	return (
-		<div data-testid="thread-header-row2" className="flex h-7 shrink-0 items-center border-b border-border/60 px-3">
-			<ThreadGitTree wolf={props.wolf} slug={props.slug} threadId={props.threadId} workspace={props.workspace} refreshKey={props.refreshKey} />
+		<div data-testid="thread-header-row2" className="relative flex h-7 shrink-0 items-center border-b border-border/60 px-3">
+			<ThreadGitTree wolf={props.wolf} slug={props.slug} threadId={props.threadId} workspace={props.workspace} refreshKey={props.refreshKey} title={props.title} />
 		</div>
 	);
 }

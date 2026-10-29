@@ -2,14 +2,14 @@
 
 import type { BranchGraph } from "@/src/core/branch-graph";
 
-const STEP = 14;
-const LANE_H = 20;
-const LABEL_W = 104;
-const R = 3.5;
+const STEP = 36;
+const LANE_H = 30;
+const LABEL_W = 190;
+const R = 5;
 const COLORS = ["#8b95a7", "#c78bfa", "#5eb0ff", "#4ade80", "#fbbf24", "#f472b6", "#2dd4bf"];
 
-function truncate(name: string, max = 16): string {
-	return name.length <= max ? name : `${name.slice(0, 6)}…${name.slice(name.length - (max - 7))}`;
+function truncate(name: string, max = 28): string {
+	return name.length <= max ? name : `${name.slice(0, 10)}…${name.slice(name.length - (max - 11))}`;
 }
 
 /** Compact git-flow style lane diagram: one lane per branch (label at left), commits as circles, oldest → newest left → right. */
@@ -22,11 +22,11 @@ export function BranchGraphView({ graph }: { graph: BranchGraph }) {
 	const index = new Map(graph.commits.map((c, i) => [c.sha, i]));
 	const color = (lane: number) => COLORS[lane % COLORS.length]!;
 	return (
-		<svg data-testid="branch-graph" role="img" aria-label="Branch graph" viewBox={`0 0 ${width} ${height}`} width="100%" style={{ maxWidth: width }} className="font-mono">
+		<svg data-testid="branch-graph" role="img" aria-label="Branch graph" viewBox={`0 0 ${width} ${height}`} width="100%" className="font-mono">
 			{graph.lanes.map((l, i) => (
 				<g key={l.name} data-testid="branch-graph-lane" data-kind={l.kind}>
 					<line x1={LABEL_W} x2={width} y1={y(i)} y2={y(i)} stroke={color(i)} strokeOpacity={0.15} />
-					<text x={0} y={y(i) + 3} fontSize={9} fill={color(i)} className={l.kind === "feature" ? "font-semibold" : undefined}>
+					<text x={0} y={y(i) + 4} fontSize={11} fill={color(i)} className={l.kind === "feature" ? "font-semibold" : undefined}>
 						<title>{l.name}</title>
 						{truncate(l.name)}
 					</text>
@@ -42,7 +42,7 @@ export function BranchGraphView({ graph }: { graph: BranchGraph }) {
 					const lane = parent.lane === c.lane ? c.lane : c.parents[0] === p ? c.lane : parent.lane;
 					const mid = (px + cx) / 2;
 					const d = py === cy ? `M${px} ${py}H${cx}` : `M${px} ${py}C${mid} ${py} ${mid} ${cy} ${cx} ${cy}`;
-					return [<path key={`${c.sha}-${p}`} data-testid="branch-graph-edge" d={d} fill="none" stroke={color(lane)} strokeWidth={1.5} />];
+					return [<path key={`${c.sha}-${p}`} data-testid="branch-graph-edge" d={d} fill="none" stroke={color(lane)} strokeWidth={2} />];
 				}),
 			)}
 			{graph.commits.map((c, i) => (

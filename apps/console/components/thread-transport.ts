@@ -29,6 +29,14 @@ export function settingsUrl(wolf: string, slug: string): string {
 	return `${threadBase(wolf, slug)}/settings`;
 }
 
+/** Context stats (GET) and the manual compaction (POST {instructions?}). */
+export function contextUrl(wolf: string, slug: string): string {
+	return `${threadBase(wolf, slug)}/context`;
+}
+export function compactUrl(wolf: string, slug: string): string {
+	return `${threadBase(wolf, slug)}/compact`;
+}
+
 // --- feature progress: bind ---
 /** Where the bind icon POSTs `{workItemId}`. */
 export function bindUrl(wolf: string, slug: string): string {

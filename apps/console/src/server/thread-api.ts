@@ -283,6 +283,33 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
+		/** The thread's context size, window, thresholds and compaction history: `GET /v1/threads/:id/context`. */
+		async getContext(ref: ThreadRef): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.getThreadContext) return json({ error: "this client has no context stats" }, 501);
+				return json(await client.getThreadContext(await resolve(client, ref)));
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
+		/** Compact the thread now (body `{instructions?}`), allowed mid-turn: `POST /v1/threads/:id/compact`. */
+		async compact(ref: ThreadRef, req: Request): Promise<Response> {
+			try {
+				const client = source();
+				if (!client.compactThread) return json({ error: "this client cannot compact" }, 501);
+				const body = (await req.json().catch(() => ({}))) as { instructions?: unknown } | null;
+				if (!body || typeof body !== "object" || (body.instructions !== undefined && typeof body.instructions !== "string")) {
+					return json({ error: "body must be {instructions?: string}" }, 400);
+				}
+				await client.compactThread(await resolve(client, ref), body.instructions || undefined);
+				return json({ accepted: true });
+			} catch (err) {
+				return failure(err);
+			}
+		},
+
 		// --- feature progress: bind ---
 		/** Bind the thread's conversation to a work item: the console's side of `POST /v1/threads/:id/bind` (body `{workItemId}`). */
 		async bind(ref: ThreadRef, req: Request): Promise<Response> {

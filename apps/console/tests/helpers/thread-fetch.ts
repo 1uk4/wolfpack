@@ -19,6 +19,8 @@ export function threadFetch(client: ConsoleClient): typeof fetch {
 		if (action === "ledger") return api.ledger(ref);
 		if (action === "workspace" && attachmentId === "graph") return api.workspaceGraph(ref);
 		if (action === "workspace") return api.workspaceStatus(ref);
+		if (action === "context") return api.getContext(ref);
+		if (action === "compact") return api.compact(ref, req);
 		if (action === "abort") return api.abort(ref);
 		if (action === "stream") return api.stream(ref, req);
 		return new Response("not found", { status: 404 });

@@ -26,6 +26,7 @@ import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } fro
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
 import { ThreadGitRow } from "@/components/thread-git-tree";
+import { ThreadContextChip } from "@/components/thread-context";
 import type { ThreadWorkspace } from "@wolfpack/client";
 import {
 	ASSISTANT_CONTENT_CLASS,
@@ -424,6 +425,7 @@ function ThreadChatInner({
 				<TopBar>
 					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground">{wolf}</span>
+					<ThreadContextChip wolf={wolf} slug={slug} threadId={threadId} refreshKey={busy} />
 				</TopBar>
 				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
 				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} title={title} />

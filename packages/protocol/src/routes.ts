@@ -281,12 +281,12 @@ export const ROUTES = {
    */
   kbPipeline: { method: "GET", path: "/v1/wolves/:name/kb/pipeline", response: { kind: "json", schema: KbPipelineResponseSchema }, status: [200], error: err },
   /**
-   * The KB graph, served by the librarian wolf only (409 `kb_unavailable` elsewhere). Query: `domain` (one domain; unknown = 404 `not_found`),
+   * The KB graph, served by any wolf with KB roots (read-only; 409 `kb_unavailable` without them). Query: `domain` (one domain; unknown = 404 `not_found`),
    * and the layer flags `archivedWork`, `denTopics` (`true`|`false`, default false; anything else is 400 `invalid_request`).
    * `denTopics` adds the serving wolf's own den topics only. Work items hang off one `fac:<domain>` Factory node per domain (sourced from the Work API, else the KB work files); there are no cross-entry relation edges.
    */
   getKbGraph: { method: "GET", path: "/v1/wolves/:name/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
-  /** One KB entry (frontmatter, body, wikilinks, backlinks). Librarian only. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
+  /** One KB entry (frontmatter, body, wikilinks, backlinks). Any wolf with KB roots. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
   getKbEntry: { method: "GET", path: "/v1/wolves/:name/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 

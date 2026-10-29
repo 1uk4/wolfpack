@@ -23,6 +23,7 @@ import {
 	createDebounce,
 	createPendingPulses,
 	createPulseBatcher,
+	KB_MIRROR_LABEL,
 	eventNodeIds,
 	focusStep,
 	parseFocusParam,
@@ -51,12 +52,21 @@ function Placeholder({ title, children }: { title: string; children?: React.Reac
 	);
 }
 
+/** Shown when the graph is read from a wolf's KB mirror because the librarian is offline. */
+export function KbMirrorLabel() {
+	return (
+		<div className="absolute left-3 top-3 z-10 rounded-lg border bg-card/90 px-2 py-1 text-xs text-muted-foreground shadow-lg" data-testid="kb-mirror-label" title="Live sweep activity and the pipeline need the librarian">
+			{KB_MIRROR_LABEL}
+		</div>
+	);
+}
+
 /** The presentational states (exported for the SSR pins). */
 export function GraphUnavailable({ message }: { message?: string | null }) {
 	return (
 		<Placeholder title="Knowledge graph unavailable">
 			<p className="max-w-sm text-sm">
-				The graph is served by the librarian wolf, and none is online right now.
+				The graph is read from the librarian wolf or a wolf with a KB mirror, and none is online right now.
 				{message ? ` (${message})` : ""} Start the librarian and this page fills in on its own.
 			</p>
 		</Placeholder>
@@ -105,14 +115,14 @@ function useActivityWolves(librarian: string | null): { wolves: string[]; refres
 function GraphHomeInner() {
 	const router = useRouter();
 	const params = useSearchParams();
-	const { librarian, loading: librarianLoading } = useLibrarian();
+	const { librarian, kbSource, loading: librarianLoading } = useLibrarian();
 	const { settings, loaded, changeSettings } = useGraphSettings();
 
 	// Transient view changes a `/?focus=` target asked for (archived work,
 	// den topics, no domain filter). Never persisted into the settings.
 	const [forced, setForced] = useState<FocusRemedy>({});
 	const focusParam = parseFocusParam(params);
-	const kb = useKbGraph(librarian, librarianLoading || !loaded, {
+	const kb = useKbGraph(kbSource?.name ?? null, librarianLoading || !loaded, {
 		domain: forced.allDomains ? undefined : (settings.domain ?? undefined),
 		archivedWork: settings.layers.archivedWork || !!forced.archivedWork,
 		denTopics: settings.layers.denTopics || !!forced.denTopics,
@@ -223,6 +233,7 @@ function GraphHomeInner() {
 	return (
 		<div className="relative h-full w-full">
 			{body}
+			{kbSource?.mirror && kb.status !== "unavailable" && <KbMirrorLabel />}
 			{activity.map((w) => (
 				<WolfTap key={w} wolf={w} onEvent={onEvent} onResync={onResync} />
 			))}

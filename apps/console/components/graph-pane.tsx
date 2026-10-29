@@ -27,6 +27,7 @@ import {
 	clampPaneWidth,
 	featureGraduateState,
 	featureThreadWolves,
+	findKbSource,
 	findLibrarian,
 	paneWork,
 	parsePaneWidth,
@@ -86,8 +87,9 @@ async function loadPaneData(card: NodeCard): Promise<PaneData> {
 		return { kind: "work", item, work: paneWork(item), threadWolves: item.kind === "feature" && !item.container ? featureThreadWolves(wolves) : [] };
 	}
 	if (card.kind === "entry") {
-		if (!librarian) return { kind: "error", message: "The knowledge base is unavailable: no librarian wolf is serving it right now." };
-		const res = await fetchKbEntry(librarian, card.id.slice("ent:".length));
+		const source = findKbSource(wolves)?.name;
+		if (!source) return { kind: "error", message: "The knowledge base is unavailable: no wolf can read it right now." };
+		const res = await fetchKbEntry(source, card.id.slice("ent:".length));
 		if (!res.ok) return { kind: "error", message: res.reason === "not_found" ? "No such entry." : res.message };
 		return { kind: "entry", entry: res.data };
 	}

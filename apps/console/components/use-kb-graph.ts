@@ -5,7 +5,7 @@
  *
  *   status: "loading"     first fetch in flight, nothing to show yet
  *           "ready"       `graph` is the librarian's payload
- *           "unavailable" no librarian online (or it answered 409) — a
+ *           "unavailable" no wolf can read the KB (or it answered 409) — a
  *                         clear empty state, not an error
  *           "error"       any other failure (`message` says what)
  *
@@ -48,7 +48,7 @@ export function useKbGraph(librarian: string | null, loading: boolean, query: Kb
 	useEffect(() => {
 		if (loading) return;
 		if (!librarian) {
-			setState({ status: "unavailable", graph: null, message: "No librarian is online." });
+			setState({ status: "unavailable", graph: null, message: "No wolf can read the knowledge base." });
 			return;
 		}
 		let cancelled = false;

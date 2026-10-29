@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PIPELINE_HREF, entryHref, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
+import { KB_MIRROR_LABEL, PIPELINE_HREF, entryHref, findKbSource, findLibrarian, parseMemoryEventFrame, workHref } from "../src/core/kb.ts";
 
 const base = { wolf: "1uk4", timestamp: "2026-10-26T00:00:00.000Z", domain: "d" };
 
@@ -12,6 +12,24 @@ describe("findLibrarian", () => {
 		assert.equal(findLibrarian([a, { name: "b", librarian: false }]), null);
 		assert.equal(findLibrarian([]), null);
 	});
+});
+
+describe("findKbSource", () => {
+	const lib = { name: "dewey", status: "online", librarian: true, kbReadable: true };
+	const mirror = { name: "1uk4", status: "online", librarian: false, kbReadable: true };
+	const blind = { name: "x", status: "online" };
+	it("prefers the online librarian", () => {
+		assert.deepEqual(findKbSource([mirror, lib]), { name: "dewey", mirror: false });
+	});
+	it("falls back to the first online wolf with kbReadable, as a mirror", () => {
+		assert.deepEqual(findKbSource([blind, mirror, { ...mirror, name: "other" }]), { name: "1uk4", mirror: true });
+		assert.deepEqual(findKbSource([{ ...lib, status: "offline" }, mirror]), { name: "1uk4", mirror: true });
+	});
+	it("is null only when no online wolf can read the KB", () => {
+		assert.equal(findKbSource([]), null);
+		assert.equal(findKbSource([blind, { ...mirror, status: "offline" }, { name: "y", status: "online", kbReadable: false }]), null);
+	});
+	it("labels the mirror", () => assert.equal(KB_MIRROR_LABEL, "read-only mirror (librarian offline)"));
 });
 
 describe("parseMemoryEventFrame", () => {

@@ -55,7 +55,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<KbResult<T>>
 	return { ok: false, reason, message, ...(code ? { code } : {}), ...(details ? { details } : {}) };
 }
 
-export function fetchWolves(): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean }[] }>> {
+export function fetchWolves(): Promise<KbResult<{ wolves: { id: string; name: string; host: string; status: string; librarian?: boolean; kbReadable?: boolean }[] }>> {
 	return request("/api/wolves");
 }
 

@@ -33,7 +33,8 @@ export function entryReaderState(res: KbResult<KbEntryDetail>): EntryReaderState
 }
 
 export function EntryReader({ id }: { id: string }) {
-	const { librarian, loading } = useLibrarian();
+	const { kbSource, loading } = useLibrarian();
+	const librarian = kbSource?.name ?? null;
 	const [fetched, setFetched] = useState<{ id: string; state: EntryReaderState } | null>(null);
 
 	useEffect(() => {
@@ -67,7 +68,7 @@ export function EntryReaderView({ id, state }: { id: string; state: EntryReaderS
 					{state.kind === "loading" && <p className="text-sm text-muted-foreground">Loading…</p>}
 					{state.kind === "unavailable" && (
 						<p className="text-sm text-muted-foreground" role="status">
-							The knowledge base is unavailable: no librarian wolf is serving it right now.
+							The knowledge base is unavailable: no wolf can read it right now.
 						</p>
 					)}
 					{state.kind === "not_found" && (

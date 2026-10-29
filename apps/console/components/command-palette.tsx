@@ -20,7 +20,7 @@ import {
 	createSwrCache,
 	currentWolfOf,
 	eventBinding,
-	findLibrarian,
+	findKbSource,
 	graphItems,
 	kbdEventForAction,
 	rankPalette,
@@ -30,7 +30,7 @@ import {
 } from "@/src/core";
 import { fetchKbGraph, fetchWolves, postConsolidate, postPromote } from "@/components/kb-client";
 
-type Wolves = { name: string; librarian?: boolean }[];
+type Wolves = { name: string; status?: string; librarian?: boolean; kbReadable?: boolean }[];
 
 /** Session cache of the KB-derived items: shown instantly on every open,
  *  refetched in the background each time. Failures/empty never stick. */
@@ -41,9 +41,9 @@ const graphCache = createSwrCache(async (): Promise<PaletteItem[]> => {
 });
 
 async function loadGraphItems(wolves: Wolves): Promise<PaletteItem[]> {
-	const librarian = findLibrarian(wolves)?.name;
-	if (!librarian) throw new Error("No librarian wolf");
-	const g = await fetchKbGraph(librarian, { archivedWork: true });
+	const source = findKbSource(wolves)?.name;
+	if (!source) throw new Error("No wolf can read the knowledge base");
+	const g = await fetchKbGraph(source, { archivedWork: true });
 	if (!g.ok) throw new Error(g.message);
 	return graphItems(g.data.nodes);
 }

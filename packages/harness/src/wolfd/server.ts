@@ -743,6 +743,7 @@ export class WolfServer {
       }
       case "kbPipeline": {
         this.checkWolf(params.name);
+        if (!this.opts.librarian) throw new HttpError("kb_unavailable", `wolf ${this.name} is not the librarian`);
         const roots = this.requireKb();
         // Loaded on first use: only the librarian ever gets here, and the pipeline reader pulls in the librarian package.
         const { readPipeline } = await import("@wolfpack/kb/librarian");
@@ -794,11 +795,11 @@ export class WolfServer {
   }
 
   /**
-   * The KB roots for a KB route. The KB graph / entry / pipeline routes are librarian-only: a wolf that is not the
-   * librarian, or has no KB roots (no KB_BASE / KB_OPS), answers `kb_unavailable` (409).
+   * The KB roots for a KB route. The graph and entry routes are read-only and served by any wolf with KB roots (a
+   * non-librarian reads its Syncthing mirror); a wolf without them (no KB_BASE / KB_OPS) answers `kb_unavailable` (409).
+   * The pipeline route additionally requires the librarian (checked at the route).
    */
   private requireKb(): KbRoots {
-    if (!this.opts.librarian) throw new HttpError("kb_unavailable", `wolf ${this.name} is not the librarian`);
     if (!this.opts.kbRoots) throw new HttpError("kb_unavailable", "this wolf has no KB roots (KB_BASE and KB_OPS)");
     return this.opts.kbRoots;
   }
@@ -849,7 +850,7 @@ export class WolfServer {
   // ------------------------------------------------------------ state
 
   private wolfSummary(): WolfSummary {
-    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true };
+    return { id: this.name, name: this.name, host: this.host, status: [...this.threads.values()].some((t) => t.isRunning) ? "busy" : "online", librarian: this.opts.librarian === true, kbReadable: this.opts.kbRoots !== undefined };
   }
 
   private checkWolf(name: string): void {

@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GraphCard } from "../components/graph-card.tsx";
-import { GraphUnavailable } from "../components/graph-home.tsx";
+import { GraphUnavailable, KbMirrorLabel } from "../components/graph-home.tsx";
 import { describeNode } from "../src/core/kb-graph-model.ts";
 import type { KbGraph } from "../src/core/kb.ts";
 
@@ -81,5 +81,15 @@ describe("GraphUnavailable (no librarian online)", () => {
 		assert.ok(h.includes("librarian"));
 		assert.ok(h.includes("kb not served"));
 		assert.ok(h.includes('data-testid="graph-placeholder"'));
+	});
+});
+
+describe("KbMirrorLabel", () => {
+	it("says the graph is a read-only mirror because the librarian is offline", () => {
+		const h = renderToStaticMarkup(createElement(KbMirrorLabel));
+		assert.match(h, /read-only mirror \(librarian offline\)/);
+	});
+	it("GraphUnavailable no longer insists on the librarian alone", () => {
+		assert.match(renderToStaticMarkup(createElement(GraphUnavailable, {})), /librarian wolf or a wolf with a KB mirror/);
 	});
 });

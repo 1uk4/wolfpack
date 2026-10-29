@@ -43,6 +43,27 @@ export function findLibrarian<W extends { name: string; librarian?: boolean }>(w
 	return wolves.find((w) => w.librarian === true) ?? null;
 }
 
+/** Where the KB graph and entries are read from: the wolf, and whether it is a read-only mirror (not the librarian). */
+export interface KbSource {
+	name: string;
+	mirror: boolean;
+}
+
+/**
+ * The KB source: the librarian when it is online, else the first online wolf that can read the KB (kbReadable,
+ * a Syncthing mirror), else null. Only for the read-only graph/entry routes; the pipeline and sweep need the librarian.
+ */
+export function findKbSource<W extends { name: string; status?: string; librarian?: boolean; kbReadable?: boolean }>(wolves: readonly W[]): KbSource | null {
+	const online = wolves.filter((w) => w.status !== "offline");
+	const lib = online.find((w) => w.librarian === true);
+	if (lib) return { name: lib.name, mirror: false };
+	const mirror = online.find((w) => w.kbReadable === true);
+	return mirror ? { name: mirror.name, mirror: true } : null;
+}
+
+/** The label shown when the KB is read from a wolf other than the librarian. */
+export const KB_MIRROR_LABEL = "read-only mirror (librarian offline)";
+
 /**
  * A memory event of a type this build does not know yet (e.g. record_written,
  * topic_archived, sweep_*): kept as a loose `{ type, ...fields }` so new

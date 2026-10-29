@@ -25,7 +25,7 @@ export const ErrorCodeSchema = z.enum([
   "promote_unavailable",
   /** A promote is running; consolidate would queue behind it, so it is refused. Retry later. */
   "memory_busy",
-  /** The KB routes (graph, entries, pipeline) are served by the librarian wolf: this one is not, or has no KB roots. */
+  /** The KB routes: this wolf has no KB roots (graph, entries), or is not the librarian (pipeline). */
   "kb_unavailable",
   /** The thread is closed history (its feature graduated): reads work, sends are refused. */
   "thread_closed",
@@ -312,6 +312,8 @@ export const WolfSummarySchema = z.object({
   status: WolfStatusSchema,
   /** Additive: this wolf is the pack's librarian (serves the KB). Absent = false / not known (offline, older server). */
   librarian: z.boolean().optional(),
+  /** Additive: this wolf has KB roots and serves the read-only graph and entry routes (a mirror when it is not the librarian). Absent = false. */
+  kbReadable: z.boolean().optional(),
 });
 export type WolfSummary = z.infer<typeof WolfSummarySchema>;
 

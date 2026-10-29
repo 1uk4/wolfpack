@@ -72,7 +72,7 @@ describe("startWolf", () => {
     const w = await start();
     expect(w.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     const wolves: any = await (await fetch(`${w.url}${buildPath("listWolves")}`)).json();
-    expect(wolves.wolves).toEqual([{ id: "bootwolf", name: "bootwolf", host: "local", status: "online", librarian: false }]);
+    expect(wolves.wolves).toEqual([{ id: "bootwolf", name: "bootwolf", host: "local", status: "online", librarian: false, kbReadable: false }]);
 
     const create = () => fetch(`${w.url}${buildPath("createThread", { name: "bootwolf" })}`, { method: "POST", body: '{"kind":"home"}' });
     const thread: any = await (await create()).json();

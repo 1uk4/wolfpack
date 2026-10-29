@@ -1,6 +1,6 @@
 /**
- * KB graph + entry routes through a real WolfServer over /v1: the librarian serves them from its KB roots, any other
- * wolf (or one without roots) answers kb_unavailable; the den layer is the serving wolf's own den; the KB is never written.
+ * KB graph + entry routes through a real WolfServer over /v1: the librarian serves them from its KB roots, any wolf with roots (a mirror)
+ * serves them read-only, one without roots answers kb_unavailable; the den layer is the serving wolf's own den; the KB is never written.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeDenTopic } from "@wolfpack/memory";
-import { ErrorEnvelopeSchema, KbEntryDetailSchema, KbGraphSchema, PROTOCOL_VERSION } from "@wolfpack/protocol";
+import { ErrorEnvelopeSchema, ROUTES, KbEntryDetailSchema, KbGraphSchema, PROTOCOL_VERSION } from "@wolfpack/protocol";
 import { HttpConsoleClient, NotFoundError, ProtocolError } from "@wolfpack/client";
 import { makeFixtureKb } from "../../../kb/src/graph/fixture.js";
 import { ScriptedEngine } from "./scripted-engine.js";
@@ -143,10 +143,27 @@ describe("kb routes", { timeout: 30_000 }, () => {
     expect((await errorOf(await get(url, "/v1/wolves/nobody/kb/graph"))).code).toBe("not_found");
   });
 
-  it("a non-librarian wolf, or a librarian without KB roots, answers kb_unavailable (409)", async () => {
+  it("a non-librarian wolf with KB roots serves the graph and entries read-only, reports kbReadable, and 409s the pipeline", async () => {
     const kb = makeFixtureKb();
     dirs.push(kb);
-    const cases = [await boot({ librarian: false, kb }), await boot({ name: "dewey", librarian: true })];
+    const before = hashTree(kb);
+    const { url, name } = await boot({ name: "mirror", librarian: false, kb });
+    const g = await get(url, `/v1/wolves/${name}/kb/graph`);
+    expect(g.status).toBe(200);
+    ROUTES.getKbGraph.response.schema.parse(await g.json());
+    const e = await get(url, `/v1/wolves/${name}/kb/entries/kb-alpha-AAA1111`);
+    expect(e.status).toBe(200);
+    expect((await e.json()).title).toBe("First");
+    const p = await get(url, `/v1/wolves/${name}/kb/pipeline`);
+    expect(p.status).toBe(409);
+    expect((await errorOf(p)).code).toBe("kb_unavailable");
+    const w = await (await get(url, "/v1/wolves")).json();
+    expect(w.wolves[0]).toMatchObject({ librarian: false, kbReadable: true });
+    expect(hashTree(kb)).toEqual(before);
+  });
+
+  it("a wolf without KB roots answers kb_unavailable (409) and reports kbReadable false", async () => {
+    const cases = [await boot({ librarian: false }), await boot({ name: "dewey", librarian: true })];
     for (const c of cases) {
       for (const path of [`/v1/wolves/${c.name}/kb/graph`, `/v1/wolves/${c.name}/kb/entries/kb-alpha-AAA1111`]) {
         const r = await get(c.url, path);

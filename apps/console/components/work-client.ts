@@ -3,7 +3,7 @@
  * console route → wolfd → the wolf's Work API (GET /work?domain=). The wolves are tried the way the graph pane
  * tries them for one item (the librarian, then every other online wolf; only "unavailable" moves on). Tests inject a fake.
  */
-import { findLibrarian, workWolfCandidates, type WorkListResponse } from "@/src/core";
+import { findKbSource, findLibrarian, workWolfCandidates, type WorkListResponse } from "@/src/core";
 import { fetchKbGraph, fetchWolves, fetchWorkList, type KbResult } from "./kb-client";
 
 export interface WorkDomain {
@@ -26,9 +26,9 @@ export function createWorkClient(): WorkClient {
 	return {
 		async domains() {
 			const all = await wolves();
-			const librarian = findLibrarian(all);
-			if (!librarian) return [];
-			const res = await fetchKbGraph(librarian.name);
+			const source = findKbSource(all);
+			if (!source) return [];
+			const res = await fetchKbGraph(source.name);
 			return res.ok ? res.data.domains.map((d) => ({ name: d.name, label: d.label })) : [];
 		},
 		async list(domain, graduated) {

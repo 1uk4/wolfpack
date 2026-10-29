@@ -31,3 +31,13 @@ export function contributionsRoot(dataDir: string): string {
 export function contributionsDir(dataDir: string, wolf: string): string {
   return join(contributionsRoot(dataDir), wolf);
 }
+
+/** The hub-owned registry (hosts, wolves, domains, subscriptions): `<dataDir>/registry/registry.json`. Seeded once, then hubd is its only writer. */
+export function registryFile(dataDir: string): string {
+  return join(dataDir, "registry", "registry.json");
+}
+
+/** The generated domains.yaml, regenerated from the registry on every write: `<kbBase>/domains.yaml`, where `readDomainRegistry(hubRoots(dataDir).kbBase)` looks. */
+export function domainsYamlFile(dataDir: string): string {
+  return join(hubRoots(dataDir).kbBase, "domains.yaml");
+}

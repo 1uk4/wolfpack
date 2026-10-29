@@ -273,6 +273,49 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       });
     });
 
+    describe("registry", () => {
+      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const send = (method: string, path: string, body?: unknown, actor: Record<string, string> = op) =>
+        fetch(baseUrl() + path, { method, headers: { "Content-Type": "application/json", ...options.headers, ...actor }, body: body === undefined ? undefined : JSON.stringify(body) });
+
+      it("reads are open to any actor; writes need an operator (403 forbidden)", async () => {
+        for (const [r, key] of [["registryListHosts", "hosts"], ["registryListWolves", "wolves"], ["registryListDomains", "domains"], ["registryListSubscriptions", "subscriptions"]] as const) {
+          const res = await call(buildPath(r));
+          expect(res.status).toBe(200);
+          expect(Array.isArray(((await res.json()) as Record<string, unknown>)[key])).toBe(true);
+        }
+        await expectError(await send("POST", buildPath("registryCreateDomain"), { name: "suite-dom" }, wolf), "forbidden");
+        await expectError(await send("DELETE", buildPath("registryDeleteDomain", { name: "suite-dom" }), undefined, wolf), "forbidden");
+        await expectError(await send("POST", buildPath("registryCreateDomain"), { name: "suite-dom" }, {}), "invalid_request");
+      });
+
+      it("CRUD over host, domain, wolf and subscription; retire marks the wolf retired", async () => {
+        const id = randomBytes(3).toString("hex");
+        const host = `h-${id}`, dom = `d-${id}`, w = `w-${id}`;
+        expect((await send("POST", buildPath("registryCreateHost"), { name: host, address: "10.0.0.1" })).status).toBe(201);
+        expect((await send("POST", buildPath("registryCreateDomain"), { name: dom, label: "Suite" })).status).toBe(201);
+        const cw = await send("POST", buildPath("registryCreateWolf"), { name: w, host, domains: [dom], tools: ["coding"] });
+        expect(cw.status).toBe(201);
+        expect(ROUTES.registryCreateWolf.response.schema.parse(await cw.json())).toMatchObject({ wolf: { name: w, status: "active" } });
+        await expectError(await send("POST", buildPath("registryCreateWolf"), { name: w }), "conflict");
+        await expectError(await send("POST", buildPath("registryCreateWolf"), { name: "Bad Name" }), "invalid_request");
+        const subs = ROUTES.registryListSubscriptions.response.schema.parse(await (await call(buildPath("registryListSubscriptions"))).json()) as { subscriptions: { wolf: string; domain: string }[] };
+        expect(subs.subscriptions).toContainEqual({ wolf: w, domain: dom });
+        const up = await send("PATCH", buildPath("registryUpdateDomain", { name: dom }), { description: "changed" });
+        expect(((await up.json()) as { domain: { description: string } }).domain.description).toBe("changed");
+        const rt = await send("POST", buildPath("registryRetireWolf", { name: w }));
+        expect(rt.status).toBe(200);
+        expect(ROUTES.registryRetireWolf.response.schema.parse(await rt.json())).toMatchObject({ wolf: { status: "retired" }, released: [] });
+        await expectError(await send("POST", buildPath("registryRetireWolf", { name: `nope-${id}` })), "not_found");
+        await expectError(await call(buildPath("registryGetHost", { name: "nope" })), "not_found");
+        await expectError(await send("DELETE", buildPath("registryDeleteHost", { name: host })), "conflict");
+        expect((await send("DELETE", buildPath("registryDeleteWolf", { name: w }))).status).toBe(200);
+        expect((await send("DELETE", buildPath("registryDeleteDomain", { name: dom }))).status).toBe(200);
+        expect((await send("DELETE", buildPath("registryDeleteHost", { name: host }))).status).toBe(200);
+      });
+    });
+
     describe.runIf(options.auth !== false)("auth", () => {
       it("a missing or wrong key is 401 unauthorized", async () => {
         const path = `${buildPath("hubListWork")}?domain=${options.domain}`;

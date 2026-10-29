@@ -12,6 +12,9 @@ export interface CliArgs {
   host: string;
   snapshot?: string;
   allowNetwork: boolean;
+  /** One-time registry seed sources (explicit; used only while the registry file does not exist). */
+  seedDomains?: string;
+  seedWolves: string[];
 }
 
 export const MIN_KEY_LENGTH = 16;
@@ -23,7 +26,7 @@ export const isLoopback = (h: string): boolean => {
 };
 
 const USAGE = `usage:
-  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1]
+  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
   hubd dev --snapshot <host> [--data-dir <dir>] [--port N] [--allow-network]    pull a read-only copy of <host>, then serve it
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
 env: HUBD_API_KEY (required, >= 16 chars)
@@ -32,7 +35,7 @@ env: HUBD_API_KEY (required, >= 16 chars)
 export function parseArgs(argv: string[]): CliArgs {
   const [command, ...rest] = argv;
   if (command !== "serve" && command !== "dev") throw new Error(USAGE);
-  const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false };
+  const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [] };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val = () => {
@@ -41,6 +44,8 @@ export function parseArgs(argv: string[]): CliArgs {
       return v;
     };
     if (flag === "--data-dir") out.dataDir = val();
+    else if (flag === "--seed-domains") out.seedDomains = val();
+    else if (flag === "--seed-wolf") out.seedWolves.push(val());
     else if (flag === "--host") out.host = val();
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
@@ -77,7 +82,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
-  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host });
+  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

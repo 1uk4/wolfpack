@@ -42,6 +42,7 @@ import {
   KbPipelineResponseSchema,
 } from "./schemas.js";
 
+import * as R from "./registry.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
@@ -406,6 +407,32 @@ export const ROUTES = {
   getKbGraph: { method: "GET", path: "/v1/wolves/:name/kb/graph", response: { kind: "json", schema: KbGraphSchema }, status: [200], error: err },
   /** One KB entry (frontmatter, body, wikilinks, backlinks). Any wolf with KB roots. 400 malformed id, 404 unknown, 409 `kb_unavailable`. */
   getKbEntry: { method: "GET", path: "/v1/wolves/:name/kb/entries/:id", response: { kind: "json", schema: KbEntryDetailSchema }, status: [200], error: err },
+  /**
+   * The hub registry: hosts, wolves, domains, subscriptions (subscription id = `<wolf>:<domain>`). Reads: any actor. Writes
+   * (create/update/delete/retire) need an operator actor, else 403 `forbidden`. Creating a wolf writes ONLY the entry (no provisioning).
+   * `registryRetireWolf` sets status retired and releases every claim the wolf holds (work.unbound); `released` lists the item ids.
+   * Every write regenerates domains.yaml in the hub data dir. 404 unknown name, 409 `conflict` on a duplicate create.
+   */
+  registryListHosts: { scope: "hub", method: "GET", path: "/v1/registry/hosts", response: { kind: "json", schema: R.RegistryHostsResponseSchema }, status: [200], error: err },
+  registryGetHost: { scope: "hub", method: "GET", path: "/v1/registry/hosts/:name", response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200], error: err },
+  registryCreateHost: { scope: "hub", method: "POST", path: "/v1/registry/hosts", body: R.RegistryHostSchema, response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200,201], error: err },
+  registryUpdateHost: { scope: "hub", method: "PATCH", path: "/v1/registry/hosts/:name", body: R.UpdateRegistryHostRequestSchema, response: { kind: "json", schema: R.RegistryHostResponseSchema }, status: [200], error: err },
+  registryDeleteHost: { scope: "hub", method: "DELETE", path: "/v1/registry/hosts/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryListWolves: { scope: "hub", method: "GET", path: "/v1/registry/wolves", response: { kind: "json", schema: R.RegistryWolvesResponseSchema }, status: [200], error: err },
+  registryGetWolf: { scope: "hub", method: "GET", path: "/v1/registry/wolves/:name", response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200], error: err },
+  registryCreateWolf: { scope: "hub", method: "POST", path: "/v1/registry/wolves", body: R.RegistryWolfSchema, response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200,201], error: err },
+  registryUpdateWolf: { scope: "hub", method: "PATCH", path: "/v1/registry/wolves/:name", body: R.UpdateRegistryWolfRequestSchema, response: { kind: "json", schema: R.RegistryWolfResponseSchema }, status: [200], error: err },
+  registryDeleteWolf: { scope: "hub", method: "DELETE", path: "/v1/registry/wolves/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryRetireWolf: { scope: "hub", method: "POST", path: "/v1/registry/wolves/:name/retire", response: { kind: "json", schema: R.RetireWolfResponseSchema }, status: [200], error: err },
+  registryListDomains: { scope: "hub", method: "GET", path: "/v1/registry/domains", response: { kind: "json", schema: R.RegistryDomainsResponseSchema }, status: [200], error: err },
+  registryGetDomain: { scope: "hub", method: "GET", path: "/v1/registry/domains/:name", response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200], error: err },
+  registryCreateDomain: { scope: "hub", method: "POST", path: "/v1/registry/domains", body: R.RegistryDomainSchema, response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200,201], error: err },
+  registryUpdateDomain: { scope: "hub", method: "PATCH", path: "/v1/registry/domains/:name", body: R.UpdateRegistryDomainRequestSchema, response: { kind: "json", schema: R.RegistryDomainResponseSchema }, status: [200], error: err },
+  registryDeleteDomain: { scope: "hub", method: "DELETE", path: "/v1/registry/domains/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
+  registryListSubscriptions: { scope: "hub", method: "GET", path: "/v1/registry/subscriptions", response: { kind: "json", schema: R.RegistrySubscriptionsResponseSchema }, status: [200], error: err },
+  registryGetSubscription: { scope: "hub", method: "GET", path: "/v1/registry/subscriptions/:name", response: { kind: "json", schema: R.RegistrySubscriptionResponseSchema }, status: [200], error: err },
+  registryCreateSubscription: { scope: "hub", method: "POST", path: "/v1/registry/subscriptions", body: R.RegistrySubscriptionSchema, response: { kind: "json", schema: R.RegistrySubscriptionResponseSchema }, status: [200, 201], error: err },
+  registryDeleteSubscription: { scope: "hub", method: "DELETE", path: "/v1/registry/subscriptions/:name", response: { kind: "json", schema: R.RegistryDeleteResponseSchema }, status: [200], error: err },
 } as const satisfies Record<string, RouteDef>;
 
 export type RouteName = keyof typeof ROUTES;

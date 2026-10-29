@@ -44,7 +44,17 @@ import {
 } from "./work-writes.js";
 import { createEventBus } from "./events.js";
 import { loadWorkState } from "@wolfpack/kb/client";
+import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
+
+const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
+const REGISTRY_ROUTE = /^registry(List|Get|Create|Update|Delete|Retire)(Host|Wolves|Wolf|Domain|Subscription)s?$/;
+function registryRoute(name: string): { c: Collection; op: string } | undefined {
+  const m = REGISTRY_ROUTE.exec(name);
+  if (!m) return undefined;
+  const c = ({ Host: "hosts", Wolves: "wolves", Wolf: "wolves", Domain: "domains", Subscription: "subscriptions" } as const)[m[2] as "Host"];
+  return { c, op: m[1]!.toLowerCase() };
+}
 
 export const API_KEY_HEADER = "x-api-key";
 
@@ -56,6 +66,8 @@ export interface HubOptions {
   port?: number;
   /** Default 127.0.0.1. */
   host?: string;
+  /** One-time registry seed (explicit paths only; used when the registry file does not exist yet). devices.yaml is never read. */
+  registrySeed?: RegistrySeed;
   /** Max time to receive a request body, ms. Default 10000. */
   bodyTimeoutMs?: number;
   /**
@@ -228,6 +240,17 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
+  let registry: ReturnType<typeof createRegistry>;
+  try {
+    registry = createRegistry({
+      dataDir: opts.dataDir,
+      seed: opts.registrySeed,
+      releaseClaims: (wolf) => writeWork({ id: "system", kind: "system" }, () => releaseWolfClaims(roots, wolf)),
+    });
+  } catch (e) {
+    writerLock.release();
+    throw e;
+  }
   let server!: Server;
   let port = 0;
   const host = opts.host ?? "127.0.0.1";
@@ -236,6 +259,24 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     const digest = (v: string) => createHash("sha256").update(v).digest();
     const expected = digest(opts.apiKey);
     const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
+
+    async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: { c: Collection; op: string }, params: Record<string, string>): Promise<void> {
+      if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
+      if (r.op === "get") return send(res, 200, { [singular(r.c)]: registry.get(r.c, params.name!) });
+      const actor = writeActor(req);
+      if (actor.kind !== "operator") throw new HubError("forbidden", "registry writes need an operator actor");
+      if (r.op === "create") {
+        const out = await registry.create(r.c, await readBody(req));
+        return send(res, 201, { [singular(r.c)]: out });
+      }
+      if (r.op === "update") {
+        const body = (await readBody(req)) as Record<string, unknown>;
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new HubError("invalid_request", "body must be an object");
+        return send(res, 200, { [singular(r.c)]: await registry.update(r.c, params.name!, body) });
+      }
+      if (r.op === "retire") return send(res, 200, await registry.retire(params.name!));
+      return send(res, 200, { deleted: await registry.remove(r.c, params.name!) });
+    }
 
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
@@ -327,9 +368,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const item = await writeWork(actor, () => graduateItem(roots, params.id));
           return send(res, 200, { item });
         }
-        default:
+        default: {
+          const reg = registryRoute(m.name);
+          if (reg) return registryDispatch(req, res, reg, params);
           // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.
           throw new HubError("not_found", `${m.name} is served by a wolf host, not the hub`);
+        }
       }
     }
 

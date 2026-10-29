@@ -59,6 +59,8 @@ export interface RebuildMove {
   id: string; title: string; from: string; to: string; own: number; better: number;
   /** The destination then judged the entry a leftover: it stays a direct entry of `to` (listed here, not under leftovers). */
   staysInParent?: boolean;
+  /** A cross-section move the owner approved by entry id (approvedCrossMoves): applied although it leaves its top-level section. */
+  crossApproved?: boolean;
 }
 /** A misplacement whose best target sits under a different top-level section: proposed, not applied (needs approval). */
 export type CrossMove = RebuildMove
@@ -85,6 +87,8 @@ export interface RebuildPlan {
   moves: RebuildMove[];
   /** Proposed moves into another top-level section; applied only with applyCrossMoves. */
   crossMoves: CrossMove[];
+  /** Approved cross-section move ids that matched no proposed move (nothing to apply: already fine, exempt, or not misplaced). */
+  unmatchedApprovals: string[];
   rejected: RejectedSplit[];
   /** Sections that split: entries that fit no group and stayed in the parent. */
   leftovers: Map<string, string[]>;
@@ -242,6 +246,8 @@ export interface PlanOptions {
   grouped?: Map<string, string>;
   /** Apply refinement moves into another top-level section too (default: list them for approval). */
   applyCrossMoves?: boolean;
+  /** Apply only these cross-section moves (by entry id); every other one stays listed as needing approval. */
+  approvedCrossMoves?: string[];
   /** Proposes a split for an oversized section (an LLM); vectors validate it. Without one, or if it fails, k-means decides. */
   partitioner?: Partitioner;
   /** Caches proposals by member set (default: in memory for this plan). */
@@ -257,7 +263,7 @@ export interface PlanOptions {
  * move is listed). A move may not leave a leaf below minGroup; leftovers are never moved. A split parent
  * left with a single split child by moves folds that child back into it.
  */
-function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, exempt: Set<string>, rules: TreeRules, applyCross: boolean): void {
+function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, exempt: Set<string>, rules: TreeRules, applyCross: boolean, approved: Set<string>): void {
   const st = plan.state;
   if (st.sections.length < 2) return;
   const items = [...byEntry.values()].map((e) => ({ id: e.id, vec: e.vector, section: st.assignment.get(e.id)! }));
@@ -266,14 +272,17 @@ function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, 
   // Moves apply only inside the same top-level section (top sections hardly ever change). A better target under
   // another top-level section is listed for approval instead (unless applyCross).
   const sameRoot = (from: string, to: string) => applyCross || t.rootOf(from) === t.rootOf(to);
+  // Individually approved ids (approvedCrossMoves) are applied; every other cross-section move stays listed.
+  const approvedMoves: Array<ReturnType<typeof findMisplaced>[number] & { crossApproved?: boolean }> = [];
   if (!applyCross) {
     const inside = new Set(findMisplaced(items, rules, sameRoot).map((m) => m.id));
     for (const m of findMisplaced(items, rules)) {
       if (exempt.has(m.id) || inside.has(m.id) || t.rootOf(m.from) === t.rootOf(m.to)) continue;
+      if (approved.has(m.id)) { approvedMoves.push({ ...m, crossApproved: true }); continue; }
       if (!plan.crossMoves.some((c) => c.id === m.id)) plan.crossMoves.push({ ...m, title: byEntry.get(m.id)!.title });
     }
   }
-  for (const m of findMisplaced(items, rules, sameRoot)) {
+  for (const m of [...findMisplaced(items, rules, sameRoot), ...approvedMoves]) {
     if (exempt.has(m.id)) continue;
     const isLeaf = !t.kids(m.from).length;
     if (isLeaf && (size.get(m.from) ?? 0) - 1 < rules.minGroup) continue;
@@ -326,7 +335,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const oldDomain = (opts.oldSections ?? []).filter((s) => String(s.domain) === domain);
   const plan: RebuildPlan = {
     domain, entries, state: { sections: [], assignment: new Map() },
-    moves: [], crossMoves: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
+    moves: [], crossMoves: [], unmatchedApprovals: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
     grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [], initialTitles: new Map(),
     from: opts.start ? "current" : "scratch",
     oldSectionCount: opts.oldSections ? oldDomain.length : undefined,
@@ -360,11 +369,12 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
 
   // 2. Level by level: refine placement among the sections that exist, then judge each
   //    not-yet-judged section once. Sections with no stable substructure stay whole.
+  const approvedSet = new Set(opts.approvedCrossMoves ?? []);
   const judgeDeps = { partitioner: opts.partitioner, cache: opts.splitCache ?? memorySplitCache(), rules, diagnostics: opts.diagnostics, notify };
   const judged = new Set<string>();
   const exempt = new Set<string>(); // leftovers: flagged as fitting nowhere, never "moved" by refinement
   for (let level = 0; level < 32; level++) {
-    refine(plan, t, byEntry, exempt, rules, !!opts.applyCrossMoves);
+    refine(plan, t, byEntry, exempt, rules, !!opts.applyCrossMoves, approvedSet);
     const todo = state.sections.filter((s) => !judged.has(String(s.id))).sort((a, b) => a.depth - b.depth || (String(a.id) < String(b.id) ? -1 : 1));
     if (!todo.length) break;
     for (const sec of todo) {
@@ -413,6 +423,8 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
     if (rest.length) plan.leftovers.set(sid, rest); else plan.leftovers.delete(sid);
   }
   plan.moves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const id of approvedSet) if (!plan.moves.some((m) => m.id === id && m.crossApproved)) plan.unmatchedApprovals.push(id);
+  plan.unmatchedApprovals.sort();
   plan.crossMoves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
 
@@ -659,11 +671,12 @@ export function renderProposal(plan: RebuildPlan): string {
   }
   lines.push("", "## Moves (refinement)", "");
   if (!plan.moves.length) lines.push("none");
-  for (const m of plan.moves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (own ${m.own.toFixed(2)}, other ${m.better.toFixed(2)})${m.staysInParent ? " — then fits none of its children: stays a direct entry there" : ""}`);
+  for (const m of plan.moves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (own ${m.own.toFixed(2)}, other ${m.better.toFixed(2)})${m.crossApproved ? " — APPROVED cross-section move (applied)" : ""}${m.staysInParent ? " — then fits none of its children: stays a direct entry there" : ""}`);
   lines.push("", "## Proposed cross-section moves (needs approval)", "");
   if (!plan.crossMoves.length) lines.push("none");
-  else lines.push("Not applied: the better target is under a different top-level section. Re-run with `--apply-cross-moves` to apply.", "");
+  else lines.push("Not applied: the better target is under a different top-level section. Re-run with `--approve-move <entryId>` (repeatable) to apply selected ones, or `--apply-cross-moves` for all.", "");
   for (const m of plan.crossMoves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (similarity to own section ${m.own.toFixed(2)}, to the target ${m.better.toFixed(2)}; top level: ${secTitle(rootTitleId(plan, m.from))} → ${secTitle(rootTitleId(plan, m.to))})`);
+  if (plan.unmatchedApprovals.length) lines.push("", `Approved moves that matched no proposed cross-section move (nothing applied): ${plan.unmatchedApprovals.join(", ")}`);
   const fallbacks = plan.judged.filter((j) => j.fallbackReason);
   lines.push("", "## k-means fallbacks (the LLM proposal failed)", "");
   if (!fallbacks.length) lines.push("none");

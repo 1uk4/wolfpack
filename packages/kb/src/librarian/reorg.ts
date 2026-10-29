@@ -61,6 +61,8 @@ export interface ReorgOptions {
   rebuildFrom?: "current" | "scratch";
   /** With rebuild: also apply refinement moves into another top-level section (default: only listed for approval). */
   applyCrossMoves?: boolean;
+  /** With rebuild: apply only these cross-section moves (entry ids); the rest stay listed as needing approval. */
+  approvedCrossMoves?: string[];
   /** With rebuild: commit although some section's split was decided by the k-means fallback (the LLM call failed). */
   allowKmeansFallback?: boolean;
   /** With rebuild: commit even if the new tree has fewer than half the current sections. */
@@ -563,7 +565,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         const start = from === "current" ? currentTreeStart(oldSections, entries, domain) : undefined;
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
-          domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves,
+          domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves, approvedCrossMoves: opts.approvedCrossMoves,
           partitioner: enginePartitioner(engine), splitCache: memorySplitCache(), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,

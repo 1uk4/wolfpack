@@ -18,7 +18,8 @@
  *                     writes only kb-rebuild-proposal.md in the cwd. --from-current (default) keeps the
  *                     existing sections and judges only oversized ones; --from-scratch starts at one root.
  *                     Refinement moves apply only inside one top-level section; moves into another are
- *                     listed in the proposal and applied only with --apply-cross-moves.
+ *                     listed in the proposal and applied only with --apply-cross-moves (all) or
+ *                     --approve-move <entryId> (repeatable: just those; the rest stay listed).
  *                     --yes aborts if any section's split fell back to k-means (LLM call failed) unless
  *                     --allow-kmeans-fallback; the proposal always lists fallbacks.
  *                     --yes commits after saving timestamped backups in the den-local dir:
@@ -436,7 +437,8 @@ async function cmdRebuild(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(2);
   const restoreAt = argv.includes("--restore") ? argv[argv.indexOf("--restore") + 1] : null;
-  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore") ?? null;
+  const approvedMoves = argv.flatMap((a, i) => (a === "--approve-move" && argv[i + 1] ? [argv[i + 1]] : a.startsWith("--approve-move=") ? [a.slice("--approve-move=".length)] : []));
+  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore" && argv[i - 1] !== "--approve-move") ?? null;
 
   if (restoreAt) {
     if (!argv.includes("--yes")) {
@@ -458,7 +460,7 @@ async function cmdRebuild(): Promise<void> {
   }
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves] [--allow-kmeans-fallback]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <entryId>...] [--allow-kmeans-fallback]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
     process.exit(1);
   }
 
@@ -488,6 +490,7 @@ async function cmdRebuild(): Promise<void> {
     allowCollapse: argv.includes("--allow-collapse"),
     allowKmeansFallback: argv.includes("--allow-kmeans-fallback"),
     applyCrossMoves: argv.includes("--apply-cross-moves"),
+    approvedCrossMoves: approvedMoves,
     dryRun,
     proposalPath: dryRun ? join(process.cwd(), "kb-rebuild-proposal.md") : undefined,
     notify: (msg) => console.log(`  ${msg}`),
@@ -584,7 +587,7 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves] [--allow-kmeans-fallback] | rebuild --restore <ts> --yes\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves | --approve-move <id>...] [--allow-kmeans-fallback] | rebuild --restore <ts> --yes\n" +
   "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 

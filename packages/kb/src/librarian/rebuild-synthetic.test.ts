@@ -153,7 +153,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
   describe("refinement stays inside one top-level section", () => {
     // Two top-level sections: A holds clusters 0-3 (one leaf each), B holds clusters 4-7. Plant a cluster-1 entry in B's cluster-4 leaf
     // (cross-section) and a cluster-0 entry in cluster 2's leaf (same section).
-    async function setup(applyCrossMoves: boolean) {
+    async function setup(applyCrossMoves: boolean, approve?: (ids: { cross1: string; cross2: string }) => string[]) {
       const es = clustersFixture();
       const first = await planRebuild({ domain: "wp", entries: es, namer: unique, start: undefined });
       const leafOf = (cl: number) => first.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id)!;
@@ -168,11 +168,13 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       const all = [rootA, rootB, ...leaves];
       const assignment = new Map(first.state.assignment);
       const crossE = es.filter((e) => clusterOf(e.id) === 1)[0], sameE = es.filter((e) => clusterOf(e.id) === 0)[0];
+      const crossE2 = es.filter((e) => clusterOf(e.id) === 2)[0];
       assignment.set(crossE.id, leafOf(4)); assignment.set(sameE.id, leafOf(2));
+      if (approve) assignment.set(crossE2.id, leafOf(5));
       void topOf;
       const onDisk = es.map((e) => ({ ...e, section: assignment.get(e.id)! }));
-      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: all, assignment }, applyCrossMoves });
-      return { plan, leafOf, crossE, sameE, es };
+      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: all, assignment }, applyCrossMoves, approvedCrossMoves: approve?.({ cross1: crossE.id, cross2: crossE2.id }) });
+      return { plan, leafOf, crossE, crossE2, sameE, es };
     }
     it("a same-section misfiling is moved; a cross-section one is only proposed (with scores) and its entry stays put", async () => {
       const { plan, leafOf, crossE, sameE } = await setup(false);
@@ -185,6 +187,28 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       const md = renderProposal(plan);
       expect(md).toContain("## Proposed cross-section moves (needs approval)");
       expect(md).toMatch(/similarity to own section \d\.\d\d, to the target \d\.\d\d/);
+    }, 600_000);
+    it("--approve-move applies only the listed cross-section moves; the rest stay listed as needing approval, and the proposal marks the approved one", async () => {
+      const { plan, leafOf, crossE, crossE2 } = await setup(false, (x) => [x.cross1]);
+      expect(plan.state.assignment.get(crossE.id)).toBe(leafOf(1)); // approved: moved home across top-level sections
+      expect(plan.state.assignment.get(crossE2.id)).toBe(leafOf(5)); // not approved: stays put
+      expect(plan.moves.find((m) => m.id === crossE.id)?.crossApproved).toBe(true);
+      expect(plan.crossMoves.map((m) => m.id)).toEqual([crossE2.id]);
+      expect(plan.unmatchedApprovals).toEqual([]);
+      const { renderProposal } = await import("./rebuild.js");
+      const md = renderProposal(plan);
+      expect(md).toContain("APPROVED cross-section move (applied)");
+      const needs = md.split("## Proposed cross-section moves (needs approval)")[1].split("## ")[0];
+      expect(needs).toContain(crossE2.id);
+      expect(needs).not.toContain(crossE.id);
+    }, 600_000);
+    it("an approved id that is not a proposed cross-section move applies nothing and is reported", async () => {
+      const { plan, crossE2, leafOf } = await setup(false, () => ["c9-nonexistent"]);
+      expect(plan.moves.some((m) => m.crossApproved)).toBe(false);
+      expect(plan.state.assignment.get(crossE2.id)).toBe(leafOf(5));
+      expect(plan.unmatchedApprovals).toEqual(["c9-nonexistent"]);
+      const { renderProposal } = await import("./rebuild.js");
+      expect(renderProposal(plan)).toContain("Approved moves that matched no proposed cross-section move");
     }, 600_000);
     it("--apply-cross-moves applies it", async () => {
       const { plan, leafOf, crossE } = await setup(true);

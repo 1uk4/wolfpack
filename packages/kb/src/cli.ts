@@ -440,8 +440,22 @@ async function cmdRebuild(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(2);
   const restoreAt = argv.includes("--restore") ? argv[argv.indexOf("--restore") + 1] : null;
-  const approvedMoves = argv.flatMap((a, i) => (a === "--approve-move" && argv[i + 1] ? [argv[i + 1]] : a.startsWith("--approve-move=") ? [a.slice("--approve-move=".length)] : []));
-  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore" && argv[i - 1] !== "--approve-move") ?? null;
+  const approvedMoves: string[] = [];
+  const takesValue = (i: number) => argv[i + 1] !== undefined && !argv[i + 1].startsWith("--");
+  argv.forEach((a, i) => {
+    if (a === "--approve-move") {
+      if (takesValue(i)) approvedMoves.push(argv[i + 1]);
+      else console.error(`warning: --approve-move needs an entry id (${i === argv.length - 1 ? "it is the last argument" : `next is ${argv[i + 1]}`}); ignored`);
+    } else if (a.startsWith("--approve-move=")) {
+      const v = a.slice("--approve-move=".length);
+      if (v) approvedMoves.push(v); else console.error("warning: --approve-move= has no entry id; ignored");
+    }
+  });
+  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore" && !(argv[i - 1] === "--approve-move" && takesValue(i - 1))) ?? null;
+  if (argv.includes("--apply-cross-moves") && (argv.includes("--approve-move") || argv.some((a) => a.startsWith("--approve-move=")))) {
+    console.error("--apply-cross-moves (all) and --approve-move (selected) cannot be combined; pick one");
+    process.exit(1);
+  }
 
   if (restoreAt) {
     if (!argv.includes("--yes")) {

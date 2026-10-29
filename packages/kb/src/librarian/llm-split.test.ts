@@ -373,3 +373,34 @@ describe("dry run and --yes share a file-backed split cache", () => {
     } finally { rmSync(base, { recursive: true, force: true }); }
   }, 120_000);
 });
+
+describe("category cap keeps the largest categories; prompt pin", () => {
+  it("when the model returns more than 5 categories the 5 LARGEST are honoured, not the first 5", () => {
+    const sizes = [3, 3, 3, 3, 3, 9, 8];
+    const e = make(sizes);
+    const idx = (c: number) => e.flatMap((x, i) => (cluster(x.id, sizes) === c ? [i] : []));
+    const d = validatePartition(e.map((x) => x.vector), { names: ["a", "b", "c", "d", "e", "BIG1", "BIG2"], members: sizes.map((_, c) => idx(c)), doesntFit: [] });
+    expect(isPartition(d)).toBe(true);
+    if (isPartition(d)) {
+      expect(d.names).toContain("BIG1");
+      expect(d.names).toContain("BIG2");
+      expect(d.k).toBe(5);
+      const dropped = d.categories.filter((c) => c.why === "over-limit").map((c) => c.name);
+      expect(dropped).toHaveLength(2);
+      expect(dropped.every((n) => ["a", "b", "c", "d", "e"].includes(n))).toBe(true);
+    }
+  });
+
+  it("PROMPT PIN: SPLIT_SECTION_SYSTEM and the prompt layout hash to the value recorded for PROMPT_VERSION. Changing either without bumping PROMPT_VERSION (and recording the new hash) fails here, because cached proposals would be served for a prompt they were not made with", async () => {
+    const { createHash } = await import("node:crypto");
+    const { SPLIT_SECTION_SYSTEM } = await import("@wolfpack/engine");
+    const { PROMPT_VERSION } = await import("./llm-split.js");
+    const { proposeSplit } = await import("./summarize.js");
+    let prompt = "";
+    const engine = { call: async (_step: string, schema: { parse: (v: unknown) => unknown }, o: { prompt: string }) => { prompt = o.prompt; return schema.parse({ categories: [], doesnt_fit: [] }); } } as never;
+    await proposeSplit(engine, "Parent", [{ id: "b", title: "B title", summary: "B sum" }, { id: "a", title: "A title" }]);
+    const hash = createHash("sha256").update(SPLIT_SECTION_SYSTEM + "\u0000" + prompt).digest("hex").slice(0, 16);
+    const PINNED: Record<string, string> = { "split-v1": "ab1c8927e17e72f1" };
+    expect(PINNED[PROMPT_VERSION], `record the new hash ${hash} for ${PROMPT_VERSION}`).toBe(hash);
+  });
+});

@@ -89,6 +89,8 @@ export interface RebuildPlan {
   crossMoves: CrossMove[];
   /** Approved cross-section move ids that matched no proposed move (nothing to apply: already fine, exempt, or not misplaced). */
   unmatchedApprovals: string[];
+  /** Approved cross-section moves skipped because the source leaf would drop below minGroup. */
+  blockedApprovals: Array<{ id: string; from: string }>;
   rejected: RejectedSplit[];
   /** Sections that split: entries that fit no group and stayed in the parent. */
   leftovers: Map<string, string[]>;
@@ -287,7 +289,10 @@ function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, 
   for (const m of [...findMisplaced(items, rules, sameRoot), ...approvedMoves]) {
     if (exempt.has(m.id)) continue;
     const isLeaf = !t.kids(m.from).length;
-    if (isLeaf && (size.get(m.from) ?? 0) - 1 < rules.minGroup) continue;
+    if (isLeaf && (size.get(m.from) ?? 0) - 1 < rules.minGroup) {
+      if ((m as { crossApproved?: boolean }).crossApproved && !plan.blockedApprovals.some((b) => b.id === m.id)) plan.blockedApprovals.push({ id: m.id, from: m.from });
+      continue;
+    }
     st.assignment.set(m.id, m.to);
     size.set(m.from, (size.get(m.from) ?? 0) - 1);
     size.set(m.to, (size.get(m.to) ?? 0) + 1);
@@ -337,7 +342,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const oldDomain = (opts.oldSections ?? []).filter((s) => String(s.domain) === domain);
   const plan: RebuildPlan = {
     domain, entries, state: { sections: [], assignment: new Map() },
-    moves: [], crossMoves: [], unmatchedApprovals: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
+    moves: [], crossMoves: [], unmatchedApprovals: [], blockedApprovals: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
     grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [], initialTitles: new Map(),
     from: opts.start ? "current" : "scratch",
     oldSectionCount: opts.oldSections ? oldDomain.length : undefined,
@@ -425,7 +430,7 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
     if (rest.length) plan.leftovers.set(sid, rest); else plan.leftovers.delete(sid);
   }
   plan.moves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  for (const id of approvedSet) if (!plan.moves.some((m) => m.id === id && m.crossApproved)) plan.unmatchedApprovals.push(id);
+  for (const id of approvedSet) if (!plan.moves.some((m) => m.id === id && m.crossApproved) && !plan.blockedApprovals.some((b) => b.id === id)) plan.unmatchedApprovals.push(id);
   plan.unmatchedApprovals.sort();
   plan.crossMoves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
@@ -499,6 +504,7 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
   plan.initialTitles = new Map([...plan.initialTitles].map(([k, v]) => [R(k), v]));
   plan.capWrappers = new Set([...plan.capWrappers].map(R));
   for (const m of [...plan.moves, ...plan.crossMoves]) { m.from = R(m.from); m.to = R(m.to); }
+  for (const b of plan.blockedApprovals) b.from = R(b.from);
   for (const oid of map.values()) {
     const sec = plan.state.sections.find((s) => String(s.id) === oid)!;
     const o = old.find((x) => String(x.id) === oid)!;
@@ -678,6 +684,7 @@ export function renderProposal(plan: RebuildPlan): string {
   if (!plan.crossMoves.length) lines.push("none");
   else lines.push("Not applied: the better target is under a different top-level section. Re-run with `--approve-move <entryId>` (repeatable) to apply selected ones, or `--apply-cross-moves` for all.", "");
   for (const m of plan.crossMoves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (similarity to own section ${m.own.toFixed(2)}, to the target ${m.better.toFixed(2)}; top level: ${secTitle(rootTitleId(plan, m.from))} → ${secTitle(rootTitleId(plan, m.to))})`);
+  for (const b of plan.blockedApprovals) lines.push("", `Approved move NOT applied (blocked by minGroup): ${title.get(b.id) ?? b.id} (${b.id}) — its section ${secTitle(b.from)} would drop below ${DEFAULT_RULES.minGroup} entries.`);
   if (plan.unmatchedApprovals.length) lines.push("", `Approved moves that matched no proposed cross-section move (nothing applied): ${plan.unmatchedApprovals.join(", ")}`);
   const fallbacks = plan.judged.filter((j) => j.fallbackReason);
   lines.push("", "## k-means fallbacks (the LLM proposal failed)", "");

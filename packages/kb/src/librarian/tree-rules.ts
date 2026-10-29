@@ -429,9 +429,13 @@ export function validatePartition(
 ): PartitionDecision | PartitionRejected {
   const n = vectors.length;
   const seen = new Set<number>();
-  // At most llmMaxCategories categories are honoured (the prompt asks for 2-5); the rest are reported as dropped and their
+  // At most llmMaxCategories categories are honoured (the prompt asks for 2-5); the rest are reported as over-limit and their
   // members stay leftovers, so a runaway answer cannot fragment a section.
-  const members = proposal.members.map((ms, c) => (c < rules.llmMaxCategories ? ms : []));
+  // The LARGEST categories are the ones honoured (ties: the earlier one), not simply the first five the model wrote.
+  const honoured = new Set(
+    proposal.members.map((ms, c) => ({ c, size: ms.length })).sort((a, b) => b.size - a.size || a.c - b.c).slice(0, rules.llmMaxCategories).map((x) => x.c)
+  );
+  const members = proposal.members.map((ms, c) => (honoured.has(c) ? ms : []));
   const cats = members.map((ms) => ms.filter((i) => i >= 0 && i < n && !seen.has(i) && (seen.add(i), true)));
   const X = centre(vectors);
   const cents = cats.map((ms) => (ms.length ? unit(meanVec(ms.map((i) => X[i]))) : null));
@@ -448,7 +452,7 @@ export function validatePartition(
       if (own > other) good.push(i);
     }
     const share = ms.length ? good.length / ms.length : 0;
-    const overLimit = c >= rules.llmMaxCategories;
+    const overLimit = !honoured.has(c);
     const kept = !overLimit && good.length >= rules.minGroup && share >= rules.llmMinCoherence;
     reports.push({
       name: proposal.names[c] ?? `Category ${c + 1}`, size: ms.length || (proposal.members[c]?.length ?? 0), coherent: good.length, share, kept,

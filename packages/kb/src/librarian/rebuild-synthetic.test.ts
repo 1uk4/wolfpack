@@ -153,7 +153,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
   describe("refinement stays inside one top-level section", () => {
     // Two top-level sections: A holds clusters 0-3 (one leaf each), B holds clusters 4-7. Plant a cluster-1 entry in B's cluster-4 leaf
     // (cross-section) and a cluster-0 entry in cluster 2's leaf (same section).
-    async function setup(applyCrossMoves: boolean, approve?: (ids: { cross1: string; cross2: string }) => string[]) {
+    async function setup(applyCrossMoves: boolean, approve?: (ids: { cross1: string; cross2: string }) => string[], rules?: import("./tree-rules.js").TreeRules) {
       const es = clustersFixture();
       const first = await planRebuild({ domain: "wp", entries: es, namer: unique, start: undefined });
       const leafOf = (cl: number) => first.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id)!;
@@ -173,7 +173,7 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       if (approve) assignment.set(crossE2.id, leafOf(5));
       void topOf;
       const onDisk = es.map((e) => ({ ...e, section: assignment.get(e.id)! }));
-      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: all, assignment }, applyCrossMoves, approvedCrossMoves: approve?.({ cross1: crossE.id, cross2: crossE2.id }) });
+      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: all, assignment }, applyCrossMoves, rules, approvedCrossMoves: approve?.({ cross1: crossE.id, cross2: crossE2.id }) });
       return { plan, leafOf, crossE, crossE2, sameE, es };
     }
     it("a same-section misfiling is moved; a cross-section one is only proposed (with scores) and its entry stays put", async () => {
@@ -201,6 +201,15 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       const needs = md.split("## Proposed cross-section moves (needs approval)")[1].split("## ")[0];
       expect(needs).toContain(crossE2.id);
       expect(needs).not.toContain(crossE.id);
+    }, 600_000);
+    it("an approved move whose source leaf would drop below minGroup is skipped and reported as blocked by minGroup (not as unmatched)", async () => {
+      const { DEFAULT_RULES } = await import("./tree-rules.js");
+      const { plan, crossE, leafOf } = await setup(false, (x) => [x.cross1], { ...DEFAULT_RULES, minGroup: 16 });
+      expect(plan.state.assignment.get(crossE.id)).toBe(leafOf(4)); // not moved
+      expect(plan.blockedApprovals.map((b) => b.id)).toEqual([crossE.id]);
+      expect(plan.unmatchedApprovals).toEqual([]);
+      const { renderProposal } = await import("./rebuild.js");
+      expect(renderProposal(plan)).toContain("Approved move NOT applied (blocked by minGroup)");
     }, 600_000);
     it("an approved id that is not a proposed cross-section move applies nothing and is reported", async () => {
       const { plan, crossE2, leafOf } = await setup(false, () => ["c9-nonexistent"]);

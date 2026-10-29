@@ -70,6 +70,9 @@ import {
   resolveBindingRoot,
   writeBindingFile,
 } from "./conversation-binding.js";
+import { HttpConsoleClient } from "@wolfpack/client";
+import { WolfIdSchema } from "@wolfpack/kb/client";
+import { hubTargetFromEnv, redactUrl } from "@wolfpack/memory";
 import { WorkClient, shipAndRollup } from "./work-client.js";
 import { createGraduation } from "./graduation.js";
 import { registerGraduationActions, unregisterGraduationActions } from "./memory-actions.js";
@@ -237,6 +240,20 @@ function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
   return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "") : new WorkClient();
 }
 
+/** The hub (WOLFPACK_HUB_URL / WOLFPACK_HUB_KEY, as the console and crawl release read them), or null when none is configured. */
+export const NO_HUB = "No hub configured (WOLFPACK_HUB_URL is not set): claiming needs a hub.";
+
+/** A hub claim/release failure as the wolf sees it: 409 names the holder, others pass the hub's message; credentials never shown. */
+export function hubErrorText(err: unknown, id: string, hubUrl: string): string {
+  const e = err as { code?: string; message?: string; details?: { holder?: unknown } };
+  const scrub = (t: string) => t.replace(/(\/\/)[^/@\s]*@/g, "$1");
+  if (e?.code === "conflict" && typeof e.details?.holder === "string") return `${id} is held by ${e.details.holder}`;
+  if (e?.code === "conflict") return scrub(e.message ?? `${id} is held by another wolf`);
+  const msg = scrub(e?.message ?? String(err));
+  if (!e?.code) return `could not reach the hub at ${redactUrl(hubUrl)}: ${msg}`;
+  return msg;
+}
+
 // ─── Extension Factory ─────────────────────────────────────────────────────
 
 export default function createTasksExtension(
@@ -252,6 +269,16 @@ export default function createTasksExtension(
   const envAuto = resolveShipPolicy(env) === "auto";
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
   const client = makeClient(context.env);
+
+  /** Hub client acting as this wolf (provisional actor header), or an error text. Read per call so a config change applies at once. */
+  function hubFor(): { hub: HttpConsoleClient; url: string } | { error: string } {
+    const target = hubTargetFromEnv(env as Record<string, string | undefined>);
+    if (!target) return { error: NO_HUB };
+    if (!WolfIdSchema.safeParse(wolfName).success) return { error: `Cannot claim: "${wolfName}" is not a valid wolf id (lower-case letters, digits, hyphens).` };
+    const hub = new HttpConsoleClient({ baseUrl: redactUrl(target.baseUrl), hub: { baseUrl: redactUrl(target.baseUrl), apiKey: target.apiKey }, actor: { id: wolfName, kind: "wolf" } as never });
+    return { hub, url: target.baseUrl };
+  }
+  const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 
   // ── Ship confirmation ───────────────────────────────────────────────────
   // task_done in a confirm policy raises a one-field confirm card (see engine/cards.ts) instead of shipping. The
@@ -767,7 +794,7 @@ export default function createTasksExtension(
         const quiet = isSubagent() || (await resolveBindingRoot({ wolfDen, conversationId: sc.conversationId ?? 1, conversation: sc.conversation })).readOnly;
         return `## Task Tools
 
-Available: task_query, task_bind, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
+Available: task_query, task_bind, task_claim, task_release, task_unbind, task_current, task_create, task_done, task_note, task_stage, task_graduate, task_features
 
 Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       }),
@@ -827,6 +854,24 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
 
           const { item, domain } = found;
           
+          // A feature is claimed on the hub (then bound here); without a hub it stays unbindable.
+          if (item.kind === "feature") {
+            const h = hubFor();
+            if ("error" in h) {
+              if (h.error !== NO_HUB) return text(h.error, true);
+            } else {
+              try {
+                await h.hub.claimWork!(item.id as string);
+              } catch (err) {
+                return text(hubErrorText(err, item.id as string, h.url), true);
+              }
+              const refusedF = await writeBinding(ctx, item.id, domain, await recordFeatureId(client, item));
+              if (refusedF) return text(refusedF, true);
+              await writeCache(item);
+              return text(`Claimed and bound to: [${item.id}] ${item.title}\nStage: ${item.stage}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`);
+            }
+          }
+
           // Only bind to actionable items
           if (!["task", "issue", "spike"].includes(item.kind)) {
             return {
@@ -847,6 +892,41 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
               text: `Bound to: [${item.id}] ${item.title}\nStage: ${item.stage}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`,
             }],
           };
+        },
+      }),
+
+      // ─── task_claim / task_release (hub) ─────────────────────────────────
+      defineTool({
+        name: "task_claim",
+        description: "Claim a work item on the hub so no other wolf works on it (an approved item moves to in_build). Fails naming the holder if another wolf has it. Needs a configured hub. Does not bind; use task_bind on a feature to claim and bind.",
+        parameters: Type.Object({ id: Type.String({ description: "Work item ID to claim" }) }),
+        async execute(args: { id: string }): Promise<ToolResult> {
+          if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
+          const h = hubFor();
+          if ("error" in h) return text(h.error, true);
+          try {
+            const r = await h.hub.claimWork!(args.id);
+            return text(`Claimed ${args.id}${r.item?.stage ? ` (stage: ${r.item.stage})` : ""}.`);
+          } catch (err) {
+            return text(hubErrorText(err, args.id, h.url), true);
+          }
+        },
+      }),
+
+      defineTool({
+        name: "task_release",
+        description: "Release a work item you claimed on the hub, so another wolf can take it. Needs a configured hub. Does not unbind; use task_unbind for that.",
+        parameters: Type.Object({ id: Type.String({ description: "Work item ID to release" }) }),
+        async execute(args: { id: string }): Promise<ToolResult> {
+          if (isSubagent()) return text(SUBAGENT_NO_BIND, true);
+          const h = hubFor();
+          if ("error" in h) return text(h.error, true);
+          try {
+            await h.hub.releaseWork!(args.id);
+            return text(`Released ${args.id}.`);
+          } catch (err) {
+            return text(hubErrorText(err, args.id, h.url), true);
+          }
         },
       }),
 

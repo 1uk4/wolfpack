@@ -67,29 +67,36 @@ function readJson<T>(path: string): T | undefined {
   }
 }
 
-/** The bound item's current snapshot; undefined when unbound or the Work API cannot be read (then nothing is said). */
-export async function takeSnapshot(den: string, conversationId: string, reader: TaskNoticeReader): Promise<TaskSnapshot | undefined> {
+/**
+ * The bound item's current snapshot; undefined when unbound or a read the snapshot depends on failed (the baseline is kept,
+ * nothing is said). A failed children read keeps the previous counts.
+ */
+export async function takeSnapshot(den: string, conversationId: string, reader: TaskNoticeReader, prev?: TaskSnapshot): Promise<TaskSnapshot | undefined> {
   const workId = readJson<{ workId?: string }>(bindingPath(den, conversationId))?.workId;
   if (!workId) return undefined;
   const got = await reader.get(workId);
   if (!got) return undefined;
   const { item, body } = got;
+  const featureHint = item.kind === "feature" ? item.id : item.partOf ?? undefined;
+  // The parent and the children are independent reads: run them together.
+  const [parent, kids] = await Promise.all([
+    item.kind !== "feature" && item.partOf ? reader.get(item.partOf).catch(() => undefined) : Promise.resolve(undefined),
+    featureHint && item.domain ? reader.children(item.domain, featureHint).then((k) => k as WorkItemLite[] | undefined, () => undefined) : Promise.resolve(undefined),
+  ]);
   let featureId: string | undefined;
   let featureBody = "";
   if (item.kind === "feature") featureId = item.id;
   else if (item.partOf) {
-    const parent = await reader.get(item.partOf).catch(() => undefined);
-    if (parent && parent.item.kind === "feature" && !parent.item.container) {
+    if (!parent) return undefined; // the parent could not be read: its Record is unknown, do not guess a change
+    if (parent.item.kind === "feature" && !parent.item.container) {
       featureId = parent.item.id;
       featureBody = parent.body;
     }
   }
   const snap: TaskSnapshot = { workId, stage: item.stage, record: hash(`${body}\u0000${featureBody}`) };
-  if (featureId && item.domain) {
-    try {
-      const kids = await reader.children(item.domain, featureId);
-      snap.children = { total: kids.length, shipped: kids.filter((k) => isShipped(k.stage)).length, stages: hash(kids.map((k) => `${k.id}:${k.stage}`).sort().join("\n")) };
-    } catch { /* counts are advisory */ }
+  if (featureId) {
+    if (kids) snap.children = { total: kids.length, shipped: kids.filter((k) => isShipped(k.stage)).length, stages: hash(kids.map((k) => `${k.id}:${k.stage}`).sort().join("\n")) };
+    else if (prev?.workId === workId && prev.children) snap.children = prev.children;
   }
   return snap;
 }
@@ -121,13 +128,14 @@ export interface PendingNotice {
  */
 export async function pendingTaskNotice(den: string, conversationId: string, reader: TaskNoticeReader): Promise<PendingNotice> {
   const none: PendingNotice = { text: "", commit() {} };
+  const path = statePath(den, conversationId);
+  const prev = readJson<TaskSnapshot | null>(path) ?? undefined;
   let next: TaskSnapshot | undefined;
   try {
-    next = await takeSnapshot(den, conversationId, reader);
+    next = await takeSnapshot(den, conversationId, reader, prev);
   } catch {
     return none;
   }
-  const path = statePath(den, conversationId);
   const write = (s: TaskSnapshot | undefined) => {
     try {
       mkdirSync(dirname(path), { recursive: true });
@@ -139,7 +147,6 @@ export async function pendingTaskNotice(den: string, conversationId: string, rea
       }
     } catch { /* best effort: the worst case is one repeated notice */ }
   };
-  const prev = readJson<TaskSnapshot | null>(path) ?? undefined;
   if (!next) {
     // Unbound (or unreadable binding file): forget the baseline so a later bind starts fresh. An unreadable API keeps it.
     if (prev && !readJson<{ workId?: string }>(bindingPath(den, conversationId))?.workId) write(undefined);
@@ -154,7 +161,4 @@ export async function pendingTaskNotice(den: string, conversationId: string, rea
   return { text, commit: () => write(next) };
 }
 
-/** The notice as it is put at the head of a user message. */
-export const NOTICE_LINE = /^Task update: [^\n]*\n\n/;
-export const withTaskNotice = (notice: string, text: string): string => (notice ? `${notice}\n\n${text}` : text);
-export const stripTaskNotice = (text: string): string => text.replace(NOTICE_LINE, "");
+export { withTaskNotice, stripTaskNotice } from "../superseded-note.js";

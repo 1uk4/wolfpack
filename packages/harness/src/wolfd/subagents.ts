@@ -1202,7 +1202,7 @@ ${text}`;
       if (!parent.hasUserText(`[delivery ${d.id}]`)) {
         try {
           // Steer: into the parent's running turn, or, when it is idle, as the message that starts one.
-          await parent.submit(`${d.text}\n\n[delivery ${d.id}]`, "steer");
+          await parent.submit(`${d.text}\n\n[delivery ${d.id}]`, "steer", [], { internal: true });
         } catch (e) {
           this.port.onError(e);
           this.retryLater(parentId);

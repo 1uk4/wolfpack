@@ -90,6 +90,27 @@ describe("task-update notice", () => {
     expect(await boundary("2")).toBe("");
   });
 
+  it("a failed parent read keeps the baseline (no false Record update); a failed children read keeps the old counts", async () => {
+    await boundary();
+    const failing: TaskNoticeReader = { ...reader, async get(id) { if (id === "F") throw new Error("boom"); return items.get(id); } };
+    const n = await pendingTaskNotice(den, "1", failing);
+    expect(n.text).toBe("");
+    const partial: TaskNoticeReader = { ...reader, async children() { throw new Error("boom"); } };
+    expect((await pendingTaskNotice(den, "1", partial)).text).toBe("");
+    items.get("T2")!.item.stage = "shipped";
+    expect(await boundary()).toBe("Task update: 1/3 tasks shipped");
+    items.get("F")!.body = "feature record";
+    const down: TaskNoticeReader = { ...reader, async get(id) { return id === "F" ? undefined : items.get(id); } };
+    expect((await pendingTaskNotice(den, "1", down)).text).toBe("");
+    expect(await boundary()).toBe("Task update: Record updated");
+  });
+
+  it("only generated notices are stripped", () => {
+    expect(stripTaskNotice("Task update: stage a → b; 2/3 tasks shipped; feature tasks changed; Record updated\n\nx")).toBe("x");
+    expect(stripTaskNotice("Task update: please review\n\nx")).toBe("Task update: please review\n\nx");
+    expect(stripTaskNotice("Task update: Record updated; nonsense\n\nx")).toContain("Task update");
+  });
+
   it("the notice is a head line the history strips again", () => {
     const text = withTaskNotice("Task update: Record updated", "hello");
     expect(text).toBe("Task update: Record updated\n\nhello");

@@ -61,6 +61,8 @@ export interface ThreadHost {
   applyTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
   /** The task-update notice due for a conversation (bound item changed since the last one). Unset: no notices. */
   taskNotice?(conversationId: string): Promise<PendingNotice>;
+  /** How long a submit waits for the notice before sending without it. Default 1500. */
+  taskNoticeDeadlineMs?: number;
 }
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
@@ -427,20 +429,30 @@ export class ThreadRuntime {
     return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
   }
 
-  async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = []): Promise<SubmitAck> {
+  async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean } = {}): Promise<SubmitAck> {
     const before = this.turnStarts;
-    // The model is told which pending cards this message replaces (the history strips the note again).
-    // (Only when idle: a steer/followUp during a run finds nothing pending, the run's first message superseded them.)
-    if (!this.running) text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + text;
-    // At a turn boundary (nothing running) the message carries one coalesced notice of what changed on the bound item.
+    // At a turn boundary (nothing running) an operator/card message carries one coalesced notice of what changed on the
+    // bound item. Machine submits (subagent deliveries) leave it for the next one. A slow Work API means no notice.
     let notice: PendingNotice | undefined;
-    if (!this.running && !this.isChild && this.host.taskNotice) {
+    if (!this.running && !this.isChild && !opts.internal && this.host.taskNotice) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        notice = await this.host.taskNotice(String(this.conv.id));
-        text = withTaskNotice(notice.text, text);
+        notice = await Promise.race([
+          this.host.taskNotice(String(this.conv.id)),
+          new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), this.host.taskNoticeDeadlineMs ?? 1500); }),
+        ]);
       } catch {
         notice = undefined;
+      } finally {
+        clearTimeout(timer);
       }
+    }
+    // (Only when idle, re-checked after the await: a turn may have started. A steer/followUp during a run finds nothing
+    // pending, the run's first message superseded them, and carries no notice.)
+    if (this.running) notice = undefined;
+    else {
+      // Order: superseded notes, then the notice, then the text (stripSupersededNotes / stripTaskNotice peel them in that order).
+      text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + withTaskNotice(notice?.text ?? "", text);
     }
     let input: SubmitOptions["input"] = text;
     if (refs.length > 0) {

@@ -24,7 +24,7 @@ const ANY_NOTE_HEAD = /^(?:\(Your pending [^\n]*? question \(call [^\n]*?\) was 
  * card state) any well-formed note block at the head goes.
  */
 export function stripSupersededNotes(text: string, cards?: readonly SupersededCard[]): string {
-  if (!cards) return text.replace(ANY_NOTE_HEAD, "");
+  if (!cards) return stripTaskNotice(text.replace(ANY_NOTE_HEAD, ""));
   const mine = new Set(cards.map(noteLine));
   const lines = text.split("\n");
   let n = 0;
@@ -32,3 +32,13 @@ export function stripSupersededNotes(text: string, cards?: readonly SupersededCa
   if (n === 0 || lines[n] !== "") return text;
   return lines.slice(n + 1).join("\n");
 }
+
+/**
+ * The task-update notice wolfd puts after any superseded notes and before the operator's text ("Task update: stage a → b;
+ * 2/3 tasks shipped; feature tasks changed; Record updated"). Only this generated vocabulary is stripped, so operator text
+ * that starts with "Task update:" survives.
+ */
+const PART = String.raw`(?:stage \S+ → \S+|\d+/\d+ tasks shipped|feature tasks changed|Record updated)`;
+const NOTICE_HEAD = new RegExp(String.raw`^Task update: ${PART}(?:; ${PART})*\n\n`);
+export const withTaskNotice = (notice: string, text: string): string => (notice ? `${notice}\n\n${text}` : text);
+export const stripTaskNotice = (text: string): string => text.replace(NOTICE_HEAD, "");

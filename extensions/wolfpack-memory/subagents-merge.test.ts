@@ -3,6 +3,7 @@
  * branch and cleans up; a conflict raises the card and each choice works; home children, dirty trees, explicit abandon;
  * main is never touched. Ship goes through the real task_done tool against a local Work server.
  */
+import { stripSupersededNotes } from "@wolfpack/harness/memory";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
@@ -100,7 +101,7 @@ function scripted(): FauxResponseStep {
     const child = system.includes("You are the sub-agent");
     const users = ctx.messages.filter((m) => m.role === "user");
     const last = [...ctx.messages].reverse().find((m) => m.role !== "system")!;
-    const lastText = textOf(last.content);
+    const lastText = stripSupersededNotes(textOf(last.content)); // a bound-item change puts a "Task update:" line before an operator message
     const tool = (name: string, args: Record<string, unknown>) => fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
     if (last.role === "toolResult") {
       toolResults.push(lastText);

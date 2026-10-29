@@ -498,13 +498,10 @@ export function GraphView({
 	// table lights is published back from this same computation.
 	const work = useWorkView();
 	const workSel = work.selection;
-	const workSelRef = useRef(workSel);
-	workSelRef.current = workSel;
 	const handledSeq = useRef<number | null>(null);
 	useEffect(() => {
 		if (!workSel) {
-			// The table is back to full screen: the graph's selection goes with it.
-			if (handledSeq.current !== null) setSelected(null);
+			// The Work list closed: a later pick of the same row is a new request. The graph keeps its own selection.
 			handledSeq.current = null;
 			return;
 		}
@@ -516,13 +513,6 @@ export function GraphView({
 		// The column narrows the canvas first; pan once the renderer has re-fitted.
 		requestAnimationFrame(() => requestAnimationFrame(() => rendererRef.current?.focusOn([gid], 3)));
 	}, [workSel, graph, isEmpty, storedLoaded]);
-	// Closing the pane (X or Esc) while the table is split returns the table to full screen.
-	const hadSelected = useRef(false);
-	useEffect(() => {
-		if (hadSelected.current && selectedId === null && workSelRef.current) work.clearSelection();
-		hadSelected.current = selectedId !== null;
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedId]);
 	const publishRoute = work.publishRoute;
 	useEffect(() => {
 		const raw = selectedId ? rawWorkId(selectedId) : null;
@@ -532,7 +522,7 @@ export function GraphView({
 	// The column covers the page's left edge: inset the graph past it so the canvas (and its fit) is the visible part.
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const [inset, setInset] = useState(0);
-	const splitWidth = workSel ? work.colWidth : 0;
+	const splitWidth = work.isOpen && !work.expanded ? work.colWidth : 0;
 	useEffect(() => {
 		const left = rootRef.current?.getBoundingClientRect().left ?? 0;
 		setInset(Math.max(0, splitWidth - left));
@@ -555,6 +545,12 @@ export function GraphView({
 		};
 	}, [graph, selectedRoute, cursor, selectedId]);
 	shownNodeRef.current = card?.id ?? null;
+	const paneOpen = !!(selected && card && !isEmpty);
+	const publishPane = work.publishPane;
+	useEffect(() => {
+		publishPane(paneOpen);
+		return () => publishPane(false);
+	}, [publishPane, paneOpen]);
 
 	return (
 		<div ref={rootRef} className="flex h-full w-full" style={inset > 0 ? { paddingLeft: inset } : undefined}>

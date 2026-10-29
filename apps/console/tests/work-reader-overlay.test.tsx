@@ -50,9 +50,39 @@ const client: WorkClient = {
 };
 
 let graphMounts = 0;
+let graphSelected: string[] = [];
+/** Stands in for graph-view: a Work row request selects here; a background click clears only the graph's own selection. */
 function FakeGraph() {
 	useEffect(() => void graphMounts++, []);
-	return <div data-testid="fake-graph" />;
+	const work = useWorkView();
+	const [selected, setSelected] = useState<string | null>(null);
+	const seq = work.selection?.seq;
+	const id = work.selection?.id ?? null;
+	useEffect(() => {
+		if (id) {
+			graphSelected.push(id);
+			setSelected(id);
+		}
+	}, [seq, id]);
+	const { publishPane } = work;
+	useEffect(() => {
+		publishPane(selected !== null);
+		return () => publishPane(false);
+	}, [selected, publishPane]);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			setSelected(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, []);
+	return (
+		<div data-testid="fake-graph" data-selected={selected ?? ""}>
+			<button data-testid="graph-bg" onClick={() => setSelected(null)} />
+		</div>
+	);
 }
 /** The (home) layout: the graph always, the route's page (the reader) over it. */
 let go: (href: string) => void = () => {};
@@ -80,6 +110,7 @@ let root: Root | null = null;
 beforeEach(() => {
 	store.clear();
 	graphMounts = 0;
+	graphSelected = [];
 });
 afterEach(() => {
 	act(() => root?.unmount());
@@ -112,36 +143,72 @@ const mount = async () => {
 };
 const isColumn = () => q("work-view")!.getAttribute("aria-modal") === "false";
 
+const openAll = async () => {
+	await mount();
+	await click(q("work-open")!);
+	await settle();
+	await click(q("sel")!); // a row selected: graph pane open
+	await act(async () => go("/kb/entry/e1"));
+};
+
 describe("graph / Work / reader layering", () => {
-	it("reader closes alone, the Work list stays a column over the graph, then closes alone", async () => {
+	it("the Work list is a column as soon as it opens; the reader sits beside it", async () => {
 		await mount();
 		await click(q("work-open")!);
 		await settle();
-		await click(q("sel")!); // a row selected: the column over the graph
-		assert.ok(isColumn());
+		assert.ok(isColumn(), "no selection needed");
 		await act(async () => go("/kb/entry/e1"));
-		assert.ok(q("entry-reader") && q("work-view") && q("fake-graph"), "all three layers");
-		assert.equal(Number.parseInt(q("entry-reader")!.style.left, 10), Number.parseInt(q("work-view")!.style.width, 10), "reader sits beside the Work column");
-		await click(q("entry-reader-close")!);
-		assert.equal(q("entry-reader"), null);
-		assert.ok(q("work-view") && isColumn(), "Work list still an overlay column, not full screen");
-		assert.ok(q("fake-graph"));
-		assert.equal(graphMounts, 1, "the graph never remounted");
-		await click(q("work-close")!); // closes the selection (back to the table)
-		await click(q("work-close")!); // closes the Work list
-		assert.equal(q("work-view"), null);
-		assert.ok(q("fake-graph"), "graph alone");
-		assert.equal(graphMounts, 1);
+		assert.equal(Number.parseInt(q("entry-reader")!.style.left, 10), Number.parseInt(q("work-view")!.style.width, 10));
 	});
-	it("Esc removes the reader first, then the Work list", async () => {
+	it("a row select focuses the graph node", async () => {
 		await mount();
 		await click(q("work-open")!);
 		await settle();
 		await click(q("sel")!);
-		await act(async () => go("/kb/entry/e1"));
-		await esc();
+		assert.deepEqual(graphSelected, ["t1"]);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "t1");
+	});
+	it("a graph background click with all three open leaves the list a column and the reader open", async () => {
+		await openAll();
+		assert.ok(q("entry-reader") && q("work-view") && q("fake-graph"), "all three layers");
+		await click(q("graph-bg")!);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "", "graph deselected");
+		assert.ok(isColumn(), "Work list still a column");
+		assert.ok(q("entry-reader"), "reader still open");
+		assert.equal(Number.parseInt(q("entry-reader")!.style.left, 10), Number.parseInt(q("work-view")!.style.width, 10));
+	});
+	it("reader closes alone, then one X closes the list; the graph never remounts", async () => {
+		await openAll();
+		await click(q("entry-reader-close")!);
 		assert.equal(q("entry-reader"), null);
 		assert.ok(q("work-view") && isColumn());
+		assert.equal(graphMounts, 1);
+		await click(q("work-close")!); // one X: the list is gone
+		assert.equal(q("work-view"), null);
+		assert.ok(q("fake-graph"));
+		assert.equal(graphMounts, 1);
+	});
+	it("Esc order: reader, then the graph pane, then the Work list", async () => {
+		await openAll();
+		await esc();
+		assert.equal(q("entry-reader"), null);
+		assert.ok(q("work-view") && q("fake-graph")!.getAttribute("data-selected") === "t1");
+		await esc();
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "", "pane closed");
+		assert.ok(q("work-view") && isColumn());
+		await esc();
+		assert.equal(q("work-view"), null);
+		assert.ok(q("fake-graph"));
+	});
+	it("expanded list: the reader opens at the left edge; collapse puts it beside the column again", async () => {
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-layout-toggle")!);
+		await act(async () => go("/kb/entry/e1"));
+		assert.equal(Number.parseInt(q("entry-reader")!.style.left, 10) || 0, 0);
+		await click(q("work-layout-toggle")!);
+		assert.ok(Number.parseInt(q("entry-reader")!.style.left, 10) > 0);
 	});
 	it("the reader alone (graph node click / palette path) leaves just graph + reader", async () => {
 		await mount();

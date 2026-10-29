@@ -68,7 +68,11 @@ const fake = (over: Partial<WorkClient> = {}): Fake => {
 };
 
 let root: Root | null = null;
-beforeEach(() => store.clear());
+// The table tests read the full-screen layout (all columns); the column is the default, so start expanded.
+beforeEach(() => {
+	store.clear();
+	store.set("wolfpack:work-view-expanded", "1");
+});
 afterEach(() => {
 	act(() => root?.unmount());
 	root = null;

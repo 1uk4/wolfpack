@@ -83,7 +83,7 @@ export function EntryReaderOverlay({ id }: { id: string }) {
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [close]);
-	const left = work.isOpen && work.selection ? work.colWidth : 0;
+	const left = work.isOpen && !work.expanded ? work.colWidth : 0;
 	return <EntryReader id={id} overlay={{ onClose: close, left }} />;
 }
 

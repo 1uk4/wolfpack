@@ -50,6 +50,7 @@ export function OverlayShell({
 	header,
 	bleed = false,
 	column,
+	yieldEsc = false,
 	children,
 }: {
 	/** aria-label, when there is no visible title element to point at. */
@@ -68,6 +69,8 @@ export function OverlayShell({
 	 * (no Tab trap) and Esc leaves a field's own Esc alone. Esc and the close button still call `onClose`.
 	 */
 	column?: number;
+	/** Another layer on top (the graph's side pane) owns Esc right now: leave it unclaimed for that layer. */
+	yieldEsc?: boolean;
 	children: ReactNode | ((close: ReactNode) => ReactNode);
 }) {
 	const dialogRef = useRef<HTMLDivElement>(null);
@@ -85,6 +88,7 @@ export function OverlayShell({
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
+				if (yieldEsc) return;
 				if (column !== undefined && isTextField(e.target)) return;
 				// THE ONE-ESC LAW: claim at the document level, the window chain must not also act.
 				e.preventDefault();
@@ -110,7 +114,7 @@ export function OverlayShell({
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose, column]);
+	}, [onClose, column, yieldEsc]);
 	const close = (
 		<Button ref={closeRef} size="icon-xs" variant="ghost" className="ml-auto shrink-0" aria-label="Close" data-testid={closeTestId} onClick={onClose}>
 			<XIcon />

@@ -35,7 +35,7 @@ Object.assign(globalThis, {
 });
 Object.defineProperty(dom.window, "innerWidth", { value: 1400, configurable: true });
 
-const { WorkViewProvider } = await import("../components/work-view.tsx");
+const { WorkViewProvider, WORK_EXPANDED_KEY } = await import("../components/work-view.tsx");
 const { WorkButton, WorkNavEntry, useWorkView } = await import("../components/work-view-entry.tsx");
 const { routeForNode, rawWorkId, reconcileCursor } = await import("../src/core/dep-route-adapter.ts");
 const { cursorNext, cursorPrev } = await import("../src/core/work-route.ts");
@@ -92,18 +92,36 @@ function FakeGraph() {
 			graphSelected.push(`work:${id}`);
 			setSelected(id);
 			setCursor(null);
-		} else setSelected(null);
+		}
 	}, [seq, id]);
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 	expandExt = (f) => setExpanded(new Set([f]));
 	const route = selected ? routeForNode(graph, `work:${selected}`, { expanded }) : null;
 	const eff = route ? reconcileCursor(route, cursor) : null;
 	setCursorExt = (dir) => route && eff && setCursor(dir === 1 ? cursorNext(route, eff) : cursorPrev(route, eff));
-	const { publishRoute } = work;
+	const { publishRoute, publishPane } = work;
+	useEffect(() => {
+		publishPane(selected !== null);
+		return () => publishPane(false);
+	}, [selected, publishPane]);
+	// Like the real pane: Esc closes it unless a higher layer already claimed the key.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			setSelected(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, []);
 	useEffect(() => {
 		publishRoute(selected ? workRouteView(route, selected, eff?.node ?? null) : null);
 	}, [selected, cursor, expanded]); // eslint-disable-line react-hooks/exhaustive-deps
-	return <div data-testid="fake-graph" data-selected={selected ?? ""} />;
+	return (
+		<div data-testid="fake-graph" data-selected={selected ?? ""}>
+			<button data-testid="graph-bg" onClick={() => setSelected(null)} />
+		</div>
+	);
 }
 
 let root: Root | null = null;
@@ -163,18 +181,22 @@ const openAndSelect = async (id = "e") => {
 };
 const step = (id: string) => q(`work-row-${id}`)?.getAttribute("data-step") ?? null;
 
-describe("split", () => {
-	it("selecting a row splits the view into a left column and selects it on the graph", async () => {
+describe("layout", () => {
+	it("opens as a column over the graph by default, no selection needed", async () => {
 		await mount();
 		await click(q("work-open")!);
 		await settle();
-		assert.ok(q("work-view") && !q("work-resize"), "full screen first");
-		assert.equal(q("work-view")!.getAttribute("aria-modal"), "true");
-		await click(q("work-toggle-i1")!);
-		await click(q("work-row-fx")!);
-		assert.ok(q("work-resize"), "now a column with a resize edge");
+		assert.ok(q("work-resize"), "a column with a resize edge");
 		assert.equal(q("work-view")!.getAttribute("aria-modal"), "false");
 		assert.ok(Number.parseInt(q("work-view")!.style.width, 10) > 0);
+	});
+	it("selecting a row selects it on the graph and keeps the column", async () => {
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-toggle-i1")!);
+		await click(q("work-row-fx")!);
+		assert.ok(q("work-resize"));
 		assert.deepEqual(graphSelected, ["work:fx"]);
 		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "fx");
 	});
@@ -183,6 +205,59 @@ describe("split", () => {
 		await click(q("work-row-b")!);
 		assert.deepEqual(graphSelected, ["work:e", "work:b"]);
 		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "b");
+	});
+	it("the toggle expands to the full-screen table and collapses back, and the choice is remembered", async () => {
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-layout-toggle")!);
+		assert.ok(q("work-view") && !q("work-resize"));
+		assert.equal(q("work-view")!.getAttribute("aria-modal"), "true");
+		assert.equal(store.get(WORK_EXPANDED_KEY), "1");
+		// close and reopen: still expanded (and a fresh mount reads it too)
+		await click(q("work-close")!);
+		await click(q("work-open")!);
+		await settle();
+		assert.ok(!q("work-resize"), "reopens expanded");
+		await click(q("work-layout-toggle")!);
+		assert.ok(q("work-resize"));
+		assert.equal(store.get(WORK_EXPANDED_KEY), "0");
+		await click(q("work-layout-toggle")!);
+		act(() => root?.unmount());
+		document.body.innerHTML = "";
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		assert.ok(!q("work-resize"), "a new session starts expanded");
+	});
+	it("selecting a row in the expanded table collapses to the column so the graph shows the node", async () => {
+		store.set(WORK_EXPANDED_KEY, "1");
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-toggle-i1")!);
+		assert.ok(!q("work-resize"));
+		await click(q("work-row-fx")!);
+		assert.ok(q("work-resize"), "column now");
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "fx");
+	});
+});
+
+describe("graph is independent", () => {
+	it("a graph background click does not collapse or close the Work list", async () => {
+		await openAndSelect("e");
+		await click(q("graph-bg")!);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "");
+		assert.ok(q("work-view") && q("work-resize"), "still the column");
+		assert.ok(q("work-row-e"), "rows still there");
+	});
+	it("with the list expanded, graph clicks leave it expanded", async () => {
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-layout-toggle")!);
+		await click(q("graph-bg")!);
+		assert.ok(q("work-view") && !q("work-resize"));
 	});
 });
 
@@ -250,29 +325,44 @@ describe("cursor sync", () => {
 	});
 });
 
-describe("restore", () => {
-	it("Esc returns to the full-screen table and clears the graph selection", async () => {
+describe("closing", () => {
+	it("Esc closes the graph pane first, then the Work list", async () => {
 		await openAndSelect("e");
 		await key("Escape");
-		assert.ok(q("work-view") && !q("work-resize"), "full-screen table again");
-		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "");
-		assert.equal(q("work-row-b")!.getAttribute("data-route"), null);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "", "pane closed");
+		assert.ok(q("work-view") && q("work-resize"), "list still open as a column");
 		await key("Escape");
-		assert.equal(q("work-view"), null, "a second Esc closes the view");
+		assert.equal(q("work-view"), null, "second Esc closes the list");
 	});
-	it("Esc while typing in the search box leaves the split alone", async () => {
+	it("Esc with no pane closes the list at once", async () => {
+		await mount();
+		await click(q("work-open")!);
+		await settle();
+		await key("Escape");
+		assert.equal(q("work-view"), null);
+	});
+	it("Esc while typing in the search box leaves the column alone", async () => {
 		await openAndSelect("e");
 		const search = q("work-search")!;
 		await key("Escape", search);
 		assert.ok(q("work-resize"));
 	});
-	it("the close control restores the table instead of closing", async () => {
+	it("one X closes the list entirely, graph selection untouched", async () => {
 		await openAndSelect("e");
 		await click(q("work-close")!);
-		assert.ok(q("work-view") && !q("work-resize"));
-		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "");
-		await click(q("work-close")!);
 		assert.equal(q("work-view"), null);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "e");
+	});
+	it("re-selecting the same row after closing and reopening is a fresh request", async () => {
+		await openAndSelect("e");
+		await click(q("work-close")!);
+		await click(q("graph-bg")!);
+		await click(q("work-open")!);
+		await settle();
+		await click(q("work-toggle-i1")!);
+		await click(q("work-toggle-f1")!);
+		await click(q("work-row-e")!);
+		assert.equal(q("fake-graph")!.getAttribute("data-selected"), "e");
 	});
 });
 

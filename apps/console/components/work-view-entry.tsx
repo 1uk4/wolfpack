@@ -25,8 +25,14 @@ export interface WorkViewApi {
 	/** The table's selection, which the graph acts on (null: the full-screen table). */
 	selection: WorkSelection | null;
 	select: (id: string) => void;
-	/** Back to the full-screen table; the graph drops its selection. */
+	/** Forget the table's last selection request (the graph's own selection is not touched). */
 	clearSelection: () => void;
+	/** Full-screen table (true) vs the left column over the graph (false, the default). Remembered. */
+	expanded: boolean;
+	setExpanded: (expanded: boolean) => void;
+	/** The graph's side pane is open: Esc closes it before the Work list. */
+	graphPaneOpen: boolean;
+	publishPane: (open: boolean) => void;
 	/** The graph's selected route, as the table lights it (null: nothing selected on the graph). */
 	routeView: WorkRouteView | null;
 	publishRoute: (view: WorkRouteView | null) => void;
@@ -42,6 +48,10 @@ export const WorkViewContext = createContext<WorkViewApi>({
 	selection: null,
 	select: () => {},
 	clearSelection: () => {},
+	expanded: false,
+	setExpanded: () => {},
+	graphPaneOpen: false,
+	publishPane: () => {},
 	routeView: null,
 	publishRoute: () => {},
 	colWidth: 0,

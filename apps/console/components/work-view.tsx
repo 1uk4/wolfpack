@@ -14,8 +14,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, Maximize2Icon, Minimize2Icon, SearchIcon } from "lucide-react";
 import { OverlayShell } from "@/components/overlay-shell";
+import { Button } from "@/components/ui/button";
 import { TopBar } from "@/components/top-bar";
 import { WorkViewContext, useWorkView, type WorkSelection } from "./work-view-entry";
 import {
@@ -47,6 +48,7 @@ import { useGraduated } from "./graduation-signal";
 
 export const WORK_DOMAIN_KEY = "wolfpack:work-view-domain";
 export const DEFAULT_WORK_DOMAIN = "wolfpack";
+export const WORK_EXPANDED_KEY = "wolfpack:work-view-expanded";
 export const WORK_POLL_MS = 30_000;
 
 function readDomain(): string {
@@ -68,6 +70,22 @@ export function WorkViewProvider({ children, client, graduate, onSelect }: { chi
 			return parseWorkColWidth(null);
 		}
 	});
+	const [expanded, setExpandedState] = useState(() => {
+		try {
+			return localStorage.getItem(WORK_EXPANDED_KEY) === "1";
+		} catch {
+			return false;
+		}
+	});
+	const [graphPaneOpen, setPaneOpen] = useState(false);
+	const setExpanded = useCallback((next: boolean) => {
+		setExpandedState(next);
+		try {
+			localStorage.setItem(WORK_EXPANDED_KEY, next ? "1" : "0");
+		} catch {
+			// storage blocked: the layout just isn't remembered
+		}
+	}, []);
 	const open = useCallback(() => setOpen(true), []);
 	const close = useCallback(() => {
 		setOpen(false);
@@ -76,9 +94,11 @@ export function WorkViewProvider({ children, client, graduate, onSelect }: { chi
 	const onSelectRef = useRef(onSelect);
 	onSelectRef.current = onSelect;
 	const select = useCallback((id: string) => {
+		// Picking a row from the full-screen table shows it on the graph: back to the column (a persisted choice).
+		setExpanded(false);
 		setSelection((cur) => ({ id, seq: (cur?.seq ?? 0) + 1 }));
 		onSelectRef.current?.(id);
-	}, []);
+	}, [setExpanded]);
 	const clearSelection = useCallback(() => setSelection(null), []);
 	// The graph republishes on every render of its selection; keep the old object when nothing changed.
 	const publishRoute = useCallback(
@@ -97,8 +117,8 @@ export function WorkViewProvider({ children, client, graduate, onSelect }: { chi
 		}
 	}, []);
 	const api = useMemo(
-		() => ({ open, close, isOpen, selection: isOpen ? selection : null, select, clearSelection, routeView, publishRoute, colWidth, setColWidth }),
-		[open, close, isOpen, selection, select, clearSelection, routeView, publishRoute, colWidth, setColWidth],
+		() => ({ open, close, isOpen, selection: isOpen ? selection : null, select, clearSelection, expanded, setExpanded, graphPaneOpen, publishPane: setPaneOpen, routeView, publishRoute, colWidth, setColWidth }),
+		[open, close, isOpen, selection, select, clearSelection, expanded, setExpanded, graphPaneOpen, routeView, publishRoute, colWidth, setColWidth],
 	);
 	// The overlay is the LAST child: the TopBar's drag region must not be punched through by later no-drag elements.
 	return (
@@ -328,9 +348,9 @@ const HEADERS: { col: WorkSortCol; label: string; cls: string }[] = [
 ];
 
 export function WorkOverlay({ client: injected, graduate: injectedGraduate, onClose }: { client?: WorkClient; graduate?: GraduateClient; onClose: () => void }) {
-	const { selection, select, clearSelection, routeView, colWidth, setColWidth } = useWorkView();
-	const split = selection !== null;
-	// In the split the graph's selection is what's lit: the table mirrors the route the graph computed.
+	const { select, routeView, colWidth, setColWidth, expanded: full, setExpanded: setFull, graphPaneOpen } = useWorkView();
+	// A column over the graph unless expanded. In the column the graph's selection is what's lit: the table mirrors the route the graph computed.
+	const split = !full;
 	const view = split ? routeView : null;
 	const client = useMemo(() => injected ?? createWorkClient(), [injected]);
 	const [domain, setDomainState] = useState(readDomain);
@@ -413,7 +433,7 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 	const chevron = (col: WorkSortCol) => (sort.col !== col ? null : sort.dir === 1 ? <ChevronUpIcon className="size-3" /> : <ChevronDownIcon className="size-3" />);
 
 	return (
-		<OverlayShell label="Work" testId="work-view" closeTestId="work-close" onClose={split ? clearSelection : onClose} bleed column={split ? colWidth : undefined}>
+		<OverlayShell label="Work" testId="work-view" closeTestId="work-close" onClose={onClose} yieldEsc={graphPaneOpen} bleed column={split ? colWidth : undefined}>
 			{(close) => (
 				<div data-split={split || undefined} className="flex h-full min-h-0 flex-1 flex-col">
 					{split && (
@@ -459,6 +479,17 @@ export function WorkOverlay({ client: injected, graduate: injectedGraduate, onCl
 								className={`h-8 rounded-lg border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring ${split ? "w-32" : "w-56"}`}
 							/>
 						</div>
+						<Button
+							size="icon-xs"
+							variant="ghost"
+							className="ml-auto shrink-0"
+							data-testid="work-layout-toggle"
+							aria-label={split ? "Expand Work list to full screen" : "Collapse Work list to a column"}
+							aria-pressed={full}
+							onClick={() => setFull(split)}
+						>
+							{split ? <Maximize2Icon /> : <Minimize2Icon />}
+						</Button>
 						{close}
 					</TopBar>
 					<div className="min-h-0 flex-1 overflow-y-auto">

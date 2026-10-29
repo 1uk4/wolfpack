@@ -13,25 +13,27 @@
  * reachability. See docs/kb-implementation.md §Phase 5.
  */
 import { patchSourceProperties, sourceDiffers, withSourceProperties } from "./source-props.js";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { atomicWrite } from "@wolfpack/engine";
 import { basename, dirname, join } from "node:path";
 import { parseFrontmatter, SWEEP } from "@wolfpack/engine";
 import { type KbEvent, type ParsedContribution, ev, now, contentHash } from "../shared/index.js";
 import { readLedger, appendLedger, seenHashes, foldRegistry } from "./ledger.js";
-import { drainInbox } from "./intake.js";
+import { drainInbox, countPending } from "./intake.js";
 import { createEmbedder, embedInput, entrySummary, cosine, type Embedder } from "./embed.js";
 import { renderRegistry } from "./registry.js";
-import { anchorIndex, anchorOf, oldHubFor } from "./anchors.js";
+import { anchorIndex, anchorOf, groupOf, oldHubFor } from "./anchors.js";
 import { syncDelivered } from "./groups.js";
 import { type EntryVector } from "./route.js";
 import { placeEntry } from "./section-tree.js";
+import { DEFAULT_RULES } from "./tree-rules.js";
 import { computeCentroid, type EntryWithVector as EWV } from "./hierarchy.js";
 import { createOracles } from "./oracles.js";
 import { resolveAliasedEntry, survivorOf } from "./alias.js";
 import { produceEntry, produceVerbatim, type ProduceEntryInput } from "./produce.js";
 import { supersededIds } from "./preserve.js";
 import { withKbLock, KbLockBusy } from "./lock.js";
+import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import {
   commitEntry,
   readEntryMarkdown,
@@ -110,6 +112,8 @@ export interface SweepResult {
   /** Set when the tick did no work because of an outage: skipped inside the
    *  backoff window, or an infrastructure error just started/extended it. */
   paused?: string;
+  /** Set while a quarantined rebuild journal (.rebuild-journal.bad) is present: an operator must look at it. */
+  journalBad?: string;
 }
 
 /** Turn a thrown error — especially a ZodError — into a short, readable reason.
@@ -289,7 +293,9 @@ function clampFit(x: number): number {
  */
 export async function sweep(ctx: SweepContext): Promise<SweepResult> {
   try {
-    return await withKbLock(ctx.roots, () => sweepUnlocked(ctx));
+    const r = await withKbLock(ctx.roots, () => sweepUnlocked(ctx));
+    const bad = badJournalNote(ctx.roots);
+    return bad && !r.journalBad ? { ...r, journalBad: bad } : r;
   } catch (err) {
     if (!(err instanceof KbLockBusy)) throw err;
     ctx.notify?.("sweep: skipped, the KB is busy (a reorg or rebuild is running)");
@@ -304,8 +310,40 @@ export function emptyResult(): SweepResult {
   };
 }
 
+/**
+ * Parents (sections with children) whose DIRECT entries outgrew the split threshold, across ALL domains with a tree. The
+ * stay-in-parent rule keeps leftovers there and the sweep never reorganises, so this is the signal a rebuild is due.
+ * Called once per sweep. Grouped entries follow their holder and are not counted.
+ */
+export function oversizedParents(roots: KbRoots, sections: Section[]): string[] {
+  const out: string[] = [];
+  for (const domain of new Set(sections.map((s) => String(s.domain)))) {
+    const withKids = new Set(sections.filter((s) => String(s.domain) === domain && s.parent).map((s) => String(s.parent)));
+    if (!withKids.size) continue;
+    const counts = new Map<string, number>();
+    const dir = join(roots.kbBase, "domains", domain, "entries");
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".md") || f.startsWith(".")) continue;
+      let raw: string;
+      try { raw = readFileSync(join(dir, f), "utf-8"); } catch { continue; }
+      if (groupOf(raw)) continue;
+      const sec = String(parseFrontmatter(raw).fields.section ?? "");
+      if (sec && withKids.has(sec)) counts.set(sec, (counts.get(sec) ?? 0) + 1);
+    }
+    for (const [id, n] of [...counts].sort()) if (n > DEFAULT_RULES.splitAbove) out.push(`${id} (${n})`);
+  }
+  return out;
+}
+
 async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const { engine, roots } = ctx;
+  // A rebuild that crashed after its journal is finished first, under the lock (idempotent; a no-op without a journal).
+  const recovery = tryRecoverAndRender(roots, ctx.notify);
+  if (recovery.failed) {
+    // Never place entries into a tree that may be half-committed: skip the run, the inbox waits.
+    return { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: recovery.failed, journalBad: badJournalNote(roots) };
+  }
   const budgetMs = ctx.budgetMs ?? SWEEP.runBudgetMs;
 
   // One contribution per run, oldest first. The timer fires every minute, so the
@@ -346,6 +384,10 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   }
   // Section tree, folded from the ledger / _sections.json.
   let sections: Section[] = readSections(roots);
+  {
+    const big = oversizedParents(roots, sections);
+    if (big.length) ctx.notify?.(`sweep: ${big.length} parent section(s) hold more than ${DEFAULT_RULES.splitAbove} direct entries (${big.join(", ")}); a rebuild is due`);
+  }
 
   const batch: KbEvent[] = [];
   const result = emptyResult();

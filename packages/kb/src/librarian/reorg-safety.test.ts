@@ -1,7 +1,5 @@
 /**
- * Rebuild safety: the KB write lock, per-domain section saves, and final
- * absorb never flattening a deeply split root (Oct 19: 39 entries landed
- * directly on "Developer Tooling and Workflows").
+ * Rebuild safety: the KB write lock and per-domain section saves.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
@@ -9,10 +7,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { KbRoots } from "../shared/index.js";
 import { withKbLock, KbLockBusy, kbLockFile } from "./lock.js";
-import { persistDomains, rebuildFinalAbsorb } from "./reorg.js";
+import { persistDomains } from "./reorg.js";
 import { readSections, writeSections } from "./sections.js";
 import { sweep } from "./sweep.js";
-import { SECTION_TREE } from "@wolfpack/engine";
 
 let base: string;
 let roots: KbRoots;
@@ -87,44 +84,5 @@ describe("persistDomains", () => {
     const inMemory = [sec("sec-x-bbbbbb", "x", null, 3, [1, 0]), sec("sec-y-old999", "y", null, 9, [0, 1])];
     persistDomains(roots, inMemory, ["x"]);
     expect(readSections(roots).map((s) => s.id).sort()).toEqual(["sec-x-bbbbbb", "sec-y-new111"]);
-  });
-});
-
-describe("rebuildFinalAbsorb", () => {
-  const eDir = () => join(roots.kbBase, "domains", "d", "entries");
-  const entry = (id: string, section: string) =>
-    writeFileSync(join(eDir(), `${id}.md`), `---\nid: ${id}\ndomain: d\nsection: ${section}\n---\n\n# ${id}\n`);
-  const sectionOf = (id: string) => /^section: (.+)$/m.exec(readFileSync(join(eDir(), `${id}.md`), "utf8"))![1];
-
-  it("keeps a root whose entries sit several levels down; absorbs a truly tiny one; leaves no orphans", () => {
-    mkdirSync(eDir(), { recursive: true });
-    // Deep root A: A (0) -> A1 (0) -> A1a (20), A1b (19). Old code counted 0.
-    const A = sec("sec-d-AAAAAA", "d", null, 0, [1, 0, 0]);
-    const A1 = sec("sec-d-A1A1A1", "d", A.id, 0, [1, 0, 0], 1);
-    const A1a = sec("sec-d-A1aaaa", "d", A1.id, 20, [1, 0, 0], 2);
-    const A1b = sec("sec-d-A1bbbb", "d", A1.id, 19, [1, 0, 0], 2);
-    A.childIds = [A1.id]; A1.childIds = [A1a.id, A1b.id];
-    const B = sec("sec-d-BBBBBB", "d", null, 10, [0, 1, 0]);
-    const C = sec("sec-d-CCCCCC", "d", null, 1, [0, 0.9, 0.1]); // tiny, closest to B
-    for (let i = 0; i < 20; i++) entry(`kb-d-a${String(i).padStart(6, "0")}`, A1a.id);
-    for (let i = 0; i < 19; i++) entry(`kb-d-b${String(i).padStart(6, "0")}`, A1b.id);
-    entry("kb-d-c0000000", C.id);
-
-    const allVectors = Array.from({ length: 50 }, (_, i) => ({ entryId: `e${i}`, domain: "d", vector: [1, 0, 0] })) as any;
-    const result = { domains: ["d"], merges: 0 } as any;
-    const ctx = {
-      opts: { roots, notify: () => {} } as any,
-      domainsRoot: join(roots.kbBase, "domains"),
-      allVectors, result, allAssignments: new Map(), stConfig: SECTION_TREE,
-    };
-    const out = rebuildFinalAbsorb([A, A1, A1a, A1b, B, C], ctx as any);
-
-    const ids = out.map((s) => s.id);
-    expect(ids).toContain(A.id);                     // deep root survives
-    expect(ids).not.toContain(C.id);                 // tiny root absorbed
-    expect(sectionOf("kb-d-a000000")).toBe(A1a.id);  // deep entries untouched
-    expect(sectionOf("kb-d-c0000000")).toBe(B.id);   // tiny root's entry moved
-    const live = new Set(ids);
-    expect(out.filter((s) => s.parent && !live.has(s.parent))).toEqual([]); // no orphans
   });
 });

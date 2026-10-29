@@ -45,6 +45,7 @@ export const ENGINE_STEPS = [
   "confirmSubject",
   "sectionSummary",
   "labelSection",
+  "splitSection",
 ] as const;
 export type EngineStep = (typeof ENGINE_STEPS)[number];
 
@@ -61,6 +62,7 @@ export const STEP_TIERS: Record<EngineStep, Tier> = {
   confirmSubject: "fast",
   sectionSummary: "fast",
   labelSection: "fast",
+  splitSection: "fast",
 };
 
 /** pi's thinking levels (`pi --help`), used everywhere thinking is set. */

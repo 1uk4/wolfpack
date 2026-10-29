@@ -1,0 +1,181 @@
+{
+ "sec-wolfpack-Xvhq6R": {
+  "categories": [
+   {
+    "name": "Console chat UI and thread settings",
+    "ids": [
+     "kb-wolfpack-h18Dpg5",
+     "kb-wolfpack-7lYX52w",
+     "kb-wolfpack-54GVxum",
+     "kb-wolfpack-VHdYBfW",
+     "kb-wolfpack-Lfyr63A",
+     "kb-wolfpack-cq5wePG",
+     "kb-wolfpack-2ouF1hj"
+    ]
+   },
+   {
+    "name": "Interaction cards and confirmations",
+    "ids": [
+     "kb-wolfpack-XJZE7YQ",
+     "kb-wolfpack-mUML23s",
+     "kb-wolfpack-yYHh2H2",
+     "kb-wolfpack-AOcPGTq"
+    ]
+   },
+   {
+    "name": "Subagents and orchestration",
+    "ids": [
+     "kb-wolfpack-BijL0No",
+     "kb-wolfpack-4WKtZeA",
+     "kb-wolfpack-KDayuD5",
+     "kb-wolfpack-LGbi6Rn",
+     "kb-wolfpack-mIWi6i1"
+    ]
+   },
+   {
+    "name": "Chat platform bridges and assistants",
+    "ids": [
+     "kb-wolfpack-OFYr0D1",
+     "kb-wolfpack-PZyLRVg",
+     "kb-wolfpack-PX7Pnmp",
+     "kb-wolfpack-5MrnRjB",
+     "kb-wolfpack-GtxpSm1"
+    ]
+   },
+   {
+    "name": "CLI, providers and local runtime",
+    "ids": [
+     "kb-wolfpack-GRiF9Iu",
+     "kb-wolfpack-qjZVs8f",
+     "kb-wolfpack-38SR0G6",
+     "kb-wolfpack-6mvugY2"
+    ]
+   }
+  ],
+  "doesntFit": [
+   "kb-wolfpack-Hl27tHS",
+   "kb-wolfpack-lY4fc5G",
+   "kb-wolfpack-avXCi32",
+   "kb-wolfpack-yott39L",
+   "kb-wolfpack-zkx2Xrf"
+  ]
+ },
+ "sec-wolfpack-RU4PVv": {
+  "categories": [
+   {
+    "name": "Data model, dependencies and scheduling",
+    "ids": [
+     "kb-wolfpack-nEu2yyw",
+     "kb-wolfpack-DCZE41l",
+     "kb-wolfpack-1MJzt7k"
+    ]
+   },
+   {
+    "name": "Knowledge graph routes and visuals",
+    "ids": [
+     "kb-wolfpack-UIOhqys",
+     "kb-wolfpack-gtqfcw1",
+     "kb-wolfpack-RZiGF4f"
+    ]
+   },
+   {
+    "name": "Console work list and thread panels",
+    "ids": [
+     "kb-wolfpack-gpk1htP",
+     "kb-wolfpack-th34D4Q"
+    ]
+   },
+   {
+    "name": "Agent context and record binding",
+    "ids": [
+     "kb-wolfpack-1iMth7e",
+     "kb-wolfpack-C0zzSyS"
+    ]
+   },
+   {
+    "name": "Operations, cleanup and cutover",
+    "ids": [
+     "kb-wolfpack-4nzRWj1",
+     "kb-wolfpack-43GkStf",
+     "kb-wolfpack-09sz6vj"
+    ]
+   }
+  ],
+  "doesntFit": [
+   "kb-wolfpack-vZ1Ia0w"
+  ]
+ },
+ "sec-wolfpack-J8KiD9": {
+  "categories": [
+   {
+    "name": "Work graduation intake",
+    "ids": [
+     "kb-wolfpack-UCYdTPx",
+     "kb-wolfpack-nedIgZK",
+     "kb-wolfpack-PL75LiZ"
+    ]
+   },
+   {
+    "name": "Section tree construction and reorg",
+    "ids": [
+     "kb-wolfpack-VB1Io8T",
+     "kb-wolfpack-Wq5Pkio",
+     "kb-wolfpack-foy1o3U",
+     "kb-wolfpack-TdTnVQY"
+    ]
+   },
+   {
+    "name": "Frontmatter and metadata integrity",
+    "ids": [
+     "kb-wolfpack-RHp041U"
+    ]
+   },
+   {
+    "name": "Entry history and versioning",
+    "ids": [
+     "kb-wolfpack-yIFvNQU"
+    ]
+   }
+  ],
+  "doesntFit": []
+ },
+ "sec-snapjack-gtT6T1": {
+  "categories": [
+   {
+    "name": "Onboarding Funnel Analytics",
+    "ids": [
+     "kb-snapjack-Djkr9ex",
+     "kb-snapjack-lU9d8Sj"
+    ]
+   },
+   {
+    "name": "Stats Dashboards & Statistics Engine",
+    "ids": [
+     "kb-snapjack-EPKuahH",
+     "kb-snapjack-SSPfSyG",
+     "kb-snapjack-qgOtOt6"
+    ]
+   },
+   {
+    "name": "Mobile Activity & Solo Session UI",
+    "ids": [
+     "kb-snapjack-3bj4S7C",
+     "kb-snapjack-gHggcMw"
+    ]
+   },
+   {
+    "name": "Core Game Architecture & Algorithms",
+    "ids": [
+     "kb-snapjack-MbbDDeS"
+    ]
+   },
+   {
+    "name": "Engineering Timeline & Milestones",
+    "ids": [
+     "kb-snapjack-Tzwv599"
+    ]
+   }
+  ],
+  "doesntFit": []
+ }
+}

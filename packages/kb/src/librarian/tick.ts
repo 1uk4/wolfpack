@@ -5,11 +5,14 @@
  *
  * Order: backoff check, idle fast path (a directory listing, no engine, no
  * embedder, no cache or ledger read), sweep one item (duplicates are retired
- * first, before any vector loads), post-sweep reorg for the domains the item
- * touched, then vector-cache upkeep. One engine and one embedder serve the
+ * first, before any vector loads), optional post-sweep reorg (off by default)
+ * for the domains the item touched, then vector-cache upkeep. One engine and one embedder serve the
  * whole tick.
  */
+import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
+import { rebuildJournalFile } from "./rebuild-commit.js";
+import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -38,6 +41,18 @@ export interface SweepTickOptions {
   onEvent?: (event: SweepEvent) => void;
   /** Test seam: replaces the tick's embedder (default: the KB's cached embedder). */
   getEmbedder?: () => CachedEmbedder;
+  /**
+   * Run the full reorg on the touched domains after a committed item. Default
+   * OFF: until incremental repair exists, a sweep only places the new entry
+   * (top-down) and never reorganises the tree. WOLFPACK_KB_POST_SWEEP_REORG=1
+   * turns it on when this option is unset.
+   */
+  postSweepReorg?: boolean;
+}
+
+function postSweepReorgEnabled(opts: SweepTickOptions): boolean {
+  if (opts.postSweepReorg !== undefined) return opts.postSweepReorg;
+  return process.env.WOLFPACK_KB_POST_SWEEP_REORG === "1";
 }
 
 export interface SweepTickResult {
@@ -56,6 +71,8 @@ export interface SweepTickResult {
  */
 export async function runSweepTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const result = await runTick(opts);
+  const bad = badJournalNote(opts.roots);
+  if (bad && !result.sweep.journalBad) result.sweep = { ...result.sweep, journalBad: bad };
   await sendWorkLinks(opts);
   return result;
 }
@@ -74,6 +91,20 @@ async function sendWorkLinks(opts: SweepTickOptions): Promise<void> {
 
 async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots } = opts;
+
+  // Finish a rebuild that crashed after its journal, before anything else (the check is one stat; idempotent).
+  // While a journal is present and recovery fails the run is SKIPPED (paused): placing entries into a half-committed
+  // tree would make it worse. The tick is one attempt; the sweep is not called, so it cannot count a second one.
+  if (existsSync(rebuildJournalFile(roots))) {
+    try {
+      const failed = await withKbLock(roots, async () => tryRecoverAndRender(roots, opts.notify).failed);
+      // outcome "backoff" is used on purpose WITHOUT touching the backoff state (backoff.json): it is the existing "did no work, retry next
+      // run" outcome; setting real backoff state would delay the retry by minutes and raise outage alerts for a local file problem.
+      if (failed) return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: failed, journalBad: badJournalNote(roots) } };
+    } catch (err) {
+      if (!(err instanceof KbLockBusy)) throw err;
+    }
+  }
 
   const waitMs = backoffRemainingMs(roots);
   if (waitMs > 0) {
@@ -119,7 +150,7 @@ async function tick(opts: SweepTickOptions): Promise<SweepTickResult> {
   );
 
   let reorged: ReorgResult | undefined;
-  if (swept.created + swept.merged > 0) {
+  if (postSweepReorgEnabled(opts) && swept.created + swept.merged > 0) {
     try {
       notify?.("Running post-sweep reorg check...");
       reorged = await reorg({ engine, roots, embedder: getEmbedder(), domains: swept.touchedDomains, notify });

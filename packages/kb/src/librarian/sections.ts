@@ -77,6 +77,17 @@ export function foldSections(events: KbEvent[]): Section[] {
         }
         break;
       }
+      case "sections_replaced": {
+        // A rebuild replaced the domain's whole tree: older section events for
+        // the domain must not resurrect it.
+        for (const [id, sec] of sections) if (String(sec.domain) === e.domain) sections.delete(id);
+        for (const raw of e.sections) {
+          const sec = raw as unknown as Section;
+          // the snapshot carries no centroids; a bootstrap recomputes them (fillMissingCentroids)
+          sections.set(String(sec.id), { ...sec, centroid: sec.centroid ?? [] } as Section);
+        }
+        break;
+      }
       case "section_split": {
         const section = sections.get(e.sectionId);
         if (section) {

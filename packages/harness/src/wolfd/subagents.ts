@@ -295,7 +295,7 @@ export class SubagentManager {
   }
 
   /**
-   * A child is closed (read-only, archived) once its parent thread is closed AND it has settled. Derived, never stored:
+   * A child is closed (a display/archive flag only: sends are not refused) once its parent thread is closed AND it has settled. Derived, never stored:
    * a running child is left alone and closes when it settles; a restart or a graduation from before this rule closes
    * the children of an already closed parent with no migration. Nothing is deleted.
    */
@@ -306,14 +306,19 @@ export class SubagentManager {
   }
 
   /**
-   * The parent thread was closed: re-announce its children (nested ones after their parents) so settled ones show as
-   * closed. Returns the ids of the children now closed. Idempotent.
+   * The parent thread was closed: announce its children (nested ones after their parents) whose summary now shows
+   * closed; running ones are skipped and close when they settle. Returns the ids of the children now closed.
+   * Idempotent: an already closed child is not re-announced. `seen` guards against a parent cycle.
    */
-  closeChildrenOf(parentThreadId: string): string[] {
+  closeChildrenOf(parentThreadId: string, seen: Set<string> = new Set()): string[] {
+    if (seen.has(parentThreadId)) return [];
+    seen.add(parentThreadId);
     const out: string[] = [];
     for (const r of this.records.filter((o) => o.parentThreadId === parentThreadId)) {
-      this.announce(r);
-      if (this.port.thread(r.id)?.summary.closed) out.push(r.id, ...this.closeChildrenOf(r.id));
+      if (seen.has(r.id)) continue;
+      const thread = this.port.thread(r.id);
+      if (thread && !thread.summary.closed && this.closedOf(r).closed) this.announce(r);
+      if (this.port.thread(r.id)?.summary.closed) out.push(r.id, ...this.closeChildrenOf(r.id, seen));
     }
     return out;
   }

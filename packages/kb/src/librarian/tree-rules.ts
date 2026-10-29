@@ -335,7 +335,9 @@ export interface Misplaced { index: number; from: string; to: string; own: numbe
  */
 export function findMisplaced(
   items: Array<{ id: string; vec: Vec; section: string }>,
-  rules: TreeRules = DEFAULT_RULES
+  rules: TreeRules = DEFAULT_RULES,
+  /** Only sections for which this returns true may be a target (e.g. same top-level section). */
+  canMove: (from: string, to: string) => boolean = () => true
 ): Array<{ id: string; from: string; to: string; own: number; better: number }> {
   const bySec = new Map<string, Array<{ id: string; vec: Vec }>>();
   for (const it of items) {
@@ -352,7 +354,7 @@ export function findMisplaced(
     const own = cosine(unit(meanVec(rest)), it.vec);
     let to = "", better = -Infinity;
     for (const [s, c] of [...cents].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-      if (s === it.section) continue;
+      if (s === it.section || !canMove(it.section, s)) continue;
       const sc = cosine(c, it.vec);
       if (sc > better) { better = sc; to = s; }
     }

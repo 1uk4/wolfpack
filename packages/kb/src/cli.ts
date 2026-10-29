@@ -17,6 +17,8 @@
  *                     development baseline: rebuild one domain's section tree in memory. --dry-run
  *                     writes only kb-rebuild-proposal.md in the cwd. --from-current (default) keeps the
  *                     existing sections and judges only oversized ones; --from-scratch starts at one root.
+ *                     Refinement moves apply only inside one top-level section; moves into another are
+ *                     listed in the proposal and applied only with --apply-cross-moves.
  *                     --yes commits after saving timestamped backups in the den-local dir:
  *                     sections.json.pre-rebuild-<ts> and .rebuild-old-sections-<ts>.json.
  *                     RESTORE: `rebuild --restore <ts> --yes` puts the snapshot and every entry's old
@@ -448,7 +450,7 @@ async function cmdRebuild(): Promise<void> {
   }
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse] [--apply-cross-moves]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
     process.exit(1);
   }
 
@@ -476,6 +478,7 @@ async function cmdRebuild(): Promise<void> {
     rebuild: true,
     rebuildFrom,
     allowCollapse: argv.includes("--allow-collapse"),
+    applyCrossMoves: argv.includes("--apply-cross-moves"),
     dryRun,
     proposalPath: dryRun ? join(process.cwd(), "kb-rebuild-proposal.md") : undefined,
     notify: (msg) => console.log(`  ${msg}`),
@@ -572,7 +575,7 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] | rebuild --restore <ts> --yes\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] [--apply-cross-moves] | rebuild --restore <ts> --yes\n" +
   "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 

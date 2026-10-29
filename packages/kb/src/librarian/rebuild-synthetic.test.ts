@@ -149,4 +149,48 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
     const lab = (x: RebuildState) => { const m = new Map<string, number>(); return ids.map((i) => { const y = x.assignment.get(i)!; if (!m.has(y)) m.set(y, m.size); return m.get(y)!; }); };
     expect(ari(lab(reb.state), lab(st))).toBeGreaterThanOrEqual(0.7);
   }, 1_200_000);
+
+  describe("refinement stays inside one top-level section", () => {
+    // Two top-level sections: A holds clusters 0-3 (one leaf each), B holds clusters 4-7. Plant a cluster-1 entry in B's cluster-4 leaf
+    // (cross-section) and a cluster-0 entry in cluster 2's leaf (same section).
+    async function setup(applyCrossMoves: boolean) {
+      const es = clustersFixture();
+      const first = await planRebuild({ domain: "wp", entries: es, namer: unique, start: undefined });
+      const leafOf = (cl: number) => first.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id)!;
+      const topOf = (id: string) => { let s = first.state.sections.find((x) => String(x.id) === id)!; while (s.parent) s = first.state.sections.find((x) => x.id === s.parent)!; return String(s.id); };
+      // flatten into two roots: A = {0..3}, B = {4..7}
+      const sections = structuredClone(first.state.sections).filter((s) => !first.capWrappers.has(String(s.id)) && s.parent !== null || false);
+      const rootA = { ...structuredClone(first.state.sections.find((s) => s.parent === null)!), id: "sec-wp-rootAA", childIds: [] as any[], parent: null, title: "A" } as any;
+      const rootB = { ...structuredClone(rootA), id: "sec-wp-rootBB", title: "B" } as any;
+      const leaves = sections.filter((s) => !first.state.sections.some((c) => c.parent === s.id));
+      const cl = (leaf: any) => clusterOf([...first.state.assignment].find(([, v]) => v === String(leaf.id))![0]);
+      for (const l of leaves) { l.parent = cl(l) < 4 ? rootA.id : rootB.id; l.depth = 1; }
+      const all = [rootA, rootB, ...leaves];
+      const assignment = new Map(first.state.assignment);
+      const crossE = es.filter((e) => clusterOf(e.id) === 1)[0], sameE = es.filter((e) => clusterOf(e.id) === 0)[0];
+      assignment.set(crossE.id, leafOf(4)); assignment.set(sameE.id, leafOf(2));
+      void topOf;
+      const onDisk = es.map((e) => ({ ...e, section: assignment.get(e.id)! }));
+      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: all, assignment }, applyCrossMoves });
+      return { plan, leafOf, crossE, sameE, es };
+    }
+    it("a same-section misfiling is moved; a cross-section one is only proposed (with scores) and its entry stays put", async () => {
+      const { plan, leafOf, crossE, sameE } = await setup(false);
+      expect(plan.moves.map((m) => m.id)).toEqual([sameE.id]);
+      expect(plan.state.assignment.get(sameE.id)).toBe(leafOf(0));
+      expect(plan.crossMoves.map((m) => m.id)).toEqual([crossE.id]);
+      expect(plan.state.assignment.get(crossE.id)).toBe(leafOf(4));
+      expect(plan.crossMoves[0].better).toBeGreaterThan(plan.crossMoves[0].own);
+      const { renderProposal } = await import("./rebuild.js");
+      const md = renderProposal(plan);
+      expect(md).toContain("## Proposed cross-section moves (needs approval)");
+      expect(md).toMatch(/similarity to own section \d\.\d\d, to the target \d\.\d\d/);
+    }, 600_000);
+    it("--apply-cross-moves applies it", async () => {
+      const { plan, leafOf, crossE } = await setup(true);
+      expect(plan.state.assignment.get(crossE.id)).toBe(leafOf(1));
+      expect(plan.crossMoves).toEqual([]);
+      expect(plan.moves.map((m) => m.id)).toContain(crossE.id);
+    }, 600_000);
+  });
 });

@@ -59,6 +59,8 @@ export interface ReorgOptions {
   dryRun?: boolean;
   /** With rebuild: start from the current tree (default; only oversized sections are judged) or from one root. */
   rebuildFrom?: "current" | "scratch";
+  /** With rebuild: also apply refinement moves into another top-level section (default: only listed for approval). */
+  applyCrossMoves?: boolean;
   /** With rebuild: commit even if the new tree has fewer than half the current sections. */
   allowCollapse?: boolean;
   /** With rebuild + dryRun: where to write the proposal markdown (the only file a dry-run rebuild writes). */
@@ -559,7 +561,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         const start = from === "current" ? currentTreeStart(oldSections, entries, domain) : undefined;
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
-          domain, entries, namer: engineNamer(engine), notify, start,
+          domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves,
           partitioner: enginePartitioner(engine), splitCache: memorySplitCache(), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,

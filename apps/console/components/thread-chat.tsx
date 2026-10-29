@@ -25,7 +25,7 @@ import { useAllThinkingToggle } from "@/components/thinking-toggle";
 import { cardAnswerUrl, cardSkipUrl, threadTransport, type ThreadCardEvent } from "@/components/thread-transport";
 import { useOptionalServerEvent } from "@/components/server-events";
 import { TopBar } from "@/components/top-bar";
-import { ThreadGitTree } from "@/components/thread-git-tree";
+import { ThreadGitRow } from "@/components/thread-git-tree";
 import type { ThreadWorkspace } from "@wolfpack/client";
 import {
 	ASSISTANT_CONTENT_CLASS,
@@ -424,9 +424,9 @@ function ThreadChatInner({
 				<TopBar>
 					<span className="min-w-4 shrink truncate font-title text-3xl tracking-tight">{title}</span>
 					<span className="text-xs uppercase tracking-wide text-muted-foreground">{wolf}</span>
-					{/* header git tree: refreshed when a turn ends */}
-					<ThreadGitTree wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} />
 				</TopBar>
+				{/* header row 2: the git tree, refreshed when a turn ends; absent for a non-git thread */}
+				<ThreadGitRow wolf={wolf} slug={slug} threadId={threadId} workspace={workspace} refreshKey={busy} />
 				<div className="relative flex min-h-0 flex-1">
 					<Conversation className="h-full min-w-0 flex-1" initial="instant">
 						<ConversationContent className="min-h-full gap-0 p-0">

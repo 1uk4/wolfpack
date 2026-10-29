@@ -12,6 +12,17 @@ export function gitTreeLabel(ws: Pick<ThreadWorkspace, "repo" | "base" | "branch
 	return `${ws.repo} · ${ws.base ? `${ws.base} → ` : ""}${ws.branch}`;
 }
 
+/** Branch names longer than this get their middle elided (the full name stays in the title). */
+export const BRANCH_MAX_CHARS = 56;
+
+/** Elide the middle of a long name: `feat/abc…ents-x`. Short names pass through. */
+export function middleTruncate(name: string, max = BRANCH_MAX_CHARS): string {
+	if (name.length <= max) return name;
+	const keep = max - 1;
+	const head = Math.ceil(keep / 2);
+	return `${name.slice(0, head)}…${name.slice(name.length - (keep - head))}`;
+}
+
 /** Refresh at most once per this many ms while events keep coming (a trailing call always lands). */
 const REFRESH_GAP_MS = 1000;
 
@@ -87,7 +98,7 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 	if (!workspace) return null;
 	const branch = status?.branch ?? workspace.branch;
 	return (
-		<div ref={rootRef} className="relative min-w-0 shrink" data-testid="git-tree">
+		<div ref={rootRef} className="relative min-w-0 max-w-full shrink" data-testid="git-tree">
 			<button
 				type="button"
 				data-testid="git-tree-button"
@@ -97,8 +108,16 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 				className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent"
 			>
 				<GitBranchIcon className="size-3 shrink-0" />
-				<span data-testid="git-tree-label" className="min-w-0 truncate font-mono">
-					{gitTreeLabel({ ...workspace, branch })}
+				<span data-testid="git-tree-label" className="flex min-w-0 items-center whitespace-pre font-mono">
+					<span title={workspace.repo} className="shrink-0 text-foreground/80">{workspace.repo}</span>
+					<span className="shrink-0 text-muted-foreground/60">{" · "}</span>
+					{workspace.base && (
+						<>
+							<span data-testid="git-tree-base" title={workspace.base} className="shrink-0 rounded border border-border px-1">{middleTruncate(workspace.base)}</span>
+							<span data-testid="git-tree-arrow" aria-hidden className="shrink-0 text-foreground/70">{" → "}</span>
+						</>
+					)}
+					<span data-testid="git-tree-current" title={branch} className="min-w-0 truncate rounded border border-border bg-accent/40 px-1 text-foreground">{middleTruncate(branch)}</span>
 				</span>
 				{workspace.isWorktree && (
 					<span data-testid="git-tree-worktree" className="shrink-0 rounded border border-border px-1 text-[10px] uppercase tracking-wide">
@@ -187,6 +206,16 @@ export function ThreadGitTree({ wolf, slug, threadId, workspace, refreshKey }: {
 					)}
 				</div>
 			)}
+		</div>
+	);
+}
+
+/** The header's second row: the git tree on its own full-width line; renders nothing (no gap) for a non-git thread. */
+export function ThreadGitRow(props: { wolf: string; slug: string; threadId: string; workspace?: ThreadWorkspace; refreshKey?: unknown }) {
+	if (!props.workspace) return null;
+	return (
+		<div data-testid="thread-header-row2" className="flex h-7 shrink-0 items-center border-b border-border/60 px-3">
+			<ThreadGitTree {...props} />
 		</div>
 	);
 }

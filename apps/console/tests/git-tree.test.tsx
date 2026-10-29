@@ -23,7 +23,7 @@ Object.assign(globalThis, {
 const { MockConsoleClient, FIXTURE_THREAD } = await import("@wolfpack/client");
 type WorkspaceStatus = import("@wolfpack/client").WorkspaceStatus;
 type ThreadWorkspace = import("@wolfpack/client").ThreadWorkspace;
-const { ThreadGitTree, gitTreeLabel } = await import("../components/thread-git-tree.tsx");
+const { ThreadGitTree, ThreadGitRow, gitTreeLabel, middleTruncate } = await import("../components/thread-git-tree.tsx");
 const { threadFetch } = await import("./helpers/thread-fetch.ts");
 
 const STATUS: WorkspaceStatus = {
@@ -80,6 +80,43 @@ describe("gitTreeLabel", () => {
 	it("repo · base → branch; home has no base", () => {
 		assert.equal(gitTreeLabel({ repo: "wolfpack", branch: "console" }), "wolfpack · console");
 		assert.equal(gitTreeLabel(WS), "wolfpack · console → feat/abc1234-console");
+	});
+});
+
+describe("middleTruncate", () => {
+	it("keeps short names and elides the middle of long ones", () => {
+		assert.equal(middleTruncate("feat/abc"), "feat/abc");
+		const long = "feat/ASNQgEf-console-ui-refinements--header-two-rows-e96f8b50-extra-long-tail";
+		const out = middleTruncate(long, 20);
+		assert.equal(out.length, 20);
+		assert.ok(out.includes("…"));
+		assert.ok(out.startsWith("feat/ASNQg") && out.endsWith("tail"));
+	});
+});
+
+describe("ThreadGitRow", () => {
+	async function mountRow(workspace: ThreadWorkspace | undefined) {
+		globalThis.fetch = threadFetch(new GitClient(STATUS));
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<ThreadGitRow wolf={FIXTURE_THREAD.wolf} slug={FIXTURE_THREAD.id.slice(FIXTURE_THREAD.wolf.length + 1)} threadId={FIXTURE_THREAD.id} workspace={workspace} />));
+		await settle();
+	}
+	it("puts the tree in its own second-row element", async () => {
+		await mountRow(WS);
+		const row = q('[data-testid="thread-header-row2"]');
+		assert.equal(row !== null, true);
+		assert.equal(row!.querySelector('[data-testid="git-tree"]') !== null, true);
+		assert.equal(q('[data-testid="git-tree-arrow"]')!.textContent!.trim(), "→");
+		assert.equal(q('[data-testid="git-tree-current"]')!.textContent, WS.branch);
+		await click(q('[data-testid="git-tree-button"]')!);
+		assert.equal(q('[data-testid="git-tree-popover"]') !== null, true);
+	});
+	it("a non-git thread has no second row", async () => {
+		await mountRow(undefined);
+		assert.equal(q('[data-testid="thread-header-row2"]') === null, true);
+		assert.equal(document.body.innerHTML, "<div></div>");
 	});
 });
 

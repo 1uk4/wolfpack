@@ -38,6 +38,7 @@ import {
   isOwnerOnlyOp,
   normalisePatch,
   parseWolfId,
+  sweepStageDirs,
   type WorkAppendedListener,
 } from "./work-writes.js";
 import { createEventBus } from "./events.js";
@@ -190,6 +191,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
+  sweepStageDirs(); // scratch dirs orphaned by a crashed hubd (own prefix + dead pid only)
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
   const domainCache = new Map<string, string>(); // work item id -> domain
   const bus = createEventBus({

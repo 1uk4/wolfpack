@@ -333,6 +333,9 @@ export const ROUTES = {
    * text}; the generated Record/Log is rejected, as is text holding an H1/H2 outside a code fence or an unclosed fence, and a
    * body with two of the same heading); operator-only: body, assignee. Empty stage/note/title/assignee and `moveTo: ""` are
    * rejected; `moveTo: null` un-parents (hierarchy rules still apply); `successCriteria: ""` clears it.
+   * A batch must be ALL ledger ops or ALL `body`/`section` ops: a mix is `invalid_request` ("section/body ops can't be combined
+   * with ledger ops in one batch; send them separately"). A ledger batch copies the ledger and the domain's work/ dir under the
+   * write queue; a content-only batch is one atomic .md write.
    * KNOWN GAP: `body` and `section` ops rewrite the .md only and append NO ledger event, so they do not bump `updated` and
    * emit no work.changed (follow-up; no new event type here).
    * `hubDeleteWork`: delete the item and its descendants; answers the deleted ids.

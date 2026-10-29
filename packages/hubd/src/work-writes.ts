@@ -9,7 +9,7 @@
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -70,6 +70,7 @@ export function isOwnerOnlyOp(op: WorkOp): boolean {
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const ATX_H12 = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+const ATX_ANY = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const CONTAINER_PREFIX = /^(?: {0,3}>[ \t]?| {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
 
 /** CRLF / lone CR -> LF. The body is stored and compared with LF only. */
@@ -112,7 +113,11 @@ function isHeading12(lines: string[], fenced: boolean[], i: number): boolean {
   }
   // Setext: an underline right below a non-blank, non-fenced line turns that line into a heading. (After a blank line `---` is
   // a thematic break and `===` plain text, both harmless.)
-  return i > 0 && !fenced[i - 1] && lines[i - 1].trim() !== "" && SETEXT_UNDERLINE.test(lines[i]);
+  if (i === 0 || fenced[i - 1] || !SETEXT_UNDERLINE.test(lines[i])) return false;
+  const prev = lines[i - 1];
+  // Only a plain paragraph line can be a setext heading's text: not blank, an ATX heading, a list item, a quote, a table row,
+  // or another underline / thematic break.
+  return prev.trim() !== "" && !ATX_ANY.test(prev) && !CONTAINER_PREFIX.test(prev) && !prev.includes("|") && !SETEXT_UNDERLINE.test(prev) && !/^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$/.test(prev);
 }
 
 /**
@@ -140,7 +145,11 @@ export function replaceSection(body: string, name: SectionName, text: string): s
   const heading = SECTION_HEADING[name];
   const lines = toLf(body).split("\n");
   const { fenced } = fenceMap(lines);
-  const at = (h: string) => lines.flatMap((l, i) => (!fenced[i] && new RegExp(`^ {0,3}${h}[ \\t]*$`).test(l) ? [i] : []));
+  // `## Plan`, also with a closing hash sequence (`## Plan ##`), outside code fences.
+  const at = (h: string) => {
+    const re = new RegExp(`^ {0,3}##[ \\t]+${h.slice(3)}(?:[ \\t]+#+)?[ \\t]*$`);
+    return lines.flatMap((l, i) => (!fenced[i] && re.test(l) ? [i] : []));
+  };
   const starts = at(heading);
   if (starts.length > 1) throw new HubError("invalid_request", `the body has more than one "${heading}" heading; fix it with a body replace`);
   const block = [heading, "", ...(text.trim() ? [toLf(text).trim(), ""] : [])];
@@ -166,7 +175,11 @@ export function replaceSection(body: string, name: SectionName, text: string): s
 
 /** PATCH body -> ops. A single-op body has exactly one field; a batch is `{ ops: [...] }`, each element a single-field op. */
 export function normalisePatch(b: PatchWorkRequest): WorkOp[] {
-  if ("ops" in b) return b.ops.flatMap(normaliseOne);
+  if ("ops" in b) {
+    const ops = b.ops.flatMap(normaliseOne);
+    assertNotMixed(ops);
+    return ops;
+  }
   return normaliseOne(b);
 }
 
@@ -209,6 +222,54 @@ function normaliseOne(b: PatchWorkOp): WorkOp[] {
   return ops;
 }
 
+/** `body` / `section` ops rewrite the .md only (no ledger event); every other op appends to the ledger. */
+export function isContentOp(op: WorkOp): boolean {
+  return op.op === "body" || op.op === "section";
+}
+
+/**
+ * A batch is either all ledger ops (staged, one ledger append) or all content ops (one atomic .md write). Mixing them could lose
+ * the content edit if the process died after the ledger append, so it is refused outright.
+ */
+function assertNotMixed(ops: WorkOp[]): void {
+  if (ops.length > 1 && ops.some(isContentOp) && ops.some((o) => !isContentOp(o))) {
+    throw new HubError("invalid_request", "section/body ops can't be combined with ledger ops in one batch; send them separately");
+  }
+}
+
+/** Dir-name prefix of staging scratch dirs: `hubd-stage-<pid>-<random>`. The pid lets a later hubd tell orphans from live ones. */
+const STAGE_PREFIX = "hubd-stage-";
+
+/** Remove scratch dirs left by a hubd that crashed mid-batch: only `hubd-stage-<pid>-*` under `tmpRoot` whose pid is not alive. */
+export function sweepStageDirs(tmpRoot: string = tmpdir()): number {
+  let n = 0;
+  let names: string[];
+  try {
+    names = readdirSync(tmpRoot);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    const m = /^hubd-stage-(\d+)-[A-Za-z0-9]+$/.exec(name);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch (e) {
+      alive = (e as NodeJS.ErrnoException).code === "EPERM";
+    }
+    if (alive && pid !== 0) continue;
+    try {
+      rmSync(join(tmpRoot, name), { recursive: true, force: true });
+      n++;
+    } catch {
+      /* best effort */
+    }
+  }
+  return n;
+}
+
 type Item = ReturnType<typeof createWork>["item"];
 
 /** TEST SEAM (failure injection): called inside a batch at the named stage; a throw simulates a crash/failure there. */
@@ -217,6 +278,8 @@ export interface ApplyHooks {
   afterStaged?: () => void;
   /** After the single real ledger append, before the .md files are rendered. */
   afterAppend?: () => void;
+  /** Where scratch dirs are made (default os.tmpdir()). */
+  tmpRoot?: string;
 }
 
 /**
@@ -228,14 +291,26 @@ export interface ApplyHooks {
  * folded state. A failing op just discards the scratch root: the real ledger and files were never touched, so nothing can be
  * left half-done, even by a crash (a crash before the append leaves nothing; after it, the ledger, the source of truth, holds
  * the whole batch and a stale .md is re-rendered by the next write to that item).
- * Failures after staging (append / render) are `engine_error`, never the op's 4xx.
+ * Once the append succeeded the batch IS committed: a render failure afterwards is logged and the call still succeeds (the .md
+ * is derived; the next write to that item repairs it). A failure of the append itself is `engine_error`, never the op's 4xx.
+ * A batch of only content ops (`body` / `section`) is one atomic .md write with no ledger involved; mixing is refused.
+ * Cost: a batch copies the ledger and the item's domain `work/` dir under the write queue.
+ * NOTE: `body` / `section` append no ledger event, so they bump no `updated` and fire no work.changed (known gap, follow-up).
  */
 export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: ApplyHooks = {}): Item {
+  assertNotMixed(ops);
   if (ops.length <= 1) return applyOpsUnchecked(roots, id, ops);
   const cur0 = loadWorkState(roots).get(id as never);
   if (!cur0) throw new Error(`work item ${id} not found`);
   const domain = cur0.domain as string;
-  const scratchDir = mkdtempSync(join(tmpdir(), "hubd-stage-"));
+  if (ops.every(isContentOp)) {
+    // Fold every edit over the body first (any failure throws before a write), then ONE atomic .md write.
+    let body = resolveWorkItem(roots, domain, id)?.body ?? "";
+    for (const o of ops) body = o.op === "body" ? o.text : o.op === "section" ? replaceSection(body, o.name, o.text) : body;
+    commitWorkItem(roots, cur0, body);
+    return cur0;
+  }
+  const scratchDir = mkdtempSync(join(hooks.tmpRoot ?? tmpdir(), `${STAGE_PREFIX}${process.pid}-`));
   try {
     const scratch: KbRoots = { kbBase: join(scratchDir, "kb", "base"), opsRoot: join(scratchDir, "kb", "ops"), denLocal: scratchDir };
     const realLedger = workLedgerFile(roots);
@@ -245,6 +320,8 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
       cpSync(realLedger, workLedgerFile(scratch));
     }
     if (existsSync(workDir(roots, domain))) cpSync(workDir(roots, domain), workDir(scratch, domain), { recursive: true });
+    // Placement forbids a parent in another domain (placementError in kb schema/work.ts: `parent.domain !== child.domain`), so
+    // every item a batch can touch, an auto-shipped parent feature included, lives in this one domain's work/ dir.
     // The kb ops read only the ledger and the item .md files, and write only those (see report): scratch is a faithful sandbox.
     const item = applyOpsUnchecked(scratch, id, ops);
     hooks.afterStaged?.();
@@ -258,6 +335,12 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
         mkdirSync(dirname(realLedger), { recursive: true });
         appendFileSync(realLedger, bytes);
       }
+    } catch (e) {
+      console.error("hubd: batch ledger append failed:", e);
+      throw new HubError("engine_error", "internal hub error");
+    }
+    // COMMITTED from here on: the ledger holds the whole batch. Rendering is best effort.
+    try {
       hooks.afterAppend?.();
       const state = loadWorkState(roots);
       for (const t of touched) {
@@ -271,10 +354,9 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
         commitWorkItem(roots, real, fresh?.body ?? "");
       }
     } catch (e) {
-      console.error("hubd: batch commit failed after staging:", e);
-      throw new HubError("engine_error", "internal hub error");
+      console.error("hubd: batch committed to the ledger but rendering the .md failed (next write repairs it):", e);
     }
-    return item;
+    return loadWorkState(roots).get(id as never) ?? item;
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
   }

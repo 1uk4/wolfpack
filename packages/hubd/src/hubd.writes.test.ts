@@ -1,12 +1,12 @@
 /** Seam 2: ledger-level tests for hubd work writes: byte compatibility with direct work-ops, concurrency, the writer lock. */
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { createWork, loadWorkState, moveWork, noteWork, stageWork, graduateWork, deleteWork, setCriteria } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "./server.js";
-import { applyOps, assertSectionText, replaceSection } from "./work-writes.js";
+import { applyOps, assertSectionText, replaceSection, sweepStageDirs } from "./work-writes.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
@@ -203,27 +203,52 @@ describe("batch atomicity and sections (staged)", () => {
     return Object.fromEntries(readdirSync(root).filter((f) => f.endsWith(".md")).map((f) => [f, readFileSync(join(root, f), "utf8")]));
   };
 
-  it("a failed batch leaves the ledger AND the .md files byte-identical, including an auto-shipped parent", async () => {
+  it("a failed batch that WOULD auto-ship the parent leaves the ledger and every .md (feature included) byte-identical", async () => {
     const dir = mk();
     const seeded = seedFixture(dir);
+    const [t1, t2] = seeded.tasks;
     const hub = await start(dir);
+    // isComplete looks at the stage only (the graduated t3 is still at plan), so ship t2 and t3; only t1 stays open.
+    expect((await patch(hub, t2, { stage: "shipped" })).status).toBe(200);
+    expect((await patch(hub, seeded.graduated, { stage: "shipped" })).status).toBe(200);
+    expect(mdFiles(dir)[`${seeded.feature.id}.md`]).not.toMatch(/^stage: shipped$/m); // t3 is graduated; only t1 stays open
     const ledgerBefore = ledger(dir);
     const mdBefore = mdFiles(dir);
-    // Complete every child of the feature in one batch (would auto-ship the parent), then fail on the last op.
-    const kids = [...loadWorkState(hubRoots(dir)).values()].filter((w) => w.partOf === seeded.feature.id);
-    expect(kids.length).toBeGreaterThan(0);
-    const r = await patch(hub, kids[0].id as string, { ops: [{ stage: "shipped" }, { note: "x" }, { link: { rel: "bogus", target: "nope" } }] });
+    const r = await patch(hub, t1, { ops: [{ stage: "shipped" }, { note: "x" }, { link: { rel: "bogus", target: "nope" } }] });
     expect(r.status).toBe(400);
     expect(ledger(dir)).toBe(ledgerBefore);
     expect(mdFiles(dir)).toEqual(mdBefore);
+    expect(mdBefore[`${seeded.feature.id}.md`]).not.toMatch(/^stage: shipped$/m);
+  });
+
+  it("the same batch without the failing op auto-ships the parent: ledger gets the feature's events, feature .md is re-rendered", async () => {
+    const dir = mk();
+    const seeded = seedFixture(dir);
+    const [t1, t2] = seeded.tasks;
+    const hub = await start(dir);
+    // isComplete looks at the stage only (the graduated t3 is still at plan), so ship t2 and t3; only t1 stays open.
+    expect((await patch(hub, t2, { stage: "shipped" })).status).toBe(200);
+    expect((await patch(hub, seeded.graduated, { stage: "shipped" })).status).toBe(200);
+    expect(mdFiles(dir)[`${seeded.feature.id}.md`]).not.toMatch(/^stage: shipped$/m);
+    const before = ledger(dir);
+    const featBefore = mdFiles(dir)[`${seeded.feature.id}.md`];
+    expect(featBefore).not.toMatch(/^stage: shipped$/m);
+    expect((await patch(hub, t1, { ops: [{ stage: "shipped" }, { note: "x" }] })).status).toBe(200);
+    const added = ledger(dir).slice(before.length).split("\n").filter(Boolean).map((l) => JSON.parse(l) as { type: string; id: string; to?: string });
+    expect(added.some((e) => e.type === "work.staged" && e.id === seeded.feature.id && e.to === "shipped")).toBe(true);
+    expect(added.some((e) => e.type === "work.noted" && e.id === seeded.feature.id)).toBe(true);
+    const featAfter = mdFiles(dir)[`${seeded.feature.id}.md`];
+    expect(featAfter).toMatch(/^stage: shipped$/m);
+    expect(featAfter).toContain("Decided things."); // body preserved
   });
 
   it("a successful batch appends once and renders touched .md files; the scratch dir is gone", async () => {
     const dir = mk();
     const t = seedFixture(dir).tasks[0];
     const hub = await start(dir);
-    const r = await patch(hub, t, { ops: [{ note: "n1" }, { section: { name: "plan", text: "P" } }, { note: "n2" }] });
+    const r = await patch(hub, t, { ops: [{ note: "n1" }, { note: "n2" }] });
     expect(r.status).toBe(200);
+    expect((await patch(hub, t, { section: { name: "plan", text: "P" } })).status).toBe(200);
     expect(ledger(dir).split("\n").filter((l) => l.includes('"n1"') || l.includes('"n2"')).length).toBe(2);
     expect(mdFiles(dir)[`${t}.md`]).toContain("## Plan\n\nP");
   });
@@ -240,23 +265,28 @@ describe("batch atomicity and sections (staged)", () => {
     expect(many.status).toBe(400);
   });
 
-  it("failure injection: a crash after staging leaves nothing; after the append the ledger holds the whole batch", () => {
+  it("failure injection: a failure after staging leaves nothing; a render failure after the append still succeeds (committed)", () => {
     const dir = mk();
     const t = seedFixture(dir).tasks[0];
     const roots = hubRoots(dir);
     const ops = [{ op: "note", text: "a" }, { op: "note", text: "b" }] as const;
     const before = ledger(dir);
     const mdBefore = mdFiles(dir);
-    expect(() => applyOps(roots, t, [...ops], { afterStaged: () => { throw new Error("boom"); } })).toThrow("boom");
+    const scratchRoot = mk();
+    expect(() => applyOps(roots, t, [...ops], { afterStaged: () => { throw new Error("boom"); }, tmpRoot: scratchRoot })).toThrow("boom");
+    expect(readdirSync(scratchRoot)).toEqual([]);
     expect(ledger(dir)).toBe(before);
     expect(mdFiles(dir)).toEqual(mdBefore);
-    // Crash (or render failure) after the single append: complete batch in the ledger, reported as engine_error, no partial state.
-    let err: unknown;
-    try { applyOps(roots, t, [...ops], { afterAppend: () => { throw new Error("disk"); } }); } catch (e) { err = e; }
-    expect((err as { code?: string }).code).toBe("engine_error");
+    // A render failure AFTER the single append: the batch is committed, the call succeeds, the .md is merely stale.
+    const item = applyOps(roots, t, [...ops], { afterAppend: () => { throw new Error("disk"); }, tmpRoot: scratchRoot });
+    expect(item.id).toBe(t);
     const added = ledger(dir).slice(before.length).split("\n").filter(Boolean);
     expect(added.length).toBe(2);
-    expect(readdirSync(tmpdir()).filter((f) => f.startsWith("hubd-stage-")).length).toBe(0);
+    expect(mdFiles(dir)).toEqual(mdBefore); // stale, not partial
+    expect(readdirSync(scratchRoot)).toEqual([]);
+    // the next write to the item repairs the .md
+    applyOps(roots, t, [{ op: "note", text: "c" }]);
+    expect(mdFiles(dir)[`${t}.md`]).toContain("— b");
   });
 
   it("a malformed single-op body is invalid_request with a real message (not a bare invalid_union)", async () => {
@@ -307,5 +337,66 @@ describe("section text and replaceSection", () => {
   });
   it("duplicate headings are rejected", () => {
     expect(() => replaceSection("## Plan\n\na\n\n## Plan\n\nb\n", "plan", "x")).toThrow(/more than one/);
+  });
+});
+
+describe("mixed batches, orphan sweep, setext and fences", () => {
+  const patch = (h: HubServer, id: string, body: unknown) =>
+    fetch(h.url + `/v1/work/${id}`, { method: "PATCH", headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...OP }, body: JSON.stringify(body) });
+
+  it("section/body ops can't be mixed with ledger ops; a content-only batch is one .md write with no ledger change", async () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const hub = await start(dir);
+    const before = ledger(dir);
+    for (const ops of [[{ note: "n" }, { section: { name: "plan", text: "p" } }], [{ body: "## Plan\n\nx" }, { note: "n" }]]) {
+      const r = await patch(hub, t, { ops });
+      expect(r.status).toBe(400);
+      const e = (await r.json()) as { code: string; message: string };
+      expect(e.code).toBe("invalid_request");
+      expect(e.message).toMatch(/send them separately/);
+    }
+    expect(ledger(dir)).toBe(before);
+    const ok = await patch(hub, t, { ops: [{ section: { name: "plan", text: "P" } }, { section: { name: "notes", text: "N" } }] });
+    expect(ok.status).toBe(200);
+    expect(ledger(dir)).toBe(before);
+    const md = readFileSync(join(dir, "kb", "base", "domains", FIXTURE_DOMAIN, "work", `${t}.md`), "utf8");
+    expect(md).toContain("## Plan\n\nP");
+    expect(md).toContain("## Notes\n\nN");
+    // a failing section in a content batch writes nothing
+    const md0 = md;
+    const bad = await patch(hub, t, { ops: [{ section: { name: "plan", text: "Z" } }, { section: { name: "log", text: "x" } }] });
+    expect(bad.status).toBe(400);
+    expect(readFileSync(join(dir, "kb", "base", "domains", FIXTURE_DOMAIN, "work", `${t}.md`), "utf8")).toBe(md0);
+  });
+
+  it("sweepStageDirs removes only hubd-stage-<deadpid>-* dirs in the given root", () => {
+    const root = mk();
+    const dead = join(root, "hubd-stage-2147483646-abc123");
+    const live = join(root, `hubd-stage-${process.pid}-abc123`);
+    const other = join(root, "something-else");
+    const similar = join(root, "hubd-stage-notapid");
+    for (const d of [dead, live, other, similar]) mkdirSync(d);
+    expect(sweepStageDirs(root)).toBe(1);
+    expect(readdirSync(root).sort()).toEqual([`hubd-stage-${process.pid}-abc123`, "hubd-stage-notapid", "something-else"].sort());
+  });
+
+  it("setext underline only counts under a plain paragraph line; closing-hash ATX is the heading", () => {
+    // `## Plan\n---` : the --- is a thematic break (previous line is ATX), not a second heading
+    expect(replaceSection("## Plan\n---\nold\n\n## Notes\n\nn\n", "plan", "P")).toBe("## Plan\n\nP\n\n## Notes\n\nn\n");
+    expect(() => assertSectionText("## x\n---")).toThrow();
+    for (const t of ["- item\n---", "> quote\n---", "| a | b |\n---", "---\n---"]) expect(() => assertSectionText(t)).not.toThrow();
+    expect(() => assertSectionText("para\n---")).toThrow();
+    expect(replaceSection("## Plan ##\n\nold\n\n## Notes\n\nn\n", "plan", "P")).toBe("## Plan\n\nP\n\n## Notes\n\nn\n");
+    expect(() => replaceSection("## Plan\n\na\n\n## Plan ##\n\nb\n", "plan", "x")).toThrow(/more than one/);
+  });
+
+  it("fences: a longer closing fence closes, a shorter or other-char one does not, a backtick in a backtick info string is no fence", () => {
+    expect(() => assertSectionText("```\n## x\n`````")).not.toThrow(); // longer closer
+    expect(() => assertSectionText("````\n## x\n```")).toThrow(); // shorter closer: still open
+    expect(() => assertSectionText("```\n## x\n~~~")).toThrow(); // other char: still open
+    expect(() => assertSectionText("~~~\n## x\n~~~")).not.toThrow();
+    expect(() => assertSectionText("``` a`b\n## x")).toThrow(); // not a fence, so the ## is a heading
+    expect(() => assertSectionText("~~~ a`b\n## x\n~~~")).not.toThrow(); // backtick is fine in a ~~~ info string
   });
 });

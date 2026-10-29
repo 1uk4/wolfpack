@@ -20,6 +20,7 @@
 import { visibleFields, type ThreadMessage, type ThreadObject } from "@wolfpack/protocol";
 import { CARD_ANSWER_KIND, USER_ENTRY_KIND, cardOfToolMessage, objectFromCall, type CardAnswerData, type EngineEvent } from "../engine/index.js";
 import { answerValue } from "./cards.js";
+import { stripTaskNotice } from "./task-notice.js";
 import { stripSupersededNotes, type SupersededCard } from "../superseded-note.js";
 
 type Entry = Extract<EngineEvent, { type: "message_end" }>["entry"];
@@ -216,6 +217,7 @@ export function applyEntry(list: ThreadMessage[], entry: Entry, now: () => Date 
       }
       // wolfd put a note for exactly these cards at the head of the message (server.ts submit): the operator sees what they typed.
       if (replaced.length) m.text = stripSupersededNotes(m.text, replaced);
+      m.text = stripTaskNotice(m.text);
     }
     list.push(m);
   }

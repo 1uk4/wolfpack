@@ -296,7 +296,7 @@ describe("per-conversation binding", () => {
     // cache holds another conversation's item.
     const activeOf = async (cid: number) => {
       const t = await section(cid);
-      return t.match(/\[(work-[^\]]+)\][^\n]*← active/)?.[1] ?? t.match(/Bound to (\S+) \(loading/)?.[1] ?? (t.includes("No work item bound") ? "none" : t);
+      return t.match(/\*\*(?:Task|Feature):\*\* \[(work-[^\]]+)\]/)?.[1] ?? t.match(/Bound to (\S+) \(loading/)?.[1] ?? (t.includes("No work item bound") ? "none" : t);
     };
     expect(await activeOf(1)).toBe(s.taskA);
     expect(await activeOf(fork)).toBe(s.taskA); // fork: lineage binding

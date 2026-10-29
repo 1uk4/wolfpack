@@ -166,8 +166,10 @@ describe("durable task tools: finishing the last task stays bound until graduate
     expect(last.split("\n").at(-1)).toBe("Bound to F (all tasks done — ready to graduate)");
     expect(last).toContain("Tell the user");
     expect(await readBoundTask(den)).toEqual({ taskId: f.id, featureId: f.id });
-    expect(await sectionText("active_task")).toContain(readyLine);
+    // the section is a stable header; the ready label and stage live in task_current
     expect(await sectionText("active_task")).toContain("**Feature:** [");
+    expect(await sectionText("active_task")).not.toContain(readyLine);
+    expect(await run("task_current", {})).toContain(readyLine);
     // task_done does not ship the feature
     const again = await tool("task_done").execute({ confirm: false }, { cwd: den, wolfDen: den, wolfName: "1uk4", conversationId: 1 });
     expect(again.isError).toBe(true);
@@ -207,5 +209,53 @@ describe("durable task tools: binding defaults and rebinds", () => {
     expect(items.get(a.id)!.stage).toBe("plan");
     expect(r).not.toContain("Heads-up");
     expect(await run("task_note", { id: a.id, text: "x" })).toContain(`you're working on "First" (${a.id}) but the bound item is "Second" (${b.id})`);
+  });
+});
+
+describe("durable task tools: the Active Task section is a stable header", () => {
+  const settle = async (): Promise<string> => {
+    await sectionText("active_task"); // first render fills the cache behind the scenes
+    await new Promise((r) => setTimeout(r, 50));
+    return sectionText("active_task");
+  };
+
+  it("is byte-identical across task_note, task_stage and a Record update, and says to call task_current", async () => {
+    const f = add({ kind: "feature", title: "F", successCriteria: "it works", body: "# F\n\n## Plan\n\nx\n" });
+    const t1 = add({ kind: "task", title: "T1", partOf: f.id });
+    add({ kind: "task", title: "T2", partOf: f.id });
+    await run("task_bind", { id: t1.id });
+    const before = await settle();
+    expect(before).toContain(`**Task:** [${t1.id}] T1 (kind: task)`);
+    expect(before).toContain(`[${f.id}] F`);
+    expect(before).toContain("Call task_current for the plan, notes and current stage.");
+    expect(before).not.toContain("Stage:");
+    expect(before).not.toContain("Working Document");
+
+    await run("task_note", { text: "a note" });
+    await run("task_stage", { stage: "in_build" });
+    items.get(t1.id)!.body = "# T1\n\n## Record\n\nnew fact\n";
+    items.get(f.id)!.body = "# F\n\n## Record\n\nfeature fact\n";
+    await new Promise((r) => setTimeout(r, 20));
+    await sectionText("active_task"); // schedules a refresh
+    expect(await settle()).toBe(before);
+
+    // task_current has the volatile state in full
+    const current = await run("task_current", {});
+    expect(current).toContain("in_build");
+    expect(current).toContain("new fact");
+  });
+
+  it("changes on bind, unbind and rebind", async () => {
+    const f = add({ kind: "feature", title: "F" });
+    const t1 = add({ kind: "task", title: "T1", partOf: f.id });
+    const t2 = add({ kind: "task", title: "T2", partOf: f.id });
+    await run("task_bind", { id: t1.id });
+    const a = await settle();
+    await run("task_bind", { id: t2.id });
+    const b = await settle();
+    expect(b).not.toBe(a);
+    expect(b).toContain(`[${t2.id}] T2`);
+    await run("task_unbind", {});
+    expect(await sectionText("active_task")).not.toContain("T2");
   });
 });

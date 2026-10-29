@@ -54,6 +54,7 @@ import { fetchWorkItem, fetchWorkSources, isTopicId, isWorkId, memoryState, read
 import { bindConversation } from "./bind.js";
 import { prepareSocketPath } from "./socket.js";
 import { AttachmentError, loadAttachment, storeAttachment } from "./attachments.js";
+import { pendingTaskNotice, workApiReader } from "./task-notice.js";
 import { HttpError } from "./http-error.js";
 import { GraduationJobs } from "./graduation-jobs.js";
 import { GitInfo } from "./workspace-info.js";
@@ -294,6 +295,7 @@ export class WolfServer {
       emitWolf: (d) => this.emitWolf(d),
       onError: (e) => this.opts.onError?.(e),
       applyTier: (c, tier) => (this.opts.conversations?.setTier ? this.opts.conversations.setTier(c, tier) : Promise.resolve()),
+      ...(this.opts.den && this.opts.work?.endpoint ? { taskNotice: (cid: string) => pendingTaskNotice(this.opts.den as string, cid, workApiReader(this.opts.work ?? {})) } : {}),
     });
     this.threads.set(summary.id, t);
     this.subagents?.watchShips(t);

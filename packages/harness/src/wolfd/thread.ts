@@ -41,6 +41,8 @@ import {
 } from "../engine/index.js";
 import { applyEntry, messagesFromEntries } from "./messages.js";
 import { AttachmentError, attachmentsInText, inlineAttachments, recordSubmission } from "./attachments.js";
+import type { PendingNotice } from "./task-notice.js";
+import { withTaskNotice } from "./task-notice.js";
 import { CardTracker, answerText, dropHiddenAnswers, supersededNotes, validateAnswers } from "./cards.js";
 import { HttpError } from "./http-error.js";
 import { readBindingFile } from "@wolfpack/memory";
@@ -57,6 +59,8 @@ export interface ThreadHost {
   onError(error: unknown): void;
   /** Switch a conversation to a model tier (engine configure). Unset: tiers are not switchable on this wolf. */
   applyTier?(conv: EngineConversation, tier: ThreadTier): Promise<void>;
+  /** The task-update notice due for a conversation (bound item changed since the last one). Unset: no notices. */
+  taskNotice?(conversationId: string): Promise<PendingNotice>;
 }
 
 const OPERATOR: Actor = { id: "operator", kind: "operator" };
@@ -428,6 +432,16 @@ export class ThreadRuntime {
     // The model is told which pending cards this message replaces (the history strips the note again).
     // (Only when idle: a steer/followUp during a run finds nothing pending, the run's first message superseded them.)
     if (!this.running) text = supersededNotes(this.cards.pending().map((p) => ({ tool: p.card.tool, callId: p.callId }))) + text;
+    // At a turn boundary (nothing running) the message carries one coalesced notice of what changed on the bound item.
+    let notice: PendingNotice | undefined;
+    if (!this.running && !this.isChild && this.host.taskNotice) {
+      try {
+        notice = await this.host.taskNotice(String(this.conv.id));
+        text = withTaskNotice(notice.text, text);
+      } catch {
+        notice = undefined;
+      }
+    }
     let input: SubmitOptions["input"] = text;
     if (refs.length > 0) {
       if (!this.host.den) throw new HttpError("invalid_request", "this wolf has no den to read attachments from");
@@ -445,6 +459,7 @@ export class ThreadRuntime {
       if (e instanceof EngineBusyError) throw new HttpError("busy", `thread ${this.summary.id} is busy`);
       throw new HttpError("engine_error", e instanceof Error ? e.message : "submit failed");
     }
+    notice?.commit();
     if (refs.length > 0 && this.host.den) {
       try {
         recordSubmission(this.host.den, this.summary.id, r.messageId, refs);

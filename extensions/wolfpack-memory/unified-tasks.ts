@@ -717,6 +717,42 @@ export default function createTasksExtension(
           }
   }
 
+
+  /** The system-prompt section of a bound item: identical for as long as the binding is, whatever happens to the item. */
+  function renderStableHeader(task: WorkItem, parent?: WorkItem): string {
+    const lines: string[] = ["## Active Task", ""];
+    lines.push(`**${task.kind === "feature" ? "Feature" : "Task"}:** [${task.id}] ${task.title} (kind: ${task.kind})`);
+    if (task.kind !== "feature" && parent && (parent.kind === "feature" || parent.kind === "initiative")) lines.push(`**Part of ${parent.kind}:** [${parent.id}] ${parent.title}`);
+    if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
+    lines.push("", "Call task_current for the plan, notes and current stage.");
+    return lines.join("\n");
+  }
+
+  /** The full view task_current returns: stage, hierarchy with counts, criteria, the whole working document and the feature Record. */
+  function renderFullTask(cached: TaskCache): string {
+    const { task, parent, siblings } = cached;
+    const lines: string[] = [];
+    if (cached.ready) lines.push(readyBoundContext(task), "");
+    if (task.kind === "feature") {
+      lines.push(`**Feature:** [${task.id}] ${task.title}`);
+      lines.push(`  Stage: ${task.stage}`);
+    } else if (parent && (parent.kind === "feature" || parent.kind === "initiative") && siblings) {
+      lines.push(formatHierarchy(parent, siblings, task.id));
+    } else {
+      lines.push(`**Task:** [${task.id}] ${task.title}`);
+      lines.push(`  Stage: ${task.stage}`);
+    }
+    lines.push(`Kind: ${task.kind}`, `Domain: ${task.domain}`);
+    if (task.successCriteria) lines.push("", `**Success Criteria:** ${task.successCriteria}`);
+    const doc = cached.body ? renderWorkingDocument(cached.body) : "";
+    if (doc) {
+      lines.push("", "## Working Document (plan + Record)", doc);
+      lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
+    }
+    if (cached.featureRecord && task.kind !== "feature") lines.push("", cached.featureRecord);
+    return lines.join("\n");
+  }
+
   return defineExtension({
     name: "wolfpack-tasks",
     runtimes: ["pi-durable"],
@@ -758,39 +794,10 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             return `## Active Task\n\nBound to ${binding.taskId} (loading...). Use \`task_query\` to refresh.`;
           }
 
-          const { task, parent, siblings } = cached;
-          const lines: string[] = ["## Active Task", ""];
-          if (cached.ready) lines.push(readyBoundContext(task), "");
-
-          if (task.kind === "feature") {
-            lines.push(`**Feature:** [${task.id}] ${task.title}`);
-            lines.push(`  Stage: ${task.stage}`);
-          } else if (parent && (parent.kind === "feature" || parent.kind === "initiative") && siblings) {
-            lines.push(formatHierarchy(parent, siblings, task.id));
-          } else {
-            lines.push(`**Task:** [${task.id}] ${task.title}`);
-            lines.push(`  Stage: ${task.stage}`);
-          }
-
-          if (task.successCriteria) {
-            lines.push("");
-            lines.push(`**Success Criteria:** ${task.successCriteria}`);
-          }
-
-          const doc = cached.body ? renderWorkingDocument(cached.body) : "";
-          if (doc) {
-            lines.push("");
-            lines.push("## Working Document (plan + Record)");
-            lines.push(doc);
-            lines.push("The Record is kept up to date by memory from this session's observations; task_update never replaces it. If the document above ends in […] it is clipped: do not write it back with task_update.");
-          }
-          if (cached.featureRecord && task.kind !== "feature") {
-            lines.push("");
-            lines.push(cached.featureRecord);
-          }
+          // Only what is fixed while bound: stage, counts and the Record change under us and would break prompt caching,
+          // so wolfd announces them as a short user-turn notice and task_current returns them in full.
           refreshCacheSoon(cached);
-
-          return lines.join("\n");
+          return renderStableHeader(cached.task, cached.parent);
         } catch (err) {
           return `## Active Task\n\nError: ${err instanceof Error ? err.message : err}`;
         }
@@ -869,7 +876,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
       // ─── task_current ────────────────────────────────────────────────────
       defineTool({
         name: "task_current",
-        description: "Get details about the currently bound task.",
+        description: "Get the currently bound task in full: its current stage, its feature's tasks and progress, success criteria, the whole working document (plan + Record) and the feature Record. The system prompt only names the task; changes to it arrive as short 'Task update' notices, so call this for the details.",
         parameters: Type.Object({}),
         async execute(_args: unknown, ctx: ToolContext): Promise<ToolResult> {
           const binding = await readBinding(ctx);
@@ -888,6 +895,12 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
           }
 
           const { item } = found;
+          // Fresh, not the section cache: this is the full current state.
+          try {
+            await writeCache(item);
+          } catch { /* fall through to whatever is cached */ }
+          const cached = readCache(item.id as string);
+          if (cached) return { content: [{ type: "text", text: `ID: ${item.id}\n${renderFullTask(cached)}` }] };
           return {
             content: [{
               type: "text",

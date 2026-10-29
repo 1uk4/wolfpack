@@ -54,7 +54,11 @@ export interface RebuildState {
   assignment: Map<string, string>;
 }
 
-export interface RebuildMove { id: string; title: string; from: string; to: string; own: number; better: number }
+export interface RebuildMove {
+  id: string; title: string; from: string; to: string; own: number; better: number;
+  /** The destination then judged the entry a leftover: it stays a direct entry of `to` (listed here, not under leftovers). */
+  staysInParent?: boolean;
+}
 /** A misplacement whose best target sits under a different top-level section: proposed, not applied (needs approval). */
 export type CrossMove = RebuildMove
 export interface RejectedSplit { sectionId: string; n: number; reason: string; detail?: Record<string, unknown> }
@@ -390,6 +394,21 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       notify?.(`split ${id} (${members.length}) into ${d.k} groups, ${left.length} leftover`);
     }
   }
+  // One line per moved entry (first section it left → section it ended in). Refinement runs BEFORE the split judgement, so a
+  // moved entry can then be judged a leftover of its new section: it is listed once, under moves (staysInParent), and is
+  // removed from that section's leftover list. An entry is never in both lists.
+  const firstFrom = new Map<string, RebuildMove>();
+  for (const m of plan.moves) { const f = firstFrom.get(m.id); if (!f) firstFrom.set(m.id, { ...m }); else { f.to = m.to; f.better = m.better; } }
+  plan.moves = [...firstFrom.values()].filter((m) => m.from !== m.to);
+  for (const m of plan.moves) {
+    const dest = state.assignment.get(m.id);
+    if (dest) m.to = dest;
+    if (dest && plan.leftovers.get(dest)?.includes(m.id)) m.staysInParent = true;
+  }
+  for (const [sid, ids] of [...plan.leftovers]) {
+    const rest = ids.filter((id) => !firstFrom.has(id));
+    if (rest.length) plan.leftovers.set(sid, rest); else plan.leftovers.delete(sid);
+  }
   plan.moves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   plan.crossMoves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
@@ -430,11 +449,13 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
   for (const e of entries) if (e.section) direct.set(e.section, [...(direct.get(e.section) ?? []), e.id]);
   const oldSub = (id: string): string[] => [...(direct.get(id) ?? []), ...old.filter((s) => String(s.parent) === id).flatMap((c) => oldSub(String(c.id)))];
   const oldSets = new Map(old.map((s) => [String(s.id), new Set(oldSub(String(s.id)))]));
+  const ownIds = new Set(plan.state.sections.map((s) => String(s.id)));
   const pairs: Array<{ j: number; n: string; o: string }> = [];
   for (const n of plan.state.sections) {
     const ns = new Set(t.subtree(String(n.id)));
     for (const [oid, os] of oldSets) {
       if (!os.size) continue;
+      if (oid !== String(n.id) && ownIds.has(oid)) continue; // a live section's id is never handed to another section
       let inter = 0;
       for (const e of ns) if (os.has(e)) inter++;
       const j = inter / (ns.size + os.size - inter);
@@ -625,6 +646,8 @@ export function renderProposal(plan: RebuildPlan): string {
     for (const k of t.kids(String(s.id))) walk(k, indent + "  ");
   };
   for (const r of plan.state.sections.filter((s) => s.parent === null)) walk(r, "");
+  const rootsTotal = plan.state.sections.filter((s) => s.parent === null).reduce((n, r) => n + t.subtree(String(r.id)).length, 0);
+  lines.push("", `Totals: the top-level sections hold ${rootsTotal} of ${plan.entries.length} entries${rootsTotal === plan.entries.length ? "" : " — MISMATCH, do not commit"}.`);
   lines.push("", "## Leftovers (fit no group, stay direct entries of the parent)", "");
   if (!plan.leftovers.size) lines.push("none");
   for (const [sid, es] of plan.leftovers) {
@@ -633,7 +656,7 @@ export function renderProposal(plan: RebuildPlan): string {
   }
   lines.push("", "## Moves (refinement)", "");
   if (!plan.moves.length) lines.push("none");
-  for (const m of plan.moves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (own ${m.own.toFixed(2)}, other ${m.better.toFixed(2)})`);
+  for (const m of plan.moves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (own ${m.own.toFixed(2)}, other ${m.better.toFixed(2)})${m.staysInParent ? " — then fits none of its children: stays a direct entry there" : ""}`);
   lines.push("", "## Proposed cross-section moves (needs approval)", "");
   if (!plan.crossMoves.length) lines.push("none");
   else lines.push("Not applied: the better target is under a different top-level section. Re-run with `--apply-cross-moves` to apply.", "");

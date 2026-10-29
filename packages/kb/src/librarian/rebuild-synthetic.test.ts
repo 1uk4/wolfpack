@@ -193,4 +193,65 @@ describe("synthetic 93-entry domain, 8 clusters", () => {
       expect(plan.moves.map((m) => m.id)).toContain(crossE.id);
     }, 600_000);
   });
+
+  describe("proposal consistency", () => {
+    const rootTotals = (md: string) => [...md.matchAll(/^- \*\*.*?— (\d+) entries/gm)].map((m) => Number(m[1]));
+    it("the top-level totals in the proposal sum to the entry count, and every line's direct + children = total", async () => {
+      const es = clustersFixture();
+      const grouped = new Map([[es[0].id, es[1].id]]); // one grouped entry follows its holder
+      const plan = await planRebuild({ domain: "wp", entries: es, namer: unique, grouped });
+      const { renderProposal } = await import("./rebuild.js");
+      const md = renderProposal(plan);
+      const topLevel = [...md.matchAll(/^- \*\*.*?— (\d+) entries/gm)].map((m) => Number(m[1]));
+      expect(topLevel.reduce((a, b) => a + b, 0)).toBe(plan.entries.length);
+      expect(md).toContain(`hold ${plan.entries.length} of ${plan.entries.length} entries.`);
+      expect([...md.matchAll(/^ *- \*\*.*?— \d+ entries/gm)].length).toBe(plan.state.sections.length);
+      const direct = [...plan.state.assignment].filter(([e]) => !plan.grouped.has(e)).length;
+      expect(direct).toBe(plan.entries.length);
+    }, 600_000);
+
+    it("moved entries are counted once, and an entry is never both a move and a leftover", async () => {
+      const es = clustersFixture();
+      const first = await planRebuild({ domain: "wp", entries: es, namer: unique });
+      const leafOf = (cl: number) => first.state.assignment.get(es.find((e) => clusterOf(e.id) === cl)!.id)!;
+      const wrong = new Map(first.state.assignment);
+      const planted = es.filter((e) => clusterOf(e.id) === 0).slice(0, 2);
+      for (const e of planted) wrong.set(e.id, leafOf(1));
+      const onDisk = es.map((e) => ({ ...e, section: wrong.get(e.id)! }));
+      const plan = await planRebuild({ domain: "wp", entries: onDisk, namer: unique, start: { sections: first.state.sections, assignment: wrong }, oldSections: first.state.sections });
+      expect(plan.moves.map((m) => m.id).sort()).toEqual(planted.map((e) => e.id).sort());
+      const left = new Set([...plan.leftovers.values()].flat());
+      for (const m of plan.moves) expect(left.has(m.id)).toBe(false);
+      const { renderProposal } = await import("./rebuild.js");
+      expect(rootTotals(renderProposal(plan)).reduce((a, b) => a + b, 0)).toBe(plan.entries.length);
+      expect(plan.state.sections.reduce((n, s) => n + s.memberCount, 0)).toBe(plan.entries.length);
+    }, 600_000);
+
+    it("a moved entry that its new section then judges a leftover is listed once, under moves (staysInParent), not under leftovers", async () => {
+      const es = clustersFixture();
+      // one section holding everything; an off-topic stray the LLM-less split will not group
+      const stray = { ...es[0], id: "c9-stray", title: "stray", vector: es[0].vector.map((x, i) => (i === 7 ? 0.9 : x * 0.1)) };
+      const all = [...es, stray];
+      const plan = await planRebuild({ domain: "wp", entries: all, namer: unique });
+      const left = new Set([...plan.leftovers.values()].flat());
+      for (const m of plan.moves) expect(left.has(m.id)).toBe(false);
+      const ids = plan.state.sections.map((s) => String(s.id));
+      expect(new Set(ids).size).toBe(ids.length);
+    }, 600_000);
+
+    it("id reuse never gives a live section's id to another section (no duplicate ids, totals intact)", async () => {
+      const es = clustersFixture();
+      const first = await planRebuild({ domain: "wp", entries: es, namer: unique });
+      // the old tree: a big section X holding clusters 0+1; its id is also what a child of the new tree overlaps >= .5 with
+      const x = { ...structuredClone(first.state.sections.find((s) => s.parent === null)!), id: "sec-wp-bigold", parent: null, childIds: [], depth: 0, title: "Big" } as any;
+      const assign = new Map(es.map((e) => [e.id, "sec-wp-bigold"] as [string, string]));
+      const plan = await planRebuild({ domain: "wp", entries: es.map((e) => ({ ...e, section: "sec-wp-bigold" })), namer: unique, start: { sections: [x], assignment: assign }, oldSections: [x] });
+      const ids = plan.state.sections.map((s) => String(s.id));
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(plan.state.sections.reduce((n, s) => n + s.memberCount, 0)).toBe(es.length);
+      const { renderProposal } = await import("./rebuild.js");
+      const md = renderProposal(plan);
+      expect(md).not.toContain("MISMATCH");
+    }, 600_000);
+  });
 });

@@ -45,6 +45,16 @@ export function fileSplitCache(path: string): SplitCache {
  */
 export const PROMPT_VERSION = "split-v1";
 
+/**
+ * A cache a non-dry run may read but NEVER write to disk: reads fall through to the base (the proposals a dry run saved and the
+ * owner reviewed); writes stay in an in-memory overlay so repeated member sets inside one plan are asked once. Only a dry run
+ * populates the file, so an aborted or repeated `--yes` can never leave an unreviewed proposal behind for the next one to commit.
+ */
+export function readOnlyOverlay(base: SplitCache): SplitCache {
+  const overlay = new Map<string, SplitProposal>();
+  return { get: (k) => overlay.get(k) ?? base.get(k), set: (k, v) => void overlay.set(k, v) };
+}
+
 /** `--fresh-split`: reads miss (so the LLM is asked again) but writes go through, overwriting the stored entries. */
 export function freshOrCached(cache: SplitCache, fresh: boolean): SplitCache {
   return fresh ? { get: () => undefined, set: (k, v) => cache.set(k, v) } : cache;

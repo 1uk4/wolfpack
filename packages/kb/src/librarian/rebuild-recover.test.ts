@@ -93,4 +93,26 @@ describe("tryRecoverAndRender quarantine", () => {
     expect(r.quarantined).toBe(true);
     expect(r.failed).toMatch(/unreadable/);
   });
+
+  it("a future mtime (clock skew, negative age) counts as old, so the quarantine still happens", () => {
+    failingJournal(-2 * 60 * 60_000); // two hours in the future
+    run(); run();
+    expect(run().r.quarantined).toBe(true);
+    expect(existsSync(journal())).toBe(false);
+  });
+
+  it("status shows PAUSED even when the failure counter could not be written (marker), and when nothing at all could be (stale journal)", () => {
+    failingJournal(1000);
+    const rename = () => { throw new Error("EPERM"); };
+    run({ writeCounter: () => { throw new Error("EROFS"); }, rename });
+    expect(existsSync(counter())).toBe(false);
+    expect(existsSync(journal())).toBe(true);
+    expect(recoveryPausedNote(roots)).toMatch(/PAUSED.*failure count unavailable/);
+    // no counter, no marker (both unwritable): an old journal that is still there is reported
+    rmSync(join(roots.denLocal, ".rebuild-recover-failed"), { force: true });
+    expect(recoveryPausedNote(roots)).toBeUndefined(); // young journal, no record: not (yet) paused
+    const t = new Date(Date.now() - 20 * 60_000);
+    utimesSync(journal(), t, t);
+    expect(recoveryPausedNote(roots)).toMatch(/PAUSED/);
+  });
 });

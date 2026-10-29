@@ -28,7 +28,7 @@ import { withKbLock } from "./lock.js";
 import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, listEntryIds, currentTreeStart, fillMissingCentroids, engineNamer, type RebuildPlan } from "./rebuild.js";
 import { commitRebuild } from "./rebuild-commit.js";
 import { recoverAndRender } from "./rebuild-recover.js";
-import { enginePartitioner, fileSplitCache, freshOrCached, type SplitCache } from "./llm-split.js";
+import { enginePartitioner, fileSplitCache, freshOrCached, readOnlyOverlay, type SplitCache } from "./llm-split.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -481,6 +481,18 @@ export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   }, lockOpts);
 }
 
+/**
+ * The split cache for a rebuild. A dry run reads and WRITES split-cache.json (it is how proposals get reviewed and cached);
+ * --fresh-split makes its reads miss while still writing. A real run (--yes) only READS it: its writes go to an in-memory
+ * overlay (--fresh-split there = reads miss, nothing reaches the file).
+ */
+function splitCacheFor(opts: ReorgOptions, roots: KbRoots): SplitCache {
+  const base = opts.splitCache ?? fileSplitCache(join(roots.denLocal, "split-cache.json"));
+  if (opts.dryRun) return freshOrCached(base, !!opts.freshSplit);
+  const overlay = readOnlyOverlay(base);
+  return opts.freshSplit ? { get: () => undefined, set: overlay.set } : overlay;
+}
+
 async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
   const domainsRoot = join(roots.kbBase, "domains");
@@ -573,7 +585,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
           domain, entries, namer: engineNamer(engine), notify, start, applyCrossMoves: opts.applyCrossMoves, approvedCrossMoves: opts.approvedCrossMoves,
-          partitioner: enginePartitioner(engine), splitCache: freshOrCached(opts.splitCache ?? fileSplitCache(join(roots.denLocal, "split-cache.json")), !!opts.freshSplit), diagnostics: opts.dryRun,
+          partitioner: enginePartitioner(engine), splitCache: splitCacheFor(opts, roots), diagnostics: opts.dryRun,
           grouped: loadGrouped(domainsRoot, domain),
           oldSections,
         });
@@ -587,13 +599,13 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
         // Recorded before the commit so the re-render below also covers a commit that fails midway.
         result.domains.push(domain);
         if (opts.dryRun) continue;
-        // The proposals the owner approved were cached by the dry run (den-local split-cache.json, keyed by member set), so this
+        // Only a dry run writes the cache: the proposals the owner approved were cached by it (den-local split-cache.json, keyed by member set), so this
         // commit reproduces them. A miss means the member set changed since (or no dry run was done): say so.
         const asked = plan.judged.filter((j) => j.source === "llm" && j.cached === false);
         if (asked.length) {
           const list = asked.map((j) => j.id).join(", ");
           if (!opts.allowUncachedSplit) {
-            throw new Error(`rebuild: ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again and the tree may differ from the proposal you reviewed (${list}); aborting before any write. Re-run \`rebuild ${domain} --dry-run\`, review the new proposal, then \`--yes\`; or pass --allow-uncached-split to commit this plan as it is`);
+            throw new Error(`rebuild: ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again and the tree may differ from the proposal you reviewed (${list}); aborting before any write (a real run never saves proposals). Re-run \`rebuild ${domain} --dry-run\` to see AND cache the new proposals, review them, then \`--yes\`; or pass --allow-uncached-split to commit this plan as it is`);
           }
           notify?.(`  ${asked.length} section(s) were not in the dry-run cache, so the LLM was asked again; the tree may differ from the approved proposal (--allow-uncached-split): ${list}`);
         }

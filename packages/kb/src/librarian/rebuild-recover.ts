@@ -46,7 +46,10 @@ export const RECOVER_MAX_FAILURES = 3;
  * age gate is skipped (see tryRecoverAndRender).
  */
 export const RECOVER_MIN_JOURNAL_AGE_MS = 10 * 60_000;
+/** A journal this old is reported as paused by status even with no failure record. */
+export const RECOVER_STALE_JOURNAL_MS = 15 * 60_000;
 const failuresFile = (r: KbRoots) => join(r.denLocal, ".rebuild-recover-failures");
+const failMarkerFile = (r: KbRoots) => join(r.denLocal, ".rebuild-recover-failed");
 const readFailures = (r: KbRoots): number => { try { return Number(readFileSync(failuresFile(r), "utf-8")) || 0; } catch { return 0; } };
 
 export interface RecoverOutcome {
@@ -75,8 +78,12 @@ export function badJournalNote(roots: KbRoots): string | undefined {
 export function recoveryPausedNote(roots: KbRoots): string | undefined {
   if (!existsSync(rebuildJournalFile(roots))) return undefined;
   const n = readFailures(roots);
-  return n > 0
-    ? `sweep and tick are PAUSED: recovering the unfinished rebuild journal has failed ${n} run(s) in a row (it is quarantined only after ${RECOVER_MAX_FAILURES} failures and ${RECOVER_MIN_JOURNAL_AGE_MS / 60_000} minutes). Fix the cause (disk, permissions) or inspect ${rebuildJournalFile(roots)}`
+  // PAUSED whenever recovery has failed: a counter, or the marker written when the counter could not be, or - if even that could not
+  // be written - a journal that has sat there longer than a healthy one ever does (the next run normally finishes it within minutes).
+  let stale = false;
+  try { stale = Date.now() - statSync(rebuildJournalFile(roots)).mtimeMs > RECOVER_STALE_JOURNAL_MS; } catch { /* gone */ }
+  return n > 0 || existsSync(failMarkerFile(roots)) || stale
+    ? `sweep and tick are PAUSED: recovering the unfinished rebuild journal has failed ${n > 0 ? `${n} run(s) in a row` : "(failure count unavailable)"} (it is quarantined only after ${RECOVER_MAX_FAILURES} failures and ${RECOVER_MIN_JOURNAL_AGE_MS / 60_000} minutes). Fix the cause (disk, permissions) or inspect ${rebuildJournalFile(roots)}`
     : undefined;
 }
 
@@ -96,6 +103,7 @@ export function tryRecoverAndRender(roots: KbRoots, notify?: (msg: string) => vo
   try {
     const r = recoverAndRender(roots, notify, { rename: hooks.rename });
     rmSync(failuresFile(roots), { force: true });
+    rmSync(failMarkerFile(roots), { force: true });
     // recoverRebuild reports an unreadable journal it moved aside: that is a stop for this run, not a success
     if (r.quarantined) return { n: 0, failed: "the rebuild journal was unreadable and has been quarantined", quarantined: true };
     return { n: r.n };
@@ -107,7 +115,11 @@ export function tryRecoverAndRender(roots: KbRoots, notify?: (msg: string) => vo
     if (counterBroken) count = Math.max(count, RECOVER_MAX_FAILURES);
     let ageMs = 0;
     try { ageMs = now() - statSync(rebuildJournalFile(roots)).mtimeMs; } catch { /* gone */ }
-    const mayQuarantine = counterBroken || (count >= RECOVER_MAX_FAILURES && ageMs >= RECOVER_MIN_JOURNAL_AGE_MS);
+    // A future mtime (clock skew) gives a negative age: treat it as old, or the quarantine could never happen.
+    const old = ageMs < 0 || ageMs >= RECOVER_MIN_JOURNAL_AGE_MS;
+    const mayQuarantine = counterBroken || (count >= RECOVER_MAX_FAILURES && old);
+    // Marker for `kb status` when the counter could not be written: the journal being present plus this file means "recovery failed".
+    if (counterBroken) { try { writeFileSync(failMarkerFile(roots), "1"); } catch { /* status falls back to the journal's age */ } }
     if (!mayQuarantine) {
       const shown = Math.min(count, RECOVER_MAX_FAILURES);
       const wait = count >= RECOVER_MAX_FAILURES ? `; quarantine waits until the journal is ${RECOVER_MIN_JOURNAL_AGE_MS / 60_000} minutes old` : "";
@@ -118,6 +130,7 @@ export function tryRecoverAndRender(roots: KbRoots, notify?: (msg: string) => vo
     try { (hooks.rename ?? renameSync)(rebuildJournalFile(roots), rebuildBadJournalFile(roots)); } catch (e) { qerr = e instanceof Error ? e.message : String(e); }
     if (!existsSync(rebuildJournalFile(roots))) {
       rmSync(failuresFile(roots), { force: true });
+      rmSync(failMarkerFile(roots), { force: true });
       notify?.(`rebuild recovery failed ${count} runs in a row (${why}); the journal was moved to ${rebuildBadJournalFile(roots)}. This run is skipped; later runs continue, but check the KB with \`status\` (restore with \`rebuild --restore\` if needed)`);
       return { n: 0, failed: `rebuild recovery failed ${count} runs in a row; journal quarantined`, quarantined: true };
     }

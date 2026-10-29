@@ -364,27 +364,42 @@ describe("dry run and --yes share a file-backed split cache", () => {
       expect(JSON.parse(readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8")).filter((s: { domain: string }) => s.domain === "wp").length).toBe(4);
 
       // a different entry set (one entry added) is a different cache key: --yes aborts before any write, naming the fix
+      const cacheFile = join(roots.denLocal, "split-cache.json");
       const extra = { ...make([1], 77)[0], id: "e950", title: "late entry", vector: es[0].vector };
       put(extra); byTitle.set(extra.title, extra.vector);
       const sectionsBefore = readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8");
+      const cacheBefore = readFileSync(cacheFile, "utf-8");
       await expect(reorg({ ...common })).rejects.toThrow(/not in the dry-run cache.*aborting before any write.*--dry-run.*--allow-uncached-split/);
       expect(splitCalls).toBe(2); // it did ask (that is how it found out) ...
       expect(readFileSync(join(roots.denLocal, "sections", "_sections.json"), "utf-8")).toBe(sectionsBefore); // ... but wrote nothing
       expect(readFileSync(join(eDir, "e950.md"), "utf-8")).toContain("section: sec-wp-old000");
-      // the operator reviews a new dry run (which caches the new proposal), then --yes reproduces it with no ask
+      // a real run never saves proposals: the cache file is unchanged, so a SECOND --yes cannot read an unreviewed proposal
+      expect(readFileSync(cacheFile, "utf-8")).toBe(cacheBefore);
+      await expect(reorg({ ...common })).rejects.toThrow(/not in the dry-run cache/);
+      expect(splitCalls).toBe(3); // asked again, aborted again
+      expect(readFileSync(cacheFile, "utf-8")).toBe(cacheBefore);
+      // --fresh-split on --yes also writes nothing
+      await expect(reorg({ ...common, freshSplit: true })).rejects.toThrow(/not in the dry-run cache/);
+      expect(readFileSync(cacheFile, "utf-8")).toBe(cacheBefore);
+      const callsBeforeReview = splitCalls;
+      // the operator runs the dry run (the ONLY thing that caches), reviews it, then --yes commits with no LLM call
       await reorg({ ...common, dryRun: true });
-      expect(splitCalls).toBe(2); // cached by the aborted run
+      expect(splitCalls).toBe(callsBeforeReview + 1);
+      expect(readFileSync(cacheFile, "utf-8")).not.toBe(cacheBefore);
       await reorg({ ...common });
-      expect(splitCalls).toBe(2);
-      // --allow-uncached-split commits an uncached plan, with the notice
+      expect(splitCalls).toBe(callsBeforeReview + 1);
+      // --allow-uncached-split commits an uncached plan, with the notice (and still saves nothing)
       const extra2 = { ...make([1], 78)[0], id: "e951", title: "later entry", vector: es[1].vector };
       put(extra2); byTitle.set(extra2.title, extra2.vector);
+      const cacheMid = readFileSync(cacheFile, "utf-8");
       const notes2: string[] = [];
       await reorg({ ...common, allowUncachedSplit: true, notify: (m) => notes2.push(m) });
-      expect(splitCalls).toBe(3);
+      expect(splitCalls).toBe(callsBeforeReview + 2);
       expect(notes2.some((m) => /not in the dry-run cache, so the LLM was asked again.*--allow-uncached-split/.test(m))).toBe(true);
+      expect(readFileSync(cacheFile, "utf-8")).toBe(cacheMid);
 
-      // --fresh-split ignores cached proposals and overwrites them (dry run: no abort rule applies)
+      // --fresh-split on a DRY run ignores cached proposals and overwrites them
+      await reorg({ ...common, dryRun: true });
       const before = splitCalls;
       await reorg({ ...common, dryRun: true });
       expect(splitCalls).toBe(before); // cached
@@ -392,8 +407,6 @@ describe("dry run and --yes share a file-backed split cache", () => {
       expect(splitCalls).toBe(before + 1);
       await reorg({ ...common, dryRun: true });
       expect(splitCalls).toBe(before + 1); // the fresh answer was written back and is now what is cached
-      // and --yes with --fresh-split counts as uncached unless allowed
-      await expect(reorg({ ...common, freshSplit: true })).rejects.toThrow(/not in the dry-run cache/);
     } finally { rmSync(base, { recursive: true, force: true }); }
   }, 120_000);
 });

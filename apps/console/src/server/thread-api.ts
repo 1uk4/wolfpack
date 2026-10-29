@@ -144,10 +144,10 @@ export function createThreadApi(source: ClientSource) {
 			}
 		},
 
-		async thread(ref: ThreadRef): Promise<Response> {
+		async thread(ref: ThreadRef, opts: { limit?: number; before?: string } = {}): Promise<Response> {
 			try {
 				const client = source();
-				return json(await client.getThread(await resolve(client, ref)));
+				return json(await client.getThread(await resolve(client, ref), opts));
 			} catch (err) {
 				return failure(err);
 			}

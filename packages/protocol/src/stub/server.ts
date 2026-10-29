@@ -10,6 +10,7 @@ import {
   CreateThreadBodySchema,
   matchRoute,
 } from "../routes.js";
+import { pageRange } from "../paging.js";
 import {
   ATTACHMENT_IMAGE_TYPES,
   ATTACHMENT_MAX_BYTES,
@@ -217,7 +218,7 @@ export class StubServer {
       }
       // ---- /header git tree ----
       case "getThread":
-        return this.json(res, 200, this.detail(this.thread(params.id)));
+        return this.json(res, 200, this.pagedDetail(this.thread(params.id), url));
       case "submit": {
         const t = this.thread(params.id);
         if (t.summary.closed) throw new HttpError("thread_closed", t.summary.closedReason ?? "thread is closed");
@@ -399,6 +400,19 @@ export class StubServer {
 
   private addThread(summary: ThreadSummary): void {
     this.threads.set(summary.id, { summary, messages: [], seq: 0, buffer: [], running: null, followUps: [], subs: new Set() });
+  }
+
+  private pagedDetail(t: ThreadState, url: URL): ThreadDetail {
+    const full = this.detail(t);
+    const rawLimit = url.searchParams.get("limit");
+    if (rawLimit === null) {
+      if (url.searchParams.has("before")) throw new HttpError("invalid_request", "before needs limit");
+      return full;
+    }
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1) throw new HttpError("invalid_request", "limit must be a positive integer");
+    const page = pageRange(full.messages, { limit, before: url.searchParams.get("before") ?? undefined });
+    return { ...full, messages: full.messages.slice(page.start, page.end), hasMore: page.hasMore, ...(page.cursor ? { cursor: page.cursor } : {}) };
   }
 
   private detail(t: ThreadState): ThreadDetail {

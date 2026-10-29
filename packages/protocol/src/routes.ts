@@ -120,6 +120,13 @@ export const ROUTES = {
    */
   getWorkspaceStatus: { method: "GET", path: "/v1/threads/:id/workspace/status", response: { kind: "json", schema: WorkspaceStatusSchema }, status: [200], error: err },
   // ---- /header git tree ----
+  /**
+   * Optional query `limit` (positive integer, at most 500; 0, fractions and non-numbers are 400 `invalid_request`, larger
+   * values are clamped to 500) and `before` (a `cursor` from an earlier response; `before` without `limit` is 400). No
+   * `limit` = the whole transcript (unchanged for old clients). `limit` alone = the newest page: the last `limit` messages,
+   * widened back to include any message holding a pending card. `limit`+`before` = exactly the `limit` messages before
+   * that message (unknown cursor = empty page). The response carries `hasMore` and `cursor`; only the page is serialised.
+   */
   getThread: { method: "GET", path: "/v1/threads/:id", response: { kind: "json", schema: ThreadDetailSchema }, status: [200], error: err },
   submit: { method: "POST", path: "/v1/threads/:id/submit", body: SubmitBodySchema, response: { kind: "json", schema: SubmitAckSchema }, status: [200], error: err },
   /**

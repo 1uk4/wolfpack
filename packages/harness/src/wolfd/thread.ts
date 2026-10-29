@@ -8,6 +8,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  pageRange,
   SSE_DONE,
   type Actor,
   type AttachmentRef,
@@ -563,21 +564,24 @@ export class ThreadRuntime {
   }
   // --- end feature progress ---
 
-  detail(): ThreadDetail {
+  /** `opts.limit` absent = the whole transcript; see `pageRange` for the paging rules. Only the page is copied/serialised. */
+  detail(opts: { limit?: number; before?: string } = {}): ThreadDetail {
     const den = this.host.den;
     const attachmentsOf = (m: ThreadMessage) => {
       const list = den && m.role === "user" ? attachmentsInText(den, this.summary.id, m.text) : [];
       return list.length ? { attachments: list } : {};
     };
-    const messages = this.messages.map((m) => ({
+    const pendingCards = this.cards.pending();
+    const page = pageRange(this.messages, { ...opts, requiredCallIds: pendingCards.map((c) => c.callId) });
+    const messages = this.messages.slice(page.start, page.end).map((m) => ({
       ...m,
       // The `{...c}` copy drops messages.ts's per-call WeakMap entries (uncapped args); fine, the copy is output-only.
       ...(m.tools ? { tools: m.tools.map((c) => ({ ...c })) } : {}),
       ...(m.objects ? { objects: m.objects.map((o) => ({ ...o })) } : {}),
       ...attachmentsOf(m),
     }));
-    const pendingCards = this.cards.pending();
-    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}) };
+    const paged = opts.limit !== undefined ? { hasMore: page.hasMore, ...(page.cursor ? { cursor: page.cursor } : {}) } : {};
+    return { ...this.threadSummary(), messages, busy: this.running !== null, lastEventId: this.seq, ...(pendingCards.length ? { pendingCards } : {}), ...paged };
   }
 
   async submit(text: string, whenBusy: "steer" | "followUp" | "reject", refs: readonly AttachmentRef[] = [], opts: { internal?: boolean; resubmit?: boolean } = {}): Promise<SubmitAck> {

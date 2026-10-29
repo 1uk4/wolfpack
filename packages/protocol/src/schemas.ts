@@ -609,6 +609,13 @@ export const ThreadDetailSchema = ThreadSummarySchema.extend({
   lastEventId: z.number().int().nonnegative(),
   /** Additive: cards waiting for the operator (survives reconnect and restart). Absent = none / older server. */
   pendingCards: z.array(PendingCardSchema).optional(),
+  /**
+   * Paging (additive; absent = the whole transcript is in `messages`, i.e. an older server or an unpaged request).
+   * `GET /v1/threads/:id?limit=N` returns the newest page; `?limit=N&before=<cursor>` the N messages before it.
+   * `hasMore`: older messages exist before the first returned one. `cursor`: id of the first returned message.
+   */
+  hasMore: z.boolean().optional(),
+  cursor: z.string().optional(),
 });
 export type ThreadDetail = z.infer<typeof ThreadDetailSchema>;
 

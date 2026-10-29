@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { cardsOfThread, resolveThreadId, threadLabel, threadMessagesToNative } from "@/src/core";
 import { getConsoleClient, isNotFound } from "@/src/server";
 import { withHistoryAttachments } from "@/components/attachments";
+import { THREAD_PAGE_SIZE } from "@/components/thread-transport";
 import { ThreadChat } from "@/components/thread-chat";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 	try {
 		const id = resolveThreadId(name, slug, await client.listThreads(name));
 		if (!id) notFound();
-		const thread = await client.getThread(id);
+		const thread = await client.getThread(id, { limit: THREAD_PAGE_SIZE });
 		return (
 			<ThreadChat
 				key={thread.id}
@@ -28,6 +29,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ name: s
 				title={threadLabel(name, thread)}
 				workspace={thread.workspace}
 				initialMessages={withHistoryAttachments(threadMessagesToNative(thread.messages), thread.messages)}
+				initialHasMore={thread.hasMore}
 				initiallyInFlight={thread.busy}
 				initialCards={cardsOfThread(thread)}
 				initialBound={thread.boundItem ?? thread.boundWorkItem}

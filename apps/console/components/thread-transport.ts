@@ -3,6 +3,9 @@ import { withHistoryAttachments } from "@/components/attachments";
 import { ThreadEventAdapter, threadMessagesToNative } from "@/src/core";
 import type { SessionTransport } from "@/components/session-core";
 
+/** Messages per transcript page: the initial open, each "Show earlier" and the settle refetch. */
+export const THREAD_PAGE_SIZE = 50;
+
 /**
  * The session transport for a ConsoleClient thread: the /api/wolves routes
  * (thin wrappers over the client), with ThreadEvents folded to the session
@@ -55,6 +58,8 @@ export function threadTransport(
 	wolf: string,
 	slug: string,
 	onCardEvent?: (ev: ThreadCardEvent) => void,
+	/** An older page landed (raw thread JSON): the caller folds its card calls. */
+	onPage?: (json: unknown) => void,
 ): SessionTransport {
 	const base = threadBase(wolf, slug);
 	return {
@@ -68,7 +73,10 @@ export function threadTransport(
 		uploadUrl: `${base}/attachments`,
 		attachmentUrl: (id) => `${base}/attachments/${encodeURIComponent(id)}`,
 		steersViaSubmit: true,
-		recordUrl: base,
+		// The record is the newest page only: the full transcript is never refetched on a settle.
+		recordUrl: `${base}?limit=${THREAD_PAGE_SIZE}`,
+		onPage,
+		pageUrl: (before, limit) => `${base}?limit=${limit}&before=${encodeURIComponent(before)}`,
 		parseRecord: (json) => {
 			const messages = (json as { messages?: Parameters<typeof threadMessagesToNative>[0] }).messages;
 			return Array.isArray(messages) ? withHistoryAttachments(threadMessagesToNative(messages), messages) : null;

@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { createEarlierScroll } from "@/components/earlier-scroll";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Conversation, ConversationContent, ConversationEmptyState } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -160,6 +161,7 @@ function ThreadChatInner({
 	title,
 	workspace,
 	initialMessages,
+	initialHasMore,
 	initiallyInFlight,
 	initialCards = NO_CARDS,
 	closedReason,
@@ -173,6 +175,8 @@ function ThreadChatInner({
 	/** Header git tree: the thread's git workspace (absent for a non-git thread). */
 	workspace?: ThreadWorkspace;
 	initialMessages: LhMessage[];
+	/** Only the newest page is loaded: a "Show earlier" divider tops the list. */
+	initialHasMore?: boolean;
 	initiallyInFlight?: boolean;
 	/** Interaction cards of the thread record (pending ones + the card-raising calls of the history). */
 	initialCards?: ThreadCards;
@@ -183,10 +187,12 @@ function ThreadChatInner({
 }) {
 	// Live card events reach the chat through a ref: the transport is created before the cards state exists.
 	const cardEventRef = useRef<(ev: ThreadCardEvent) => void>(() => {});
-	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev)), [wolf, slug]);
-	const { messages, status, error, send, steer, clearError, resumeStream } = useChatSession({
+	const pageRef = useRef<(json: unknown) => void>(() => {});
+	const transport = useMemo(() => threadTransport(wolf, slug, (ev) => cardEventRef.current(ev), (json) => pageRef.current(json)), [wolf, slug]);
+	const { messages, status, error, send, steer, clearError, resumeStream, hasMore, loadingEarlier, earlierCount, loadEarlier } = useChatSession({
 		chatId: threadId,
 		initialMessages,
+		initialHasMore,
 		initiallyInFlight,
 		transport,
 	});
@@ -211,11 +217,51 @@ function ThreadChatInner({
 			const next = parseThreadCards(await res.json());
 			if (seq !== refreshSeq.current) return;
 			if (epoch !== cardEpoch.current) return void refreshCards(); // a card event landed meanwhile: fetch again
-			if (next) setCards(next);
+			// The record is the newest page: keep the calls of older pages already loaded.
+			if (next) setCards((prev) => ({ pending: next.pending, calls: { ...prev.calls, ...next.calls } }));
 		} catch {
 			/* the next settle refetches */
 		}
 	}, [transport]);
+	// "Show earlier": the divider's button and reaching the top of the scroll container both load the next older page.
+	// The scroll position is kept by measuring scrollHeight/scrollTop before the fetch and restoring the delta once the
+	// prepended rows are laid out (useLayoutEffect, before paint), so the message the operator was reading stays put.
+	const earlierRef = useRef<HTMLDivElement | null>(null);
+	const scrollKeep = useRef(createEarlierScroll()).current;
+	const showEarlier = useCallback(() => scrollKeep.run(scrollParent(earlierRef.current), () => loadEarlier()), [loadEarlier, scrollKeep]);
+	// Keyed on the count of paged-in rows (earlierCount), not the whole list: a streamed message never triggers a restore,
+	// and a page that adds no rows leaves nothing pending.
+	useLayoutEffect(() => scrollKeep.restore(), [earlierCount, scrollKeep]);
+	// The top trigger arms only after the list has been at the bottom once (the initial scroll-to-bottom must not look
+	// like "reached the top"), then stays armed: it is not rebuilt when streamed messages arrive.
+	const [atBottomOnce, setAtBottomOnce] = useState(false);
+	useEffect(() => {
+		if (atBottomOnce || !hasMore) return;
+		const el = scrollParent(earlierRef.current);
+		if (!el) return;
+		const check = () => {
+			if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) setAtBottomOnce(true);
+		};
+		check();
+		el.addEventListener("scroll", check, { passive: true });
+		return () => el.removeEventListener("scroll", check);
+	}, [atBottomOnce, hasMore]);
+	useEffect(() => {
+		const node = earlierRef.current;
+		if (!hasMore || !atBottomOnce || !node || typeof IntersectionObserver === "undefined") return;
+		const io = new IntersectionObserver((entries) => {
+			if (entries.some((e) => e.isIntersecting)) void showEarlier();
+		}, { root: scrollParent(node) });
+		io.observe(node);
+		return () => io.disconnect();
+	}, [hasMore, atBottomOnce, showEarlier]);
+	// An older page brings its own card calls (answered cards in history); pending cards are always in the newest page.
+	useEffect(() => {
+		pageRef.current = (json) => {
+			const older = parseThreadCards(json);
+			if (older) setCards((prev) => ({ pending: prev.pending, calls: { ...older.calls, ...prev.calls } }));
+		};
+	});
 	// A card raised mid-stream shows at once (no wait for the turn to settle); an answer's text comes with the record.
 	useEffect(() => {
 		cardEventRef.current = (ev) => {
@@ -436,6 +482,18 @@ function ThreadChatInner({
 								{messages.length === 0 && !busy && (
 									<ConversationEmptyState title={title} description="Say something to start a turn." />
 								)}
+								{hasMore && (
+									<div ref={earlierRef} data-testid="show-earlier" className="flex justify-center py-2">
+										<button
+											type="button"
+											disabled={loadingEarlier}
+											onClick={() => void showEarlier()}
+											className="rounded-full border px-3 py-1 font-ui text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
+										>
+											{loadingEarlier ? "Loading earlier…" : "Show earlier"}
+										</button>
+									</div>
+								)}
 								{messages.map((m, mi) => (
 									<Fragment key={m.id || `m-${mi}`}>
 										{m.role === "user" && subagentOrigins[mi] ? (
@@ -601,6 +659,15 @@ function ThreadChatInner({
 			<RightPanelHost />
 		</div>
 	);
+}
+
+/** The nearest scrolling ancestor (the stick-to-bottom viewport). */
+function scrollParent(el: HTMLElement | null): HTMLElement | null {
+	for (let p = el?.parentElement ?? null; p; p = p.parentElement) {
+		const oy = getComputedStyle(p).overflowY;
+		if (oy === "auto" || oy === "scroll") return p;
+	}
+	return null;
 }
 
 /** The thread view plus its right-panel host: the provider sits above the view so any child can call openPanel. */

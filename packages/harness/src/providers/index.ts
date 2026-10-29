@@ -4,7 +4,7 @@
  */
 import { anthropicFactory, anthropicLookupModels } from "./anthropic.js";
 import { CLAUDE_BRIDGE_ID, claudeBridgeFactory, claudeBridgeLookupModels, claudeBridgeSdkSeams } from "./claude-bridge.js";
-import { CLAUDE_STATELESS_ID, claudeStatelessFactory, claudeStatelessModels } from "./claude-stateless.js";
+import { CLAUDE_STATELESS_ID, claudeStatelessFactory, claudeStatelessModels, claudeStatelessSdkSeams } from "./claude-stateless.js";
 import type { ProviderFactory } from "./types.js";
 
 export type { ProviderContext, ProviderFactory, ProviderHandle } from "./types.js";
@@ -20,6 +20,7 @@ export const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 /** Providers that run on the host's Agent SDK `query` (not bundleable): id → the seams to hand their factory. */
 export const SDK_PROVIDER_SEAMS: Record<string, (query: unknown, env: NodeJS.ProcessEnv) => object> = {
   [CLAUDE_BRIDGE_ID]: claudeBridgeSdkSeams,
+  [CLAUDE_STATELESS_ID]: (query) => claudeStatelessSdkSeams(query),
 };
 
 /** Providers that need CLAUDE_CODE_OAUTH_TOKEN (the Max subscription) in the environment to start. */

@@ -11,7 +11,8 @@
  */
 import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
-import { recoverRebuild, rebuildJournalFile } from "./rebuild-commit.js";
+import { rebuildJournalFile } from "./rebuild-commit.js";
+import { recoverAndRender } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
 import { sweep, emptyResult, type SweepEvent, type SweepResult } from "./sweep.js";
 import { reorg, type ReorgResult } from "./reorg.js";
@@ -89,10 +90,10 @@ async function sendWorkLinks(opts: SweepTickOptions): Promise<void> {
 async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   const { roots } = opts;
 
-  // Finish a rebuild that crashed after its journal, before anything else (idempotent; the check is one stat).
+  // Finish a rebuild that crashed after its journal, before anything else (the check is one stat; idempotent).
   if (existsSync(rebuildJournalFile(roots))) {
     try {
-      await withKbLock(roots, async () => { const n = recoverRebuild(roots); opts.notify?.(`recovered an interrupted rebuild (${n} file(s) finished)`); });
+      await withKbLock(roots, async () => { recoverAndRender(roots, opts.notify); });
     } catch (err) {
       if (!(err instanceof KbLockBusy)) throw err;
     }

@@ -6,7 +6,7 @@ import type { Engine } from "@wolfpack/engine";
 import { reorg } from "./reorg.js";
 import {
   planRebuild, commitRebuild, recoverRebuild, rebuildJournalFile, renderProposal, withSectionLine,
-  listRebuildTemps, type RebuildEntry, type Namer,
+  listRebuildTemps, listRebuildBackups, restoreRebuild, type RebuildEntry, type Namer,
 } from "./rebuild.js";
 import { readSections, foldSections } from "./sections.js";
 import { readLedger } from "./ledger.js";
@@ -166,13 +166,28 @@ describe("commitRebuild / dry-run on disk", () => {
   it("recoverRebuild finishes a commit interrupted after its journal", () => {
     mkdirSync(eDir(), { recursive: true });
     const final = join(eDir(), "a.md");
-    writeFileSync(final, "old");
-    writeFileSync(final + ".rebuild-tmp", "new");
-    writeFileSync(rebuildJournalFile(roots), JSON.stringify({ version: 1, domain: "wp", at: "x", renames: [{ tmp: final + ".rebuild-tmp", final }] }));
-    expect(recoverRebuild(roots)).toBe(1);
-    expect(readFileSync(final, "utf-8")).toBe("new");
+    writeFileSync(final, "---\ndomain: wp\nsection: old\n---\nbody EDITED AFTER THE PLAN\n");
+    writeFileSync(join(eDir(), ".rebuild-tmp-s.json.tmp"), "[]");
+    writeFileSync(rebuildJournalFile(roots), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [{ path: final, section: "sec-wp-new" }], renames: [{ tmp: join(eDir(), ".rebuild-tmp-s.json.tmp"), final: join(eDir(), "s.json") }] }));
+    expect(recoverRebuild(roots)).toBe(2);
+    // the CURRENT file text is kept; only the section line changes
+    expect(readFileSync(final, "utf-8")).toBe("---\ndomain: wp\nsection: sec-wp-new\n---\nbody EDITED AFTER THE PLAN\n");
     expect(existsSync(rebuildJournalFile(roots))).toBe(false);
     expect(recoverRebuild(roots)).toBe(0);
+  });
+
+  it("an unreadable journal is moved to .rebuild-journal.bad, stale temps are removed, and the notify fires once", () => {
+    mkdirSync(eDir(), { recursive: true });
+    writeFileSync(join(eDir(), ".rebuild-tmp-a.md.tmp"), "x");
+    writeFileSync(rebuildJournalFile(roots), "{ not json");
+    const notes: string[] = [];
+    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toBe(0);
+    expect(existsSync(rebuildJournalFile(roots))).toBe(false);
+    expect(existsSync(join(roots.denLocal, ".rebuild-journal.bad"))).toBe(true);
+    expect(listRebuildTemps(roots, "wp")).toEqual([]);
+    expect(notes).toHaveLength(1);
+    expect(recoverRebuild(roots, { notify: (m) => notes.push(m) })).toBe(0);
+    expect(notes).toHaveLength(1);
   });
 
   it("withSectionLine sets or inserts the section line", () => {
@@ -270,23 +285,33 @@ describe("commit safety", () => {
     for (const e of es) put(e.id, "sec-wp-old000");
     put("kid", "sec-wp-old000");
     const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer, grouped: new Map([["kid", es[3].id]]) });
-    expect(plan.state.assignment.has("kid")).toBe(false); // not clustered, not counted
+    // not clustered, counted or listed as an entry of the plan; pinned at the holder's section at the end
+    expect(plan.entries.some((e) => e.id === "kid")).toBe(false);
+    expect(plan.state.assignment.get("kid")).toBe(plan.state.assignment.get(es[3].id));
+    const total = plan.state.sections.reduce((n, s) => n + s.memberCount, 0);
+    expect(total).toBe(es.length);
     commitRebuild(roots, plan);
     expect(sectionOf("kid")).toBe(plan.state.assignment.get(es[3].id));
   });
 
-  it("crash injection: renames fail after N calls, the journal remains, recovery finishes it, and sections.json and the entries agree", async () => {
+  it("crash injection: writes fail after N calls (and the sections rename can fail), the journal remains, recovery finishes it, and sections.json and the entries agree", async () => {
     const es = all();
     for (const e of es) put(e.id, "sec-wp-old000");
     const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
-    for (const failAfter of [0, 3, 10]) {
+    const cases: Array<{ failWriteAfter: number; failRename: boolean }> = [
+      { failWriteAfter: 0, failRename: false }, { failWriteAfter: 3, failRename: false }, { failWriteAfter: 10, failRename: false },
+      { failWriteAfter: 1e9, failRename: true },
+    ];
+    for (const c of cases) {
       for (const e of es) put(e.id, "sec-wp-old000");
       rmSync(rebuildJournalFile(roots), { force: true });
       let calls = 0;
-      const rename = (a: string, b: string) => { if (calls++ >= failAfter) throw new Error("disk gone"); renameSync(a, b); };
-      expect(() => commitRebuild(roots, plan, { rename })).toThrow(/disk gone/);
+      const writeFile = (p: string, t: string) => { if (calls++ >= c.failWriteAfter) throw new Error("disk gone"); writeFileSync(p, t); };
+      const rename = () => { throw new Error("disk gone"); };
+      expect(() => commitRebuild(roots, plan, { writeFile, ...(c.failRename ? { rename } : {}) })).toThrow(/disk gone/);
       expect(existsSync(rebuildJournalFile(roots))).toBe(true);
-      expect(recoverRebuild(roots)).toBe(es.length + 1 - failAfter);
+      const written = Math.min(c.failWriteAfter, es.length);
+      expect(recoverRebuild(roots)).toBe(es.length - written + 1);
       expect(recoverRebuild(roots)).toBe(0); // idempotent
       expect(existsSync(rebuildJournalFile(roots))).toBe(false);
       expect(listRebuildTemps(roots, "wp")).toEqual([]);
@@ -308,8 +333,9 @@ describe("commit safety", () => {
     appendLedger(roots, [ev.sectionCreated({ sectionId: "sec-wp-old000", domain: "wp", parent: null, label: "o" })]);
     const plan = await planRebuild({ domain: "wp", entries: es, namer: uniqueNamer });
     commitRebuild(roots, plan);
-    expect(JSON.parse(readFileSync(join(roots.denLocal, "sections.json.pre-rebuild"), "utf-8"))[0].id).toBe("sec-wp-old000");
-    const oldVals = JSON.parse(readFileSync(join(roots.denLocal, ".rebuild-old-sections.json"), "utf-8"));
+    const stamp = listRebuildBackups(roots)[0];
+    expect(JSON.parse(readFileSync(join(roots.denLocal, `sections.json.pre-rebuild-${stamp}`), "utf-8"))[0].id).toBe("sec-wp-old000");
+    const oldVals = JSON.parse(readFileSync(join(roots.denLocal, `.rebuild-old-sections-${stamp}.json`), "utf-8"));
     expect(oldVals.entries[es[0].id]).toBe("sec-wp-old000");
     const folded = foldSections(readLedger(roots));
     expect(folded.map((s) => String(s.id)).sort()).toEqual(plan.state.sections.map((s) => String(s.id)).sort());

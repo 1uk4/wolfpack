@@ -324,6 +324,8 @@ export const SECTION_TREE = {
     restateJaccard: 0.6,
     /** A rebuilt section reuses an old section's id/title/summary at or above this member overlap. */
     reuseJaccard: 0.5,
+    /** ...and also keeps its title and summary at or above this; between the two it keeps the id and is re-named. */
+    reuseKeepLabelJaccard: 0.7,
     /** Fixed base seed (combined with a hash of the member ids). */
     seed: 1337,
   },

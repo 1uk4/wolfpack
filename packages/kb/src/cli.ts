@@ -13,8 +13,14 @@
  *                     until the inbox is empty, the sweep is paused by an
  *                     outage, or a tick makes no progress (manual/dev use).
  *   history <id>      list an entry's kept versions (`--show <timestamp>` prints one)
- *   rebuild <domain> [--dry-run]  development baseline: rebuild one domain's section tree in
- *                     memory; --dry-run writes only kb-rebuild-proposal.md in the cwd
+ *   rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse]
+ *                     development baseline: rebuild one domain's section tree in memory. --dry-run
+ *                     writes only kb-rebuild-proposal.md in the cwd. --from-current (default) keeps the
+ *                     existing sections and judges only oversized ones; --from-scratch starts at one root.
+ *                     --yes commits after saving timestamped backups in the den-local dir:
+ *                     sections.json.pre-rebuild-<ts> and .rebuild-old-sections-<ts>.json.
+ *                     RESTORE: `rebuild --restore <ts> --yes` puts the snapshot and every entry's old
+ *                     section: line back. An interrupted commit is finished by the next sweep/tick.
  *   rebuild-vectors   wipe + re-embed the entry-vector cache (model change etc.)
  *
  * A den-local lock (sweep.lock) guarantees a single writer — a second sweep
@@ -56,6 +62,7 @@ import { listVersions, readVersion } from "./librarian/versions.js";
 import { EntryId } from "./schema/knowledge.js";
 import { ledgeredByDomain, driftOf } from "./librarian/drift.js";
 import { reorg as reorgFn } from "./librarian/reorg.js";
+import { listRebuildBackups, restoreRebuild } from "./librarian/rebuild-commit.js";
 import { unpark, listParked } from "./librarian/park.js";
 import { acquireKbLock, kbLockFile, pidAlive, releaseOwnedLock } from "./librarian/lock.js";
 import { countPending } from "./librarian/intake.js";
@@ -423,10 +430,25 @@ async function cmdReorg(): Promise<void> {
 async function cmdRebuild(): Promise<void> {
   const roots = resolveRoots();
   const argv = process.argv.slice(2);
-  const domain = argv.find((a) => !a.startsWith("--") && a !== "rebuild") ?? null;
+  const restoreAt = argv.includes("--restore") ? argv[argv.indexOf("--restore") + 1] : null;
+  const domain = argv.find((a, i) => !a.startsWith("--") && a !== "rebuild" && argv[i - 1] !== "--restore") ?? null;
+
+  if (restoreAt) {
+    if (!argv.includes("--yes")) {
+      console.error(`restore puts back the section: lines and the sections snapshot saved before the rebuild stamped ${restoreAt}.\nKnown backups: ${listRebuildBackups(roots).join(", ") || "none"}\nRe-run with --yes.`);
+      process.exit(2);
+    }
+    const release = acquireKbLock(roots);
+    if (!release) { console.error("a sweep is running (sweep.lock held); retry when it finishes"); process.exit(1); }
+    try {
+      const r = restoreRebuild(roots, restoreAt);
+      console.log(`restored ${r.entriesRestored} entry file(s) and the sections snapshot from ${restoreAt}`);
+    } finally { release(); }
+    return;
+  }
 
   if (!domain) {
-    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes)");
+    console.error("Usage: wolfpack-kb rebuild <domain> (--dry-run | --yes) [--from-current | --from-scratch] [--allow-collapse]\n       wolfpack-kb rebuild --restore <timestamp> --yes");
     process.exit(1);
   }
 
@@ -435,11 +457,16 @@ async function cmdRebuild(): Promise<void> {
     console.error(
       `rebuild rewrites the section: line of every entry in "${domain}" and replaces its whole section tree.\n` +
       `Preview it with:  wolfpack-kb rebuild ${domain} --dry-run\n` +
-      `Then run it with: wolfpack-kb rebuild ${domain} --yes   (backs up sections.json first)`
+      `Then run it with: wolfpack-kb rebuild ${domain} --yes   (backs up sections.json and the old section values first)`
     );
     process.exit(2);
   }
-  console.log(`\n── rebuild${dryRun ? " (dry-run: no KB file is written; LLM label calls are made and the vector cache may be warmed)" : ""}: ${domain} (full section tree reconstruction) ──`);
+  if (argv.includes("--from-current") && argv.includes("--from-scratch")) {
+    console.error("--from-current and --from-scratch are exclusive");
+    process.exit(1);
+  }
+  const rebuildFrom = argv.includes("--from-scratch") ? "scratch" : "current";
+  console.log(`\n── rebuild${dryRun ? " (dry-run: no KB file is written; LLM label calls are made and the vector cache may be warmed)" : ""}: ${domain} (from ${rebuildFrom === "current" ? "the current tree: only oversized sections are judged" : "scratch: one root, every section judged"}) ──`);
 
   const engine = makeEngine();
   const result = await reorgFn({
@@ -447,6 +474,8 @@ async function cmdRebuild(): Promise<void> {
     roots,
     domains: [domain],
     rebuild: true,
+    rebuildFrom,
+    allowCollapse: argv.includes("--allow-collapse"),
     dryRun,
     proposalPath: dryRun ? join(process.cwd(), "kb-rebuild-proposal.md") : undefined,
     notify: (msg) => console.log(`  ${msg}`),
@@ -459,8 +488,8 @@ async function cmdRebuild(): Promise<void> {
   console.log(
     `\nrebuild done: ${result.placements} entries placed, ` +
     `${result.labelsUpdated} sections labeled, ` +
-    `${result.splits} splits, ${result.merges} merges` +
-    (result.rebuilt ? " (full rebuild)" : "")
+    `${result.splits} splits` +
+    (result.rebuilt ? " (rebuild)" : "")
   );
 }
 
@@ -543,7 +572,7 @@ async function cmdHistory(): Promise<void> {
 
 const USAGE =
   "Usage: wolfpack-kb <command>\n" +
-  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> [--dry-run]\n" +
+  "  status | sweep [--drain] | reindex | rebuild-vectors | reorg [domain] [--dry-run] [--resummarize-all] | rebuild <domain> (--dry-run | --yes) [--from-current|--from-scratch] [--allow-collapse] | rebuild --restore <ts> --yes\n" +
   "  retire <entryId...> [--reason=…] [--dry-run] [--force: anchored entries]\n" +
   "  unpark [<wolf>/<file> | <wolf> | --all | --list] | history <entryId> [--show <timestamp>]";
 

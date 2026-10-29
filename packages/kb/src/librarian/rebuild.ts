@@ -2,15 +2,17 @@
  * rebuild — the development-baseline rebuild of one domain's section tree,
  * done entirely in memory on a RebuildState {sections, assignment}. No phase
  * reads or writes entry frontmatter; the one write is commitRebuild at the
- * end (temp files + renames, entries then sections, journalled for recovery).
+ * end (journalled: entries then sections, recoverable after a crash).
  *
-Flow (top-down, the same gated rule the insert path uses): one root holding every entry (or the
- * given `start` tree) → level by level, misplacement refinement among the sections that exist
+ * Flow (top-down, the same gated rule the insert path uses): the CURRENT tree (`start`, the
+ * default: top sections hardly ever change) or ONE root holding every entry (from scratch) → level by level, misplacement refinement among the sections that exist
  * (anywhere in the domain, every move listed), then each section above splitAbove is judged once by
  * tree-rules.chooseSplit (stability gate, minGroup; leftovers stay in the parent; no stable
- * substructure → the section stays whole, even above the soft range) → seeded branching cap →
+ * substructure → the section stays whole, even above the soft range) → seeded branching cap
+ * (its wrappers are labelled and judged like split children) →
  * id continuity with the old tree → ONE top-down, sibling-aware label pass that re-asks, then
- * folds back, a split child whose label restates the parent.
+ * folds back, a split child whose label restates the parent. Grouped (`group:`) entries take no part:
+ * they are added at their holder's section once the tree is final.
  *
  * It is a baseline tool: inserts must keep the tree right on their own, so
  * nothing here runs from the sweep.
@@ -23,6 +25,7 @@ import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
 import { enforceBranchingFactor, placeEntry } from "./section-tree.js";
 import type { EntryVector } from "./embed.js";
+import { collapseGuardFires } from "./rebuild-commit.js";
 import { anchorOf, groupOf } from "./anchors.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
 import {
@@ -77,8 +80,20 @@ export interface RebuildPlan {
   unnamed: string[];
   /** Grouped (`group:`) entries → the holder entry whose section they follow. */
   grouped: Map<string, string>;
-  /** Final ids of sections that kept an old section's id, title and summary. */
+  /** Final ids of sections that kept an old section's id (by member overlap). */
   reused: Set<string>;
+  /** Subset of `reused` that also kept the old title and summary (overlap >= reuseKeepLabelJaccard). */
+  labelKept: Set<string>;
+  /** Sections the branching cap created to group siblings. */
+  capWrappers: Set<string>;
+  /** Every section the split rule looked at, in order, with the outcome. */
+  judged: Array<{ id: string; n: number; outcome: "split" | "kept" | "below-threshold" }>;
+  /** How the plan started. */
+  from: "current" | "scratch";
+  /** Section count of the tree being replaced (for the collapse guard). */
+  oldSectionCount?: number;
+  /** Entry files present when the plan was made; the commit aborts if the directory differs. */
+  fileIds?: string[];
 }
 
 /** The default namer: summary then title from the engine (confined calls). */
@@ -104,12 +119,18 @@ const today = () => new Date().toISOString().split("T")[0];
 
 class Tree {
   byId = new Map<string, Section>();
-  constructor(public st: RebuildState, public vec: Map<string, number[]>, public domain: string) {}
+  constructor(public st: RebuildState, public vec: Map<string, number[]>, public domain: string, public grouped: Set<string> = new Set()) {}
+
+  private counts(): Map<string, number> {
+    const c = new Map<string, number>();
+    for (const [e, s] of this.st.assignment) if (!this.grouped.has(e)) c.set(s, (c.get(s) ?? 0) + 1);
+    return c;
+  }
 
   kids(id: string): Section[] { return this.st.sections.filter((s) => String(s.parent) === id); }
   direct(id: string): string[] {
     const out: string[] = [];
-    for (const [e, s] of this.st.assignment) if (s === id) out.push(e);
+    for (const [e, s] of this.st.assignment) if (s === id && !this.grouped.has(e)) out.push(e);
     return out.sort();
   }
   subtree(id: string): string[] {
@@ -129,8 +150,7 @@ class Tree {
     let changed = true;
     while (changed) {
       changed = false;
-      const counts = new Map<string, number>();
-      for (const s of this.st.assignment.values()) counts.set(s, (counts.get(s) ?? 0) + 1);
+      const counts = this.counts();
       const parents = new Set(this.st.sections.map((s) => String(s.parent)));
       const before = this.st.sections.length;
       this.st.sections = this.st.sections.filter((s) => (counts.get(String(s.id)) ?? 0) > 0 || parents.has(String(s.id)));
@@ -151,8 +171,7 @@ class Tree {
       }
     };
     setDepth(null, 0);
-    const counts = new Map<string, number>();
-    for (const s of this.st.assignment.values()) counts.set(s, (counts.get(s) ?? 0) + 1);
+    const counts = this.counts();
     for (const s of this.st.sections) {
       s.memberCount = counts.get(String(s.id)) ?? 0;
       const vs = this.subtree(String(s.id)).map((e) => this.vec.get(e)).filter(Boolean) as number[][];
@@ -183,7 +202,11 @@ export interface PlanOptions {
   namer: Namer;
   rules?: TreeRules;
   notify?: (msg: string) => void;
-  /** Start from this tree instead of the bottom-up build (tests, and comparing an incremental tree). */
+  /**
+   * Start from this tree (its sections stay; only sections above splitAbove are judged) instead of one root
+   * holding every entry. The kb rebuild default is the current tree. Entries missing from `assignment` go to
+   * the nearest leaf.
+   */
   start?: RebuildState;
   /** Grouped entry → holder entry. They take no part in clustering; they are pinned to the holder's section. */
   grouped?: Map<string, string>;
@@ -229,11 +252,17 @@ function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, 
 export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const { domain, namer, notify } = opts;
   const rules = opts.rules ?? DEFAULT_RULES;
-  const entries = [...opts.entries].sort((a, b) => (a.id < b.id ? -1 : 1));
+  // Grouped entries (with a holder in the plan) are not clustered, counted or judged; they are pinned at the end.
+  const holderIds = new Set(opts.entries.map((e) => e.id));
+  const grouped = new Map([...(opts.grouped ?? new Map())].filter(([g, h]) => holderIds.has(h) && !(opts.grouped ?? new Map()).has(h) && g !== h));
+  const entries = opts.entries.filter((e) => !grouped.has(e.id)).sort((a, b) => (a.id < b.id ? -1 : 1));
+  const oldDomain = (opts.oldSections ?? []).filter((s) => String(s.domain) === domain);
   const plan: RebuildPlan = {
     domain, entries, state: { sections: [], assignment: new Map() },
     moves: [], rejected: [], leftovers: new Map(), splitChildren: new Map(), unnamed: [],
-    grouped: opts.grouped ?? new Map(), reused: new Set(),
+    grouped, reused: new Set(), labelKept: new Set(), capWrappers: new Set(), judged: [],
+    from: opts.start ? "current" : "scratch",
+    oldSectionCount: opts.oldSections ? oldDomain.length : undefined,
   };
   if (entries.length === 0) return plan;
   const byEntry = new Map(entries.map((e) => [e.id, e]));
@@ -249,11 +278,13 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
     state = { sections: [], assignment: new Map() };
   }
   plan.state = state;
-  const t = new Tree(state, vec, domain);
+  const t = new Tree(state, vec, domain, new Set(grouped.keys()));
   if (state.sections.length === 0) {
+    plan.from = "scratch";
     const root = t.newSection(null, entries.map((e) => e.id));
     for (const e of entries) state.assignment.set(e.id, String(root.id));
   }
+  t.normalize(); // centroids from the members that are assigned (drops sections left empty)
   for (const e of entries) if (!state.assignment.has(e.id)) {
     const rs = state.sections.filter((s) => !s.childIds.length);
     state.assignment.set(e.id, String(rs.reduce((b, l) => (cosine(e.vector, l.centroid) > cosine(e.vector, b.centroid) ? l : b)).id));
@@ -272,12 +303,14 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
       const id = String(sec.id);
       judged.add(id);
       const members = t.direct(id);
-      if (members.length <= rules.splitAbove) continue;
+      if (members.length <= rules.splitAbove) { plan.judged.push({ id, n: members.length, outcome: "below-threshold" }); continue; }
       const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
       if (!isSplit(d)) {
         plan.rejected.push({ sectionId: id, n: members.length, reason: d.reason, detail: d.detail });
+        plan.judged.push({ id, n: members.length, outcome: "kept" });
         continue;
       }
+      plan.judged.push({ id, n: members.length, outcome: "split" });
       for (let g = 0; g < d.k; g++) {
         const ids = members.filter((_, i) => d.labels[i] === g);
         const child = t.newSection(sec, ids);
@@ -294,14 +327,22 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
 
   // 3. the seeded branching cap is the only other structural rule
+  const beforeCap = new Set(state.sections.map((s) => String(s.id)));
   enforceBranchingFactor(state.sections, domain, SECTION_TREE);
   t.normalize();
+  for (const s of state.sections) if (!beforeCap.has(String(s.id))) plan.capWrappers.add(String(s.id));
 
   // 4. id continuity: sections matching an old one by member overlap keep its id, title and summary
   if (opts.oldSections) reuseOldSections(plan, t, opts.oldSections, entries, rules);
 
   // 5. one top-down, sibling-aware label pass (new sections only; may reject splits)
   await labelTree(plan, t, byEntry, namer, rules, notify);
+
+  // 6. grouped entries follow their holder (not counted, not clustered)
+  for (const [g, h] of plan.grouped) {
+    const sec = state.assignment.get(h);
+    if (sec) state.assignment.set(g, sec);
+  }
   t.normalize();
   return plan;
 }
@@ -329,7 +370,7 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
       let inter = 0;
       for (const e of ns) if (os.has(e)) inter++;
       const j = inter / (ns.size + os.size - inter);
-      if (j >= rules.reuseJaccard) pairs.push({ j, n: String(n.id), o: oid });
+      if (j >= rules.reuseJaccard) pairs.push({ j: String(n.id) === oid ? j + 10 : j, n: String(n.id), o: oid }); // a section that already has this id keeps it first
     }
   }
   pairs.sort((a, b) => b.j - a.j || (a.n < b.n ? -1 : 1) || (a.o < b.o ? -1 : 1));
@@ -348,13 +389,29 @@ function reuseOldSections(plan: RebuildPlan, t: Tree, oldSections: Section[], en
   plan.leftovers = new Map([...plan.leftovers].map(([k, v]) => [R(k), v]));
   plan.splitChildren = new Map([...plan.splitChildren].map(([k, v]) => [R(k), R(v)]));
   for (const r of plan.rejected) r.sectionId = R(r.sectionId);
+  for (const j of plan.judged) j.id = R(j.id);
+  plan.capWrappers = new Set([...plan.capWrappers].map(R));
   for (const m of plan.moves) { m.from = R(m.from); m.to = R(m.to); }
   for (const oid of map.values()) {
     const sec = plan.state.sections.find((s) => String(s.id) === oid)!;
     const o = old.find((x) => String(x.id) === oid)!;
-    sec.title = o.title; sec.summary = o.summary; sec.summaryHash = o.summaryHash; sec.created = o.created;
-    sec.dirty = false;
+    const ns = new Set(t.subtree(oid));
+    const os = oldSets.get(oid)!;
+    let inter = 0;
+    for (const e of ns) if (os.has(e)) inter++;
+    const jac = inter / (ns.size + os.size - inter);
+    sec.created = o.created;
+    sec.label = o.label;
     plan.reused.add(oid);
+    if (jac >= rules.reuseKeepLabelJaccard) {
+      // same section, same name
+      sec.title = o.title; sec.summary = o.summary; sec.summaryHash = o.summaryHash;
+      sec.memberCountAtLastLabel = o.memberCountAtLastLabel;
+      sec.dirty = false;
+      plan.labelKept.add(oid);
+    } else {
+      sec.dirty = true; // id kept, membership moved enough that the name is asked again
+    }
   }
 }
 
@@ -396,7 +453,7 @@ async function labelTree(
       sec.memberCountAtLastLabel = sec.memberCount;
     };
     for (const sec of sibs) {
-      if (!plan.reused.has(String(sec.id))) await ask(sec);
+      if (!plan.labelKept.has(String(sec.id))) await ask(sec);
       done.push(sec.summary || sec.title);
     }
     // A split child whose label restates the parent is re-asked once with the parent's title forbidden;
@@ -408,7 +465,7 @@ async function labelTree(
         if (!restatesParent(k.title, parent.title, rules)) continue;
         notify?.(`label "${k.title}" restates parent "${parent.title}"; asking again`);
         const first = k.title;
-        plan.reused.delete(String(k.id));
+        plan.labelKept.delete(String(k.id));
         await ask(k, [parent.title, first]);
         if (restatesParent(k.title, parent.title, rules)) {
           notify?.(`split rejected for ${k.id}: "${k.title}" still restates "${parent.title}"`);
@@ -423,6 +480,7 @@ async function labelTree(
             t.remove(id);
             plan.splitChildren.delete(id);
             plan.reused.delete(id);
+            plan.labelKept.delete(id);
           }
           plan.rejected.push({
             sectionId: String(parent.id), n: t.subtree(String(parent.id)).length, reason: "child-label-restates-parent",
@@ -432,6 +490,31 @@ async function labelTree(
         if (fold === splitKids) plan.leftovers.delete(String(parent.id));
         t.normalize();
         sibs = sibs.filter((s) => !fold.includes(s));
+      }
+    }
+    // A branching-cap wrapper is judged like a split child: re-ask once, and if its title still restates the
+    // parent the wrapper is dissolved (its children go back up to the parent) and the adopted children are named.
+    if (parent) {
+      const adopted: Section[] = [];
+      for (const w of sibs.filter((x) => plan.capWrappers.has(String(x.id)))) {
+        if (!restatesParent(w.title, parent.title, rules)) continue;
+        notify?.(`wrapper "${w.title}" restates parent "${parent.title}"; asking again`);
+        const first = w.title;
+        plan.labelKept.delete(String(w.id));
+        await ask(w, [parent.title, first]);
+        if (!restatesParent(w.title, parent.title, rules)) continue;
+        notify?.(`wrapper ${w.id} dissolved: "${w.title}" still restates "${parent.title}"`);
+        for (const k of t.kids(String(w.id))) { k.parent = parent.id; adopted.push(k); }
+        t.remove(String(w.id));
+        plan.capWrappers.delete(String(w.id));
+        plan.reused.delete(String(w.id));
+        plan.rejected.push({ sectionId: String(parent.id), n: adopted.length, reason: "wrapper-label-restates-parent", detail: { parent: parent.title, wrapper: w.title } });
+        t.normalize();
+        sibs = sibs.filter((x) => x !== w);
+      }
+      for (const k of adopted) {
+        if (!plan.labelKept.has(String(k.id))) await ask(k);
+        sibs.push(k);
       }
     }
     for (const sec of sibs) {
@@ -445,19 +528,25 @@ async function labelTree(
 // ── proposal ─────────────────────────────────────────────────────────────────
 
 export function renderProposal(plan: RebuildPlan): string {
-  const t = new Tree(plan.state, new Map(), plan.domain);
+  const t = new Tree(plan.state, new Map(), plan.domain, new Set(plan.grouped.keys()));
   const title = new Map(plan.entries.map((e) => [e.id, e.title]));
   const secTitle = (id: string) => plan.state.sections.find((s) => String(s.id) === id)?.title || id;
   const lines: string[] = [];
   lines.push(`# KB rebuild proposal: ${plan.domain}`, "");
-  lines.push(`${plan.entries.length} entries, ${plan.state.sections.length} sections (${plan.reused.size} reuse an existing section's id, title and summary; ${plan.state.sections.length - plan.reused.size} are new). Nothing was written to the KB.`, "");
+  const kept = plan.labelKept.size, relabel = plan.reused.size - kept;
+  lines.push(`${plan.entries.length} entries${plan.grouped.size ? ` (+${plan.grouped.size} grouped, pinned to their holders)` : ""}, ${plan.state.sections.length} sections, built ${plan.from === "current" ? "from the current tree" : "from scratch (one root)"}: ${kept} keep id and name, ${relabel} keep the id but are re-named, ${plan.state.sections.length - plan.reused.size} are new. Nothing was written to the KB.`, "");
+  if (plan.oldSectionCount !== undefined && collapseGuardFires(plan.oldSectionCount, plan.state.sections.length)) {
+    lines.push(`> **Collapse guard would fire:** the new tree has ${plan.state.sections.length} sections, fewer than half of the current ${plan.oldSectionCount}. \`rebuild --yes\` aborts unless \`--allow-collapse\` is given.`, "");
+  } else if (plan.oldSectionCount !== undefined) {
+    lines.push(`Collapse guard: not triggered (${plan.oldSectionCount} sections now, ${plan.state.sections.length} proposed).`, "");
+  }
   lines.push("A dry run still makes LLM label calls and may add vectors to the embedding cache; it changes no entry file, no sections file and no ledger.", "");
   lines.push("## Tree", "");
   const walk = (s: Section, indent: string) => {
     const direct = t.direct(String(s.id));
     const total = t.subtree(String(s.id)).length;
     const left = plan.leftovers.get(String(s.id));
-    lines.push(`${indent}- **${s.title || s.id}** \`${s.id}\` ${plan.reused.has(String(s.id)) ? "[reused]" : "[new]"} — ${total} entries${t.kids(String(s.id)).length ? ` (${direct.length} direct${left ? `, ${left.length} leftover` : ""})` : ""}`);
+    lines.push(`${indent}- **${s.title || s.id}** \`${s.id}\` ${plan.labelKept.has(String(s.id)) ? "[reused]" : plan.reused.has(String(s.id)) ? "[id reused, re-named]" : "[new]"}${plan.capWrappers.has(String(s.id)) ? " [cap wrapper]" : ""} — ${total} entries${t.kids(String(s.id)).length ? ` (${direct.length} direct${left ? `, ${left.length} leftover` : ""})` : ""}`);
     for (const k of t.kids(String(s.id))) walk(k, indent + "  ");
   };
   for (const r of plan.state.sections.filter((s) => s.parent === null)) walk(r, "");
@@ -470,6 +559,12 @@ export function renderProposal(plan: RebuildPlan): string {
   lines.push("", "## Moves (refinement)", "");
   if (!plan.moves.length) lines.push("none");
   for (const m of plan.moves) lines.push(`- ${m.title} (${m.id}): ${secTitle(m.from)} → ${secTitle(m.to)} (own ${m.own.toFixed(2)}, other ${m.better.toFixed(2)})`);
+  lines.push("", "## Judged by the split rule", "");
+  const judgedNow = plan.judged.filter((j) => j.outcome !== "below-threshold");
+  if (!judgedNow.length) lines.push("none");
+  for (const j of judgedNow) lines.push(`- ${secTitle(j.id)} \`${j.id}\` (${j.n} direct): ${j.outcome === "split" ? "split" : "kept whole"}`);
+  const below = plan.judged.length - judgedNow.length;
+  if (below) lines.push(`- ${below} section(s) at or below the split threshold were not judged`);
   lines.push("", "## Rejected / not split", "");
   if (!plan.rejected.length) lines.push("none");
   for (const r of plan.rejected) lines.push(`- ${secTitle(r.sectionId)} \`${r.sectionId}\` (${r.n}): ${r.reason}${r.detail ? " " + JSON.stringify(r.detail) : ""}`);
@@ -497,7 +592,7 @@ export function loadRebuildEntries(domainsRoot: string, domain: string, vectors:
   return out;
 }
 
-export { commitRebuild, recoverRebuild, withSectionLine, rebuildJournalFile, rebuildOldValuesFile, sectionsBackupFile, listRebuildTemps, type CommitHooks } from "./rebuild-commit.js";
+export { commitRebuild, recoverRebuild, withSectionLine, rebuildJournalFile, rebuildOldValuesFile, sectionsBackupFile, listRebuildTemps, listRebuildBackups, restoreRebuild, collapseGuardFires, type CommitHooks } from "./rebuild-commit.js";
 
 /** Grouped entries (`group: <anchor>`) → the entry holding that anchor. A grouped entry with no holder is left out (the commit then keeps or aborts on it). */
 export function loadGrouped(domainsRoot: string, domain: string): Map<string, string> {
@@ -604,4 +699,45 @@ export function insertEntry(
   repairPath(state, target, vec, domain, rules);
   refreshPath(state, target, vec);
   return target;
+}
+
+// ── starting from the current tree ───────────────────────────────────────────
+
+/** The domain's current tree as a start state: its sections, and each entry at the section its file names (if that section exists). */
+export function currentTreeStart(oldSections: Section[], entries: RebuildEntry[], domain: string): RebuildState | undefined {
+  const sections = oldSections.filter((s) => String(s.domain) === domain);
+  if (!sections.length) return undefined;
+  const ids = new Set(sections.map((s) => String(s.id)));
+  const assignment = new Map<string, string>();
+  for (const e of entries) if (e.section && ids.has(e.section)) assignment.set(e.id, e.section);
+  return { sections: structuredClone(sections), assignment };
+}
+
+/** Entry file ids in a domain (what a plan was made from; the commit re-checks it under the lock). */
+export function listEntryIds(domainsRoot: string, domain: string): string[] {
+  const eDir = join(domainsRoot, domain, "entries");
+  return existsSync(eDir) ? readdirSync(eDir).filter((f) => f.endsWith(".md") && !f.startsWith(".")).map((f) => f.slice(0, -3)).sort() : [];
+}
+
+/**
+ * Bootstrap helper: sections folded from the ledger have no centroids (the sections_replaced event
+ * does not carry them). Recompute any empty or all-zero centroid from the subtree's entry vectors.
+ */
+export function fillMissingCentroids(sections: Section[], domainsRoot: string, vectors: EntryVector[]): number {
+  let filled = 0;
+  const missing = (c: number[] | undefined) => !c || c.length === 0 || c.every((x) => x === 0);
+  for (const domain of new Set(sections.map((s) => String(s.domain)))) {
+    const mine = sections.filter((s) => String(s.domain) === domain);
+    if (!mine.some((s) => missing(s.centroid))) continue;
+    const entries = loadRebuildEntries(domainsRoot, domain, vectors);
+    const vecs = new Map<string, number[][]>();
+    for (const e of entries) if (e.section) vecs.set(e.section, [...(vecs.get(e.section) ?? []), e.vector]);
+    const sub = (id: string): number[][] => [...(vecs.get(id) ?? []), ...mine.filter((c) => String(c.parent) === id).flatMap((c) => sub(String(c.id)))];
+    for (const s of mine) {
+      if (!missing(s.centroid)) continue;
+      const vs = sub(String(s.id));
+      if (vs.length) { s.centroid = unit(meanVec(vs)); filled++; }
+    }
+  }
+  return filled;
 }

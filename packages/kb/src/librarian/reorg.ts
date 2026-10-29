@@ -25,8 +25,9 @@ import { createEmbedder, buildEntryVectors, cosine, type Embedder, type EntryVec
 import { computeCentroid } from "./hierarchy.js";
 import { ev, type KbEvent } from "../shared/index.js";
 import { withKbLock } from "./lock.js";
-import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, engineNamer, type RebuildPlan } from "./rebuild.js";
-import { commitRebuild, recoverRebuild } from "./rebuild-commit.js";
+import { planRebuild, renderProposal, loadRebuildEntries, loadGrouped, listEntryIds, currentTreeStart, fillMissingCentroids, engineNamer, type RebuildPlan } from "./rebuild.js";
+import { commitRebuild } from "./rebuild-commit.js";
+import { recoverAndRender } from "./rebuild-recover.js";
 
 /** Shared state for a single incremental `reorgDomain` call. */
 interface IncrementalCtx {
@@ -55,6 +56,10 @@ export interface ReorgOptions {
    * snapshot or ledger line is written.
    */
   dryRun?: boolean;
+  /** With rebuild: start from the current tree (default; only oversized sections are judged) or from one root. */
+  rebuildFrom?: "current" | "scratch";
+  /** With rebuild: commit even if the new tree has fewer than half the current sections. */
+  allowCollapse?: boolean;
   /** With rebuild + dryRun: where to write the proposal markdown (the only file a dry-run rebuild writes). */
   proposalPath?: string;
   /** Treat every section as dirty (re-label all, not just changed ones). */
@@ -449,12 +454,21 @@ async function llmLabelSection(args: {
  */
 export async function reorg(opts: ReorgOptions): Promise<ReorgResult> {
   if (opts.dryRun) return reorgUnlocked(opts);
-  return withKbLock(opts.roots, () => reorgUnlocked(opts), { waitMs: 15 * 60_000 });
+  const lockOpts = { waitMs: 15 * 60_000 };
+  if (opts.rebuild) {
+    // A rebuild PLANS outside the lock (minutes of LLM calls must not stall the sweep) and takes it only to
+    // commit, where the entry set is re-checked. A half-applied earlier commit is finished first.
+    await withKbLock(opts.roots, async () => { recoverAndRender(opts.roots, opts.notify); }, lockOpts);
+    return reorgUnlocked(opts);
+  }
+  return withKbLock(opts.roots, async () => {
+    recoverAndRender(opts.roots, opts.notify);
+    return reorgUnlocked(opts);
+  }, lockOpts);
 }
 
 async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const { engine, roots, notify } = opts;
-  if (!opts.dryRun) recoverRebuild(roots);
   const domainsRoot = join(roots.kbBase, "domains");
   if (!existsSync(domainsRoot)) {
     return { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
@@ -478,6 +492,7 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   if (sections.length === 0 && log.length > 0) {
     sections = foldSections(log);
     if (sections.length > 0) {
+      fillMissingCentroids(sections, join(roots.kbBase, "domains"), allVectors);
       notify?.(`Bootstrapped ${sections.length} sections from ledger`);
     }
   }
@@ -530,37 +545,49 @@ async function reorgUnlocked(opts: ReorgOptions): Promise<ReorgResult> {
   const events: KbEvent[] = [];
   const result: ReorgResult = { splits: 0, merges: 0, crystallized: 0, placements: 0, labelsUpdated: 0, domains: [] };
 
-  // Full rebuild: planned entirely in memory per domain, then ONE commit per domain.
+  // Full rebuild: planned entirely in memory per domain (outside the KB lock), then ONE locked commit per domain.
   if (opts.rebuild) {
-    if (!opts.dryRun) recoverRebuild(roots);
     const vectorById = new Map(allVectors.map((v) => [v.entryId, v.vector]));
     try {
       for (const domain of domains) {
+        const fileIds = listEntryIds(domainsRoot, domain);
         const entries = loadRebuildEntries(domainsRoot, domain, allVectors);
         if (entries.length === 0) { notify?.(`rebuild: ${domain} — no entries, skipping`); continue; }
-        notify?.(`rebuild: ${domain} (${entries.length} entries)`);
+        const oldSections = sections.filter((s) => String(s.domain) === domain);
+        const from = opts.rebuildFrom ?? "current";
+        const start = from === "current" ? currentTreeStart(oldSections, entries, domain) : undefined;
+        notify?.(`rebuild: ${domain} (${entries.length} entries, from ${start ? "the current tree" : "scratch"})`);
         const plan = await planRebuild({
-          domain, entries, namer: engineNamer(engine), notify,
+          domain, entries, namer: engineNamer(engine), notify, start,
           grouped: loadGrouped(domainsRoot, domain),
-          oldSections: sections.filter((s) => String(s.domain) === domain),
+          oldSections,
         });
+        plan.fileIds = fileIds;
         result.splits += plan.splitChildren.size;
         result.placements += plan.state.assignment.size;
-        result.labelsUpdated += plan.state.sections.length - plan.reused.size;
+        result.labelsUpdated += plan.state.sections.length - plan.labelKept.size;
         result.rebuilt = true;
         result.plans = [...(result.plans ?? []), plan];
         result.proposal = (result.proposal ?? "") + renderProposal(plan);
-        if (opts.dryRun) { result.domains.push(domain); continue; }
-        const { entriesWritten, orphansPlaced } = commitRebuild(roots, plan, { vectorOf: (id) => vectorById.get(id) });
+        // Recorded before the commit so the re-render below also covers a commit that fails midway.
         result.domains.push(domain);
+        if (opts.dryRun) continue;
+        const { entriesWritten, orphansPlaced } = await withKbLock(
+          roots,
+          async () => commitRebuild(roots, plan, { vectorOf: (id) => vectorById.get(id), allowCollapse: opts.allowCollapse, notify }),
+          { waitMs: 15 * 60_000 },
+        );
         notify?.(`  committed: ${entriesWritten} entry file(s) rewritten, ${plan.state.sections.length} sections` + (orphansPlaced.length ? `, ${orphansPlaced.length} orphan(s) placed by similarity` : ""));
       }
     } finally {
-      // Domains already committed must get a consistent registry/digest/index even if a later one failed.
+      // Domains already committed (or being committed) must get a consistent registry/digest/index even if a later one failed.
       if (!opts.dryRun && result.domains.length > 0) {
-        rerenderRegistry(roots, false);
-        repinGroups(roots, result.domains, false);
-        for (const domain of result.domains) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
+        await withKbLock(roots, async () => {
+          recoverAndRender(roots, notify);
+          rerenderRegistry(roots, false);
+          repinGroups(roots, result.domains, false);
+          for (const domain of result.domains) { renderDomainDigest(roots, domain); renderDomainIndex(roots, domain); }
+        }, { waitMs: 15 * 60_000 });
       }
     }
     if (opts.dryRun) {

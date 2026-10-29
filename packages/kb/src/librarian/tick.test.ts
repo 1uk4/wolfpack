@@ -163,13 +163,12 @@ describe("runSweepTick", () => {
 
   it("finishes an interrupted rebuild (journal left behind) before anything else, even with an empty inbox", async () => {
     const final = join(roots.kbBase, "domains", "wp", "entries", "a.md");
-    writeFileSync(final, "old");
-    writeFileSync(join(roots.kbBase, "domains", "wp", "entries", ".rebuild-tmp-a.md.tmp"), "new");
+    writeFileSync(final, "---\ndomain: wp\nsection: old\n---\n");
     mkdirSync(roots.denLocal, { recursive: true });
-    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 2, domain: "wp", at: "x", renames: [{ tmp: join(roots.kbBase, "domains", "wp", "entries", ".rebuild-tmp-a.md.tmp"), final }] }));
+    writeFileSync(join(roots.denLocal, ".rebuild-journal.json"), JSON.stringify({ version: 3, domain: "wp", at: "x", entries: [{ path: final, section: "sec-wp-new" }], renames: [] }));
     const t = await tick();
     expect(t.outcome).toBe("idle");
-    expect(readFileSync(final, "utf-8")).toBe("new");
+    expect(readFileSync(final, "utf-8")).toContain("section: sec-wp-new");
     expect(existsSync(join(roots.denLocal, ".rebuild-journal.json"))).toBe(false);
   });
 

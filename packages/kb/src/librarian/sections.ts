@@ -83,7 +83,8 @@ export function foldSections(events: KbEvent[]): Section[] {
         for (const [id, sec] of sections) if (String(sec.domain) === e.domain) sections.delete(id);
         for (const raw of e.sections) {
           const sec = raw as unknown as Section;
-          sections.set(String(sec.id), sec);
+          // the snapshot carries no centroids; a bootstrap recomputes them (fillMissingCentroids)
+          sections.set(String(sec.id), { ...sec, centroid: sec.centroid ?? [] } as Section);
         }
         break;
       }

@@ -22,6 +22,9 @@ import {
   SubmitRequestSchema,
   ThreadDetailSchema,
   ThreadSettingsPatchSchema,
+  ThreadContextSchema,
+  CompactBodySchema,
+  CompactAckSchema,
   ThreadSettingsResponseSchema,
   ThreadEventSchema,
   ThreadSummarySchema,
@@ -172,6 +175,14 @@ export const ROUTES = {
    * 400 `invalid_request` for a bad body or a subagent thread (its model comes from its profile), 404 `not_found` for an unknown thread.
    */
   putThreadSettings: { method: "PUT", path: "/v1/threads/:id/settings", body: ThreadSettingsPatchSchema, response: { kind: "json", schema: ThreadSettingsResponseSchema }, status: [200], error: err },
+  /** The thread's context size against its model window, thresholds and compaction history. Works for every thread kind. 404 `not_found`. */
+  getThreadContext: { method: "GET", path: "/v1/threads/:id/context", response: { kind: "json", schema: ThreadContextSchema }, status: [200], error: err },
+  /**
+   * Compact the thread's context now (manual compaction; extension beforeCompact hooks run first). Allowed while a turn runs.
+   * Answers once admitted; the wolf then announces `thread-updated` when the compaction starts and again when it finishes
+   * (re-read the context route). Body `{instructions?}`. 400 `invalid_request`, 404 `not_found`.
+   */
+  compactThread: { method: "POST", path: "/v1/threads/:id/compact", body: CompactBodySchema, response: { kind: "json", schema: CompactAckSchema }, status: [200], error: err },
   // --- feature progress: bind ---
   /**
    * Bind the thread's conversation to a work item (task, issue or spike), the way the agent's `task_bind` does: same

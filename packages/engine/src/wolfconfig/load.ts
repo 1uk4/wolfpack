@@ -118,6 +118,7 @@ export function loadWolfConfig(file: string, opts: { home?: string } = {}): Load
     ...(v.subagents?.maxRunning !== undefined ? { subagents: { maxRunning: v.subagents.maxRunning } } : {}),
     ...(sandbox ? { sandbox } : {}),
     prompts: { ...(v.prompts?.structuredOutput !== undefined ? { structuredOutput: v.prompts.structuredOutput } : {}) },
+    ...(v.compaction ? { compaction: definedOnly(v.compaction) as NonNullable<WolfConfig["compaction"]> } : {}),
     memory: {
       live: v.memory.live === true,
       librarian: v.memory.librarian === true,

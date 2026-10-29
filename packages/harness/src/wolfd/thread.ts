@@ -18,6 +18,7 @@ import {
   DEFAULT_THREAD_SETTINGS,
   type ThreadSettings,
   type ThreadTier,
+  type ThreadContext,
   type ThreadDetail,
   type ThreadEvent,
   type ThreadMessage,
@@ -174,6 +175,42 @@ export class ThreadRuntime {
     this.disarmWatchdog();
     await this.watch?.stop().catch(() => {});
     await this.pump?.catch(() => {});
+  }
+
+  /**
+   * Context stats for the header chip (wire shape of GET .../context). `lastAt` becomes an ISO string.
+   */
+  /** Error of the last manual compaction, until the next one starts. */
+  private compactError: string | undefined;
+
+  async contextStats(): Promise<ThreadContext> {
+    const s = await this.conv.contextStats();
+    return {
+      tokens: Math.round(s.tokens),
+      ...(s.window ? { window: s.window } : {}),
+      ...(s.startAt !== undefined ? { startAt: s.startAt } : {}),
+      ...(s.waitAt !== undefined ? { waitAt: s.waitAt } : {}),
+      compactions: { count: s.compactions.count, ...(s.compactions.lastAt !== undefined ? { lastAt: new Date(s.compactions.lastAt).toISOString() } : {}) },
+      compacting: s.compacting,
+      ...(this.compactError ? { compactError: this.compactError } : {}),
+    };
+  }
+
+  /**
+   * Compact now. No busy check: pi-durable places the summary at the next boundary while a turn runs. Resolves once
+   * admitted; `onDone` runs when the compaction has finished (the server announces thread-updated then).
+   */
+  async compact(instructions: string | undefined, onDone: (r: { status: "ok" | "failed"; error?: string }) => void): Promise<void> {
+    const { done } = await this.conv.compact(instructions);
+    this.compactError = undefined;
+    const finish = (r: { status: "ok" | "failed"; error?: string }) => {
+      if (r.status === "failed") {
+        this.compactError = r.error || "compaction failed";
+        console.error(`[wolfd] compaction failed on ${this.summary.id}: ${this.compactError}`);
+      }
+      try { onDone(r); } catch { /* announcing must not crash the process */ }
+    };
+    void done.then(finish, (e) => finish({ status: "failed", error: e instanceof Error ? e.message : String(e) }));
   }
 
   /** Abort the running turn and wait until the pump has seen it end. */

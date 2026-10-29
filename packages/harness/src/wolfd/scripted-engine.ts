@@ -60,6 +60,48 @@ export class ScriptedEngine implements EngineConversation {
     this.id = opts.id ?? "scripted";
   }
 
+  /** Manual compactions requested (their instructions). */
+  readonly compactCalls: Array<string | undefined> = [];
+  /** A test holds the compaction open by setting this; compact()'s `done` waits for it. */
+  compactGate?: Promise<void>;
+  private compactingNow = 0;
+  private compactionCount = 0;
+  private compactionLastAt: number | undefined;
+  /** Context numbers contextStats() reports. */
+  tokens = 12_000;
+  window: number | undefined = 1_000_000;
+
+  /** A test sets this to make the next compaction fail. */
+  compactFail?: string;
+  private inflight?: { taskId: string; done: Promise<{ status: "ok" | "failed"; error?: string }> };
+
+  async compact(instructions?: string): Promise<{ taskId: string; done: Promise<{ status: "ok" | "failed"; error?: string }> }> {
+    if (this.inflight) return this.inflight;
+    this.compactCalls.push(instructions);
+    this.compactingNow++;
+    const fail = this.compactFail;
+    this.compactFail = undefined;
+    const done = (this.compactGate ?? Promise.resolve()).then((): { status: "ok" | "failed"; error?: string } => {
+      this.compactingNow--;
+      this.inflight = undefined;
+      if (fail) return { status: "failed", error: fail };
+      this.compactionCount++;
+      this.compactionLastAt = Date.now();
+      return { status: "ok" };
+    });
+    this.inflight = { taskId: String(this.compactCalls.length), done };
+    return this.inflight;
+  }
+
+  async contextStats() {
+    return {
+      tokens: this.tokens,
+      ...(this.window ? { window: this.window, startAt: this.window - 16384 - 32768, waitAt: this.window - 16384 } : {}),
+      compactions: { count: this.compactionCount, ...(this.compactionLastAt !== undefined ? { lastAt: this.compactionLastAt } : {}) },
+      compacting: this.compactingNow > 0,
+    };
+  }
+
   async configure(opts: ConfigureOptions): Promise<void> {
     this.configured.push(opts);
   }

@@ -30,6 +30,7 @@ import {
   GraduationConfirmBodySchema,
   DEFAULT_THREAD_SETTINGS,
   ThreadSettingsPatchSchema,
+  CompactBodySchema,
 } from "../schemas.js";
 
 const STUB_TIER_MODELS = { main: "stub-main", smart: "stub-smart", fast: "stub-fast" };
@@ -116,6 +117,7 @@ export class StubServer {
   private readonly http: Server;
   private counter = 0;
   /** `<threadId>\n<attachmentId>` -> the upload (kept in memory so `getAttachment` can serve it). */
+  private readonly compactions = new Map<string, { count: number; lastAt?: string }>();
   private readonly uploads = new Map<string, { att: Attachment; bytes: Uint8Array }>();
   private baseUrl = "";
 
@@ -276,6 +278,17 @@ export class StubServer {
         if (t.summary.kind === "subagent") throw new HttpError("invalid_request", "a subagent thread's model comes from its profile");
         t.summary.settings = { ...DEFAULT_THREAD_SETTINGS, ...t.summary.settings, ...body.data };
         return this.json(res, 200, { ...t.summary.settings, models: STUB_TIER_MODELS });
+      }
+      case "getThreadContext": {
+        const t = this.thread(params.id);
+        return this.json(res, 200, { tokens: 12_000, window: 1_000_000, startAt: 200_000, waitAt: 983_616, compactions: this.compactions.get(t.summary.id) ?? { count: 0 }, compacting: false });
+      }
+      case "compactThread": {
+        const t = this.thread(params.id);
+        if (!CompactBodySchema.safeParse(await readJson(req)).success) throw new HttpError("invalid_request", "body must be {instructions?: string}");
+        const c = this.compactions.get(t.summary.id) ?? { count: 0 };
+        this.compactions.set(t.summary.id, { count: c.count + 1, lastAt: new Date().toISOString() });
+        return this.json(res, 200, { accepted: true });
       }
       // --- feature progress: bind ---
       case "bindThread": {

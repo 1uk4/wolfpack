@@ -27,6 +27,7 @@ import {
   PROTOCOL_VERSION_HEADER,
   SubmitBodySchema,
   ThreadSettingsPatchSchema,
+  CompactBodySchema,
   matchRoute,
   type ThreadSettings,
   type ThreadSettingsResponse,
@@ -554,6 +555,21 @@ export class WolfServer {
         this.mirrorAutoShip(t);
         this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
         return this.json(res, 200, this.settingsResponse(t));
+      }
+      case "getThreadContext":
+        return this.json(res, 200, await this.checkThread(params.id).contextStats());
+      case "compactThread": {
+        const t = this.checkThread(params.id);
+        const body = CompactBodySchema.safeParse((await readJson(req)) ?? {});
+        if (!body.success) throw new HttpError("invalid_request", "body must be {instructions?: string}");
+        const announce = () => this.emitWolf({ type: "thread-updated", thread: t.threadSummary() });
+        try {
+          await t.compact(body.data.instructions?.trim() || undefined, announce);
+        } catch (e) {
+          throw new HttpError("engine_error", `could not compact: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        announce();
+        return this.json(res, 200, { accepted: true });
       }
       // --- feature progress: bind ---
       case "bindThread": {

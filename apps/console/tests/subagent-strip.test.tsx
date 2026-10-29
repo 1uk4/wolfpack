@@ -301,6 +301,23 @@ describe("the sidebar", () => {
 		assert.match(html, /braille-spinner/);
 	});
 
+	it("a feature row's meta line is its git branch (truncated, full in the tooltip); no branch = no line", () => {
+		const BR = "feat/07auwWg-app-follow-ups-after-the-cutov";
+		const [withBr, noBr, archived] = core.foldWolfThreads(null, [{ wolf: "1uk4", threads: [
+			wire({ ...FIXTURE_THREAD, id: "1uk4/f1", title: "F1", kind: "feature", workspace: { repo: "r", toplevel: "/t", branch: BR, path: "/p", isWorktree: true } } as never),
+			wire({ ...FIXTURE_THREAD, id: "1uk4/f2", title: "F2", kind: "feature", workspace: undefined } as never),
+			wire({ ...FIXTURE_THREAD, id: "1uk4/f3", title: "F3", kind: "feature", closed: true, workspace: { repo: "r", toplevel: "/t", branch: "feat/old", path: "/p", isWorktree: true } } as never),
+		] }]) as (ReturnType<typeof core.threadListItem>)[];
+		const html = (r: typeof withBr) => renderToStaticMarkup(<SessionRow chat={r!} active={false} onOpen={() => {}} />);
+		assert.equal(withBr!.branch, BR);
+		assert.match(html(withBr), new RegExp(`title="${BR}"[^>]*>${BR}<`));
+		assert.match(html(withBr), /truncate/);
+		assert.doesNotMatch(html(withBr), />1uk4</);
+		assert.doesNotMatch(html(noBr), /session-meta|>1uk4</); // no gap, no wolf name
+		assert.match(html(archived), />feat\/old</);
+		assert.notEqual(core.fuzzyScore("07auw", withBr!.branch!), null);
+	});
+
 	it("a feature row sits one step under Home with a guide line; Home does not", () => {
 		const feat = { ...rows.find((r) => r.id === PARENT)!, kind: "feature" };
 		assert.match(renderToStaticMarkup(<SessionRow chat={feat} active={false} onOpen={() => {}} indented />), /ml-4[^"]*border-l/);

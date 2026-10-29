@@ -25,7 +25,7 @@ import { isChildThread, sidebarLayout, stateLabel, threadListItem, type ChatList
 
 /** A sidebar row: a chat-shaped item that may carry the route it opens and
  *  its own meta line (thread rows — the ConsoleClient list). */
-type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string } & Omit<ChildThread, "id" | "title">;
+type SessionItem = ChatListItem & { href?: string; meta?: string; needsYou?: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string } & Omit<ChildThread, "id" | "title">;
 
 const itemHref = (c: SessionItem) => c.href ?? `/chat/${c.id}`;
 import { kbdEventForAction } from "@/src/core";
@@ -264,9 +264,11 @@ function sessionMeta(chat: SessionItem): string {
 		const step = chat.state === "running" && chat.step ? ` · ${chat.step}` : "";
 		return `${chat.agent ?? "agent"} · ${stateLabel(chat)}${step}`;
 	}
-	if (chat.meta !== undefined && !chat.busy && !chat.needsYou) return chat.meta;
+	// A feature thread names its git branch where other rows name the wolf (the orchestrator row carries the wolf).
+	const who = chat.kind === "feature" ? chat.branch : chat.meta;
+	if (chat.meta !== undefined && !chat.busy && !chat.needsYou) return who ?? "";
 	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
-	if (chat.needsYou) return chat.meta !== undefined ? `${chat.meta} · needs you` : "Needs you";
+	if (chat.needsYou) return who !== undefined ? `${who} · needs you` : "Needs you";
 	if (chat.pendingQuestion) return `Waiting for input · ${timeAgo(chat.updatedAt)}`;
 	if (chat.busy) return "Working…";
 	return timeAgo(chat.updatedAt);
@@ -370,7 +372,13 @@ export function SessionRow({
 					{home && <WorkflowIcon data-testid="orchestrator-icon" aria-label="Orchestrator" className="size-[1em] shrink-0 text-muted-foreground" />}
 					<span className="truncate">{chat.title}</span>
 				</span>
-				<span className="block text-xs text-muted-foreground">{home ? "orchestrator" : sessionMeta(chat)}</span>
+				{(() => {
+					const meta = home ? "orchestrator" : sessionMeta(chat);
+					// Nothing to say (a feature without a branch): no line, so no empty gap.
+					return meta ? (
+						<span data-testid="session-meta" title={chat.branch && chat.kind === "feature" ? chat.branch : undefined} className="block truncate text-xs text-muted-foreground">{meta}</span>
+					) : null;
+				})()}
 			</span>
 		</button>
 	);
@@ -455,7 +463,7 @@ export function SessionsSidebar() {
 		if (!q) return list;
 		return list
 			.map((c) => {
-				const scores = [fuzzyScore(q, c.title), c.alias ? fuzzyScore(q, c.alias) : null].filter((x): x is number => x !== null);
+				const scores = [fuzzyScore(q, c.title), c.alias ? fuzzyScore(q, c.alias) : null, c.branch ? fuzzyScore(q, c.branch) : null].filter((x): x is number => x !== null);
 				return { c, score: scores.length ? Math.max(...scores) : null };
 			})
 			.filter((r): r is { c: (typeof list)[number]; score: number } => r.score !== null)
@@ -519,7 +527,7 @@ export function SessionsSidebar() {
 				wolves.wolves.map(async (w) => {
 					try {
 						const res = await fetch(`/api/wolves/${encodeURIComponent(w.name)}/threads`, { cache: "no-store" });
-						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string }[] };
+						const d = (await res.json()) as { threads?: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string } }[] };
 						return { wolf: w.name, threads: res.ok && Array.isArray(d.threads) ? d.threads : undefined };
 					} catch {
 						return { wolf: w.name, threads: undefined }; // this wolf keeps its last rows; the others still update

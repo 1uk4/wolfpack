@@ -326,9 +326,9 @@ export function threadLabel(wolf: string, thread: { kind?: string; title: string
 
 export function threadListItem(
 	wolf: string,
-	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string } & Omit<ChildThread, "id" | "title">,
+	thread: { id: string; title: string; status?: "idle" | "busy" | "needs-you"; closed?: boolean; kind?: string; workspace?: { branch?: string } } & Omit<ChildThread, "id" | "title">,
 	busy = thread.status === "busy",
-): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; kind?: string; alias?: string } & Omit<ChildThread, "id" | "title"> {
+): ChatListItem & { href: string; meta: string; needsYou: boolean; archived?: boolean; kind?: string; alias?: string; branch?: string } & Omit<ChildThread, "id" | "title"> {
 	const now = new Date().toISOString();
 	return {
 		id: thread.id,
@@ -347,6 +347,8 @@ export function threadListItem(
 		// A graduated feature's thread is read-only history: the sidebar files it under "Archived".
 		...(thread.closed ? { archived: true } : {}),
 		...(thread.kind !== undefined ? { kind: thread.kind } : {}),
+		// The git branch the thread works on (a feature row shows it as its meta line).
+		...(thread.workspace?.branch ? { branch: thread.workspace.branch } : {}),
 		// A subagent's fields ride the row (the sidebar nests it under its parent, the job list reads its state).
 		...(thread.parentThreadId !== undefined ? { parentThreadId: thread.parentThreadId } : {}),
 		...(thread.agent !== undefined ? { agent: thread.agent } : {}),

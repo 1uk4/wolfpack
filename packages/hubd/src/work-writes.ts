@@ -10,7 +10,6 @@
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   appendWorkLedger,
@@ -240,8 +239,27 @@ function assertNotMixed(ops: WorkOp[]): void {
 /** Dir-name prefix of staging scratch dirs: `hubd-stage-<pid>-<random>`. The pid lets a later hubd tell orphans from live ones. */
 const STAGE_PREFIX = "hubd-stage-";
 
-/** Remove scratch dirs left by a hubd that crashed mid-batch: only `hubd-stage-<pid>-*` under `tmpRoot` whose pid is not alive. */
-export function sweepStageDirs(tmpRoot: string = tmpdir()): number {
+/** The hub-owned scratch root: `<dataDir>/tmp` (`roots.denLocal` is the hub dataDir). Nothing else lives there. */
+export function stageRoot(roots: KbRoots): string {
+  return join(roots.denLocal, "tmp");
+}
+
+/** Is `pid` a live process? EPERM means it exists but is not ours, so alive. */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Remove scratch dirs left by a hubd that crashed mid-batch. Scans only the hub-owned `tmpRoot` (`<dataDir>/tmp`), only names
+ * `hubd-stage-<pid>-<random>`. Rule: pid <= 0 is not a real hubd pid, so the dir is deleted; otherwise it is deleted only if the
+ * pid is dead. `isAlive` is injectable for tests.
+ */
+export function sweepStageDirs(tmpRoot: string, isAlive: (pid: number) => boolean = pidAlive): number {
   let n = 0;
   let names: string[];
   try {
@@ -253,13 +271,7 @@ export function sweepStageDirs(tmpRoot: string = tmpdir()): number {
     const m = /^hubd-stage-(\d+)-[A-Za-z0-9]+$/.exec(name);
     if (!m) continue;
     const pid = Number(m[1]);
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch (e) {
-      alive = (e as NodeJS.ErrnoException).code === "EPERM";
-    }
-    if (alive && pid !== 0) continue;
+    if (pid > 0 && isAlive(pid)) continue;
     try {
       rmSync(join(tmpRoot, name), { recursive: true, force: true });
       n++;
@@ -278,8 +290,10 @@ export interface ApplyHooks {
   afterStaged?: () => void;
   /** After the single real ledger append, before the .md files are rendered. */
   afterAppend?: () => void;
-  /** Where scratch dirs are made (default os.tmpdir()). */
+  /** Where scratch dirs are made (default `<dataDir>/tmp`, see stageRoot). */
   tmpRoot?: string;
+  /** TEST SEAM: runs where the final fold happens, after the render; a throw simulates the fold failing after the append. */
+  beforeResult?: () => void;
 }
 
 /**
@@ -310,7 +324,9 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
     commitWorkItem(roots, cur0, body);
     return cur0;
   }
-  const scratchDir = mkdtempSync(join(hooks.tmpRoot ?? tmpdir(), `${STAGE_PREFIX}${process.pid}-`));
+  const stageDir = hooks.tmpRoot ?? stageRoot(roots);
+  mkdirSync(stageDir, { recursive: true });
+  const scratchDir = mkdtempSync(join(stageDir, `${STAGE_PREFIX}${process.pid}-`));
   try {
     const scratch: KbRoots = { kbBase: join(scratchDir, "kb", "base"), opsRoot: join(scratchDir, "kb", "ops"), denLocal: scratchDir };
     const realLedger = workLedgerFile(roots);
@@ -356,7 +372,14 @@ export function applyOps(roots: KbRoots, id: string, ops: WorkOp[], hooks: Apply
     } catch (e) {
       console.error("hubd: batch committed to the ledger but rendering the .md failed (next write repairs it):", e);
     }
-    return loadWorkState(roots).get(id as never) ?? item;
+    // The batch is committed; a failing fold must not turn it into a 500. Fall back to the item the staged run produced.
+    try {
+      hooks.beforeResult?.();
+      return loadWorkState(roots).get(id as never) ?? item;
+    } catch (e) {
+      console.error("hubd: batch committed but the final fold failed; answering with the staged item:", e);
+      return item;
+    }
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
   }

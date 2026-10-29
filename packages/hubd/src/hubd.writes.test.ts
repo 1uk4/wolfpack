@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { createWork, loadWorkState, moveWork, noteWork, stageWork, graduateWork, deleteWork, setCriteria } from "@wolfpack/kb/client";
 import { createHubServer, type HubServer } from "./server.js";
-import { applyOps, assertSectionText, replaceSection, sweepStageDirs } from "./work-writes.js";
+import { spawnSync } from "node:child_process";
+import { applyOps, assertSectionText, pidAlive, replaceSection, sweepStageDirs } from "./work-writes.js";
 import { hubRoots } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
 
@@ -370,15 +371,34 @@ describe("mixed batches, orphan sweep, setext and fences", () => {
     expect(readFileSync(join(dir, "kb", "base", "domains", FIXTURE_DOMAIN, "work", `${t}.md`), "utf8")).toBe(md0);
   });
 
-  it("sweepStageDirs removes only hubd-stage-<deadpid>-* dirs in the given root", () => {
+  it("sweepStageDirs: removes pid<=0 and dead-pid stage dirs only; live pid, other names and bad names stay", () => {
     const root = mk();
-    const dead = join(root, "hubd-stage-2147483646-abc123");
-    const live = join(root, `hubd-stage-${process.pid}-abc123`);
-    const other = join(root, "something-else");
-    const similar = join(root, "hubd-stage-notapid");
-    for (const d of [dead, live, other, similar]) mkdirSync(d);
-    expect(sweepStageDirs(root)).toBe(1);
-    expect(readdirSync(root).sort()).toEqual([`hubd-stage-${process.pid}-abc123`, "hubd-stage-notapid", "something-else"].sort());
+    const child = spawnSync(process.execPath, ["-e", "0"]); // exits before we look: its pid is dead
+    const deadPid = child.pid;
+    expect(pidAlive(deadPid)).toBe(false);
+    const names = {
+      dead: `hubd-stage-${deadPid}-abc123`,
+      zero: "hubd-stage-0-abc123",
+      live: `hubd-stage-${process.pid}-abc123`,
+      other: "something-else",
+      bad: "hubd-stage-notapid",
+    };
+    for (const d of Object.values(names)) mkdirSync(join(root, d));
+    expect(sweepStageDirs(root)).toBe(2);
+    expect(readdirSync(root).sort()).toEqual([names.live, names.other, names.bad].sort());
+    // injected liveness
+    expect(sweepStageDirs(root, () => false)).toBe(1);
+    expect(readdirSync(root).sort()).toEqual([names.other, names.bad].sort());
+  });
+
+  it("batch scratch dirs live under <dataDir>/tmp and are gone afterwards; a fold failure after the append still succeeds", () => {
+    const dir = mk();
+    const t = seedFixture(dir).tasks[0];
+    const roots = hubRoots(dir);
+    const item = applyOps(roots, t, [{ op: "note", text: "a" }, { op: "note", text: "b" }], { beforeResult: () => { throw new Error("fold"); } });
+    expect(item.id).toBe(t);
+    expect(ledger(dir).split("\n").filter((l) => l.includes('"a"') || l.includes('"b"')).length).toBe(2);
+    expect(readdirSync(join(dir, "tmp"))).toEqual([]);
   });
 
   it("setext underline only counts under a plain paragraph line; closing-hash ATX is the heading", () => {

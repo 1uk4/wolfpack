@@ -15,13 +15,17 @@ export function hubRoots(dataDir: string): KbRoots {
   return { kbBase: join(dataDir, "kb", "base"), opsRoot: join(dataDir, "kb", "ops"), denLocal: dataDir };
 }
 
+/** The lane directory name under the ops root (`<opsRoot>/contributions/<wolf>/`): sfo-01's equivalent is `inbox`. */
+export const CONTRIBUTIONS_LANE = "contributions";
+
 /**
- * The hub's contribution intake: `<dataDir>/kb/ops/contributions/<wolf>/<denTopicId>-<hash10>.md`, with `_bad/` (quarantine, each
- * file beside a `.reason.txt`) and `_processed/` (handled by the curator) inside the wolf's lane. This is the sfo-01 `inbox/<wolf>/`
- * layout renamed for the hub; the files are byte-identical to what the kb librarian intake reads (it takes the lane's parent dir).
+ * The hub's contribution intake: `<dataDir>/kb/ops/contributions/<wolf>/<denTopicId>-<hash10>.md`, with `_bad/` (quarantine: a
+ * truncated raw copy beside a `.reason.txt`) and `_processed/` (handled by the curator) inside the wolf's lane. It is the sfo-01
+ * `inbox/<wolf>/` layout under another lane name. The files are byte-identical to the wolf-side inbox files, and the kb intake reads
+ * them with its lane option: `drainInbox(hubRoots(dataDir), { lane: CONTRIBUTIONS_LANE })`.
  */
 export function contributionsRoot(dataDir: string): string {
-  return join(dataDir, "kb", "ops", "contributions");
+  return join(dataDir, "kb", "ops", CONTRIBUTIONS_LANE);
 }
 
 export function contributionsDir(dataDir: string, wolf: string): string {

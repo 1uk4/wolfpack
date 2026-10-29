@@ -26,23 +26,55 @@ export function hubTargetFromEnv(env: Record<string, string | undefined> = proce
   return baseUrl ? { baseUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
 }
 
-/** POST one contribution as the wolf. Throws with the hub's error message on a non-2xx. */
-export async function postContribution(hub: HubTarget, wolf: string, contribution: object): Promise<{ id: string; duplicate: boolean }> {
-  const res = await (hub.fetch ?? fetch)(`${hub.baseUrl.replace(/\/+$/, "")}/v1/contributions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Wolfpack-Actor": JSON.stringify({ id: wolf, kind: "wolf" }),
-      ...(hub.apiKey ? { "X-API-Key": hub.apiKey } : {}),
-    },
-    body: JSON.stringify(contribution),
-  });
-  const body = (await res.json().catch(() => ({}))) as { id?: string; duplicate?: boolean; message?: string };
-  if (!res.ok) throw new Error(`hub rejected the contribution (${res.status}): ${body.message ?? "no detail"}`);
-  return { id: String(body.id), duplicate: !!body.duplicate };
+/** The hub URL without credentials, query or fragment (safe to show and log). */
+export function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.username = "";
+    u.password = "";
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return url.replace(/\/\/[^/@\s]*@/g, "//").replace(/\/+$/, "");
+  }
 }
 
-/** Like `emitCrawl` (real emit), but delivers to the hub. `dest` of the result is the hub URL. */
+/** Hub POST timeout. */
+export const POST_TIMEOUT_MS = 30_000;
+
+/** Strip `user:pass@` from any URL inside an error text. */
+const scrub = (text: string): string => text.replace(/(\/\/)[^/@\s]*@/g, "$1");
+
+/** POST one contribution as the wolf (30 s timeout). Throws, with credentials scrubbed from the text, on a transport error, a non-2xx, or a 2xx without an id. */
+export async function postContribution(hub: HubTarget, wolf: string, contribution: object): Promise<{ id: string; duplicate: boolean }> {
+  const where = redactUrl(hub.baseUrl);
+  let res: Response;
+  try {
+    res = await (hub.fetch ?? fetch)(`${where}/v1/contributions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Wolfpack-Actor": JSON.stringify({ id: wolf, kind: "wolf" }),
+        ...(hub.apiKey ? { "X-API-Key": hub.apiKey } : {}),
+      },
+      body: JSON.stringify(contribution),
+      signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error(scrub(`could not reach the hub at ${where}: ${e instanceof Error ? e.message : String(e)}`));
+  }
+  const body = (await res.json().catch(() => ({}))) as { id?: unknown; duplicate?: unknown; message?: unknown };
+  if (!res.ok) throw new Error(scrub(`hub rejected the contribution (${res.status}): ${typeof body.message === "string" ? body.message : "no detail"}`));
+  if (typeof body.id !== "string" || !body.id) throw new Error(`hub at ${where} answered ${res.status} without a stored id`);
+  return { id: body.id, duplicate: body.duplicate === true };
+}
+
+/**
+ * Like `emitCrawl` (real emit), but delivers to the hub. `dest` of the result is the hub URL (credentials stripped). If emitCrawl or
+ * any post fails, the wolf's `emitted.json` dedup is restored, so a retry re-sends everything; the hub is idempotent
+ * (an already-stored contribution answers 200 `duplicate`), so only the missing ones land.
+ */
 export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<EmitCrawlOptions, "dryRun"> = {}): Promise<EmitCrawlResult> {
   const wolf = opts.wolf ?? process.env.WOLF_NAME ?? "scribe";
   const denLocal = opts.roots?.denLocal ?? join(process.env.WOLF_DEN ?? join(homedir(), "wolves", "den"), "kb");
@@ -50,15 +82,16 @@ export async function emitCrawlToHub(runDir: string, hub: HubTarget, opts: Omit<
   const before = existsSync(emittedPath) ? readFileSync(emittedPath, "utf-8") : undefined;
   const staging = mkdtempSync(join(tmpdir(), "crawl-hub-"));
   try {
-    const r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: staging, denLocal } });
+    let r: EmitCrawlResult;
     try {
+      r = emitCrawl(runDir, { ...opts, wolf, dryRun: false, quiet: true, roots: { ...opts.roots, opsRoot: staging, denLocal } });
       for (const c of r.delta) await postContribution(hub, wolf, c);
     } catch (e) {
       if (before !== undefined) writeFileSync(emittedPath, before);
       else rmSync(emittedPath, { force: true });
       throw e;
     }
-    const dest = `${hub.baseUrl.replace(/\/+$/, "")}/v1/contributions`;
+    const dest = `${redactUrl(hub.baseUrl)}/v1/contributions`;
     if (!opts.quiet) console.log(`\n${r.emitted} contribution(s) emitted → ${dest}`);
     return { ...r, dest };
   } finally {

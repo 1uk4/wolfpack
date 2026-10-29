@@ -143,7 +143,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       case "submitContribution": {
         const actor = writeActor(req);
         try {
-          const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req));
+          const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res));
           return send(res, stored.duplicate ? 200 : 201, stored);
         } catch (e) {
           if (e instanceof ContributionError) throw new HubError(e.code, e.message);

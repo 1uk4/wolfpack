@@ -13,9 +13,15 @@ import {
   type KbRoots,
 } from "../shared/index.js";
 
-/** List wolf subdirectories under librarian-ops/inbox/. */
-function inboxWolves(opsRoot: string): string[] {
-  const dir = join(opsRoot, "inbox");
+/** The lane directory (under the ops root) holding `<wolf>/*.md`: sfo-01's `inbox`; hubd's is `contributions`. */
+export interface LaneOptions {
+  lane?: string;
+}
+export const DEFAULT_LANE = "inbox";
+
+/** List wolf subdirectories under <opsRoot>/<lane>/ (default `inbox`). */
+function inboxWolves(opsRoot: string, lane: string = DEFAULT_LANE): string[] {
+  const dir = join(opsRoot, lane);
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
     .filter((d) => d.isDirectory())
@@ -24,11 +30,12 @@ function inboxWolves(opsRoot: string): string[] {
 
 /** Count pending top-level contributions per wolf (excludes _processed/, _bad/).
  *  Reads directory listings only: no file is opened. */
-export function countPending(opsRoot: string): { total: number; wolves: string[] } {
+export function countPending(opsRoot: string, opts: LaneOptions = {}): { total: number; wolves: string[] } {
+  const lane = opts.lane ?? DEFAULT_LANE;
   let total = 0;
   const wolves: string[] = [];
-  for (const wolf of inboxWolves(opsRoot)) {
-    const n = readdirSync(join(opsRoot, "inbox", wolf)).filter((f) => f.endsWith(".md")).length;
+  for (const wolf of inboxWolves(opsRoot, lane)) {
+    const n = readdirSync(join(opsRoot, lane, wolf)).filter((f) => f.endsWith(".md")).length;
     if (n > 0) {
       total += n;
       wolves.push(`${wolf}(${n})`);
@@ -38,10 +45,11 @@ export function countPending(opsRoot: string): { total: number; wolves: string[]
 }
 
 /** Drain every inbox into parsed contributions. A bad file is quarantined; it never fails the drain. */
-export function drainInbox(roots: KbRoots): ParsedContribution[] {
+export function drainInbox(roots: KbRoots, opts: LaneOptions = {}): ParsedContribution[] {
+  const lane = opts.lane ?? DEFAULT_LANE;
   const out: ParsedContribution[] = [];
-  for (const wolf of inboxWolves(roots.opsRoot)) {
-    const dir = join(roots.opsRoot, "inbox", wolf);
+  for (const wolf of inboxWolves(roots.opsRoot, lane)) {
+    const dir = join(roots.opsRoot, lane, wolf);
     for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
       const filePath = join(dir, file);
       try {

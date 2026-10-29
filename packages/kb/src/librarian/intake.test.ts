@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { drainInbox } from "./intake.js";
+import { drainInbox, countPending } from "./intake.js";
 import { writeReceipt } from "./commit.js";
 import { emitDelta, tryEmitDelta } from "../client/emitDelta.js";
 import { contentHash, hashTag, isSafeSegment, safeSegment, toTopicId, type KbRoots } from "../shared/index.js";
@@ -31,6 +31,18 @@ describe("drainInbox", () => {
     writeFileSync(join(inbox(), "a.md"), fm(valid));
     expect(drainInbox(roots).map((c) => c.denTopicId)).toEqual(["topic-a"]);
     expect(existsSync(bad())).toBe(false);
+  });
+
+  it("the lane defaults to inbox/<wolf>/; a lane option reads <lane>/<wolf>/ instead (and only that)", () => {
+    writeFileSync(join(inbox(), "a.md"), fm(valid));
+    const hubLane = join(roots.opsRoot, "contributions", "w2");
+    mkdirSync(hubLane, { recursive: true });
+    writeFileSync(join(hubLane, "b.md"), fm({ ...valid, from: "w2", den_topic_id: "topic-hub", content_hash: "abcdef0123456711" }));
+    expect(drainInbox(roots).map((c) => c.denTopicId)).toEqual(["topic-a"]);
+    expect(countPending(roots.opsRoot)).toEqual({ total: 1, wolves: ["w1(1)"] });
+    const hub = drainInbox(roots, { lane: "contributions" });
+    expect(hub.map((c) => [c.from, c.denTopicId])).toEqual([["w2", "topic-hub"]]);
+    expect(countPending(roots.opsRoot, { lane: "contributions" })).toEqual({ total: 1, wolves: ["w2(1)"] });
   });
 
   it("ignores group/group_date unless the contribution is anchored and verbatim", () => {

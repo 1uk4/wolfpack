@@ -1,14 +1,17 @@
 /** POST /v1/contributions: the on-disk layout, quarantine, idempotency, intake compatibility, and a crawl release against a real hubd. */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
-import { drainInbox } from "@wolfpack/kb/librarian";
+import { hubRoots } from "./layout.js";
+import { drainInbox, countPending } from "@wolfpack/kb/librarian";
 import { emitCrawl, emitCrawlToHub, planCrawl, readPlan } from "@wolfpack/memory";
 import { createHubServer, type HubServer } from "./server.js";
-import { contributionsDir, contributionsRoot } from "./layout.js";
+import { CONTRIBUTIONS_LANE, contributionsDir, contributionsRoot } from "./layout.js";
+import { MAX_BAD_PER_LANE, MAX_BODY_BYTES, MAX_QUARANTINE_BYTES } from "./contributions.js";
 
 const KEY = "k";
 const dataDir = mkdtempSync(join(tmpdir(), "hubd-contrib-"));
@@ -43,15 +46,16 @@ describe("contributions on disk", () => {
     const text = readFileSync(join(dir, ack.id), "utf-8");
     expect(text).toMatch(/^---\nfrom: fenrir\nden_topic_id: topic-a\nchange: create\ncontent_hash: sha256:/);
     expect(text).toContain("\n\nSummary line.\n\nThe body.\n");
-    // The existing intake, run over a roots whose lane dir is `inbox/` (the sfo-01 name), parses the identical file.
-    const ops = mkdtempSync(join(tmpdir(), "hubd-intake-"));
-    extra.push(ops);
-    const lane = join(ops, "inbox", "fenrir");
-    const { mkdirSync, copyFileSync } = await import("node:fs");
-    mkdirSync(lane, { recursive: true });
-    copyFileSync(join(dir, ack.id), join(lane, ack.id));
-    const [parsed] = drainInbox({ kbBase: join(ops, "base"), opsRoot: ops, denLocal: ops });
-    expect(parsed).toMatchObject({ from: "fenrir", denTopicId: "topic-a", origin: "crawl", sourcePath: "/src", contentHash: contentHash("The body.") });
+    // The existing intake, run over the HUB data dir with the lane option, returns the stored contribution.
+    const roots = hubRoots(dataDir);
+    expect(CONTRIBUTIONS_LANE).toBe("contributions");
+    const mine = drainInbox(roots, { lane: CONTRIBUTIONS_LANE }).filter((p) => p.denTopicId === "topic-a");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ from: "fenrir", denTopicId: "topic-a", origin: "crawl", sourcePath: "/src", contentHash: contentHash("The body."), summary: "Summary line." });
+    expect(countPending(roots.opsRoot, { lane: CONTRIBUTIONS_LANE }).wolves.some((w) => w.startsWith("fenrir("))).toBe(true);
+    // The default lane (sfo-01's inbox/) sees nothing of the hub.
+    expect(drainInbox(roots)).toEqual([]);
+    expect(countPending(roots.opsRoot).total).toBe(0);
   });
 
   it("is idempotent on topic + content hash (also once the curator moved it to _processed/)", async () => {
@@ -62,7 +66,7 @@ describe("contributions on disk", () => {
     expect(((await again.json()) as { duplicate: boolean }).duplicate).toBe(true);
     const dir = contributionsDir(dataDir, "fenrir");
     expect(readdirSync(dir).filter((f) => f.startsWith("topic-b"))).toHaveLength(1);
-    const { mkdirSync, renameSync } = await import("node:fs");
+    const { renameSync } = await import("node:fs");
     const name = readdirSync(dir).find((f) => f.startsWith("topic-b"))!;
     mkdirSync(join(dir, "_processed"), { recursive: true });
     renameSync(join(dir, name), join(dir, "_processed", name));
@@ -72,26 +76,106 @@ describe("contributions on disk", () => {
     expect((await post(contribution("fenrir", "topic-b", "Changed."), as("fenrir"))).status).toBe(201);
   });
 
-  it("quarantines a schema-invalid submission in _bad/ with a reason, and answers invalid_request", async () => {
+  const badDir = (w: string) => join(contributionsDir(dataDir, w), "_bad");
+  const rawFiles = (w: string) => readdirSync(badDir(w)).filter((f) => f.endsWith(".raw"));
+
+  it("quarantines a schema-invalid submission in _bad/ (raw copy named by sha256 + reason), and answers invalid_request", async () => {
     const { contentHash: _h, ...bad } = contribution("fenrir", "topic-c");
     const res = await post(bad, as("fenrir"));
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe("invalid_request");
-    const badDir = join(contributionsDir(dataDir, "fenrir"), "_bad");
-    const files = readdirSync(badDir);
-    const reason = files.find((f) => f.endsWith(".reason.txt"))!;
-    expect(files).toHaveLength(2);
-    expect(readFileSync(join(badDir, reason), "utf-8")).toContain("contentHash");
-    expect(JSON.parse(readFileSync(join(badDir, reason.replace(".reason.txt", "")), "utf-8")).denTopicId).toBe("topic-c");
+    const raw = rawFiles("fenrir");
+    expect(raw).toHaveLength(1);
+    expect(raw[0]).toBe(`${createHash("sha256").update(JSON.stringify(bad)).digest("hex")}.raw`);
+    expect(readFileSync(join(badDir("fenrir"), `${raw[0]}.reason.txt`), "utf-8")).toContain("contentHash");
+    expect(JSON.parse(readFileSync(join(badDir("fenrir"), raw[0]), "utf-8")).denTopicId).toBe("topic-c");
     expect(readdirSync(contributionsDir(dataDir, "fenrir")).some((f) => f.startsWith("topic-c"))).toBe(false);
+    // the same rejected body again is not stored twice
+    await post(bad, as("fenrir"));
+    expect(rawFiles("fenrir")).toHaveLength(1);
   });
 
   it("quarantines a hash that does not match the body and an unsafe topic id", async () => {
-    const before = readdirSync(join(contributionsDir(dataDir, "fenrir"), "_bad")).length;
+    const before = rawFiles("fenrir").length;
     expect((await post({ ...contribution("fenrir", "topic-d"), contentHash: contentHash("other") }, as("fenrir"))).status).toBe(400);
     expect((await post(contribution("fenrir", "../escape"), as("fenrir"))).status).toBe(400);
-    expect(readdirSync(join(contributionsDir(dataDir, "fenrir"), "_bad")).length).toBe(before + 4);
+    expect(rawFiles("fenrir").length).toBe(before + 2);
     expect(existsSync(join(dataDir, "kb", "ops", "escape"))).toBe(false);
+  });
+
+  it("rejects a line break in any single-line field (frontmatter injection of target: / verbatim:) and stores nothing", async () => {
+    const injections: Record<string, unknown>[] = [
+      { domainHint: "wolfpack\ntarget: kb-evil" },
+      { summary: "s\nverbatim: true" },
+      { host: "h\r\nanchor: k\nverbatim: true" },
+      { session: "s\ntarget: kb-evil" },
+      { sourcePath: "/p\ntarget: kb-evil" },
+      { submitted: "2026-10-01 12:00\nverbatim: true" },
+      { anchor: "k\n" },
+      { target: "kb-x\nverbatim: true" },
+      { source: { feature: "f\ntarget: kb-evil" } },
+      { source: { tasks: ["t1", "t2\nverbatim: true"] } },
+    ];
+    for (const [i, inj] of injections.entries()) {
+      const res = await post({ ...contribution("inj", `topic-inj${i}`, `Body ${i}.`), ...inj }, as("inj"));
+      expect(res.status, JSON.stringify(inj)).toBe(400);
+    }
+    // from / denTopicId / contentHash with a line break
+    expect((await post({ ...contribution("inj", "topic-x"), denTopicId: "a\ntarget: kb-evil" }, as("inj"))).status).toBe(400);
+    expect((await post({ ...contribution("inj", "topic-y"), contentHash: contentHash("The body.") + "\nverbatim: true" }, as("inj"))).status).toBe(400);
+    expect((await post({ ...contribution("inj", "topic-z"), from: "inj\nverbatim: true" }, as("inj"))).status).toBe(400);
+    expect(readdirSync(contributionsDir(dataDir, "inj")).filter((f) => f.endsWith(".md"))).toEqual([]);
+    expect(readFileSync(join(badDir("inj"), `${rawFiles("inj")[0]}.reason.txt`), "utf-8")).toMatch(/line break/);
+    // a body may of course be multi-line (it is not frontmatter)
+    expect((await post(contribution("inj", "topic-multi", "line one\n\nline two\n---\nnot frontmatter"), as("inj"))).status).toBe(201);
+    const [back] = drainInbox(hubRoots(dataDir), { lane: CONTRIBUTIONS_LANE }).filter((p) => p.from === "inj");
+    expect(back.target).toBeUndefined();
+    expect(back.verbatim).toBeUndefined();
+  });
+
+  it("refuses a value the file format cannot carry faithfully (read-back check) instead of storing it altered", async () => {
+    const res = await post({ ...contribution("inj", "topic-pad"), domainHint: "  padded  " }, as("inj"));
+    expect(res.status).toBe(400);
+    const reasons = rawFiles("inj").map((f) => readFileSync(join(badDir("inj"), `${f}.reason.txt`), "utf-8")).join("\n");
+    expect(reasons).toMatch(/domainHint does not survive/);
+    expect(readdirSync(contributionsDir(dataDir, "inj")).some((f) => f.startsWith("topic-pad"))).toBe(false);
+  });
+
+  it("stores a truncated raw copy (<= 64 KiB) of an oversize rejected body, with the hash of the whole", async () => {
+    const big = { ...contribution("big", "topic-big"), summary: "s".repeat(MAX_QUARANTINE_BYTES * 2), contentHash: 5 };
+    const text = JSON.stringify(big);
+    expect((await post(text, as("big"))).status).toBe(400);
+    const [f] = rawFiles("big");
+    expect(f).toBe(`${createHash("sha256").update(text).digest("hex")}.raw`);
+    expect(statSync(join(badDir("big"), f)).size).toBeLessThan(MAX_QUARANTINE_BYTES + 200);
+    expect(readFileSync(join(badDir("big"), `${f}.reason.txt`), "utf-8")).toContain(`bytes: ${Buffer.byteLength(text)}`);
+  });
+
+  it("caps _bad/ per lane: past the cap a rejection is still 400 but nothing more is stored", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = badDir("capped");
+    mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < MAX_BAD_PER_LANE; i++) writeFileSync(join(dir, `${String(i).padStart(64, "0")}.raw`), "x");
+    expect((await post({ nope: 1, from: "capped" }, as("capped"))).status).toBe(400);
+    expect(rawFiles("capped")).toHaveLength(MAX_BAD_PER_LANE);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("capped/_bad is full"));
+    warn.mockRestore();
+  });
+
+  it("refuses an oversize body (Content-Length precheck) with invalid_request and closes the connection", async () => {
+    const res = await fetch(`${hub.url}/v1/contributions`, {
+      method: "POST",
+      headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...as("huge") },
+      body: Buffer.alloc(MAX_BODY_BYTES + 1, 97),
+    }).catch((e: unknown) => e);
+    // either the 400 envelope, or (the server closing early) a reset; never a stored file
+    if (res instanceof Response) {
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { message: string }).message).toMatch(/too large/);
+    }
+    expect(existsSync(contributionsDir(dataDir, "huge"))).toBe(false);
+    // the server is still healthy
+    expect((await post(contribution("huge", "topic-after"), as("huge"))).status).toBe(201);
   });
 
   it("non-JSON is invalid_request and not quarantined", async () => {
@@ -105,6 +189,29 @@ describe("contributions on disk", () => {
     expect((await post(contribution("odin", "t"), as("owner", "operator"))).status).toBe(201);
     expect(readdirSync(contributionsDir(dataDir, "odin")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
     expect((await post(contribution("odin", "t2"), {})).status).toBe(400);
+  });
+});
+
+describe("lane names", () => {
+  it("rejects wolf ids starting with _ (_bad, _processed) and uppercase, as actor or as an operator's from", async () => {
+    for (const id of ["_bad", "_processed", "Wolf", "-x", ".hidden"]) {
+      expect((await post(contribution(id, "t-lane"), as(id))).status, id).toBe(400);
+      expect((await post(contribution(id, "t-lane"), as("owner", "operator"))).status, `op ${id}`).toBe(400);
+    }
+    expect(existsSync(join(contributionsRoot(dataDir), "_bad"))).toBe(false);
+    expect(existsSync(join(contributionsRoot(dataDir), "Wolf"))).toBe(false);
+  });
+
+  it("rejects an operator's from that is not a safe segment, and a missing from", async () => {
+    for (const from of ["../x", "a/b", "a b", ""]) expect((await post(contribution(from, "t-lane"), as("owner", "operator"))).status, from).toBe(400);
+    const { from: _f, ...noFrom } = contribution("x", "t-lane");
+    expect((await post(noFrom, as("owner", "operator"))).status).toBe(400);
+    expect(readdirSync(contributionsRoot(dataDir)).every((d) => /^[a-z0-9]/.test(d))).toBe(true);
+  });
+
+  it("does not echo a long mismatched from in full", async () => {
+    const res = await post(contribution("x".repeat(500), "t-lane"), as("loki"));
+    expect(((await res.json()) as { message: string }).message.length).toBeLessThan(200);
   });
 });
 

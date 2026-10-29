@@ -42,7 +42,7 @@ const fakeConversation = (cards: FakeCard[], kind: "root" | "task" = "root") => 
   },
 });
 
-function setup(opts: { cards?: boolean; opsRoot?: string | null } = {}) {
+function setup(opts: { cards?: boolean; opsRoot?: string | null; env?: Record<string, string> } = {}) {
   const den = tmp("den");
   const crawlHome = join(tmp("home"), "crawls");
   mkdirSync(crawlHome, { recursive: true });
@@ -79,7 +79,7 @@ function setup(opts: { cards?: boolean; opsRoot?: string | null } = {}) {
       };
     },
   };
-  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: "", KB_OPS: ops ?? "" };
+  const env: NodeJS.ProcessEnv = { WOLFPACK_CRAWL_HOME: crawlHome, KB_BASE: "", KB_OPS: ops ?? "", ...opts.env };
   const ext = createCrawlExtension({ runner }, { wolfDen: den, wolfName: "w", domains: ["wolfpack"], wolfConfig: {}, env, ...(opts.cards === false ? {} : { capabilities: { askCards: true } }) } as never);
   const cardLog: FakeCard[] = [];
   const conv = fakeConversation(cardLog);
@@ -296,6 +296,17 @@ describe("crawl_release", () => {
     const bad = await t.call("crawl_release", { runDir: outside });
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain("not a crawl run");
+  });
+
+  it("the confirm card names the hub (credentials stripped) when a hub is configured, else the inbox lane", async () => {
+    const hubbed = setup({ env: { WOLFPACK_HUB_URL: "https://user:secret@hub.example:8443/base?token=zz" } });
+    const dir = complete(hubbed.crawlHome, await hubbed.plan(), "run-h");
+    const desc = (await hubbed.call("crawl_release", { runDir: dir })).card!.fields[0].description as string;
+    expect(desc).toContain('hub https://hub.example:8443/base as wolf "w"');
+    expect(desc).not.toMatch(/secret|user:|token|inbox lane/);
+    const plain = setup();
+    const dir2 = complete(plain.crawlHome, await plain.plan(), "run-i");
+    expect((await plain.call("crawl_release", { runDir: dir2 })).card!.fields[0].description).toContain('inbox lane "w"');
   });
 
   it("emits only after a structured yes on its own confirm card, once", async () => {

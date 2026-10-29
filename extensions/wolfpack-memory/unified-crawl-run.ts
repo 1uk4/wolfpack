@@ -25,7 +25,7 @@ import { defineTool, Type, type ExtensionContext, type ToolContext, type ToolRes
 import type { Card } from "@wolfpack/protocol";
 import { engineSteps, createEngine, loadModelTable } from "@wolfpack/engine";
 import { confirmCard } from "@wolfpack/harness/engine";
-import { DEFAULT_CRAWL_CONCURRENCY, emitCrawl, emitCrawlToHub, hubTargetFromEnv, readPlan, runCrawl, type EmitCrawlOptions, type EmitCrawlResult, type RunCrawlOptions, type RunCrawlResult } from "@wolfpack/memory";
+import { DEFAULT_CRAWL_CONCURRENCY, emitCrawl, emitCrawlToHub, hubTargetFromEnv, redactUrl, readPlan, runCrawl, type EmitCrawlOptions, type EmitCrawlResult, type RunCrawlOptions, type RunCrawlResult } from "@wolfpack/memory";
 import type { CrawlCore } from "./crawl-core.js";
 import {
   applyProgress,
@@ -444,7 +444,8 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
       const review = `${items.length} contribution(s) from ${dir} (domain ${plan.domain}):\n${list}`;
 
       const journeyMissing = !hasFile(dir, "history.json");
-      if (!opsRoot) return text(`${review}\n\nThe KB is not configured here (no KB_OPS), so this cannot be released.`, { isError: true });
+      const hubTarget = hubTargetFromEnv(env);
+      if (!opsRoot && !hubTarget) return text(`${review}\n\nThe KB is not configured here (no KB_OPS), so this cannot be released.`, { isError: true });
       if (journeyMissing) return text(`${review}\n\nThe run's journey is not written yet — finish it with crawl_run (resume) before releasing.`, { isError: true });
 
       // No card, no release: without a user who can confirm in the console (a task-owned conversation, or a host without
@@ -467,7 +468,7 @@ export function createCrawlRunTools(i: CrawlRunToolsInput): { tools: ReturnType<
           title: "Release to the librarian?",
           question: label,
           description:
-            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → inbox lane "${ctx.wolfName}" → Dewey` +
+            `${already ? `${already}\n\n` : ""}**${toEmit}** contribution(s) in "${plan.domain}" → ${hubTarget ? `hub ${redactUrl(hubTarget.baseUrl)} as wolf "${ctx.wolfName}"` : `inbox lane "${ctx.wolfName}"`} → Dewey` +
             `${unchanged ? ` (${unchanged} unchanged will be skipped)` : ""}.\n\n${list}\n\n` +
             `This is a SHARED, one-way handoff: Dewey's sweep will route, guard, and curate them into the KB.`,
           confirmLabel: "Release",

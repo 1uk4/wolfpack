@@ -174,8 +174,8 @@ export function emitCrawl(
           `(cap ${CRAWL.bodyMaxChars}) — consider splitting this batch`
       );
     }
-    if (result) delta.push(result);
     if (result) {
+      delta.push(result);
       emitted++;
       sink.log(`emit: ${b.topic} → ${result.denTopicId}`);
     } else {
@@ -218,8 +218,8 @@ export function emitCrawl(
         currency: "archived",
         status: result ? "emit" : "skip",
       });
-      if (result) delta.push(result);
       if (result) {
+        delta.push(result);
         emitted++;
         sink.log(`emit: history → ${result.denTopicId}`);
       } else {

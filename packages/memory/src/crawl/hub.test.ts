@@ -1,10 +1,10 @@
 /** Releasing a crawl: with a hub configured the contributions are POSTed (wolf actor header); without, the inbox files are written as before. */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { emitCrawl } from "./emit.js";
-import { emitCrawlToHub, hubTargetFromEnv } from "./hub.js";
+import { emitCrawlToHub, hubTargetFromEnv, postContribution, redactUrl } from "./hub.js";
 import { planCrawl, readPlan } from "./plan.js";
 
 const dirs: string[] = [];
@@ -17,14 +17,17 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function runDirFixture(): string {
+function runDirFixture(folders = 1): string {
   const src = tmp("src");
-  writeFileSync(join(src, "a.md"), "# A\nalpha\n");
+  for (let i = 0; i < folders; i++) {
+    mkdirSync(join(src, `f${i}`), { recursive: true });
+    writeFileSync(join(src, `f${i}`, "a.md"), `# A${i}\nalpha\n`);
+  }
   const { sink } = planCrawl({ source: src, domain: "wolfpack", strategy: "by-folder", sinkBase: tmp("sink") });
   const runDir = tmp("run");
   const plan = readPlan(join(sink.dir, "plan.yaml"));
   writeFileSync(join(runDir, "plan.yaml"), readFileSync(join(sink.dir, "plan.yaml")));
-  writeFileSync(join(runDir, "topics.json"), JSON.stringify([[plan.batches[0].topic, { title: "T", summary: "s", body: "body text", events: [] }]]));
+  writeFileSync(join(runDir, "topics.json"), JSON.stringify(plan.batches.map((b, i) => [b.topic, { title: `T${i}`, summary: "s", body: `body text ${i}`, events: [] }])));
   return runDir;
 }
 
@@ -72,6 +75,69 @@ describe("emitCrawlToHub", () => {
     const ok = (async () => (n++, new Response(JSON.stringify({ id: "x", duplicate: false }), { status: 201 }))) as unknown as typeof fetch;
     const r = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: ok }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots });
     expect([r.emitted, n]).toEqual([1, 1]);
+  });
+});
+
+describe("emitCrawlToHub failure handling", () => {
+  const created = (n: number) => Response.json({ id: `x${n}.md`, wolf: "w", duplicate: false }, { status: 201 });
+
+  it("a partial POST failure (1 posted, then an error) throws; the retry lands the rest and the hub's duplicate answer is fine", async () => {
+    const runDir = runDirFixture(3);
+    const denLocal = join(tmp("den"), "kb");
+    const roots = { opsRoot: tmp("ops"), kbBase: "", denLocal };
+    const stored = new Set<string>();
+    let call = 0;
+    const flaky = (async (_u: string, init: RequestInit) => {
+      const b = JSON.parse(String(init.body)) as { denTopicId: string };
+      if (++call === 2) return Response.json({ code: "busy", message: "try later" }, { status: 409 });
+      const dup = stored.has(b.denTopicId);
+      stored.add(b.denTopicId);
+      return Response.json({ id: `${b.denTopicId}.md`, wolf: "w", duplicate: dup }, { status: dup ? 200 : 201 });
+    }) as unknown as typeof fetch;
+    const opts = { wolf: "w", sinkBase: tmp("s"), quiet: true, roots };
+    await expect(emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: flaky }, opts)).rejects.toThrow(/409.*try later/);
+    expect(stored.size).toBe(1);
+    expect(existsSync(join(denLocal, "emitted.json"))).toBe(false); // restored: nothing counts as sent
+    const retry = await emitCrawlToHub(runDir, { baseUrl: "http://h", fetch: flaky }, opts);
+    expect(retry.emitted).toBe(3);
+    expect(stored.size).toBe(3);
+    expect(call).toBe(5); // 2 + 3 (the first one answered duplicate)
+  });
+
+  it("emitCrawl throwing leaves a previous emitted.json as it was and surfaces the error", async () => {
+    const denLocal = join(tmp("den"), "kb");
+    mkdirSync(denLocal, { recursive: true });
+    writeFileSync(join(denLocal, "emitted.json"), '{"keep":"me"}');
+    const fetchStub = (async () => created(1)) as unknown as typeof fetch;
+    await expect(emitCrawlToHub(join(tmp("no-run"), "missing"), { baseUrl: "http://h", fetch: fetchStub }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal } })).rejects.toThrow();
+    expect(readFileSync(join(denLocal, "emitted.json"), "utf-8")).toBe('{"keep":"me"}');
+  });
+
+  it("a 2xx without a stored id is an error", async () => {
+    const noId = (async () => Response.json({ ok: true }, { status: 201 })) as unknown as typeof fetch;
+    await expect(postContribution({ baseUrl: "http://h", fetch: noId }, "w", {})).rejects.toThrow(/without a stored id/);
+  });
+
+  it("each post carries a timeout signal", async () => {
+    let signal: AbortSignal | null | undefined;
+    const spy = (async (_u: string, init: RequestInit) => ((signal = init.signal), created(1))) as unknown as typeof fetch;
+    await postContribution({ baseUrl: "http://h", fetch: spy }, "w", {});
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("credentials in the hub URL are stripped from dest, the request URL, and error text", async () => {
+    expect(redactUrl("https://u:p@h.example:1/base/?k=v#f")).toBe("https://h.example:1/base");
+    const seen: string[] = [];
+    const ok = (async (u: string) => (seen.push(u), created(1))) as unknown as typeof fetch;
+    const r = await emitCrawlToHub(runDirFixture(), { baseUrl: "https://u:p@h.example", fetch: ok }, { wolf: "w", sinkBase: tmp("s"), quiet: true, roots: { opsRoot: tmp("ops"), kbBase: "", denLocal: join(tmp("den"), "kb") } });
+    expect(r.dest).toBe("https://h.example/v1/contributions");
+    expect(seen).toEqual(["https://h.example/v1/contributions"]);
+    const boom = (async () => {
+      throw new Error("connect ECONNREFUSED https://u:p@h.example/v1/contributions");
+    }) as unknown as typeof fetch;
+    const err = await postContribution({ baseUrl: "https://u:p@h.example", fetch: boom }, "w", {}).catch((e: Error) => e);
+    expect((err as Error).message).toContain("ECONNREFUSED");
+    expect((err as Error).message).not.toMatch(/u:p/);
   });
 });
 

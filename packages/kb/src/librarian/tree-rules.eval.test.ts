@@ -32,6 +32,8 @@ const set = (id: string) => F.sections[id].entries;
 const run = (es: Fx[], seed: number) => chooseSplit(es.map((e) => e.vec), es.map((e) => e.id), { ...DEFAULT_RULES, seed }, { ignoreSize: true });
 const accepted = (r: SplitDecision | SplitRejected): r is SplitDecision => isSplit(r);
 const SLOW = 240_000;
+/** The rules are CPU-bound; yielding between runs keeps the vitest worker answering its RPC heartbeat. */
+const yieldLoop = () => new Promise<void>((r) => setImmediate(r));
 
 describe("fixtures", () => {
   it("have the expected shapes", () => {
@@ -42,9 +44,10 @@ describe("fixtures", () => {
 });
 
 describe("determinism", () => {
-  it("one partition across seeds: every accepted split is the same grouping", () => {
+  it("one partition across seeds: every accepted split is the same grouping", async () => {
     for (const sid of [WORK, GRAD]) {
-      const runs = [1, 2, 3, 4, 5, 6].map((s) => run(set(sid), s));
+      const runs = [];
+      for (const s of [1, 2, 3, 4, 5, 6]) { runs.push(run(set(sid), s)); await yieldLoop(); }
       const ok = runs.filter(accepted);
       expect(ok.length, `${sid} accepted in ${ok.length}/6 seeds`).toBeGreaterThanOrEqual(4);
       for (const r of ok) expect(ari(ok[0].labels, r.labels)).toBeCloseTo(1, 6);
@@ -52,9 +55,9 @@ describe("determinism", () => {
     }
   }, SLOW);
 
-  it("clear rejections are rejected on every seed", () => {
+  it("clear rejections are rejected on every seed", async () => {
     for (const [name, es, seeds] of [[CONSOLE, set(CONSOLE), [1, 2, 3]], [GAME, set(GAME), [1, 2, 3, 4, 5, 6]]] as const) {
-      for (const s of seeds) expect(accepted(run(es, s)), `${name} seed ${s}`).toBe(false);
+      for (const s of seeds) { expect(accepted(run(es, s)), `${name} seed ${s}`).toBe(false); await yieldLoop(); }
     }
   }, SLOW);
 
@@ -64,9 +67,10 @@ describe("determinism", () => {
 });
 
 describe("null gate on real sections", () => {
-  it("substructure beats the permutation null on all four real sections (p < .05)", () => {
+  it("substructure beats the permutation null on all four real sections (p < .05)", async () => {
     for (const sid of [CONSOLE, WORK, GRAD, GAME]) {
       const r = run(set(sid), 1);
+      await yieldLoop();
       const p = accepted(r) ? r.p : (r.detail?.p as number);
       expect(p, sid).toBeLessThan(DEFAULT_RULES.nullAlpha);
     }
@@ -74,9 +78,10 @@ describe("null gate on real sections", () => {
 });
 
 describe("negative control: the grab bag", () => {
-  it("is never split, on any seed (rejected by the stability gate, not the weak null)", () => {
+  it("is never split, on any seed (rejected by the stability gate, not the weak null)", async () => {
     for (const s of [1, 2, 3, 4, 5, 6]) {
       const r = run(F.grabBag, s);
+      await yieldLoop();
       expect(accepted(r), `seed ${s}`).toBe(false);
       expect((r as SplitRejected).reason).toBe("unstable");
     }
@@ -123,50 +128,59 @@ const labelsOf = (st: RebuildState, ids: string[]) => {
   const m = new Map<string, number>();
   return ids.map((i) => { const s = st.assignment.get(i)!; if (!m.has(s)) m.set(s, m.size); return m.get(s)!; });
 };
-const insertAll = (order: RebuildEntry[]) => {
+const insertAll = async (order: RebuildEntry[]) => {
   const st: RebuildState = { sections: [], assignment: new Map() };
   const vec = new Map<string, number[]>();
-  for (const e of order) insertEntry(st, e, vec, "wp");
+  for (const e of order) { insertEntry(st, e, vec, "wp"); await yieldLoop(); }
   return { st, vec };
 };
 /** Tolerance: adjusted Rand index between the groupings of the two trees >= 0.7 (the same bar as the seed-stability gate:
- *  "as alike as two re-runs of the same rule are allowed to be"). Measured: 0.84. */
+ *  "as alike as two re-runs of the same rule are allowed to be"). Measured on every set below: 1.00. */
 const EQUIV_ARI = 0.7;
 
-describe("acceptance: incremental inserts ≈ rebuild", () => {
-  const entries = toEntries(set(WORK));
-  const ids = entries.map((e) => e.id).sort();
+/**
+ * Tree shapes the top-down rebuild produces on the fixtures (default seed; inserts give the same shapes):
+ *  - Console Chat (30):   one section, 30 entries (split rejected: unstable). Intended: no stable substructure.
+ *  - Work Item Tracking (14): root with 2 children of 8 and 6, no leftovers.
+ *  - Graduation (9):      one section, 9 entries (below splitAbove).
+ *  - Game Tracking (9):   one section, 9 entries (below splitAbove).
+ *  - grab bag (14):       one section, 14 entries (rejected: unstable).
+ */
+describe("acceptance: one-by-one inserts ≈ top-down rebuild (work-wolfpack-t800z3L)", () => {
+  const cases: Array<[string, Fx[]]> = [
+    ["Console Chat (30)", set(CONSOLE)],
+    ["Work Item Tracking (14)", set(WORK)],
+    ["Graduation (9)", set(GRAD)],
+    ["Game Tracking (9)", set(GAME)],
+    ["grab bag (14, negative control)", F.grabBag],
+  ];
+  const namer = async () => ({ title: `T${Math.random()}`, summary: "s" });
 
-  it("Work Item Tracking (14): one-by-one inserts group like a rebuild, in any order, and a second pass is a no-op", async () => {
-    const reb = await planRebuild({ domain: "wp", entries, namer: async () => ({ title: `T${Math.random()}`, summary: "s" }) });
-    const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const reversed = [...sorted].reverse();
-    const a = insertAll(sorted), b = insertAll(reversed);
-    expect(ari(labelsOf(reb.state, ids), labelsOf(a.st, ids))).toBeGreaterThanOrEqual(EQUIV_ARI);
+  for (const [name, fx] of cases) {
+    it(`${name}: inserts group like a rebuild, and a second pass is a no-op`, async () => {
+      const entries = toEntries(fx);
+      const ids = entries.map((e) => e.id).sort();
+      const reb = await planRebuild({ domain: "wp", entries, namer });
+      const a = await insertAll([...entries].sort((x, y) => (x.id < y.id ? -1 : 1)));
+      expect(a.st.assignment.size).toBe(entries.length);
+      expect(ari(labelsOf(reb.state, ids), labelsOf(a.st, ids)), name).toBeGreaterThanOrEqual(EQUIV_ARI);
+      // second run: repairing every section again creates and changes nothing
+      const snap = () => JSON.stringify({ s: a.st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...a.st.assignment].sort() });
+      const before = snap();
+      for (const s of [...a.st.sections]) expect(repairPath(a.st, String(s.id), a.vec, "wp")).toEqual([]);
+      expect(snap()).toBe(before);
+      // and rebuilding again from the rebuilt tree changes nothing either
+      const again = await planRebuild({ domain: "wp", entries, namer, start: reb.state, oldSections: reb.state.sections });
+      expect(ari(labelsOf(reb.state, ids), labelsOf(again.state, ids))).toBe(1);
+      expect(again.state.sections.map((s) => String(s.id)).sort()).toEqual(reb.state.sections.map((s) => String(s.id)).sort());
+    }, 600_000);
+  }
+
+  it("Work Item Tracking: a different insert order gives the same grouping", async () => {
+    const entries = toEntries(set(WORK));
+    const ids = entries.map((e) => e.id).sort();
+    const sorted = [...entries].sort((x, y) => (x.id < y.id ? -1 : 1));
+    const a = await insertAll(sorted), b = await insertAll([...sorted].reverse());
     expect(ari(labelsOf(a.st, ids), labelsOf(b.st, ids))).toBeGreaterThanOrEqual(EQUIV_ARI);
-    // second run: repairing every section again creates and changes nothing
-    const before = JSON.stringify({ s: a.st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...a.st.assignment].sort() });
-    for (const s of [...a.st.sections]) expect(repairPath(a.st, String(s.id), a.vec, "wp")).toEqual([]);
-    expect(JSON.stringify({ s: a.st.sections.map((s) => [s.id, s.parent, s.memberCount]), a: [...a.st.assignment].sort() })).toBe(before);
-    // and re-inserting the same entries again does not move any of them
-    const labels = labelsOf(a.st, ids);
-    expect(a.st.assignment.size).toBe(14);
-    expect(labels.length).toBe(14);
-  }, SLOW);
-
-  // KNOWN GAP (reported to the owner): the rebuild keeps the agglomerative bottom-up step, which
-  // cuts sections the insert-path rule leaves whole (it only splits above ~10 entries and only on
-  // evidence). Measured on the other three fixtures the rebuild yields 2 groups where the inserts
-  // yield 1 (ARI 0): Console Chat 30 (split rejected as unstable), Graduation 9 and Game Tracking 9
-  // (below splitAbove). Closing it means either a top-down rebuild (one root, gated splits only)
-  // or an agglomerative local rule on insert. Not done in this pass.
-  it.skip("all four fixture sections: inserts ≈ rebuild (blocked: rebuild's agglomerative step vs gated insert rule)", async () => {
-    for (const sid of [CONSOLE, GRAD, GAME]) {
-      const es = toEntries(set(sid));
-      const idList = es.map((e) => e.id).sort();
-      const reb = await planRebuild({ domain: "wp", entries: es, namer: async () => ({ title: `T${Math.random()}`, summary: "s" }) });
-      const inc = insertAll([...es].sort((x, y) => (x.id < y.id ? -1 : 1)));
-      expect(ari(labelsOf(reb.state, idList), labelsOf(inc.st, idList)), sid).toBeGreaterThanOrEqual(EQUIV_ARI);
-    }
-  }, SLOW);
+  }, 600_000);
 });

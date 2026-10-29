@@ -4,12 +4,13 @@
  * reads or writes entry frontmatter; the one write is commitRebuild at the
  * end (temp files + renames, entries then sections, journalled for recovery).
  *
- * Flow: bottom-up agglomerative build (deterministic) → structural cleanup
- * (absorb small roots, merge near-identical roots, collapse/promote wrappers)
- * → misplacement refinement (anywhere in the domain, every move listed) →
- * recursive gated split (tree-rules.chooseSplit; leftovers stay in the parent)
- * → seeded branching cap → ONE top-down, sibling-aware label pass that rejects
- * a split whose child label restates the parent.
+Flow (top-down, the same gated rule the insert path uses): one root holding every entry (or the
+ * given `start` tree) → level by level, misplacement refinement among the sections that exist
+ * (anywhere in the domain, every move listed), then each section above splitAbove is judged once by
+ * tree-rules.chooseSplit (stability gate, minGroup; leftovers stay in the parent; no stable
+ * substructure → the section stays whole, even above the soft range) → seeded branching cap →
+ * id continuity with the old tree → ONE top-down, sibling-aware label pass that re-asks, then
+ * folds back, a split child whose label restates the parent.
  *
  * It is a baseline tool: inserts must keep the tree right on their own, so
  * nothing here runs from the sweep.
@@ -20,8 +21,7 @@ import { SECTION_TREE, parseFrontmatter } from "@wolfpack/engine";
 import type { Engine } from "@wolfpack/engine";
 import type { KbRoots } from "../shared/index.js";
 import type { Section, SectionId, DomainId } from "../schema/knowledge.js";
-import { buildTreeBottomUp, enforceBranchingFactor, placeEntry } from "./section-tree.js";
-import { computeCentroid, type EntryWithVector } from "./hierarchy.js";
+import { enforceBranchingFactor, placeEntry } from "./section-tree.js";
 import type { EntryVector } from "./embed.js";
 import { anchorOf, groupOf } from "./anchors.js";
 import { labelSection, sectionSummary, type SectionMember } from "./summarize.js";
@@ -175,79 +175,6 @@ class Tree {
   }
 }
 
-// ── structural cleanup (state-based absorb / merge / collapse / promote) ────
-
-function roots(t: Tree): Section[] { return t.st.sections.filter((s) => s.parent === null); }
-
-function absorbSmallRoots(t: Tree, nEntries: number): void {
-  const minEntries = Math.max(2, Math.ceil(nEntries * SECTION_TREE.minRootRatio));
-  for (let guard = 0; guard < 1000; guard++) {
-    const rs = roots(t);
-    if (rs.length <= 2) return;
-    const small = rs.find((r) => t.subtree(String(r.id)).length < minEntries);
-    if (!small) return;
-    const neighbours = rs.filter((r) => r !== small && t.subtree(String(r.id)).length >= minEntries);
-    if (!neighbours.length) return;
-    const near = neighbours.reduce((b, n) => (cosine(small.centroid, n.centroid) > cosine(small.centroid, b.centroid) ? n : b));
-    const leaves = t.descendantIds(String(near.id)).map((i) => t.byId.get(i) ?? t.st.sections.find((s) => String(s.id) === i)!).filter((s) => t.direct(String(s.id)).length > 0 || t.kids(String(s.id)).length === 0);
-    for (const e of t.subtree(String(small.id))) {
-      const v = t.vec.get(e)!;
-      const best = leaves.reduce((b, l) => (cosine(v, l.centroid) > cosine(v, b.centroid) ? l : b));
-      t.st.assignment.set(e, String(best.id));
-    }
-    for (const id of t.descendantIds(String(small.id))) t.remove(id);
-    t.normalize();
-  }
-}
-
-function mergeSimilarRoots(t: Tree, nEntries: number): void {
-  const target = Math.max(3, Math.round(Math.sqrt(nEntries) * SECTION_TREE.rootCountFactor));
-  for (let guard = 0; guard < 1000; guard++) {
-    const rs = roots(t);
-    if (rs.length <= target) return;
-    let bi = -1, bj = -1, bs: number = SECTION_TREE.rootMergeSimilarity;
-    for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
-      const c = cosine(rs[i].centroid, rs[j].centroid);
-      if (c > bs) { bs = c; bi = i; bj = j; }
-    }
-    if (bi < 0) return;
-    const [big, small] = t.subtree(String(rs[bi].id)).length >= t.subtree(String(rs[bj].id)).length ? [rs[bi], rs[bj]] : [rs[bj], rs[bi]];
-    small.parent = big.id;
-    t.normalize();
-  }
-}
-
-/** A section with no direct entries and one child adds nothing: the child takes its place. */
-function collapseSingleChild(t: Tree): void {
-  for (let guard = 0; guard < 1000; guard++) {
-    const w = t.st.sections.find((s) => t.direct(String(s.id)).length === 0 && t.kids(String(s.id)).length === 1);
-    if (!w) return;
-    t.kids(String(w.id))[0].parent = w.parent;
-    t.remove(String(w.id));
-    t.normalize();
-  }
-}
-
-/** Wrappers (no direct entries) dominated by one child: promote the children. Only used before splitting. */
-function promoteDominant(t: Tree): void {
-  for (let guard = 0; guard < 1000; guard++) {
-    const wrappers = t.st.sections.filter((s) => t.direct(String(s.id)).length === 0 && t.kids(String(s.id)).length >= 2).sort((a, b) => b.depth - a.depth);
-    let hit = false;
-    for (const w of wrappers) {
-      const kids = t.kids(String(w.id));
-      const totals = kids.map((k) => t.subtree(String(k.id)).length);
-      const grand = totals.reduce((a, b) => a + b, 0);
-      if (!grand || Math.max(...totals) / grand < SECTION_TREE.dominantChildThreshold) continue;
-      for (const k of kids) k.parent = w.parent;
-      t.remove(String(w.id));
-      t.normalize();
-      hit = true;
-      break;
-    }
-    if (!hit) return;
-  }
-}
-
 // ── the plan ─────────────────────────────────────────────────────────────────
 
 export interface PlanOptions {
@@ -264,6 +191,41 @@ export interface PlanOptions {
   oldSections?: Section[];
 }
 
+/**
+ * Misplacement refinement on the sections that exist now (may move an entry anywhere in the domain; every
+ * move is listed). A move may not leave a leaf below minGroup; leftovers are never moved. A split parent
+ * left with a single split child by moves folds that child back into it.
+ */
+function refine(plan: RebuildPlan, t: Tree, byEntry: Map<string, RebuildEntry>, exempt: Set<string>, rules: TreeRules): void {
+  const st = plan.state;
+  if (st.sections.length < 2) return;
+  const items = [...byEntry.values()].map((e) => ({ id: e.id, vec: e.vector, section: st.assignment.get(e.id)! }));
+  const size = new Map<string, number>();
+  for (const i of items) size.set(i.section, (size.get(i.section) ?? 0) + 1);
+  for (const m of findMisplaced(items, rules)) {
+    if (exempt.has(m.id)) continue;
+    const isLeaf = !t.kids(m.from).length;
+    if (isLeaf && (size.get(m.from) ?? 0) - 1 < rules.minGroup) continue;
+    st.assignment.set(m.id, m.to);
+    size.set(m.from, (size.get(m.from) ?? 0) - 1);
+    size.set(m.to, (size.get(m.to) ?? 0) + 1);
+    plan.moves.push({ ...m, title: byEntry.get(m.id)!.title });
+  }
+  t.normalize();
+  // fold a lone split child back into its parent
+  for (const parent of st.sections.map((x) => String(x.id))) {
+    const kids = [...plan.splitChildren].filter(([, p]) => p === parent).map(([c]) => c).filter((c) => st.sections.some((x) => String(x.id) === c));
+    if (kids.length === 1) {
+      for (const id of t.descendantIds(kids[0])) {
+        for (const [e, sid] of st.assignment) if (sid === id) st.assignment.set(e, parent);
+        t.remove(id);
+        plan.splitChildren.delete(id);
+      }
+      t.normalize();
+    }
+  }
+}
+
 export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const { domain, namer, notify } = opts;
   const rules = opts.rules ?? DEFAULT_RULES;
@@ -277,78 +239,68 @@ export async function planRebuild(opts: PlanOptions): Promise<RebuildPlan> {
   const byEntry = new Map(entries.map((e) => [e.id, e]));
   const vec = new Map(entries.map((e) => [e.id, e.vector]));
 
-  // 1. deterministic bottom-up build
-  const ewv: EntryWithVector[] = entries.map((e) => ({ entryId: e.id, sectionId: "" as SectionId, vector: e.vector }));
-  const meta = new Map(entries.map((e) => [e.id, { kind: e.kind, maturity: e.maturity }]));
+  // 1. Start: the given tree (`start`, e.g. the current roots) or ONE root holding every entry.
+  //    There is no bottom-up clustering: structure only ever comes from the gated split below,
+  //    the same rule the insert path (repairPath) applies.
   let state: RebuildState;
   if (opts.start) {
     state = { sections: structuredClone(opts.start.sections), assignment: new Map(opts.start.assignment) };
   } else {
-    const built = buildTreeBottomUp(ewv, domain, computeCentroid(entries.map((e) => e.vector)), SECTION_TREE, meta);
-    state = { sections: built.sections, assignment: new Map([...built.assignments].map(([e, s]) => [e, String(s)])) };
+    state = { sections: [], assignment: new Map() };
   }
   plan.state = state;
   const t = new Tree(state, vec, domain);
+  if (state.sections.length === 0) {
+    const root = t.newSection(null, entries.map((e) => e.id));
+    for (const e of entries) state.assignment.set(e.id, String(root.id));
+  }
   for (const e of entries) if (!state.assignment.has(e.id)) {
     const rs = state.sections.filter((s) => !s.childIds.length);
     state.assignment.set(e.id, String(rs.reduce((b, l) => (cosine(e.vector, l.centroid) > cosine(e.vector, b.centroid) ? l : b)).id));
   }
   t.normalize();
-  notify?.(`built ${state.sections.length} sections from ${entries.length} entries`);
 
-  // 2. structural cleanup
-  absorbSmallRoots(t, entries.length);
-  mergeSimilarRoots(t, entries.length);
-  collapseSingleChild(t);
-  promoteDominant(t);
-  t.normalize();
-
-  // 3. misplacement refinement (rebuild only; may move anywhere in the domain)
-  const items = entries.map((e) => ({ id: e.id, vec: e.vector, section: state.assignment.get(e.id)! }));
-  for (const m of findMisplaced(items, rules)) {
-    state.assignment.set(m.id, m.to);
-    plan.moves.push({ ...m, title: byEntry.get(m.id)!.title });
-  }
-  plan.moves.sort((a, b) => (a.id < b.id ? -1 : 1));
-  t.normalize();
-  notify?.(`refinement moved ${plan.moves.length} entries`);
-
-  // 4. recursive gated split; leftovers stay in the parent
-  const queue = state.sections.map((s) => String(s.id));
-  while (queue.length) {
-    const id = queue.shift()!;
-    const sec = state.sections.find((s) => String(s.id) === id);
-    if (!sec) continue;
-    const members = t.direct(id);
-    if (members.length <= rules.splitAbove) continue;
-    const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
-    if (!isSplit(d)) {
-      plan.rejected.push({ sectionId: id, n: members.length, reason: d.reason, detail: d.detail });
-      continue;
+  // 2. Level by level: refine placement among the sections that exist, then judge each
+  //    not-yet-judged section once. Sections with no stable substructure stay whole.
+  const judged = new Set<string>();
+  const exempt = new Set<string>(); // leftovers: flagged as fitting nowhere, never "moved" by refinement
+  for (let level = 0; level < 32; level++) {
+    refine(plan, t, byEntry, exempt, rules);
+    const todo = state.sections.filter((s) => !judged.has(String(s.id))).sort((a, b) => a.depth - b.depth || (String(a.id) < String(b.id) ? -1 : 1));
+    if (!todo.length) break;
+    for (const sec of todo) {
+      const id = String(sec.id);
+      judged.add(id);
+      const members = t.direct(id);
+      if (members.length <= rules.splitAbove) continue;
+      const d = chooseSplit(members.map((m) => vec.get(m)!), members, rules);
+      if (!isSplit(d)) {
+        plan.rejected.push({ sectionId: id, n: members.length, reason: d.reason, detail: d.detail });
+        continue;
+      }
+      for (let g = 0; g < d.k; g++) {
+        const ids = members.filter((_, i) => d.labels[i] === g);
+        const child = t.newSection(sec, ids);
+        for (const e of ids) state.assignment.set(e, String(child.id));
+        plan.splitChildren.set(String(child.id), id);
+      }
+      const left = members.filter((_, i) => d.labels[i] < 0);
+      if (left.length) { plan.leftovers.set(id, [...(plan.leftovers.get(id) ?? []), ...left]); for (const e of left) exempt.add(e); }
+      t.normalize();
+      notify?.(`split ${id} (${members.length}) into ${d.k} groups, ${left.length} leftover`);
     }
-    for (let g = 0; g < d.k; g++) {
-      const ids = members.filter((_, i) => d.labels[i] === g);
-      const child = t.newSection(sec, ids);
-      for (const e of ids) state.assignment.set(e, String(child.id));
-      plan.splitChildren.set(String(child.id), id);
-      queue.push(String(child.id));
-    }
-    const left = members.filter((_, i) => d.labels[i] < 0);
-    if (left.length) plan.leftovers.set(id, left);
-    t.normalize();
-    notify?.(`split ${id} (${members.length}) into ${d.k} groups, ${left.length} leftover`);
   }
+  plan.moves.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  notify?.(`top-down build: ${state.sections.length} sections, refinement moved ${plan.moves.length} entries`);
 
-  // 5. seeded branching cap, then drop pass-through wrappers
+  // 3. the seeded branching cap is the only other structural rule
   enforceBranchingFactor(state.sections, domain, SECTION_TREE);
   t.normalize();
-  collapseSingleChild(t);
-  t.normalize();
 
-  // 6a. id continuity: sections matching an old one by member overlap keep its id, title and summary
+  // 4. id continuity: sections matching an old one by member overlap keep its id, title and summary
   if (opts.oldSections) reuseOldSections(plan, t, opts.oldSections, entries, rules);
 
-  // 6. one top-down, sibling-aware label pass (new sections only; may reject splits)
+  // 5. one top-down, sibling-aware label pass (new sections only; may reject splits)
   await labelTree(plan, t, byEntry, namer, rules, notify);
   t.normalize();
   return plan;

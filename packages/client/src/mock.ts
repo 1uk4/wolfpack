@@ -11,6 +11,7 @@ import {
   type CardAnswers,
   type CreateThreadBody,
   type WolfEvent,
+  type HubEvent,
   type PendingCard,
   type ConsoleClient,
   type SubmitAck,
@@ -138,6 +139,12 @@ export class MockConsoleClient implements ConsoleClient {
       this.activitySubs.delete(sub);
       opts.signal?.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** The mock hub has no activity: an open stream that never yields, until `signal` aborts. */
+  async *watchHubEvents(opts: { signal?: AbortSignal } = {}): AsyncIterable<HubEvent> {
+    const { signal } = opts;
+    if (!signal?.aborted) await new Promise<void>((r) => signal?.addEventListener("abort", () => r(), { once: true }));
   }
 
   async getThread(threadId: string, opts: { limit?: number; before?: string } = {}): Promise<ThreadDetail> {

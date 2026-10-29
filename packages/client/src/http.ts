@@ -12,6 +12,7 @@ import {
   parseMemoryEvent,
   parseThreadEvent,
   parseWolfEvent,
+  parseHubEvent,
   type BindThreadResponse,
   type ThreadContext,
   type ThreadSettingsPatch,
@@ -43,6 +44,7 @@ import {
   type PromoteResponse,
   type MemoryEvent,
   type WolfEvent,
+  type HubEvent,
   type Attachment,
   type SubmitAck,
   type SubmitOptions,
@@ -296,6 +298,64 @@ export class HttpConsoleClient implements ConsoleClient {
           if (frame.id) cursor = frame.id; // opaque `<boot>:<seq>`
           yield parsed.event;
         }
+        } finally {
+          clearTimeout(idle);
+        }
+        throw new TypeError("stream ended");
+      } catch (e) {
+        if (signal?.aborted) return;
+        if (e instanceof ProtocolError || e instanceof BusyError || e instanceof NotFoundError) throw e;
+        if (++failures > this.maxRetries) {
+          throw new ProtocolError("engine_error", `stream lost: ${e instanceof Error ? e.message : String(e)}`, true);
+        }
+        await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
+      } finally {
+        signal?.removeEventListener("abort", stop);
+        ctl.abort();
+      }
+    }
+  }
+
+  /**
+   * The pack's hub events (`work.changed`, `kb.changed`, `wolf.presence`; `resync` = refetch). Needs `HttpClientOptions.hub`.
+   * Reconnects on a dropped stream, resuming with Last-Event-ID (the opaque `<boot>:<seq>` of the last frame, resync included);
+   * a cursor the hub cannot replay is answered with `resync`, which is yielded like any event. Never ends on its own: stop with `signal`.
+   */
+  async *watchHubEvents(opts: { from?: string; signal?: AbortSignal; idleMs?: number } = {}): AsyncGenerator<HubEvent> {
+    const { signal } = opts;
+    const idleMs = opts.idleMs ?? 60_000; // the hub sends a keepalive every 20s
+    let cursor = opts.from;
+    let failures = 0;
+    while (!signal?.aborted) {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener("abort", stop);
+      try {
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = cursor;
+        const res = await this.request("hubEvents", {}, { headers, signal: ctl.signal });
+        if (!res.body) throw new TypeError("stream response has no body");
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        const arm = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => ctl.abort(), idleMs);
+        };
+        arm();
+        try {
+          for await (const frame of sseFrames(res.body, arm)) {
+            failures = 0;
+            let json: unknown;
+            try {
+              json = JSON.parse(frame.data);
+            } catch {
+              throw new ProtocolError("invalid_request", "stream frame is not JSON", false);
+            }
+            const parsed = parseHubEvent(json);
+            if (parsed.kind === "unknown") continue;
+            if (parsed.kind === "invalid") throw new ProtocolError("invalid_request", `invalid stream event: ${parsed.error.message}`, false);
+            if (frame.id) cursor = frame.id;
+            yield parsed.event;
+          }
         } finally {
           clearTimeout(idle);
         }

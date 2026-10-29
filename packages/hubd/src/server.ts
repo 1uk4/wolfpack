@@ -39,7 +39,8 @@ import {
   parseWolfId,
   type WorkAppendedListener,
 } from "./work-writes.js";
-import { createEventBus, DEFAULT_EVENT_BUFFER } from "./events.js";
+import { createEventBus } from "./events.js";
+import { loadWorkState } from "@wolfpack/kb/client";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 export const API_KEY_HEADER = "x-api-key";
@@ -61,6 +62,8 @@ export interface HubOptions {
   writeGate?: () => Promise<void> | void;
   /** Replay buffer size of GET /v1/events (events kept for Last-Event-ID resume). Default 1000. */
   eventBufferSize?: number;
+  /** Max concurrent GET /v1/events streams; beyond it a new one is refused with 409 `busy` (retryable). Default 128. */
+  maxEventStreams?: number;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -69,8 +72,8 @@ export type { WorkAppendedListener };
 export interface HubServer {
   /** Subscribe to ledger appends made by work writes; returns an unsubscribe. Listener errors are swallowed (logged). */
   onWorkAppended(listener: WorkAppendedListener): () => void;
-  /** Publish a `kb.changed` event (entry ids) to /v1/events subscribers; the KB commit path calls this. */
-  emitKbChanged(entryIds: string[]): void;
+  /** Publish a `kb.changed` event (entry ids, optional domain) to /v1/events subscribers; the KB commit path calls this. */
+  emitKbChanged(entryIds: string[], domain?: string): void;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -187,8 +190,25 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
-  const bus = createEventBus(opts.eventBufferSize ?? DEFAULT_EVENT_BUFFER);
+  const bus = createEventBus({
+    bufferSize: opts.eventBufferSize,
+    maxStreams: opts.maxEventStreams,
+    domainOf: (ids) => {
+      const out = new Map<string, string>();
+      try {
+        const state = loadWorkState(roots);
+        for (const id of ids) {
+          const d = state.get(id as never)?.domain;
+          if (typeof d === "string") out.set(id, d);
+        }
+      } catch (e) {
+        console.error("hubd: domain lookup for events failed:", e);
+      }
+      return out;
+    },
+  });
   writer.onAppended(({ events }) => bus.workAppended(events));
+  writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
   let server!: Server;
@@ -276,9 +296,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 200, { item });
         }
         case "hubEvents": {
-          const raw = req.headers["last-event-id"] ?? url.searchParams.get("from");
-          const cursor = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-          bus.attach(res, cursor || undefined, (fn) => req.on("close", fn));
+          const hdr = req.headers["last-event-id"];
+          const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
+          bus.attach(res, cursor);
           return;
         }
         case "hubGraduateWork": {
@@ -319,7 +339,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     roots,
     port,
     url: `http://${host}:${port}`,
-    emitKbChanged: (ids) => bus.emitKbChanged(ids),
+    emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
@@ -330,6 +350,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));
         server.closeIdleConnections?.();
+        // Ended event streams only become idle once their final bytes flush; sweep again shortly after.
+        setTimeout(() => server.closeIdleConnections?.(), 50).unref();
         // 3. last resort for a stuck client: force-close after a grace period.
         setTimeout(() => server.closeAllConnections?.(), 5_000).unref();
       }),

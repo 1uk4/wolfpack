@@ -250,8 +250,10 @@ export function readLedgerSince(roots: KbRoots, offset: number): { events: Ledge
   let size = 0;
   try {
     size = statSync(file).size;
-  } catch {
-    return { events: [], end: 0 };
+  } catch (e) {
+    // A missing ledger is empty; any other failure is surfaced (the caller must not mistake it for "nothing appended").
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { events: [], end: 0 };
+    throw e;
   }
   if (size <= offset) return { events: [], end: size };
   const buf = Buffer.alloc(size - offset);
@@ -304,6 +306,17 @@ export function createWorkWriter(opts: WorkWriterOptions) {
   const { roots } = opts;
   const queue = new WriteQueue();
   const listeners = new Set<WorkAppendedListener>();
+  const failedListeners = new Set<() => void>();
+  // The diff could not be taken (probe or read failed): events may have been appended unseen. Tell subscribers.
+  const appendFailed = () => {
+    for (const l of failedListeners) {
+      try {
+        l();
+      } catch (e) {
+        console.error("hubd: append-failed listener failed:", e);
+      }
+    }
+  };
   let closing = false;
   let released = false;
 
@@ -318,6 +331,7 @@ export function createWorkWriter(opts: WorkWriterOptions) {
       } catch (e) {
         console.error("hubd: ledger size probe failed:", e);
       }
+      const probeFailed = before === undefined;
       let result: T | undefined;
       let failure: HubError | undefined;
       try {
@@ -342,8 +356,9 @@ export function createWorkWriter(opts: WorkWriterOptions) {
           }
         } catch (e) {
           console.error("hubd: post-append hook failed:", e);
+          appendFailed();
         }
-      }
+      } else if (probeFailed) appendFailed();
       if (failure) throw failure;
       return result as T;
     });
@@ -354,6 +369,11 @@ export function createWorkWriter(opts: WorkWriterOptions) {
     onAppended(l: WorkAppendedListener): () => void {
       listeners.add(l);
       return () => void listeners.delete(l);
+    },
+    /** Fired when a write's ledger diff could not be taken, so appended events may have gone unannounced. Returns an unsubscribe. */
+    onAppendFailed(l: () => void): () => void {
+      failedListeners.add(l);
+      return () => void failedListeners.delete(l);
     },
     /** Stop admitting writes, drain the queue, release the lock. Idempotent. */
     close(): Promise<void> {

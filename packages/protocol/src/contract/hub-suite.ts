@@ -257,8 +257,9 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         // Missed while disconnected:
         const id2 = await create();
         const resumed = await open({ "Last-Event-ID": first.id! });
-        const [got] = await resumed.next(1);
-        expect(got.event).toMatchObject({ type: "work.changed", itemId: id2 });
+        // Taking frames until id2's own event: the create may have appended more than one ledger event.
+        let got: Frame | undefined;
+        while (got?.event.itemId !== id2) got = (await resumed.next(1))[0];
         expect(got.event.id).toBeGreaterThan(first.event.id);
         resumed.close();
       });
@@ -267,6 +268,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         const s = await open({ "Last-Event-ID": "deadbeef:1" });
         const [f] = await s.next(1);
         expect(f.event.type).toBe("resync");
+        expect(f.id).toMatch(/^[0-9a-f]+:\d+$/);
         s.close();
       });
     });

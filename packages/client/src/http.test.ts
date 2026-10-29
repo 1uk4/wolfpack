@@ -264,6 +264,33 @@ describe("children and ledger", () => {
   });
 });
 
+describe("HttpConsoleClient watchHubEvents", () => {
+  const sse = (frames: string) => new Response(new TextEncoder().encode(frames), { headers: { "Content-Type": "text/event-stream" } });
+  it("yields events, sends the API key, and reconnects with the last frame id (resync included) as Last-Event-ID", async () => {
+    const seen: { url: string; cursor: string | null; key: string | null }[] = [];
+    const ctl = new AbortController();
+    const f: typeof fetch = async (input, init) => {
+      const req = new Request(input as string, init);
+      seen.push({ url: req.url, cursor: req.headers.get("last-event-id"), key: req.headers.get("x-api-key") });
+      if (seen.length === 1) return sse(`id: b:0\ndata: {"type":"resync","id":0,"at":"2026-10-29T00:00:00.000Z"}\n\nid: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
+      return sse(`id: b:2\ndata: {"type":"future.thing","id":2,"at":"x"}\n\nid: b:3\ndata: {"type":"wolf.presence","id":3,"at":"2026-10-29T00:00:00.000Z","wolf":"w","state":"online","host":"h"}\n\n`);
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", apiKey: "sekret" }, fetch: f, retryDelayMs: 1 });
+    const got: string[] = [];
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) {
+      got.push(ev.type);
+      if (got.length === 3) ctl.abort();
+    }
+    expect(got).toEqual(["resync", "kb.changed", "wolf.presence"]); // the unknown type is skipped
+    expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "sekret" });
+    expect(seen[1].cursor).toBe("b:1");
+  });
+  it("needs a hub", async () => {
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", fetch: async () => new Response("") });
+    await expect(c.watchHubEvents().next()).rejects.toBeInstanceOf(ProtocolError);
+  });
+});
+
 describe("HttpConsoleClient hub work reads", () => {
   it("goes to the hub's /v1/work routes with the API key; other calls keep using baseUrl", async () => {
     const seen: { url: string; key: string | null }[] = [];

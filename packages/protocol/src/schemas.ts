@@ -831,12 +831,28 @@ export function parseWolfEvent(input: unknown): ParsedWolfEvent {
  * `wolf.presence` when a wolf registers/leaves (defined here; nothing emits it yet). `resync`: the cursor is too old, refetch.
  */
 const hubBase = z.object({ id: EventIdSchema, at: IsoSchema });
-export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string() });
-export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()) });
-export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]) });
-export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync") });
+/** `domain`: the item's domain when the hub could fold it (absent for a deleted item). */
+export const HubWorkChangedEventSchema = hubBase.extend({ type: z.literal("work.changed"), itemId: z.string(), event: z.string(), domain: z.string().optional() });
+export const HubKbChangedEventSchema = hubBase.extend({ type: z.literal("kb.changed"), entryIds: z.array(z.string()), domain: z.string().optional() });
+export const HubWolfPresenceEventSchema = hubBase.extend({ type: z.literal("wolf.presence"), wolf: z.string(), state: z.enum(["online", "offline"]), host: z.string().optional() });
+/**
+ * The cursor cannot be replayed (too old, another hub boot, ahead of the hub) or the hub missed a ledger append: refetch.
+ * Not a sequenced event: its `id` is the hub's CURRENT sequence (0 on a hub that has emitted nothing), so a client that stores
+ * it as Last-Event-ID resumes with exactly the events after it.
+ */
+export const HubResyncEventSchema = hubBase.extend({ type: z.literal("resync"), id: z.number().int().nonnegative() });
 export const HubEventSchema = z.discriminatedUnion("type", [HubWorkChangedEventSchema, HubKbChangedEventSchema, HubWolfPresenceEventSchema, HubResyncEventSchema]);
 export type HubEvent = z.infer<typeof HubEventSchema>;
+const HUB_EVENT_TYPES: ReadonlySet<string> = new Set(HubEventSchema.options.map((o) => o.shape.type.value));
+export type ParsedHubEvent = { kind: "event"; event: HubEvent } | { kind: "unknown" } | { kind: "invalid"; error: z.ZodError };
+/** Same ignore-unknown contract as parseWolfEvent. */
+export function parseHubEvent(input: unknown): ParsedHubEvent {
+  const env = z.object({ type: z.string() }).passthrough().safeParse(input);
+  if (!env.success) return { kind: "invalid", error: env.error };
+  if (!HUB_EVENT_TYPES.has(env.data.type)) return { kind: "unknown" };
+  const ev = HubEventSchema.safeParse(input);
+  return ev.success ? { kind: "event", event: ev.data } : { kind: "invalid", error: ev.error };
+}
 export type HubEventType = HubEvent["type"];
 
 // ------------------------------------------------------- memory events

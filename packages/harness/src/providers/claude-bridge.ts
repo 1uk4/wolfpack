@@ -40,3 +40,13 @@ export const claudeBridgeSdkSeams = (queryFn: unknown, env: NodeJS.ProcessEnv): 
   queryFn: queryFn as ClaudeBridgeSeams["queryFn"],
   ...(env.WOLF_HARNESS_SMOKE ? { sweepOrphans: false } : {}),
 });
+
+/**
+ * Model list for a lookup-only bridge (a den holding stored claude-bridge refs on a wolf that does not use it).
+ * Builds the provider with no SDK query, no auth probe and NO orphan sweep, reads its table and shuts it down:
+ * nothing is spawned and no claude process is touched.
+ */
+export const claudeBridgeLookupModels = (ctx: { cwd: string; env: NodeJS.ProcessEnv }) => {
+  const p = createClaudeBridgeProvider({ cwd: ctx.cwd, env: { ...ctx.env, ...NO_TOOL_SEARCH }, sweepOrphans: false, checkAuth: false });
+  try { return [...p.getModels()]; } finally { p.shutdown(); }
+};

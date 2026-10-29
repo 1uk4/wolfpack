@@ -38,7 +38,7 @@ import { adaptToDurable } from "../adapters/durable.js";
 import { createAskUserQuestionExtension } from "../extensions/ask-user-question.js";
 import { loadExtensions, reportLoad, withoutProvided } from "../loader.js";
 import { composeProjectContext } from "./context.js";
-import { buildWolfModels } from "./models.js";
+import { buildWolfModels, storedProviderIds } from "./models.js";
 import { WolfServer } from "./server.js";
 import { SubagentBridge, createSubagentExtension } from "./subagent-tools.js";
 import { startLibrarianSweep, startSweepTimer } from "../sweep-host.js";
@@ -181,7 +181,7 @@ async function startConfigured(
   if (opts.socket) await prepareSocketPath(opts.socket);
 
   mkdirSync(config.den, { recursive: true });
-  const wolfModels = opts.models ? { models: opts.models, dispose: () => {}, forget: () => {} } : buildWolfModels(table, { cwd, env });
+  const wolfModels = opts.models ? { models: opts.models, dispose: () => {}, forget: () => {} } : buildWolfModels(table, { cwd, env, storedProviders: storedProviderIds(join(config.den, "session.sqlite")) });
   const engine = await openWolfEngine(join(config.den, "session.sqlite"), {
     ...(wolfModels.models ? { models: wolfModels.models } : {}),
     extensions,

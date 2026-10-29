@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveModel, DEFAULT_MAX_TOKENS, type EngineConfig } from "./config.js";
 import {
+  tierPiProvider,
   ENGINE_STEPS,
   ModelConfigError,
   STEP_TIERS,
@@ -292,5 +293,22 @@ describe("resolveModel — output cap", () => {
   it("still honours a step or engine override", () => {
     expect(resolveModel({ ...cfg, defaultMaxTokens: 2000 }, "classify").maxTokens).toBe(2000);
     expect(resolveModel({ ...cfg, steps: { classify: { model: "m", maxTokens: 512 } } }, "classify").maxTokens).toBe(512);
+  });
+});
+
+describe("per-tier providers and engine-step tiers", () => {
+  const pack = (extra: object) => ({ main: { model: "claude-opus-5-5" }, smart: { model: "claude-sonnet-5-5" }, fast: { model: "claude-haiku-5-5" }, transport: { local: "subscription", vps: "api" }, ...extra }) as never;
+  it("an engine-step tier on a provider with no adapter is refused with a clear error", () => {
+    for (const tier of ["smart", "fast"]) {
+      expect(() => resolveModelTable({ pack: pack({ [tier]: { model: "x", provider: "openrouter" } }), location: "local" })).toThrow(/models\.(smart|fast)\.provider "openrouter" has no engine adapter/);
+    }
+  });
+  it("main may name any pi provider", () => {
+    const t = resolveModelTable({ pack: pack({ main: { model: "x/y", provider: "openrouter" } }), location: "local" });
+    expect(t.tiers.main.piModel).toBe("openrouter/x/y");
+  });
+  it("tierPiProvider prefers the tier's piModel prefix over the transport default", () => {
+    expect(tierPiProvider({ transport: "subscription" }, { piModel: "anthropic/m" })).toBe("anthropic");
+    expect(tierPiProvider({ transport: "api" }, { piModel: "claude-bridge/m" })).toBe("claude-bridge");
   });
 });

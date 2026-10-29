@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { selectMainModel, startRoot } from "./main-model.js";
+import { NEEDS_SUBSCRIPTION_TOKEN } from "./providers/index.js";
+import { providersInUse, storedProviderIds } from "./wolfd/models.js";
 
 import { createRegistry, Harness, type Conversation, type ContextEdit } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord/context";
@@ -80,9 +82,9 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   // On subscription, engine steps (memory, consolidation, KB sweep) run on the
   // Max plan through the Agent SDK; the main agent uses the pi-claude-bridge
   // provider on the same plan (selectMainModel).
-  if (table.transport === "subscription" && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (providersInUse(table).some((id) => NEEDS_SUBSCRIPTION_TOKEN.has(id)) && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     throw new Error(
-      `${config.name} is on transport: subscription but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
+      `${config.name} uses the claude-bridge provider but has no CLAUDE_CODE_OAUTH_TOKEN — add it to ~/.wolfpack/.env (from \`claude setup-token\`) and run \`wolfpack sync ${config.name}\`, or switch back with \`wolfpack config ${config.name} --set transport=api\``,
     );
   }
   const main = table.tiers.main;
@@ -102,7 +104,7 @@ export async function createWolfHarness(): Promise<HarnessInstance> {
   }
   // Main agent provider: whatever the main tier names (providers/index.ts); a provider that cannot start fails startup.
   let rootId: string | undefined;
-  const mainModel = await selectMainModel({ table, cwd: wolfDen });
+  const mainModel = await selectMainModel({ table, cwd: wolfDen, storedProviders: storedProviderIds(join(wolfDen, config.harness?.storage ?? "session.sqlite")) });
   console.log(`[harness] ${mainModel.line}; memory + sweep via ${table.transport === "subscription" ? "Max subscription (Agent SDK)" : "API key"}`);
   const models = mainModel.models;
 

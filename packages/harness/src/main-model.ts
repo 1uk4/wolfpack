@@ -25,9 +25,12 @@ export interface SelectMainModelOptions {
   table: Pick<ModelTable, "transport" | "tiers">;
   env?: NodeJS.ProcessEnv;
   cwd: string;
+  /** Provider ids stored in the den (storedProviderIds); those the main tier does not use resolve lookup-only. */
+  storedProviders?: readonly string[];
   /** Test seams. */
   factories?: BuildWolfModelsOptions["factories"];
   seams?: BuildWolfModelsOptions["seams"];
+  lookups?: BuildWolfModelsOptions["lookups"];
   /** Hands the Agent SDK `query` to providers that need it (they receive it as seams[provider].queryFn). */
   loadSdkQuery?: () => Promise<unknown>;
 }
@@ -42,7 +45,7 @@ export async function selectMainModel(opts: SelectMainModelOptions): Promise<Mai
   if (sdkSeams) seams[provider] = { ...sdkSeams(await (opts.loadSdkQuery ?? loadQuery)(), env), ...((seams[provider] as object | undefined) ?? {}) };
   let reg;
   try {
-    reg = buildModelRegistry([provider], { cwd: opts.cwd, env, seams, ...(opts.factories ? { factories: opts.factories } : {}) });
+    reg = buildModelRegistry([provider], { cwd: opts.cwd, env, seams, ...(opts.storedProviders ? { storedProviders: opts.storedProviders } : {}), ...(opts.lookups ? { lookups: opts.lookups } : {}), ...(opts.factories ? { factories: opts.factories } : {}) });
   } catch (err) {
     throw new Error(`main agent provider "${provider}" failed to start: ${err instanceof Error ? err.message : err}`);
   }

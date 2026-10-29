@@ -86,7 +86,7 @@ describe("smokeStartBundle expectBridge", () => {
       expect((await smokeStartBundle(files)).ok).toBe(true);
       const r = await smokeStartBundle(files, { expectBridge: true });
       expect(r.ok).toBe(false);
-      expect(r.output).toContain("fell back to the API key");
+      expect(r.output).toContain("did not start on it");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

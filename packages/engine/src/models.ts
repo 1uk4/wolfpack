@@ -122,6 +122,14 @@ const TRANSPORT_PROVIDERS: Record<Transport, { engine: string; pi: string }> = {
 /** Engine provider for a pi provider id; ids not listed here are used as-is. */
 const ENGINE_PROVIDER_FOR_PI: Record<string, string> = { "claude-bridge": "claude-agent-sdk" };
 
+/**
+ * Engine providers that have an adapter (adapters/index.ts). Engine steps (memory, consolidation, KB sweep,
+ * librarian) read `tiers.smart` / `tiers.fast`, so those tiers stay on anthropic or claude-bridge for now; only
+ * `main` (the pi-durable conversation path) may name any other pi provider.
+ */
+const ENGINE_ADAPTER_PROVIDERS: readonly string[] = ["anthropic", "claude-agent-sdk"];
+const ENGINE_STEP_TIERS: readonly Tier[] = [...new Set(Object.values(STEP_TIERS))];
+
 export interface TierSetting {
   model?: string;
   /** pi provider id for this tier (e.g. "claude-bridge", "anthropic", "openrouter"). Wins over the transport default. */
@@ -150,7 +158,10 @@ export interface ResolvedTier {
   modelSource: ModelSource;
   thinking?: ThinkingLevel;
   thinkingSource?: ModelSource;
-  /** Engine provider (`createEngine({ provider })`). */
+  /**
+   * ENGINE provider (`createEngine({ provider })`: "anthropic" | "claude-agent-sdk"). Not the pi provider: that is
+   * `piProvider`. In config INPUT (`models.<tier>.provider`) the field names the pi provider instead.
+   */
   provider: string;
   /** pi model string: `<pi provider>/<id>`, without the thinking suffix. */
   piModel: string;
@@ -163,6 +174,7 @@ export interface ResolvedTier {
  * `piModel` prefix, else to the transport's provider, so legacy configs keep resolving.
  */
 export function tierPiProvider(table: Pick<ModelTable, "transport">, tier: Pick<ResolvedTier, "piModel" | "piProvider">): string {
+  // The piModel prefix / piProvider wins over `transport`: a per-tier provider may differ from the transport default.
   if (tier.piProvider) return tier.piProvider;
   const slash = tier.piModel?.indexOf("/") ?? -1;
   if (slash > 0) return tier.piModel.slice(0, slash);
@@ -248,6 +260,12 @@ export function resolveModelTable(input: ResolveInput): ModelTable {
 
     // Provider: wolf tier > pack tier > the transport's default (legacy configs).
     const piProvider = nonEmpty(wolfTier?.provider) ?? nonEmpty(packTier?.provider) ?? providers.pi;
+    const engineProvider = ENGINE_PROVIDER_FOR_PI[piProvider] ?? piProvider;
+    if (ENGINE_STEP_TIERS.includes(tier) && !ENGINE_ADAPTER_PROVIDERS.includes(engineProvider)) {
+      throw new ModelConfigError(
+        `models.${tier}.provider "${piProvider}" has no engine adapter; engine steps (memory, consolidation, KB sweep) need ${ENGINE_ADAPTER_PROVIDERS.join("|")} for the ${tier} tier (only main can use other providers)`,
+      );
+    }
     const resolved: ResolvedTier = {
       model,
       modelSource,

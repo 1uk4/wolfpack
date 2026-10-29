@@ -123,9 +123,9 @@ export async function smokeStartBundle(built: BuiltBundleFiles, opts: { timeoutM
       timeoutMs: opts.timeoutMs ?? 30_000,
       nodePath: opts.nodePath,
     });
-    // On subscription the main agent must come up on the bridge: a silent fallback to the API key fails the smoke.
+    // On subscription the main agent must come up on the bridge.
     if (res.ok && opts.expectBridge && !res.output.includes("Main agent via claude-bridge")) {
-      return { ok: false, output: `${res.output}\n(expected the main agent on the claude-bridge provider, but it fell back to the API key)`.trim() };
+      return { ok: false, output: `${res.output}\n(expected the main agent on the claude-bridge provider, but it did not start on it)`.trim() };
     }
     return res;
   } finally {

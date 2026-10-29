@@ -4,11 +4,18 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import type { ClaudeBridgeProvider } from "pi-claude-bridge/core";
 import { Type } from "typebox";
 import { createClaudeBridgeProvider } from "pi-claude-bridge/core";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveModelTable, resolveWolfModel, tierPiProvider } from "@wolfpack/engine";
-import { buildWolfModels, providersInUse } from "./models.js";
+import { buildModelRegistry, buildWolfModels, providersInUse, storedProviderIds } from "./models.js";
 
 const fakeProvider = () => {
   const base = createProvider({ id: "claude-bridge", auth: { check: async () => "test" } as any, models: [], api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } } } as any);
@@ -195,5 +202,68 @@ describe("bridge seam: images reach the SDK query", () => {
       { role: "toolResult", toolCallId: "t1", toolName: "read", content: [toolImage], isError: false, timestamp: 1 },
     ]);
     expect(blocks(msg)).toEqual([toolImage.data]);
+  });
+});
+
+describe("registry lifecycle and the orphan sweep default", () => {
+  it("dispose is idempotent", () => {
+    const provider = fakeProvider();
+    const m = buildWolfModels(table("claude-bridge"), { cwd: "/w", seams: bridgeSeam(() => provider) });
+    m.dispose();
+    m.dispose();
+    expect(provider.shutdown).toHaveBeenCalledOnce();
+  });
+  it("the orphan sweep stays on by default (never opted out unless a seam says so)", () => {
+    const create = vi.fn(() => fakeProvider());
+    buildWolfModels(table("claude-bridge"), { cwd: "/w", seams: bridgeSeam(create) });
+    expect((create.mock.calls[0] as any[])[0].sweepOrphans).toBeUndefined();
+  });
+});
+
+describe("stored provider ids resolve lookup-only", () => {
+  const entry = (id: string) => (model: string) => ({ id: model, name: model, api: id, provider: id, baseUrl: id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1, maxTokens: 1 });
+  const lookups = { anthropic: () => [entry("anthropic")("m")], "claude-bridge": () => [entry("claude-bridge")("m")] } as never;
+
+  it("a stored anthropic ref on a bridge-only tier resolves, and the stub refuses to serve", async () => {
+    const m = buildWolfModels(table("claude-bridge"), { cwd: "/w", seams: bridgeSeam(() => fakeProvider()), storedProviders: ["anthropic"], lookups });
+    expect(m.models!.getModel("anthropic", "m")).toBeDefined();
+    const events: any[] = [];
+    for await (const e of (m.models as any).streamSimple(m.models!.getModel("anthropic", "m"), { messages: [] })) events.push(e);
+    expect(events[0].error.errorMessage).toMatch(/provider anthropic is not configured for this wolf/);
+  });
+
+  it("a stored claude-bridge ref on an api-only tier resolves WITHOUT starting the bridge", () => {
+    const create = vi.fn();
+    const m = buildWolfModels(table("anthropic"), { cwd: "/w", seams: bridgeSeam(create), storedProviders: ["claude-bridge"], lookups });
+    expect(m.models!.getModel("claude-bridge", "m")).toBeDefined();
+    expect(m.models!.getProvider("anthropic")).toBeDefined();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("an in-use provider is never replaced by a stub; unknown stored ids are ignored; no stored extras keeps the default", () => {
+    const provider = fakeProvider();
+    const r = buildModelRegistry(["claude-bridge"], { cwd: "/w", seams: bridgeSeam(() => provider), storedProviders: ["claude-bridge", "mystery"], lookups });
+    expect(r.models.getProvider("claude-bridge")).toBe(provider);
+    expect(r.models.getProvider("mystery")).toBeUndefined();
+    expect(buildWolfModels(table("anthropic"), { cwd: "/w", storedProviders: ["anthropic"] }).models).toBeUndefined();
+  });
+
+  it("storedProviderIds reads the provider ids a real den holds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "den-"));
+    try {
+      const file = join(dir, "session.sqlite");
+      expect(storedProviderIds(file)).toEqual([]);
+      const reg = createModels();
+      reg.setProvider(anthropicProvider());
+      const h = await Harness.open(await openNodeSqliteStorage(file), { models: reg, registry: createRegistry(), env: () => new NodeExecutionEnv({ cwd: dir }) } as never, BACKGROUND_CONTEXT);
+      await h.root(BACKGROUND_CONTEXT, { agent: { model: { provider: "anthropic", modelId: "claude-sonnet-5-5" }, cwd: dir } } as never);
+      await h.close(BACKGROUND_CONTEXT);
+      expect(storedProviderIds(file)).toContain("anthropic");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("the real bridge lookup lists models without a query, auth probe or sweep", async () => {
+    const { claudeBridgeLookupModels } = await import("../providers/claude-bridge.js");
+    expect(claudeBridgeLookupModels({ cwd: "/w", env: {} }).length).toBeGreaterThan(0);
   });
 });

@@ -21,6 +21,7 @@ import {
 } from "@wolfpack/protocol";
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { hubRoots } from "./layout.js";
+import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 export const API_KEY_HEADER = "x-api-key";
@@ -138,6 +139,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         const rec = readWorkRecordFor(roots, params.id);
         if (!rec) throw new HubError("not_found", `work item ${params.id}`);
         return send(res, 200, rec);
+      }
+      case "submitContribution": {
+        const actor = writeActor(req);
+        try {
+          const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req));
+          return send(res, stored.duplicate ? 200 : 201, stored);
+        } catch (e) {
+          if (e instanceof ContributionError) throw new HubError(e.code, e.message);
+          throw e;
+        }
       }
       default:
         // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts, not the hub.

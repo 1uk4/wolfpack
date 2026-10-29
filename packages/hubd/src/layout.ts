@@ -14,3 +14,16 @@ import type { KbRoots } from "@wolfpack/kb/shared";
 export function hubRoots(dataDir: string): KbRoots {
   return { kbBase: join(dataDir, "kb", "base"), opsRoot: join(dataDir, "kb", "ops"), denLocal: dataDir };
 }
+
+/**
+ * The hub's contribution intake: `<dataDir>/kb/ops/contributions/<wolf>/<denTopicId>-<hash10>.md`, with `_bad/` (quarantine, each
+ * file beside a `.reason.txt`) and `_processed/` (handled by the curator) inside the wolf's lane. This is the sfo-01 `inbox/<wolf>/`
+ * layout renamed for the hub; the files are byte-identical to what the kb librarian intake reads (it takes the lane's parent dir).
+ */
+export function contributionsRoot(dataDir: string): string {
+  return join(dataDir, "kb", "ops", "contributions");
+}
+
+export function contributionsDir(dataDir: string, wolf: string): string {
+  return join(contributionsRoot(dataDir), wolf);
+}

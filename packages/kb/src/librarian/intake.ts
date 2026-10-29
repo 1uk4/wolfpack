@@ -86,7 +86,8 @@ function sourceFrom(fields: Record<string, unknown>): ParsedContribution["source
   return feature || tasks || recordLines ? { ...(feature ? { feature } : {}), ...(tasks ? { tasks } : {}), ...(recordLines ? { recordLines } : {}), ...(scope ? { recordLinesScope: scope } : {}) } : undefined;
 }
 
-function parseContribution(filePath: string, from: string): ParsedContribution {
+/** Parse + validate one contribution file (throws on a malformed one). `from` is the sender (the inbox directory). */
+export function parseContribution(filePath: string, from: string): ParsedContribution {
   const raw = readFileSync(filePath, "utf-8");
   const { fields, body } = parseFrontmatter(raw);
   if (!fields.den_topic_id) throw new Error("missing den_topic_id");

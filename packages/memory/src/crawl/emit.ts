@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { emitDelta } from "@wolfpack/kb/client";
-import type { KbRoots } from "@wolfpack/kb/shared";
+import type { Contribution, KbRoots } from "@wolfpack/kb/shared";
 import { CRAWL } from "@wolfpack/engine";
 import { readPlan } from "./plan.js";
 import { discoverSources } from "./discover.js";
@@ -77,6 +77,8 @@ export interface EmitCrawlResult {
   dir: string;
   /** Per-contribution detail, in plan order (history last). */
   contributions: EmitContribution[];
+  /** The contributions actually written (status "emit"), in order: what a hub release posts. */
+  delta: Contribution[];
 }
 
 export function emitCrawl(
@@ -126,6 +128,7 @@ export function emitCrawl(
   let emitted = 0;
   let skipped = 0;
   const contributions: EmitContribution[] = [];
+  const delta: Contribution[] = [];
 
   for (const b of plan.batches) {
     const topic = topics.get(b.topic);
@@ -171,6 +174,7 @@ export function emitCrawl(
           `(cap ${CRAWL.bodyMaxChars}) — consider splitting this batch`
       );
     }
+    if (result) delta.push(result);
     if (result) {
       emitted++;
       sink.log(`emit: ${b.topic} → ${result.denTopicId}`);
@@ -214,6 +218,7 @@ export function emitCrawl(
         currency: "archived",
         status: result ? "emit" : "skip",
       });
+      if (result) delta.push(result);
       if (result) {
         emitted++;
         sink.log(`emit: history → ${result.denTopicId}`);
@@ -233,5 +238,5 @@ export function emitCrawl(
         `\nLog: ${sink.dir}`
     );
   }
-  return { emitted, skipped, dest, dir: sink.dir, contributions };
+  return { emitted, skipped, dest, dir: sink.dir, contributions, delta };
 }

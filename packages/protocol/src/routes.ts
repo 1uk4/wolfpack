@@ -72,6 +72,21 @@ export const BindThreadBodySchema = BindThreadRequestSchema;
 // --- end feature progress ---
 export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSchema) });
 
+/**
+ * Hub contribution submission body: the contribution's fields (the kb `ContributionSchema`: from, denTopicId, change, contentHash,
+ * prevHash, domainHint, summary, submitted, body, + optional provenance) as JSON. The protocol only requires an object; hubd validates
+ * it against the kb schema and quarantines a non-conforming one.
+ */
+export const SubmitContributionBodySchema = z.record(z.string(), z.unknown());
+export const SubmitContributionResponseSchema = z.object({
+  /** The stored file name, `<denTopicId>-<10 hex of contentHash>.md`. */
+  id: z.string(),
+  /** The submitting wolf's lane (`contributions/<wolf>/`). */
+  wolf: z.string(),
+  /** true: the same contribution (topic + content hash) was already stored; nothing was written. */
+  duplicate: z.boolean(),
+});
+
 export const ListWolvesResponseSchema = z.object({ wolves: z.array(WolfSummarySchema) });
 export const ListThreadsResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
 export const ListChildrenResponseSchema = z.object({ threads: z.array(ThreadSummarySchema) });
@@ -296,6 +311,14 @@ export const ROUTES = {
    */
   hubListWork: { scope: "hub", method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   hubGetWorkRecord: { scope: "hub", method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
+  /**
+   * Submit a wolf contribution to the hub (the hub-side librarian inbox). Body: the contribution fields as JSON. Needs `X-Wolfpack-Actor`;
+   * a wolf actor may only submit as itself (`from` must equal the actor id; an operator may submit for any wolf). 201 when stored,
+   * 200 `duplicate: true` when the same topic + content hash is already stored (idempotent). 400 `invalid_request` for non-JSON, a
+   * `from`/actor mismatch, or a contribution that fails the contribution schema (the latter is also quarantined under
+   * `contributions/<wolf>/_bad/` with a `.reason.txt`).
+   */
+  submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a
    * preview with a confirmation token. Answers at once with the job `{jobId, kind, state: "running", startedAt}`; a start

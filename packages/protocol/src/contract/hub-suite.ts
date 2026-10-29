@@ -1,5 +1,6 @@
+import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, buildPath, type ErrorCode } from "../index.js";
+import { ACTOR_HEADER, ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, buildPath, type ErrorCode } from "../index.js";
 
 export interface HubSuiteOptions {
   /** Headers every request carries (the hub's X-API-Key). */
@@ -54,6 +55,53 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       it("an unknown item is not_found, a malformed id invalid_request", async () => {
         await expectError(await call(buildPath("hubGetWorkRecord", { id: "work-nope-zzzzzzz" })), "not_found");
         await expectError(await call(buildPath("hubGetWorkRecord", { id: "../etc" })), "invalid_request");
+      });
+    });
+
+    describe("contributions", () => {
+      const asWolf = (id: string) => ({ ...options.headers, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id, kind: "wolf" }) });
+      const post = (body: unknown, headers: Record<string, string>) =>
+        fetch(baseUrl() + buildPath("submitContribution"), { method: "POST", headers, body: typeof body === "string" ? body : JSON.stringify(body) });
+      const contribution = (from: string) => {
+        const body = `Knowledge ${randomBytes(4).toString("hex")}.`;
+        return {
+          from,
+          denTopicId: `suite-${randomBytes(4).toString("hex")}`,
+          change: "create",
+          contentHash: "sha256:" + createHash("sha256").update(body, "utf-8").digest("hex"),
+          prevHash: null,
+          domainHint: options.domain,
+          summary: "A suite contribution.",
+          submitted: "2026-10-01 12:00",
+          body,
+        };
+      };
+
+      it("a valid contribution is accepted (201), and posting it again is an idempotent 200", async () => {
+        const c = contribution("suite-wolf");
+        const res = await post(c, asWolf("suite-wolf"));
+        expect(res.status).toBe(201);
+        const ack = ROUTES.submitContribution.response.schema.parse(await res.json()) as { id: string; wolf: string; duplicate: boolean };
+        expect(ack).toMatchObject({ wolf: "suite-wolf", duplicate: false });
+        expect(ack.id).toMatch(new RegExp(`^${c.denTopicId}-[0-9a-f]{10}\\.md$`));
+        const again = await post(c, asWolf("suite-wolf"));
+        expect(again.status).toBe(200);
+        expect(((await again.json()) as { duplicate: boolean }).duplicate).toBe(true);
+      });
+
+      it("a malformed contribution is invalid_request", async () => {
+        const { contentHash: _drop, ...noHash } = contribution("suite-wolf");
+        await expectError(await post(noHash, asWolf("suite-wolf")), "invalid_request");
+        await expectError(await post({ ...contribution("suite-wolf"), change: "rewrite" }, asWolf("suite-wolf")), "invalid_request");
+        await expectError(await post("not json", asWolf("suite-wolf")), "invalid_request");
+      });
+
+      it("a missing actor is rejected", async () => {
+        await expectError(await post(contribution("suite-wolf"), { ...options.headers, "Content-Type": "application/json" }), "invalid_request");
+      });
+
+      it("a wolf posting as another wolf is rejected", async () => {
+        await expectError(await post(contribution("someone-else"), asWolf("suite-wolf")), "invalid_request");
       });
     });
 

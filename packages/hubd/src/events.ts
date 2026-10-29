@@ -39,6 +39,8 @@ export function createEventBus(opts: EventBusOptions = {}) {
   const buffer: HubEvent[] = [];
   const subs = new Set<Sub>();
   let closed = false;
+  /** Highest seq at the last lost ledger diff: a cursor at or below it (same boot) may have missed events, so it must resync. */
+  let gapSeq = -1;
 
   /** Deliver to every subscriber; one that throws loses its stream, never the others (and never the sequence). */
   const fanOut = (ev: HubEvent) => {
@@ -77,6 +79,9 @@ export function createEventBus(opts: EventBusOptions = {}) {
     },
     /** The ledger diff for a write could not be taken: tell every live client to refetch (not buffered, no sequence minted). */
     broadcastResync(): void {
+      // Mint a sequence for the gap marker so the resync's own id sits AFTER the gap: a client that stores it as Last-Event-ID
+      // is past the loss (cursor > gapSeq) and does not get resynced again on its next reconnect.
+      gapSeq = seq++;
       fanOut(resyncEvent());
     },
     /** Called by the KB commit path (later ticket). */
@@ -107,7 +112,7 @@ export function createEventBus(opts: EventBusOptions = {}) {
       if (from !== undefined) {
         const cur = from;
         const first = buffer[0]?.id;
-        if (cur === "stale" || cur > seq || (first === undefined ? cur < seq : cur < first - 1)) send(resyncEvent());
+        if (cur === "stale" || cur <= gapSeq || cur > seq || (first === undefined ? cur < seq : cur < first - 1)) send(resyncEvent());
         else for (const e of buffer) if (e.id > cur) send(e);
       }
       const sub: Sub = { res, send };

@@ -190,24 +190,37 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
+  const domainCache = new Map<string, string>(); // work item id -> domain
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
     maxStreams: opts.maxEventStreams,
     domainOf: (ids) => {
       const out = new Map<string, string>();
-      try {
-        const state = loadWorkState(roots);
-        for (const id of ids) {
-          const d = state.get(id as never)?.domain;
-          if (typeof d === "string") out.set(id, d);
+      const miss = ids.filter((id) => !domainCache.has(id));
+      if (miss.length > 0) {
+        // Cache miss: one fold (inside the write queue) fills the cache for every item, so later batches hit.
+        try {
+          for (const [id, item] of loadWorkState(roots)) if (typeof item.domain === "string") domainCache.set(id as string, item.domain);
+        } catch (e) {
+          console.error("hubd: domain lookup for events failed:", e);
         }
-      } catch (e) {
-        console.error("hubd: domain lookup for events failed:", e);
+      }
+      for (const id of ids) {
+        const d = domainCache.get(id);
+        if (d) out.set(id, d);
       }
       return out;
     },
   });
-  writer.onAppended(({ events }) => bus.workAppended(events));
+  writer.onAppended(({ events }) => {
+    // `work.created` is the only ledger event that carries a domain; seed the cache from it so the fold is rarely needed.
+    for (const e of events) if (typeof e.domain === "string") domainCache.set(e.id, e.domain);
+    try {
+      bus.workAppended(events);
+    } finally {
+      for (const e of events) if (e.type === "work.deleted") domainCache.delete(e.id); // after emit: the event still reports its domain
+    }
+  });
   writer.onAppendFailed(() => bus.broadcastResync());
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
@@ -350,7 +363,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));
         server.closeIdleConnections?.();
-        // Ended event streams only become idle once their final bytes flush; sweep again shortly after.
+        // bus.closeAll() ended the SSE streams, but a response that has just been ended only counts as idle once its final bytes
+        // flush, so the sweep above misses it; sweep again shortly after so shutdown doesn't wait for the 5s forced close.
         setTimeout(() => server.closeIdleConnections?.(), 50).unref();
         // 3. last resort for a stuck client: force-close after a grace period.
         setTimeout(() => server.closeAllConnections?.(), 5_000).unref();

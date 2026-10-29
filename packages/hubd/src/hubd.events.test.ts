@@ -192,10 +192,42 @@ describe("hubd /v1/events", () => {
     writeFileSync(join(dir, "ledger"), "x");
     await create(h, "d").catch(() => {});
     const [r] = await s.next(1);
-    expect(r.data).toMatchObject({ type: "resync", id: 1 });
-    expect(r.id).toMatch(/:1$/);
+    expect(r.data).toMatchObject({ type: "resync", id: 2 }); // seq 1 was the last event; the gap marker takes 2
+    expect(r.id).toMatch(/:2$/);
     expect(log).toHaveBeenCalled();
     s.close();
+  });
+
+  it("after a lost diff, a reconnect with a cursor at or before the gap resyncs; one after the gap replays normally", async () => {
+    const dir = mk();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = await start({}, dir, false);
+    const { boot } = await cursorNow(h);
+    h.emitKbChanged(["a"]); // seq 1
+    h.emitKbChanged(["b"]); // seq 2
+    const live = await open(h, { "Last-Event-ID": `${boot}:1` });
+    expect((await live.next(1))[0].data.entryIds).toEqual(["b"]); // replays normally before any gap
+    rmSync(join(dir, "ledger"), { recursive: true, force: true });
+    writeFileSync(join(dir, "ledger"), "x");
+    await create(h, "d").catch(() => {}); // probe fails -> broadcast resync, gapSeq = 2
+    const [r] = await live.next(1);
+    expect(r.data).toMatchObject({ type: "resync", id: 3 });
+    live.close();
+    // The old cursor (1, and 2 itself) lies at or before the gap: resync, not a buffer replay.
+    for (const c of [1, 2]) {
+      const again = await open(h, { "Last-Event-ID": `${boot}:${c}` });
+      expect((await again.next(1))[0].data.type, `cursor ${c}`).toBe("resync");
+      again.close();
+    }
+    // The resync's own id (3) is past the gap: reconnecting with it does not resync again, and replays what follows.
+    const after = await open(h, { "Last-Event-ID": r.id! });
+    h.emitKbChanged(["c"]); // seq 4
+    expect((await after.next(1))[0].data).toMatchObject({ type: "kb.changed", entryIds: ["c"], id: 4 });
+    after.close();
+    const post = await open(h, { "Last-Event-ID": `${boot}:4` });
+    h.emitKbChanged(["d"]);
+    expect((await post.next(1))[0].data.entryIds).toEqual(["d"]);
+    post.close();
   });
 
   it("the stream cap refuses with 409 busy (the protocol has no 429), and frees a slot on disconnect", async () => {

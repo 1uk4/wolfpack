@@ -285,6 +285,32 @@ describe("HttpConsoleClient watchHubEvents", () => {
     expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "sekret" });
     expect(seen[1].cursor).toBe("b:1");
   });
+  it("a busy refusal is retried (no limit) and then succeeds", async () => {
+    let calls = 0;
+    const ctl = new AbortController();
+    const f: typeof fetch = async () => {
+      calls++;
+      if (calls <= 8) return Response.json({ code: "busy", message: "too many open event streams", retryable: true }, { status: 409 });
+      return sse(`id: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f, retryDelayMs: 1, maxStreamRetries: 2 });
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) {
+      expect(ev.type).toBe("kb.changed");
+      ctl.abort();
+    }
+    expect(calls).toBe(9); // more attempts than maxStreamRetries: hub events retry without a limit
+  });
+  it("an abort during backoff returns promptly", async () => {
+    const ctl = new AbortController();
+    const f: typeof fetch = async () => Response.json({ code: "busy", message: "busy", retryable: true }, { status: 409 });
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid" }, fetch: f, retryDelayMs: 60_000 });
+    const t0 = Date.now();
+    setTimeout(() => ctl.abort(), 50);
+    const got: unknown[] = [];
+    for await (const ev of c.watchHubEvents({ signal: ctl.signal })) got.push(ev);
+    expect(got).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
   it("needs a hub", async () => {
     const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", fetch: async () => new Response("") });
     await expect(c.watchHubEvents().next()).rejects.toBeInstanceOf(ProtocolError);

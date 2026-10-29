@@ -324,12 +324,16 @@ export class HttpConsoleClient implements ConsoleClient {
   async *watchHubEvents(opts: { from?: string; signal?: AbortSignal; idleMs?: number } = {}): AsyncGenerator<HubEvent> {
     const { signal } = opts;
     const idleMs = opts.idleMs ?? 60_000; // the hub sends a keepalive every 20s
+    const STABLE_MS = 10_000; // a stream that stayed up this long (or delivered STABLE_FRAMES) was healthy: reset the backoff
+    const STABLE_FRAMES = 5;
     let cursor = opts.from;
     let failures = 0;
     while (!signal?.aborted) {
       const ctl = new AbortController();
       const stop = () => ctl.abort();
       signal?.addEventListener("abort", stop);
+      const startedAt = Date.now();
+      let frames = 0;
       try {
         const headers: Record<string, string> = { Accept: "text/event-stream" };
         if (cursor !== undefined) headers[LAST_EVENT_ID_HEADER] = cursor;
@@ -343,7 +347,8 @@ export class HttpConsoleClient implements ConsoleClient {
         arm();
         try {
           for await (const frame of sseFrames(res.body, arm)) {
-            failures = 0;
+            frames++;
+            if (frames >= STABLE_FRAMES || Date.now() - startedAt >= STABLE_MS) failures = 0;
             let json: unknown;
             try {
               json = JSON.parse(frame.data);
@@ -362,11 +367,13 @@ export class HttpConsoleClient implements ConsoleClient {
         throw new TypeError("stream ended");
       } catch (e) {
         if (signal?.aborted) return;
-        if (e instanceof ProtocolError || e instanceof BusyError || e instanceof NotFoundError) throw e;
-        if (++failures > this.maxRetries) {
-          throw new ProtocolError("engine_error", `stream lost: ${e instanceof Error ? e.message : String(e)}`, true);
-        }
-        await sleep(Math.min(2000, this.retryDelayMs * 2 ** (failures - 1)));
+        // Busy (stream cap, hub shutting down) is retryable here, like a transport error. Other protocol errors are final.
+        if (e instanceof ProtocolError || e instanceof NotFoundError) throw e;
+        if (Date.now() - startedAt >= STABLE_MS) failures = 0;
+        failures++;
+        // Unlimited retries, capped exponential backoff 50ms -> 30s with jitter; abort cuts the wait short.
+        const base = Math.min(30_000, Math.max(1, this.retryDelayMs) * 2 ** Math.min(failures - 1, 20));
+        await abortableSleep(base / 2 + Math.random() * (base / 2), signal);
       } finally {
         signal?.removeEventListener("abort", stop);
         ctl.abort();
@@ -554,6 +561,17 @@ export class HttpConsoleClient implements ConsoleClient {
   }
 }
 
+const abortableSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(t);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Minimal SSE parser: frames separated by blank lines; `id:`/`data:` fields, comments ignored. */

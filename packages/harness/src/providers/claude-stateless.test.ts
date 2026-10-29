@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { buildWolfModels, providersInUse } from "../wolfd/models.js";
@@ -33,6 +36,14 @@ describe("claude-stateless factory", () => {
     const h = claudeStatelessFactory({ cwd: "/cwd", env: { WOLF_DEN: "/tmp/never-created" } });
     const models = [...h.provider.getModels()];
     expect(models.some((m) => m.id === "claude-sonnet-5-5" && m.provider === "claude-stateless" && m.api === "claude-stateless")).toBe(true);
+  });
+
+  it("creates the session dir (the CLI cwd) up front", () => {
+    const den = mkdtempSync(join(tmpdir(), "stateless-den-"));
+    try {
+      claudeStatelessFactory({ cwd: den, env: { WOLF_DEN: den }, seams: { "claude-stateless": { createProvider: () => fakeStateless() as never, models: [] } } });
+      expect(existsSync(join(den, "claude-stateless", "sessions"))).toBe(true);
+    } finally { rmSync(den, { recursive: true, force: true }); }
   });
 
   it("mixed config: main on claude-bridge, other tiers on claude-stateless, both resolve", () => {

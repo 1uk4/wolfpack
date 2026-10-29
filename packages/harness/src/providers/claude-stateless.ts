@@ -13,6 +13,7 @@
  * `forget(id)` deletes the session files of one conversation; `dispose()` kills in-flight queries.
  */
 import { createStatelessProvider } from "pi-claude-bridge-stateless/stateless";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { claudeBridgeLookupModels, NO_TOOL_SEARCH } from "./claude-bridge.js";
 import { guardProviderStreams } from "./guard.js";
@@ -39,6 +40,9 @@ export const claudeStatelessPaths = (ctx: { cwd: string; env: NodeJS.ProcessEnv 
 export const claudeStatelessFactory: ProviderFactory = (ctx) => {
   const seams = (ctx.seams?.[CLAUDE_STATELESS_ID] ?? {}) as ClaudeStatelessSeams;
   const { sessionDir, debugLogPath } = claudeStatelessPaths(ctx);
+  // The bridge does not create the CLI cwd: with a missing folder the first round fails with a misleading "native binary
+  // failed to launch" (spawn ENOENT). Create it here (found in the live smoke test; report upstream).
+  try { mkdirSync(sessionDir, { recursive: true }); } catch { /* the round reports the real error */ }
   const handle = (seams.createProvider ?? createStatelessProvider)({
     id: CLAUDE_STATELESS_ID,
     models: (seams.models ?? claudeStatelessModels(ctx)) as never,

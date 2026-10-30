@@ -114,16 +114,16 @@ describe("hub claim tools", () => {
     expect((await a.run("task_bind", { id: featureId })).text).toContain("Stage: in_build");
   });
 
-  it("a refused local bind gives the claim back on the hub", async () => {
+  it("a second conversation of the holder is refused locally and the hub claim stays", async () => {
     const a = wolf("wolf-a", cfg());
     const b = wolf("wolf-b", cfg());
     expect((await a.run("task_bind", { id: featureId }, 1)).isError).toBe(false);
-    // Another conversation of the same wolf: the claim is idempotent for the holder, but the local binding is held by conversation 1 -> refused.
     const refused = await a.run("task_bind", { id: featureId }, 2);
     expect(refused.isError).toBe(true);
+    expect(refused.text).toContain(featureId);
     expect(refused.text).not.toContain("still claimed");
-    // released on the hub: another wolf can now claim it
-    expect((await b.run("task_claim", { id: featureId })).isError).toBe(false);
+    // no release happened: the hub still holds it for wolf-a
+    expect((await b.run("task_claim", { id: featureId })).text).toBe(`${featureId} is held by wolf-a`);
   });
 
   // Intended: with a hub configured, an invalid wolf id blocks a feature bind (and claim/release) rather than falling back to local behaviour.

@@ -866,6 +866,12 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             if ("error" in h) {
               if (h.error !== NO_HUB) return text(h.error, true);
             } else {
+              // Another conversation of this wolf may already hold the local binding: refuse BEFORE touching the hub. The claim is
+              // idempotent for the holder, so a claim here followed by a refused bind (and its release) would drop the first conversation's claim.
+              const { root: bindRoot } = await resolveBindingRoot(ctx);
+              migrateLegacyBinding(ctx.wolfDen, bindRoot);
+              const localHolder = findHolder(ctx.wolfDen, item.id as string, bindRoot);
+              if (localHolder !== undefined) return text(`${item.id} is ${heldMessage(localHolder)}.`, true);
               let claimed;
               try {
                 claimed = await h.hub.claimWork!(item.id as string);

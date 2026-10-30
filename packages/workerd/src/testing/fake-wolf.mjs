@@ -24,6 +24,10 @@ const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/octet-stream" });
     return res.end(Buffer.alloc(Number(url.searchParams.get("big")), 97));
   }
+  if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("cookies")) {
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": ["a=1", "b=2"], "access-control-allow-origin": "*", "x-keep": "1" });
+    return res.end("{}");
+  }
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("hang")) return; // never answers
   if (p === `/v1/wolves/${name}/threads` && req.method === "POST") {
     const bufs = [];

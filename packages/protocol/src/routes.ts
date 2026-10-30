@@ -515,7 +515,7 @@ export function buildPath(name: RouteName, params: Record<string, string> = {}):
   return ROUTES[name].path.replace(/:(\w+)/g, (_, k: string) => encodeURIComponent(params[k] ?? ""));
 }
 
-/** Which wolf a wolf-scoped /v1 request belongs to: the name in `wolves/:name/*`, or the prefix of the thread id `<wolf>/<rest>`. */
+/** Which wolf a wolf-scoped /v1 request belongs to (hub and workerd both use this, so both decode the thread id identically via matchRoute's decodeURIComponent): the name in `wolves/:name/*`, or the prefix of the thread id `<wolf>/<rest>`. */
 export function wolfForRoute(params: Record<string, string>): string | undefined {
   if (params.name !== undefined) return params.name;
   if (params.id !== undefined) {

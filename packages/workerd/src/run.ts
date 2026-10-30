@@ -72,7 +72,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   let link: HubLink | undefined;
   let wake: { stop(): void } | undefined;
   let serverUrl = "";
-  const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f) => link?.sendFrame(f) ?? false, buffered: () => link?.bufferedAmount() ?? 0 });
+  const relay = new WorkerRelay({ baseUrl: () => serverUrl, send: (f, written) => link?.sendFrame(f, written) ?? false });
   if (hubCfg) {
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);

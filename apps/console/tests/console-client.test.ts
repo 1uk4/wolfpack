@@ -35,6 +35,36 @@ describe("createConsoleClient", () => {
 	});
 });
 
+describe("relay is the default with a hub + token and no direct wolf host", () => {
+	it("defaults on; WOLFPACK_API_URL means direct; =0 turns it off; =1 forces it", async () => {
+		const urls: string[] = [];
+		const hub = createServer((req, res) => {
+			urls.push(String(req.url));
+			res.setHeader("Content-Type", "application/json");
+			res.end(JSON.stringify({ threads: [] }));
+		});
+		await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
+		const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+		try {
+			const base = { WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "t" };
+			await createConsoleClient(base).listThreads("alpha");
+			assert.deepEqual(urls, ["/v1/wolves/alpha/threads"]);
+			urls.length = 0;
+			await createConsoleClient({ ...base, WOLFPACK_HUB_RELAY: "1", WOLFPACK_API_URL: "http://127.0.0.1:1" }).listThreads("alpha");
+			assert.deepEqual(urls, ["/v1/wolves/alpha/threads"]);
+			// off: threads stay on the mock, work reads still use the hub
+			urls.length = 0;
+			await createConsoleClient({ ...base, WOLFPACK_HUB_RELAY: "0" }).listThreads("1uk4");
+			assert.deepEqual(urls, [], "off: threads stay on the mock, nothing reaches the hub");
+			// direct wolf configured: direct mode
+			assert.ok(createConsoleClient({ ...base, WOLFPACK_API_URL: "http://127.0.0.1:1" }) instanceof HttpConsoleClient);
+		} finally {
+			hub.closeAllConnections();
+			hub.close();
+		}
+	});
+});
+
 describe("WOLFPACK_HUB_RELAY (relay mode)", () => {
 	it("sends wolf-scoped requests and streams to the hub with the request's token; no request token is a hub-auth 401", async () => {
 		const seen: { url?: string; auth?: string }[] = [];

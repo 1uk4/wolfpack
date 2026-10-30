@@ -562,7 +562,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         }
         case "listWolves":
           // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).
-          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired").map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
+          // A worker token sees only its own host's wolves (it must not enumerate other hosts).
+          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.legacy || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
@@ -680,7 +681,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const wolf = wolfForRoute(params);
           if (!wolf) throw new HubError("not_found", `no wolf in ${url.pathname}`);
           if (identity && !identity.legacy && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot use the console relay");
-          return relay.handle(req, res, wolf);
+          return relay.handle(req, res, wolf, url.pathname + url.search); // the routed URL, never raw req.url
         }
       }
     }

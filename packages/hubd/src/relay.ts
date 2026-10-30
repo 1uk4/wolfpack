@@ -12,6 +12,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  LINK_RELAY_CHUNK_BYTES,
   LINK_RELAY_MAX_BODY,
   LINK_RELAY_MAX_INFLIGHT,
   PROTOCOL_VERSION_HEADER,
@@ -22,10 +23,14 @@ import { HubError } from "./errors.js";
 import type { Link } from "./link.js";
 import type { Registry } from "./registry.js";
 
-const RELAY_MAX_BUFFERED = 4 * 1024 * 1024;
+/** Bytes a slow client may leave queued on its response, per request and summed per host. */
+const RELAY_MAX_BUFFERED = 1024 * 1024;
+const RELAY_MAX_BUFFERED_HOST = 8 * 1024 * 1024;
+/** A response whose socket stays un-drained this long is cut off. */
+const DRAIN_STALL_MS = 30_000;
 /** Request headers that never cross the link (credentials of the hub hop, hop-by-hop, framing). */
 const DROP_REQ = new Set(["authorization", "x-api-key", "cookie", "host", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "content-length", "proxy-authorization", "x-wolfpack-actor", "expect"]);
-const DROP_RES = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authenticate", "content-length"]);
+const DROP_RES = (k: string) => ["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authenticate", "proxy-authorization", "content-length", "set-cookie", "set-cookie2", "host"].includes(k) || k.startsWith("access-control-");
 
 interface Pending {
   res: ServerResponse;
@@ -34,10 +39,12 @@ interface Pending {
   started: boolean;
   done: boolean;
   headTimer?: NodeJS.Timeout;
+  stallTimer?: NodeJS.Timeout;
 }
 
 export interface Relay {
-  handle(req: IncomingMessage, res: ServerResponse, wolf: string): Promise<void>;
+  /** `path` is pathname+search of the URL the caller routed on; it is what crosses the link. */
+  handle(req: IncomingMessage, res: ServerResponse, wolf: string, path: string): Promise<void>;
   onFrame(hostId: string, epoch: number, f: LinkFrame): void;
   onDown(hostId: string, epoch: number): void;
   inflight(): number;
@@ -62,6 +69,7 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
     if (p.done) return;
     p.done = true;
     clearTimeout(p.headTimer);
+    clearTimeout(p.stallTimer);
     pending.delete(id);
     bump(p.hostId, -1);
   }
@@ -81,29 +89,44 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
         return resolve(Buffer.alloc(0));
       }
       const declared = Number(req.headers["content-length"]);
+      const tooBig = () => new HubError("invalid_request", `request body too large for the relay (limit ${LINK_RELAY_MAX_BODY} bytes)`);
       if (Number.isFinite(declared) && declared > LINK_RELAY_MAX_BODY) {
         req.resume();
-        return reject(new HubError("invalid_request", `request body too large for the relay (limit ${LINK_RELAY_MAX_BODY} bytes)`));
+        return reject(tooBig());
       }
       const chunks: Buffer[] = [];
       let size = 0;
-      const timer = setTimeout(() => reject(new HubError("invalid_request", "timed out reading the request body")), o.bodyTimeoutMs ?? 10_000);
-      req.on("data", (c: Buffer) => {
+      // One exit: clears the timer and removes every listener, whatever ended the read.
+      const exit = (err: HubError | undefined, drain: boolean) => {
+        clearTimeout(timer);
+        req.off("data", onData);
+        req.off("end", onEnd);
+        req.off("error", onError);
+        req.on("error", () => {}); // a late socket error must not be unhandled
+        if (drain) req.resume();
+        if (err) reject(err);
+        else resolve(Buffer.concat(chunks));
+      };
+      const onData = (c: Buffer) => {
         size += c.length;
-        if (size > LINK_RELAY_MAX_BODY) {
-          clearTimeout(timer);
-          req.removeAllListeners("data");
-          req.resume();
-          return reject(new HubError("invalid_request", `request body too large for the relay (limit ${LINK_RELAY_MAX_BODY} bytes)`));
-        }
+        if (size > LINK_RELAY_MAX_BODY) return exit(tooBig(), true);
         chunks.push(c);
-      });
-      req.once("error", () => (clearTimeout(timer), reject(new HubError("invalid_request", "request aborted"))));
-      req.once("end", () => (clearTimeout(timer), resolve(Buffer.concat(chunks))));
+      };
+      const onEnd = () => exit(undefined, false);
+      const onError = () => exit(new HubError("invalid_request", "request aborted"), false);
+      const timer = setTimeout(() => exit(new HubError("invalid_request", "timed out reading the request body"), true), o.bodyTimeoutMs ?? 10_000);
+      req.on("data", onData);
+      req.once("end", onEnd);
+      req.once("error", onError);
     });
   }
 
-  async function handle(req: IncomingMessage, res: ServerResponse, wolf: string): Promise<void> {
+  async function handle(req: IncomingMessage, res: ServerResponse, wolf: string, path: string): Promise<void> {
+    // Only origin-form paths cross the link (an absolute-form or `//host` target is never forwarded, whatever the worker does with it).
+    if (!/^\/(?![/\\])[^\s\u0000-\u001f\u007f]*$/.test(path) || (req.url ?? "").startsWith("//") || !(req.url ?? "").startsWith("/")) {
+      req.resume();
+      throw new HubError("invalid_request", "request target must be origin-form");
+    }
     let entry: { host?: string; status?: string };
     try {
       entry = o.registry.get("wolves", wolf) as { host?: string; status?: string };
@@ -151,7 +174,7 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
       abort(id, p, () => envelope(res, 504, "engine_error", `wolf ${wolf.slice(0, 64)} did not answer in time`, true, { presence: "online" }));
     }, o.link.relayHeadTimeoutMs);
     p.headTimer.unref();
-    const sent = o.link.sendToHost(hostId, { t: "req", id, method: req.method ?? "GET", path: req.url ?? "/", headers, wolf, ...(body.length ? { body: body.toString("base64") } : {}) });
+    const sent = o.link.sendToHost(hostId, { t: "req", id, method: req.method ?? "GET", path, headers, wolf, ...(body.length ? { body: body.toString("base64") } : {}) });
     if (!sent) {
       finish(id, p);
       const state = o.link.presence(hostId);
@@ -170,7 +193,7 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
       p.started = true;
       clearTimeout(p.headTimer);
       const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(f.headers)) if (!DROP_RES.has(k.toLowerCase()) && k.toLowerCase() !== PROTOCOL_VERSION_HEADER.toLowerCase()) out[k] = v;
+      for (const [k, v] of Object.entries(f.headers)) if (!DROP_RES(k.toLowerCase()) && k.toLowerCase() !== PROTOCOL_VERSION_HEADER.toLowerCase()) out[k] = v;
       try {
         res.writeHead(f.status, out);
         res.flushHeaders();
@@ -181,11 +204,26 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
     }
     if (f.t === "chunk") {
       if (!p.started) return;
-      if (res.writableLength > RELAY_MAX_BUFFERED) {
+      // Bound the DECODED size for both encodings before decoding anything big.
+      const utf8 = f.enc === "utf8";
+      if (f.data.length > (utf8 ? LINK_RELAY_CHUNK_BYTES : Math.ceil((LINK_RELAY_CHUNK_BYTES * 4) / 3) + 4)) return tooBigChunk(f.id, p, hostId);
+      const buf = utf8 ? Buffer.from(f.data, "utf8") : Buffer.from(f.data, "base64");
+      if (buf.length > LINK_RELAY_CHUNK_BYTES) return tooBigChunk(f.id, p, hostId);
+      let hostBuffered = 0;
+      for (const q of pending.values()) if (q.hostId === hostId) hostBuffered += q.res.writableLength;
+      if (res.writableLength + buf.length > RELAY_MAX_BUFFERED || hostBuffered + buf.length > RELAY_MAX_BUFFERED_HOST) {
         log(`hubd: relay ${f.id} to ${hostId}: client too slow (${res.writableLength} bytes queued); cutting it off`);
         return abort(f.id, p, () => res.destroy());
       }
-      res.write(f.enc === "utf8" ? Buffer.from(f.data, "utf8") : Buffer.from(f.data, "base64"));
+      if (!res.write(buf) && !p.stallTimer) {
+        // Not drained: the worker has no flow-control frame, so the caps above bound the queue; this bounds the time.
+        p.stallTimer = setTimeout(() => {
+          log(`hubd: relay ${f.id} to ${hostId}: client not draining for ${DRAIN_STALL_MS}ms; cutting it off`);
+          abort(f.id, p, () => res.destroy());
+        }, DRAIN_STALL_MS);
+        p.stallTimer.unref();
+        res.once("drain", () => (clearTimeout(p.stallTimer), (p.stallTimer = undefined)));
+      }
       return;
     }
     if (f.t === "end") {
@@ -197,6 +235,11 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
     finish(f.id, p);
     if (!p.started) return envelope(res, 502, "engine_error", `worker failed the request: ${f.code}${f.message ? `: ${f.message.slice(0, 200)}` : ""}`, true, { code: f.code.slice(0, 40) });
     res.destroy();
+  }
+
+  function tooBigChunk(id: string, p: Pending, hostId: string): void {
+    log(`hubd: relay ${id} to ${hostId}: oversized chunk; failing the request`);
+    abort(id, p, () => envelope(p.res, 502, "engine_error", "worker sent an oversized chunk", true));
   }
 
   function onDown(hostId: string, epoch: number): void {

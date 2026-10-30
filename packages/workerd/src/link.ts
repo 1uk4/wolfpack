@@ -36,11 +36,11 @@ export interface HubLinkOptions {
   onRetired?: (names: string[]) => void;
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
   onRejected?: (names: string[]) => void;
-  /** Called with the welcome's domain mismatches (informational; the hub registry decides domains). */
   /** Relay: called for `req` / `cancel` frames from the hub. */
   onRelay?: (f: Extract<LinkFrame, { t: "req" | "cancel" }>) => void;
   /** Relay: called when the live socket closes or is retired (in-flight relayed requests must stop). */
   onLinkDown?: () => void;
+  /** Called with the welcome's domain mismatches (informational; the hub registry decides domains). */
   onDomainMismatch?: (m: { wolf: string; reported: string[]; granted: string[] }[]) => void;
   /** Durable contribution outbox. Items are sent on every (re)connect and removed when the hub acks them. */
   outbox?: Outbox;
@@ -146,12 +146,12 @@ export class HubLink {
     this.send({ t: "sleep" });
   }
   /** Send any frame on the live link (relay answers). False when not online. */
-  sendFrame(f: LinkFrame): boolean {
-    return this.send(f);
-  }
-  /** Bytes queued on the socket, for relay backpressure. */
-  bufferedAmount(): number {
-    return this.ws?.bufferedAmount ?? 0;
+  sendFrame(f: LinkFrame, written?: (err?: Error) => void): boolean {
+    if (this.st === "online" && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(encodeLinkFrame(f), (err) => written?.(err));
+      return true;
+    }
+    return false;
   }
   wolfAdded(w: LinkWolf): void {
     if (this.send({ t: "wolf.add", wolf: w })) this.sentWolves.set(w.name, JSON.stringify(w.domains));
@@ -374,7 +374,13 @@ export class HubLink {
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
     } else if (f.t === "req" || f.t === "cancel") {
-      if (this.st === "online") this.o.onRelay?.(f);
+      if (this.st === "online") {
+        try {
+          this.o.onRelay?.(f);
+        } catch (e) {
+          this.log(`relay handler failed: ${(e as Error).message}`);
+        }
+      }
     } else if (f.t === "error") {
       // Never overwrite a sticky reason; a rejected wolf.add is informational.
       if (!this.sticky() && f.code !== "rejected") this.detail = f.message ? `${f.code}: ${f.message}` : f.code;

@@ -39,7 +39,7 @@ describe("console relay through the hub", () => {
     const { r, get } = await rig();
     const sizes: number[] = [];
     const orig = r.workerd.link!.sendFrame.bind(r.workerd.link!);
-    r.workerd.link!.sendFrame = (f) => (f.t === "chunk" && sizes.push(f.data.length), orig(f));
+    r.workerd.link!.sendFrame = (f, w) => (f.t === "chunk" && sizes.push(f.data.length), orig(f, w));
     const res = await get("/v1/wolves/alpha/memory?big=3000000");
     const buf = Buffer.from(await res.arrayBuffer());
     expect(buf.length).toBe(3_000_000);
@@ -156,5 +156,39 @@ describe("console relay through the hub", () => {
     const next = await reader.read();
     expect(next.done).toBe(false); // the stream is still alive
     await reader.cancel();
+  });
+
+  it("absolute-form and //host request targets are refused at the hub; nothing connects off-loopback", async () => {
+    const { r, token, hubUrl } = await rig();
+    const { request } = await import("node:http");
+    const u = new URL(hubUrl);
+    const raw = (target: string) =>
+      new Promise<number>((resolve, reject) => {
+        const q = request({ hostname: u.hostname, port: u.port, path: target, method: "GET", headers: { Authorization: `Bearer ${token}` } }, (x) => (x.resume(), resolve(x.statusCode ?? 0)));
+        q.on("error", reject);
+        q.end();
+      });
+    expect(await raw("http://evil.invalid:8080/v1/wolves/alpha/threads")).toBe(400);
+    expect(await raw("//evil.invalid:8080/v1/wolves/alpha/threads")).toBe(400);
+    expect(r.workerd.link!.status().state).toBe("online");
+  });
+
+  it("GET /v1/wolves: a worker token sees only its own host's wolves; console sees all", async () => {
+    const { r, get } = await rig({ preRegister: ["zed"] });
+    const mine = (await (await get("/v1/wolves", r.token)).json()) as any;
+    expect(mine.wolves.map((w: any) => w.name)).toEqual(["alpha"]);
+    const other = r.mintWorker("other");
+    expect(((await (await get("/v1/wolves", other.token)).json()) as any).wolves).toEqual([]);
+    const all = (await (await get("/v1/wolves")).json()) as any;
+    expect(all.wolves.map((w: any) => w.name).sort()).toEqual(["alpha", "zed"]);
+  });
+
+  it("set-cookie and CORS headers from the worker do not reach the console", async () => {
+    const { get } = await rig();
+    const res = await get("/v1/wolves/alpha/memory?cookies");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    expect(res.headers.get("x-keep")).toBe("1");
   });
 });

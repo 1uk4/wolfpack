@@ -515,6 +515,16 @@ export class HttpConsoleClient implements ConsoleClient {
 
   // ------------------------------------------------------------ plumbing
 
+  /** Credentials for a request that goes to the hub: bearer token (preferred), else the legacy key + asserted actor. */
+  private hubHeaders(viaHub: boolean): Record<string, string> {
+    if (!viaHub || !this.hub) return {};
+    if (this.hub.token) return { Authorization: `Bearer ${this.hub.token}` };
+    return {
+      ...(this.hub.apiKey ? { "X-API-Key": this.hub.apiKey } : {}),
+      ...(this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}),
+    };
+  }
+
   private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {
     const route: RouteDef = ROUTES[name];
     const hubRoute = route.scope === "hub";
@@ -524,8 +534,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, ...(viaHub && this.hub!.token ? { Authorization: `Bearer ${this.hub!.token}` } : viaHub && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
-        ...(viaHub && !this.hub!.token && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+      headers: { ...init.headers, ...this.hubHeaders(viaHub), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
     if (viaHub && res.status === 401) {

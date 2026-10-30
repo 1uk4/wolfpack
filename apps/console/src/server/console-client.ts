@@ -174,15 +174,21 @@ export function relayClient(hub: { baseUrl: string; token?: string; apiKey?: str
  *   WOLFPACK_API_URL   a wolf's /v1 (otherwise the mock)
  *   WOLFPACK_HUB_URL   a hubd /v1: work reads (list + record) go there instead of the wolf (optional)
  *   WOLFPACK_HUB_TOKEN the hub bearer token from `hubd pair` (optional; preferred)
- *   WOLFPACK_HUB_RELAY 1/true: RELAY MODE. Everything (chat, streams, memory, KB, work) goes through the hub, which tunnels to the wolf's host;
- *                      WOLFPACK_API_URL is not used. Needs only WOLFPACK_HUB_URL (+ token). Unset: the direct mode below.
+ *   WOLFPACK_HUB_RELAY RELAY MODE: everything (chat, streams, memory, KB, work) goes through the hub, which tunnels to the wolf's host.
+ *                      DEFAULT when a hub URL is set with a token (env, or the browser's per-request token) and no WOLFPACK_API_URL (no
+ *                      direct wolf host). 0/false/no: never relay (the old hub-for-work-reads-only mode). 1/true: relay even when
+ *                      WOLFPACK_API_URL is set (that URL is then unused).
  *   WOLFPACK_HUB_KEY   LEGACY: the hub's X-API-Key (optional; ignored when a token is set)
  */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env, requestToken?: RequestToken): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
 	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
-	if (hub && /^(1|true|yes)$/i.test(env.WOLFPACK_HUB_RELAY?.trim() ?? "")) return relayClient(hub, requestToken);
+	const flag = env.WOLFPACK_HUB_RELAY?.trim() ?? "";
+	const off = /^(0|false|no|off)$/i.test(flag);
+	const forced = /^(1|true|yes|on)$/i.test(flag);
+	const haveToken = !!(hub?.token || hub?.apiKey || requestToken);
+	if (hub && !off && (forced || (!baseUrl && haveToken))) return relayClient(hub, requestToken);
 	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
 	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));
 	if (!hub) return new MockConsoleClient();

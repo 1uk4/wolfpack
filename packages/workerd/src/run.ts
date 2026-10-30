@@ -81,6 +81,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   if (linkOnly) {
     if (!announce.length) throw new Error("link-only mode needs at least one announced wolf (--announce <name> or WORKERD_ANNOUNCE)");
     if (opts.hub === false) throw new Error("link-only mode needs a hub link");
+    if (opts.only?.length) throw new Error("link-only mode supervises nothing: `only` is not allowed");
+    if (opts.command) throw new Error("link-only mode spawns nothing: `command` (--wolfd) is not allowed");
     log(`[workerd] link-only: supervising no wolves; announcing ${announce.join(", ")}`);
   }
   const found = linkOnly ? { wolves: [], errors: [] } : discoverWolves(root);
@@ -101,7 +103,15 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     }
   }
   // Link-only never spawns; a placeholder command also keeps the Supervisor from resolving @wolfpack/harness (absent in the single-file bundle).
-  const supervisor = new Supervisor({ ...opts, ...(linkOnly ? { command: opts.command ?? ["/bin/false"] } : {}), wolves, log });
+  const supervisor = new Supervisor({ ...opts, ...(linkOnly ? { command: ["/bin/false"] } : {}), wolves, log });
+  if (linkOnly) {
+    // Unreachable by construction: nothing in workerd calls these in link-only, and a stray call must throw rather than spawn.
+    const refuse = (): never => {
+      throw new Error("link-only: spawning wolves is disabled");
+    };
+    supervisor.start = refuse;
+    supervisor.addWolf = refuse;
+  }
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
   const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
   const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
@@ -151,7 +161,9 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     });
     supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
     kbSync.start();
-    const off = opts.feed === false ? "disabled by options" : feedDisabledReason(kbOps, process.env, opts.hubInboxRoot);
+    // Link-only: the feed is OFF unless explicitly enabled (opts.feed === true or WORKERD_FEED=1/true/on/yes).
+    const feedExplicit = opts.feed === true || /^(1|true|on|yes)$/i.test((process.env.WORKERD_FEED ?? "").trim());
+    const off = opts.feed === false ? "disabled by options" : linkOnly && !feedExplicit ? "link-only default (set WORKERD_FEED=1 to enable)" : feedDisabledReason(kbOps, process.env, opts.hubInboxRoot);
     if (off) log(`[workerd] contribution feed off: ${off}`);
     else {
       const warned = new Set<string>();
@@ -166,7 +178,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     registry: supervisor,
     health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
   });
-  const url = await server.listen(opts.port ?? 7141, opts.host);
+  const url = await server.listen(opts.port ?? 7141, opts.host ?? (linkOnly ? (process.env.WORKERD_HOST || "127.0.0.1") : undefined));
   serverUrl = url;
   if (!linkOnly) supervisor.start(); // link-only: never spawn
   link?.start();

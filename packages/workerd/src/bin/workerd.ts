@@ -3,10 +3,10 @@
  * workerd --wolves <dir> --port N [--only name]...
  * Supervises one wolfd per wolf under <dir> and serves the /v1 protocol for all of them on one port.
  */
-import { parseArgs } from "node:util";
+import { parseServeArgs } from "../cli-args.js";
 import { KB_COMPARE_USAGE, runKbCompare } from "../kb-compare.js";
 import { pairWithHub } from "../hub-config.js";
-import { envLinkOnly, runWorkerd } from "../run.js";
+import { runWorkerd } from "../run.js";
 
 const USAGE = "usage: workerd pair <hub-url> <code>\n       " + KB_COMPARE_USAGE.replace("usage: ", "") + "\n       workerd [--wolves <dir>] [--port N] [--host H] [--only name]... [--wolfd <command>]\n       workerd --link-only --announce <wolf>... [--host 127.0.0.1] [--port N]   (hub link + KB sync only; spawns no wolfd)";
 
@@ -22,41 +22,16 @@ async function main(): Promise<void> {
     console.log(`workerd: paired with ${cfg.hubUrl} as host ${cfg.hostId}`);
     return;
   }
-  const { values } = parseArgs({
-    options: {
-      wolves: { type: "string", short: "w" },
-      port: { type: "string", short: "p" },
-      only: { type: "string", multiple: true },
-      wolfd: { type: "string" },
-      host: { type: "string" },
-      "link-only": { type: "boolean" },
-      announce: { type: "string", multiple: true },
-      help: { type: "boolean", short: "h" },
-    },
-  });
-  if (values.help) {
+  const parsed = parseServeArgs(process.argv.slice(2));
+  if ("help" in parsed) {
     console.log(USAGE);
     return;
   }
-  const linkOnly = values["link-only"] || envLinkOnly() || undefined;
-  if (!linkOnly && values.announce?.length) {
-    console.error("workerd: --announce needs --link-only");
+  if ("error" in parsed) {
+    console.error(`workerd: ${parsed.error}`);
     process.exit(2);
   }
-  const port = values.port === undefined ? 7141 : Number(values.port);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    console.error(`workerd: invalid --port ${values.port}`);
-    process.exit(2);
-  }
-  const w = await runWorkerd({
-    wolvesDir: values.wolves,
-    port,
-    host: values.host,
-    linkOnly,
-    announce: values.announce?.length ? values.announce : undefined,
-    only: values.only,
-    command: values.wolfd ? values.wolfd.split(/\s+/) : undefined,
-  });
+  const w = await runWorkerd(parsed.opts);
   console.log(`workerd: serving ${w.url} (${w.supervisor.wolves().length} wolves)`);
   let stopping = false;
   const stop = () => {

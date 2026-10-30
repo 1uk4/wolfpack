@@ -8,3 +8,4 @@ export * from "./wake.js";
 export * from "./outbox.js";
 export * from "./kb-sync.js";
 export * from "./kb-compare.js";
+export * from "./cli-args.js";

@@ -1,8 +1,9 @@
 /** Link-only mode: hub link + KB sync + announce, and NOTHING supervised or spawned. */
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseServeArgs } from "./cli-args.js";
 import { runWorkerd } from "./run.js";
 import { startLinkRig, type LinkRig } from "./testing/link-rig.js";
 
@@ -17,15 +18,11 @@ describe("runWorkerd link-only", () => {
     cleanup.push(() => r.close());
     const tmp = mkdtempSync(join(tmpdir(), "link-only-"));
     cleanup.push(() => rmSync(tmp, { recursive: true, force: true }));
-    const marker = join(tmp, "spawned");
-    // If anything were spawned, this "wolfd" would leave a marker; wolvesDir holds a real hal wolf.yaml that must be ignored.
-    const script = join(tmp, "spawn.mjs");
-    writeFileSync(script, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "x");`);
+    // wolvesDir holds a real hal wolf.yaml (fake wolf) that must be ignored; no `command` is given (placeholder path).
     const lines: string[] = [];
     const mirror = join(tmp, "mirror");
     const w = await runWorkerd({
       wolvesDir: r.wolvesDir,
-      command: [process.execPath, script],
       port: 0,
       linkOnly: true,
       announce: ["hal"],
@@ -37,7 +34,6 @@ describe("runWorkerd link-only", () => {
       wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
       kbOps: join(tmp, "ops"),
       outboxDir: join(tmp, "outbox"),
-      feed: false,
       log: (l) => void lines.push(l),
     });
     cleanup.push(() => w.close());
@@ -48,12 +44,58 @@ describe("runWorkerd link-only", () => {
     await r.kbWrite("personal", "INDEX.md", "# Index\n");
     await r.eventually(() => existsSync(join(mirror, "domains", "personal", "INDEX.md")), "mirror filled (base layout)");
     await new Promise((res) => setTimeout(res, 300));
-    expect(existsSync(marker)).toBe(false);
+    expect(w.supervisor.wolves()).toEqual([]);
+    expect(() => w.supervisor.start()).toThrow(/disabled/);
+    expect(() => w.supervisor.addWolf({ identity: { name: "x", domains: [] } } as never)).toThrow(/disabled/);
+    expect(new URL(w.url).hostname).toBe("127.0.0.1");
+    expect(lines.some((l) => l.includes("contribution feed off: link-only default"))).toBe(true);
     expect(lines.some((l) => l.includes("link-only"))).toBe(true);
   });
 
   it("refuses link-only with nothing to announce or without a hub", async () => {
     await expect(runWorkerd({ linkOnly: true, announce: [], hub: false, port: 0 })).rejects.toThrow(/announced wolf/);
     await expect(runWorkerd({ linkOnly: true, announce: ["hal"], hub: false, port: 0 })).rejects.toThrow(/hub link/);
+  });
+
+  it("rejects only/command in link-only", async () => {
+    await expect(runWorkerd({ linkOnly: true, announce: ["hal"], only: ["hal"], port: 0, hub: { hubUrl: "http://127.0.0.1:1", token: "t", hostId: "h" } })).rejects.toThrow(/only/);
+    await expect(runWorkerd({ linkOnly: true, announce: ["hal"], command: ["x"], port: 0, hub: { hubUrl: "http://127.0.0.1:1", token: "t", hostId: "h" } })).rejects.toThrow(/command/);
+  });
+});
+
+describe("workerd CLI args", () => {
+  it("activates link-only from the environment alone", () => {
+    const r = parseServeArgs([], { WORKERD_LINK_ONLY: "1", WORKERD_PORT: "7142" });
+    expect(r).toMatchObject({ opts: { linkOnly: true, port: 7142 } });
+  });
+  it("default (no link-only) stays unchanged", () => {
+    expect(parseServeArgs([], {})).toMatchObject({ opts: { linkOnly: undefined, port: 7141 } });
+  });
+  it("--announce without link-only is an error", () => {
+    expect(parseServeArgs(["--announce", "hal"], {})).toHaveProperty("error");
+  });
+  it("--wolfd and --only are rejected with link-only (flag or env)", () => {
+    expect(parseServeArgs(["--link-only", "--wolfd", "x"], {})).toHaveProperty("error");
+    expect(parseServeArgs(["--only", "a"], { WORKERD_LINK_ONLY: "1" })).toHaveProperty("error");
+  });
+});
+
+describe("link-only defaults from env", () => {
+  it("feed is on only when explicitly enabled", async () => {
+    const r: LinkRig = await startLinkRig({ wolves: ["hal"], noHub: true });
+    cleanup.push(() => r.close());
+    const tmp = mkdtempSync(join(tmpdir(), "link-only-feed-"));
+    cleanup.push(() => rmSync(tmp, { recursive: true, force: true }));
+    const mk = async (env: string | undefined) => {
+      if (env === undefined) vi.stubEnv("WORKERD_FEED", "");
+      else vi.stubEnv("WORKERD_FEED", env);
+      const lines: string[] = [];
+      const w = await runWorkerd({ linkOnly: true, announce: ["hal"], port: 0, hub: { hubUrl: r.hub.url, token: r.token, hostId: r.hostId }, kbMirrorDir: join(tmp, "m" + env), kbOps: join(tmp, "ops"), outboxDir: join(tmp, "o" + env), wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 }, log: (l) => void lines.push(l) });
+      cleanup.push(() => w.close());
+      return lines;
+    };
+    cleanup.push(() => void vi.unstubAllEnvs());
+    expect((await mk(undefined)).some((l) => l.includes("contribution feed off"))).toBe(true);
+    expect((await mk("1")).some((l) => l.includes("contribution feed off"))).toBe(false);
   });
 });

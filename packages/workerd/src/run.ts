@@ -37,6 +37,8 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   ackTimeoutMs?: number;
   /** Where the hub-synced KB mirror lives (side by side with the Syncthing KB, never inside it). Default `<configDir>/kb-mirror`. */
   kbMirrorDir?: string;
+  /** Mirror layout: "flat" (default) or "base" (`<mirror>/domains/<d>/`). Env WORKERD_KB_LAYOUT. */
+  kbMirrorLayout?: "flat" | "base";
   /** Test seams for the KB sync. */
   kbSync?: Partial<Omit<KbSyncOptions, "hubUrl" | "token" | "mirrorDir">>;
   /** How often the kb inbox lanes are scanned for contributions to send over the link, ms (default 5000). */
@@ -96,10 +98,14 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     const outbox = new Outbox(opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox"));
     // The subscribed set is ONLY what the hub registry grants this host (welcome.grantedDomains / grants frames); wolf.yaml domains are
     // never consulted, and nothing syncs before the first welcome.
+    const rawLayout = opts.kbMirrorLayout ?? process.env.WORKERD_KB_LAYOUT ?? "flat";
+    if (rawLayout !== "flat" && rawLayout !== "base") throw new Error(`invalid WORKERD_KB_LAYOUT ${JSON.stringify(rawLayout)} (expected flat or base)`);
+    const kbLayout: "flat" | "base" = rawLayout;
     kbSync = new KbSync({
       hubUrl: hubCfg.hubUrl,
       token: hubCfg.token,
       mirrorDir: opts.kbMirrorDir ?? join(opts.configDir ?? workerdConfigDir(), "kb-mirror"),
+      layout: kbLayout,
       log,
       ...opts.kbSync,
     });

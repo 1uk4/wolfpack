@@ -67,6 +67,27 @@ describe("worker KB sync (hubd + workerd rig)", () => {
     expect(sync.revisions()).toEqual({ alpha: 3 });
   });
 
+  it("layout base syncs into <mirror>/domains/<d>/ with .sync/ unchanged; the default stays flat", async () => {
+    const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
+    await r.kbWrite("alpha", `entries/${E1}.md`, entry(E1));
+    await r.kbWrite("alpha", `versions/${E1}/2026-01-01.md`, entry(E1, "old"));
+    await online(r);
+    const base = direct(r, ["alpha"], { layout: "base" });
+    base.sync.start();
+    await settle(r, base.sync, "alpha", 2);
+    expect(readFileSync(join(base.mirrorDir, "domains", "alpha", "entries", `${E1}.md`), "utf8")).toBe(entry(E1));
+    expect(readFileSync(join(base.mirrorDir, "domains", "alpha", "versions", E1, "2026-01-01.md"), "utf8")).toBe(entry(E1, "old"));
+    expect(existsSync(join(base.mirrorDir, "alpha"))).toBe(false);
+    expect(stateOf(base.mirrorDir, "alpha").rev).toBe(2);
+    expect(base.sync.mirrorPath("alpha")).toBe(join(base.mirrorDir, "domains", "alpha"));
+
+    const flat = direct(r, ["alpha"]);
+    flat.sync.start();
+    await settle(r, flat.sync, "alpha", 2);
+    expect(existsSync(join(flat.mirrorDir, "alpha", "entries", `${E1}.md`))).toBe(true);
+    expect(existsSync(join(flat.mirrorDir, "domains"))).toBe(false);
+  });
+
   it("resumes from the saved revision without a manifest diff", async () => {
     const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
     await r.kbWrite("alpha", `entries/${E1}.md`, entry(E1));

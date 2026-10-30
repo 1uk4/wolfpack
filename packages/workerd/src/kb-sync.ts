@@ -35,10 +35,14 @@ const hashOf = (text: string): string => "sha256:" + createHash("sha256").update
 const safeRel = (p: string): boolean => KB_SYNC_PATH.test(p) && p.split("/").every((x) => x !== "" && x !== "." && x !== "..");
 const MAX_BYTES = 2 * 1024 * 1024;
 
+export type KbMirrorLayout = "flat" | "base";
+
 export interface KbSyncOptions {
   hubUrl: string;
   token: string;
   mirrorDir: string;
+  /** Where domain folders live: "flat" = `<mirrorDir>/<d>/` (default), "base" = `<mirrorDir>/domains/<d>/` (KB_BASE shape). `.sync/` stays at `<mirrorDir>/.sync/` either way. */
+  layout?: KbMirrorLayout;
   log?: (m: string) => void;
   fetchImpl?: typeof fetch;
   baseMs?: number;
@@ -125,7 +129,7 @@ export class KbSync {
     (this.o.log ?? (() => {}))(`[workerd] kb sync: ${m}`);
   }
   mirrorPath(domain: string): string {
-    return join(this.o.mirrorDir, domain);
+    return this.o.layout === "base" ? join(this.o.mirrorDir, "domains", domain) : join(this.o.mirrorDir, domain);
   }
   private stateFile(d: string) {
     return join(this.o.mirrorDir, ".sync", `${d}.json`);

@@ -19,7 +19,8 @@ EnvironmentFile=/etc/wolfpack/hubd.env
 # Guards (bash; $$ is a literal $ for systemd): port is numeric, 1024-65535 and not 3141 (wolfpack-agent); bind is IPv4 and not a wildcard.
 ExecStartPre=/bin/bash -c '[[ "$${HUBD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${HUBD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 )) || { echo "bad HUBD_PORT=$${HUBD_PORT} (1024-65535, not 3141)" >&2; exit 1; }; [[ "$${HUBD_HOST}" =~ ^([0-9]{1,3}[.]){3}[0-9]{1,3}$$ && "$${HUBD_HOST}" != 0.0.0.0 ]] || { echo "bad HUBD_HOST" >&2; exit 1; }'
 # Wait (up to 30 s) for the bind address to exist. Pure bash on /proc (no `ip`: it needs AF_NETLINK, which RestrictAddressFamilies denies).
-ExecStartPre=/bin/bash -c 'for i in $$(seq 1 30); do grep -Fq "|-- $${HUBD_HOST}" /proc/net/fib_trie && exit 0; sleep 1; done; echo "address $${HUBD_HOST} not present" >&2; exit 1'
+# Exact match: a fib_trie line "|-- <ip>" (dots escaped, anchored) followed by "/32 host LOCAL" (so 100.1.1.1 never matches 100.1.1.10).
+ExecStartPre=/bin/bash -c 'h=$${HUBD_HOST//./[.]}; for i in $$(seq 1 30); do grep -E -A1 "^ *[|]-- $$h$$" /proc/net/fib_trie | grep -Fq "/32 host LOCAL" && exit 0; sleep 1; done; echo "address $${HUBD_HOST} not present" >&2; exit 1'
 ExecStart=@NODE@ /opt/wolfpack-hubd/current/hubd.mjs serve --data-dir ${HUBD_DATA_DIR} --host ${HUBD_HOST} --port ${HUBD_PORT}
 Restart=on-failure
 RestartSec=5

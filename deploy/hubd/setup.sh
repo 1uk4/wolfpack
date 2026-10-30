@@ -42,6 +42,12 @@ valid_ipv4() {
   ((10#${BASH_REMATCH[1]} <= 255 && 10#${BASH_REMATCH[2]} <= 255 && 10#${BASH_REMATCH[3]} <= 255 && 10#${BASH_REMATCH[4]} <= 255))
 }
 valid_port() { [[ $1 =~ ^[0-9]+$ ]] && ((10#$1 >= 1024 && 10#$1 <= 65535 && 10#$1 != 3141)); }
+# Warn loudly when an existing lane dir is not wolf-W1hOrJ-owned mode 777 (Dewey or hubd could be locked out of it).
+check_lane_dir() {
+  local got
+  got="$(stat -c '%U %a' "$1" 2>/dev/null || echo "? ?")"
+  [[ $got == "$WOLF_USER 777" ]] || warn "!!! $1 is '$got', expected '$WOLF_USER 777': Dewey and hubd may not both be able to write there. Fix: chown $WOLF_USER:$WOLF_USER $1 && chmod 777 $1"
+}
 valid_wolf() { [[ $1 =~ ^[a-z0-9][a-z0-9-]*$ ]]; }
 
 while (($#)); do
@@ -153,7 +159,7 @@ cmd_setup() {
   log "per-wolf lane dirs (hubd would otherwise create them 755 hubd-owned, and Dewey could not write into them)"
   for d in "$INBOX" "$RECEIPTS"; do
     for w in "${WOLVES[@]}"; do
-      if [[ -d $d/$w ]]; then echo "exists: $d/$w ($(stat -c '%U %a' "$d/$w"))"; else
+      if [[ -d $d/$w ]]; then echo "exists: $d/$w"; check_lane_dir "$d/$w"; else
         run install -d -o "$WOLF_USER" -g "$WOLF_USER" -m 0777 "$d/$w"
       fi
     done
@@ -162,7 +168,7 @@ cmd_setup() {
   # Dewey moves files INTO them (renameSync), so they must be Dewey-writable even if hubd created them first: pre-create, only when missing.
   for w in "${WOLVES[@]}"; do
     for sub in _bad _processed; do
-      if [[ -d $INBOX/$w/$sub ]]; then echo "exists: $INBOX/$w/$sub ($(stat -c '%U %a' "$INBOX/$w/$sub"))"; else
+      if [[ -d $INBOX/$w/$sub ]]; then echo "exists: $INBOX/$w/$sub"; check_lane_dir "$INBOX/$w/$sub"; else
         run install -d -o "$WOLF_USER" -g "$WOLF_USER" -m 0777 "$INBOX/$w/$sub"
       fi
     done
@@ -193,6 +199,10 @@ cmd_setup() {
     echo "hub-writes (UNTESTED under real systemd): work dirs writable: ${rw[*]:-none found}"
     if ((${#rw[@]} == 0)); then
       warn "no domains/*/work dirs found; NOT writing the drop-in (an empty BindPaths= would reset the unit's inbox/receipts binds)"
+      if [[ -e $DROPIN_DIR/work-writes.conf ]]; then
+        warn "removing stale $DROPIN_DIR/work-writes.conf from an earlier run"
+        run rm -f "$DROPIN_DIR/work-writes.conf"
+      fi
     elif ((DRY)); then echo "DRY-RUN: write $DROPIN_DIR/work-writes.conf (BindPaths= and ReadWritePaths= for ${#rw[@]} work dir(s); systemd does not expand globs, re-run after adding a domain or work dir)"; else
       install -d -m 0755 "$DROPIN_DIR"
       # BindPaths= is a list: the drop-in must repeat the unit's own entries, or it would replace them.
@@ -256,7 +266,8 @@ cmd_uninstall() {
     echo "--purge: deleting hub state. Run 'hubd export' first if you want to keep it."
     run rm -rf "$DATA_DIR"
     run rm -f "$ENV_FILE"
-    run userdel "$HUBD_USER"
+    if hubd_user_exists; then run userdel "$HUBD_USER"; else echo "user $HUBD_USER already gone"; fi
+    if getent group "$HUBD_GROUP" >/dev/null 2>&1; then run groupdel "$HUBD_GROUP"; else echo "group $HUBD_GROUP already gone"; fi
   else
     echo "kept: $DATA_DIR (hub state), $ENV_FILE, user $HUBD_USER (use --purge to remove)"
   fi

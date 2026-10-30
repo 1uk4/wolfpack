@@ -136,6 +136,14 @@ export function kbBaseDir(config: CliConfig, env: NodeJS.ProcessEnv = process.en
   return explicitKbBase(config, env) ?? path.join(config.wolvesRoot, "knowledge", "base");
 }
 
+/**
+ * The KB base the CLI WRITES to (domain scaffolds, domains.yaml, local librarian, setup). Ignores `WOLFPACK_KB_BASE` and
+ * config `kbBase` on purpose: those point READERS (a wolf's .env KB_BASE) at a hub mirror, and a writer must never follow them.
+ */
+export function kbWriteBaseDir(config: CliConfig): string {
+  return path.join(config.wolvesRoot, "knowledge", "base");
+}
+
 /** The KB base the owner set explicitly (`WOLFPACK_KB_BASE` env, then config `kbBase`), if any. */
 export function explicitKbBase(config: CliConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const v = env.WOLFPACK_KB_BASE?.trim() || config.kbBase?.trim();

@@ -19,7 +19,7 @@ import {
   saveConfig,
   savePackModels,
   getHost,
-  kbBaseDir,
+  kbWriteBaseDir,
   librarianDir,
   localWolfDir,
   type CliConfig,
@@ -68,7 +68,7 @@ async function setupHub(config: CliConfig, opts: { yes?: boolean }): Promise<voi
 
   // Create the canonical structure.
   for (const d of [
-    kbBaseDir(config),
+    kbWriteBaseDir(config),
     path.join(librarianDir(config), "inbox"),
     path.join(librarianDir(config), "receipts"),
     path.join(librarianDir(config), "rejected"),

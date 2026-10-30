@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
-import { loadConfig, getHost, localHostDir, localWolfDir, kbBaseDir } from "../config.js";
+import { loadConfig, getHost, localHostDir, localWolfDir, kbWriteBaseDir } from "../config.js";
 import { AgentClient } from "../agent-client.js";
 import {
   loadRegistry,
@@ -92,7 +92,7 @@ function subscribersOf(domain: string): string[] {
 
 /** Count curated entries for a domain in the local KB-base mirror (best effort). */
 function entryCount(domain: string): number | null {
-  const dir = path.join(kbBaseDir(loadConfig()), "domains", domain, "entries");
+  const dir = path.join(kbWriteBaseDir(loadConfig()), "domains", domain, "entries");
   try {
     return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).length;
   } catch {
@@ -191,7 +191,7 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   console.log(c.dim(`  description: ${description || "(none)"}`));
   console.log(c.dim(`  registry:    ${registryPath()}`));
   if (hub) console.log(c.dim(`  hub:         ${redactUrl(hub.baseUrl)} (the hub creates the domain folder)`));
-  else console.log(c.dim(`  scaffolds:   ${path.join(kbBaseDir(loadConfig()), "domains", name)}/`));
+  else console.log(c.dim(`  scaffolds:   ${path.join(kbWriteBaseDir(loadConfig()), "domains", name)}/`));
   if (!opts.yes && !(await confirm("Proceed?", true))) {
     console.log(c.dim("Aborted \u2014 no changes made."));
     return;
@@ -366,7 +366,7 @@ async function applySubscription(w: SubscribableWolf, domain: string, add: boole
 }
 
 function scaffoldDomainFolder(name: string, entry: DomainEntry): void {
-  const base = kbBaseDir(loadConfig());
+  const base = kbWriteBaseDir(loadConfig());
   const domainDir = path.join(base, "domains", name);
   assertNotHubMirror(domainDir);
   fs.mkdirSync(path.join(domainDir, "entries"), { recursive: true });
@@ -466,7 +466,7 @@ async function domainRm(name: string | undefined, opts: DomainOpts): Promise<voi
   await pushRegistry();
   // Refresh the deployed registry copy; leave the KB folder on disk for audit.
   try {
-    const base = kbBaseDir(loadConfig());
+    const base = kbWriteBaseDir(loadConfig());
     assertNotHubMirror(path.join(base, "domains.yaml"));
     if (fs.existsSync(base)) fs.writeFileSync(path.join(base, "domains.yaml"), yamlStringify(reg));
   } catch {

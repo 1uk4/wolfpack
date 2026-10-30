@@ -45,6 +45,14 @@ interface SyncOpts {
   resetKbBase?: boolean;
 }
 
+/** Trim a .env value and strip one pair of matching surrounding quotes. */
+function unquoteEnv(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  let t = v.trim();
+  if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) t = t.slice(1, -1).trim();
+  return t || undefined;
+}
+
 /**
  * Decide the KB_BASE a local wolf's .env gets. An explicit override (env/config)
  * wins; otherwise an existing .env value is preserved (so a manual switch to a hub
@@ -58,7 +66,7 @@ export function resolveWolfKbBase(
   env: NodeJS.ProcessEnv = process.env,
 ): { value: string; notice?: string } {
   const configured = kbBaseDir(config, env);
-  const existing = existingEnvLines.find((l) => l.startsWith("KB_BASE="))?.slice("KB_BASE=".length);
+  const existing = unquoteEnv(existingEnvLines.find((l) => l.startsWith("KB_BASE="))?.slice("KB_BASE=".length));
   if (!existing || existing === configured) return { value: configured };
   if (explicitKbBase(config, env)) {
     return { value: configured, notice: `KB_BASE changed ${existing} -> ${configured} (WOLFPACK_KB_BASE/config kbBase)` };

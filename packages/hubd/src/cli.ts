@@ -116,7 +116,10 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (flag === "--console-url" && (command === "serve" || command === "dev")) out.consoleUrl = normalizeConsoleUrl(val());
     else if (flag === "--socket" && command === "serve") out.socket = val();
     else if (flag === "--socket-mode" && command === "serve") out.socketMode = parseSocketMode(val());
-    else if (flag === "--host") (out.host = val(), (out.tcpExplicit = true));
+    else if (flag === "--host") {
+      out.host = val();
+      out.tcpExplicit = true;
+    }
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
     else if (flag === "--port") {
@@ -207,6 +210,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   if (socket !== undefined && args.command !== "serve") throw new Error("a unix socket is only supported by serve");
   if (socket !== undefined && args.tcpExplicit) throw new Error("HUBD_SOCKET cannot be combined with --port/--host: pick TCP or a unix socket");
   const socketMode = args.socketMode ?? (env.HUBD_SOCKET_MODE?.trim() ? parseSocketMode(env.HUBD_SOCKET_MODE) : undefined);
+  if (socketMode !== undefined && socket === undefined) throw new Error("HUBD_SOCKET_MODE / --socket-mode needs a unix socket (HUBD_SOCKET or --socket)");
   if (socket !== undefined) assertSocketPath(socket);
   const listen = socket !== undefined ? { socketPath: socket, ...(socketMode !== undefined ? { socketMode } : {}) } : { port: args.port, host: args.host };
   const hub = await createHubServer({ dataDir, apiKey, ...listen, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
@@ -215,6 +219,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   const stop = () => void hub.close().then(() => process.exit(0));
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  return hub;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

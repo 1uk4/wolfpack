@@ -35,7 +35,7 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
-import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket } from "./socket.js";
+import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket, type SocketIdentity } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -361,6 +361,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   }
   let server!: Server;
   let port = 0;
+  let socketId: SocketIdentity | undefined;
   let stopWatcher: () => void = () => {};
   let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
@@ -712,7 +713,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       }
     });
     await new Promise<void>((resolve, reject) => {
-      if (opts.socketPath !== undefined) listenOnSocket(server, opts.socketPath, opts.socketMode ?? DEFAULT_SOCKET_MODE).then(resolve, reject);
+      if (opts.socketPath !== undefined) listenOnSocket(server, opts.socketPath, opts.socketMode ?? DEFAULT_SOCKET_MODE).then((id) => ((socketId = id), resolve()), reject);
       else {
         server.once("error", reject);
         server.listen(opts.port ?? 0, host, () => resolve());
@@ -724,7 +725,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
-    if (opts.socketPath !== undefined && server?.listening) removeSocket(opts.socketPath);
+    if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
     stopWatcher();
     revisions.stop();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
@@ -758,7 +759,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         link.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => {
-          if (opts.socketPath !== undefined) removeSocket(opts.socketPath);
+          if (opts.socketPath !== undefined) removeSocket(opts.socketPath, socketId);
           void drained.then(() => resolve());
         });
         server.closeIdleConnections?.();

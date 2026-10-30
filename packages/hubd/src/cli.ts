@@ -33,7 +33,7 @@ const USAGE = `usage:
   hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
   hubd dev --snapshot <host> [--data-dir <dir>] [--port N] [--allow-network]    pull a read-only copy of <host>, then serve it
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
-  hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped)
+  hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
   hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
 env: HUBD_API_KEY (required, >= 16 chars)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
@@ -44,6 +44,7 @@ export function parseArgs(argv: string[]): CliArgs {
   const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [] };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
+    if ((command === "export" || command === "import") && !["--data-dir", command === "export" ? "--out" : "--in"].includes(flag)) throw new Error(`${command} does not take ${flag}\n${USAGE}`);
     const val = () => {
       const v = rest[++i];
       if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);

@@ -19,7 +19,7 @@ function splitName(path: string): { name: string; prefix: string } {
     const name = parts.slice(i).join("/");
     if (Buffer.byteLength(prefix) <= 155 && Buffer.byteLength(name) <= 100) return { name, prefix };
   }
-  throw new Error(`path too long for a tar entry: ${path.slice(0, 80)}`);
+  throw new Error(`path cannot be stored in a ustar tar (a name part is limited to 100 bytes, the directory prefix to 155): ${path}`);
 }
 
 /** Entries are written in the given order; mtime 0, uid/gid 0, mode 0644 (files) / 0755 (dirs): same input, same bytes. */
@@ -59,6 +59,15 @@ const cstr = (b: Buffer) => {
   return b.subarray(0, z < 0 ? b.length : z).toString("utf8");
 };
 
+/** An octal header field: NUL/space padding trimmed, then digits 0-7 only (parseInt alone would accept "12abc"). */
+function octalField(b: Buffer, what: string): number {
+  const t = cstr(b).replace(/^[ \0]+|[ \0]+$/g, "");
+  if (!/^[0-7]*$/.test(t)) throw new Error(`tar header has a malformed ${what} field`);
+  const n = t === "" ? 0 : parseInt(t, 8);
+  if (!Number.isSafeInteger(n)) throw new Error(`tar header has a bad ${what} field`);
+  return n;
+}
+
 /** Parses a tar; throws on links, devices, extension headers, bad checksums, truncation. Paths are returned raw (the caller validates them). */
 export function readTar(buf: Buffer): TarEntry[] {
   const out: TarEntry[] = [];
@@ -66,8 +75,13 @@ export function readTar(buf: Buffer): TarEntry[] {
   for (;;) {
     if (off + BLOCK > buf.length) throw new Error("tar is truncated (no end-of-archive marker)");
     const h = buf.subarray(off, off + BLOCK);
-    if (h.every((b) => b === 0)) return out;
-    const stored = parseInt(cstr(h.subarray(148, 156)).trim(), 8);
+    if (h.every((b) => b === 0)) {
+      // End of archive: exactly two zero blocks are required, and only zero padding may follow.
+      if (off + 2 * BLOCK > buf.length || !buf.subarray(off + BLOCK, off + 2 * BLOCK).every((b) => b === 0)) throw new Error("tar is truncated (needs two zero end blocks)");
+      if (!buf.subarray(off + 2 * BLOCK).every((b) => b === 0)) throw new Error("tar has non-zero data after the end-of-archive marker");
+      return out;
+    }
+    const stored = octalField(h.subarray(148, 156), "checksum");
     let sum = 0;
     for (let i = 0; i < BLOCK; i++) sum += i >= 148 && i < 156 ? 32 : h[i]!;
     if (stored !== sum) throw new Error("tar header checksum mismatch");
@@ -76,10 +90,10 @@ export function readTar(buf: Buffer): TarEntry[] {
     const name = cstr(h.subarray(0, 100));
     const prefix = cstr(h.subarray(345, 500));
     let path = prefix ? `${prefix}/${name}` : name;
-    const size = parseInt(cstr(h.subarray(124, 136)).trim() || "0", 8);
-    if (!Number.isInteger(size) || size < 0) throw new Error("tar entry has a bad size");
+    const size = octalField(h.subarray(124, 136), "size");
     off += BLOCK;
     if (flag === "5") {
+      if (size !== 0) throw new Error(`tar directory entry ${JSON.stringify(path)} has a non-zero size`);
       path = path.replace(/\/+$/, "");
       out.push({ path, type: "dir", data: Buffer.alloc(0) });
       continue;

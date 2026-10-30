@@ -1,10 +1,16 @@
 /** hubd export / import: round trip, served reads, and every refusal. */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, statSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { readWorkLedger } from "@wolfpack/kb/client";
+import { ledgerFile } from "@wolfpack/kb/shared";
+import { readLedger } from "@wolfpack/kb/librarian";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { contentHash } from "@wolfpack/kb/shared";
+import { hubRoots } from "./layout.js";
 import { createHubServer, type HubServer } from "./server.js";
 import { exportHub, importHub, type ExportManifest } from "./export.js";
 import { readTar, writeTar, type TarEntry } from "./tar.js";
@@ -206,5 +212,200 @@ describe("hubd export / import", () => {
     expect(log).toHaveLength(2);
     await expect(main(["import", "--data-dir", target, "--in", out], {}, () => {})).rejects.toThrow(/not empty/);
     expect(() => parseArgs(["export", "--data-dir", s.dir])).toThrow(/--out/);
+  });
+});
+
+const mode = (p: string) => statSync(p).mode & 0o777;
+const fixHeaderSum = (t: Buffer, at = 0) => {
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 32 : t[at + i]!;
+  t.write(sum.toString(8).padStart(6, "0") + "\0 ", at + 148, "ascii");
+};
+
+describe("hubd export / import hardening", () => {
+  it("keeps an existing empty target's mode, writes the tar 0600 and imported files 0644 / dirs 0755", async () => {
+    const s = await seed();
+    const out = join(mk(), "hub.tar");
+    exportHub({ dataDir: s.dir, out });
+    expect(mode(out)).toBe(0o600);
+    const target = mk();
+    chmodSync(target, 0o750);
+    importHub({ dataDir: target, in: out });
+    expect(mode(target)).toBe(0o750);
+    expect(mode(join(target, "ledger", "work-events.jsonl"))).toBe(0o644);
+    expect(mode(join(target, "kb", "base"))).toBe(0o755);
+    expect(readdirSync(target).some((n) => n.startsWith(".import-"))).toBe(false);
+    expect(tree(target)).toEqual(tree(join(mk(), "x") && target));
+  });
+
+  it("export refuses a --out that appears after the existence check (dangling symlink), writes nothing", async () => {
+    const s = await seed();
+    const parent = mk();
+    const out = join(parent, "hub.tar");
+    symlinkSync(join(parent, "nowhere"), out); // existsSync() is false for it; linkSync() gets EEXIST
+    expect(() => exportHub({ dataDir: s.dir, out })).toThrow(/already exists/);
+    expect(readdirSync(parent).sort()).toEqual(["hub.tar"]);
+    expect(existsSync(join(parent, "nowhere"))).toBe(false);
+  });
+
+  it("export refuses an --out inside the data dir, also through a symlinked directory", async () => {
+    const s = await seed();
+    expect(() => exportHub({ dataDir: s.dir, out: join(s.dir, "x.tar") })).toThrow(/outside the data directory/);
+    const links = mk();
+    symlinkSync(s.dir, join(links, "alias"));
+    expect(() => exportHub({ dataDir: s.dir, out: join(links, "alias", "x.tar") })).toThrow(/outside the data directory/);
+    expect(existsSync(join(s.dir, "x.tar"))).toBe(false);
+  });
+
+  it("ledger counts match the hub's readers (blank and invalid lines skipped)", async () => {
+    const s = await seed();
+    const roots = hubRoots(s.dir);
+    appendFileSync(join(s.dir, "ledger", "work-events.jsonl"), "\n   \nnot json\n{\"type\":\"bogus\"}\n");
+    appendFileSync(ledgerFile(roots), "\ngarbage\n");
+    const warn = console.warn;
+    console.warn = () => {};
+    let w: number, k: number;
+    try {
+      w = readWorkLedger(roots).length;
+      k = readLedger(roots).length;
+    } finally {
+      console.warn = warn;
+    }
+    const out = join(mk(), "hub.tar");
+    const { manifest } = exportHub({ dataDir: s.dir, out });
+    expect(manifest.lastEventSequence).toBe(w);
+    expect(manifest.kbLedgerLines).toBe(k);
+    importHub({ dataDir: join(mk(), "t"), in: out });
+  });
+
+  it("export refuses a partial trailing ledger line (work and KB)", async () => {
+    for (const f of ["work-events.jsonl", "events.jsonl"]) {
+      const s = await seed();
+      appendFileSync(join(s.dir, "ledger", f), '{"type":"work.cre');
+      expect(() => exportHub({ dataDir: s.dir, out: join(mk(), "x.tar") }), f).toThrow(/partial line/);
+    }
+  });
+
+  it("import refuses a ledger line-count mismatch (work and KB)", async () => {
+    const s = await seed();
+    const good = join(mk(), "hub.tar");
+    exportHub({ dataDir: s.dir, out: good });
+    for (const [field, re] of [["lastEventSequence", /work ledger line count/], ["kbLedgerLines", /KB ledger line count/]] as const) {
+      const file = join(mk(), `${field}.tar`);
+      writeFileSync(file, readFileSync(good));
+      rewrite(file, (e) => withManifest(e, (m) => ((m as never as Record<string, number>)[field] += 1)));
+      const parent = mk();
+      expect(() => importHub({ dataDir: join(parent, "t"), in: file })).toThrow(re);
+      expect(readdirSync(parent)).toEqual([]);
+    }
+  });
+
+  it("import refuses duplicate entries and file/dir type confusion", async () => {
+    const s = await seed();
+    const good = join(mk(), "hub.tar");
+    exportHub({ dataDir: s.dir, out: good });
+    const bad = (name: string, f: (e: TarEntry[]) => TarEntry[], re: RegExp) => {
+      const file = join(mk(), `${name}.tar`);
+      writeFileSync(file, readFileSync(good));
+      rewrite(file, f);
+      const parent = mk();
+      expect(() => importHub({ dataDir: join(parent, "t"), in: file }), name).toThrow(re);
+      expect(readdirSync(parent), name).toEqual([]);
+    };
+    bad("dup-file", (e) => [...e, e.find((x) => x.path === "registry/registry.json")!], /duplicate archive entry/);
+    bad("dup-dir", (e) => [...e, e.find((x) => x.type === "dir")!], /duplicate archive entry/);
+    bad("file-as-dir", (e) => e.map((x) => (x.path === "registry/registry.json" ? { ...x, type: "dir" as const, data: Buffer.alloc(0) } : x)), /not in the manifest/);
+    bad("dir-as-file", (e) => e.map((x) => (x.path === "kb/base" ? { ...x, type: "file" as const, data: Buffer.from("x") } : x)), /not in the manifest/);
+  });
+
+  it("the CLI exits non-zero on refusal and rejects flags that do not apply", async () => {
+    const s = await seed();
+    const out = join(mk(), "cli.tar");
+    exportHub({ dataDir: s.dir, out });
+    const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+    const run = (...a: string[]) => spawnSync(process.execPath, [cli, ...a], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    const target = join(mk(), "t");
+    const ok = run("import", "--data-dir", target, "--in", out);
+    expect(ok.status).toBe(0);
+    const refused = run("import", "--data-dir", target, "--in", out);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/not empty/);
+    const flag = run("export", "--data-dir", s.dir, "--out", join(mk(), "y.tar"), "--port", "99");
+    expect(flag.status).toBe(1);
+    expect(flag.stderr).toMatch(/does not take --port/);
+    expect(run("import", "--data-dir", join(mk(), "z"), "--in", out, "--seed-domains", "x").status).toBe(1);
+  });
+
+  it("names the offending path when a component exceeds the ustar limit", () => {
+    const long = `kb/base/${"a".repeat(101)}`;
+    expect(() => writeTar([{ path: long, type: "file", data: Buffer.from("x") }])).toThrow(new RegExp(`ustar.*${"a".repeat(101)}`));
+  });
+});
+
+describe("tar reader", () => {
+  const one = () => Buffer.from(writeTar([{ path: "a/b.txt", type: "file", data: Buffer.from("hello") }]));
+  it("round-trips a path whose prefix is over 100 bytes", () => {
+    const path = `${"d".repeat(60)}/${"e".repeat(60)}/file.txt`;
+    const back = readTar(writeTar([{ path, type: "file", data: Buffer.from("hi") }]));
+    expect(back).toHaveLength(1);
+    expect(back[0]!.path).toBe(path);
+    expect(back[0]!.data.toString()).toBe("hi");
+  });
+  it("accepts a well-formed archive and zero padding after the end marker", () => {
+    expect(readTar(Buffer.concat([one(), Buffer.alloc(1024)]))).toHaveLength(1);
+  });
+  it("rejects a bad checksum", () => {
+    const t = one();
+    t[0] = t[0]! ^ 1;
+    expect(() => readTar(t)).toThrow(/checksum/);
+  });
+  it("rejects truncation (header, data, end marker, one end block)", () => {
+    const t = one();
+    expect(() => readTar(t.subarray(0, 100))).toThrow(/truncated/);
+    expect(() => readTar(t.subarray(0, 512 + 100))).toThrow(/truncated/);
+    expect(() => readTar(t.subarray(0, t.length - 1024))).toThrow(/truncated/);
+    expect(() => readTar(t.subarray(0, t.length - 512))).toThrow(/two zero end blocks/);
+  });
+  it("rejects non-zero data after the end marker", () => {
+    expect(() => readTar(Buffer.concat([one(), Buffer.from("junk")]))).toThrow(/after the end-of-archive/);
+  });
+  it("rejects pax, GNU long-name, link and special types", () => {
+    for (const flag of ["x", "g", "L", "K", "1", "2", "3", "4", "6"]) {
+      const t = one();
+      t[156] = flag.charCodeAt(0);
+      fixHeaderSum(t);
+      expect(() => readTar(t), flag).toThrow(/unsupported type/);
+    }
+  });
+  it("rejects a huge declared size without allocating", () => {
+    const t = one();
+    t.write("77777777777\0", 124, "ascii");
+    fixHeaderSum(t);
+    expect(() => readTar(t)).toThrow(/truncated/);
+    const u = one();
+    u.write("99999999999\0", 124, "ascii"); // not octal
+    fixHeaderSum(u);
+    expect(() => readTar(u)).toThrow(/malformed size/);
+  });
+  it("validates octal fields strictly", () => {
+    const t = one();
+    t.write("12abc\0", 124, "ascii");
+    fixHeaderSum(t);
+    expect(() => readTar(t)).toThrow(/malformed size/);
+    const c = one();
+    c.write("0x1234\0 ", 148, "ascii");
+    expect(() => readTar(c)).toThrow(/malformed checksum/);
+  });
+  it("rejects a directory entry with a size", () => {
+    const t = Buffer.from(writeTar([{ path: "d", type: "dir", data: Buffer.alloc(0) }]));
+    t.write("00000000005\0", 124, "ascii");
+    fixHeaderSum(t);
+    expect(() => readTar(t)).toThrow(/non-zero size/);
+  });
+  it("rejects a non-ustar header", () => {
+    const t = one();
+    t.write("xxxxx", 257, "ascii");
+    fixHeaderSum(t);
+    expect(() => readTar(t)).toThrow(/ustar/);
   });
 });

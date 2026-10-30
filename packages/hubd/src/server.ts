@@ -45,7 +45,6 @@ import {
 import { createEventBus } from "./events.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
-import { loadWorkState } from "@wolfpack/kb/client";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));

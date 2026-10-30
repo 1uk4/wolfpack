@@ -32,13 +32,13 @@ async function fetchImpl(url: string | URL, init: RequestInit = {}) {
   return json({ error: "unsupported" }, 400);
 }
 
-function wolf(name: string, hubEnv: Record<string, string>) {
-  const den = mkdtempSync(join(tmpdir(), `hubclaim-${name}-`));
-  dirs.push(den);
-  const env = { ...process.env, WORK_ENDPOINT: LOCAL, WORK_TOKEN: "t", PI_SUBAGENT_AGENT: "", ...hubEnv } as NodeJS.ProcessEnv;
+function wolf(name: string, hubEnv: Record<string, string>, shared?: string) {
+  const den = shared ?? mkdtempSync(join(tmpdir(), `hubclaim-${name}-`));
+  if (!shared) dirs.push(den);
+  const env = { PATH: process.env.PATH, WORK_ENDPOINT: LOCAL, WORK_TOKEN: "t", PI_SUBAGENT_AGENT: "", ...hubEnv } as NodeJS.ProcessEnv; // minimal base: a WOLFPACK_HUB_KEY in the shell must not leak in
   const ext = createTasksExtension({ kbRoots: { kbBase: join(den, "kb"), opsRoot: join(den, "ops"), denLocal: join(den, "kbl") } } as never, { wolfDen: den, wolfName: name, domains: [FIXTURE_DOMAIN], wolfConfig: {}, env } as never);
-  const run = async (tool: string, args: Record<string, unknown>) => {
-    const r = await ext.tools!.find((t) => t.name === tool)!.execute(args as never, { cwd: den, wolfDen: den, wolfName: name, conversationId: 1 } as never);
+  const run = async (tool: string, args: Record<string, unknown>, conversationId = 1) => {
+    const r = await ext.tools!.find((t) => t.name === tool)!.execute(args as never, { cwd: den, wolfDen: den, wolfName: name, conversationId } as never);
     return { text: (r.content[0] as { text: string }).text, isError: r.isError === true };
   };
   return { run, den };
@@ -109,6 +109,24 @@ describe("hub claim tools", () => {
     expect(r.text).not.toContain(KEY);
   });
 
+  it("shows the stage from the claim response (approved -> in_build), not the local copy", async () => {
+    const a = wolf("wolf-a", cfg());
+    expect((await a.run("task_bind", { id: featureId })).text).toContain("Stage: in_build");
+  });
+
+  it("a refused local bind gives the claim back on the hub", async () => {
+    const a = wolf("wolf-a", cfg());
+    const b = wolf("wolf-b", cfg());
+    expect((await a.run("task_bind", { id: featureId }, 1)).isError).toBe(false);
+    // Another conversation of the same wolf: the claim is idempotent for the holder, but the local binding is held by conversation 1 -> refused.
+    const refused = await a.run("task_bind", { id: featureId }, 2);
+    expect(refused.isError).toBe(true);
+    expect(refused.text).not.toContain("still claimed");
+    // released on the hub: another wolf can now claim it
+    expect((await b.run("task_claim", { id: featureId })).isError).toBe(false);
+  });
+
+  // Intended: with a hub configured, an invalid wolf id blocks a feature bind (and claim/release) rather than falling back to local behaviour.
   it("an invalid wolf id is refused before any request", async () => {
     const bad = wolf("Bad_Wolf", cfg());
     const r = await bad.run("task_claim", { id: featureId });
@@ -134,6 +152,9 @@ describe("without a hub", () => {
 describe("hubErrorText", () => {
   it("names the holder on conflict and scrubs credentials", () => {
     expect(hubErrorText({ code: "conflict", message: "m", details: { holder: "w1" } }, "work-x", "http://h")).toBe("work-x is held by w1");
+    const echoed = hubErrorText({ code: "invalid_request", message: "bad key throwaway-key-1234 at http://h/x?api_key=throwaway-key-1234&a=1" }, "work-x", "http://h", "throwaway-key-1234");
+    expect(echoed).not.toContain("throwaway-key-1234");
+    expect(echoed).not.toContain("?");
     expect(hubErrorText(new TypeError("fetch failed http://u:p@h/x"), "work-x", "http://u:p@h:1/")).not.toMatch(/u:p/);
   });
 });

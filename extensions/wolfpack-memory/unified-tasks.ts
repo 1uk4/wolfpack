@@ -244,10 +244,14 @@ function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
 export const NO_HUB = "No hub configured (WOLFPACK_HUB_URL is not set): claiming needs a hub.";
 
 /** A hub claim/release failure as the wolf sees it: 409 names the holder, others pass the hub's message; credentials never shown. */
-export function hubErrorText(err: unknown, id: string, hubUrl: string): string {
+export function hubErrorText(err: unknown, id: string, hubUrl: string, apiKey?: string): string {
   const e = err as { code?: string; message?: string; details?: { holder?: unknown } };
-  const scrub = (t: string) => t.replace(/(\/\/)[^/@\s]*@/g, "$1");
-  if (e?.code === "conflict" && typeof e.details?.holder === "string") return `${id} is held by ${e.details.holder}`;
+  const scrub = (t: string) => {
+    let out = t.replace(/(\/\/)[^/@\s]*@/g, "$1").replace(/(https?:\/\/[^\s?#]*)[?#][^\s]*/g, "$1");
+    if (apiKey) out = out.split(apiKey).join("[redacted]");
+    return out;
+  };
+  if (e?.code === "conflict" && typeof e.details?.holder === "string") return `${id} is held by ${scrub(e.details.holder)}`;
   if (e?.code === "conflict") return scrub(e.message ?? `${id} is held by another wolf`);
   const msg = scrub(e?.message ?? String(err));
   if (!e?.code) return `could not reach the hub at ${redactUrl(hubUrl)}: ${msg}`;
@@ -271,12 +275,14 @@ export default function createTasksExtension(
   const client = makeClient(context.env);
 
   /** Hub client acting as this wolf (provisional actor header), or an error text. Read per call so a config change applies at once. */
-  function hubFor(): { hub: HttpConsoleClient; url: string } | { error: string } {
+  function hubFor(): { hub: HttpConsoleClient; url: string; key?: string } | { error: string } {
     const target = hubTargetFromEnv(env as Record<string, string | undefined>);
     if (!target) return { error: NO_HUB };
     if (!WolfIdSchema.safeParse(wolfName).success) return { error: `Cannot claim: "${wolfName}" is not a valid wolf id (lower-case letters, digits, hyphens).` };
-    const hub = new HttpConsoleClient({ baseUrl: redactUrl(target.baseUrl), hub: { baseUrl: redactUrl(target.baseUrl), apiKey: target.apiKey }, actor: { id: wolfName, kind: "wolf" } as never });
-    return { hub, url: target.baseUrl };
+    // baseUrl = redactUrl(hub URL) is deliberate: the client never sees userinfo, query or fragment, so no error text it builds can echo them.
+    const safe = redactUrl(target.baseUrl);
+    const hub = new HttpConsoleClient({ baseUrl: safe, hub: { baseUrl: safe, apiKey: target.apiKey }, actor: { id: wolfName, kind: "wolf" } });
+    return { hub, url: target.baseUrl, key: target.apiKey };
   }
   const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 
@@ -860,15 +866,31 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             if ("error" in h) {
               if (h.error !== NO_HUB) return text(h.error, true);
             } else {
+              let claimed;
               try {
-                await h.hub.claimWork!(item.id as string);
+                claimed = await h.hub.claimWork!(item.id as string);
               } catch (err) {
-                return text(hubErrorText(err, item.id as string, h.url), true);
+                return text(hubErrorText(err, item.id as string, h.url, h.key), true);
               }
-              const refusedF = await writeBinding(ctx, item.id, domain, await recordFeatureId(client, item));
-              if (refusedF) return text(refusedF, true);
-              await writeCache(item);
-              return text(`Claimed and bound to: [${item.id}] ${item.title}\nStage: ${item.stage}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`);
+              // The claim is on the hub; if the local bind then fails, give it back so the hub and the wolf agree.
+              const undo = async (why: string): Promise<ToolResult> => {
+                try {
+                  await h.hub.releaseWork!(item.id as string);
+                  return text(why, true);
+                } catch {
+                  return text(`${why}\nThe feature is still claimed on the hub; run task_release ${item.id}`, true);
+                }
+              };
+              try {
+                const refusedF = await writeBinding(ctx, item.id, domain, await recordFeatureId(client, item));
+                if (refusedF) return await undo(refusedF);
+                await writeCache(item).catch(() => {}); // the next prompt render refills it
+              } catch (err) {
+                return await undo(`Could not bind: ${err instanceof Error ? err.message : String(err)}`);
+              }
+              // The stage comes from the claim response (the hub moves approved -> in_build); the local copy may lag until cutover.
+              const stage = claimed.item?.stage ?? item.stage;
+              return text(`Claimed and bound to: [${item.id}] ${item.title}\nStage: ${stage}\n${item.successCriteria ? `Success: ${item.successCriteria}` : ""}`);
             }
           }
 
@@ -908,7 +930,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             const r = await h.hub.claimWork!(args.id);
             return text(`Claimed ${args.id}${r.item?.stage ? ` (stage: ${r.item.stage})` : ""}.`);
           } catch (err) {
-            return text(hubErrorText(err, args.id, h.url), true);
+            return text(hubErrorText(err, args.id, h.url, h.key), true);
           }
         },
       }),
@@ -925,7 +947,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
             await h.hub.releaseWork!(args.id);
             return text(`Released ${args.id}.`);
           } catch (err) {
-            return text(hubErrorText(err, args.id, h.url), true);
+            return text(hubErrorText(err, args.id, h.url, h.key), true);
           }
         },
       }),

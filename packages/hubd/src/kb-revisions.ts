@@ -208,7 +208,7 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
       /* no log yet */
     }
     const stRev = typeof state?.rev === "number" ? state.rev : 0;
-    const lastRow = rows.length ? Math.max(...rows.map((r) => r.rev)) : 0;
+    const lastRow = rows.length ? rows.reduce((m, r) => Math.max(m, r.rev), 0) : 0;
     const floor0 = typeof state?.floor === "number" ? state.floor : 0;
     const s: Dom = {
       epoch: !rotateNext.has(d) && typeof state?.epoch === "string" ? state.epoch : randomBytes(8).toString("hex"),
@@ -311,7 +311,7 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     }
     for (const [p, st] of stats ?? []) if (s.files.has(p)) s.stat.set(p, st);
     if (rows.length === 0) return 0;
-    s.rows.push(...rows);
+    for (const r of rows) s.rows.push(r); // not push(...rows): a first scan of a big domain would overflow the argument limit
     try {
       appendRows(d, rows);
       writeManifest(d, s);

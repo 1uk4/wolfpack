@@ -35,7 +35,7 @@ async function setup(over: Partial<HubOptions> = {}, existing?: string) {
     for (const d of ["alpha", "beta"]) mkdirSync(join(dir, "kb", "base", "domains", d, "entries"), { recursive: true });
   }
   const clock = { t: Date.now() };
-  const opts: HubOptions = { dataDir: dir, apiKey: KEY, kbPollMs: 0, kbSettleMs: 0, now: () => clock.t, ...over };
+  const opts: HubOptions = { dataDir: dir, apiKey: KEY, kbPollMs: 0, kbSettleMs: -1, now: () => clock.t, ...over };
   let hub = await createHubServer(opts);
   servers.push(hub);
   const base = join(dir, "kb", "base", "domains");
@@ -421,19 +421,48 @@ describe("KB revisions", () => {
     expect(await s.rev("alpha")).toBe(2);
     expect(await s.changes("alpha", `?since=1&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 2 });
     expect(ok(await s.changes("alpha", `?since=2&epoch=${epoch}`)).files).toEqual([]);
-    // a missing head: drop the first row of the log
-    s.write("alpha", "_registry.md", "# r\n");
-    await s.hub.scanKb();
-    await s.hub.close();
-    servers = servers.filter((x) => x !== s.hub);
-    const log = join(s.dir, "kb-rev", "alpha", "changes.jsonl");
-    writeFileSync(log, readFileSync(log, "utf8").split("\n").slice(1).join("\n") + "");
-    s.write("alpha", "INDEX.md", "# i\n");
-    await s.restart();
-    expect(await s.rev("alpha")).toBe(4);
-    // the only row (3) was lost, row 4 survives: the log no longer reaches back past 3
-    expect(await s.changes("alpha", `?since=2&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 3 });
-    expect(ok(await s.changes("alpha", `?since=3&epoch=${epoch}`)).files.map((f) => f.path)).toEqual(["INDEX.md"]);
+  });
+
+  it("a log with a missing head or a hole is covered by raising the floor", async () => {
+    // rows 1..5 exist; build logs by hand-editing between restarts
+    const prep = async () => {
+      const s = await setup();
+      await s.commit(create("alpha", A1), create("alpha", A2));
+      s.write("alpha", "_registry.md", "# r\n");
+      s.write("alpha", "_digest.json", "{}");
+      s.write("alpha", "INDEX.md", "# i\n");
+      await s.hub.scanKb();
+      expect(await s.rev("alpha")).toBe(5);
+      const epoch = ok(await s.changes("alpha")).epoch;
+      await s.hub.close();
+      servers = servers.filter((x) => x !== s.hub);
+      const log = join(s.dir, "kb-rev", "alpha", "changes.jsonl");
+      return { s, epoch, log, lines: readFileSync(log, "utf8").trim().split("\n") };
+    };
+    // rows 3, 4, 5 with 3 removed (state.floor 0): head of the live log is lost -> floor 3
+    {
+      const { s, epoch, log, lines } = await prep();
+      writeFileSync(log, lines.filter((l) => JSON.parse(l).rev >= 4).join("\n") + "\n"); // rows 1-2 gone too: 3 missing, 4 and 5 survive
+      await s.restart();
+      expect(await s.rev("alpha")).toBe(5);
+      expect(await s.changes("alpha", `?since=2&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 3 });
+      const c = ok(await s.changes("alpha", `?since=3&epoch=${epoch}`));
+      expect(c.revision).toBe(5);
+      expect(c.files).toHaveLength(2); // rows 4 and 5
+      await s.hub.close();
+      servers = servers.filter((x) => x !== s.hub);
+    }
+    // a hole at row 4 (rows 1-3 and 5 survive): only the contiguous suffix (5) is trusted -> floor 4
+    {
+      const { s, epoch, log, lines } = await prep();
+      writeFileSync(log, lines.filter((l) => JSON.parse(l).rev !== 4).join("\n") + "\n");
+      await s.restart();
+      expect(await s.rev("alpha")).toBe(5);
+      expect(await s.changes("alpha", `?since=3&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 4 });
+      const c = ok(await s.changes("alpha", `?since=4&epoch=${epoch}`));
+      expect(c.revision).toBe(5);
+      expect(c.files).toHaveLength(1);
+    }
   });
 
   it("after a manifest rebuild a client at exactly the old head is reset (synthetic revision)", async () => {
@@ -471,6 +500,8 @@ describe("KB revisions", () => {
     await s.hub.scanKb();
     expect(await s.rev("alpha")).toBe(1);
     const f = s.file("alpha", `entries/${A1}.md`);
+    // Assumes the filesystem keeps mtime to at least ms precision (utimes restores the Date exactly); the stat cache compares ns, so the
+    // restored mtime matches but ctime (set by the kernel at write time) still differs.
     const { mtime } = statSync(f);
     await new Promise((r) => setTimeout(r, 20));
     writeFileSync(f, entry("alpha", A1, "BBBB")); // same size

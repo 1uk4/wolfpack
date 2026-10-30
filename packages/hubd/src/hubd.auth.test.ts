@@ -141,13 +141,13 @@ describe("hubd token auth", () => {
     expect((await fetch(`${hub.url}/v1/events`, { method: "POST" })).status).toBe(401);
   });
 
-  it("a token-authenticated work write is attributed to its token and host in auth/attribution.jsonl", async () => {
+  const lastLedgerEvent = () => readFileSync(join(dir, "ledger", "work-events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+  it("a token-authenticated work write is attributed on the ledger event itself (by/tokenId), with no side log", async () => {
     const con = await mint("console");
     const r = await createWork(bearer(con.token));
     expect(r.status).toBe(201);
-    const lines = readFileSync(join(dir, "auth", "attribution.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(lines.at(-1)).toMatchObject({ tokenId: con.tokenId, actor: { id: "owner", kind: "operator" } });
-    expect(lines.at(-1).events[0].type).toBe("work.created");
+    expect(lastLedgerEvent()).toMatchObject({ type: "work.created", by: "owner", tokenId: con.tokenId });
+    expect(existsSync(join(dir, "auth", "attribution.jsonl"))).toBe(false);
   });
 
   it("a worker pairing needs a hostId; it is stored on the token and the worker acts as that host", async () => {
@@ -249,11 +249,10 @@ describe("hubd token auth", () => {
     expect(parseArgs(["pair", "--kind", "worker", "--host-id", "sfo-01", "--data-dir", "/d"])).toMatchObject({ kind: "worker", hostId: "sfo-01" });
   });
 
-  it("a worker token's tokenId and hostId land in attribution.jsonl", async () => {
+  it("a worker token's tokenId and hostId land on the ledger event", async () => {
     const w = await mint("worker", { hostId: "sfo-01" });
     expect((await createWork(bearer(w.token))).status).toBe(201);
-    const last = readFileSync(join(dir, "auth", "attribution.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
-    expect(last).toMatchObject({ tokenId: w.tokenId, hostId: "sfo-01", actor: { id: "sfo-01", kind: "wolf" } });
+    expect(lastLedgerEvent()).toMatchObject({ tokenId: w.tokenId, hostId: "sfo-01", by: "sfo-01" });
   });
 
   describe("token store lock", () => {

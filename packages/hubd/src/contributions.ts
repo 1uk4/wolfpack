@@ -13,7 +13,7 @@ import type { Actor } from "@wolfpack/protocol";
 import { ContributionSchema, contentHash, isSafeSegment, type Contribution } from "@wolfpack/kb/shared";
 import { contributionFileName, renderContribution } from "@wolfpack/kb/client";
 import { parseContribution } from "@wolfpack/kb/librarian";
-import { contributionsDir } from "./layout.js";
+import { contributionsRoot } from "./layout.js";
 
 /** Largest accepted request body. */
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -69,9 +69,9 @@ export async function readJsonObject(req: IncomingMessage, res: ServerResponse):
 }
 
 /** Keep a bounded copy of a rejected submission: truncated raw body named by the sha256 of the FULL body (so a repeat is not stored twice). */
-function quarantine(dataDir: string, wolf: string, text: string, reason: string): void {
+function quarantine(laneRoot: string, wolf: string, text: string, reason: string): void {
   try {
-    const dir = join(contributionsDir(dataDir, wolf), "_bad");
+    const dir = join(laneRoot, wolf, "_bad");
     mkdirSync(dir, { recursive: true });
     const sha = createHash("sha256").update(text, "utf-8").digest("hex");
     const file = join(dir, `${sha}.raw`);
@@ -110,7 +110,8 @@ function lineBreakIn(c: Contribution): string | undefined {
 const shorten = (v: unknown) => JSON.stringify(String(v)).slice(0, 60);
 
 /** Validate + store one contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
-export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody): StoredContribution {
+export function storeContribution(dataDir: string, actor: Actor, submitted: SubmittedBody, inboxRoot?: string): StoredContribution {
+  const laneRoot = inboxRoot ?? contributionsRoot(dataDir);
   const raw = submitted.json;
   if (actor.kind !== "wolf" && actor.kind !== "operator") throw new ContributionError("invalid_request", "contributions are submitted by a wolf or an operator");
   // Lane: a wolf's own; an operator's is the `from` it names (it may submit for any wolf).
@@ -123,7 +124,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
     throw new ContributionError("invalid_request", `bad wolf name ${shorten(wolf)} (lowercase letters, digits, . _ -; must not start with _ or .)`);
   }
   const reject = (reason: string): never => {
-    quarantine(dataDir, wolf, submitted.text, reason);
+    quarantine(laneRoot, wolf, submitted.text, reason);
     throw new ContributionError("invalid_request", `malformed contribution: ${reason}`);
   };
 
@@ -141,7 +142,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
   } catch (e) {
     return reject((e instanceof Error ? e.message : String(e)).slice(0, REASON_MAX));
   }
-  const dir = contributionsDir(dataDir, wolf);
+  const dir = join(laneRoot, wolf);
   mkdirSync(dir, { recursive: true });
   // Idempotent on (topic, content hash): already pending, or already handled by the curator.
   if (existsSync(join(dir, name)) || existsSync(join(dir, "_processed", name))) return { id: name, wolf, duplicate: true };

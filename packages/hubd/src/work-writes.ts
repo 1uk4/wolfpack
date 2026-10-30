@@ -9,7 +9,7 @@
  * - The write queue serialises every mutation in this process (hubd also holds the work-writer lock across processes).
  * - Guard failures thrown by work-ops are mapped to protocol error codes (`mapWorkError`); messages carry no absolute paths.
  */
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, fsyncSync, ftruncateSync, writeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   appendWorkLedger,
@@ -596,6 +596,34 @@ export interface WorkWriterOptions {
   release: () => void;
   /** TEST SEAM: awaited inside the queue before each write runs (lets a test hold a write in flight). */
   gate?: () => Promise<void> | void;
+  /** Attribution to stamp (`by`, `tokenId`, `hostId`) on every ledger event this actor's write appends. Undefined = stamp nothing. */
+  stamp?: (actor: Actor) => Record<string, string> | undefined;
+}
+
+/** Rewrite the ledger bytes after `offset` with `stamp` merged into each event (sole writer, inside the write queue). */
+function stampTail(roots: KbRoots, offset: number, stamp: Record<string, string>): void {
+  const file = workLedgerFile(roots);
+  const raw = readFileSync(file);
+  if (raw.length <= offset) return;
+  const lines = raw.subarray(offset).toString("utf8").split("\n");
+  const out = lines.map((l) => {
+    if (!l.trim()) return l;
+    try {
+      const o = JSON.parse(l) as Record<string, unknown>;
+      return JSON.stringify({ ...o, ...stamp });
+    } catch {
+      return l;
+    }
+  });
+  const fd = openSync(file, "r+");
+  try {
+    const buf = Buffer.from(out.join("\n"), "utf8");
+    ftruncateSync(fd, offset);
+    writeSync(fd, buf, 0, buf.length, offset);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export type WorkAppendedListener = (batch: { actor: Actor; events: LedgerEvent[] }) => void;
@@ -647,6 +675,12 @@ export function createWorkWriter(opts: WorkWriterOptions) {
       // INVARIANT: hubd is the SOLE writer of the ledger (writer lock + this queue), so every byte appended between `before` and
       // now belongs to this write; with any other writer the diff would misattribute their events to this actor.
       if (before !== undefined) {
+        try {
+          const st = opts.stamp?.(actor);
+          if (st) stampTail(roots, before, st);
+        } catch (e) {
+          console.error("hubd: could not stamp attribution on the ledger tail:", e);
+        }
         try {
           const { events } = readLedgerSince(roots, before);
           if (events.length > 0) {

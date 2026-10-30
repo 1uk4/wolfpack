@@ -7,7 +7,8 @@
  * for "replaced") until a welcome arrives.
  */
 import WebSocket from "ws";
-import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkWolf } from "@wolfpack/protocol";
+import { LINK_PATH, LINK_PROTOCOL_VERSION, encodeLinkFrame, parseLinkFrame, type LinkFrame, type LinkReceipt, type LinkWolf } from "@wolfpack/protocol";
+import type { Outbox } from "./outbox.js";
 
 export type LinkState = "idle" | "connecting" | "online" | "backoff" | "incompatible" | "unauthorized" | "replaced" | "stopped";
 const STICKY: ReadonlySet<LinkState> = new Set(["incompatible", "unauthorized", "replaced"]);
@@ -37,6 +38,14 @@ export interface HubLinkOptions {
   onRejected?: (names: string[]) => void;
   /** Called with the welcome's domain mismatches (informational; the hub registry decides domains). */
   onDomainMismatch?: (m: { wolf: string; reported: string[]; granted: string[] }[]) => void;
+  /** Durable contribution outbox. Items are sent on every (re)connect and removed when the hub acks them. */
+  outbox?: Outbox;
+  /** A receipt arrived. Must write it durably; the receipt.ack is sent only if this returns without throwing. */
+  onReceipt?: (r: LinkReceipt) => void;
+  /** A contribution was terminally rejected by the hub (kept under outbox/rejected). */
+  onContributionRejected?: (id: string, code: string | undefined, message: string | undefined) => void;
+  /** Resend an unacknowledged contribution after this long while online, ms. Default 15000. */
+  ackTimeoutMs?: number;
 }
 
 export interface LinkStatus {
@@ -65,6 +74,8 @@ export class HubLink {
   private stopped = false;
   private heartbeatDeadMs = 0;
   private sentWolves = new Map<string, string>();
+  private inflight = new Map<string, number>();
+  private resendTimer: NodeJS.Timeout | null = null;
   private readonly laptop: boolean;
   private readonly rand: () => number;
 
@@ -128,7 +139,29 @@ export class HubLink {
     if (this.send({ t: "wolf.remove", name })) this.sentWolves.delete(name);
   }
 
+  /** Queue a contribution durably (idempotency id generated unless given) and send it now if the link is up. Throws OutboxError when too large/full. */
+  contribute(wolf: string, contribution: Record<string, unknown>, id?: string): string {
+    if (!this.o.outbox) throw new Error("no outbox configured");
+    const item = this.o.outbox.enqueue(wolf, contribution, id);
+    this.flushOutbox();
+    return item.id;
+  }
+
+  /** Send every outbox item not already in flight (or whose ack is overdue). Oldest first. */
+  private flushOutbox(): void {
+    if (!this.o.outbox || this.st !== "online") return;
+    const now = Date.now();
+    const timeout = this.o.ackTimeoutMs ?? 15_000;
+    for (const it of this.o.outbox.list()) {
+      const at = this.inflight.get(it.id);
+      if (at !== undefined && now - at < timeout) continue;
+      if (this.send({ t: "contribute", id: it.id, wolf: it.wolf, contribution: it.contribution })) this.inflight.set(it.id, now);
+    }
+  }
+
   private clearTimers(): void {
+    if (this.resendTimer) clearInterval(this.resendTimer);
+    this.resendTimer = null;
     for (const k of ["timer", "deadTimer", "welcomeTimer"] as const) {
       if (this[k]) clearTimeout(this[k]!);
       this[k] = null;
@@ -253,6 +286,30 @@ export class HubLink {
         this.o.onDomainMismatch?.(f.domainMismatch);
       }
       this.syncDiff();
+      this.inflight.clear(); // a new connection: everything unacked is replayed (the hub dedups on the idempotency id)
+      this.flushOutbox();
+      if (this.o.outbox) {
+        this.resendTimer = setInterval(() => this.flushOutbox(), Math.max(50, Math.floor((this.o.ackTimeoutMs ?? 15_000) / 2)));
+        this.resendTimer.unref();
+      }
+    } else if (f.t === "contribute.ack") {
+      this.inflight.delete(f.id);
+      try {
+        if (f.status === "rejected") {
+          this.log(`hub rejected contribution ${JSON.stringify(f.id.slice(0, 64))}: ${f.code ?? "?"} ${f.message ?? ""}`);
+          this.o.outbox?.reject(f.id, `${f.code ?? "rejected"}: ${f.message ?? ""}`);
+          this.o.onContributionRejected?.(f.id, f.code, f.message);
+        } else this.o.outbox?.remove(f.id);
+      } catch (e) {
+        this.log(`outbox update for ${JSON.stringify(f.id.slice(0, 64))} failed: ${(e as Error).message}`);
+      }
+    } else if (f.t === "receipt") {
+      try {
+        this.o.onReceipt?.(f);
+        if (this.o.onReceipt) this.send({ t: "receipt.ack", id: f.id });
+      } catch (e) {
+        this.log(`could not write receipt ${JSON.stringify(f.name.slice(0, 80))} for ${JSON.stringify(f.wolf.slice(0, 64))}: ${(e as Error).message}`); // no ack: the hub resends
+      }
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
     } else if (f.t === "error") {

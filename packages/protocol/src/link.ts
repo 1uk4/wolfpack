@@ -82,7 +82,46 @@ export const LinkEndSchema = z.object({ t: z.literal("end"), id: Id });
 export const LinkCancelSchema = z.object({ t: z.literal("cancel"), id: Id });
 export const LinkRerrSchema = z.object({ t: z.literal("rerr"), id: Id, code: z.string().min(1), message: z.string().optional() });
 
+// Contribution + receipt frames (additive; LINK_PROTOCOL_VERSION unchanged).
+// worker -> hub  contribute      one outbox item. `id` is the idempotency id (stable across retries; the hub dedups on hostId+id, persisted).
+//                                `wolf` must be owned by the sending host (registry). `contribution` is the same JSON the HTTP route takes.
+// hub -> worker  contribute.ack  accepted | duplicate (both: drop the item) | rejected (terminal: do NOT retry; `code` says why).
+// hub -> worker  receipt         a librarian receipt for `wolf` (file `name`, text `content`); `id` is stable per receipt content.
+// worker -> hub  receipt.ack     the worker durably wrote the receipt; the hub stops resending it. Unacked receipts are resent on reconnect.
+export const LINK_CONTRIBUTION_MAX_BYTES = 1024 * 1024;
+export const LINK_RECEIPT_MAX_BYTES = 256 * 1024;
+export const LinkContributeSchema = z.object({
+  t: z.literal("contribute"),
+  id: z.string().min(1).max(128),
+  wolf: z.string().min(1).max(64),
+  contribution: z.record(z.string(), z.unknown()),
+});
+export const LinkContributeAckCodeSchema = z.enum(["foreign_wolf", "too_large", "invalid", "internal"]);
+export type LinkContributeAckCode = z.infer<typeof LinkContributeAckCodeSchema>;
+export const LinkContributeAckSchema = z.object({
+  t: z.literal("contribute.ack"),
+  id: z.string().min(1).max(128),
+  status: z.enum(["accepted", "duplicate", "rejected"]),
+  code: LinkContributeAckCodeSchema.optional(),
+  message: z.string().optional(),
+});
+export const LinkReceiptSchema = z.object({
+  t: z.literal("receipt"),
+  id: z.string().min(1).max(128),
+  wolf: z.string().min(1).max(64),
+  name: z.string().min(1).max(200),
+  content: z.string(),
+});
+export const LinkReceiptAckSchema = z.object({ t: z.literal("receipt.ack"), id: z.string().min(1).max(128) });
+export type LinkContribute = z.infer<typeof LinkContributeSchema>;
+export type LinkContributeAck = z.infer<typeof LinkContributeAckSchema>;
+export type LinkReceipt = z.infer<typeof LinkReceiptSchema>;
+
 export const LinkFrameSchema = z.discriminatedUnion("t", [
+  LinkContributeSchema,
+  LinkContributeAckSchema,
+  LinkReceiptSchema,
+  LinkReceiptAckSchema,
   LinkHelloSchema,
   LinkWelcomeSchema,
   LinkWolfAddSchema,

@@ -2,7 +2,9 @@ import { discoverWolves } from "@wolfpack/engine";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
 import { WorkerdServer } from "./proxy.js";
 import { HubLink, type LinkStatus } from "./link.js";
-import { insecureHubWarning, loadHubConfig, type HubConfig } from "./hub-config.js";
+import { insecureHubWarning, loadHubConfig, workerdConfigDir, type HubConfig } from "./hub-config.js";
+import { Outbox, writeReceiptFile } from "./outbox.js";
+import { dirname, join } from "node:path";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
 import type { LinkWolf } from "@wolfpack/protocol";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
@@ -24,6 +26,12 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Test seams for the link. */
   linkOptions?: { baseMs?: number; capMs?: number; rand?: () => number };
   wake?: Partial<WakeOptions>;
+  /** Librarian-ops root where receipts are written (`<kbOps>/receipts/<wolf>/`). Default env KB_OPS, else `<wolvesDir>/../librarian`. */
+  kbOps?: string;
+  /** Contribution outbox directory. Default `<configDir>/outbox`. */
+  outboxDir?: string;
+  /** Test seam: resend overdue contribution acks after this long, ms. */
+  ackTimeoutMs?: number;
 }
 
 export interface RunningWorkerd {
@@ -65,8 +73,16 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   if (hubCfg) {
     const warning = insecureHubWarning(hubCfg.hubUrl);
     if (warning) log(`[workerd] ${warning}`);
+    const kbOps = opts.kbOps ?? process.env.KB_OPS ?? join(dirname(root), "librarian");
+    const outbox = new Outbox(opts.outboxDir ?? join(opts.configDir ?? workerdConfigDir(), "outbox"));
     link = new HubLink({
       ...hubCfg,
+      outbox,
+      ackTimeoutMs: opts.ackTimeoutMs,
+      onReceipt: (r) => {
+        if (!supervisor.configs().some((c) => c.identity.name === r.wolf)) return log(`[workerd] receipt for ${JSON.stringify(r.wolf.slice(0, 64))} ignored: not a wolf on this host`);
+        writeReceiptFile(kbOps, r.wolf, r.name, r.content);
+      },
       laptop: opts.laptop,
       wolves: () => supervisor.configs().map(linkWolf),
       log,

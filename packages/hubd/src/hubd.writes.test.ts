@@ -40,7 +40,7 @@ function normalise(text: string): string[] {
   return text
     .split("\n")
     .filter(Boolean)
-    .map((l) => l.replace(/"at":"[^"]*"/g, '"at":"<at>"').replace(/work-[a-z0-9-]+-[a-z0-9]{4,}/gi, (m) => idOf(m)));
+    .map((l) => l.replace(/,"(by|tokenId|hostId)":"[^"]*"/g, "") /* the hub stamps attribution; work-ops do not */.replace(/"at":"[^"]*"/g, '"at":"<at>"').replace(/work-[a-z0-9-]+-[a-z0-9]{4,}/gi, (m) => idOf(m)));
 }
 
 describe("ledger byte compatibility", () => {

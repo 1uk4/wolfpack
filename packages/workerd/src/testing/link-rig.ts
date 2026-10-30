@@ -1,5 +1,5 @@
 /** In-process link harness: a real hubd (port 0, small timers), a real workerd with the fake wolf, and an HttpConsoleClient. */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket as WsClient } from "ws";
@@ -30,6 +30,17 @@ export interface LinkRig {
   mintWorker(hostId?: string): { token: string; tokenId: string };
   /** A bare WebSocket speaking raw frames (for impersonating a second worker or a version-skewed one). */
   rawLink(token: string): Promise<RawLink>;
+  /** Librarian-ops dirs: the hub's inbox + receipts roots, and the worker's receipts root (kbOps) and outbox dir. */
+  inboxRoot: string;
+  receiptsRoot: string;
+  kbOps: string;
+  outboxDir: string;
+  /** Close the hub and start a new one on the SAME data dir and port (workerd reconnects by itself). */
+  restartHub(): Promise<void>;
+  stopHub(): Promise<void>;
+  startHub(): Promise<void>;
+  /** Close workerd and start a new one with the same outbox/config (a worker restart). */
+  restartWorkerd(): Promise<void>;
   close(): Promise<void>;
 }
 export interface RawLink {
@@ -50,6 +61,9 @@ export interface LinkRigOptions {
   preRegister?: string[];
   /** Start workerd with no hub config (pair later). */
   noHub?: boolean;
+  /** Extra createHubServer options (limits, poll intervals). */
+  hubOptions?: Partial<Parameters<typeof createHubServer>[0]>;
+  ackTimeoutMs?: number;
 }
 
 const KEY = "rig-legacy-key-0123456789";
@@ -57,7 +71,15 @@ const KEY = "rig-legacy-key-0123456789";
 export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const hostId = o.hostId ?? "box";
   const dataDir = mkdtempSync(join(tmpdir(), "link-rig-hub-"));
-  const hub = await createHubServer({ dataDir, apiKey: KEY, port: 0, authPollMs: 30, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 } });
+  const ops = mkdtempSync(join(tmpdir(), "link-rig-ops-"));
+  const inboxRoot = join(ops, "hub", "inbox");
+  const receiptsRoot = join(ops, "hub", "receipts");
+  const kbOps = join(ops, "worker", "librarian");
+  const outboxDir = join(ops, "worker", "outbox");
+  mkdirSync(receiptsRoot, { recursive: true });
+  const hubOpts = { dataDir, apiKey: KEY, port: 0, authPollMs: 30, inboxRoot, receiptsRoot, receiptPollMs: 40, receiptAckTimeoutMs: 300, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 }, ...o.hubOptions };
+  const hub = await createHubServer(hubOpts);
+  const hubPort = hub.port;
   const store = createTokenStore(dataDir);
   const mintWorker = (h = hostId) => {
     const { code } = store.mintPairingCode({ kind: "worker", hostId: h });
@@ -74,16 +96,21 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     if (!r.ok) throw new Error(`pre-register ${name} failed: ${r.status}`);
   };
   for (const n of [...wolfNames, ...(o.preRegister ?? [])]) await registerWolf(n);
-  const workerd = await runWorkerd({
-    wolvesDir: root,
-    port: 0,
-    command: FAKE_COMMAND,
-    laptop: o.laptop,
-    hub: o.noHub ? false : { hubUrl: hub.url, token, hostId },
-    linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5 },
-    wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
-    log: () => {},
-  });
+  const startWorkerd = (url: string) =>
+    runWorkerd({
+      wolvesDir: root,
+      port: 0,
+      command: FAKE_COMMAND,
+      laptop: o.laptop,
+      hub: o.noHub ? false : { hubUrl: url, token, hostId },
+      linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5 },
+      wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
+      kbOps,
+      outboxDir,
+      ackTimeoutMs: o.ackTimeoutMs ?? 400,
+      log: () => {},
+    });
+  const workerd = await startWorkerd(hub.url);
   const client = new HttpConsoleClient({ baseUrl: workerd.url, hub: { baseUrl: hub.url, token } });
   const raws: WsClient[] = [];
   const rig: LinkRig = {
@@ -96,14 +123,32 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     dataDir,
     wolvesDir: root,
     store,
-    presence: () => hub.link.presence(hostId),
-    waitPresence: (p, ms = 8000) => until(() => hub.link.presence(hostId) === p, ms, `presence ${p} (is ${hub.link.presence(hostId)})`),
+    presence: () => rig.hub.link.presence(hostId),
+    waitPresence: (p, ms = 8000) => until(() => rig.hub.link.presence(hostId) === p, ms, `presence ${p} (is ${rig.hub.link.presence(hostId)})`),
     async registry(c) {
       const r = await fetch(`${hub.url}/v1/registry/${c}`, { headers: { "X-API-Key": KEY } });
       return ((await r.json()) as Record<string, any[]>)[c]!;
     },
     mintWorker,
     registerWolf,
+    inboxRoot,
+    receiptsRoot,
+    kbOps,
+    outboxDir,
+    async stopHub() {
+      await rig.hub.close();
+    },
+    async startHub() {
+      rig.hub = await createHubServer({ ...hubOpts, port: hubPort });
+    },
+    async restartHub() {
+      await rig.stopHub();
+      await rig.startHub();
+    },
+    async restartWorkerd() {
+      await rig.workerd.close();
+      rig.workerd = await startWorkerd(rig.hub.url);
+    },
     async eventually(cond, what, ms = 5000) {
       const end = Date.now() + ms;
       while (!(await cond())) {
@@ -131,9 +176,10 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     },
     async close() {
       for (const w of raws) w.terminate();
-      await workerd.close();
-      await hub.close();
+      await rig.workerd.close();
+      await rig.hub.close().catch(() => {});
       rmSync(dataDir, { recursive: true, force: true });
+      rmSync(ops, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
     },
   };

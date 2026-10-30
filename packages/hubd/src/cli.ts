@@ -53,7 +53,8 @@ const USAGE = `usage:
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
-env: HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
+env: HUBD_INBOX_ROOT / HUBD_RECEIPTS_ROOT (librarian inbox + receipts roots, e.g. /home/wolf-W1hOrJ/librarian/inbox; default <data-dir>/kb/ops/contributions and /receipts)
+     HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -186,7 +187,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
-  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

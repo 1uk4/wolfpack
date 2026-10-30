@@ -7,7 +7,7 @@
  * a matching X-API-Key and no bearer is accepted and its identity is the asserted X-Wolfpack-Actor (PROVISIONAL, asserted not proven).
  */
 import { createHash, timingSafeEqual } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -34,7 +34,8 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
-import { hubRoots } from "./layout.js";
+import { join } from "node:path";
+import { contributionsRoot, hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
   applyOps,
@@ -57,6 +58,7 @@ import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
+import { createLinkContributions, type LinkContributions } from "./link-contributions.js";
 import { createLink, type Link, type LinkTimers } from "./link.js";
 import { LINK_PATH } from "@wolfpack/protocol";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
@@ -117,6 +119,18 @@ export interface HubOptions {
   kbRetention?: KbRetention;
   /** @internal TEST-ONLY: shrink the worker-link heartbeat / dead / hello timers. */
   linkTimers?: Partial<LinkTimers>;
+  /** Librarian inbox root the hub delivers contributions into (`<root>/<wolf>/`). Default `<dataDir>/kb/ops/contributions`; on sfo-01 Dewey's `.../librarian/inbox`. CLI: --inbox-root / env HUBD_INBOX_ROOT. */
+  inboxRoot?: string;
+  /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. CLI: --receipts-root / env HUBD_RECEIPTS_ROOT. */
+  receiptsRoot?: string;
+  /** Receipts lane poll, ms (default 3000; 0 = off). */
+  receiptPollMs?: number;
+  /** Resend an unacknowledged receipt after this long, ms (default 10000). */
+  receiptAckTimeoutMs?: number;
+  /** Per-item limit for contributions over the link, bytes (default 1 MiB). */
+  linkContributionMaxBytes?: number;
+  /** Bound on the persisted idempotency / delivered id sets (default 100000). */
+  linkSeenMax?: number;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -277,7 +291,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     exclusive: (fn) => kbWriter!.exclusive(fn),
   });
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
-  const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
+  const writer = createWorkWriter({
+    roots,
+    release: () => writerLock.release(),
+    gate: opts.writeGate,
+    // Attribution lives on the ledger events themselves (by / tokenId / hostId); the old auth/attribution.jsonl side log is retired.
+    stamp: (actor) => {
+      const info = TOKEN_INFO.get(actor);
+      return { by: actor.id, ...(info ? { tokenId: info.tokenId, ...(info.hostId ? { hostId: info.hostId } : {}) } : {}) };
+    },
+  });
   const domainCache = new Map<string, string>(); // work item id -> domain
   const bus = createEventBus({
     bufferSize: opts.eventBufferSize,
@@ -310,19 +333,6 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     }
   });
   writer.onAppendFailed(() => bus.broadcastResync());
-  // Attribution of token-authenticated writes: the ledger event schema has no actor field, so tokenId + hostId go to a side log
-  // (<dataDir>/auth/attribution.jsonl, one line per write) naming the events that write appended.
-  writer.onAppended(({ actor, events }) => {
-    const info = TOKEN_INFO.get(actor);
-    if (!info) return;
-    try {
-      const line = JSON.stringify({ at: new Date().toISOString(), ...info, actor, events: events.map((e) => ({ id: e.id, type: e.type })) });
-      mkdirSync(`${opts.dataDir}/auth`, { recursive: true });
-      appendFileSync(`${opts.dataDir}/auth/attribution.jsonl`, line + "\n", { mode: 0o600 });
-    } catch (e) {
-      console.error("hubd: could not record write attribution:", e);
-    }
-  });
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
   let registry: ReturnType<typeof createRegistry>;
@@ -343,6 +353,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
   let link!: Link;
+  let linkContrib!: LinkContributions;
+  const inboxRoot = opts.inboxRoot ?? contributionsRoot(opts.dataDir);
+  const receiptsRoot = opts.receiptsRoot ?? join(roots.opsRoot, "receipts");
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
@@ -439,7 +452,27 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       revokeListeners.add(l);
       return () => void revokeListeners.delete(l);
     };
-    link = createLink({ authenticate, registry, timers: opts.linkTimers });
+    const hostOf = (wolf: string): string | undefined => {
+      try {
+        const w = registry.get("wolves", wolf) as { host?: string; status?: string };
+        return w.status === "retired" ? undefined : w.host || undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    linkContrib = createLinkContributions({
+      dataDir: opts.dataDir,
+      inboxRoot,
+      receiptsRoot,
+      hostOf,
+      send: (h, f) => link.sendToHost(h, f),
+      receiptPollMs: opts.receiptPollMs,
+      receiptAckTimeoutMs: opts.receiptAckTimeoutMs,
+      maxItemBytes: opts.linkContributionMaxBytes,
+      seenMax: opts.linkSeenMax,
+    });
+    link = createLink({ authenticate, registry, timers: opts.linkTimers, contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
+    link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));
     revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
@@ -539,7 +572,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "submitContribution": {
           const actor = writeActor(req);
           try {
-            const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res));
+            const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res), inboxRoot);
             return send(res, stored.duplicate ? 200 : 201, stored);
           } catch (e) {
             if (e instanceof ContributionError) throw new HubError(e.code, e.message);
@@ -696,6 +729,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         stopWatcher();
         tokensFlush();
         bus.closeAll();
+        linkContrib?.stop();
         link.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));

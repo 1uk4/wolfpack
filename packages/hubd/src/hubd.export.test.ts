@@ -117,7 +117,7 @@ describe("hubd export / import", () => {
     const target = join(mk(), "imported");
     importHub({ dataDir: target, in: out });
     const a = tree(s.dir);
-    for (const k of Object.keys(a)) if (k === "run" || k.startsWith("run/") || k === "tmp" || k.startsWith("tmp/")) delete a[k];
+    for (const k of Object.keys(a)) if (k === "run" || k.startsWith("run/") || k === "tmp" || k.startsWith("tmp/") || k === "link" || k.startsWith("link/")) delete a[k]; // link/ = transient link state (idempotency ids), not exported
     // import gives every KB revision log a NEW epoch (a new lineage); everything else is byte-identical
     const b = tree(target);
     const stateKeys = Object.keys(a).filter((k) => /^kb-rev\/[^/]+\/state\.json$/.test(k));

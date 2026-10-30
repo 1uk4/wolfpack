@@ -173,7 +173,7 @@ function withLock<T>(file: string, fn: () => T, o: LockOptions = {}): T {
 /**
  * The actor a token acts as: console/browser = the owner as operator; worker = its hostId as a `wolf` actor.
  * LIMITATION: a worker token is attributed to its HOST, not to an individual wolf on that host (per-wolf attribution comes with the
- * link tickets). The server records tokenId + hostId beside every work write made with a token (auth/attribution.jsonl).
+ * link tickets). The hub stamps by / tokenId / hostId on every ledger event it writes.
  */
 export function actorOf(t: Pick<TokenRecord, "kind" | "hostId" | "owner">): Actor {
   return t.kind === "worker" ? { id: t.hostId ?? "unknown-host", kind: "wolf" } : { id: t.owner, kind: "operator" };

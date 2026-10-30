@@ -27,6 +27,8 @@ import {
   type LinkErrorCode,
   type LinkFrame,
   type LinkHello,
+  type LinkContribute,
+  type LinkContributeAck,
   type LinkPresence,
 } from "@wolfpack/protocol";
 import type { AuthIdentity } from "./auth.js";
@@ -46,6 +48,11 @@ export interface LinkOptions {
   /** @internal TEST-ONLY: shrink the heartbeat / dead / hello timers. */
   timers?: Partial<LinkTimers>;
   log?: (m: string) => void;
+  /** Contribution / receipt handlers (link-contributions.ts). Without them those frames are ignored. */
+  contributions?: {
+    onContribute: (hostId: string, f: LinkContribute) => LinkContributeAck | Promise<LinkContributeAck>;
+    onReceiptAck: (hostId: string, id: string) => void;
+  };
 }
 
 export type PresenceListener = (hostId: string, presence: LinkPresence) => void;
@@ -250,6 +257,11 @@ export function createLink(opts: LinkOptions): Link {
         return;
       case "wolf.remove":
         return opts.registry.removeWolf(c.hostId, f.name);
+      case "contribute":
+        if (opts.contributions) send(c, await opts.contributions.onContribute(c.hostId, f));
+        return;
+      case "receipt.ack":
+        return opts.contributions?.onReceiptAck(c.hostId, f.id);
       default:
         return; // pong, and relay frames (next ticket): nothing to do
     }

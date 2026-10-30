@@ -5,3 +5,4 @@ export * from "./run.js";
 export * from "./hub-config.js";
 export * from "./link.js";
 export * from "./wake.js";
+export * from "./outbox.js";

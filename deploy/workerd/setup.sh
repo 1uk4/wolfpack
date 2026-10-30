@@ -85,9 +85,21 @@ cmd_setup() {
   node="$(command -v node || true)"
   [[ $node == /usr/bin/node || $node == /usr/local/bin/node ]] || need "node must be in /usr/bin or /usr/local/bin (found: ${node:-none}); the sandbox hides /home" false
   [[ -n $node ]] || node=/usr/bin/node
+  local major
+  major="$("$node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  need "node >= 22 required (found major $major)" test "${major:-0}" -ge 22
   need "$HERE/workerd.service missing" test -f "$HERE/workerd.service"
   need "$HERE/workerd.env.example missing" test -f "$HERE/workerd.env.example"
   # Ports: hubd 3150 and the agent 3141 must be left alone; ours must be free (or already ours).
+  need "ss is required for the port check but is missing" command -v ss
+  if [[ -e $ENV_FILE ]]; then
+    local envport envann
+    envport="$(envval "$ENV_FILE" WORKERD_PORT)"; envann="$(envval "$ENV_FILE" WORKERD_ANNOUNCE)"
+    if [[ -n $envport && $envport != "$PORT" ]]; then echo "NOTICE: $ENV_FILE exists; its WORKERD_PORT=$envport is used, --port $PORT is ignored"; fi
+    if [[ -n $envann && $envann != "$(IFS=,; echo "${ANNOUNCE[*]}")" ]]; then echo "NOTICE: $ENV_FILE exists; its WORKERD_ANNOUNCE=$envann is used, --announce is ignored"; fi
+    [[ -z $envport ]] || PORT="$envport"
+  fi
+  need "bad port $PORT" valid_port "$PORT"
   foreign="$(port_foreign_listener "$PORT" || true)"
   [[ -z $foreign ]] || need "port $PORT is already in use by something other than workerd: $foreign" false
   if [[ -e $ENV_FILE ]]; then no_spawn_checks "$ENV_FILE"; else no_spawn_checks "$HERE/workerd.env.example"; fi
@@ -103,7 +115,9 @@ cmd_setup() {
 
   log "directories"
   run install -d -o "$WU" -g "$WG" -m 0700 "$DATA_DIR" "$DATA_DIR/ops"
-  run install -d -o root -g root -m 0755 "$OPT" "$OPT/releases" "$ENV_DIR"
+  run install -d -o root -g root -m 0755 "$OPT" "$OPT/releases"
+  # /etc/wolfpack is shared with hubd: create only if missing, never reset its owner or mode.
+  [[ -d $ENV_DIR ]] || run install -d -o root -g root -m 0755 "$ENV_DIR"
 
   log "env file (written only if missing)"
   if [[ -e $ENV_FILE ]]; then
@@ -114,6 +128,7 @@ cmd_setup() {
   else
     (
       umask 077
+      trap 'rm -f "$ENV_FILE.tmp"' EXIT
       sed -e "s|^WORKERD_PORT=.*|WORKERD_PORT=$PORT|" -e "s|^WORKERD_ANNOUNCE=.*|WORKERD_ANNOUNCE=$(IFS=,; echo "${ANNOUNCE[*]}")|" "$HERE/workerd.env.example" >"$ENV_FILE.tmp"
       chown root:root "$ENV_FILE.tmp"; chmod 600 "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
     )
@@ -125,6 +140,7 @@ cmd_setup() {
   fi
   run systemctl daemon-reload
   run systemctl enable workerd.service
+  if systemctl is-active --quiet workerd 2>/dev/null; then echo "NOTE: workerd is running: restart it (systemctl restart workerd) to pick up a changed env file or unit."; fi
   echo "setup done. Next: install a bundle, register/pair (RUNBOOK), then 'systemctl start workerd'."
 }
 
@@ -156,8 +172,9 @@ cmd_install() {
 }
 
 cmd_rollback() {
-  if ((DRY)); then echo "DRY-RUN: swap $OPT/current and $OPT/previous (needs $OPT/previous to exist), restart workerd if active"; [[ -L $OPT/previous ]] || echo "WOULD FAIL: no $OPT/previous"; return; fi
+  if ((DRY)); then echo "DRY-RUN: swap $OPT/current and $OPT/previous (needs $OPT/previous to exist), restart workerd if active"; [[ -L $OPT/previous ]] || echo "WOULD FAIL: no $OPT/previous"; [[ -f $OPT/current/workerd.mjs ]] || echo "WOULD FAIL: $OPT/current does not resolve"; return; fi
   [[ -L $OPT/previous ]] || die "no $OPT/previous to roll back to"
+  [[ -L $OPT/current && -f $OPT/current/workerd.mjs ]] || die "$OPT/current does not resolve to a release; refusing to flip"
   local cur prev
   cur="$(readlink -f "$OPT/current")"; prev="$(readlink -f "$OPT/previous")"
   [[ -f $prev/workerd.mjs ]] || die "$prev has no workerd.mjs"
@@ -168,6 +185,11 @@ cmd_rollback() {
 }
 
 cmd_uninstall() {
+  if ((PURGE)); then
+    local refs
+    refs="$(grep -rlsF "$DATA_DIR/kb-mirror" /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /home/*/.env /home/*/agent/.env 2>/dev/null | grep -v "^$ENV_FILE$" || true)"
+    [[ -z $refs ]] || need "refusing --purge: still referenced by: $(echo "$refs" | tr '\n' ' ')(repoint KB_BASE first)" false
+  fi
   log "uninstall workerd (Hal's unit, Dewey's tree and every KB copy are never touched)"
   if ((DRY)) || systemctl cat workerd.service >/dev/null 2>&1; then run systemctl disable --now workerd.service; else echo "workerd.service not installed; skipping disable"; fi
   run rm -f "$UNIT"

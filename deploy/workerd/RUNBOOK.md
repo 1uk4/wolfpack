@@ -31,6 +31,7 @@ systemctl is-active wolf-ETAy7b; pgrep -u wolf-ETAy7b -fc . ; id workerd        
 ## C. Stage (Mac)
 ```
 S="ssh -i ~/.ssh/wolfpack -o IdentitiesOnly=yes -o IdentityAgent=none"
+$S root@100.120.154.69 'mkdir -p /root/workerd-stage/bundle /root/workerd-stage/deploy'
 rsync -a --delete -e "$S" /tmp/workerd-bundle/ root@100.120.154.69:/root/workerd-stage/bundle/
 rsync -a --delete -e "$S" deploy/workerd/ root@100.120.154.69:/root/workerd-stage/deploy/
 ```
@@ -40,40 +41,48 @@ cd /root/workerd-stage/deploy
 ./setup.sh --dry-run setup --announce hal --port 7142
 ./setup.sh --dry-run install --bundle /root/workerd-stage/bundle
 ```
-Resolve every `WOULD FAIL` line first.
+Resolve every `WOULD FAIL` line first. If `/etc/wolfpack/workerd.env` already exists, its `WORKERD_PORT` and `WORKERD_ANNOUNCE` win and `--port`/`--announce` are ignored (setup prints a NOTICE).
 ## E. Install (sfo-01, root); the service is enabled but not started yet
 ```
 ./setup.sh setup --announce hal --port 7142
 ./setup.sh install --bundle /root/workerd-stage/bundle
 ```
-## G. Register and pair (sfo-01, root), then start
-Order: host and wolf on the hub, then pair, then start. Use a console token (hubd's `/root/hubd-admin.token`; never echo it):
+Sandbox smoke test (same properties as the unit; node must not crash on `os.networkInterfaces()`, which needs AF_NETLINK):
 ```
-H=http://100.120.154.69:3150; A="Authorization: Bearer $(cat /root/hubd-admin.token)"; J='Content-Type: application/json'
-curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/hosts  -d '{"name":"sfo-01"}'
-curl -sS -H "$A" -H "$J" -X POST $H/v1/registry/wolves -d '{"name":"hal","host":"sfo-01","domains":["personal","snapjack","wolfpack"]}'   # each 201
-curl -sS -H "$A" $H/v1/registry/wolves
-CODE=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id sfo-01 --data-dir /var/lib/hubd)   # single-use, 10 minutes; take the code from the output
-runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs pair http://100.120.154.69:3150 <code>
-systemctl start workerd
+systemd-run --wait --pipe -p User=workerd -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
+  -p RestrictAddressFamilies="AF_INET AF_INET6 AF_UNIX AF_NETLINK" -p CapabilityBoundingSet= -p SystemCallFilter=@system-service -p SystemCallErrorNumber=EPERM \
+  /usr/bin/node -e 'require("os").networkInterfaces(); console.log("netif ok")'
 ```
-(If `/root/hubd-admin.token` does not exist, mint a console token as in `deploy/hubd/RUNBOOK.md` §5.) Plain http is accepted inside Tailscale only; workerd prints a warning.
+## F. Register, pair, start (sfo-01, root)
+Order: host and wolf on the hub, then pair, then start. The admin token must never appear in argv, so curl reads the header from a process substitution (a bash builtin `printf`; `cat` only reads the file):
+```
+H=http://100.120.154.69:3150; J='Content-Type: application/json'
+hubcurl() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$(cat /root/hubd-admin.token)") -H "$J" "$@"; }
+hubcurl -X POST $H/v1/registry/hosts  -d '{"name":"sfo-01"}'
+hubcurl -X POST $H/v1/registry/wolves -d '{"name":"hal","host":"sfo-01","domains":["personal","snapjack","wolfpack"]}'   # each 201
+hubcurl $H/v1/registry/wolves
+CODE=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id sfo-01 --data-dir /var/lib/hubd | sed -n 's/^pairing code: *\([A-Za-z0-9]*\).*/\1/p')   # single-use, 10 minutes
+test -n "$CODE" || echo "no code extracted: read it from the pair output by hand"
+( cd / && runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs pair http://100.120.154.69:3150 "$CODE" )
+test -f /var/lib/workerd/hub.json && echo "hub.json present" || echo "NO hub.json: the unit will NOT start (ConditionPathExists)"
+systemctl start workerd; sleep 3; systemctl is-active workerd
+```
+`systemctl start` returns success even when `ConditionPathExists` skips the unit, so always check `is-active` and `hub.json`. The code is passed to `pair` in argv for a few seconds; it is single-use and expires, unlike the admin token. (If `/root/hubd-admin.token` does not exist, mint a console token as in `deploy/hubd/RUNBOOK.md` §5.) Plain http is accepted inside Tailscale only; workerd prints a warning.
 
-## F. Verify
+## G. Verify
 ```
 journalctl -u workerd -n 30 --no-pager | grep -E 'link-only|hub link: online \(host sfo-01\)'   # both lines expected
-ss -tnp state established '( dport = :3150 )' | grep workerd/node                              # established to :3150
-ss -ltnp | grep ':7142'                                                                        # 127.0.0.1 only
-ps -o user= -p "$(systemctl show -p MainPID --value workerd)"                                  # workerd
-pgrep -u workerd -a . | wc -l                                                                  # one process: no wolfd children
-ls /var/lib/workerd/kb-mirror/domains; du -sh /var/lib/workerd/kb-mirror                       # fills in (personal, snapjack, wolfpack)
-runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs kb-compare --syncthing /var/wolfpack/kb/base --mirror /var/lib/workerd/kb-mirror --layout base
+ss -tnpe state established '( dport = :3150 )' | grep -E "users:\(\(\"node\"" | grep "uid:$(id -u workerd)"   # established to :3150 as the workerd uid
+ss -ltnp | grep ':7142'                                                                         # 127.0.0.1 only
+ps -o user= -p "$(systemctl show -p MainPID --value workerd)"                                   # workerd
+pgrep -u workerd -a . | wc -l                                                                   # 1: no wolfd children
+ls /var/lib/workerd/kb-mirror/domains; du -sh /var/lib/workerd/kb-mirror                        # fills in (personal, snapjack, wolfpack)
+/usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs kb-compare --syncthing /var/wolfpack/kb/base --mirror /var/lib/workerd/kb-mirror --layout base
 ```
-`kb-compare` must report CLEAN. If the `workerd` user cannot read `/var/wolfpack/kb/base`, run it as root instead (it is read-only; `--syncthing` is only read, never written):
-`/usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs kb-compare --syncthing /var/wolfpack/kb/base --mirror /var/lib/workerd/kb-mirror --layout base`.
-Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l` same as before); `journalctl -k | grep -i seccomp` has nothing about workerd; `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`.
+`kb-compare` must report CLEAN. It is read-only (`--syncthing` is only read); run it as root, since the `workerd` user may not be able to read `/var/wolfpack/kb/base`.
+Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l`, same as before); `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`. (A seccomp journal check proves little here: `SystemCallErrorNumber=EPERM` makes filtered calls fail quietly, so rely on the sandbox smoke test in E.)
 
 ## Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
 - Stop quickly: `systemctl disable --now workerd`. Hal and hubd are unaffected; the hub just sees the host offline.
-- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json, mirror), the env file and the user. `uninstall --purge` also deletes `/var/lib/workerd` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.
+- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json, mirror), the env file and the user. `uninstall --purge` refuses while any systemd unit or `/home/*/.env` still references `/var/lib/workerd/kb-mirror`; otherwise it deletes `/var/lib/workerd` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.

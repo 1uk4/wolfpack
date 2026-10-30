@@ -16,7 +16,7 @@ Group=workerd
 # Root-owned, mode 600; systemd reads it as root before dropping privileges.
 EnvironmentFile=/etc/wolfpack/workerd.env
 # Guards ($$ is a literal $): link-only on, a wolf to announce, feed off, loopback bind, port numeric 1024-65535 and not 3141/3150/7141.
-ExecStartPre=/bin/bash -c '[[ "$${WORKERD_LINK_ONLY}" == 1 && -n "$${WORKERD_ANNOUNCE}" && "$${WORKERD_FEED}" == 0 ]] || { echo "workerd.env must set WORKERD_LINK_ONLY=1, WORKERD_ANNOUNCE and WORKERD_FEED=0" >&2; exit 1; }; [[ "$${WORKERD_HOST}" == 127.0.0.1 ]] || { echo "WORKERD_HOST must be 127.0.0.1" >&2; exit 1; }; [[ "$${WORKERD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${WORKERD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 && p != 3150 && p != 7141 )) || { echo "bad WORKERD_PORT=$${WORKERD_PORT}" >&2; exit 1; }'
+ExecStartPre=/bin/bash -c '[[ "$${WORKERD_LINK_ONLY}" == 1 && -n "$${WORKERD_ANNOUNCE}" && "$${WORKERD_FEED}" == 0 && "$${WORKERD_KB_LAYOUT}" == base ]] || { echo "workerd.env must set WORKERD_LINK_ONLY=1, WORKERD_ANNOUNCE, WORKERD_FEED=0 and WORKERD_KB_LAYOUT=base" >&2; exit 1; }; [[ "$${WORKERD_HOST}" == 127.0.0.1 ]] || { echo "WORKERD_HOST must be 127.0.0.1" >&2; exit 1; }; [[ "$${WORKERD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${WORKERD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 && p != 3150 && p != 7141 )) || { echo "bad WORKERD_PORT=$${WORKERD_PORT}" >&2; exit 1; }'
 ExecStart=@NODE@ /opt/wolfpack-workerd/current/workerd.mjs --link-only --host ${WORKERD_HOST} --port ${WORKERD_PORT}
 Restart=on-failure
 RestartSec=5
@@ -46,7 +46,8 @@ RestrictRealtime=yes
 LockPersonality=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required: os.networkInterfaces() (wake.ts polls it) crashes node without it (confirmed on sfo-01).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM

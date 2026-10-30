@@ -34,6 +34,8 @@ import {
   today,
   type DomainEntry,
 } from "../domains.js";
+import { assertNotHubMirror } from "@wolfpack/kb/shared";
+import { hubFromEnv, redactUrl, registerDomainOnHub, removeDomainOnHub } from "../hub-registry.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 import { prompt, confirm, multiSelect } from "../prompts.js";
@@ -168,7 +170,9 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   assertValidDomainName(name);
 
   const reg = loadRegistry();
-  if (domainExists(reg, name)) {
+  const hub = hubFromEnv();
+  // With a hub, a re-run is allowed: the hub's 409 ("already registered") decides, and the local registry is brought in line.
+  if (!hub && domainExists(reg, name)) {
     console.error(c.red(`Domain "${name}" already exists.`));
     process.exit(1);
   }
@@ -186,15 +190,33 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   console.log(c.dim(`  label:       ${label}`));
   console.log(c.dim(`  description: ${description || "(none)"}`));
   console.log(c.dim(`  registry:    ${registryPath()}`));
-  console.log(c.dim(`  scaffolds:   ${path.join(kbBaseDir(loadConfig()), "domains", name)}/`));
+  if (hub) console.log(c.dim(`  hub:         ${redactUrl(hub.baseUrl)} (the hub creates the domain folder)`));
+  else console.log(c.dim(`  scaffolds:   ${path.join(kbBaseDir(loadConfig()), "domains", name)}/`));
   if (!opts.yes && !(await confirm("Proceed?", true))) {
     console.log(c.dim("Aborted \u2014 no changes made."));
     return;
   }
 
   const entry: DomainEntry = { label, description, created: today() };
+  let hubResult: "created" | "exists" | undefined;
+  if (hub) {
+    // The hub owns the KB tree: register there; never scaffold into this machine's (read-only mirror) KB path.
+    try {
+      hubResult = await registerDomainOnHub(hub, { name, label, description, created: entry.created });
+    } catch (err) {
+      console.error(c.red(`✗ ${err instanceof Error ? err.message : err}`));
+      process.exit(1);
+    }
+  }
   reg.domains[name] = entry;
   saveRegistry(reg);
+
+  if (hub) {
+    console.log(hubResult === "exists" ? c.yellow(`· Domain "${name}" is already registered on the hub`) : c.green(`✓ Declared domain "${name}" on the hub`));
+    console.log(c.dim("  Local scaffold skipped: the hub creates the domain folder."));
+    await offerSubscription(name, opts);
+    return;
+  }
 
   // Scaffold the hub-side KB base folder so the domain is immediately visible
   // to `domain list` and ready to mirror. Authoritative provisioning (Dewey
@@ -340,6 +362,7 @@ async function applySubscription(w: SubscribableWolf, domain: string, add: boole
 function scaffoldDomainFolder(name: string, entry: DomainEntry): void {
   const base = kbBaseDir(loadConfig());
   const domainDir = path.join(base, "domains", name);
+  assertNotHubMirror(domainDir);
   fs.mkdirSync(path.join(domainDir, "entries"), { recursive: true });
   // Syncthing marker: without `.stfolder` the mirror errors "folder marker
   // missing" and syncs nothing. Scaffold it now so the domain is sync-ready the
@@ -416,12 +439,29 @@ async function domainRm(name: string | undefined, opts: DomainOpts): Promise<voi
     return;
   }
 
+  const hub = hubFromEnv();
+  let hubResult: "removed" | "absent" | undefined;
+  if (hub) {
+    try {
+      hubResult = await removeDomainOnHub(hub, name);
+    } catch (err) {
+      console.error(c.red(`✗ ${err instanceof Error ? err.message : err}`));
+      process.exit(1);
+    }
+  }
   delete reg.domains[name];
   saveRegistry(reg);
+  if (hub) {
+    if (hubResult === "absent") console.log(c.yellow(`· The hub does not know "${name}" (already removed); cleared the local declaration.`));
+    else console.log(c.green(`✓ Removed domain declaration "${name}" on the hub`));
+    console.log(c.dim("  KB base domains.yaml not touched: the hub owns it."));
+    return;
+  }
   await pushRegistry();
   // Refresh the deployed registry copy; leave the KB folder on disk for audit.
   try {
     const base = kbBaseDir(loadConfig());
+    assertNotHubMirror(path.join(base, "domains.yaml"));
     if (fs.existsSync(base)) fs.writeFileSync(path.join(base, "domains.yaml"), yamlStringify(reg));
   } catch {
     /* hub not present */

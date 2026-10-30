@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { assertNotHubMirror } from "@wolfpack/kb/shared";
 import { loadConfig, getHost, kbBaseDir, type CliConfig } from "./config.js";
 import { registryPath } from "./domains.js";
 import { AgentClient } from "./agent-client.js";
@@ -41,6 +42,11 @@ export async function deployDomainsRegistry(
   // Local librarian: the hub KB base IS the librarian's KB base.
   if (lib.host === "local") {
     const dest = path.join(kbBaseDir(config), "domains.yaml");
+    try {
+      assertNotHubMirror(dest);
+    } catch (err) {
+      return { ok: false, note: err instanceof Error ? err.message : String(err) };
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, content);
     return { ok: true, note: `local: ${dest}` };

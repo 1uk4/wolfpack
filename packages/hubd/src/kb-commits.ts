@@ -186,7 +186,7 @@ export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: K
 
 // ------------------------------------------------------------------ durable io
 
-function fsyncPath(p: string): void {
+export function fsyncPath(p: string): void {
   const fd = openSync(p, "r");
   try {
     fsyncSync(fd);
@@ -195,7 +195,7 @@ function fsyncPath(p: string): void {
   }
 }
 
-function fsyncDir(dir: string): void {
+export function fsyncDir(dir: string): void {
   try {
     fsyncPath(dir);
   } catch (e) {
@@ -214,7 +214,7 @@ function mkdirDurable(dir: string): void {
   for (const d of created) fsyncDir(dirname(d));
 }
 
-function writeDurable(file: string, data: string | Buffer): void {
+export function writeDurable(file: string, data: string | Buffer): void {
   mkdirDurable(dirname(file));
   const tmp = `${file}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
@@ -470,7 +470,7 @@ function plan(roots: KbRoots, req: KbCommitRequest): Planned[] {
 // ------------------------------------------------------------------ commit
 
 export interface KbCommitFaults {
-  /** @internal TEST-ONLY: called at "journal" | "file:<i>" | "ledger" | "journal-drop" | "rollback"; throw to inject a failure. */
+  /** @internal TEST-ONLY: called at "journal" | "file:<i>" | "ledger" | "journal-drop" | "committed" | "rollback"; throw to inject a failure. */
   at?: (stage: string) => void;
   /** @internal TEST-ONLY: when true an injected failure behaves like a crash (no in-process rollback; recovery must fix it). */
   crash?: boolean;
@@ -543,6 +543,11 @@ export function applyKbCommit(roots: KbRoots, dataDir: string, req: KbCommitRequ
     if (e instanceof HubError) throw e;
     throw new HubError("engine_error", "kb commit failed and was rolled back");
   }
+  try {
+    stage("committed"); // TEST-ONLY seam: a crash after the journal drop, before the revision is recorded
+  } catch {
+    throw new HubError("engine_error", "kb commit applied but the process stopped before it was recorded (simulated crash)");
+  }
   const domains = [...new Set(planned.map((p) => p.change.domain))];
   return {
     committed: planned.length,
@@ -558,6 +563,8 @@ export interface KbWriterOptions {
   /** Called per domain after a committed batch with the entry ids in it (only when there are some). */
   onChanged: (entryIds: string[], domain: string) => void;
   faults?: KbCommitFaults;
+  /** Called inside the commit's queue job with the applied batch (the revision log records it). Failure is logged, never fails the commit: the poll scan picks the files up. */
+  onCommitted?: (out: KbCommitResponse) => void;
 }
 
 /** The KB writer: takes the lock, recovers an interrupted batch, serialises commits. */
@@ -591,6 +598,11 @@ export function createKbWriter(opts: KbWriterOptions) {
           if (e instanceof KbRollbackError) poisoned = true;
           throw e;
         }
+        try {
+          opts.onCommitted?.(out);
+        } catch (e) {
+          console.error("hubd: kb revision record failed (the next scan will catch up):", e);
+        }
         for (const domain of out.domains) {
           const ids = out.files.filter((f) => f.domain === domain && f.path.startsWith("entries/")).map((f) => f.path.slice(8, -3));
           if (ids.length === 0) continue;
@@ -602,6 +614,11 @@ export function createKbWriter(opts: KbWriterOptions) {
         }
         return out;
       });
+    },
+    /** Run `fn` on the writer queue (revision scans); undefined result when the hub is shutting down. */
+    exclusive<T>(fn: () => T): Promise<T | undefined> {
+      if (closing) return Promise.resolve(undefined);
+      return queue.run(() => (closing ? undefined : fn()));
     },
     /** Release the lock after the commits already queued have drained. */
     close(): Promise<void> {

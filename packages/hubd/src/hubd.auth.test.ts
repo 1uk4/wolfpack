@@ -268,9 +268,8 @@ describe("hubd token auth", () => {
       const t0 = Date.now();
       const impatient = createTokenStore(dir, () => clock, { waitMs: 0 });
       expect(() => impatient.mintPairingCode(CON)).toThrow(/locked/);
-      const code = "x"; // the hub itself fails fast too (default authLockWaitMs 0): 409 busy, retryable, no stall
-      const r = await pairVia({ label: "x", kind: "console" }, code);
-      expect([401, 409]).toContain(r.status);
+      const r = await pairVia({ label: "x", kind: "console" }, "x"); // the hub fails fast too (authLockWaitMs 0): 409 busy, no stall
+      expect(r.status).toBe(409);
       expect(Date.now() - t0).toBeLessThan(1000);
       expect(readFileSync(lockPath(), "utf8")).toBe("someone-else"); // not stolen, not removed
     });
@@ -310,15 +309,12 @@ describe("hubd token auth", () => {
     it("release only removes a lock that still holds our nonce", () => {
       const s2 = createTokenStore(dir, () => clock, { waitMs: 0 });
       // another process replaced our lock mid-operation (we were judged stale): its lock must survive our release
-      const orig = s2.mintPairingCode;
-      void orig;
       let swapped = false;
-      const c = s2.withLockForTest(() => {
+      s2.withLockForTest(() => {
         rmSync(lockPath());
         writeFileSync(lockPath(), "other-nonce");
         swapped = true;
       });
-      void c;
       expect(swapped).toBe(true);
       expect(readFileSync(lockPath(), "utf8")).toBe("other-nonce");
     });

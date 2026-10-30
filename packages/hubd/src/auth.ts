@@ -101,6 +101,7 @@ export interface LockOptions {
  * stat and our rename, put it back (link fails if yet another took the path). Returns true when WE removed a stale lock.
  */
 export function tryBreakStaleLock(lock: string, staleMs: number): boolean {
+  // Known best-effort window: stat -> rename is not atomic; a live lock refreshed in between is detected and restored below, not prevented.
   try {
     if (Date.now() - statSync(lock).mtimeMs <= staleMs) return false;
   } catch {

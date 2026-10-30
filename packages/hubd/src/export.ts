@@ -7,6 +7,7 @@
  *   kb/base/**                       the KB (domains.yaml, domains/<d>/entries + work/*.md, _registry.md, _digest.json, INDEX.md)
  *   kb/ops/contributions/**          contributions incl. _processed and _bad
  *   registry/registry.json           the registry
+ *   kb-rev/**                        KB revision counters, change logs and manifests (keeps the epoch, so workers need no resync)
  * EXCLUDED: run/ (locks, run file, KB commit journal: process state), tmp/ (write scratch), and anything else (e.g. a
  * DEV-SNAPSHOT marker, other kb/ops lanes, other ledger/ files); they are reported in `skipped`.
  *
@@ -43,7 +44,7 @@ export const MANIFEST_NAME = "manifest.json";
 const WORK_LEDGER = "ledger/work-events.jsonl";
 const KB_LEDGER = "ledger/events.jsonl";
 const INCLUDE_FILES = [WORK_LEDGER, KB_LEDGER, "registry/registry.json"];
-const INCLUDE_TREES = ["kb/base", "kb/ops/contributions"];
+const INCLUDE_TREES = ["kb/base", "kb/ops/contributions", "kb-rev"];
 
 export interface ManifestFile {
   path: string;

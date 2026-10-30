@@ -19,6 +19,7 @@ import {
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
   KbCommitRequestSchema,
+  KbManifestDiffRequestSchema,
   KB_COMMIT_BODY_LIMIT,
   type KbCommitRequest,
   type KbCommitResponse,
@@ -53,6 +54,7 @@ import {
 import { actorOf, createTokenStore, OWNER, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
+import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
@@ -105,6 +107,12 @@ export interface HubOptions {
   maxEventStreams?: number;
   /** @internal TEST-ONLY: failure injection inside KB commits. */
   kbFaults?: KbCommitFaults;
+  /** How often hubd scans the KB domain folders for direct writes (Dewey's), ms. Default 3000; 0 disables the timer (tests call scanKb). */
+  kbPollMs?: number;
+  /** A file modified more recently than this is left for the next scan, ms. Default 1500. */
+  kbSettleMs?: number;
+  /** @internal TEST-ONLY: KB change log retention (default 30 days or 10,000 changes, whichever keeps more). */
+  kbRetention?: KbRetention;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -127,6 +135,8 @@ export interface HubServer {
   authenticate(req: IncomingMessage): AuthIdentity | null;
   /** Called (id of the revoked token) when the running hub detects a revoke (token file scan, within `authPollMs`). Returns an unsubscribe. */
   onRevoke(listener: (tokenId: string) => void): () => void;
+  /** Scan the KB folders now (on the KB writer queue) and record direct writes as revisions; `prune` applies retention too. Resolves when done. */
+  scanKb(opts?: { settle?: boolean; prune?: boolean }): Promise<void>;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -251,6 +261,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   sweepStageDirs(stageRoot(roots)); // scratch dirs orphaned by a crashed hubd (hub-owned <dataDir>/tmp, own prefix, dead pid)
+  const revisions = createKbRevisions({
+    dataDir: opts.dataDir,
+    roots,
+    now: opts.now,
+    retention: opts.kbRetention,
+    settleMs: opts.kbSettleMs,
+    pollMs: opts.kbPollMs,
+    exclusive: (fn) => kbWriter!.exclusive(fn),
+  });
   let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
   const domainCache = new Map<string, string>(); // work item id -> domain
@@ -320,7 +339,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
-    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults });
+    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
+    // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
+    await kbWriter.exclusive(() => revisions.init());
     // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
     const digest = (v: string) => createHash("sha256").update(v).digest();
     const expected = opts.apiKey ? digest(opts.apiKey) : undefined;
@@ -429,16 +450,26 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return send(res, 200, { deleted: await registry.remove(r.c, params.name!) });
     }
 
+    /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens and the legacy key see all. */
+    function requireKbDomain(id: AuthIdentity | undefined, domain: string): void {
+      if (!id || id.legacy || id.kind !== "worker") return;
+      const hostId = id.hostId;
+      const allowed = hostId !== undefined && (registry.list("wolves") as { host?: string; domains?: string[]; status?: string }[]).some((w) => w.host === hostId && w.status !== "retired" && (w.domains ?? []).includes(domain));
+      if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
+    }
+
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
       const m = matchRoute(req.method ?? "GET", url.pathname);
       const isPublic = typeof m === "object" && m.route.public === true;
       let tokenId: string | undefined;
+      let identity: AuthIdentity | undefined;
       if (!isPublic) {
         const id = authenticate(req); // 401 before 404/405/body reads
         if (!id) throw new HubError("unauthorized", "missing or invalid bearer token");
         tokenId = id.tokenId;
+        identity = id;
       }
       if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
       if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
@@ -553,6 +584,24 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const body = parseBody(KbCommitRequestSchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
           return send(res, 200, await kbWriter!.commit(actor, body));
         }
+        case "hubKbChanges": {
+          requireKbDomain(identity, params.domain);
+          const q = url.searchParams;
+          const sinceRaw = q.get("since");
+          if (sinceRaw !== null && !/^\d{1,15}$/.test(sinceRaw)) throw new HubError("invalid_request", "since must be a non-negative integer");
+          const mb = q.get("maxBytes");
+          if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
+          return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));
+        }
+        case "hubKbManifest": {
+          requireKbDomain(identity, params.domain);
+          return send(res, 200, revisions.manifest(params.domain));
+        }
+        case "hubKbManifestDiff": {
+          requireKbDomain(identity, params.domain);
+          const body = parseBody(KbManifestDiffRequestSchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
+          return send(res, 200, revisions.diff(params.domain, body.files, body.maxBytes === undefined ? undefined : Math.min(body.maxBytes, KB_COMMIT_BODY_LIMIT)));
+        }
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
@@ -596,11 +645,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       server.listen(opts.port ?? 0, host, () => resolve());
     });
     port = (server.address() as AddressInfo).port;
+    revisions.start();
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
     stopWatcher();
+    revisions.stop();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
     writerLock.release();
     throw e;
@@ -614,11 +665,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     onRevoke: (l) => onRevokeFn(l),
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
+    scanKb: async (o) => void (await kbWriter!.exclusive(() => revisions.scan(o))),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
+        revisions.stop(); // before the KB writer closes
         const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
         stopWatcher();
         tokensFlush();

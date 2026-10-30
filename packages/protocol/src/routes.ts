@@ -41,6 +41,7 @@ import {
   GraduationResultSchema,
   KbPipelineResponseSchema,
 } from "./schemas.js";
+import { KbChangesResponseSchema, KbManifestResponseSchema, KbManifestDiffRequestSchema, KbManifestDiffResponseSchema } from "./kb-sync.js";
 
 import * as R from "./registry.js";
 import { PairRequestSchema, PairResponseSchema } from "./pairing.js";
@@ -372,6 +373,16 @@ export const ROUTES = {
    * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
    */
   hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
+  /**
+   * KB sync: changes of one domain since revision N. Query `since` (integer >= 0, default 0), `epoch` (the epoch from the previous answer; omit on the first call), `maxBytes` (page cap, default the KB commit body limit).
+   * Answers `{status:"ok", domain, epoch, since, revision, truncated, files:[{path,contentHash,encoding:"utf8",content}], deletes:[{path}]}` (coalesced per path; `truncated` = ask again with since=revision), or `{status:"reset", reason}` with reason `below_floor` (the log no longer reaches `since`), `epoch_mismatch` or `ahead_of_hub`: fall back to the manifest diff.
+   * Worker tokens may read only domains their host's wolves subscribe to (403 otherwise).
+   */
+  hubKbChanges: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/changes", response: { kind: "json", schema: KbChangesResponseSchema }, status: [200], error: err },
+  /** KB sync: the hub's path -> contentHash manifest of one domain, with epoch, revision and the retention floor. Same domain filtering as changes. */
+  hubKbManifest: { scope: "hub", method: "GET", path: "/v1/kb/domains/:domain/manifest", response: { kind: "json", schema: KbManifestResponseSchema }, status: [200], error: err },
+  /** KB sync: send the worker's path -> hash manifest; get the differing files (up to maxBytes), the paths to delete, and `pending` paths that did not fit. */
+  hubKbManifestDiff: { scope: "hub", method: "POST", path: "/v1/kb/domains/:domain/manifest-diff", body: KbManifestDiffRequestSchema, response: { kind: "json", schema: KbManifestDiffResponseSchema }, status: [200], error: err },
   /**
    * PUBLIC (no token): exchange a single-use pairing code (minted by `hubd pair`, valid ~10 minutes) for a per-device bearer token.
    * Body `{code, label, kind?, hostId?}`: the token's kind and hostId are fixed by the CODE (`hubd pair --kind worker|console|browser [--host-id]`); `kind`/`hostId` in the body are optional and must match the code (401 otherwise, the code is not consumed). Answers `{token, tokenId}`. The token is shown once; the hub keeps only its hash.

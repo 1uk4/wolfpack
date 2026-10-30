@@ -61,8 +61,8 @@ hubcurl() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$(cat /root/hubd
 hubcurl -X POST $H/v1/registry/hosts  -d '{"name":"sfo-01"}'
 hubcurl -X POST $H/v1/registry/wolves -d '{"name":"hal","host":"sfo-01","domains":["personal","snapjack","wolfpack"]}'   # each 201
 hubcurl $H/v1/registry/wolves
-CODE=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id sfo-01 --data-dir /var/lib/hubd | sed -n 's/^pairing code: *\([A-Za-z0-9]*\).*/\1/p')   # single-use, 10 minutes
-test -n "$CODE" || echo "no code extracted: read it from the pair output by hand"
+CODE=$(runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id sfo-01 --data-dir /var/lib/hubd | sed -n 's/^pairing code: *\([A-Za-z0-9_-]*\).*/\1/p')   # single-use, 10 minutes
+[ "${#CODE}" -eq 16 ] || { echo "STOP: pairing code is ${#CODE} chars, expected 16 (base64url); do not continue, read it from the pair output by hand" >&2; false; }
 ( cd / && runuser -u workerd -- env WORKERD_CONFIG_DIR=/var/lib/workerd /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs pair http://100.120.154.69:3150 "$CODE" )
 test -f /var/lib/workerd/hub.json && echo "hub.json present" || echo "NO hub.json: the unit will NOT start (ConditionPathExists)"
 systemctl start workerd; sleep 3; systemctl is-active workerd
@@ -79,10 +79,10 @@ pgrep -u workerd -a . | wc -l                                                   
 ls /var/lib/workerd/kb-mirror/domains; du -sh /var/lib/workerd/kb-mirror                        # fills in (personal, snapjack, wolfpack)
 /usr/bin/node /opt/wolfpack-workerd/current/workerd.mjs kb-compare --syncthing /var/wolfpack/kb/base --mirror /var/lib/workerd/kb-mirror --layout base
 ```
-`kb-compare` must report CLEAN. It is read-only (`--syncthing` is only read); run it as root, since the `workerd` user may not be able to read `/var/wolfpack/kb/base`.
+`kb-compare` must report CLEAN. Do not pass `--json` a path inside `/var/lib/workerd` (it would write into the data dir; use `/root/...`). It is read-only (`--syncthing` is only read); run it as root, since the `workerd` user may not be able to read `/var/wolfpack/kb/base`.
 Hal unchanged: `systemctl is-active wolf-ETAy7b` as recorded in B; exactly one Hal process (`pgrep -u wolf-ETAy7b -af agent | wc -l`, same as before); `stat -c '%U:%G %a' /etc/wolfpack/workerd.env /var/lib/workerd/hub.json` is `root:root 600` and `workerd:workerd 600`. (A seccomp journal check proves little here: `SystemCallErrorNumber=EPERM` makes filtered calls fail quietly, so rely on the sandbox smoke test in E.)
 
 ## Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
 - Stop quickly: `systemctl disable --now workerd`. Hal and hubd are unaffected; the hub just sees the host offline.
-- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json, mirror), the env file and the user. `uninstall --purge` refuses while any systemd unit or `/home/*/.env` still references `/var/lib/workerd/kb-mirror`; otherwise it deletes `/var/lib/workerd` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.
+- Remove: `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. Keeps `/var/lib/workerd` (hub.json, mirror), the env file and the user. `uninstall --purge` refuses while any systemd unit or `/home/*/.env` still references `/var/lib/workerd/kb-mirror` (it searches systemd unit dirs, `/etc/wolfpack`, `/var/wolfpack`, `/home/*/.env`, and Hal's `EnvironmentFile=`/`WorkingDirectory=` from `systemctl cat wolf-ETAy7b`; **the guard is best-effort**, so confirm by hand that nothing reads the mirror, and it also refuses in `--dry-run`); otherwise it deletes `/var/lib/workerd` (including the **derived** hub mirror and hub.json) and the user; stop first. It never touches Hal's unit or `.env`, Dewey's tree, or Syncthing/`/var/wolfpack/kb` copies. Revoke the host's token on the hub afterwards if it is gone for good.

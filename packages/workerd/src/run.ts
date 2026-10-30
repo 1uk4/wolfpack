@@ -56,6 +56,9 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   announce?: string[];
 }
 
+/** Link-only may only listen on loopback. */
+export const isLoopbackHost = (h: string): boolean => h === "127.0.0.1" || h === "::1" || h === "localhost";
+
 /** Parse WORKERD_LINK_ONLY (1/true/yes/on). */
 export const envLinkOnly = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|yes|on)$/i.test(env.WORKERD_LINK_ONLY ?? "");
 export const envAnnounce = (env: NodeJS.ProcessEnv = process.env): string[] => (env.WORKERD_ANNOUNCE ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -81,6 +84,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   if (linkOnly) {
     if (!announce.length) throw new Error("link-only mode needs at least one announced wolf (--announce <name> or WORKERD_ANNOUNCE)");
     if (opts.hub === false) throw new Error("link-only mode needs a hub link");
+    const lh = opts.host ?? process.env.WORKERD_HOST;
+    if (lh && !isLoopbackHost(lh)) throw new Error(`link-only mode only listens on loopback (127.0.0.1, ::1, localhost), not ${JSON.stringify(lh)}`);
     if (opts.only?.length) throw new Error("link-only mode supervises nothing: `only` is not allowed");
     if (opts.command) throw new Error("link-only mode spawns nothing: `command` (--wolfd) is not allowed");
     log(`[workerd] link-only: supervising no wolves; announcing ${announce.join(", ")}`);

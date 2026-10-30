@@ -71,6 +71,20 @@ describe("workerd CLI args", () => {
   it("default (no link-only) stays unchanged", () => {
     expect(parseServeArgs([], {})).toMatchObject({ opts: { linkOnly: undefined, port: 7141 } });
   });
+  it("link-only needs an explicit port (no 7141 fallback)", () => {
+    expect(parseServeArgs(["--link-only"], {})).toHaveProperty("error");
+    expect(parseServeArgs(["--link-only", "--port", "7142"], {})).toMatchObject({ opts: { port: 7142 } });
+    expect(parseServeArgs([], { WORKERD_LINK_ONLY: "1" })).toHaveProperty("error");
+  });
+  it("link-only refuses a non-loopback host (flag or WORKERD_HOST); loopback forms pass", () => {
+    expect(parseServeArgs(["--link-only", "--port", "1", "--host", "0.0.0.0"], {})).toHaveProperty("error");
+    expect(parseServeArgs(["--link-only", "--port", "1"], { WORKERD_HOST: "100.120.154.69" })).toHaveProperty("error");
+    for (const h of ["127.0.0.1", "::1", "localhost"]) expect(parseServeArgs(["--link-only", "--port", "1", "--host", h], {})).toMatchObject({ opts: { host: h } });
+    expect(parseServeArgs(["--port", "1", "--host", "0.0.0.0"], {})).toMatchObject({ opts: { host: "0.0.0.0" } }); // default mode unchanged
+  });
+  it("runWorkerd link-only throws on a non-loopback host", async () => {
+    await expect(runWorkerd({ linkOnly: true, announce: ["hal"], host: "0.0.0.0", port: 0, hub: { hubUrl: "http://127.0.0.1:1", token: "t", hostId: "h" } })).rejects.toThrow(/loopback/);
+  });
   it("--announce without link-only is an error", () => {
     expect(parseServeArgs(["--announce", "hal"], {})).toHaveProperty("error");
   });

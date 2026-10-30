@@ -1,6 +1,6 @@
 /** Argument parsing and validation for the `workerd` serve command (pure: no process.exit, testable). */
 import { parseArgs } from "node:util";
-import { envLinkOnly, type RunWorkerdOptions } from "./run.js";
+import { envLinkOnly, isLoopbackHost, type RunWorkerdOptions } from "./run.js";
 
 export type CliParse = { help: true } | { error: string } | { opts: RunWorkerdOptions };
 
@@ -28,13 +28,16 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   if (!linkOnly && values.announce?.length) return { error: "--announce needs --link-only (or WORKERD_LINK_ONLY=1)" };
   if (linkOnly && values.wolfd !== undefined) return { error: "--wolfd is not allowed with --link-only (link-only spawns nothing)" };
   if (linkOnly && values.only?.length) return { error: "--only is not allowed with --link-only (link-only supervises nothing)" };
-  const port = values.port === undefined ? (linkOnly && env.WORKERD_PORT ? Number(env.WORKERD_PORT) : 7141) : Number(values.port);
+  if (linkOnly && values.port === undefined && !env.WORKERD_PORT) return { error: "link-only needs an explicit port: --port N or WORKERD_PORT (no fallback to 7141)" };
+  const host = values.host ?? (linkOnly ? env.WORKERD_HOST || undefined : undefined);
+  if (linkOnly && host && !isLoopbackHost(host)) return { error: `link-only only listens on loopback (127.0.0.1, ::1, localhost), not ${host}` };
+  const port = values.port === undefined ? (linkOnly ? Number(env.WORKERD_PORT) : 7141) : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) return { error: `invalid --port ${values.port ?? env.WORKERD_PORT}` };
   return {
     opts: {
       wolvesDir: values.wolves,
       port,
-      host: values.host,
+      host,
       linkOnly: linkOnly || undefined,
       announce: values.announce?.length ? values.announce : undefined,
       only: values.only,

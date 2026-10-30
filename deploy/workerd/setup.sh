@@ -91,7 +91,7 @@ cmd_setup() {
   need "$HERE/workerd.service missing" test -f "$HERE/workerd.service"
   need "$HERE/workerd.env.example missing" test -f "$HERE/workerd.env.example"
   # Ports: hubd 3150 and the agent 3141 must be left alone; ours must be free (or already ours).
-  need "ss is required for the port check but is missing" command -v ss
+  need "ss is required for the port check but is missing" command -v ss >/dev/null
   if [[ -e $ENV_FILE ]]; then
     local envport envann
     envport="$(envval "$ENV_FILE" WORKERD_PORT)"; envann="$(envval "$ENV_FILE" WORKERD_ANNOUNCE)"
@@ -186,9 +186,24 @@ cmd_rollback() {
 
 cmd_uninstall() {
   if ((PURGE)); then
-    local refs
-    refs="$(grep -rlsF "$DATA_DIR/kb-mirror" /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /home/*/.env /home/*/agent/.env 2>/dev/null | grep -v "^$ENV_FILE$" || true)"
-    [[ -z $refs ]] || need "refusing --purge: still referenced by: $(echo "$refs" | tr '\n' ' ')(repoint KB_BASE first)" false
+    # Best-effort: look for anything that still points at the mirror (systemd units, /etc/wolfpack, /var/wolfpack, home .env files,
+    # and Hal's real EnvironmentFile= / WorkingDirectory= resolved from `systemctl cat`).
+    local refs="" targets=() l v t
+    while IFS= read -r l; do
+      case "$l" in
+        EnvironmentFile=* | WorkingDirectory=*)
+          v="${l#*=}"; v="${v#-}"; v="${v%% *}"; [[ -n $v ]] && targets+=("$v") ;;
+      esac
+    done < <(systemctl cat "$HAL_UNIT" 2>/dev/null || true)
+    for t in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /etc/wolfpack /var/wolfpack /home/*/.env /home/*/agent/.env ${targets[@]+"${targets[@]}"}; do
+      [[ -e $t ]] || continue
+      refs+="$(grep -rlsF "$DATA_DIR/kb-mirror" "$t" 2>/dev/null | grep -vx "$ENV_FILE" || true)"$'\n'
+    done
+    refs="$(printf '%s' "$refs" | sed '/^$/d' | sort -u)"
+    if [[ -n $refs ]]; then
+      echo "REFUSING --purge: still referenced by: $(echo "$refs" | tr '\n' ' ')(repoint KB_BASE first)" >&2
+      exit 1 # also in a dry run
+    fi
   fi
   log "uninstall workerd (Hal's unit, Dewey's tree and every KB copy are never touched)"
   if ((DRY)) || systemctl cat workerd.service >/dev/null 2>&1; then run systemctl disable --now workerd.service; else echo "workerd.service not installed; skipping disable"; fi

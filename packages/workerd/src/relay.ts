@@ -17,7 +17,7 @@ const SKIP_RES = (k: string) => HOP.has(k) || k === "set-cookie" || k === "set-c
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authenticate", "proxy-authorization", "content-length", "host"]);
 const SKIP_REQ = new Set(["authorization", "cookie", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authorization", "content-length", "host", "expect"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
-const HIGH_WATER = 1024 * 1024;
+const HIGH_WATER = 256 * 1024;
 const LOW_WATER = HIGH_WATER / 4;
 const MAX_B64 = Math.ceil((LINK_RELAY_MAX_BODY * 4) / 3) + 4;
 

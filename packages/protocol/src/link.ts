@@ -20,11 +20,17 @@ export const LINK_RELAY_CHUNK_BYTES = 256 * 1024;
  * Relay flow control (hub -> worker `pause`/`resume`): the hub sends `pause {id}` when a client's response has more than
  * LINK_RELAY_PAUSE_HIGH bytes queued, and `resume {id}` once it drained (below LINK_RELAY_PAUSE_LOW). A worker that honours `pause`
  * stops sending chunks for that id; one that ignores it (older worker) is still bounded by the hub's hard caps
- * (LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK queued per request, 8 MB per host) and is cut off, as before.
+ * (LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK queued per request, LINK_RELAY_HOST_BUFFERED per host) and is cut off, as before.
  */
 export const LINK_RELAY_PAUSE_HIGH = 256 * 1024;
 export const LINK_RELAY_PAUSE_LOW = 64 * 1024;
-export const LINK_RELAY_HARD_SLACK = 4 * 1024 * 1024;
+/**
+ * Data already in flight when `pause` is sent (worker send queue + kernel socket buffers, several MB on a fast loopback/LAN link) still
+ * arrives and must not count against a worker that honours pause: hence 16 MB of slack. The per-HOST cap (LINK_RELAY_HOST_BUFFERED) is the real memory bound.
+ */
+export const LINK_RELAY_HARD_SLACK = 16 * 1024 * 1024;
+/** Relay: max bytes queued on client responses summed over one host's requests; beyond it the request that overflows is cut off. */
+export const LINK_RELAY_HOST_BUFFERED = 32 * 1024 * 1024;
 /** Relay: max request body the hub tunnels (raw bytes). */
 export const LINK_RELAY_MAX_BODY = 2 * 1024 * 1024;
 /** Relay: no `res` head within this after `req` = the hub gives up (504) and sends `cancel`. */

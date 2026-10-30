@@ -15,6 +15,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   LINK_RELAY_CHUNK_BYTES,
   LINK_RELAY_HARD_SLACK,
+  LINK_RELAY_HOST_BUFFERED,
   LINK_RELAY_MAX_BODY,
   LINK_RELAY_PAUSE_HIGH,
   LINK_RELAY_MAX_INFLIGHT,
@@ -28,11 +29,11 @@ import type { Registry } from "./registry.js";
 
 /**
  * Flow control: above PAUSE_HIGH queued on a client's response the hub sends `pause` (once per paused state); when the response drains
- * it sends `resume`. A worker that ignores pause is cut off at the hard caps: PAUSE_HIGH + HARD_SLACK per request, 8 MB summed per host.
+ * it sends `resume`. A worker that ignores pause is cut off at the hard caps: PAUSE_HIGH + HARD_SLACK per request, LINK_RELAY_HOST_BUFFERED summed per host.
  * The no-progress timer cuts a response only when its socket stops moving bytes for DRAIN_STALL_MS; a slow but advancing reader is never cut.
  */
 const RELAY_HARD_BUFFERED = LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK;
-const RELAY_MAX_BUFFERED_HOST = 8 * 1024 * 1024;
+const RELAY_MAX_BUFFERED_HOST = LINK_RELAY_HOST_BUFFERED;
 const DRAIN_STALL_MS = 30_000;
 /** Request headers that never cross the link (credentials of the hub hop, hop-by-hop, framing). */
 const DROP_REQ = new Set(["authorization", "x-api-key", "cookie", "host", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "content-length", "proxy-authorization", "x-wolfpack-actor", "expect"]);

@@ -292,8 +292,8 @@ describe("relay flow control", () => {
     expect(w.frames.some((f) => f.t === "pause")).toBe(true);
     expect(w.frames.some((f) => f.t === "cancel")).toBe(true);
     // The client's own queue (kernel buffers aside) was bounded by the hard cap, not by the whole 75 MB attempt.
-    expect(sent * 128 * 1024).toBeLessThan(64 * 1024 * 1024);
-    expect(LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK).toBeLessThan(5 * 1024 * 1024);
+    expect(sent * 128 * 1024).toBeLessThan(72 * 1024 * 1024);
+    expect(LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK).toBeLessThan(20 * 1024 * 1024);
     c.read();
     expect(await c.done).toBe("error");
   });

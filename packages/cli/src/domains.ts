@@ -25,8 +25,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { cliDomainsFile } from "@wolfpack/engine";
 
 /** Per-domain metadata as declared in the registry. */
 export interface DomainEntry {
@@ -43,12 +43,9 @@ export interface DomainRegistry {
   domains: Record<string, DomainEntry>;
 }
 
-const REGISTRY_DIR = path.join(os.homedir(), ".wolfpack");
-const REGISTRY_FILE = path.join(REGISTRY_DIR, "domains.yaml");
-
-/** Absolute path to the control-plane domain registry. */
+/** Absolute path to the control-plane domain registry. Same helper the kb readers use (@wolfpack/engine), so they cannot diverge. */
 export function registryPath(): string {
-  return REGISTRY_FILE;
+  return cliDomainsFile();
 }
 
 /**
@@ -74,7 +71,7 @@ export function assertValidDomainName(name: string): void {
 /** Load the registry (empty if none exists yet). */
 export function loadRegistry(): DomainRegistry {
   try {
-    const raw = fs.readFileSync(REGISTRY_FILE, "utf8");
+    const raw = fs.readFileSync(registryPath(), "utf8");
     const parsed = (yamlParse(raw) ?? {}) as Partial<DomainRegistry>;
     return { domains: parsed.domains ?? {} };
   } catch {
@@ -84,10 +81,11 @@ export function loadRegistry(): DomainRegistry {
 
 /** Persist the registry atomically. */
 export function saveRegistry(reg: DomainRegistry): void {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  const tmp = `${REGISTRY_FILE}.tmp`;
+  const file = registryPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, yamlStringify(reg));
-  fs.renameSync(tmp, REGISTRY_FILE);
+  fs.renameSync(tmp, file);
 }
 
 export function domainExists(reg: DomainRegistry, name: string): boolean {

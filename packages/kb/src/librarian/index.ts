@@ -73,6 +73,7 @@ export { drainFile, readDrain, formatDrain, type DrainState } from "./drain.js";
 export { withBudget, BudgetExceeded, park, unpark, listParked, type ParkedItem } from "./park.js";
 export {
   readDeclaredDomains,
+  describeGateSource,
   isDeclared,
   renderDomainIndex,
 } from "./domains.js";

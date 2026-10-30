@@ -35,8 +35,6 @@ export const domainDigest = (r: KbRoots, domain: string) =>
 /** Quarantine for contributions that fit no declared domain. Dewey-only; never
  *  inside a domain folder, so it is never mirrored to any wolf. */
 export const unclassifiedDir = (r: KbRoots) => join(r.kbBase, "_unclassified");
-/** Deployed copy of the declared-domain list (CLI writes; Dewey reads). */
-export const domainsRegistryFile = (r: KbRoots) => join(r.kbBase, "domains.yaml");
 /** Per-domain topic registry. Lives INSIDE the domain folder so it rides that
  *  domain's Syncthing share to subscribed wolves — the registry is their route
  *  (and coverage map) into the KB. No separate global registry. */

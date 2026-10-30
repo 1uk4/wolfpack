@@ -42,7 +42,7 @@ import {
   gitCommit,
   quarantine,
 } from "./commit.js";
-import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, isDeclared } from "./domains.js";
+import { renderDomainIndex, renderDomainDigest, readDeclaredDomains, describeGateSource, isDeclared } from "./domains.js";
 import { readSections, writeSections } from "./sections.js";
 import { withBudget, BudgetExceeded, recordFailure, recordOverrun, clearAttempts, park } from "./park.js";
 import { classifyError, shouldParkNow, backoffRemainingMs, noteInfraFailure, noteSweepSuccess, type Alert } from "./backoff.js";
@@ -393,6 +393,7 @@ async function sweepUnlocked(ctx: SweepContext): Promise<SweepResult> {
   const result = emptyResult();
 
   const declared = readDeclaredDomains(roots);
+  ctx.notify?.(`sweep: domain gate source: ${describeGateSource(roots)}`);
   const touchedDomains = new Set<string>();
 
   // ── RELATION RESOLVER (first-cut) ──────────────────────────────────────────

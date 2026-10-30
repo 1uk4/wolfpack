@@ -84,6 +84,19 @@ describe("runSweepTick", () => {
     expect(existsSync(join(roots.denLocal, "ledger.jsonl"))).toBe(false);
   });
 
+  it("a missing WOLFPACK_DOMAINS_FILE skips the tick (logged, nothing consumed), never fails open", async () => {
+    drop("a");
+    vi.stubEnv("WOLFPACK_DOMAINS_FILE", join(base, "nope.yaml"));
+    const msgs: string[] = [];
+    const t = await runSweepTick({ roots, createEngine, notify: (m) => void msgs.push(m), alert: () => {}, budgetMs: 1000 });
+    vi.unstubAllEnvs();
+    expect(t.outcome).toBe("backoff");
+    expect(t.sweep.paused).toMatch(/WOLFPACK_DOMAINS_FILE/);
+    expect(msgs.join("\n")).toMatch(/skipped/);
+    expect(createEngine).not.toHaveBeenCalled();
+    expect(queued()).toEqual(["a.md"]);
+  });
+
   it("skips the tick inside a backoff window without building an engine", async () => {
     drop("a");
     await noteInfraFailure(roots, new Error("Overloaded"));

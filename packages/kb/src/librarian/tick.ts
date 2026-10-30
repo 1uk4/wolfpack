@@ -11,6 +11,8 @@
  */
 import { existsSync } from "node:fs";
 import { SWEEP, type Engine } from "@wolfpack/engine";
+import { DomainsFileError } from "../shared/domain-registry.js";
+import { readDeclaredDomains } from "./domains.js";
 import { rebuildJournalFile } from "./rebuild-commit.js";
 import { tryRecoverAndRender, badJournalNote } from "./rebuild-recover.js";
 import type { KbRoots } from "../shared/index.js";
@@ -113,6 +115,15 @@ async function runTick(opts: SweepTickOptions): Promise<SweepTickResult> {
   if (countPending(roots.opsRoot).total === 0) {
     await flushDrain(roots, opts.alert);
     return { outcome: "idle", sweep: emptyResult() };
+  }
+
+  // Fail closed: an unusable WOLFPACK_DOMAINS_FILE skips this tick (logged, retried next run), it never opens the gate or crashes the loop.
+  try {
+    readDeclaredDomains(roots);
+  } catch (err) {
+    if (!(err instanceof DomainsFileError)) throw err;
+    opts.notify?.(`sweep: skipped, ${err.message}`);
+    return { outcome: "backoff", sweep: { ...emptyResult(), remaining: countPending(roots.opsRoot).total, paused: err.message } };
   }
 
   try {

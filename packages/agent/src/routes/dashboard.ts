@@ -278,7 +278,7 @@ export function dashboardRouter(): Router {
       // Read domain labels
       const labels: Record<string, string> = {};
       const regPath = resolveDomainsFile(KB_BASE);
-      if (regPath && existsSync(regPath)) {
+      if (regPath) {
         const raw = readFileSync(regPath, "utf-8");
         const domainBlock = raw.match(/domains:\n([\s\S]*?)(?:\n\S|\Z)/);
         if (domainBlock) {

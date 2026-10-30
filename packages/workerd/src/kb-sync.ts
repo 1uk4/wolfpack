@@ -10,7 +10,15 @@
  *   `reset` (below_floor / epoch_mismatch / ahead_of_hub), or no saved state: manifest diff (POST manifest-diff with the hashes of the
  *   files on disk; fetch differing files, delete extras, follow `pending`), then adopt the diff's {epoch, revision}.
  * FAILURES (404 not-scanned-yet, 403, 5xx, network, hash mismatch, disk errors) retry with backoff 1s -> 60s and NEVER delete anything.
- * TRIGGERS: start, refresh() (subscription change / welcome), notify() (kb.changed hint), and a slow safety poll.
+ * SUBSCRIBED SET: ONLY what the hub registry grants this host (welcome.grantedDomains, updated by `grants` frames) via setGranted();
+ *   wolf.yaml domains are never consulted, and the set is empty before the first welcome.
+ * TRIGGERS: setGranted() (welcome / grants frame), notify() (kb.changed hint; ignored for unsubscribed domains and for domains in backoff),
+ *   and a slow safety poll (which also respects backoff). The first sync of a domain after start, and every 12th poll, ALSO runs a manifest
+ *   diff even with a saved revision, so deleted or corrupted mirror files get repaired.
+ * SAFETY: a diff that would delete more than half of the local files (or all of them, when there are 2+) is refused and retried with
+ *   backoff (a mass-delete guard against a hub that wrongly reports an empty domain). Paths are KB_SYNC_PATH-checked and every parent
+ *   directory is lstat'ed for symlinks before any write or delete. Nothing is written after stop().
+ * An epoch rotation after a hub persist failure is not pushed; the worker sees it on the next write's push or its poll (epoch_mismatch -> diff).
  * REMOVAL: a domain that leaves the subscribed set stops syncing; its mirror is KEPT and marked `active:false` (stale, ignore it).
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -20,20 +28,26 @@ import { KB_SYNC_PATH, KbChangesResponseSchema, KbManifestDiffResponseSchema, ty
 
 const DOMAIN = /^[a-z0-9][a-z0-9-]*$/;
 const hashOf = (text: string): string => "sha256:" + createHash("sha256").update(text, "utf-8").digest("hex");
+/** A relative KB path with no `.`/`..`/empty segments that matches the sync grammar. */
+const safeRel = (p: string): boolean => KB_SYNC_PATH.test(p) && p.split("/").every((x) => x !== "" && x !== "." && x !== "..");
 const MAX_BYTES = 2 * 1024 * 1024;
 
 export interface KbSyncOptions {
   hubUrl: string;
   token: string;
   mirrorDir: string;
-  /** The subscribed domains right now (union over the host's wolves). */
-  domains: () => string[];
   log?: (m: string) => void;
   fetchImpl?: typeof fetch;
   baseMs?: number;
   capMs?: number;
   /** Safety poll interval; 0 disables. Default 5 min. */
   pollMs?: number;
+  /** Run a manifest diff on the first sync after start even with a saved revision. Default true. */
+  verifyOnStart?: boolean;
+  /** Every Nth poll tick also runs a manifest diff. Default 12. */
+  verifyEveryPolls?: number;
+  /** maxBytes asked of the hub per page. Default 2 MiB (test seam). */
+  maxBytes?: number;
 }
 
 export interface KbDomainStatus {
@@ -51,6 +65,8 @@ interface DomState {
   active: boolean;
 }
 class Retry extends Error {}
+/** The domain was unsubscribed or the sync stopped mid-flight: abandon quietly. */
+class Abandon extends Error {}
 
 export class KbSync {
   private readonly subscribed = new Set<string>();
@@ -59,7 +75,11 @@ export class KbSync {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly failures = new Map<string, number>();
   private readonly errors = new Map<string, string>();
+  private readonly full = new Set<string>();
   private poll?: NodeJS.Timeout;
+  private pollTicks = 0;
+  private ac = new AbortController();
+  private granted: string[] = [];
   private stopped = true;
   private readonly f: typeof fetch;
 
@@ -122,27 +142,39 @@ export class KbSync {
 
   start(): void {
     this.stopped = false;
+    if (this.ac.signal.aborted) this.ac = new AbortController();
     this.refresh();
     if ((this.o.pollMs ?? 300_000) > 0) {
-      this.poll = setInterval(() => this.syncAll(), this.o.pollMs ?? 300_000);
+      this.poll = setInterval(() => {
+        if (++this.pollTicks % (this.o.verifyEveryPolls ?? 12) === 0) for (const d of this.subscribed) this.full.add(d);
+        this.syncAll(false);
+      }, this.o.pollMs ?? 300_000);
       this.poll.unref();
     }
   }
   stop(): void {
     this.stopped = true;
+    this.ac.abort();
     if (this.poll) clearInterval(this.poll);
     this.poll = undefined;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
   }
 
+  /** The registry-granted domains for this host (welcome / grants frame). Replaces the previous set. */
+  setGranted(domains: string[]): void {
+    this.granted = [...new Set(domains)];
+    this.refresh();
+  }
+
   /** Recompute the subscribed set; start new domains, deactivate removed ones (mirror kept), and pull everything now. */
   refresh(): void {
     if (this.stopped) return;
-    const want = new Set(this.o.domains().filter((d) => DOMAIN.test(d)));
+    const want = new Set(this.granted.filter((d) => DOMAIN.test(d)));
     for (const d of [...this.subscribed]) {
       if (want.has(d)) continue;
       this.subscribed.delete(d);
+      this.full.delete(d);
       clearTimeout(this.timers.get(d));
       this.timers.delete(d);
       this.failures.delete(d);
@@ -160,6 +192,7 @@ export class KbSync {
     for (const d of want) {
       if (!this.subscribed.has(d)) {
         this.subscribed.add(d);
+        if (this.o.verifyOnStart !== false) this.full.add(d);
         const s = this.load(d);
         if (s && !s.active) {
           try {
@@ -173,16 +206,18 @@ export class KbSync {
     this.syncAll();
   }
 
-  /** A kb.changed hint from the hub: pull now (the hint's revision is only advisory). */
+  /** A kb.changed hint from the hub: pull now (the revision is only advisory). Unsubscribed domains are never fetched; a domain in backoff waits for its timer. */
   notify(domain: string, _rev?: number, _epoch?: string): void {
     if (this.stopped || !this.subscribed.has(domain)) return;
+    if (this.timers.has(domain)) return;
     clearTimeout(this.timers.get(domain));
     this.timers.delete(domain);
     void this.run(domain);
   }
-  /** Pull every subscribed domain now (welcome / reconnect / poll). */
-  syncAll(): void {
+  /** Pull every subscribed domain now (welcome / grants / poll). `force:false` (poll) leaves domains in backoff to their timers. */
+  syncAll(force = true): void {
     for (const d of this.subscribed) {
+      if (!force && this.timers.has(d)) continue;
       clearTimeout(this.timers.get(d));
       this.timers.delete(d);
       void this.run(d);
@@ -208,6 +243,7 @@ export class KbSync {
           this.failures.delete(d);
           this.errors.delete(d);
         } catch (e) {
+          if (e instanceof Abandon) break;
           this.fail(d, e as Error);
           break;
         }
@@ -242,7 +278,7 @@ export class KbSync {
         method,
         headers: { Authorization: `Bearer ${this.o.token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.any([this.ac.signal, AbortSignal.timeout(30_000)]),
       });
     } catch (e) {
       throw new Retry(`network: ${(e as Error).message}`);
@@ -266,9 +302,10 @@ export class KbSync {
   private async syncOnce(d: string): Promise<void> {
     const base = `/v1/kb/domains/${d}`;
     let st = this.load(d);
-    if (st && st.rev > 0) {
+    if (st && st.rev > 0 && !this.full.has(d)) {
       for (;;) {
-        const raw = await this.call("GET", `${base}/changes?since=${st.rev}&epoch=${encodeURIComponent(st.epoch)}&maxBytes=${MAX_BYTES}`);
+        const raw = await this.call("GET", `${base}/changes?since=${st.rev}&epoch=${encodeURIComponent(st.epoch)}&maxBytes=${this.o.maxBytes ?? MAX_BYTES}`);
+        this.alive(d);
         const r = KbChangesResponseSchema.safeParse(raw);
         if (!r.success) throw new Retry("unexpected changes response");
         const c = r.data;
@@ -277,25 +314,36 @@ export class KbSync {
           break;
         }
         this.applyFiles(d, c.files, c.deletes.map((x) => x.path));
-        st = { epoch: c.epoch, rev: c.revision, active: true };
+        st = { epoch: c.epoch, rev: c.revision, active: this.subscribed.has(d) };
         this.save(d, st);
         if (!c.truncated) return;
       }
     }
     await this.diffSync(d);
+    this.full.delete(d);
+  }
+
+  /** Throws Abandon when stopped or unsubscribed. Called after every await and before any write, so nothing lands after stop()/removal. */
+  private alive(d: string): void {
+    if (this.stopped || !this.subscribed.has(d)) throw new Abandon();
   }
 
   private async diffSync(d: string): Promise<void> {
     const base = `/v1/kb/domains/${d}`;
     for (let round = 0; round < 10_000; round++) {
       const local = this.localManifest(d);
-      const raw = await this.call("POST", `${base}/manifest-diff`, { files: local, maxBytes: MAX_BYTES });
+      const raw = await this.call("POST", `${base}/manifest-diff`, { files: local, maxBytes: this.o.maxBytes ?? MAX_BYTES });
+      this.alive(d);
       const r = KbManifestDiffResponseSchema.safeParse(raw);
       if (!r.success) throw new Retry("unexpected manifest-diff response");
       const x = r.data;
+      const have = Object.keys(local).length;
+      if (have >= 2 && x.deletes.length * 2 > have) {
+        throw new Retry(`mass-delete guard: the hub's diff would delete ${x.deletes.length} of ${have} local files; refusing (nothing changed)`);
+      }
       this.applyFiles(d, x.files, x.deletes.map((e) => e.path));
       if (x.pending.length === 0) {
-        this.save(d, { epoch: x.epoch, rev: x.revision, active: true });
+        this.save(d, { epoch: x.epoch, rev: x.revision, active: this.subscribed.has(d) });
         return;
       }
       if (x.files.length === 0) throw new Retry("manifest-diff made no progress");
@@ -336,12 +384,15 @@ export class KbSync {
 
   /** Verify EVERYTHING first (paths + hashes), then write files, then delete. A bad page changes nothing. */
   private applyFiles(d: string, files: KbSyncFile[], deletes: string[]): void {
+    this.alive(d);
     for (const f of files) {
-      if (!KB_SYNC_PATH.test(f.path)) throw new Retry(`hub sent a path outside the sync set: ${f.path.slice(0, 80)}`);
+      if (!safeRel(f.path)) throw new Retry(`hub sent a path outside the sync set: ${f.path.slice(0, 80)}`);
       if (hashOf(f.content) !== f.contentHash) throw new Retry(`content hash mismatch for ${f.path}; page rejected`);
     }
-    const dels = deletes.filter((p) => KB_SYNC_PATH.test(p));
+    const dels = deletes.filter(safeRel);
     const root = this.mirrorPath(d);
+    for (const f of files) this.noSymlinks(root, join(root, ...f.path.split("/")));
+    for (const p of dels) this.noSymlinks(root, join(root, ...p.split("/")));
     for (const f of files) this.writeAtomic(join(root, ...f.path.split("/")), f.content);
     for (const p of dels) {
       try {
@@ -349,6 +400,17 @@ export class KbSync {
       } catch (e) {
         throw new Retry(`cannot delete ${p}: ${(e as Error).message}`);
       }
+    }
+  }
+
+  /** Refuse when the domain root or any existing parent directory below it is a symlink. */
+  private noSymlinks(root: string, file: string): void {
+    const parts = [root];
+    let cur = root;
+    for (const seg of file.slice(root.length + 1).split("/").slice(0, -1)) parts.push((cur = join(cur, seg)));
+    for (const dir of parts) {
+      const st = lstatSync(dir, { throwIfNoEntry: false });
+      if (st?.isSymbolicLink() || (st && !st.isDirectory())) throw new Retry(`refusing to touch ${file.slice(root.length + 1)}: ${dir.slice(root.length) || "domain root"} is a symlink or not a directory`);
     }
   }
 

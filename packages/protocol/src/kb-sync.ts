@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 /** Paths the hub versions and serves, relative to `kb/base/domains/<domain>/`. Wider than KB_COMMIT_PATH: also entry history. */
-export const KB_SYNC_PATH = /^(entries\/[A-Za-z0-9._~-]+\.md|versions\/[A-Za-z0-9._~-]+\/[A-Za-z0-9._~-]+\.md|_registry\.md|_digest\.json|INDEX\.md)$/;
+export const KB_SYNC_PATH = /^(entries\/[A-Za-z0-9._~-]+\.md|versions\/(?!\.{1,2}\/)[A-Za-z0-9._~-]+\/[A-Za-z0-9._~-]+\.md|_registry\.md|_digest\.json|INDEX\.md)$/;
 const hash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const path = z.string().regex(KB_SYNC_PATH);
 

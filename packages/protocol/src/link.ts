@@ -84,7 +84,11 @@ export const LinkWelcomeSchema = z.object({
   /** Informational: wolves whose self-reported domains differ from what the registry grants. The registry decides; the worker never writes domains. */
   domainMismatch: z.array(z.object({ wolf: z.string(), reported: z.array(z.string()), granted: z.array(z.string()) })).default([]),
   hubRevisions: Revisions.default({}),
+  /** Additive: the KB domains the registry grants this host (union over its non-retired wolves). The worker syncs ONLY these. */
+  grantedDomains: z.array(z.string().min(1).max(64)).max(1024).default([]),
 });
+/** Additive, hub -> worker: the host's granted KB domain union changed (registry edit, wolf.add accepted, retire). Replaces the previous set. */
+export const LinkGrantsSchema = z.object({ t: z.literal("grants"), domains: z.array(z.string().min(1).max(64)).max(1024) });
 export const LinkWolfAddSchema = z.object({ t: z.literal("wolf.add"), wolf: LinkWolfSchema });
 export const LinkWolfRemoveSchema = z.object({ t: z.literal("wolf.remove"), name: z.string().min(1).max(64) });
 export const LinkPingSchema = z.object({ t: z.literal("ping"), n: z.number().int() });
@@ -97,6 +101,7 @@ export const LinkErrorSchema = z.object({ t: z.literal("error"), code: LinkError
  * Hub -> worker hint (additive, link protocol 1): domain `domain` reached revision `rev` under `epoch`. Sent only to hosts whose
  * non-retired wolves (per the registry) subscribe to the domain. The worker pulls the data over HTTP (GET /v1/kb/domains/:d/changes);
  * the frame carries no content and may be lost or coalesced: polling and sync-on-reconnect still converge.
+ * A rotation of the domain epoch after a hub persist failure is NOT pushed: the worker notices it on the next write's push or its poll.
  */
 export const LinkKbChangedSchema = z.object({ t: z.literal("kb.changed"), domain: z.string().min(1).max(64), rev: z.number().int().nonnegative(), epoch: z.string().min(1).max(128) });
 
@@ -171,6 +176,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
   LinkByeSchema,
   LinkErrorSchema,
   LinkKbChangedSchema,
+  LinkGrantsSchema,
   LinkReqSchema,
   LinkResSchema,
   LinkChunkSchema,
@@ -182,6 +188,7 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
 ]);
 export type LinkFrame = z.infer<typeof LinkFrameSchema>;
 export type LinkHello = z.infer<typeof LinkHelloSchema>;
+export type LinkGrants = z.infer<typeof LinkGrantsSchema>;
 export type LinkKbChanged = z.infer<typeof LinkKbChangedSchema>;
 export type LinkWelcome = z.infer<typeof LinkWelcomeSchema>;
 

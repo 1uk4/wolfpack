@@ -34,6 +34,8 @@ export interface HubLinkOptions {
   welcomeTimeoutMs?: number;
   /** Called with every welcome (also after reconnects). */
   onWelcome?: (w: LinkWelcome) => void;
+  /** Called with each `grants` frame (the host's registry-granted KB domains changed). */
+  onGrants?: (domains: string[]) => void;
   /** Called with each kb.changed hint pushed by the hub. */
   onKbChanged?: (domain: string, rev: number, epoch: string) => void;
   /** Called with the welcome's retired wolf names. */
@@ -376,6 +378,8 @@ export class HubLink {
       } catch (e) {
         this.log(`could not write receipt ${JSON.stringify(f.name.slice(0, 80))} for ${JSON.stringify(f.wolf.slice(0, 64))}: ${(e as Error).message}`); // no ack: the hub resends
       }
+    } else if (f.t === "grants") {
+      this.o.onGrants?.(f.domains);
     } else if (f.t === "kb.changed") {
       this.o.onKbChanged?.(f.domain, f.rev, f.epoch);
     } else if (f.t === "ping") {

@@ -138,6 +138,8 @@ export interface Registry {
   addWolf(hostId: string, wolf: LinkWolf): Promise<"ok" | "retired" | "rejected">;
   /** Worker link: a wolf left `hostId`: its host is cleared, the entry is kept. */
   removeWolf(hostId: string, name: string): Promise<void>;
+  /** Called after every registry change that reached memory (grants may have moved). Returns an unsubscribe. */
+  onChange(l: () => void): () => void;
   /** Resolves when queued writes are done. */
   idle(): Promise<void>;
 }
@@ -179,6 +181,7 @@ export function createRegistry(opts: RegistryOptions): Registry {
     }
   }
 
+  const changeListeners = new Set<() => void>();
   // One queue for every registry write; a failed write does not poison the next.
   let tail: Promise<unknown> = Promise.resolve();
   function mutate<T>(fn: (draft: RegistryFile) => T, skipIfUnchanged = false): Promise<T> {
@@ -190,6 +193,13 @@ export function createRegistry(opts: RegistryOptions): Registry {
       persist(draft); // if this throws, memory is untouched and still equals disk
       reg = draft; // disk now has the new state: memory must follow it immediately
       regenYaml(draft);
+      for (const l of [...changeListeners]) {
+        try {
+          l();
+        } catch {
+          /* a listener never breaks a registry write */
+        }
+      }
       return out;
     });
     tail = run.catch(() => {});
@@ -365,6 +375,10 @@ export function createRegistry(opts: RegistryOptions): Registry {
       return { wolf, released };
     },
     isRetired: (name) => reg.wolves.find((w) => w.name === name)?.status === "retired",
+    onChange(l) {
+      changeListeners.add(l);
+      return () => void changeListeners.delete(l);
+    },
     idle: () => tail.then(() => {}),
   };
 }

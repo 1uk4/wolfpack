@@ -6,6 +6,7 @@ import { WebSocket as WsClient } from "ws";
 import { HttpConsoleClient } from "@wolfpack/client";
 import { createHubServer, createTokenStore, type HubServer } from "@wolfpack/hubd";
 import { ACTOR_HEADER, LINK_PROTOCOL_VERSION, type LinkFrame, type LinkPresence, parseLinkFrame } from "@wolfpack/protocol";
+import type { KbSyncOptions } from "../kb-sync.js";
 import { runWorkerd, type RunningWorkerd } from "../run.js";
 import { FAKE_COMMAND, makeWolves, until } from "./helpers.js";
 
@@ -83,7 +84,7 @@ export interface LinkRigOptions {
   /** `domains:` written into each wolf's wolf.yaml (what the worker reports). Default: the grants. */
   wolfDomains?: Record<string, string[]>;
   /** KB sync timing seams. */
-  kbSync?: { baseMs?: number; capMs?: number; pollMs?: number };
+  kbSync?: Partial<Omit<KbSyncOptions, "hubUrl" | "token" | "mirrorDir">>;
   /** Reuse a mirror dir (restart tests). */
   kbMirrorDir?: string;
 }

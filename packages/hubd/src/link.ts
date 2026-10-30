@@ -118,6 +118,29 @@ export function createLink(opts: LinkOptions): Link {
   const states = new Map<string, LinkPresence>();
   const listeners = new Set<PresenceListener>();
   const asleepTimers = new Map<string, NodeJS.Timeout>();
+  /** Domains the registry grants `hostId` (union over its non-retired wolves), sorted. */
+  const grantedFor = (hostId: string): string[] => {
+    try {
+      const ws = opts.registry.list("wolves") as { host?: string; domains?: string[]; status?: string }[];
+      return [...new Set(ws.filter((w) => w.host === hostId && w.status !== "retired").flatMap((w) => w.domains ?? []))].sort();
+    } catch {
+      return [];
+    }
+  };
+  /** What each live host was last told, so a grants frame goes out only when the union really changed. */
+  const sentGrants = new Map<string, string>();
+  const pushGrants = (hostId: string) => {
+    const c = byHost.get(hostId);
+    if (!c || !c.hello || c.ws.readyState !== c.ws.OPEN) return;
+    const domains = grantedFor(hostId);
+    const key = JSON.stringify(domains);
+    if (sentGrants.get(hostId) === key) return;
+    sentGrants.set(hostId, key);
+    send(c, { t: "grants", domains });
+  };
+  const offChange = opts.registry.onChange(() => {
+    for (const h of [...byHost.keys()]) pushGrants(h);
+  });
   const q = (v: unknown) => JSON.stringify(String(v).slice(0, 64)); // log-safe
 
   const setPresence = (hostId: string, p: LinkPresence) => {
@@ -219,7 +242,8 @@ export function createLink(opts: LinkOptions): Link {
     if (receiver && typeof receiver._maxPayload === "number") receiver._maxPayload = LINK_MAX_PAYLOAD;
     else log(`hubd: WARNING link ${c.hostId}: ws internals changed (no _receiver._maxPayload); this connection stays limited to ${LINK_HELLO_MAX_PAYLOAD} bytes per frame`);
     if (result.rejected.length) log(`hubd: link ${c.hostId}: rejected wolves ${result.rejected.map(q).join(", ")}`);
-    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {} });
+    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {}, grantedDomains: grantedFor(c.hostId) });
+    sentGrants.set(c.hostId, JSON.stringify(grantedFor(c.hostId)));
     setPresence(c.hostId, "online");
     let n = 0;
     c.pingTimer = setInterval(() => send(c, { t: "ping", n: ++n }), t.heartbeatMs);
@@ -279,6 +303,7 @@ export function createLink(opts: LinkOptions): Link {
             log(`hubd: link ${c.hostId}: wolf ${q(f.wolf.name)} not registered (${r})`);
             sendError(c, "rejected", `${f.wolf.name}: ${r}`);
           }
+          pushGrants(c.hostId); // a wolf attached: its granted domains join the union
         }
         return;
       case "wolf.remove":
@@ -367,6 +392,7 @@ export function createLink(opts: LinkOptions): Link {
       for (const tm of asleepTimers.values()) clearTimeout(tm);
       asleepTimers.clear();
       wss.close();
+      offChange();
     },
     presence: (hostId) => states.get(hostId) ?? "offline",
     onPresence(l) {

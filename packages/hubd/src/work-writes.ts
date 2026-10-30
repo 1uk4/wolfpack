@@ -30,7 +30,6 @@ import {
   stageWork,
   unlinkWork,
   isBindable,
-  resolveWorkItem,
   type CreateWorkInput,
   WolfIdSchema,
   type WolfId,

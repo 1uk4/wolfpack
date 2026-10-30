@@ -64,13 +64,13 @@ export interface HttpClientOptions {
   /** Server origin (optionally with a path prefix), e.g. `http://127.0.0.1:4100`. */
   baseUrl: string;
   /**
-   * Acting identity. Sent as `X-Wolfpack-Actor` on hub requests only (see `hub`); wolf hosts get no actor on the wire. PROVISIONAL: the
-   * hub's shared key is the only authentication, the actor is asserted, not proven. A `system` actor is never sent (reserved for the hub).
+   * Acting identity. Sent as `X-Wolfpack-Actor` on hub requests that authenticate with the LEGACY `apiKey` only (see `hub`); with a bearer `token` the
+   * hub takes the identity from the token and the header is not sent. Wolf hosts get no actor on the wire. PROVISIONAL (legacy path): asserted, not proven. A `system` actor is never sent (reserved for the hub).
    */
   actor?: Actor;
   /**
    * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
-   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
+   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `Authorization: Bearer token` (preferred) or the legacy `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
    */
   hub?: { baseUrl: string; /** Per-device bearer token (preferred). */ token?: string; /** LEGACY shared key; ignored when `token` is set. */ apiKey?: string };
   /** Injectable fetch (tests, auth wrappers). Defaults to global fetch. */
@@ -518,7 +518,7 @@ export class HttpConsoleClient implements ConsoleClient {
       ...init,
       method: route.method,
       headers: { ...init.headers, ...(hubRoute && this.hub!.token ? { Authorization: `Bearer ${this.hub!.token}` } : hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
-        ...(hubRoute && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
+        ...(hubRoute && !this.hub!.token && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;
     throw await this.toError(res, threadId);

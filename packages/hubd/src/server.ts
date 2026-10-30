@@ -7,7 +7,7 @@
  * a matching X-API-Key and no bearer is accepted and its identity is the asserted X-Wolfpack-Actor (PROVISIONAL, asserted not proven).
  */
 import { createHash, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -77,6 +77,8 @@ export interface HubOptions {
   apiKey?: string;
   /** How often the running hub checks the token file for revokes (closing their SSE streams), ms. Default 1000. */
   authPollMs?: number;
+  /** Clock (ms since epoch) for pairing-code expiry and last-used stamps. Tests inject one; default Date.now. */
+  now?: () => number;
   /** 0 picks an ephemeral port. Default 0. */
   port?: number;
   /** Default 127.0.0.1. */
@@ -131,9 +133,12 @@ export { HubError };
 const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
+const PAIR_FAILS_PER_MIN = 10;
 const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
+/** The token behind a token-derived actor object (same object reaches the work writer), for attribution. */
+const TOKEN_INFO = new WeakMap<Actor, { tokenId: string; hostId?: string }>();
 
 /**
  * The asserted actor of a request (`X-Wolfpack-Actor`, PROVISIONAL: the shared key is the only authentication, so this is
@@ -271,6 +276,19 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     }
   });
   writer.onAppendFailed(() => bus.broadcastResync());
+  // Attribution of token-authenticated writes: the ledger event schema has no actor field, so tokenId + hostId go to a side log
+  // (<dataDir>/auth/attribution.jsonl, one line per write) naming the events that write appended.
+  writer.onAppended(({ actor, events }) => {
+    const info = TOKEN_INFO.get(actor);
+    if (!info) return;
+    try {
+      const line = JSON.stringify({ at: new Date().toISOString(), ...info, actor, events: events.map((e) => ({ id: e.id, type: e.type })) });
+      mkdirSync(`${opts.dataDir}/auth`, { recursive: true });
+      appendFileSync(`${opts.dataDir}/auth/attribution.jsonl`, line + "\n", { mode: 0o600 });
+    } catch (e) {
+      console.error("hubd: could not record write attribution:", e);
+    }
+  });
   const readBody = (req: IncomingMessage) => readJson(req, { maxBytes: WORK_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 });
   const writeWork = writer.write;
   let registry: ReturnType<typeof createRegistry>;
@@ -288,6 +306,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let server!: Server;
   let port = 0;
   let stopWatcher: () => void = () => {};
+  let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
@@ -297,11 +316,12 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     const digest = (v: string) => createHash("sha256").update(v).digest();
     const expected = opts.apiKey ? digest(opts.apiKey) : undefined;
     const legacyOk = (req: IncomingMessage): boolean => expected !== undefined && timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
-    const tokens = createTokenStore(opts.dataDir);
+    const pairFailures = new Map<string, number[]>(); // remote address -> times of failed redeems (in memory)
+    const tokens = createTokenStore(opts.dataDir, opts.now);
     /** Open SSE responses per token id, so a revoke can close them. */
     const streams = new Map<string, Set<ServerResponse>>();
     const revokeListeners = new Set<(tokenId: string) => void>();
-    const known = new Set<string>(tokens.list().map((t) => t.id)); // token ids seen live (file scans + authentications)
+    const known = new Set<string>(tokens.ids()); // token ids seen live (file scans + authentications)
     const fireRevoked = (id: string) => {
       known.delete(id);
       for (const l of [...revokeListeners]) {
@@ -318,7 +338,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       streams.delete(id);
     });
     const sweepRevoked = () => {
-      const live = new Set(tokens.list().map((t) => t.id));
+      const live = new Set(tokens.ids());
       for (const id of [...known]) if (!live.has(id)) fireRevoked(id);
       for (const id of live) known.add(id);
     };
@@ -335,13 +355,16 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     }, opts.authPollMs ?? 1000);
     watcher.unref();
     stopWatcher = () => clearInterval(watcher);
+    tokensFlush = () => tokens.flush();
     /** The shared check for dispatch AND the coming HTTP `upgrade` path. */
     function authenticate(req: IncomingMessage): AuthIdentity | null {
       const h = req.headers.authorization;
       if (typeof h === "string" && /^bearer /i.test(h)) {
         const rec = tokens.verify(h.slice(7).trim());
         if (!rec) return null; // a bad bearer never falls back to the legacy key
-        TOKEN_ACTOR.set(req, actorOf(rec));
+        const actor = actorOf(rec);
+        TOKEN_ACTOR.set(req, actor);
+        TOKEN_INFO.set(actor, { tokenId: rec.id, ...(rec.hostId ? { hostId: rec.hostId } : {}) });
         known.add(rec.id);
         tokens.touch(rec.id);
         return { tokenId: rec.id, kind: rec.kind, ...(rec.hostId ? { hostId: rec.hostId } : {}), owner: rec.owner };
@@ -394,8 +417,23 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       const { params } = m;
       switch (m.name) {
         case "hubPair": {
+          const addr = req.socket.remoteAddress ?? "?";
+          const t = (opts.now ?? Date.now)();
+          const recent = (pairFailures.get(addr) ?? []).filter((x) => t - x < 60_000);
+          pairFailures.set(addr, recent);
+          if (recent.length >= PAIR_FAILS_PER_MIN) {
+            res.setHeader("Retry-After", "60");
+            return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
+          }
           const body = parseBody(PairRequestSchema, await readBody(req));
-          return send(res, 200, tokens.redeem(body.code, body.label, body.kind, body.hostId));
+          try {
+            const out = tokens.redeem(body.code, body.label, body.kind, body.hostId);
+            console.log(`hubd: paired token ${out.tokenId} kind=${body.kind} label=${JSON.stringify(body.label)}${body.hostId ? ` hostId=${body.hostId}` : ""}`);
+            return send(res, 200, out);
+          } catch (e) {
+            if (e instanceof HubError && e.code === "unauthorized") pairFailures.set(addr, [...recent, t]);
+            throw e;
+          }
         }
         case "listWolves":
           // The hub is not a wolf host. (The registry ticket makes this the pack's wolf list.)
@@ -476,7 +514,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           bus.attach(res, cursor);
           if (tokenId) {
             // Revoked between auth and attach, or later (the watcher): close this stream.
-            if (!tokens.list().some((t) => t.id === tokenId)) return void res.destroy();
+            if (!tokens.ids().includes(tokenId)) return void res.destroy();
             let set = streams.get(tokenId);
             if (!set) streams.set(tokenId, (set = new Set()));
             set.add(res);
@@ -538,6 +576,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
         stopWatcher();
+        tokensFlush();
         bus.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));

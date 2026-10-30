@@ -3,7 +3,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { exportHub, importHub } from "./export.js";
-import { createTokenStore } from "./auth.js";
+import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
 import { createHubServer } from "./server.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
@@ -110,7 +110,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   }
   if (args.command === "pair") {
     const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode();
-    log(`pairing code: ${code}\nsingle-use, expires ${expiresAt} (10 minutes)`);
+    log(`pairing code: ${code}\nsingle-use, expires ${expiresAt} (${PAIRING_TTL_MS / 60000} minutes)`);
     return;
   }
   if (args.command === "tokens") {

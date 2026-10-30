@@ -6,14 +6,17 @@
  *   no wolf host) fails AT ONCE with 503 and a message + `details.presence` naming the state. Nothing is queued.
  * - Cancel: the HTTP client going away sends `cancel` to the worker. A dropped/replaced link fails every in-flight request of that link
  *   (503 before the head; the response is destroyed after it, so a stream ends like a lost connection).
- * - Backpressure: a client that cannot keep up (more than RELAY_MAX_BUFFERED bytes queued on its response) is cut off and cancelled.
+ * - Backpressure: per-request `pause`/`resume` frames (above LINK_RELAY_PAUSE_HIGH queued on the client's response); a worker that ignores
+ *   pause is cut off at the hard caps below. A client whose socket makes no progress for the stall window is cut off too.
  * - A `res` head must arrive within `headTimeoutMs` (default 30s): else 504 and `cancel`.
  * The caller (server.ts) authenticates and refuses worker tokens before calling `handle`.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   LINK_RELAY_CHUNK_BYTES,
+  LINK_RELAY_HARD_SLACK,
   LINK_RELAY_MAX_BODY,
+  LINK_RELAY_PAUSE_HIGH,
   LINK_RELAY_MAX_INFLIGHT,
   PROTOCOL_VERSION_HEADER,
   type ErrorCode,
@@ -23,10 +26,13 @@ import { HubError } from "./errors.js";
 import type { Link } from "./link.js";
 import type { Registry } from "./registry.js";
 
-/** Bytes a slow client may leave queued on its response, per request and summed per host. */
-const RELAY_MAX_BUFFERED = 1024 * 1024;
+/**
+ * Flow control: above PAUSE_HIGH queued on a client's response the hub sends `pause` (once per paused state); when the response drains
+ * it sends `resume`. A worker that ignores pause is cut off at the hard caps: PAUSE_HIGH + HARD_SLACK per request, 8 MB summed per host.
+ * The no-progress timer cuts a response only when its socket stops moving bytes for DRAIN_STALL_MS; a slow but advancing reader is never cut.
+ */
+const RELAY_HARD_BUFFERED = LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK;
 const RELAY_MAX_BUFFERED_HOST = 8 * 1024 * 1024;
-/** A response whose socket stays un-drained this long is cut off. */
 const DRAIN_STALL_MS = 30_000;
 /** Request headers that never cross the link (credentials of the hub hop, hop-by-hop, framing). */
 const DROP_REQ = new Set(["authorization", "x-api-key", "cookie", "host", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "content-length", "proxy-authorization", "x-wolfpack-actor", "expect"]);
@@ -40,6 +46,11 @@ interface Pending {
   done: boolean;
   headTimer?: NodeJS.Timeout;
   stallTimer?: NodeJS.Timeout;
+  /** A `pause` is outstanding (no `resume` sent yet). */
+  paused?: boolean;
+  drainWatch?: boolean;
+  /** Socket bytes written when the stall timer was last armed. */
+  stallMark?: number;
 }
 
 export interface Relay {
@@ -50,7 +61,8 @@ export interface Relay {
   inflight(): number;
 }
 
-export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?: number; log?: (m: string) => void }): Relay {
+export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?: number; /** @internal TEST-ONLY */ stallMs?: number; log?: (m: string) => void }): Relay {
+  const stallMs = o.stallMs ?? DRAIN_STALL_MS;
   const pending = new Map<string, Pending>();
   const perHost = new Map<string, number>();
   const log = o.log ?? ((m: string) => console.log(m));
@@ -211,18 +223,28 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
       if (buf.length > LINK_RELAY_CHUNK_BYTES) return tooBigChunk(f.id, p, hostId);
       let hostBuffered = 0;
       for (const q of pending.values()) if (q.hostId === hostId) hostBuffered += q.res.writableLength;
-      if (res.writableLength + buf.length > RELAY_MAX_BUFFERED || hostBuffered + buf.length > RELAY_MAX_BUFFERED_HOST) {
+      if (res.writableLength + buf.length > RELAY_HARD_BUFFERED || hostBuffered + buf.length > RELAY_MAX_BUFFERED_HOST) {
         log(`hubd: relay ${f.id} to ${hostId}: client too slow (${res.writableLength} bytes queued); cutting it off`);
         return abort(f.id, p, () => res.destroy());
       }
-      if (!res.write(buf) && !p.stallTimer) {
-        // Not drained: the worker has no flow-control frame, so the caps above bound the queue; this bounds the time.
-        p.stallTimer = setTimeout(() => {
-          log(`hubd: relay ${f.id} to ${hostId}: client not draining for ${DRAIN_STALL_MS}ms; cutting it off`);
-          abort(f.id, p, () => res.destroy());
-        }, DRAIN_STALL_MS);
-        p.stallTimer.unref();
-        res.once("drain", () => (clearTimeout(p.stallTimer), (p.stallTimer = undefined)));
+      if (!res.write(buf)) {
+        armStall(f.id, p, hostId);
+        if (!p.paused && res.writableLength > LINK_RELAY_PAUSE_HIGH) {
+          p.paused = true; // one pause per paused state
+          o.link.sendToHost(hostId, { t: "pause", id: f.id });
+        }
+        if (!p.drainWatch) {
+          p.drainWatch = true;
+          res.once("drain", () => {
+            p.drainWatch = false;
+            clearTimeout(p.stallTimer);
+            p.stallTimer = undefined;
+            if (p.paused && !p.done) {
+              p.paused = false;
+              if (o.link.epoch(hostId) === p.epoch) o.link.sendToHost(hostId, { t: "resume", id: f.id });
+            }
+          });
+        }
       }
       return;
     }
@@ -235,6 +257,21 @@ export function createRelay(o: { link: Link; registry: Registry; bodyTimeoutMs?:
     finish(f.id, p);
     if (!p.started) return envelope(res, 502, "engine_error", `worker failed the request: ${f.code}${f.message ? `: ${f.message.slice(0, 200)}` : ""}`, true, { code: f.code.slice(0, 40) });
     res.destroy();
+  }
+
+  /** No-progress timer: fires only if the client's socket moved no bytes over a whole window (slow-but-advancing readers survive). */
+  function armStall(id: string, p: Pending, hostId: string): void {
+    if (p.stallTimer) return;
+    p.stallMark = p.res.socket?.bytesWritten ?? 0;
+    p.stallTimer = setTimeout(function check() {
+      p.stallTimer = undefined;
+      if (p.done) return;
+      const now = p.res.socket?.bytesWritten ?? 0;
+      if (now > (p.stallMark ?? 0)) return armStall(id, p, hostId); // still draining
+      log(`hubd: relay ${id} to ${hostId}: client not draining for ${stallMs}ms; cutting it off`);
+      abort(id, p, () => p.res.destroy());
+    }, stallMs);
+    p.stallTimer.unref();
   }
 
   function tooBigChunk(id: string, p: Pending, hostId: string): void {

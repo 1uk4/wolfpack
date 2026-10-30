@@ -289,7 +289,7 @@ export function createLink(opts: LinkOptions): Link {
       case "rerr":
         return opts.onRelayFrame?.(c.hostId, c.epoch, f);
       default:
-        return; // pong, req/cancel (hub-originated only): nothing to do
+        return; // pong, req/cancel/pause/resume (hub-originated only): nothing to do
     }
   }
 

@@ -1,7 +1,8 @@
 /**
  * Worker side of the console relay: a `req` frame from the hub becomes a request to this workerd's own local /v1 (loopback HTTP, so
  * the proxy, version gate and routing are exactly the ones a local console gets), and the answer goes back as res / chunk* / end (or rerr).
- * `cancel` (or a link drop) aborts the local request. Only the hub opens requests.
+ * `cancel` (or a link drop) aborts the local request. `pause`/`resume` from the hub stop/restart reading the local response (so no chunk
+ * frames are sent while the hub's client is slow). Only the hub opens requests.
  *
  * SSRF: the frame is untrusted. Host and port ALWAYS come from `baseUrl`; `path` must be origin-form ("/x", not "//x", not absolute) and must
  * resolve to baseUrl's own origin, else the request is refused with rerr before anything connects.
@@ -28,7 +29,7 @@ export interface WorkerRelayOptions {
 }
 
 export class WorkerRelay {
-  private readonly live = new Map<string, () => void>();
+  private readonly live = new Map<string, { abort: () => void; hubPause: (on: boolean) => void }>();
   private queued = 0;
   private readonly paused = new Set<() => void>();
   constructor(private readonly o: WorkerRelayOptions) {}
@@ -37,10 +38,14 @@ export class WorkerRelay {
     return this.live.size;
   }
   cancel(id: string): void {
-    this.live.get(id)?.();
+    this.live.get(id)?.abort();
+  }
+  /** Hub flow control: stop (true) / restart (false) reading the local response of this request. Unknown ids are ignored. */
+  hubPause(id: string, on: boolean): void {
+    this.live.get(id)?.hubPause(on);
   }
   abortAll(): void {
-    for (const abort of [...this.live.values()]) abort();
+    for (const e of [...this.live.values()]) e.abort();
     this.queued = 0;
     this.paused.clear();
   }
@@ -88,6 +93,14 @@ export class WorkerRelay {
     let up: ReturnType<typeof httpRequest> | undefined;
     let seq = 0;
     let resume: (() => void) | undefined;
+    let upstream: import("node:http").IncomingMessage | undefined;
+    let hubPaused = false;
+    let queuePaused = false;
+    const apply = () => {
+      if (finished || !upstream) return;
+      if (hubPaused || queuePaused) upstream.pause();
+      else upstream.resume();
+    };
     const done = () => {
       finished = true;
       this.live.delete(id);
@@ -107,16 +120,19 @@ export class WorkerRelay {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(f.headers)) if (!SKIP_REQ.has(k.toLowerCase())) headers[k] = v;
     if (body) headers["content-length"] = String(body.length);
-    this.live.set(id, abort);
+    this.live.set(id, { abort, hubPause: (on) => ((hubPaused = on), apply()) });
     // Host and port are the worker's own; only the (validated) path comes from the frame.
     up = httpRequest({ hostname: base.hostname, port: base.port, path: f.path, method: f.method, headers }, (ur) => {
       if (finished) return void ur.destroy();
       const out: Record<string, string> = {};
       for (const [k, v] of Object.entries(ur.headers)) if (!SKIP_RES(k) && v !== undefined) out[k] = Array.isArray(v) ? v.join(", ") : v;
       this.o.send({ t: "res", id, status: ur.statusCode ?? 502, headers: out });
+      upstream = ur;
       resume = () => {
-        if (!finished) ur.resume();
+        queuePaused = false;
+        apply();
       };
+      apply(); // a pause may have arrived before the head
       ur.on("data", (buf: Buffer) => {
         if (finished) return;
         for (let i = 0; i < buf.length; i += LINK_RELAY_CHUNK_BYTES) {
@@ -124,7 +140,8 @@ export class WorkerRelay {
           this.sendCounted({ t: "chunk", id, seq: seq++, enc: "b64", data: part.toString("base64") }, part.length);
         }
         if (this.queued > HIGH_WATER) {
-          ur.pause();
+          queuePaused = true;
+          apply();
           this.paused.add(resume!);
         }
       });

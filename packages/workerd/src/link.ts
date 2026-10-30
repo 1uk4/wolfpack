@@ -36,8 +36,8 @@ export interface HubLinkOptions {
   onRetired?: (names: string[]) => void;
   /** Called with the welcome's rejected wolf names (unknown to the hub, or owned by another host). */
   onRejected?: (names: string[]) => void;
-  /** Relay: called for `req` / `cancel` frames from the hub. */
-  onRelay?: (f: Extract<LinkFrame, { t: "req" | "cancel" }>) => void;
+  /** Relay: called for `req` / `cancel` / `pause` / `resume` frames from the hub. */
+  onRelay?: (f: Extract<LinkFrame, { t: "req" | "cancel" | "pause" | "resume" }>) => void;
   /** Relay: called when the live socket closes or is retired (in-flight relayed requests must stop). */
   onLinkDown?: () => void;
   /** Called with the welcome's domain mismatches (informational; the hub registry decides domains). */
@@ -373,7 +373,7 @@ export class HubLink {
       }
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
-    } else if (f.t === "req" || f.t === "cancel") {
+    } else if (f.t === "req" || f.t === "cancel" || f.t === "pause" || f.t === "resume") {
       if (this.st === "online") {
         try {
           this.o.onRelay?.(f);

@@ -22,6 +22,8 @@ const server = createServer((req, res) => {
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("openStreams")) return json(res, 200, { openStreams });
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("big")) {
     res.writeHead(200, { "content-type": "application/octet-stream" });
+    openStreams += 1;
+    res.on("close", () => (openStreams -= 1));
     return res.end(Buffer.alloc(Number(url.searchParams.get("big")), 97));
   }
   if (p === `/v1/wolves/${name}/memory` && url.searchParams.has("cookies")) {

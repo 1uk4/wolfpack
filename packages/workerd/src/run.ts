@@ -89,7 +89,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       laptop: opts.laptop,
       wolves: () => supervisor.configs().map(linkWolf),
       log,
-      onRelay: (f) => (f.t === "req" ? relay.handle(f) : relay.cancel(f.id)),
+      onRelay: (f) => (f.t === "req" ? relay.handle(f) : f.t === "cancel" ? relay.cancel(f.id) : relay.hubPause(f.id, f.t === "pause")),
       onLinkDown: () => relay.abortAll(),
       onRetired: (names) => log(`[workerd] hub retired wolves: ${names.join(", ")}`),
       ...opts.linkOptions,

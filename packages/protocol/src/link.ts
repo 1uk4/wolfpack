@@ -3,7 +3,8 @@
  * LINK_PROTOCOL_VERSION is separate from the HTTP PROTOCOL_VERSION; a MAJOR mismatch is rejected (close 4001).
  * Relay frames (req/res/chunk/end/cancel/rerr) tunnel the console's /v1 HTTP requests (SSE included) from the hub to a worker's local
  * /v1 handler. Only the hub opens requests (ids `h-<n>`); a worker answers with res (head), chunk* (body, base64) and end, or rerr.
- * `cancel` (hub -> worker) aborts a request whose HTTP client went away. Additive over the v1 frames: `req.body` and `chunk.enc`
+ * `cancel` (hub -> worker) aborts a request whose HTTP client went away; `pause` / `resume` (hub -> worker, additive) are per-request flow control
+ * (see LINK_RELAY_PAUSE_HIGH); a peer that does not know them ignores the frames. Additive over the v1 frames: `req.body` and `chunk.enc`
  * are optional, so a peer that never sends them is unchanged. A worker that does not know the relay ignores these frames.
  * Request ids are prefixed by the side that opened them: `h-` (hub) or `w-` (worker; reserved, not used yet).
  */
@@ -15,6 +16,15 @@ export const LINK_PATH = "/v1/link";
 export const LINK_MAX_PAYLOAD = 8 * 1024 * 1024;
 /** Relay: max raw bytes per chunk frame (base64 grows it ~4/3; well below LINK_MAX_PAYLOAD). */
 export const LINK_RELAY_CHUNK_BYTES = 256 * 1024;
+/**
+ * Relay flow control (hub -> worker `pause`/`resume`): the hub sends `pause {id}` when a client's response has more than
+ * LINK_RELAY_PAUSE_HIGH bytes queued, and `resume {id}` once it drained (below LINK_RELAY_PAUSE_LOW). A worker that honours `pause`
+ * stops sending chunks for that id; one that ignores it (older worker) is still bounded by the hub's hard caps
+ * (LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK queued per request, 8 MB per host) and is cut off, as before.
+ */
+export const LINK_RELAY_PAUSE_HIGH = 256 * 1024;
+export const LINK_RELAY_PAUSE_LOW = 64 * 1024;
+export const LINK_RELAY_HARD_SLACK = 4 * 1024 * 1024;
 /** Relay: max request body the hub tunnels (raw bytes). */
 export const LINK_RELAY_MAX_BODY = 2 * 1024 * 1024;
 /** Relay: no `res` head within this after `req` = the hub gives up (504) and sends `cancel`. */
@@ -94,6 +104,9 @@ export const LinkResSchema = z.object({ t: z.literal("res"), id: Id, status: z.n
 export const LinkChunkSchema = z.object({ t: z.literal("chunk"), id: Id, data: z.string(), seq: z.number().int().nonnegative(), enc: z.enum(["b64", "utf8"]).optional() });
 export const LinkEndSchema = z.object({ t: z.literal("end"), id: Id });
 export const LinkCancelSchema = z.object({ t: z.literal("cancel"), id: Id });
+/** Additive (hub -> worker): stop / restart sending `chunk` frames for this request. Idempotent; unknown ids are ignored. */
+export const LinkPauseSchema = z.object({ t: z.literal("pause"), id: Id });
+export const LinkResumeSchema = z.object({ t: z.literal("resume"), id: Id });
 export const LinkRerrSchema = z.object({ t: z.literal("rerr"), id: Id, code: z.string().min(1), message: z.string().optional() });
 
 // Contribution + receipt frames (additive; LINK_PROTOCOL_VERSION unchanged).
@@ -151,6 +164,8 @@ export const LinkFrameSchema = z.discriminatedUnion("t", [
   LinkEndSchema,
   LinkCancelSchema,
   LinkRerrSchema,
+  LinkPauseSchema,
+  LinkResumeSchema,
 ]);
 export type LinkFrame = z.infer<typeof LinkFrameSchema>;
 export type LinkHello = z.infer<typeof LinkHelloSchema>;

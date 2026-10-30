@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { HttpConsoleClient } from "@wolfpack/client";
+import { request as nodeRequest, type IncomingMessage } from "node:http";
+import { LINK_RELAY_PAUSE_HIGH, LINK_RELAY_HARD_SLACK, type LinkFrame } from "@wolfpack/protocol";
 import { startLinkRig, type LinkRig } from "./testing/link-rig.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];
@@ -9,8 +11,10 @@ afterEach(async () => {
 async function rig(o: Parameters<typeof startLinkRig>[0] = {}) {
   const r = await startLinkRig(o);
   cleanup.push(() => r.close());
-  await r.waitPresence("online");
-  await r.workerd.supervisor.whenSettled();
+  if (!o.noHub) {
+    await r.waitPresence("online");
+    await r.workerd.supervisor.whenSettled();
+  }
   const console_ = r.store.redeem(r.store.mintPairingCode({ kind: "console" }).code, "c", "console");
   const hubUrl = r.hub.url;
   const get = (path: string, token = console_.token, init: RequestInit = {}) => fetch(hubUrl + path, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers as object) } });
@@ -35,17 +39,16 @@ describe("console relay through the hub", () => {
     expect((await get("/v1/wolves/ghost/threads")).status).toBe(404);
   });
 
-  // Kept under the hub's 1 MB per-request queue cap: a faster-than-client burst above it is cut off by design (no flow-control frame on the link).
   it("a large response is split into bounded chunk frames and arrives intact", async () => {
     const { r, get } = await rig();
     const sizes: number[] = [];
     const orig = r.workerd.link!.sendFrame.bind(r.workerd.link!);
     r.workerd.link!.sendFrame = (f, w) => (f.t === "chunk" && sizes.push(f.data.length), orig(f, w));
-    const res = await get("/v1/wolves/alpha/memory?big=900000");
+    const res = await get("/v1/wolves/alpha/memory?big=3500000");
     const buf = Buffer.from(await res.arrayBuffer());
-    expect(buf.length).toBe(900_000);
+    expect(buf.length).toBe(3_500_000);
     expect(buf.every((b) => b === 97)).toBe(true);
-    expect(sizes.length).toBeGreaterThanOrEqual(3);
+    expect(sizes.length).toBeGreaterThanOrEqual(13);
     expect(Math.max(...sizes)).toBeLessThan(8 * 1024 * 1024 / 4);
   });
 
@@ -195,5 +198,126 @@ describe("console relay through the hub", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
     expect(res.headers.get("x-keep")).toBe("1");
+  });
+
+});
+
+// ---- flow control (pause / resume) ----------------------------------------------------------------------------------------------
+
+/** Count the hub -> worker frames of one type (wraps sendToHost; call before the request). */
+function recordHubFrames(r: LinkRig) {
+  const frames: LinkFrame[] = [];
+  const orig = r.hub.link.sendToHost.bind(r.hub.link);
+  r.hub.link.sendToHost = (h, f) => (frames.push(f), orig(h, f));
+  return { frames, count: (t: string) => frames.filter((f) => f.t === t).length };
+}
+/** A raw HTTP GET against the hub whose body is NOT read until `read()` is called (a slow client). */
+function slowGet(hubUrl: string, token: string, path: string) {
+  const u = new URL(hubUrl);
+  let res!: IncomingMessage;
+  let bytes = 0;
+  let bad = 0;
+  let abortFn = () => {};
+  const done = new Promise<"end" | "error">((resolve) => {
+    const q = nodeRequest({ hostname: u.hostname, port: u.port, path, headers: { Authorization: `Bearer ${token}` } }, (x) => {
+      res = x;
+      x.pause();
+      x.on("data", (b: Buffer) => {
+        bytes += b.length;
+        for (const c of b) if (c !== 97) bad++;
+      });
+      x.on("end", () => resolve("end"));
+      x.on("error", () => resolve("error"));
+      x.on("aborted", () => resolve("error"));
+    });
+    q.on("error", () => resolve("error"));
+    q.end();
+    abortFn = () => q.destroy();
+  });
+  return { done, abort: () => (res?.destroy(), abortFn()), read: () => res.resume(), got: () => ({ bytes, bad }), head: () => until2(() => !!res) };
+}
+const until2 = async (c: () => boolean) => {
+  const end = Date.now() + 5000;
+  while (!c()) {
+    if (Date.now() > end) throw new Error("timeout");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+};
+
+describe("relay flow control", () => {
+  it("a slow reader gets a 24 MB body intact; the hub pauses and resumes the worker (no cutoff)", async () => {
+    const { r, hubUrl, token } = await rig();
+    const rec = recordHubFrames(r);
+    const c = slowGet(hubUrl, token, "/v1/wolves/alpha/memory?big=25165824");
+    await c.head();
+    await r.eventually(() => rec.count("pause") >= 1, "a pause frame", 8000); // the client has not read a byte
+    expect(rec.count("cancel")).toBe(0);
+    c.read();
+    expect(await c.done).toBe("end");
+    expect(c.got()).toEqual({ bytes: 25165824, bad: 0 });
+    expect(rec.count("resume")).toBeGreaterThanOrEqual(1);
+    expect(rec.count("pause")).toBeLessThanOrEqual(rec.count("resume") + 1); // never two pauses without a resume between
+    expect(rec.count("cancel")).toBe(0);
+  });
+
+  it("cancel while paused: the worker's paused local request is cleaned up", async () => {
+    const { r, hubUrl, token } = await rig();
+    const rec = recordHubFrames(r);
+    const c = slowGet(hubUrl, token, "/v1/wolves/alpha/memory?big=25165824");
+    await c.head();
+    await r.eventually(() => rec.count("pause") >= 1, "a pause frame", 8000);
+    await new Promise((x) => setTimeout(x, 200));
+    expect(await openStreams(r)).toBe(1); // held open by the pause
+    c.abort();
+    await r.eventually(() => rec.count("cancel") === 1, "cancel frame");
+    await r.eventually(async () => (await openStreams(r)) === 0, "paused worker request closed");
+  });
+
+  it("a worker that ignores pause is still cut off at the hard cap", async () => {
+    const { r, hubUrl, token } = await rig({ noHub: true });
+    const w = await r.rawLink(r.token);
+    w.hello({ wolves: [{ name: "alpha", domains: [] }] });
+    await w.until(() => w.frames.some((f) => f.t === "welcome"), "welcome");
+    const c = slowGet(hubUrl, token, "/v1/wolves/alpha/memory");
+    await w.until(() => w.frames.some((f) => f.t === "req"), "req");
+    const id = (w.frames.find((f) => f.t === "req") as any).id as string;
+    w.send({ t: "res", id, status: 200, headers: {} });
+    const data = Buffer.alloc(128 * 1024, 97).toString("base64");
+    let sent = 0;
+    // Never honours pause: keeps sending until the hub cancels (bounded so a broken hub fails the test, not hangs it).
+    while (!w.frames.some((f) => f.t === "cancel") && sent < 600) {
+      w.send({ t: "chunk", id, seq: sent++, data, enc: "b64" });
+      if (sent % 4 === 0) await new Promise((x) => setTimeout(x, 2));
+    }
+    expect(w.frames.some((f) => f.t === "pause")).toBe(true);
+    expect(w.frames.some((f) => f.t === "cancel")).toBe(true);
+    // The client's own queue (kernel buffers aside) was bounded by the hard cap, not by the whole 75 MB attempt.
+    expect(sent * 128 * 1024).toBeLessThan(64 * 1024 * 1024);
+    expect(LINK_RELAY_PAUSE_HIGH + LINK_RELAY_HARD_SLACK).toBeLessThan(5 * 1024 * 1024);
+    c.read();
+    expect(await c.done).toBe("error");
+  });
+
+  it("cancel while paused (raw worker): the hub sends exactly one pause, then cancel", async () => {
+    const { r, hubUrl, token } = await rig({ noHub: true });
+    const w = await r.rawLink(r.token);
+    w.hello({ wolves: [{ name: "alpha", domains: [] }] });
+    await w.until(() => w.frames.some((f) => f.t === "welcome"), "welcome");
+    const c = slowGet(hubUrl, token, "/v1/wolves/alpha/memory");
+    await w.until(() => w.frames.some((f) => f.t === "req"), "req");
+    const id = (w.frames.find((f) => f.t === "req") as any).id as string;
+    w.send({ t: "res", id, status: 200, headers: {} });
+    const data = Buffer.alloc(128 * 1024, 97).toString("base64");
+    let sent = 0;
+    while (!w.frames.some((f) => f.t === "pause") && sent < 600) {
+      w.send({ t: "chunk", id, seq: sent++, data, enc: "b64" }); // honours pause: stops at the first one
+      if (sent % 4 === 0) await new Promise((x) => setTimeout(x, 2));
+    }
+    expect(w.frames.some((f) => f.t === "pause")).toBe(true);
+    await new Promise((x) => setTimeout(x, 150));
+    expect(w.frames.filter((f) => f.t === "pause")).toHaveLength(1);
+    expect(w.frames.some((f) => f.t === "cancel")).toBe(false);
+    c.abort();
+    await w.until(() => w.frames.some((f) => f.t === "cancel"), "cancel after abort while paused");
   });
 });

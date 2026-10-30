@@ -362,12 +362,6 @@ export const ROUTES = {
   hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   /**
-   * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
-   * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`
-   * replays from a bounded buffer, or answers `resync` when the cursor is older than the buffer (or from another hub boot).
-   * Keepalive comments; never ends with `[DONE]`.
-   */
-  /**
    * KB commit (hubd): a batch of create/update/delete changes to entries/*.md, _registry.md, _digest.json and INDEX.md of declared
    * domains, each with contentHash and prevHash. All-or-nothing under the KB writer lock: entry schema, declared domain (domains.yaml),
    * path confinement, and prevHash compare-and-set (409 `conflict`, `details.path`, on a stale write). Then it writes the files,
@@ -375,6 +369,12 @@ export const ROUTES = {
    * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
    */
   hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
+  /**
+   * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
+   * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`
+   * replays from a bounded buffer, or answers `resync` when the cursor is older than the buffer (or from another hub boot).
+   * Keepalive comments; never ends with `[DONE]`.
+   */
   hubEvents: { scope: "hub", method: "GET", path: "/v1/events", response: { kind: "sse", event: HubEventSchema }, status: [200], error: err },
   /**
    * Graduation, step 1: start a background job that distills the work item into KB contribution entries and leaves a

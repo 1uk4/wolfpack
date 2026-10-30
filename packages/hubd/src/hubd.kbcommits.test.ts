@@ -1,5 +1,6 @@
 /** KB commits: validation, CAS, actor policy, kb.changed, ledger-level atomicity (failure injection, crash recovery). */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as netServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -32,7 +33,7 @@ async function setup(kbFaults?: Parameters<typeof createHubServer>[0]["kbFaults"
   tmp.push(dir);
   const base = join(dir, "kb", "base");
   mkdirSync(base, { recursive: true });
-  writeFileSync(join(base, "domains.yaml"), "domains:\n  alpha:\n    label: Alpha\n  beta:\n    label: Beta\n");
+  writeFileSync(join(base, "domains.yaml"), "domains:\n  alpha:\n    label: Alpha\n  beta:\n    label: Beta\n  wp:\n    label: WP\n");
   const hub = await createHubServer({ dataDir: dir, apiKey: KEY, kbFaults });
   servers.push(hub);
   const post = (body: unknown, actor?: object) =>
@@ -124,6 +125,10 @@ describe("POST /v1/kb/commits", () => {
       { op: "create", domain: "alpha", path: "work/x.md", content: "x", contentHash: contentHash("x"), prevHash: null } as KbChange,
       { op: "create", domain: "../alpha", path: "INDEX.md", content: "x", contentHash: contentHash("x"), prevHash: null },
       { op: "create", domain: "alpha", path: "_digest.json", content: "[not json", contentHash: contentHash("[not json"), prevHash: null },
+      { op: "create", domain: "alpha", path: "_digest.json", content: "null", contentHash: contentHash("null"), prevHash: null },
+      { op: "create", domain: "alpha", path: "_digest.json", content: "[1]", contentHash: contentHash("[1]"), prevHash: null },
+      create("wp", "kb-wp-foo-aaaaaaa"), // the id's domain part must be exactly the declared domain
+      create("alpha", "kb-alpha-AAAAAAA"), // case-insensitive collision with ID1 in the same batch
     ];
     for (const bad of cases) {
       const res = await s.post({ changes: [good, bad] }, OP);
@@ -132,6 +137,16 @@ describe("POST /v1/kb/commits", () => {
     expect((await s.post({ changes: [good, good] }, OP)).status).toBe(400); // duplicate path
     expect(s.snapshot()).toEqual(before.snap);
     expect(s.ledger().equals(before.led)).toBe(true);
+  });
+
+  it("refuses a symlinked domain directory", async () => {
+    const s = await setup();
+    const outside = mkdtempSync(join(tmpdir(), "hubd-kb-out-"));
+    tmp.push(outside);
+    mkdirSync(join(s.base, "domains"), { recursive: true });
+    symlinkSync(outside, join(s.base, "domains", "alpha"));
+    expect((await s.post({ changes: [create("alpha", ID1)] }, OP)).status).toBe(400);
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("refuses a symlinked directory or file as a write target", async () => {
@@ -174,6 +189,19 @@ describe("POST /v1/kb/commits", () => {
   });
 });
 
+describe("in-process commitKb validates the request", () => {
+  it("bad prevHash, a missing field and more than 500 changes are invalid_request", async () => {
+    const s = await setup();
+    const c = create("alpha", ID1);
+    await expect(s.hub.commitKb(SYS, { changes: [{ ...c, prevHash: "nope" }] } as never)).rejects.toMatchObject({ code: "invalid_request" });
+    const { content: _c, ...noContent } = c as KbChange & { content: string };
+    await expect(s.hub.commitKb(SYS, { changes: [noContent] } as never)).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(s.hub.commitKb(OP, { changes: Array.from({ length: 501 }, () => c) })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(s.hub.commitKb(OP, {} as never)).rejects.toMatchObject({ code: "invalid_request" });
+    expect(existsSync(s.file("alpha", `entries/${ID1}.md`))).toBe(false);
+  });
+});
+
 describe("ledger-level atomicity", () => {
   const batch = (): KbChange[] => [create("alpha", ID1), create("alpha", ID2), { op: "create", domain: "alpha", path: "INDEX.md", content: "# i\n", contentHash: contentHash("# i\n"), prevHash: null }];
 
@@ -210,7 +238,7 @@ describe("ledger-level atomicity", () => {
       const snap = () => ({ f: readFileSync(join(roots.kbBase, "domains/alpha/entries", `${ID1}.md`), "base64"), has2: existsSync(join(roots.kbBase, "domains/alpha/entries", `${ID2}.md`)), led: readFileSync(ledgerFile(roots), "base64") });
       const before = snap();
       expect(() =>
-        applyKbCommit(roots, dir, { changes: [update("alpha", ID1, prior, entry("alpha", ID1, "new")), create("alpha", ID2), { op: "delete", domain: "alpha", path: `entries/${ID1}.md`, contentHash: null, prevHash: contentHash(entry("alpha", ID1, "new")) }].slice(0, 2) }, {
+        applyKbCommit(roots, dir, { changes: [update("alpha", ID1, prior, entry("alpha", ID1, "new")), create("alpha", ID2)] }, {
           crash: true,
           at: (st) => { if (st === stage) throw new Error("crash"); },
         }),
@@ -249,5 +277,110 @@ describe("ledger-level atomicity", () => {
     mkdirSync(join(dir, "run"), { recursive: true });
     writeFileSync(join(dir, "run", "kb-writer.lock"), JSON.stringify({ pid: 2 ** 22 + 12345 }));
     acquireKbWriterLock(dir).release();
+  });
+
+  it("a failed rollback poisons the writer, the journal stays untouched, and a restart recovers byte-identical", async () => {
+    let mode: "off" | "both" = "off";
+    const s = await setup({ at: (st) => { if (mode === "both" && (st === "file:1" || st === "rollback")) throw new Error("injected"); } });
+    const prior = entry("alpha", ID1);
+    await s.post({ changes: [create("alpha", ID1, prior)] }, OP);
+    const before = { snap: s.snapshot(), led: s.ledger() };
+    mode = "both";
+    const res = await s.post({ changes: [update("alpha", ID1, prior, entry("alpha", ID1, "new")), create("alpha", ID2), create("alpha", "kb-alpha-eeeeeee")] }, OP);
+    expect(res.status).toBe(502);
+    const msg = ((await res.json()) as { message: string }).message;
+    expect(msg).toMatch(/restart/);
+    expect(msg).not.toMatch(/was rolled back/);
+    const jf = kbJournalFile(s.dir);
+    const journalBytes = readFileSync(jf);
+    const partial = s.snapshot();
+    expect(partial).not.toEqual(before.snap);
+    mode = "off";
+    const next = await s.post({ changes: [create("alpha", "kb-alpha-fffffff")] }, OP);
+    expect(next.status).toBe(502);
+    expect(((await next.json()) as { message: string }).message).toMatch(/restart/);
+    expect(readFileSync(jf).equals(journalBytes)).toBe(true);
+    expect(s.snapshot()).toEqual(partial);
+    await servers.pop()!.close();
+    const hub2 = await createHubServer({ dataDir: s.dir, apiKey: KEY });
+    servers.push(hub2);
+    expect(s.snapshot()).toEqual(before.snap);
+    expect(readFileSync(ledgerFile(hub2.roots)).equals(before.led)).toBe(true);
+    expect(existsSync(jf)).toBe(false);
+  });
+
+  it("a journal already on disk makes applyKbCommit refuse (never overwritten)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-jr-"));
+    tmp.push(dir);
+    const roots = hubRoots(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    mkdirSync(roots.kbBase, { recursive: true });
+    writeFileSync(join(roots.kbBase, "domains.yaml"), "domains:\n  alpha: {}\n");
+    writeFileSync(kbJournalFile(dir), "{\"keep\":1}");
+    expect(() => applyKbCommit(roots, dir, { changes: [create("alpha", ID1)] })).toThrow(/awaiting recovery/);
+    expect(readFileSync(kbJournalFile(dir), "utf8")).toBe("{\"keep\":1}");
+  });
+
+  it("rollback does not cut a ledger append made after ours", async () => {
+    let fail = false;
+    const s = await setup({
+      at: (st) => {
+        if (!fail || st !== "journal-drop") return;
+        appendFileSync(ledgerFile(hubRoots(s.dir)), JSON.stringify({ t: "subscribed", id: "x", at: "2026-01-01 00:00", wolf: "w", canonicalId: "c" }) + "\n");
+        throw new Error("injected");
+      },
+    });
+    const before = s.ledger();
+    fail = true;
+    expect((await s.post({ changes: [create("alpha", ID1)] }, OP)).status).toBe(502);
+    expect(existsSync(s.file("alpha", `entries/${ID1}.md`))).toBe(false); // files rolled back
+    const after = s.ledger();
+    expect(after.length).toBeGreaterThan(before.length);
+    expect(after.toString("utf8")).toMatch(/"entry_written"[\s\S]*"subscribed"/); // ours and the later append both stay
+    expect(after.toString("utf8").trim().split("\n").pop()).toContain('"subscribed"');
+  });
+
+  it("recovery sweeps stale *.tmp-* files of the touched domain", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-tmp-"));
+    tmp.push(dir);
+    const roots = hubRoots(dir);
+    mkdirSync(roots.kbBase, { recursive: true });
+    writeFileSync(join(roots.kbBase, "domains.yaml"), "domains:\n  alpha: {}\n");
+    expect(() => applyKbCommit(roots, dir, { changes: [create("alpha", ID1)] }, { crash: true, at: (st) => { if (st === "ledger") throw new Error("crash"); } })).toThrow();
+    const stale = join(roots.kbBase, "domains/alpha/entries", `${ID2}.md.tmp-123-deadbeef`);
+    writeFileSync(stale, "partial");
+    expect(recoverKbCommit(roots, dir)).toBe(true);
+    expect(existsSync(stale)).toBe(false);
+  });
+
+  it("lock takeover: a live lock that slips in between judging and moving is put back, not deleted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-race-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    const live = JSON.stringify({ pid: process.pid, startedAt: "live" });
+    expect(() =>
+      acquireKbWriterLock(dir, process.pid, {
+        afterJudgedStale: () => {
+          writeFileSync(`${lock}.new`, live);
+          renameSync(`${lock}.new`, lock); // another contender took the stale lock over first
+        },
+      }),
+    ).toThrow(/already has a writer/);
+    expect(readFileSync(lock, "utf8")).toBe(live);
+  });
+
+  it("a failed start releases both locks: an immediate same-process restart succeeds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-start-"));
+    tmp.push(dir);
+    const blocker = netServer();
+    await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", () => r()));
+    const port = (blocker.address() as { port: number }).port;
+    await expect(createHubServer({ dataDir: dir, apiKey: KEY, port })).rejects.toThrow();
+    blocker.close();
+    expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);
+    const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+    servers.push(hub);
   });
 });

@@ -221,14 +221,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   // dataDir throws here (SandboxError, with a clear message).
   const writerLock = acquireWorkWriterLock(opts.dataDir);
   sweepStageDirs(stageRoot(roots)); // scratch dirs orphaned by a crashed hubd (hub-owned <dataDir>/tmp, own prefix, dead pid)
-  const busRef = { emitKbChanged: (_ids: string[], _domain?: string): void => {} };
-  let kbWriter: ReturnType<typeof createKbWriter>;
-  try {
-    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => busRef.emitKbChanged(ids, domain), faults: opts.kbFaults });
-  } catch (e) {
-    writerLock.release();
-    throw e;
-  }
+  let kbWriter: ReturnType<typeof createKbWriter> | undefined; // taken inside the start try below, so a failed start releases it
   const writer = createWorkWriter({ roots, release: () => writerLock.release(), gate: opts.writeGate });
   const domainCache = new Map<string, string>(); // work item id -> domain
   const bus = createEventBus({
@@ -252,7 +245,6 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return out;
     },
   });
-  busRef.emitKbChanged = (ids, domain) => bus.emitKbChanged(ids, domain);
   writer.onAppended(({ events }) => {
     // `work.created` is the only ledger event that carries a domain; seed the cache from it so the fold is rarely needed.
     for (const e of events) if (typeof e.domain === "string") domainCache.set(e.id, e.domain);
@@ -281,6 +273,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let port = 0;
   const host = opts.host ?? "127.0.0.1";
   try {
+    kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults });
     // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
     const digest = (v: string) => createHash("sha256").update(v).digest();
     const expected = digest(opts.apiKey);
@@ -390,7 +383,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const actor = writeActor(req); // `system` cannot be asserted, so over HTTP this is the operator; a wolf is 403 below
           if (actor.kind !== "operator") throw new HubError("forbidden", "only the operator (or the in-process curator) may commit to the KB");
           const body = parseBody(KbCommitRequestSchema, await readJson(req, { maxBytes: KB_COMMIT_BODY_LIMIT, timeoutMs: opts.bodyTimeoutMs ?? 10_000 }));
-          return send(res, 200, await kbWriter.commit(actor, body));
+          return send(res, 200, await kbWriter!.commit(actor, body));
         }
         case "hubEvents": {
           const hdr = req.headers["last-event-id"];
@@ -431,7 +424,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
-    void kbWriter.close();
+    kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
     writerLock.release();
     throw e;
   }
@@ -441,13 +434,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     port,
     url: `http://${host}:${port}`,
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
-    commitKb: (actor, req) => kbWriter.commit(actor, req),
+    commitKb: (actor, req) => kbWriter!.commit(actor, req),
     onWorkAppended: (listener) => writer.onAppended(listener),
     /** Resolves once the writes already queued have drained and the lock is released. Can take up to 5s if a client holds a connection open (forced close after the grace period). */
     close: () =>
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
-        const drained = Promise.all([writer.close(), kbWriter.close()]).then(() => undefined);
+        const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
         bus.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));

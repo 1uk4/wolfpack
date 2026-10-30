@@ -1,13 +1,18 @@
 #!/usr/bin/env node
-/** hubd CLI: `hubd serve` and `hubd dev`. The API key comes from env HUBD_API_KEY only (never argv, never logged). */
+/** hubd CLI: `hubd serve` and `hubd dev`. Clients authenticate with device tokens (`hubd pair`); the optional LEGACY API key comes from env HUBD_API_KEY only (never argv, never logged). */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { exportHub, importHub } from "./export.js";
+import { createTokenStore } from "./auth.js";
 import { createHubServer } from "./server.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
-  command: "serve" | "dev" | "export" | "import";
+  command: "serve" | "dev" | "export" | "import" | "pair" | "tokens";
+  /** tokens: list | revoke */
+  sub?: "list" | "revoke";
+  /** tokens revoke: the token id. */
+  tokenId?: string;
   /** export: output tar. import: input tar. */
   out?: string;
   in?: string;
@@ -35,15 +40,32 @@ const USAGE = `usage:
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
   hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
   hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
-env: HUBD_API_KEY (required, >= 16 chars)
+  hubd pair --data-dir <dir>                                  print a single-use pairing code (valid 10 minutes); a device trades it at POST /v1/pair for a token
+  hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
+  hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
+env: HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
 export function parseArgs(argv: string[]): CliArgs {
-  const [command, ...rest] = argv;
-  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import") throw new Error(USAGE);
-  const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [] };
+  const [command, ...rest0] = argv;
+  if (command !== "serve" && command !== "dev" && command !== "export" && command !== "import" && command !== "pair" && command !== "tokens") throw new Error(USAGE);
+  let rest = rest0;
+  let sub: CliArgs["sub"];
+  let tokenId: string | undefined;
+  if (command === "tokens") {
+    if (rest[0] !== "list" && rest[0] !== "revoke") throw new Error(`tokens needs list or revoke\n${USAGE}`);
+    sub = rest[0];
+    rest = rest.slice(1);
+    if (sub === "revoke") {
+      if (!rest[0] || rest[0].startsWith("--")) throw new Error("tokens revoke needs a token id");
+      tokenId = rest[0];
+      rest = rest.slice(1);
+    }
+  }
+  const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [], ...(sub ? { sub } : {}), ...(tokenId ? { tokenId } : {}) };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
+    if ((command === "pair" || command === "tokens") && flag !== "--data-dir") throw new Error(`${command} does not take ${flag}\n${USAGE}`);
     if ((command === "export" || command === "import") && !["--data-dir", command === "export" ? "--out" : "--in"].includes(flag)) throw new Error(`${command} does not take ${flag}\n${USAGE}`);
     const val = () => {
       const v = rest[++i];
@@ -67,6 +89,7 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if (command === "export" && (!out.dataDir || !out.out)) throw new Error("export requires --data-dir and --out");
   if (command === "import" && (!out.dataDir || !out.in)) throw new Error("import requires --data-dir and --in");
+  if ((command === "pair" || command === "tokens") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (command === "dev" && !out.snapshot && !out.dataDir) throw new Error("dev requires --snapshot <host> or --data-dir <existing snapshot>");
   if (command === "dev" && !isLoopback(out.host) && !out.allowNetwork) throw new Error(`refusing to bind dev mode (production data copy) to non-loopback host ${out.host} without --allow-network`);
@@ -85,9 +108,26 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     log(`hubd import: ${args.dataDir} (${manifest.files.length} files verified, work events ${manifest.lastEventSequence})`);
     return;
   }
-  const apiKey = env.HUBD_API_KEY;
-  if (!apiKey) throw new Error("HUBD_API_KEY is not set");
-  if (apiKey.length < MIN_KEY_LENGTH) throw new Error(`HUBD_API_KEY must be at least ${MIN_KEY_LENGTH} characters`);
+  if (args.command === "pair") {
+    const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode();
+    log(`pairing code: ${code}\nsingle-use, expires ${expiresAt} (10 minutes)`);
+    return;
+  }
+  if (args.command === "tokens") {
+    const store = createTokenStore(args.dataDir!);
+    if (args.sub === "revoke") {
+      if (!store.revoke(args.tokenId!)) throw new Error(`no token ${args.tokenId}`);
+      log(`revoked ${args.tokenId}`);
+      return;
+    }
+    const rows = store.list();
+    if (rows.length === 0) log("no tokens");
+    for (const t of rows) log(`${t.id}  ${t.kind.padEnd(7)} ${t.label}  owner=${t.owner}  created=${t.createdAt}  lastUsed=${t.lastUsedAt ?? "never"}`);
+    return;
+  }
+  const apiKey = env.HUBD_API_KEY || undefined;
+  if (apiKey !== undefined && apiKey.length < MIN_KEY_LENGTH) throw new Error(`HUBD_API_KEY must be at least ${MIN_KEY_LENGTH} characters`);
+  if (apiKey) log("hubd: WARNING: HUBD_API_KEY legacy auth is enabled (temporary); prefer device tokens (hubd pair).");
   if (args.command === "dev" && !isLoopback(args.host))
     log(`!!! WARNING: dev mode is binding to ${args.host} (--allow-network). This serves a COPY OF PRODUCTION DATA to the network, protected only by the shared API key. !!!`);
   let dataDir: string;

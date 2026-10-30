@@ -41,3 +41,8 @@ export function registryFile(dataDir: string): string {
 export function domainsYamlFile(dataDir: string): string {
   return join(hubRoots(dataDir).kbBase, "domains.yaml");
 }
+
+/** Device tokens (hashes only) and pending pairing codes (hashes only): `<dataDir>/auth/tokens.json`. Written by hubd and by the local `hubd pair|tokens` CLI. */
+export function tokensFile(dataDir: string): string {
+  return join(dataDir, "auth", "tokens.json");
+}

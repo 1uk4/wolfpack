@@ -285,6 +285,18 @@ describe("HttpConsoleClient watchHubEvents", () => {
     expect(seen[0]).toEqual({ url: "http://hub.invalid/v1/events", cursor: null, key: "sekret" });
     expect(seen[1].cursor).toBe("b:1");
   });
+  it("hub requests send the bearer token (preferred over the legacy key)", async () => {
+    const seen: { auth: string | null; key: string | null }[] = [];
+    const ctl = new AbortController();
+    const f: typeof fetch = async (input, init) => {
+      const req = new Request(input as string, init);
+      seen.push({ auth: req.headers.get("authorization"), key: req.headers.get("x-api-key") });
+      return sse(`id: b:1\ndata: {"type":"kb.changed","id":1,"at":"2026-10-29T00:00:00.000Z","entryIds":["e"]}\n\n`);
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "tok123", apiKey: "sekret" }, fetch: f });
+    for await (const _ev of c.watchHubEvents({ signal: ctl.signal })) ctl.abort();
+    expect(seen[0]).toEqual({ auth: "Bearer tok123", key: null });
+  });
   it("a busy refusal is retried (no limit) and then succeeds", async () => {
     let calls = 0;
     const ctl = new AbortController();

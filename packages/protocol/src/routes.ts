@@ -43,6 +43,7 @@ import {
 } from "./schemas.js";
 
 import * as R from "./registry.js";
+import { PairRequestSchema, PairResponseSchema } from "./pairing.js";
 import { KbCommitRequestSchema, KbCommitResponseSchema } from "./kb-commits.js";
 import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSchema, PatchWorkRequestSchema, WorkItemResponseSchema } from "./work-writes.js";
 
@@ -104,6 +105,8 @@ export interface RouteDef {
   readonly path: string;
   /** `"hub"`: served by hubd (the pack authority), not by a wolf host. Absent = a wolf-host route. */
   readonly scope?: "hub";
+  /** `true`: no `Authorization: Bearer` needed (hub pairing only; every other hub route requires a token). */
+  readonly public?: true;
   /** JSON request body schema, if any. */
   readonly body?: z.ZodType;
   /** Success response: a JSON body schema, or an SSE stream of events. */
@@ -369,6 +372,13 @@ export const ROUTES = {
    * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
    */
   hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
+  /**
+   * PUBLIC (no token): exchange a single-use pairing code (minted by `hubd pair`, valid ~10 minutes) for a per-device bearer token.
+   * Body `{code, label, kind: worker|console|browser}`; answers `{token, tokenId}`. The token is shown once; the hub keeps only its hash.
+   * 401 `unauthorized` for an unknown, used or expired code; 400 `invalid_request` for a bad body. Every other hub route needs
+   * `Authorization: Bearer <token>`; with a token the identity comes from the token and `X-Wolfpack-Actor` is IGNORED.
+   */
+  hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },
   /**
    * SSE (hubd): pack events, `id: <boot>:<seq>` + `data: <HubEvent json>`. `work.changed {itemId, event}` for every hub ledger
    * write (event = ledger event type), `kb.changed {entryIds}`, `wolf.presence`. Live from connect; `Last-Event-ID` / `?from=`

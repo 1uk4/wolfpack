@@ -37,12 +37,13 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
  *
  *   WOLFPACK_API_URL   a wolf's /v1 (otherwise the mock)
  *   WOLFPACK_HUB_URL   a hubd /v1: work reads (list + record) go there instead of the wolf (optional)
- *   WOLFPACK_HUB_KEY   the hub's X-API-Key (optional)
+ *   WOLFPACK_HUB_TOKEN the hub bearer token from `hubd pair` (optional; preferred)
+ *   WOLFPACK_HUB_KEY   LEGACY: the hub's X-API-Key (optional; ignored when a token is set)
  */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
-	const hub = hubUrl ? { baseUrl: hubUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
 	if (baseUrl) return new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) });
 	if (!hub) return new MockConsoleClient();
 	// No wolf configured, a hub is: threads stay on the mock; work reads come from the hub. The reader's own baseUrl is the hub's

@@ -72,7 +72,7 @@ export interface HttpClientOptions {
    * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
    * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
    */
-  hub?: { baseUrl: string; apiKey?: string };
+  hub?: { baseUrl: string; /** Per-device bearer token (preferred). */ token?: string; /** LEGACY shared key; ignored when `token` is set. */ apiKey?: string };
   /** Injectable fetch (tests, auth wrappers). Defaults to global fetch. */
   fetch?: typeof fetch;
   /** Consecutive failed stream reconnects tolerated before giving up. Default 5. */
@@ -90,7 +90,7 @@ interface Frame {
 export class HttpConsoleClient implements ConsoleClient {
   readonly actor?: Actor;
   private readonly base: string;
-  private readonly hub?: { base: string; apiKey?: string };
+  private readonly hub?: { base: string; token?: string; apiKey?: string };
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
@@ -98,7 +98,7 @@ export class HttpConsoleClient implements ConsoleClient {
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.actor = opts.actor;
-    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), apiKey: opts.hub.apiKey };
+    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, apiKey: opts.hub.apiKey };
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
@@ -517,7 +517,7 @@ export class HttpConsoleClient implements ConsoleClient {
     const res = await this.fetchFn(origin + buildPath(name, params) + query, {
       ...init,
       method: route.method,
-      headers: { ...init.headers, ...(hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
+      headers: { ...init.headers, ...(hubRoute && this.hub!.token ? { Authorization: `Bearer ${this.hub!.token}` } : hubRoute && this.hub!.apiKey ? { "X-API-Key": this.hub!.apiKey } : {}),
         ...(hubRoute && this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}), [PROTOCOL_VERSION_HEADER]: String(PROTOCOL_VERSION) },
     });
     if (res.ok) return res;

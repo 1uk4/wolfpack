@@ -2,7 +2,9 @@
  * hubd: the pack authority. Serves the /v1 protocol's hub-scoped routes from a hub data directory. This ticket: work reads.
  * Later tickets slot into `dispatch` (work writes under the work-writer lock, claim, registry, /v1/events, ...).
  *
- * Auth: one shared X-API-Key; the acting identity comes from the protocol's actor (see `readActor` / `writeActor`; PROVISIONAL, asserted not proven).
+ * Auth: every route except POST /v1/pair needs `Authorization: Bearer <device token>` (hashes in <dataDir>/auth/tokens.json). The acting
+ * identity comes from the token; X-Wolfpack-Actor is IGNORED for token requests. LEGACY (temporary): when `apiKey` is set, a request with
+ * a matching X-API-Key and no bearer is accepted and its identity is the asserted X-Wolfpack-Actor (PROVISIONAL, asserted not proven).
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -12,6 +14,7 @@ import {
   ACTOR_HEADER,
   ActorSchema,
   CreateWorkRequestSchema,
+  PairRequestSchema,
   PatchWorkBatchSchema,
   PatchWorkOpSchema,
   KbCommitRequestSchema,
@@ -46,6 +49,7 @@ import {
   sweepStageDirs,
   type WorkAppendedListener,
 } from "./work-writes.js";
+import { actorOf, createTokenStore, OWNER, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { loadWorkState } from "@wolfpack/kb/client";
@@ -69,8 +73,10 @@ export const API_KEY_HEADER = "x-api-key";
 
 export interface HubOptions {
   dataDir: string;
-  /** Required shared secret (X-API-Key). */
-  apiKey: string;
+  /** LEGACY, optional: shared secret (X-API-Key) accepted alongside device tokens until the legacy path is removed. */
+  apiKey?: string;
+  /** How often the running hub checks the token file for revokes (closing their SSE streams), ms. Default 1000. */
+  authPollMs?: number;
   /** 0 picks an ephemeral port. Default 0. */
   port?: number;
   /** Default 127.0.0.1. */
@@ -105,6 +111,13 @@ export interface HubServer {
    * Same validation, atomicity and kb.changed emission as POST /v1/kb/commits. A `wolf` actor rejects `forbidden`.
    */
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
+  /**
+   * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated. A legacy
+   * HUBD_API_KEY request resolves to `{owner, legacy: true}` with NO tokenId, kind or hostId, so callers can refuse it.
+   */
+  authenticate(req: IncomingMessage): AuthIdentity | null;
+  /** Called (id of the revoked token) when the running hub detects a revoke (token file scan, within `authPollMs`). Returns an unsubscribe. */
+  onRevoke(listener: (tokenId: string) => void): () => void;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -119,6 +132,8 @@ const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
+/** Requests authenticated with a bearer token -> the actor the token maps to. */
+const TOKEN_ACTOR = new WeakMap<object, Actor>();
 
 /**
  * The asserted actor of a request (`X-Wolfpack-Actor`, PROVISIONAL: the shared key is the only authentication, so this is
@@ -126,6 +141,8 @@ const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
  * own internal jobs; a client cannot claim it) = 400 `invalid_request`.
  */
 export function assertedActor(req: Pick<IncomingMessage, "headers">): Actor | undefined {
+  const fromToken = TOKEN_ACTOR.get(req);
+  if (fromToken) return fromToken; // token identity: the header is not even parsed
   const raw = req.headers[ACTOR_KEY];
   if (typeof raw !== "string") return undefined;
   let parsed: ReturnType<typeof ActorSchema.safeParse> | undefined;
@@ -214,7 +231,6 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 export async function createHubServer(opts: HubOptions): Promise<HubServer> {
-  if (!opts.apiKey) throw new Error("createHubServer: apiKey is required");
   const roots = hubRoots(opts.dataDir);
   mkdirSync(`${opts.dataDir}/ledger`, { recursive: true });
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
@@ -271,14 +287,73 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   }
   let server!: Server;
   let port = 0;
+  let stopWatcher: () => void = () => {};
+  let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
+  let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
     kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults });
     // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
     const digest = (v: string) => createHash("sha256").update(v).digest();
-    const expected = digest(opts.apiKey);
-    const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
-
+    const expected = opts.apiKey ? digest(opts.apiKey) : undefined;
+    const legacyOk = (req: IncomingMessage): boolean => expected !== undefined && timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
+    const tokens = createTokenStore(opts.dataDir);
+    /** Open SSE responses per token id, so a revoke can close them. */
+    const streams = new Map<string, Set<ServerResponse>>();
+    const revokeListeners = new Set<(tokenId: string) => void>();
+    const known = new Set<string>(tokens.list().map((t) => t.id)); // token ids seen live (file scans + authentications)
+    const fireRevoked = (id: string) => {
+      known.delete(id);
+      for (const l of [...revokeListeners]) {
+        try {
+          l(id);
+        } catch (e) {
+          console.error("hubd: onRevoke listener failed:", e);
+        }
+      }
+    };
+    // The SSE close is the first onRevoke subscriber.
+    revokeListeners.add((id) => {
+      for (const r of [...(streams.get(id) ?? [])]) r.destroy();
+      streams.delete(id);
+    });
+    const sweepRevoked = () => {
+      const live = new Set(tokens.list().map((t) => t.id));
+      for (const id of [...known]) if (!live.has(id)) fireRevoked(id);
+      for (const id of live) known.add(id);
+    };
+    let stamp = tokens.stamp();
+    const watcher = setInterval(() => {
+      try {
+        const now = tokens.stamp();
+        if (now === stamp) return;
+        stamp = now;
+        sweepRevoked();
+      } catch (e) {
+        console.error("hubd: token watch failed:", e);
+      }
+    }, opts.authPollMs ?? 1000);
+    watcher.unref();
+    stopWatcher = () => clearInterval(watcher);
+    /** The shared check for dispatch AND the coming HTTP `upgrade` path. */
+    function authenticate(req: IncomingMessage): AuthIdentity | null {
+      const h = req.headers.authorization;
+      if (typeof h === "string" && /^bearer /i.test(h)) {
+        const rec = tokens.verify(h.slice(7).trim());
+        if (!rec) return null; // a bad bearer never falls back to the legacy key
+        TOKEN_ACTOR.set(req, actorOf(rec));
+        known.add(rec.id);
+        tokens.touch(rec.id);
+        return { tokenId: rec.id, kind: rec.kind, ...(rec.hostId ? { hostId: rec.hostId } : {}), owner: rec.owner };
+      }
+      if (legacyOk(req)) return { owner: OWNER, legacy: true }; // no tokenId, kind or hostId
+      return null;
+    }
+    authenticateFn = authenticate;
+    onRevokeFn = (l) => {
+      revokeListeners.add(l);
+      return () => void revokeListeners.delete(l);
+    };
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
       if (r.op === "get") return send(res, 200, { [singular(r.c)]: registry.get(r.c, params.name!) });
@@ -300,8 +375,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://hubd");
       res.setHeader(PROTOCOL_VERSION_HEADER, String(PROTOCOL_VERSION));
-      if (!authed(req)) throw new HubError("unauthorized", "missing or wrong X-API-Key");
       const m = matchRoute(req.method ?? "GET", url.pathname);
+      const isPublic = typeof m === "object" && m.route.public === true;
+      let tokenId: string | undefined;
+      if (!isPublic) {
+        const id = authenticate(req); // 401 before 404/405/body reads
+        if (!id) throw new HubError("unauthorized", "missing or invalid bearer token");
+        tokenId = id.tokenId;
+      }
       if (m === undefined) throw new HubError("not_found", `no route ${url.pathname}`);
       if (m === "method") throw new HubError("invalid_request", `method ${req.method} not allowed`);
       const v = req.headers[PROTOCOL_VERSION_HEADER.toLowerCase()];
@@ -312,6 +393,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
       const { params } = m;
       switch (m.name) {
+        case "hubPair": {
+          const body = parseBody(PairRequestSchema, await readBody(req));
+          return send(res, 200, tokens.redeem(body.code, body.label, body.kind, body.hostId));
+        }
         case "listWolves":
           // The hub is not a wolf host. (The registry ticket makes this the pack's wolf list.)
           return send(res, 200, { wolves: [] });
@@ -389,6 +474,14 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const hdr = req.headers["last-event-id"];
           const cursor = (Array.isArray(hdr) ? hdr[0] : hdr)?.trim() || url.searchParams.get("from")?.trim() || undefined;
           bus.attach(res, cursor);
+          if (tokenId) {
+            // Revoked between auth and attach, or later (the watcher): close this stream.
+            if (!tokens.list().some((t) => t.id === tokenId)) return void res.destroy();
+            let set = streams.get(tokenId);
+            if (!set) streams.set(tokenId, (set = new Set()));
+            set.add(res);
+            res.once("close", () => set!.delete(res));
+          }
           return;
         }
         case "hubGraduateWork": {
@@ -424,6 +517,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
+    stopWatcher();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
     writerLock.release();
     throw e;
@@ -433,6 +527,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     roots,
     port,
     url: `http://${host}:${port}`,
+    authenticate: (req) => authenticateFn(req),
+    onRevoke: (l) => onRevokeFn(l),
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
     commitKb: (actor, req) => kbWriter!.commit(actor, req),
     onWorkAppended: (listener) => writer.onAppended(listener),
@@ -441,6 +537,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       new Promise<void>((resolve) => {
         // 1. stop admitting writes (new ones get a retryable `busy`), queue the lock release behind the writes already queued;
         const drained = Promise.all([writer.close(), kbWriter!.close()]).then(() => undefined);
+        stopWatcher();
         bus.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));

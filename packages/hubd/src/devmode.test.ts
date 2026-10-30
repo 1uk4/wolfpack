@@ -66,8 +66,7 @@ describe("hubd cli args", () => {
     expect(() => parseArgs(["dev", "--snapshot", "h", "--host", "127.evil.com"])).toThrow(/allow-network/);
     expect(parseArgs(["dev", "--snapshot", "h", "--host", "127.0.0.1"]).host).toBe("127.0.0.1");
   });
-  it("requires HUBD_API_KEY of at least 16 characters", async () => {
-    await expect(main(["serve", "--data-dir", "/d"], {})).rejects.toThrow(/HUBD_API_KEY is not set/);
+  it("HUBD_API_KEY is optional (legacy) but, when set, must be at least 16 characters", async () => {
     await expect(main(["serve", "--data-dir", "/d"], { HUBD_API_KEY: "short" })).rejects.toThrow(/at least 16/);
   });
   it("dev on a non-loopback host needs --allow-network, and warns loudly", async () => {

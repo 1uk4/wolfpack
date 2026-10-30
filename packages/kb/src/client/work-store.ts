@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { atomicWrite, parseFrontmatter } from "@wolfpack/engine";
-import { type KbRoots, workDir, workLedgerFile } from "../shared/index.js";
+import { type KbRoots, workDir, workLedgerFile, assertNotHubMirror } from "../shared/index.js";
 import {
   type WorkItem,
   type WorkId,
@@ -173,6 +173,7 @@ export function commitWorkItem(
   body: string = "",
 ): void {
   const dir = workDir(roots, item.domain as string);
+  assertNotHubMirror(dir);
   mkdirSync(dir, { recursive: true });
   atomicWrite(join(dir, `${item.id}.md`), renderWorkItem(item, body));
 }

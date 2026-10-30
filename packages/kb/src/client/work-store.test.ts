@@ -195,3 +195,9 @@ describe("ledger attribution at append time", () => {
     expect(readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1)).not.toHaveProperty("by");
   });
 });
+
+describe("withLedgerAttribution is sync-only", () => {
+  it("throws when fn returns a thenable", () => {
+    expect(() => withLedgerAttribution({ by: "x" }, (() => Promise.resolve(1)) as () => unknown)).toThrow(/synchronous/);
+  });
+});

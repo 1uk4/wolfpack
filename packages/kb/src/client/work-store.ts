@@ -215,7 +215,10 @@ export function withLedgerAttribution<T>(attr: LedgerAttribution | undefined, fn
   const prev = ambientAttribution;
   ambientAttribution = attr;
   try {
-    return fn();
+    const out = fn();
+    // The scope is a module global: an async fn would lose it at its first await and could leak it to another write.
+    if (out && typeof (out as { then?: unknown }).then === "function") throw new Error("withLedgerAttribution: fn must be synchronous");
+    return out;
   } finally {
     ambientAttribution = prev;
   }

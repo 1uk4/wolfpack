@@ -30,9 +30,9 @@ export interface LinkRig {
   mintWorker(hostId?: string): { token: string; tokenId: string };
   /** A bare WebSocket speaking raw frames (for impersonating a second worker or a version-skewed one). */
   rawLink(token: string): Promise<RawLink>;
-  /** Librarian-ops dirs: the hub's inbox + receipts roots, and the worker's receipts root (kbOps) and outbox dir. */
   /** workerd log lines. */
   logs: string[];
+  /** Librarian-ops dirs: the hub's inbox + receipts roots, and the worker's receipts root (kbOps) and outbox dir. */
   inboxRoot: string;
   receiptsRoot: string;
   kbOps: string;

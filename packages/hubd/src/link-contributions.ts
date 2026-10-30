@@ -31,6 +31,8 @@ import {
 } from "@wolfpack/protocol";
 import { ContributionError, storeContribution } from "./contributions.js";
 
+const SETTLE_MS = 2000;
+
 export interface LinkContributionsOptions {
   dataDir: string;
   /** Librarian inbox root (`<root>/<wolf>/`). */
@@ -238,16 +240,13 @@ export function createLinkContributions(o: LinkContributionsOptions): LinkContri
     let blockAdvance = false;
     for (const wolf of wolves) {
       const host = o.hostOf(wolf);
-      if (!host) {
-        blockAdvance = true; // not deliverable yet: do not let the mark pass its receipts
-        continue;
-      }
+      if (!host) continue; // retired or unknown wolf: nothing can be delivered, so it must not pin the mark either
       const laneDir = join(o.receiptsRoot, wolf);
       let dirM: number;
       let files: string[];
       try {
         dirM = statSync(laneDir).mtimeMs;
-        if (dirM < since || cleanDir.get(wolf) === dirM) continue; // nothing new here since the last look (receipts land by rename, which bumps the dir)
+        if (dirM <= since || cleanDir.get(wolf) === dirM) continue; // nothing new here since the last look (receipts land by rename, which bumps the dir)
         files = readdirSync(laneDir).filter((n) => n.endsWith(".md") && !n.startsWith("."));
       } catch {
         blockAdvance = true;
@@ -294,11 +293,16 @@ export function createLinkContributions(o: LinkContributionsOptions): LinkContri
           log(`hubd: receipt ${q(wolf)}/${q(name)} not delivered: ${(e as Error).message}`);
         }
       }
-      if (pending) cleanDir.delete(wolf);
+      // Dewey writes receipts by temp file + rename (engine atomicWrite), which bumps the lane dir mtime, so the dir-mtime skip is sound.
+      // Still, never trust a lane as clean while its dir mtime is within the settle window (same-tick writes).
+      if (pending || t - dirM < SETTLE_MS) cleanDir.delete(wolf);
       else cleanDir.set(wolf, dirM);
     }
     if (!blockAdvance) {
-      const next = Number.isFinite(minPending) ? minPending - 1 : maxHandled; // exclusive: the oldest pending receipt stays above the mark
+      // Exclusive mark. Never past the oldest pending receipt, never ahead of now (a future mtime = clock skew must not push it),
+      // and never within SETTLE_MS of now (a receipt written in the same mtime tick as this scan must not be skipped).
+      const handled = Math.min(maxHandled, t);
+      const next = Math.min(Number.isFinite(minPending) ? minPending - 1 : handled, handled, t - SETTLE_MS);
       if (next > since) {
         try {
           writeDurable(sinceFile, String(next));

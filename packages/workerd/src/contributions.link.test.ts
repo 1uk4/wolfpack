@@ -232,6 +232,45 @@ describe("receipts over the link", () => {
     expect(receipts(w2).map((x) => x.name)).toEqual(["h2.md"]);
   });
 
+  it("a receipt written in the same tick as a scan is not skipped (mark stays 2s behind now)", async () => {
+    const r = await rig({ noHub: true });
+    const w = await r.rawLink(r.token);
+    w.hello({ wolves: [{ name: "alpha", domains: [] }] });
+    await w.until(() => w.frames.some((f) => f.t === "welcome"), "welcome");
+    writeReceipt(r, "alpha", "s1.md");
+    await w.until(() => receipts(w).length === 1, "s1");
+    w.send({ t: "receipt.ack", id: receipts(w)[0]!.id });
+    await r.eventually(() => fileLines(join(r.dataDir, "link", "receipts-delivered.jsonl")).length === 1, "s1 delivered");
+    const mark = Number(fileLines(join(r.dataDir, "link", "receipts-since"))[0]);
+    const same = statSync(join(r.receiptsRoot, "alpha", "s1.md")).mtime;
+    expect(mark).toBeLessThan(same.getTime()); // a just-handled receipt is still above the mark (settle window)
+    writeReceipt(r, "alpha", "s2.md");
+    utimesSync(join(r.receiptsRoot, "alpha", "s2.md"), same, same); // identical mtime to the receipt the last scan handled
+    await w.until(() => receipts(w).some((x) => x.name === "s2.md"), "s2 still delivered");
+  });
+
+  it("a future mtime (clock skew) cannot push the mark ahead of now; a retired wolf's lane does not pin it", async () => {
+    const r = await rig({ noHub: true, preRegister: ["gone"] });
+    const w = await r.rawLink(r.token);
+    w.hello({ wolves: [{ name: "alpha", domains: [] }] });
+    await w.until(() => w.frames.some((f) => f.t === "welcome"), "welcome");
+    // an unowned/unknown-host lane with a pending receipt must not hold the mark back
+    writeReceipt(r, "gone", "stuck.md");
+    writeReceipt(r, "alpha", "future.md");
+    const future = new Date(Date.now() + 3600_000);
+    utimesSync(join(r.receiptsRoot, "alpha", "future.md"), future, future);
+    await w.until(() => receipts(w).some((x) => x.name === "future.md"), "future receipt delivered");
+    w.send({ t: "receipt.ack", id: receipts(w).find((x) => x.name === "future.md")!.id });
+    await r.eventually(() => fileLines(join(r.dataDir, "link", "receipts-delivered.jsonl")).length === 1, "delivered");
+    await r.eventually(() => {
+      const m = Number(fileLines(join(r.dataDir, "link", "receipts-since"))[0]);
+      return m > 0 && m <= Date.now(); // never ahead of now
+    }, "mark within bounds");
+    expect(Number(fileLines(join(r.dataDir, "link", "receipts-since"))[0])).toBeLessThanOrEqual(Date.now());
+    // a receipt for the lane-less wolf was never sent
+    expect(receipts(w).some((x) => x.name === "stuck.md")).toBe(false);
+  });
+
   it("an oversized receipt is skipped and does not block the others", async () => {
     const r = await rig({ noHub: true });
     const w = await r.rawLink(r.token);
@@ -328,6 +367,12 @@ describe("outbox", () => {
     expect(new Outbox(ob.dir).list().map((i) => i.id)).toEqual(["a-b"]); // a reload agrees
     ob.remove("a-b");
     expect(new Outbox(ob.dir).list()).toEqual([]);
+  });
+  it("removes leftover .*.tmp files on load", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, ".abc.tmp"), "partial");
+    new Outbox(dir);
+    expect(readdirSync(dir)).toEqual([]);
   });
   it("reject keeps the original until the dead letter is durable", () => {
     const dir = tmp();

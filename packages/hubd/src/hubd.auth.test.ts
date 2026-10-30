@@ -150,6 +150,13 @@ describe("hubd token auth", () => {
     expect(existsSync(join(dir, "auth", "attribution.jsonl"))).toBe(false);
   });
 
+  it("a very long actor id is truncated in the attribution stamp and the write still succeeds", async () => {
+    const long = "o".repeat(300);
+    const r = await createWork({ "X-API-Key": KEY, [ACTOR_HEADER]: JSON.stringify({ id: long, kind: "operator" }) });
+    expect(r.status).toBe(201);
+    expect(lastLedgerEvent().by).toBe("o".repeat(128));
+  });
+
   it("a worker pairing needs a hostId; it is stored on the token and the worker acts as that host", async () => {
     expect(() => store.mintPairingCode({ kind: "worker" })).toThrow(/hostId/); // a worker code is minted for a host
     expect(() => store.mintPairingCode({ kind: "console", hostId: "x" })).toThrow(/worker/);

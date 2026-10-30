@@ -300,7 +300,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     // Attribution lives on the ledger events themselves (by / tokenId / hostId); the old auth/attribution.jsonl side log is retired.
     stamp: (actor) => {
       const info = TOKEN_INFO.get(actor);
-      return { by: actor.id, ...(info ? { tokenId: info.tokenId, ...(info.hostId ? { hostId: info.hostId } : {}) } : {}) };
+      // Truncated to the schema's limits so a long actor id can never make the ledger append fail validation.
+      return { by: actor.id.slice(0, 128), ...(info ? { tokenId: info.tokenId.slice(0, 128), ...(info.hostId ? { hostId: info.hostId.slice(0, 64) } : {}) } : {}) };
     },
   });
   const domainCache = new Map<string, string>(); // work item id -> domain

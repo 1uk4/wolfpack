@@ -67,6 +67,7 @@ export class Outbox {
     private readonly opts: { maxItemBytes?: number; maxItems?: number } = {},
   ) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir)) if (/^\..*\.tmp$/.test(f)) rmSync(join(dir, f), { force: true }); // leftovers of a crash mid-write
     for (const f of readdirSync(dir).filter((x) => FILE_RE.test(x)).sort()) {
       try {
         const o = JSON.parse(readFileSync(join(dir, f), "utf8")) as OutboxItem;

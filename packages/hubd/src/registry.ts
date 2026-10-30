@@ -129,10 +129,13 @@ export interface Registry {
   remove(c: Collection, name: string): Promise<string>;
   isRetired(name: string): boolean;
   retire(name: string): Promise<{ wolf: unknown; released: string[] }>;
-  /** Worker link: register `hostId` and its wolves from a hello. Returns the retired wolf names the worker must not serve. */
-  applyHello(hostId: string, wolves: LinkWolf[]): Promise<{ retired: string[] }>;
-  /** Worker link: a wolf appeared on `hostId`. Returns false when it is retired or invalid (not registered). */
-  addWolf(hostId: string, wolf: LinkWolf): Promise<boolean>;
+  /**
+   * Worker link: a hello from `hostId`. Only wolves the operator pre-registered are accepted, and only when they are unowned or already
+   * on this host. Domains are the registry's: reported domains are only compared (domainMismatch), never written. Returns the retired names (never resurrected) and the rejected ones (unknown, or owned by another host).
+   */
+  applyHello(hostId: string, wolves: LinkWolf[]): Promise<{ retired: string[]; rejected: string[]; domainMismatch: { wolf: string; reported: string[]; granted: string[] }[] }>;
+  /** Worker link: a wolf appeared on `hostId`. */
+  addWolf(hostId: string, wolf: LinkWolf): Promise<"ok" | "retired" | "rejected">;
   /** Worker link: a wolf left `hostId`: its host is cleared, the entry is kept. */
   removeWolf(hostId: string, name: string): Promise<void>;
   /** Resolves when queued writes are done. */
@@ -211,25 +214,28 @@ export function createRegistry(opts: RegistryOptions): Registry {
   const conflict = (m: string) => new HubError("conflict", m);
   const notFound = (c: Collection, n: string) => new HubError("not_found", `${c.replace(/s$/, "")} ${n} not found`);
 
-  /** Register one wolf from a worker link into `d`. Returns false (and logs) when it cannot be registered. */
-  function upsertLinkWolf(d: RegistryFile, hostId: string, w: LinkWolf): boolean {
-    if (!WolfIdSchema.safeParse(w.name).success) {
-      log(`hubd: link ${hostId}: ignoring wolf with invalid name ${JSON.stringify(w.name)}`);
-      return false;
-    }
+  const q = (v: unknown) => JSON.stringify(String(v).slice(0, 64)); // log-safe: escapes control characters, bounded
+  /** Register one wolf from a worker link into `d`. */
+  function upsertLinkWolf(d: RegistryFile, hostId: string, w: LinkWolf, mismatches?: { wolf: string; reported: string[]; granted: string[] }[]): "ok" | "retired" | "rejected" {
     const existing = d.wolves.find((x) => x.name === w.name);
-    if (existing?.status === "retired") return false; // never resurrect
-    const known = new Set(d.domains.map((x) => x.name));
-    const domains = [...new Set(w.domains)].filter((dom) => {
-      if (known.has(dom)) return true;
-      log(`hubd: link ${hostId}: wolf ${w.name} lists unknown domain ${JSON.stringify(dom)}; dropped`);
-      return false;
-    });
-    if (existing) {
-      existing.host = hostId; // operator fields (tiers, workspace, tools, status) stay
-      existing.domains = domains;
-    } else d.wolves.push({ name: w.name, host: hostId, domains, tools: [], status: "active" });
-    return true;
+    if (!existing) {
+      log(`hubd: link ${hostId}: wolf ${q(w.name)} is not registered; refused (an operator must create it first)`);
+      return "rejected";
+    }
+    if (existing.status === "retired") return "retired"; // never resurrect
+    if (existing.host !== undefined && existing.host !== hostId) {
+      // Whatever the other host's presence (laptops sleep): moving a wolf is an operator action.
+      log(`hubd: link ${hostId}: wolf ${q(w.name)} belongs to host ${q(existing.host)}; refused`);
+      return "rejected";
+    }
+    existing.host = hostId; // operator fields (domains, tiers, workspace, tools, status) are never written by the worker
+    const reported = [...new Set(w.domains)].sort();
+    const granted = [...new Set(existing.domains)].sort();
+    if (JSON.stringify(reported) !== JSON.stringify(granted)) {
+      log(`hubd: link ${hostId}: wolf ${q(w.name)} reports domains [${reported.map(q).join(", ")}] but the registry grants [${granted.map(q).join(", ")}]; registry wins`);
+      mismatches?.push({ wolf: w.name, reported, granted });
+    }
+    return "ok";
   }
   const ensureHost = (d: RegistryFile, hostId: string) => {
     if (!d.hosts.some((h) => h.name === hostId)) d.hosts.push({ name: hostId });
@@ -241,11 +247,17 @@ export function createRegistry(opts: RegistryOptions): Registry {
       return mutate((d) => {
         ensureHost(d, hostId);
         const names = new Set(wolves.map((w) => w.name));
-        const retired = new Set<string>();
-        for (const w of wolves) if (!upsertLinkWolf(d, hostId, w) && d.wolves.find((x) => x.name === w.name)?.status === "retired") retired.add(w.name);
+        const retired: string[] = [];
+        const rejected: string[] = [];
+        const domainMismatch: { wolf: string; reported: string[]; granted: string[] }[] = [];
+        for (const w of wolves) {
+          const r = upsertLinkWolf(d, hostId, w, domainMismatch);
+          if (r === "retired") retired.push(w.name);
+          else if (r === "rejected") rejected.push(w.name);
+        }
         // Wolves the hub had on this host but the hello omits: host cleared, entry kept.
         for (const w of d.wolves) if (w.host === hostId && !names.has(w.name)) delete w.host;
-        return { retired: [...retired] };
+        return { retired, rejected, domainMismatch };
       }, true);
     },
     addWolf: (hostId, wolf) =>

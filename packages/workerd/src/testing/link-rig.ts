@@ -22,6 +22,10 @@ export interface LinkRig {
   presence(): LinkPresence;
   waitPresence(p: LinkPresence, ms?: number): Promise<void>;
   registry(c: "hosts" | "wolves"): Promise<any[]>;
+  /** Operator-register a wolf (no host). */
+  registerWolf(name: string): Promise<void>;
+  /** Poll until `cond` holds (default 5s). */
+  eventually(cond: () => boolean | Promise<boolean>, what: string, ms?: number): Promise<void>;
   /** Mint another worker token for `hostId` (default: the rig's host). */
   mintWorker(hostId?: string): { token: string; tokenId: string };
   /** A bare WebSocket speaking raw frames (for impersonating a second worker or a version-skewed one). */
@@ -41,7 +45,9 @@ export interface LinkRigOptions {
   wolves?: string[];
   laptop?: boolean;
   hostId?: string;
-  hubTimers?: { heartbeatMs: number; deadAfterMs: number; helloTimeoutMs: number };
+  hubTimers?: { heartbeatMs: number; deadAfterMs: number; helloTimeoutMs: number; asleepOfflineMs?: number };
+  /** Extra wolf names the operator registers up front (e.g. ones added at runtime). */
+  preRegister?: string[];
   /** Start workerd with no hub config (pair later). */
   noHub?: boolean;
 }
@@ -51,7 +57,7 @@ const KEY = "rig-legacy-key-0123456789";
 export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const hostId = o.hostId ?? "box";
   const dataDir = mkdtempSync(join(tmpdir(), "link-rig-hub-"));
-  const hub = await createHubServer({ dataDir, apiKey: KEY, port: 0, authPollMs: 30, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 600, helloTimeoutMs: 500 } });
+  const hub = await createHubServer({ dataDir, apiKey: KEY, port: 0, authPollMs: 30, linkTimers: o.hubTimers ?? { heartbeatMs: 100, deadAfterMs: 1000, helloTimeoutMs: 500, asleepOfflineMs: 60_000 } });
   const store = createTokenStore(dataDir);
   const mintWorker = (h = hostId) => {
     const { code } = store.mintPairingCode({ kind: "worker", hostId: h });
@@ -60,7 +66,14 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
   const op = { "X-API-Key": KEY, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
   await fetch(`${hub.url}/v1/registry/domains`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolfpack" }) });
   const { token, tokenId } = mintWorker();
-  const { root } = makeWolves(...(o.wolves ?? ["alpha"]));
+  const wolfNames = o.wolves ?? ["alpha"];
+  const { root } = makeWolves(...wolfNames);
+  // The operator pre-registers wolves; a worker cannot create them.
+  const registerWolf = async (name: string) => {
+    const r = await fetch(`${hub.url}/v1/registry/wolves`, { method: "POST", headers: op, body: JSON.stringify({ name, domains: [] }) });
+    if (!r.ok) throw new Error(`pre-register ${name} failed: ${r.status}`);
+  };
+  for (const n of [...wolfNames, ...(o.preRegister ?? [])]) await registerWolf(n);
   const workerd = await runWorkerd({
     wolvesDir: root,
     port: 0,
@@ -90,6 +103,14 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       return ((await r.json()) as Record<string, any[]>)[c]!;
     },
     mintWorker,
+    registerWolf,
+    async eventually(cond, what, ms = 5000) {
+      const end = Date.now() + ms;
+      while (!(await cond())) {
+        if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    },
     async rawLink(tok) {
       const ws = new WsClient(hub.url.replace("http", "ws") + "/v1/link", { headers: { Authorization: `Bearer ${tok}` } });
       raws.push(ws);

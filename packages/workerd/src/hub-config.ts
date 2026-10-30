@@ -1,7 +1,7 @@
 /** Hub pairing for workerd: `workerd pair <hub-url> <code>` trades a code for a worker token and stores it in hub.json (0600). */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PairResponseSchema } from "@wolfpack/protocol";
 
 export interface HubConfig {
@@ -18,8 +18,9 @@ export function loadHubConfig(dir?: string): HubConfig | undefined {
   let raw: string;
   try {
     raw = readFileSync(hubConfigFile(dir), "utf8");
-  } catch {
-    return undefined;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; // unpaired
+    throw new Error(`cannot read ${hubConfigFile(dir)}: ${(e as Error).message}`);
   }
   const j = JSON.parse(raw) as Partial<HubConfig>;
   if (typeof j.hubUrl !== "string" || typeof j.token !== "string" || typeof j.hostId !== "string") throw new Error(`${hubConfigFile(dir)} is invalid (need hubUrl, token, hostId)`);
@@ -28,7 +29,7 @@ export function loadHubConfig(dir?: string): HubConfig | undefined {
 
 export function saveHubConfig(cfg: HubConfig, dir?: string): string {
   const file = hubConfigFile(dir);
-  mkdirSync(join(file, ".."), { recursive: true });
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   chmodSync(tmp, 0o600);
@@ -36,7 +37,20 @@ export function saveHubConfig(cfg: HubConfig, dir?: string): string {
   return file;
 }
 
+/** A warning when the hub URL is plain http to a non-loopback host (the token and pairing code cross the network in clear). */
+export function insecureHubWarning(hubUrl: string): string | undefined {
+  try {
+    const u = new URL(hubUrl);
+    const loopback = u.hostname === "localhost" || u.hostname === "[::1]" || u.hostname === "::1" || /^127\./.test(u.hostname);
+    if (u.protocol === "http:" && !loopback) return `warning: ${u.origin} is plain http; the worker token would travel unencrypted (use https)`;
+  } catch {
+    /* an invalid URL fails later with a clearer error */
+  }
+  return undefined;
+}
+
 export interface PairOptions {
+  warn?: (m: string) => void;
   dir?: string;
   label?: string;
   fetch?: typeof fetch;
@@ -44,6 +58,8 @@ export interface PairOptions {
 
 /** POST /v1/pair as a worker; stores and returns the config. The host id comes from the code (bound at `hubd pair --host-id`). */
 export async function pairWithHub(hubUrl: string, code: string, opts: PairOptions = {}): Promise<HubConfig> {
+  const warning = insecureHubWarning(hubUrl);
+  if (warning) (opts.warn ?? ((m: string) => console.warn(`workerd: ${m}`)))(warning);
   const base = hubUrl.replace(/\/+$/, "");
   const res = await (opts.fetch ?? fetch)(`${base}/v1/pair`, {
     method: "POST",

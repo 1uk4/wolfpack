@@ -19,13 +19,14 @@
   "dependencies": {
     "@wolfpack/engine": "*",
     "@wolfpack/harness": "*",
-    "@wolfpack/protocol": "*"
+    "@wolfpack/protocol": "*",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
     "@wolfpack/client": "*",
     "@wolfpack/hubd": "*",
-    "typescript": "^5.7.0",
-    "ws": "^8.22.0"
+    "typescript": "^5.7.0"
   }
 }

@@ -2,7 +2,7 @@ import { discoverWolves } from "@wolfpack/engine";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
 import { WorkerdServer } from "./proxy.js";
 import { HubLink, type LinkStatus } from "./link.js";
-import { loadHubConfig, type HubConfig } from "./hub-config.js";
+import { insecureHubWarning, loadHubConfig, type HubConfig } from "./hub-config.js";
 import { startWakeMonitor, type WakeOptions } from "./wake.js";
 import type { LinkWolf } from "@wolfpack/protocol";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
@@ -63,6 +63,8 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   let link: HubLink | undefined;
   let wake: { stop(): void } | undefined;
   if (hubCfg) {
+    const warning = insecureHubWarning(hubCfg.hubUrl);
+    if (warning) log(`[workerd] ${warning}`);
     link = new HubLink({
       ...hubCfg,
       laptop: opts.laptop,

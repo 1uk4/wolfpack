@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { HubLink, linkBackoff } from "./link.js";
-import { loadHubConfig, pairWithHub } from "./hub-config.js";
+import { insecureHubWarning, loadHubConfig, pairWithHub } from "./hub-config.js";
 import { startWakeMonitor } from "./wake.js";
 import { makeWolves, until } from "./testing/helpers.js";
 import { startLinkRig, type LinkRig } from "./testing/link-rig.js";
@@ -19,9 +21,10 @@ async function rig(o: Parameters<typeof startLinkRig>[0] = {}): Promise<LinkRig>
   return r;
 }
 const names = async (r: LinkRig) => (await r.registry("wolves")).map((w) => [w.name, w.host ?? null]);
+const op = { "X-API-Key": "rig-legacy-key-0123456789", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
 
 describe("worker link (hubd + workerd + fake wolf)", () => {
-  it("registers the host and its wolves and goes online; the wolf stays reachable through workerd", async () => {
+  it("registers the host and its pre-registered wolves and goes online; the wolf stays reachable through workerd", async () => {
     const r = await rig({ wolves: ["alpha", "beta"] });
     await r.waitPresence("online");
     expect((await r.registry("hosts")).map((h) => h.name)).toEqual(["box"]);
@@ -34,27 +37,42 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
   it("a retired wolf is not resurrected on reconnect and stays retired", async () => {
     const r = await rig({ wolves: ["alpha"] });
     await r.waitPresence("online");
-    const op = { "X-API-Key": "rig-legacy-key-0123456789", [ACTOR_HEADER]: JSON.stringify({ id: "op", kind: "operator" }) };
     expect((await fetch(`${r.hub.url}/v1/registry/wolves/alpha/retire`, { method: "POST", headers: op })).status).toBe(200);
     r.workerd.link!.kick();
-    await r.waitPresence("online");
-    await new Promise((x) => setTimeout(x, 100));
-    expect((await r.registry("wolves"))[0]).toMatchObject({ name: "alpha", status: "retired" });
+    await r.eventually(async () => r.presence() === "online" && (await r.registry("wolves"))[0].status === "retired", "reconnected, still retired");
   });
 
-  it("a major version mismatch is rejected (4001) and the worker reports hub incompatible and keeps backing off", async () => {
+  it("an unregistered wolf is not created (name squatting) and a wolf of another host is refused (hijack)", async () => {
+    const r = await rig({ wolves: ["alpha"], noHub: true });
+    const a = await r.rawLink(r.token);
+    a.hello({ wolves: [{ name: "alpha", domains: [] }, { name: "squat", domains: [] }] });
+    await a.until(() => a.frames.some((f) => f.t === "welcome"), "welcome a");
+    expect((a.frames.find((f) => f.t === "welcome") as any).rejected).toEqual(["squat"]);
+    expect(await names(r)).toEqual([["alpha", "box"]]); // squat not created
+    // A second host claims alpha: refused, alpha stays on box.
+    const other = r.mintWorker("evil");
+    const b = await r.rawLink(other.token);
+    b.hello({ hostId: "evil", wolves: [{ name: "alpha", domains: [] }] });
+    await b.until(() => b.frames.some((f) => f.t === "welcome"), "welcome b");
+    expect((b.frames.find((f) => f.t === "welcome") as any).rejected).toEqual(["alpha"]);
+    b.send({ t: "wolf.add", wolf: { name: "alpha", domains: [] } });
+    await b.until(() => b.frames.some((f) => f.t === "error" && (f as any).code === "rejected"), "wolf.add refused");
+    expect(await names(r)).toEqual([["alpha", "box"]]);
+  });
+
+  it("a major version mismatch is rejected (4001); the worker reports hub incompatible, stays incompatible and keeps retrying", async () => {
     const r = await rig({ noHub: true });
     const Skewed = class extends WebSocket {
-      override send(d: string) {
-        super.send(d.replace(/"v":1/, '"v":2'));
+      override send(d: any, ...rest: any[]) {
+        return (super.send as any)(typeof d === "string" ? d.replace(/"v":1/, '"v":2') : d, ...rest);
       }
     };
     const logs: string[] = [];
-    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Skewed, baseMs: 10, capMs: 40, log: (m) => logs.push(m) });
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Skewed as typeof WebSocket, baseMs: 10, capMs: 40, log: (m) => logs.push(m) });
     cleanup.push(() => link.stop());
     link.start();
     await until(() => link.status().attempts >= 3, 5000, "backing off");
-    expect(link.status().state).toMatch(/incompatible|connecting/);
+    expect(link.status().state).toBe("incompatible");
     expect(link.status().detail).toBe("hub incompatible");
     expect(logs.some((l) => l.includes("hub incompatible"))).toBe(true);
     expect(r.presence()).toBe("offline");
@@ -65,9 +83,8 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     const raw = await r.rawLink(r.token);
     raw.hello();
     await raw.until(() => raw.frames.some((f) => f.t === "welcome"), "welcome");
-    await r.waitPresence("online");
-    await r.waitPresence("offline");
-    expect(raw.closed).toBeDefined();
+    await until(() => raw.closed !== undefined, 5000, "dropped for silence");
+    expect(r.presence()).toBe("offline");
   });
 
   it("a laptop's clean shutdown shows asleep; a non-laptop shows offline", async () => {
@@ -82,17 +99,26 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
   });
 
   it("wolves added or removed at runtime are registered / cleared", async () => {
-    const r = await rig({ wolves: ["alpha"] });
+    const r = await rig({ wolves: ["alpha"], preRegister: ["gamma"] });
     await r.waitPresence("online");
     const extra = makeWolves("gamma");
+    cleanup.push(() => rmSync(extra.root, { recursive: true, force: true }));
     r.workerd.supervisor.addWolf(extra.wolves[0]!);
-    await until(() => false || (r.hub.link.presence("box") === "online"), 1000, "online");
-    for (let i = 0; i < 100 && !(await names(r)).some(([n]) => n === "gamma"); i++) await new Promise((x) => setTimeout(x, 30));
-    expect(await names(r)).toEqual([["alpha", "box"], ["gamma", "box"]]);
+    await r.eventually(async () => JSON.stringify(await names(r)) === JSON.stringify([["alpha", "box"], ["gamma", "box"]]), "gamma registered");
     await r.workerd.supervisor.removeWolf("gamma");
-    for (let i = 0; i < 100 && (await names(r)).some(([n, h]) => n === "gamma" && h); i++) await new Promise((x) => setTimeout(x, 30));
-    expect(await names(r)).toEqual([["alpha", "box"], ["gamma", null]]);
-    rmSync(extra.root, { recursive: true, force: true });
+    await r.eventually(async () => JSON.stringify(await names(r)) === JSON.stringify([["alpha", "box"], ["gamma", null]]), "gamma cleared");
+  });
+
+  it("wolves added between the hello snapshot and the welcome are sent after the welcome", async () => {
+    const r = await rig({ noHub: true, wolves: ["alpha"], preRegister: ["gamma"] });
+    let calls = 0;
+    const link = new HubLink({
+      hubUrl: r.hub.url, token: r.token, hostId: r.hostId,
+      wolves: () => (++calls === 1 ? [{ name: "alpha", domains: [] }] : [{ name: "alpha", domains: [] }, { name: "gamma", domains: [] }]),
+    });
+    cleanup.push(() => link.stop());
+    link.start();
+    await r.eventually(async () => JSON.stringify(await names(r)) === JSON.stringify([["alpha", "box"], ["gamma", "box"]]), "gamma synced after welcome");
   });
 
   it("the newest connection from a host wins (4409 to the old one)", async () => {
@@ -107,27 +133,73 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     expect(r.presence()).toBe("online");
   });
 
-  it("revoking the token drops the link; the worker reports unauthorized", async () => {
+  it("a replaced worker goes to the 'replaced' state and retries slowly instead of fighting", async () => {
+    const r = await rig({ noHub: true });
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], baseMs: 20, capMs: 30_000 });
+    cleanup.push(() => link.stop());
+    link.start();
+    await r.waitPresence("online");
+    const b = await r.rawLink(r.mintWorker().token);
+    b.hello();
+    await until(() => link.status().state === "replaced", 5000, "replaced state");
+    expect(link.status().nextRetryInMs!).toBeGreaterThan(10_000);
+    link.kick(); // a wake must not start the fight again
+    expect(link.status().state).toBe("replaced");
+    expect(r.presence()).toBe("online");
+  });
+
+  it("revoking the token drops the link; the worker stays 'unauthorized' with the re-pair detail across retries", async () => {
     const r = await rig();
     await r.waitPresence("online");
     r.store.revoke(r.tokenId);
     await r.waitPresence("offline");
     await until(() => r.workerd.link!.status().state === "unauthorized", 5000, "unauthorized state");
+    r.workerd.link!.kick(); // retry: refused with 401 at the upgrade
+    await until(() => r.workerd.link!.status().attempts >= 1 && r.workerd.link!.status().nextRetryInMs !== null, 5000, "retry refused and rescheduled");
+    expect(r.workerd.link!.status().state).toBe("unauthorized");
     expect(r.workerd.link!.status().detail).toMatch(/re-pair/);
+    expect(r.workerd.link!.status().nextRetryInMs!).toBeGreaterThan(100); // the rig caps at 200ms: retries sit at the cap, not the 20ms base
   });
 
   it("kick() reconnects at once, skipping a long backoff", async () => {
     const r = await rig({ noHub: true });
-    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], baseMs: 30_000, capMs: 60_000 });
+    let first: WebSocket | undefined;
+    const Capture = class extends WebSocket {
+      constructor(...a: ConstructorParameters<typeof WebSocket>) {
+        super(...a);
+        first ??= this;
+      }
+    };
+    const link = new HubLink({ hubUrl: r.hub.url, token: r.token, hostId: r.hostId, wolves: () => [], WebSocketImpl: Capture as typeof WebSocket, baseMs: 30_000, capMs: 60_000, rand: () => 0.5 });
     cleanup.push(() => link.stop());
     link.start();
     await r.waitPresence("online");
-    r.hub.link.closeByHost("box");
-    await until(() => link.status().nextRetryInMs !== null, 3000, "backoff scheduled");
-    expect(link.status().nextRetryInMs!).toBeGreaterThan(10_000);
+    first!.terminate(); // an unclean drop: the link schedules a 30s backoff
+    await until(() => link.status().state === "backoff", 3000, "backoff scheduled");
+    expect(link.status().nextRetryInMs!).toBeGreaterThan(20_000);
     link.kick();
-    await r.waitPresence("online");
-    expect(link.status().state).toBe("online");
+    await until(() => link.status().state === "online", 5000, "online again after kick");
+  });
+
+  it("a hub that never answers the upgrade hits the connect timeout; one that never sends welcome hits the welcome timeout", async () => {
+    const blackhole: Server = createServer(() => {});
+    blackhole.on("upgrade", () => {}); // accept the upgrade request and never answer
+    await new Promise<void>((res) => blackhole.listen(0, "127.0.0.1", res));
+    const socks = new Set<import("node:net").Socket>();
+    blackhole.on("connection", (sk) => socks.add(sk));
+    cleanup.push(() => new Promise<void>((res) => (blackhole.close(() => res()), socks.forEach((sk) => sk.destroy()))));
+    const l1 = new HubLink({ hubUrl: `http://127.0.0.1:${(blackhole.address() as any).port}`, token: "x", hostId: "box", wolves: () => [], connectTimeoutMs: 100, baseMs: 10, capMs: 20 });
+    cleanup.push(() => l1.stop());
+    l1.start();
+    await until(() => l1.status().attempts >= 2, 5000, "connect timeouts");
+
+    const mute = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((res) => mute.once("listening", res));
+    cleanup.push(() => new Promise<void>((res) => (mute.clients.forEach((c) => c.terminate()), mute.close(() => res()))));
+    const l2 = new HubLink({ hubUrl: `http://127.0.0.1:${(mute.address() as any).port}`, token: "x", hostId: "box", wolves: () => [], welcomeTimeoutMs: 100, baseMs: 10, capMs: 20 });
+    cleanup.push(() => l2.stop());
+    l2.start();
+    await until(() => l2.status().attempts >= 2, 5000, "welcome timeouts");
   });
 
   it("pair: trades a code for a worker token, stores hub.json 0600 with the host id", async () => {
@@ -135,25 +207,41 @@ describe("worker link (hubd + workerd + fake wolf)", () => {
     const dir = mkdtempSync(join(tmpdir(), "workerd-pair-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const { code } = r.store.mintPairingCode({ kind: "worker", hostId: "newbox" });
-    const cfg = await pairWithHub(r.hub.url + "/", code, { dir, label: "test-laptop" });
+    const cfg = await pairWithHub(r.hub.url + "/", code, { dir: join(dir, "cfg"), label: "test-laptop" });
     expect(cfg).toMatchObject({ hubUrl: r.hub.url, hostId: "newbox" });
-    expect(loadHubConfig(dir)).toEqual(cfg);
-    expect(statSync(join(dir, "hub.json")).mode & 0o777).toBe(0o600);
+    expect(loadHubConfig(join(dir, "cfg"))).toEqual(cfg);
+    expect(statSync(join(dir, "cfg", "hub.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, "cfg")).mode & 0o777).toBe(0o700);
     await expect(pairWithHub(r.hub.url, code, { dir })).rejects.toThrow(/pairing failed \(401\)/); // single use
     const link = new HubLink({ ...cfg, wolves: () => [] });
     cleanup.push(() => link.stop());
     link.start();
     await until(() => r.hub.link.presence("newbox") === "online", 5000, "paired link online");
   });
+
+  it("loadHubConfig: missing = unpaired; any other read problem throws", () => {
+    const dir = mkdtempSync(join(tmpdir(), "workerd-cfg-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    expect(loadHubConfig(dir)).toBeUndefined();
+    mkdirSync(join(dir, "hub.json")); // unreadable as a file (EISDIR): not "unpaired"
+    expect(() => loadHubConfig(dir)).toThrow(/cannot read/);
+  });
+
+  it("warns about plain http to a non-loopback host only", () => {
+    expect(insecureHubWarning("http://hub.example.com:3000")).toMatch(/plain http/);
+    expect(insecureHubWarning("http://127.0.0.1:3000")).toBeUndefined();
+    expect(insecureHubWarning("http://localhost:3000")).toBeUndefined();
+    expect(insecureHubWarning("https://hub.example.com")).toBeUndefined();
+  });
 });
 
 describe("backoff and wake", () => {
-  it("backoff doubles from 1s to a 60s cap with +-20% jitter", () => {
+  it("backoff doubles from 1s to a 60s cap with +-20% jitter, never above the cap", () => {
     const mid = () => 0.5;
     expect([1, 2, 3, 4, 5, 6, 7, 8].map((n) => linkBackoff(n, mid))).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000]);
     expect(linkBackoff(3, () => 0)).toBe(3200);
     expect(linkBackoff(3, () => 1)).toBe(4800);
-    expect(linkBackoff(20, () => 1)).toBe(72000);
+    expect(linkBackoff(20, () => 1)).toBe(60000);
   });
 
   it("wake monitor fires on a wall-clock gap > 15s and on an interface change", () => {

@@ -23,3 +23,9 @@ const AMBIENT = [
   "TMUX", "TMUX_PANE", "HERDR_ENV",
 ];
 for (const k of AMBIENT) delete process.env[k];
+
+// workerd reads/writes its hub pairing (hub.json) from here; tests must never touch the developer's real ~/.wolfpack/workerd.
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+process.env.WORKERD_CONFIG_DIR = mkdtempSync(join(tmpdir(), "workerd-test-config-"));

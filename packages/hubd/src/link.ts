@@ -1,8 +1,13 @@
 /**
  * Worker link: one WebSocket per host on GET /v1/link. Authenticates BEFORE upgrading (worker token with a hostId only; the legacy
  * key and console/browser tokens are refused), registers the host and its wolves from `hello`, tracks presence
- * (online / asleep / offline), and drops the link when its token is revoked. Relay frames are not handled yet (error bad_frame is
- * NOT sent for them either: they are valid frames, ignored until the relay ticket).
+ * (online / asleep / offline), and drops the link when its token is revoked. Relay frames are valid but not handled yet: they are
+ * ignored until the relay ticket (no error is sent for them).
+ *
+ * Wolves are pre-registered by the operator: a hello/wolf.add can only attach a known, unretired wolf that is unowned or already on
+ * this host. Anything else is `rejected` (welcome.rejected / an error frame) and logged; nothing is created.
+ * Presence: an asleep host (sleep frame, or clean close of a laptop) stays asleep until it reconnects (heartbeat traffic does not
+ * undo it) and turns offline after `asleepOfflineMs` (default 12h).
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -10,7 +15,9 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   LINK_CLOSE,
   LINK_DEAD_AFTER_MS,
+  LINK_ASLEEP_OFFLINE_MS,
   LINK_HEARTBEAT_MS,
+  LINK_HELLO_MAX_PAYLOAD,
   LINK_HELLO_TIMEOUT_MS,
   LINK_MAX_PAYLOAD,
   LINK_PROTOCOL_VERSION,
@@ -29,6 +36,8 @@ export interface LinkTimers {
   heartbeatMs: number;
   deadAfterMs: number;
   helloTimeoutMs: number;
+  /** Asleep -> offline after this long without a reconnect. Default 12h. */
+  asleepOfflineMs: number;
 }
 
 export interface LinkOptions {
@@ -72,17 +81,26 @@ interface Conn {
 }
 
 export function createLink(opts: LinkOptions): Link {
-  const t: LinkTimers = { heartbeatMs: LINK_HEARTBEAT_MS, deadAfterMs: LINK_DEAD_AFTER_MS, helloTimeoutMs: LINK_HELLO_TIMEOUT_MS, ...opts.timers };
+  const t: LinkTimers = { heartbeatMs: LINK_HEARTBEAT_MS, deadAfterMs: LINK_DEAD_AFTER_MS, helloTimeoutMs: LINK_HELLO_TIMEOUT_MS, asleepOfflineMs: LINK_ASLEEP_OFFLINE_MS, ...opts.timers };
   const log = opts.log ?? ((m: string) => console.log(m));
-  const wss = new WebSocketServer({ noServer: true, maxPayload: LINK_MAX_PAYLOAD });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: LINK_HELLO_MAX_PAYLOAD });
   const conns = new Set<Conn>();
   const byHost = new Map<string, Conn>();
   const states = new Map<string, LinkPresence>();
   const listeners = new Set<PresenceListener>();
+  const asleepTimers = new Map<string, NodeJS.Timeout>();
+  const q = (v: unknown) => JSON.stringify(String(v).slice(0, 64)); // log-safe
 
   const setPresence = (hostId: string, p: LinkPresence) => {
     if ((states.get(hostId) ?? "offline") === p) return;
     states.set(hostId, p);
+    clearTimeout(asleepTimers.get(hostId));
+    asleepTimers.delete(hostId);
+    if (p === "asleep") {
+      const tm = setTimeout(() => (asleepTimers.delete(hostId), setPresence(hostId, "offline")), t.asleepOfflineMs);
+      tm.unref();
+      asleepTimers.set(hostId, tm);
+    }
     for (const l of [...listeners]) {
       try {
         l(hostId, p);
@@ -131,14 +149,21 @@ export function createLink(opts: LinkOptions): Link {
 
   async function onHello(c: Conn, h: LinkHello) {
     clearTimeout(c.helloTimer);
-    if (!linkCompatible(h.v)) {
-      sendError(c, "version_mismatch", `hub speaks link protocol ${LINK_PROTOCOL_VERSION}, worker sent ${h.v}`);
-      return hubClose(c, LINK_CLOSE.incompatible, "incompatible");
-    }
+    if (!linkCompatible(h.v)) return versionMismatch(c, h.v);
     if (h.hostId !== c.hostId) {
       sendError(c, "unauthorized", "hello.hostId does not match the token");
       return hubClose(c, LINK_CLOSE.unauthorized, "unauthorized");
     }
+    // Register FIRST: if that fails the existing connection (if any) stays untouched and this one is dropped.
+    let result: { retired: string[]; rejected: string[]; domainMismatch: { wolf: string; reported: string[]; granted: string[] }[] };
+    try {
+      result = await opts.registry.applyHello(c.hostId, h.wolves);
+    } catch (e) {
+      log(`hubd: link ${c.hostId}: registering hello failed: ${(e as Error).message}`);
+      sendError(c, "internal", "could not register this host");
+      return hubClose(c, 1011, "register failed");
+    }
+    if (c.ws.readyState !== c.ws.OPEN) return;
     const old = byHost.get(c.hostId);
     if (old && old !== c) {
       sendError(old, "replaced");
@@ -146,9 +171,11 @@ export function createLink(opts: LinkOptions): Link {
     }
     byHost.set(c.hostId, c);
     c.hello = h;
-    const { retired } = await opts.registry.applyHello(c.hostId, h.wolves);
-    if (c.ws.readyState !== c.ws.OPEN || byHost.get(c.hostId) !== c) return;
-    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired, hubRevisions: {} });
+    // Hello accepted: now allow full-size frames (ws keeps the limit on the receiver; there is no public setter).
+    const receiver = (c.ws as unknown as { _receiver?: { _maxPayload: number } })._receiver;
+    if (receiver) receiver._maxPayload = LINK_MAX_PAYLOAD;
+    if (result.rejected.length) log(`hubd: link ${c.hostId}: rejected wolves ${result.rejected.map(q).join(", ")}`);
+    send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {} });
     setPresence(c.hostId, "online");
     let n = 0;
     c.pingTimer = setInterval(() => send(c, { t: "ping", n: ++n }), t.heartbeatMs);
@@ -156,7 +183,22 @@ export function createLink(opts: LinkOptions): Link {
     armDead(c);
   }
 
+  function versionMismatch(c: Conn, v: unknown) {
+    clearTimeout(c.helloTimer);
+    sendError(c, "version_mismatch", `hub speaks link protocol ${LINK_PROTOCOL_VERSION}, worker sent ${String(v).slice(0, 12)}`);
+    hubClose(c, LINK_CLOSE.incompatible, "incompatible");
+  }
+
   async function onFrame(c: Conn, text: string) {
+    if (!c.hello) {
+      // Version check before the full parse, so a future hello shape still gets "hub incompatible".
+      try {
+        const raw = JSON.parse(text) as { t?: unknown; v?: unknown };
+        if (raw && raw.t === "hello" && typeof raw.v === "number" && !linkCompatible(raw.v)) return versionMismatch(c, raw.v);
+      } catch {
+        /* fall through to the normal parse error */
+      }
+    }
     const p = parseLinkFrame(text);
     if (!p.ok) return sendError(c, "bad_frame", p.reason);
     const f = p.frame;
@@ -166,10 +208,6 @@ export function createLink(opts: LinkOptions): Link {
     }
     if (byHost.get(c.hostId) !== c) return;
     armDead(c);
-    if (f.t !== "sleep" && c.sleeping) {
-      c.sleeping = false;
-      setPresence(c.hostId, "online");
-    }
     switch (f.t) {
       case "hello":
         return sendError(c, "bad_frame", "duplicate hello");
@@ -182,7 +220,13 @@ export function createLink(opts: LinkOptions): Link {
         c.bye = true;
         return;
       case "wolf.add":
-        if (!(await opts.registry.addWolf(c.hostId, f.wolf))) log(`hubd: link ${c.hostId}: wolf ${f.wolf.name} not registered (retired or invalid)`);
+        {
+          const r = await opts.registry.addWolf(c.hostId, f.wolf);
+          if (r !== "ok") {
+            log(`hubd: link ${c.hostId}: wolf ${q(f.wolf.name)} not registered (${r})`);
+            sendError(c, "rejected", `${f.wolf.name}: ${r}`);
+          }
+        }
         return;
       case "wolf.remove":
         return opts.registry.removeWolf(c.hostId, f.name);
@@ -197,6 +241,7 @@ export function createLink(opts: LinkOptions): Link {
     c.helloTimer = setTimeout(() => hubClose(c, LINK_CLOSE.noHello, "no hello"), t.helloTimeoutMs);
     c.helloTimer.unref();
     ws.on("message", (data, isBinary) => {
+      if (!c.hello && (data as Buffer).length > LINK_HELLO_MAX_PAYLOAD) return hubClose(c, 1009, "too big");
       if (isBinary) return sendError(c, "bad_frame", "text frames only");
       const text = data.toString();
       c.queue = c.queue.then(() => onFrame(c, text)).catch((e) => log(`hubd: link ${c.hostId}: frame failed: ${(e as Error).message}`));
@@ -209,6 +254,13 @@ export function createLink(opts: LinkOptions): Link {
     socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     socket.destroy();
   };
+
+  function sendToHost(hostId: string, frame: LinkFrame): boolean {
+    const c = byHost.get(hostId);
+    if (!c || c.ws.readyState !== c.ws.OPEN) return false;
+    send(c, frame);
+    return true;
+  }
 
   return {
     handleUpgrade(req, socket, head) {
@@ -236,22 +288,20 @@ export function createLink(opts: LinkOptions): Link {
     closeAll() {
       for (const c of [...conns]) hubClose(c, 1001, "hub shutting down");
       for (const c of [...conns]) setTimeout(() => c.ws.terminate(), 200).unref();
+      for (const tm of asleepTimers.values()) clearTimeout(tm);
+      asleepTimers.clear();
+      wss.close();
     },
     presence: (hostId) => states.get(hostId) ?? "offline",
     onPresence(l) {
       listeners.add(l);
       return () => void listeners.delete(l);
     },
-    sendToHost(hostId, frame) {
-      const c = byHost.get(hostId);
-      if (!c || c.ws.readyState !== c.ws.OPEN) return false;
-      send(c, frame);
-      return true;
-    },
+    sendToHost,
     sendToWolf(wolf, frame) {
       try {
         const host = (opts.registry.get("wolves", wolf) as { host?: string }).host;
-        return host ? this.sendToHost(host, frame) : false;
+        return host ? sendToHost(host, frame) : false;
       } catch {
         return false;
       }

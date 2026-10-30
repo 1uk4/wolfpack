@@ -13,8 +13,14 @@ export const LINK_HELLO_TIMEOUT_MS = 10_000;
 export const LINK_HEARTBEAT_MS = 10_000;
 export const LINK_DEAD_AFTER_MS = 30_000;
 
+/** Until the hello is accepted the hub accepts only small frames. */
+export const LINK_HELLO_MAX_PAYLOAD = 64 * 1024;
+export const LINK_MAX_WOLVES = 256;
+export const LINK_MAX_DOMAINS = 64;
+/** An asleep host that has not come back after this long is shown offline. */
+export const LINK_ASLEEP_OFFLINE_MS = 12 * 60 * 60 * 1000;
+
 export const LINK_CLOSE = {
-  clean: 1000,
   incompatible: 4001,
   noHello: 4400,
   unauthorized: 4401,
@@ -24,10 +30,10 @@ export const LINK_CLOSE = {
 const Id = z.string().min(1).max(64);
 const Revisions = z.record(z.string(), z.number().int().nonnegative());
 
-export const LinkWolfSchema = z.object({ name: z.string().min(1).max(64), domains: z.array(z.string().min(1)).default([]) });
+export const LinkWolfSchema = z.object({ name: z.string().min(1).max(64), domains: z.array(z.string().min(1).max(64)).max(LINK_MAX_DOMAINS).default([]) });
 export type LinkWolf = z.infer<typeof LinkWolfSchema>;
 
-export const LinkErrorCodeSchema = z.enum(["version_mismatch", "unauthorized", "bad_frame", "replaced"]);
+export const LinkErrorCodeSchema = z.enum(["version_mismatch", "unauthorized", "bad_frame", "replaced", "rejected", "internal"]);
 export type LinkErrorCode = z.infer<typeof LinkErrorCodeSchema>;
 
 export const LinkHelloSchema = z.object({
@@ -35,7 +41,7 @@ export const LinkHelloSchema = z.object({
   v: z.number().int().nonnegative(),
   hostId: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(64),
   laptop: z.boolean(),
-  wolves: z.array(LinkWolfSchema),
+  wolves: z.array(LinkWolfSchema).max(LINK_MAX_WOLVES),
   /** Per-domain KB cursors the worker has applied. */
   kbRevisions: Revisions.default({}),
 });
@@ -46,6 +52,10 @@ export const LinkWelcomeSchema = z.object({
   deadAfterMs: z.number().int().positive(),
   /** Wolves the hub has retired; the worker must not serve them. */
   retired: z.array(z.string()).default([]),
+  /** Wolves the hub refused to register for this host (unknown name, or owned by another host). Operator action needed. */
+  rejected: z.array(z.string()).default([]),
+  /** Informational: wolves whose self-reported domains differ from what the registry grants. The registry decides; the worker never writes domains. */
+  domainMismatch: z.array(z.object({ wolf: z.string(), reported: z.array(z.string()), granted: z.array(z.string()) })).default([]),
   hubRevisions: Revisions.default({}),
 });
 export const LinkWolfAddSchema = z.object({ t: z.literal("wolf.add"), wolf: LinkWolfSchema });

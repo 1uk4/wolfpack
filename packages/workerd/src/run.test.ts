@@ -38,14 +38,14 @@ describe("runWorkerd shared sandbox", () => {
       started.push("x");
       return { url: "http://127.0.0.1:45001", close: async () => {} };
     };
-    const w: RunningWorkerd = await runWorkerd({ wolvesDir: f.wolves, port: 0, command: FAKE_COMMAND, startWorkServer, log: (l) => lines.push(l) });
+    const w: RunningWorkerd = await runWorkerd({ wolvesDir: f.wolves, port: 0, command: FAKE_COMMAND, hub: false, startWorkServer, log: (l) => lines.push(l) });
     cleanup.push(() => w.close());
     expect(started).toHaveLength(1);
     expect(JSON.parse(readFileSync(sandboxPaths(f.sandbox).workServerFile, "utf8")).url).toBe("http://127.0.0.1:45001");
     expect(lines.some((l) => l.includes("the only ledger writer"))).toBe(true);
 
     const lines2: string[] = [];
-    const w2 = await runWorkerd({ wolvesDir: f.wolves, port: 0, command: FAKE_COMMAND, startWorkServer, only: ["a"], log: (l) => lines2.push(l) });
+    const w2 = await runWorkerd({ wolvesDir: f.wolves, port: 0, command: FAKE_COMMAND, hub: false, startWorkServer, only: ["a"], log: (l) => lines2.push(l) });
     cleanup.push(() => w2.close());
     expect(started).toHaveLength(1); // no second writer
     expect(lines2.some((l) => /no shared work server: .*already has a writer/.test(l))).toBe(true);

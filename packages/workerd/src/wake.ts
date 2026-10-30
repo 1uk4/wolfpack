@@ -14,10 +14,19 @@ export interface WakeOptions {
   netHash?: () => string;
 }
 
+/** Virtual / transient interfaces that change constantly without the machine's connectivity changing. */
+const NOISY_IFACE = /^(awdl|llw|utun|bridge|docker|veth|vmnet|vboxnet|lo)\d*/i;
+
 export function networkHash(): string {
   const parts: string[] = [];
   for (const [name, addrs] of Object.entries(networkInterfaces()).sort(([a], [b]) => a.localeCompare(b))) {
-    for (const a of addrs ?? []) if (!a.internal) parts.push(`${name}|${a.family}|${a.address}`);
+    if (NOISY_IFACE.test(name)) continue;
+    for (const a of addrs ?? []) {
+      if (a.internal) continue;
+      const v6 = a.family === "IPv6";
+      if (v6 && /^fe[89ab]/i.test(a.address)) continue; // link-local
+      parts.push(`${name}|${a.family}|${a.address}`);
+    }
   }
   return createHash("sha1").update(parts.sort().join("\n")).digest("hex");
 }

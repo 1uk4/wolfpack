@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** hubd CLI: `hubd serve` and `hubd dev`. Clients authenticate with device tokens (`hubd pair`); the optional LEGACY API key comes from env HUBD_API_KEY only (never argv, never logged). */
+/** hubd CLI: `hubd serve` and `hubd dev`. Clients authenticate with device tokens (`hubd pair`); the old HUBD_API_KEY is no longer supported (serve/dev refuse to start while it is set). */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
@@ -41,7 +41,6 @@ export interface CliArgs {
   seedWolves: string[];
 }
 
-export const MIN_KEY_LENGTH = 16;
 /** Strict: `localhost`, `::1`/`[::1]`, or a dotted-quad 127.x.y.z with every octet <= 255. DNS names such as 127.evil.com are NOT loopback. */
 export const isLoopback = (h: string): boolean => {
   if (h === "localhost" || h === "::1" || h === "[::1]") return true;
@@ -62,7 +61,6 @@ const USAGE = `usage:
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
      HUBD_INBOX_ROOT / HUBD_RECEIPTS_ROOT (librarian inbox + receipts roots, e.g. /home/wolf-W1hOrJ/librarian/inbox; default <data-dir>/kb/ops/contributions and /receipts)
-     HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -188,11 +186,9 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     for (const t of rows) log(`${t.id}  ${t.kind.padEnd(7)} ${t.label}  owner=${t.owner}  created=${t.createdAt}  lastUsed=${t.lastUsedAt ?? "never"}`);
     return;
   }
-  const apiKey = env.HUBD_API_KEY || undefined;
-  if (apiKey !== undefined && apiKey.length < MIN_KEY_LENGTH) throw new Error(`HUBD_API_KEY must be at least ${MIN_KEY_LENGTH} characters`);
-  if (apiKey) log("hubd: WARNING: HUBD_API_KEY legacy auth is enabled (temporary); prefer device tokens (hubd pair).");
+  if (env.HUBD_API_KEY) throw new Error("HUBD_API_KEY is no longer supported; remove it and pair devices with `hubd pair`");
   if (args.command === "dev" && !isLoopback(args.host))
-    log(`!!! WARNING: dev mode is binding to ${args.host} (--allow-network). This serves a COPY OF PRODUCTION DATA to the network, protected only by the shared API key. !!!`);
+    log(`!!! WARNING: dev mode is binding to ${args.host} (--allow-network). This serves a COPY OF PRODUCTION DATA to the network, protected only by device tokens. !!!`);
   let dataDir: string;
   if (args.command === "dev") {
     dataDir = assertSafeDevDataDir(args.dataDir ?? defaultDevDataDir());
@@ -213,7 +209,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
   if (socketMode !== undefined && socket === undefined) throw new Error("HUBD_SOCKET_MODE / --socket-mode needs a unix socket (HUBD_SOCKET or --socket)");
   if (socket !== undefined) assertSocketPath(socket);
   const listen = socket !== undefined ? { socketPath: socket, ...(socketMode !== undefined ? { socketMode } : {}) } : { port: args.port, host: args.host };
-  const hub = await createHubServer({ dataDir, apiKey, ...listen, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const hub = await createHubServer({ dataDir, ...listen, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

@@ -14,13 +14,12 @@ import type { Actor, TokenKind } from "@wolfpack/protocol";
 import { HubError } from "./errors.js";
 import { tokensFile } from "./layout.js";
 
-/** Who a request is. Legacy-key requests have `legacy: true` and no tokenId/kind/hostId. */
+/** Who a request is (always a verified device token). */
 export interface AuthIdentity {
   tokenId?: string;
   kind?: TokenKind;
   hostId?: string;
   owner: string;
-  legacy?: true;
 }
 
 export const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -172,8 +171,7 @@ function withLock<T>(file: string, fn: () => T, o: LockOptions = {}): T {
 
 /**
  * The actor a token acts as: console/browser = the owner as operator; worker = its hostId as a `wolf` actor.
- * LIMITATION: a worker token is attributed to its HOST, not to an individual wolf on that host (per-wolf attribution comes with the
- * link tickets). The hub stamps by / tokenId / hostId on every ledger event it writes.
+ * A worker token is attributed to its HOST; hubd lets it act for any active wolf the registry places on that host (server.ts wolfActorFor). The hub stamps by / tokenId / hostId on every ledger event it writes.
  */
 export function actorOf(t: Pick<TokenRecord, "kind" | "hostId" | "owner">): Actor {
   return t.kind === "worker" ? { id: t.hostId ?? "unknown-host", kind: "wolf" } : { id: t.owner, kind: "operator" };

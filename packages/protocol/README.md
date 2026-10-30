@@ -113,11 +113,11 @@ Normative serving semantics (implemented by the stub, asserted by the contract):
   ```
 - Every error is an `ErrorEnvelope` with the `ERROR_HTTP_STATUS` status. `X-Protocol-Version` differing from `PROTOCOL_VERSION` -> 426 `version_mismatch`; absent is accepted.
 
-### Hub routes (hubd) and the provisional actor
+### Hub routes (hubd) and the actor
 
-Routes with `scope: "hub"` in `ROUTES` are served by hubd, the pack authority, not by a wolf host: `GET /v1/work?domain=[&graduated=true]` and `GET /v1/work/:id/record` (same response shapes as the wolf-scoped `listWork` / `getWorkRecord`). A hub requires `X-API-Key` (401 `unauthorized` otherwise).
+Routes with `scope: "hub"` in `ROUTES` are served by hubd, the pack authority, not by a wolf host: `GET /v1/work?domain=[&graduated=true]` and `GET /v1/work/:id/record` (same response shapes as the wolf-scoped `listWork` / `getWorkRecord`). A hub requires `Authorization: Bearer <device token>` (401 `unauthorized` otherwise); there is no API key.
 
-`X-Wolfpack-Actor: {"id","kind"}` (`ACTOR_HEADER`) names who a hub request acts as. It is **PROVISIONAL**: the shared key is the only authentication, so the actor is *asserted, not proven*; per-actor pairing (work-wolfpack-WRkevxL) replaces it. Reads default to the `system` actor when it is absent. Mutating routes require it (400 `invalid_request` when missing). Owner-only operations require kind `operator` (401 `unauthorized` otherwise). `system` is reserved for the hub's own internal jobs; a client asserting it is 400 `invalid_request`.
+The acting identity is the bearer token's: an operator/console token acts as the operator, a worker token acts as its host and may act for any active wolf the registry places on that host. A client cannot assert an actor (the former `X-Wolfpack-Actor` header is removed and ignored). Owner-only operations require an operator token (403 `forbidden` otherwise). `system` is reserved for the hub's own internal jobs.
 
 Testing entrypoints (subpath exports): `@wolfpack/protocol/stub` exports `StubServer` (`new StubServer({fixture?, delayMs?, port?})`, `await listen()` -> base URL on 127.0.0.1, `close()`), `DEFAULT_FIXTURE`; `@wolfpack/protocol/contract` exports `runContractSuite(() => baseUrl, {wolf?, turnTimeoutMs?, wolfRuntime?, headers?})` (`wolfRuntime: false` skips the wolf-runtime groups, for hubd) and `runHubSuite`, a set of vitest `describe`/`it` blocks to run against any `/v1` server (call it from a test file; start the server in `beforeAll`). The target needs a wolf, and its scripted turns must take long enough (~50ms+) for the busy-window tests to land mid-turn. Zero runtime deps beyond zod; the contract imports `vitest` (a dev dependency of the consumer).
 
@@ -175,7 +175,7 @@ Skipping a card that is unknown, already closed, or held by a running turn is 40
 
 The hub tunnels any wolf-scoped `/v1` request (`/v1/wolves/:name/*`, `/v1/threads/:id/*`) from a console/browser token to the host that owns the wolf, over that host's `GET /v1/link` socket. The route's wolf (`wolfForRoute`) is resolved to a host through the registry.
 
-- `req {id:"h-<n>", method, path, headers, wolf, body?}` (hub → worker; `body` is base64, ≤ `LINK_RELAY_MAX_BODY`). Credentials (`Authorization`, `X-API-Key`, cookies) are never forwarded.
+- `req {id:"h-<n>", method, path, headers, wolf, body?}` (hub → worker; `body` is base64, ≤ `LINK_RELAY_MAX_BODY`). Credentials (`Authorization`, cookies) are never forwarded.
 - `res {id, status, headers}` then `chunk {id, seq, data, enc:"b64"}`* (each ≤ `LINK_RELAY_CHUNK_BYTES` raw) then `end {id}`; or `rerr {id, code, message?}` (worker → hub).
 - `cancel {id}` (hub → worker): the HTTP client went away. If the link drops, the hub fails every in-flight request of that link (503 before the head, a destroyed stream after) and the worker aborts its local requests.
 - A host that is not `online` fails at once with 503 `engine_error` (retryable), `details.presence` = `asleep` | `offline`; nothing is queued. No `res` within `LINK_RELAY_HEAD_TIMEOUT_MS` is 504 + `cancel`.

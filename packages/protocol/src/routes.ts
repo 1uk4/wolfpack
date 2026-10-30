@@ -51,14 +51,6 @@ import { CreateWorkRequestSchema, CreateWorkResponseSchema, DeleteWorkResponseSc
 export { ATTACHMENT_NAME_HEADER } from "./attachments.js";
 /** Request header carrying the client's protocol version (single integer). */
 export const PROTOCOL_VERSION_HEADER = "X-Protocol-Version";
-/**
- * `X-Wolfpack-Actor: {"id":"<id>","kind":"operator"|"wolf"}` (JSON): who a request to a HUB acts as. PROVISIONAL: the hub's shared
- * `X-API-Key` is the only authentication, so the actor is ASSERTED by the client, not proven; do not treat it as an identity
- * guarantee. Per-actor pairing (work-wolfpack-WRkevxL) replaces it. Rules (hubd): reads default to the `system` actor when it is
- * absent; mutating routes REQUIRE it (400 `invalid_request` when missing); owner-only operations require kind `operator`
- * (401 `unauthorized` otherwise); `system` is reserved for the hub's own jobs and a client asserting it is 400 `invalid_request`.
- */
-export const ACTOR_HEADER = "X-Wolfpack-Actor";
 /** SSE resume: standard header, or the `?from=` query fallback. */
 export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 /** Terminator frame payload (`data: [DONE]`) sent when a stream ends at turn-end. */
@@ -321,15 +313,15 @@ export const ROUTES = {
   hubListWork: { scope: "hub", method: "GET", path: "/v1/work", response: { kind: "json", schema: WorkListResponseSchema }, status: [200], error: err },
   hubGetWorkRecord: { scope: "hub", method: "GET", path: "/v1/work/:id/record", response: { kind: "json", schema: WorkRecordResponseSchema }, status: [200], error: err },
   /**
-   * Submit a wolf contribution to the hub (the hub-side librarian inbox). Body: the contribution fields as JSON. Needs `X-Wolfpack-Actor`;
-   * a wolf actor may only submit as itself (`from` must equal the actor id; an operator may submit for any wolf). 201 when stored,
+   * Submit a wolf contribution to the hub (the hub-side librarian inbox). Body: the contribution fields as JSON. Needs a bearer token; the actor is the token's identity.
+   * A wolf may only submit as itself (`from` must be the acting wolf; an operator token may submit for any wolf, a worker token for any active wolf on its host). 201 when stored,
    * 200 `duplicate: true` when the same topic + content hash is already stored (idempotent). 400 `invalid_request` for non-JSON, a
    * `from`/actor mismatch, or a contribution that fails the contribution schema (the latter is also quarantined under
    * `contributions/<wolf>/_bad/` with a `.reason.txt`).
    */
   submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
   /**
-   * Hub work WRITES (hubd is the only ledger writer). Every one requires `X-Wolfpack-Actor` (400 `invalid_request` without).
+   * Hub work WRITES (hubd is the only ledger writer). Every one requires a bearer token; the actor is the token's identity.
    * Errors: 400 `invalid_request` (bad body, placement/scope/cycle guard, unknown parent), 404 `not_found` (unknown item),
    * 409 `not_ready` (stage not advanceable), 403 `forbidden` (`body` / `assignee` PATCH by a non-operator).
    * `hubCreateWork`: create an item (a parentless task/issue/spike is filed in the domain Inbox). 201.
@@ -370,7 +362,7 @@ export const ROUTES = {
    * domains, each with contentHash and prevHash. All-or-nothing under the KB writer lock: entry schema, declared domain (domains.yaml),
    * path confinement, and prevHash compare-and-set (409 `conflict`, `details.path`, on a stale write). Then it writes the files,
    * appends the KB ledger (ledger/events.jsonl) and emits `kb.changed` per domain. 400 `invalid_request`, 403 `forbidden` for a wolf
-   * actor. Body cap 8 MiB. Actor: operator over HTTP (X-Wolfpack-Actor required); the curator (system) uses the in-process hub.commitKb.
+   * actor. Body cap 8 MiB. Actor: operator token over HTTP; the curator (system) uses the in-process hub.commitKb.
    */
   hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
   /**
@@ -387,7 +379,7 @@ export const ROUTES = {
    * PUBLIC (no token): exchange a single-use pairing code (minted by `hubd pair`, valid ~10 minutes) for a per-device bearer token.
    * Body `{code, label, kind?, hostId?}`: the token's kind and hostId are fixed by the CODE (`hubd pair --kind worker|console|browser [--host-id]`); `kind`/`hostId` in the body are optional and must match the code (401 otherwise, the code is not consumed). Answers `{token, tokenId}`. The token is shown once; the hub keeps only its hash.
    * 401 `unauthorized` for an unknown, used, expired or mismatched code; 409 `busy` (retryable) while the token store is locked; 429 after 10 failed attempts a minute from one peer address; 400 `invalid_request` for a bad body. Every other hub route needs
-   * `Authorization: Bearer <token>`; with a token the identity comes from the token and `X-Wolfpack-Actor` is IGNORED.
+   * `Authorization: Bearer <token>`; the identity comes from the token. `X-API-Key` and `X-Wolfpack-Actor` are not accepted or read.
    */
   hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },
   /** The hub's browser pairing page (static HTML + JS, public like hubPair): code + label form that POSTs hubPair with kind browser. `?code=` prefills. */

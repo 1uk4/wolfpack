@@ -1,11 +1,11 @@
 /**
  * Release a crawl to a hub (hubd) instead of the local KB_OPS inbox.
  *
- * Config (same knobs as the console): `WOLFPACK_HUB_URL` (the hubd base URL) and `WOLFPACK_HUB_KEY` (its X-API-Key). Unset URL = the
+ * Config (same knobs as the console): `WOLFPACK_HUB_URL` (the hubd base URL) and `WOLFPACK_HUB_TOKEN` (a per-device bearer token from `hubd pair`). Unset URL = the
  * file-write path (`emitCrawl`) is used unchanged.
  *
  * The contributions are built by the same `emitCrawl` (same dedup, same bodies) into a throwaway staging ops dir and then POSTed to
- * `/v1/contributions` with the wolf actor header. The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
+ * `/v1/contributions` with `Authorization: Bearer` (the hub takes the wolf from the token's host). The wolf's `emitted.json` dedup is only kept when every post succeeded; on a failure
  * it is restored, so a retry re-sends (the hub is idempotent on topic + content hash).
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,15 +15,16 @@ import { emitCrawl, type EmitCrawlOptions, type EmitCrawlResult } from "./emit.j
 
 export interface HubTarget {
   baseUrl: string;
-  apiKey?: string;
+  /** Per-device bearer token (worker token of this wolf's host). */
+  token?: string;
   /** Injectable for tests. */
   fetch?: typeof fetch;
 }
 
-/** The hub configured in `env` (WOLFPACK_HUB_URL / WOLFPACK_HUB_KEY), or undefined. */
+/** The hub configured in `env` (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN), or undefined. */
 export function hubTargetFromEnv(env: Record<string, string | undefined> = process.env): HubTarget | undefined {
   const baseUrl = env.WOLFPACK_HUB_URL?.trim();
-  return baseUrl ? { baseUrl, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+  return baseUrl ? { baseUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
 }
 
 /** The hub URL without credentials, query or fragment (safe to show and log). */
@@ -55,8 +56,7 @@ export async function postContribution(hub: HubTarget, wolf: string, contributio
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Wolfpack-Actor": JSON.stringify({ id: wolf, kind: "wolf" }),
-        ...(hub.apiKey ? { "X-API-Key": hub.apiKey } : {}),
+        ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}),
       },
       body: JSON.stringify(contribution),
       signal: AbortSignal.timeout(POST_TIMEOUT_MS),

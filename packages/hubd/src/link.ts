@@ -1,6 +1,6 @@
 /**
- * Worker link: one WebSocket per host on GET /v1/link. Authenticates BEFORE upgrading (worker token with a hostId only; the legacy
- * key and console/browser tokens are refused), registers the host and its wolves from `hello`, tracks presence
+ * Worker link: one WebSocket per host on GET /v1/link. Authenticates BEFORE upgrading (worker token with a hostId only; console/browser
+ * tokens are refused), registers the host and its wolves from `hello`, tracks presence
  * (online / asleep / offline), and drops the link when its token is revoked. Relay frames from the worker (res/chunk/end/rerr) are
  * handed to `onRelayFrame` (relay.ts); `onDown` fires when a registered link closes, so in-flight relayed requests fail.
  *
@@ -380,7 +380,7 @@ export function createLink(opts: LinkOptions): Link {
       socket.on("error", () => {});
       const id = opts.authenticate(req);
       if (!id) return reject(socket, "401 Unauthorized");
-      if (id.legacy || id.kind !== "worker" || !id.hostId || !id.tokenId) return reject(socket, "403 Forbidden");
+      if (id.kind !== "worker" || !id.hostId || !id.tokenId) return reject(socket, "403 Forbidden");
       const ident = id as AuthIdentity & { tokenId: string; hostId: string };
       wss.handleUpgrade(req, socket, head, (ws) => connect(ws, ident));
     },

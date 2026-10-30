@@ -3,7 +3,6 @@ import {
   ErrorEnvelopeSchema,
   LAST_EVENT_ID_HEADER,
   PROTOCOL_VERSION,
-  ACTOR_HEADER,
   PROTOCOL_VERSION_HEADER,
   ROUTES,
   type RouteDef,
@@ -25,7 +24,6 @@ import {
   BusyError,
   NotFoundError,
   ProtocolError,
-  type Actor,
   type CardAnswers,
   type CreateThreadBody,
   type ConsoleClient,
@@ -64,15 +62,10 @@ export interface HttpClientOptions {
   /** Server origin (optionally with a path prefix), e.g. `http://127.0.0.1:4100`. */
   baseUrl: string;
   /**
-   * Acting identity. Sent as `X-Wolfpack-Actor` on hub requests that authenticate with the LEGACY `apiKey` only (see `hub`); with a bearer `token` the
-   * hub takes the identity from the token and the header is not sent. Wolf hosts get no actor on the wire. PROVISIONAL (legacy path): asserted, not proven. A `system` actor is never sent (reserved for the hub).
-   */
-  actor?: Actor;
-  /**
    * A hub (hubd) to read work from. When set, `listWork` / `getWorkRecord` go to the hub's hub-scoped routes
-   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `Authorization: Bearer token` (preferred) or the legacy `X-API-Key: apiKey`; everything else still goes to `baseUrl`.
+   * (`/v1/work`, `/v1/work/:id/record`; the `wolf` argument is ignored) with `Authorization: Bearer token` (no token = no credentials, so the hub answers 401); everything else still goes to `baseUrl`.
    */
-  hub?: { baseUrl: string; /** Per-device bearer token (preferred). */ token?: string; /** LEGACY shared key; ignored when `token` is set. */ apiKey?: string;
+  hub?: { baseUrl: string; /** Per-device bearer token. */ token?: string;
     /**
      * Relay mode: wolf-scoped requests (threads, memory, streams, ...) go to the HUB too, with the same credentials; the hub tunnels them to the
      * wolf's host over its worker link. With this set `baseUrl` is not contacted (pass the hub's URL). A wolf whose host is asleep/offline
@@ -94,17 +87,15 @@ interface Frame {
 
 /** ConsoleClient over the /v1 HTTP+SSE protocol. Interchangeable with MockConsoleClient. */
 export class HttpConsoleClient implements ConsoleClient {
-  readonly actor?: Actor;
   private readonly base: string;
-  private readonly hub?: { base: string; token?: string; apiKey?: string; relay?: boolean };
+  private readonly hub?: { base: string; token?: string; relay?: boolean };
   private readonly fetchFn: typeof fetch;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
 
   constructor(opts: HttpClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
-    this.actor = opts.actor;
-    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, apiKey: opts.hub.apiKey, relay: opts.hub.relay };
+    if (opts.hub) this.hub = { base: opts.hub.baseUrl.replace(/\/+$/, ""), token: opts.hub.token, relay: opts.hub.relay };
     this.fetchFn = opts.fetch ?? ((...a) => fetch(...a));
     this.maxRetries = opts.maxStreamRetries ?? 5;
     this.retryDelayMs = opts.retryDelayMs ?? 50;
@@ -515,14 +506,10 @@ export class HttpConsoleClient implements ConsoleClient {
 
   // ------------------------------------------------------------ plumbing
 
-  /** Credentials for a request that goes to the hub: bearer token (preferred), else the legacy key + asserted actor. */
+  /** Credentials for a request that goes to the hub: the bearer token only. Without one nothing is sent and the hub's 401 becomes a ProtocolError. */
   private hubHeaders(viaHub: boolean): Record<string, string> {
-    if (!viaHub || !this.hub) return {};
-    if (this.hub.token) return { Authorization: `Bearer ${this.hub.token}` };
-    return {
-      ...(this.hub.apiKey ? { "X-API-Key": this.hub.apiKey } : {}),
-      ...(this.actor && this.actor.kind !== "system" ? { [ACTOR_HEADER]: JSON.stringify(this.actor) } : {}),
-    };
+    if (!viaHub || !this.hub?.token) return {};
+    return { Authorization: `Bearer ${this.hub.token}` };
   }
 
   private async request(name: RouteName, params: Record<string, string>, init: RequestInit & { headers?: Record<string, string> } = {}, threadId?: string, query = ""): Promise<Response> {

@@ -1,15 +1,17 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ACTOR_HEADER, ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, HubEventSchema, buildPath, type ErrorCode } from "../index.js";
+import { ERROR_HTTP_STATUS, ErrorEnvelopeSchema, ROUTES, HubEventSchema, buildPath, type ErrorCode } from "../index.js";
 
 export interface HubSuiteOptions {
-  /** Headers every request carries (the hub's X-API-Key). */
-  headers?: Record<string, string>;
+  /** Ready-made request headers (a bearer token) for the operator, for the wolf `w1` and for the wolf `w2` (two different hosts). The server must register w1 and w2. The objects are read when requests are made, so a caller may fill them in `beforeAll` (e.g. with Object.assign). */
+  operator: Record<string, string>;
+  wolf: Record<string, string>;
+  wolf2: Record<string, string>;
   /** A domain the hub holds seeded work in. */
   domain: string;
   /** A thunk (the fixture is seeded in beforeAll) for a seeded item the record route must answer, with the title and kind it must report. */
   record: () => { id: string; title: string; kind: string };
-  /** Run the "no/wrong key is 401" checks (the server enforces auth). Default true. */
+  /** Run the "no/bad credentials is 401" checks (the server enforces auth). Default true. */
   auth?: boolean;
   /** Run the "kb commits" group (`domain` must be declared in the hub's domains.yaml). Default true. */
   kbCommits?: boolean;
@@ -20,7 +22,7 @@ export interface HubSuiteOptions {
  * Run against a server seeded with the fixture described by `options`.
  */
 export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): void {
-  const call = (path: string, headers: Record<string, string> | undefined = options.headers) => fetch(baseUrl() + path, { headers });
+  const call = (path: string, headers: Record<string, string> | undefined = options.operator) => fetch(baseUrl() + path, { headers });
   async function expectError(res: Response, code: ErrorCode): Promise<void> {
     expect(res.status).toBe(ERROR_HTTP_STATUS[code]);
     expect(ErrorEnvelopeSchema.parse(await res.json()).code).toBe(code);
@@ -61,7 +63,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
     });
 
     describe("contributions", () => {
-      const asWolf = (id: string) => ({ ...options.headers, "Content-Type": "application/json", [ACTOR_HEADER]: JSON.stringify({ id, kind: "wolf" }) });
+      const asWolf = (_id: string) => ({ ...options.wolf, "Content-Type": "application/json" });
       const post = (body: unknown, headers: Record<string, string>) =>
         fetch(baseUrl() + buildPath("submitContribution"), { method: "POST", headers, body: typeof body === "string" ? body : JSON.stringify(body) });
       const contribution = (from: string) => {
@@ -80,40 +82,41 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       };
 
       it("a valid contribution is accepted (201), and posting it again is an idempotent 200", async () => {
-        const c = contribution("suite-wolf");
-        const res = await post(c, asWolf("suite-wolf"));
+        const c = contribution("w1");
+        const res = await post(c, asWolf("w1"));
         expect(res.status).toBe(201);
         const ack = ROUTES.submitContribution.response.schema.parse(await res.json()) as { id: string; wolf: string; duplicate: boolean };
-        expect(ack).toMatchObject({ wolf: "suite-wolf", duplicate: false });
+        expect(ack).toMatchObject({ wolf: "w1", duplicate: false });
         expect(ack.id).toMatch(new RegExp(`^${c.denTopicId}-[0-9a-f]{10}\\.md$`));
-        const again = await post(c, asWolf("suite-wolf"));
+        const again = await post(c, asWolf("w1"));
         expect(again.status).toBe(200);
         expect(((await again.json()) as { duplicate: boolean }).duplicate).toBe(true);
       });
 
       it("a malformed contribution is invalid_request", async () => {
-        const { contentHash: _drop, ...noHash } = contribution("suite-wolf");
-        await expectError(await post(noHash, asWolf("suite-wolf")), "invalid_request");
-        await expectError(await post({ ...contribution("suite-wolf"), change: "rewrite" }, asWolf("suite-wolf")), "invalid_request");
-        await expectError(await post("not json", asWolf("suite-wolf")), "invalid_request");
+        const { contentHash: _drop, ...noHash } = contribution("w1");
+        await expectError(await post(noHash, asWolf("w1")), "invalid_request");
+        await expectError(await post({ ...contribution("w1"), change: "rewrite" }, asWolf("w1")), "invalid_request");
+        await expectError(await post("not json", asWolf("w1")), "invalid_request");
       });
 
-      it("a missing actor is rejected", async () => {
-        await expectError(await post(contribution("suite-wolf"), { ...options.headers, "Content-Type": "application/json" }), "invalid_request");
+      it("a request without credentials is rejected", async () => {
+        await expectError(await post(contribution("w1"), { "Content-Type": "application/json" }), "unauthorized");
       });
 
-      it("a wolf posting as another wolf is rejected", async () => {
-        await expectError(await post(contribution("someone-else"), asWolf("suite-wolf")), "invalid_request");
+      it("a wolf posting as a wolf that is not on its host (or unregistered) is rejected", async () => {
+        await expectError(await post(contribution("someone-else"), asWolf("w1")), "forbidden");
+        await expectError(await post(contribution("w2"), asWolf("w1")), "forbidden");
       });
     });
 
     describe("work writes", () => {
-      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
-      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const op = options.operator;
+      const wolf = options.wolf;
       const send = (method: string, path: string, body?: unknown, actor: Record<string, string> | undefined = op) =>
         fetch(baseUrl() + path, {
           method,
-          headers: { "Content-Type": "application/json", ...options.headers, ...actor },
+          headers: { "Content-Type": "application/json", ...actor },
           body: body === undefined ? undefined : JSON.stringify(body),
         });
       const create = async (extra: Record<string, unknown> = {}) => {
@@ -153,10 +156,10 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
 
       it("a missing actor is rejected on every write route", async () => {
         const c = await create();
-        await expectError(await send("POST", buildPath("hubCreateWork"), { kind: "task", domain: options.domain, title: "t", assignee: "a" }, {}), "invalid_request");
-        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { note: "n" }, {}), "invalid_request");
-        await expectError(await send("DELETE", buildPath("hubDeleteWork", { id: c.id }), undefined, {}), "invalid_request");
-        await expectError(await send("POST", buildPath("hubGraduateWork", { id: c.id }), undefined, {}), "invalid_request");
+        await expectError(await send("POST", buildPath("hubCreateWork"), { kind: "task", domain: options.domain, title: "t", assignee: "a" }, {}), "unauthorized");
+        await expectError(await send("PATCH", buildPath("hubPatchWork", { id: c.id }), { note: "n" }, {}), "unauthorized");
+        await expectError(await send("DELETE", buildPath("hubDeleteWork", { id: c.id }), undefined, {}), "unauthorized");
+        await expectError(await send("POST", buildPath("hubGraduateWork", { id: c.id }), undefined, {}), "unauthorized");
       });
 
       it("a non-operator body or assignee write is rejected", async () => {
@@ -167,7 +170,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       });
 
       it("claim is a compare-and-set naming the holder; unclaim is holder-or-owner", async () => {
-        const w2 = { "X-Wolfpack-Actor": JSON.stringify({ id: "w2", kind: "wolf" }) };
+        const w2 = options.wolf2;
         const c = await create({ successCriteria: "claimed in the suite" });
         const stage = (to: string) => send("PATCH", buildPath("hubPatchWork", { id: c.id }), { stage: to });
         const claim = (actor: Record<string, string>) => send("POST", buildPath("hubClaimWork", { id: c.id }), undefined, actor);
@@ -190,7 +193,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         expect((await record(c.id)).stage).toBe("in_build");
         expect((await claim(w2)).status).toBe(200);
         expect((await unclaim(op)).status).toBe(200); // the owner may release anyone's claim
-        await expectError(await send("POST", buildPath("hubClaimWork", { id: c.id }), undefined, {}), "invalid_request");
+        await expectError(await send("POST", buildPath("hubClaimWork", { id: c.id }), undefined, {}), "unauthorized");
       });
 
       it("DELETE removes the item; POST graduate marks it graduated", async () => {
@@ -207,11 +210,11 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
     });
 
     describe.runIf(options.kbCommits !== false)("kb commits", () => {
-      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
-      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const op = options.operator;
+      const wolf = options.wolf;
       const sha = (t: string) => "sha256:" + createHash("sha256").update(t, "utf-8").digest("hex");
       const post = (body: unknown, actor: Record<string, string> | undefined = op) =>
-        fetch(baseUrl() + buildPath("hubKbCommit"), { method: "POST", headers: { "Content-Type": "application/json", ...options.headers, ...actor }, body: JSON.stringify(body) });
+        fetch(baseUrl() + buildPath("hubKbCommit"), { method: "POST", headers: { "Content-Type": "application/json", ...actor }, body: JSON.stringify(body) });
       const entryId = () => `kb-${options.domain}-${randomBytes(4).toString("hex").slice(0, 7)}`;
       const entry = (id: string, title: string) => `---\nid: ${id}\ntitle: "${title}"\ndomain: ${options.domain}\n---\n\n# ${title}\n\nBody.\n`;
 
@@ -239,20 +242,20 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         await expectError(await bad({ content: ok, contentHash: sha("other") }), "invalid_request");
       });
 
-      it("a wolf actor is forbidden (403), a missing actor is invalid_request", async () => {
+      it("a wolf is forbidden (403), missing credentials are unauthorized", async () => {
         const body = { changes: [{ op: "create", domain: options.domain, path: "INDEX.md", content: "x", contentHash: sha("x"), prevHash: null }] };
         await expectError(await post(body, wolf), "forbidden");
-        await expectError(await post(body, {}), "invalid_request");
+        await expectError(await post(body, {}), "unauthorized");
       });
     });
 
     describe("events", () => {
-      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+      const op = options.operator;
       type Frame = { id?: string; event: { type: string; id: number; itemId?: string; event?: string } };
       /** Open /v1/events; `next(n)` resolves the next n data frames. */
       async function open(headers: Record<string, string> = {}) {
         const ctl = new AbortController();
-        const res = await fetch(baseUrl() + buildPath("hubEvents"), { headers: { ...options.headers, ...headers }, signal: ctl.signal });
+        const res = await fetch(baseUrl() + buildPath("hubEvents"), { headers: { ...op, ...headers }, signal: ctl.signal });
         expect(res.status).toBe(200);
         expect(res.headers.get("content-type")).toContain("text/event-stream");
         const reader = res.body!.getReader();
@@ -281,7 +284,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       const create = async () => {
         const res = await fetch(baseUrl() + buildPath("hubCreateWork"), {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...options.headers, ...op },
+          headers: { "Content-Type": "application/json", ...op },
           body: JSON.stringify({ kind: "task", domain: options.domain, title: "Events task", assignee: "1uk4" }),
         });
         expect(res.status).toBe(201);
@@ -316,10 +319,10 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
     });
 
     describe("registry", () => {
-      const op = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
-      const wolf = { "X-Wolfpack-Actor": JSON.stringify({ id: "w1", kind: "wolf" }) };
+      const op = options.operator;
+      const wolf = options.wolf;
       const send = (method: string, path: string, body?: unknown, actor: Record<string, string> = op) =>
-        fetch(baseUrl() + path, { method, headers: { "Content-Type": "application/json", ...options.headers, ...actor }, body: body === undefined ? undefined : JSON.stringify(body) });
+        fetch(baseUrl() + path, { method, headers: { "Content-Type": "application/json", ...actor }, body: body === undefined ? undefined : JSON.stringify(body) });
 
       it("reads are open to any actor; writes need an operator (403 forbidden)", async () => {
         for (const [r, key] of [["registryListHosts", "hosts"], ["registryListWolves", "wolves"], ["registryListDomains", "domains"], ["registryListSubscriptions", "subscriptions"]] as const) {
@@ -329,7 +332,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         }
         await expectError(await send("POST", buildPath("registryCreateDomain"), { name: "suite-dom" }, wolf), "forbidden");
         await expectError(await send("DELETE", buildPath("registryDeleteDomain", { name: "suite-dom" }), undefined, wolf), "forbidden");
-        await expectError(await send("POST", buildPath("registryCreateDomain"), { name: "suite-dom" }, {}), "invalid_request");
+        await expectError(await send("POST", buildPath("registryCreateDomain"), { name: "suite-dom" }, {}), "unauthorized");
       });
 
       it("CRUD over host, domain, wolf and subscription; retire marks the wolf retired", async () => {
@@ -359,10 +362,26 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
     });
 
     describe.runIf(options.auth !== false)("auth", () => {
-      it("a missing or wrong key is 401 unauthorized", async () => {
-        const path = `${buildPath("hubListWork")}?domain=${options.domain}`;
-        await expectError(await call(path, {}), "unauthorized");
-        await expectError(await call(path, { "X-API-Key": "wrong" }), "unauthorized");
+      const path = () => `${buildPath("hubListWork")}?domain=${options.domain}`;
+      it("a bad bearer token is 401 unauthorized", async () => {
+        const bearer = options.operator.Authorization ?? "";
+        await expectError(await call(path(), { Authorization: "Bearer not-a-real-token" }), "unauthorized");
+        await expectError(await call(path(), { Authorization: bearer.slice(0, -1) + (bearer.endsWith("a") ? "b" : "a") }), "unauthorized");
+      });
+
+      it("no credentials is 401 unauthorized", async () => {
+        await expectError(await call(path(), {}), "unauthorized");
+      });
+
+      it("X-API-Key alone is 401 unauthorized (the shared key is gone)", async () => {
+        await expectError(await call(path(), { "X-API-Key": "0123456789abcdef0123456789abcdef" }), "unauthorized");
+      });
+
+      it("a forged X-Wolfpack-Actor with a valid token is ignored: the token's identity wins", async () => {
+        const forged = { "X-Wolfpack-Actor": JSON.stringify({ id: "1uk4", kind: "operator" }) };
+        const body = { changes: [{ op: "create", domain: options.domain, path: "INDEX.md", content: "x", contentHash: "sha256:" + createHash("sha256").update("x").digest("hex"), prevHash: null }] };
+        const res = await fetch(baseUrl() + buildPath("hubKbCommit"), { method: "POST", headers: { "Content-Type": "application/json", ...options.wolf, ...forged }, body: JSON.stringify(body) });
+        await expectError(res, "forbidden"); // still the wolf, not the operator it claims to be
       });
     });
   });

@@ -240,7 +240,7 @@ function makeClient(env?: NodeJS.ProcessEnv): WorkClient {
   return env ? new WorkClient(env.WORK_ENDPOINT ?? "", env.WORK_TOKEN ?? "") : new WorkClient();
 }
 
-/** The hub (WOLFPACK_HUB_URL / WOLFPACK_HUB_KEY, as the console and crawl release read them), or null when none is configured. */
+/** The hub (WOLFPACK_HUB_URL / WOLFPACK_HUB_TOKEN, as the console and crawl release read them), or null when none is configured. */
 export const NO_HUB = "No hub configured (WOLFPACK_HUB_URL is not set): claiming needs a hub.";
 
 /** A hub claim/release failure as the wolf sees it: 409 names the holder, others pass the hub's message; credentials never shown. */
@@ -274,15 +274,15 @@ export default function createTasksExtension(
   const autoShipFor = (ctx: ToolContext): boolean => config.autoShip ?? (envAuto || readThreadAutoShip(wolfDen, ctx.conversationId));
   const client = makeClient(context.env);
 
-  /** Hub client acting as this wolf (provisional actor header), or an error text. Read per call so a config change applies at once. */
+  /** Hub client acting as this wolf (bearer token), or an error text. Read per call so a config change applies at once. */
   function hubFor(): { hub: HttpConsoleClient; url: string; key?: string } | { error: string } {
     const target = hubTargetFromEnv(env as Record<string, string | undefined>);
     if (!target) return { error: NO_HUB };
     if (!WolfIdSchema.safeParse(wolfName).success) return { error: `Cannot claim: "${wolfName}" is not a valid wolf id (lower-case letters, digits, hyphens).` };
     // baseUrl = redactUrl(hub URL) is deliberate: the client never sees userinfo, query or fragment, so no error text it builds can echo them.
     const safe = redactUrl(target.baseUrl);
-    const hub = new HttpConsoleClient({ baseUrl: safe, hub: { baseUrl: safe, apiKey: target.apiKey }, actor: { id: wolfName, kind: "wolf" } });
-    return { hub, url: target.baseUrl, key: target.apiKey };
+    const hub = new HttpConsoleClient({ baseUrl: safe, hub: { baseUrl: safe, token: target.token } });
+    return { hub, url: target.baseUrl, key: target.token };
   }
   const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 

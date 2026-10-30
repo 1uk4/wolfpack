@@ -3,17 +3,15 @@
  * Later tickets slot into `dispatch` (work writes under the work-writer lock, claim, registry, /v1/events, ...).
  *
  * Auth: every route except POST /v1/pair needs `Authorization: Bearer <device token>` (hashes in <dataDir>/auth/tokens.json). The acting
- * identity comes from the token; X-Wolfpack-Actor is IGNORED for token requests. LEGACY (temporary): when `apiKey` is set, a request with
- * a matching X-API-Key and no bearer is accepted and its identity is the asserted X-Wolfpack-Actor (PROVISIONAL, asserted not proven).
+ * identity comes from the token; nothing else (no API key, no actor header) is accepted. A worker token acts as its host and may act
+ * for any active wolf the registry places on that host (see wolfActorFor).
  */
-import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  ACTOR_HEADER,
   ActorSchema,
   CreateWorkRequestSchema,
   PairRequestSchema,
@@ -53,7 +51,7 @@ import {
   sweepStageDirs,
   type WorkAppendedListener,
 } from "./work-writes.js";
-import { actorOf, createTokenStore, OWNER, type AuthIdentity } from "./auth.js";
+import { actorOf, createTokenStore, type AuthIdentity } from "./auth.js";
 import { createEventBus } from "./events.js";
 import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
@@ -78,12 +76,9 @@ for (const [c, S, P] of [["hosts", "Host", "Hosts"], ["wolves", "Wolf", "Wolves"
 REGISTRY_ROUTES.registryRetireWolf = { c: "wolves", op: "retire" };
 const registryRoute = (name: string): RegRoute | undefined => REGISTRY_ROUTES[name];
 
-export const API_KEY_HEADER = "x-api-key";
 
 export interface HubOptions {
   dataDir: string;
-  /** LEGACY, optional: shared secret (X-API-Key) accepted alongside device tokens until the legacy path is removed. */
-  apiKey?: string;
   /** Where the pairing page sends the browser after a successful pair (the console's base URL; it receives the token in the URL fragment at /pair). Unset: the page just reports the token saved. */
   consoleUrl?: string;
   /** How often the running hub checks the token file for revokes (closing their SSE streams), ms. Default 1000. */
@@ -155,8 +150,7 @@ export interface HubServer {
    */
   commitKb(actor: Actor, req: KbCommitRequest): Promise<KbCommitResponse>;
   /**
-   * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated. A legacy
-   * HUBD_API_KEY request resolves to `{owner, legacy: true}` with NO tokenId, kind or hostId, so callers can refuse it.
+   * The bearer check `dispatch` uses, exported for the HTTP `upgrade` path (which skips dispatch). `null` = not authenticated.
    */
   authenticate(req: IncomingMessage): AuthIdentity | null;
   /** Called (id of the revoked token) when the running hub detects a revoke (token file scan, within `authPollMs`). Returns an unsubscribe. */
@@ -180,45 +174,31 @@ const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
 const PAIR_LIMITER_MAX_KEYS = 10_000;
-const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
 /** The token behind a token-derived actor object (same object reaches the work writer), for attribution. */
 const TOKEN_INFO = new WeakMap<Actor, { tokenId: string; hostId?: string }>();
 
 /**
- * The asserted actor of a request (`X-Wolfpack-Actor`, PROVISIONAL: the shared key is the only authentication, so this is
- * asserted, not proven; see the protocol README). Absent = `undefined`. Malformed, or asserting `system` (reserved for hubd's
- * own internal jobs; a client cannot claim it) = 400 `invalid_request`.
+ * The actor of a request: the one its bearer token maps to (see actorOf), or `undefined` when the request carries no verified token.
+ * Nothing the client sends (headers, body) can name or change it.
  */
 export function assertedActor(req: Pick<IncomingMessage, "headers">): Actor | undefined {
-  const fromToken = TOKEN_ACTOR.get(req);
-  if (fromToken) return fromToken; // token identity: the header is not even parsed
-  const raw = req.headers[ACTOR_KEY];
-  if (typeof raw !== "string") return undefined;
-  let parsed: ReturnType<typeof ActorSchema.safeParse> | undefined;
-  try {
-    parsed = ActorSchema.safeParse(JSON.parse(raw));
-  } catch {
-    parsed = undefined;
-  }
-  if (!parsed?.success) throw new HubError("invalid_request", `bad ${ACTOR_HEADER}`);
-  if (parsed.data.kind === "system") throw new HubError("invalid_request", `${ACTOR_HEADER}: the system actor is reserved for the hub`);
-  return parsed.data;
+  return TOKEN_ACTOR.get(req);
 }
 
-/** The actor of a READ: the asserted one, else the `system` default. */
+/** The actor of a READ: the token's one, else the `system` default. */
 export function readActor(req: Pick<IncomingMessage, "headers">): Actor {
   return assertedActor(req) ?? SYSTEM_ACTOR;
 }
 
 /**
- * The actor of a MUTATING route (work writes, claim, ...): an explicit actor is REQUIRED (400 `invalid_request` when missing).
+ * The actor of a MUTATING route (work writes, claim, ...): an authenticated token is REQUIRED (400 `invalid_request` when missing; dispatch already answers 401 first).
  * `ownerOnly` (owner-only operations) additionally requires kind `operator` (403 `forbidden` otherwise).
  */
 export function writeActor(req: Pick<IncomingMessage, "headers">, opts: { ownerOnly?: boolean } = {}): Actor {
   const actor = assertedActor(req);
-  if (!actor) throw new HubError("invalid_request", `${ACTOR_HEADER} is required on this route`);
+  if (!actor) throw new HubError("invalid_request", "an authenticated token is required on this route");
   if (opts.ownerOnly && actor.kind !== "operator") throw new HubError("forbidden", "this operation is owner-only (actor kind operator)");
   return actor;
 }
@@ -376,10 +356,6 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     kbWriter = createKbWriter({ dataDir: opts.dataDir, roots, onChanged: (ids, domain) => bus.emitKbChanged(ids, domain), faults: opts.kbFaults, onCommitted: (out) => revisions.record(out) });
     // Startup scan after KB recovery, before listening: records edits made while the hub was down (and the first-ever baseline).
     await kbWriter.exclusive(() => revisions.init());
-    // Hash both sides so the comparison is fixed-length (no length leak, timingSafeEqual never throws).
-    const digest = (v: string) => createHash("sha256").update(v).digest();
-    const expected = opts.apiKey ? digest(opts.apiKey) : undefined;
-    const legacyOk = (req: IncomingMessage): boolean => expected !== undefined && timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
     // Failed-redeem limiter, in memory, keyed by the socket peer address (behind a reverse proxy every client shares the proxy's
     // address; X-Forwarded-For is NOT trusted because anyone could forge it). Only failures are stored; empty entries are deleted,
     // a sweep runs every minute and the map is capped.
@@ -450,7 +426,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       const h = req.headers.authorization;
       if (typeof h === "string" && /^bearer /i.test(h)) {
         const rec = tokens.verify(h.slice(7).trim());
-        if (!rec) return null; // a bad bearer never falls back to the legacy key
+        if (!rec) return null;
         const actor = actorOf(rec);
         TOKEN_ACTOR.set(req, actor);
         TOKEN_INFO.set(actor, { tokenId: rec.id, ...(rec.hostId ? { hostId: rec.hostId } : {}) });
@@ -458,7 +434,6 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         tokens.touch(rec.id);
         return { tokenId: rec.id, kind: rec.kind, ...(rec.hostId ? { hostId: rec.hostId } : {}), owner: rec.owner };
       }
-      if (legacyOk(req)) return { owner: OWNER, legacy: true }; // no tokenId, kind or hostId
       return null;
     }
     authenticateFn = authenticate;
@@ -509,9 +484,38 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       return send(res, 200, { deleted: await registry.remove(r.c, params.name!) });
     }
 
-    /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens and the legacy key see all. */
+    /**
+     * The wolf a request acts as. Operator/console tokens: the token's actor, unchanged. Worker token: the token's actor is its HOST, so it
+     * may act for any ACTIVE wolf the registry places on that host (`named`, or the host's only active wolf when none is named; several = 400); a wolf on
+     * another host, an unregistered or retired wolf is 403 `forbidden`.
+     */
+    function wolfActorFor(actor: Actor, named?: string): Actor {
+      const info = TOKEN_INFO.get(actor);
+      if (!info?.hostId) return actor;
+      const wolves = registry.list("wolves") as { name: string; host?: string; status?: string }[];
+      let wolf = named;
+      if (wolf === undefined) {
+        const mine = wolves.filter((w) => w.host === info.hostId && w.status === "active");
+        if (mine.length > 1) throw new HubError("invalid_request", "this host has several active wolves: name the one this request acts for");
+        if (mine.length === 0) throw new HubError("forbidden", "this worker host has no active wolf to act for");
+        wolf = mine[0]!.name;
+      }
+      const w = wolves.find((x) => x.name === wolf);
+      if (!w || w.status !== "active" || w.host !== info.hostId) throw new HubError("forbidden", `this worker host cannot act for wolf ${JSON.stringify(String(wolf)).slice(0, 60)}`);
+      const out: Actor = { id: wolf, kind: "wolf" };
+      TOKEN_INFO.set(out, info);
+      return out;
+    }
+    /** The optional `{wolf}` a worker token's claim/unclaim names (only read for worker tokens, and only when a body is sent). */
+    async function namedWolf(req: IncomingMessage, actor: Actor): Promise<string | undefined> {
+      if (!TOKEN_INFO.get(actor)?.hostId || !(Number(req.headers["content-length"]) > 0)) return undefined;
+      const b = await readBody(req);
+      return b && typeof b === "object" && typeof (b as { wolf?: unknown }).wolf === "string" ? (b as { wolf: string }).wolf : undefined;
+    }
+
+    /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens see all. */
     function requireKbDomain(id: AuthIdentity | undefined, domain: string): void {
-      if (!id || id.legacy || id.kind !== "worker") return;
+      if (!id || id.kind !== "worker") return;
       const hostId = id.hostId;
       const allowed = hostId !== undefined && (registry.list("wolves") as { host?: string; domains?: string[]; status?: string }[]).some((w) => w.host === hostId && w.status !== "retired" && (w.domains ?? []).includes(domain));
       if (!allowed) throw new HubError("forbidden", `this worker is not subscribed to KB domain ${domain.slice(0, 60)}`);
@@ -573,7 +577,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         case "listWolves":
           // The pack's wolf list from the registry: online when the owning host's link is online (asleep/offline hosts show offline; the relay names the state).
           // A worker token sees only its own host's wolves (it must not enumerate other hosts).
-          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.legacy || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
+          return send(res, 200, { wolves: (registry.list("wolves") as { name: string; host?: string; status?: string }[]).filter((w) => w.status !== "retired" && (!identity || identity.kind !== "worker" || w.host === identity.hostId)).map((w) => ({ id: w.name, name: w.name, host: w.host ?? "", status: w.host && link.presence(w.host) === "online" ? "online" : "offline" })) });
         case "hubListWork": {
           const domain = url.searchParams.get("domain");
           if (!domain) throw new HubError("invalid_request", "domain is required");
@@ -588,9 +592,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 200, rec);
         }
         case "submitContribution": {
-          const actor = writeActor(req);
+          const tokenActor = writeActor(req);
           try {
-            const stored = storeContribution(opts.dataDir, actor, await readJsonObject(req, res), inboxRoot);
+            const submitted = await readJsonObject(req, res);
+            const named = typeof submitted.json.from === "string" ? submitted.json.from : undefined;
+            const stored = storeContribution(opts.dataDir, wolfActorFor(tokenActor, named), submitted, inboxRoot);
             return send(res, stored.duplicate ? 200 : 201, stored);
           } catch (e) {
             if (e instanceof ContributionError) throw new HubError(e.code, e.message);
@@ -621,7 +627,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 200, { deleted });
         }
         case "hubClaimWork": {
-          const actor = writeActor(req);
+          const tokenActor = writeActor(req);
+          const actor = wolfActorFor(tokenActor, await namedWolf(req, tokenActor));
           const wolf = parseWolfId(actor);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
           // Checked inside the queue, so it is ordered against a retire. A wolf with no registry entry is not refused (registry optional until cutover).
@@ -632,7 +639,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           return send(res, 200, { item });
         }
         case "hubUnclaimWork": {
-          const actor = writeActor(req);
+          const tokenActor = writeActor(req);
+          const actor = wolfActorFor(tokenActor, await namedWolf(req, tokenActor));
           parseWolfId(actor);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
           const item = await writeWork(actor, () => unclaimItem(roots, params.id, actor));
@@ -687,10 +695,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const reg = registryRoute(m.name);
           if (reg) return registryDispatch(req, res, reg, params);
           // Wolf-scoped routes (threads, memory, KB, graduation, ...) belong to the wolf hosts: tunnelled over the host's link (relay.ts).
-          // A worker token must not reach into any host's wolves; console/browser tokens (and the legacy key) may.
+          // A worker token must not reach into any host's wolves; console/browser tokens may.
           const wolf = wolfForRoute(params);
           if (!wolf) throw new HubError("not_found", `no wolf in ${url.pathname}`);
-          if (identity && !identity.legacy && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot use the console relay");
+          if (identity && identity.kind === "worker") throw new HubError("forbidden", "a worker token cannot use the console relay");
           return relay.handle(req, res, wolf, url.pathname + url.search); // the routed URL, never raw req.url
         }
       }

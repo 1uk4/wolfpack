@@ -84,7 +84,7 @@ export class HubAuthError extends Error {
  * The env credentials serve only callers with NO request scope (background jobs). One small client per token, cached: each client
  * holds nothing but its own base URL and token (no response or per-user state), so the cache cannot carry data between tokens.
  */
-export function requestScopedWork(hub: { baseUrl: string; token?: string; apiKey?: string }, requestToken: RequestToken): WorkReads {
+export function requestScopedWork(hub: { baseUrl: string; token?: string }, requestToken: RequestToken): WorkReads {
 	const clients = new Map<string, ConsoleClient>();
 	const forToken = (t: string | undefined): ConsoleClient => {
 		const key = t ?? "";
@@ -119,7 +119,7 @@ const STREAMS = new Set(["watch", "watchMemory", "watchActivity", "watchHubEvent
  * to the wolf's host over its worker link. Credentials are per request exactly as in `requestScopedWork` (a request scope with no token is
  * 401; the env token serves only scope-less callers). One HttpConsoleClient per token, cached.
  */
-export function relayClient(hub: { baseUrl: string; token?: string; apiKey?: string }, requestToken?: RequestToken): ConsoleClient {
+export function relayClient(hub: { baseUrl: string; token?: string }, requestToken?: RequestToken): ConsoleClient {
 	const clients = new Map<string, ConsoleClient>();
 	const forToken = (t: string | undefined): ConsoleClient => {
 		const key = t ?? "";
@@ -178,16 +178,17 @@ export function relayClient(hub: { baseUrl: string; token?: string; apiKey?: str
  *                      DEFAULT when a hub URL is set with a token (env, or the browser's per-request token) and no WOLFPACK_API_URL (no
  *                      direct wolf host). 0/false/no: never relay (the old hub-for-work-reads-only mode). 1/true: relay even when
  *                      WOLFPACK_API_URL is set (that URL is then unused).
- *   WOLFPACK_HUB_KEY   LEGACY: the hub's X-API-Key (optional; ignored when a token is set)
+ *   (WOLFPACK_HUB_KEY, the old shared X-API-Key, is no longer read; a warning is logged if it is still set)
  */
 export function createConsoleClient(env: Record<string, string | undefined> = process.env, requestToken?: RequestToken): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
-	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
+	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
+	if (env.WOLFPACK_HUB_KEY?.trim()) console.warn("console: WOLFPACK_HUB_KEY is no longer supported and is ignored; set WOLFPACK_HUB_TOKEN (from `hubd pair`)");
 	const flag = env.WOLFPACK_HUB_RELAY?.trim() ?? "";
 	const off = /^(0|false|no|off)$/i.test(flag);
 	const forced = /^(1|true|yes|on)$/i.test(flag);
-	const haveToken = !!(hub?.token || hub?.apiKey || requestToken);
+	const haveToken = !!(hub?.token || requestToken);
 	if (hub && !off && (forced || (!baseUrl && haveToken))) return relayClient(hub, requestToken);
 	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
 	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));

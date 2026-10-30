@@ -383,4 +383,134 @@ describe("ledger-level atomicity", () => {
     const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
     servers.push(hub);
   });
+
+  const bare = (name: string, yaml = "domains:\n  alpha: {}\n") => {
+    const dir = mkdtempSync(join(tmpdir(), `hubd-kb-${name}-`));
+    tmp.push(dir);
+    const roots = hubRoots(dir);
+    mkdirSync(roots.kbBase, { recursive: true });
+    mkdirSync(join(dir, "run"), { recursive: true });
+    writeFileSync(join(roots.kbBase, "domains.yaml"), yaml);
+    return { dir, roots };
+  };
+  const crashAt = (st: string) => ({ crash: true, at: (x: string) => { if (x === st) throw new Error("crash"); } });
+
+  it("an unparseable journal is never deleted: start fails naming it, bytes unchanged, lock released", async () => {
+    const { dir } = bare("garbage");
+    writeFileSync(kbJournalFile(dir), "{not json");
+    await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/kb-commit\.journal\.json is unparseable.*half-applied.*by hand/s);
+    expect(readFileSync(kbJournalFile(dir), "utf8")).toBe("{not json");
+    expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);
+    expect(existsSync(join(dir, "run", "kb-writer.lock.takeover"))).toBe(false);
+  });
+
+  it("a torn *.tmp-* journal is swept, not treated as corruption", async () => {
+    const { dir } = bare("torn");
+    const torn = join(dir, "run", "kb-commit.journal.json.tmp-1-deadbeef");
+    writeFileSync(torn, "{tor");
+    const hub = await createHubServer({ dataDir: dir, apiKey: KEY });
+    servers.push(hub);
+    expect(existsSync(torn)).toBe(false);
+  });
+
+  describe("a tampered journal refuses to start, with no partial recovery", () => {
+    const outsideDir = () => {
+      const o = mkdtempSync(join(tmpdir(), "hubd-kb-out-"));
+      tmp.push(o);
+      return o;
+    };
+    const rels: Record<string, (dir: string) => string> = {
+      "a bad domain": () => "kb/base/domains/BAD_DOM/entries/kb-alpha-aaaaaaa.md",
+      "a file directly under domains/": () => "kb/base/domains/x.md",
+      "a disallowed file kind": () => "kb/base/domains/alpha/work/x.md",
+      "a path outside the KB": () => "kb/base/../../etc/x",
+      "a symlinked entries dir": (dir) => {
+        symlinkSync(outsideDir(), join(dir, "kb/base/domains/alpha/entries"));
+        return `kb/base/domains/alpha/entries/${ID2}.md`;
+      },
+    };
+    for (const [name, mk] of Object.entries(rels)) {
+      it(name, async () => {
+        const { dir, roots } = bare("tamper");
+        mkdirSync(join(roots.kbBase, "domains/alpha"), { recursive: true });
+        writeFileSync(join(roots.kbBase, "domains/alpha/INDEX.md"), "changed on disk");
+        const rel = mk(dir);
+        const journal = JSON.stringify({ v: 1, ledgerOffset: 0, ledgerAppend: "", files: [{ rel: "kb/base/domains/alpha/INDEX.md", prev: Buffer.from("original").toString("base64") }, { rel, prev: null }] });
+        writeFileSync(kbJournalFile(dir), journal);
+        await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/journal path/);
+        expect(readFileSync(kbJournalFile(dir), "utf8")).toBe(journal);
+        expect(readFileSync(join(roots.kbBase, "domains/alpha/INDEX.md"), "utf8")).toBe("changed on disk"); // the valid first file was NOT restored
+        expect(existsSync(join(dir, "run", "kb-writer.lock"))).toBe(false);
+      });
+    }
+  });
+
+  it("the journal's ledgerAppend equals the bytes appendLedger actually wrote", () => {
+    const { dir, roots } = bare("bytes");
+    applyKbCommit(roots, dir, { changes: [create("alpha", ID1)] });
+    const base = readFileSync(ledgerFile(roots));
+    expect(() => applyKbCommit(roots, dir, { changes: [create("alpha", ID2), update("alpha", ID1, entry("alpha", ID1), entry("alpha", ID1, "v2"))] }, crashAt("journal-drop"))).toThrow();
+    const j = JSON.parse(readFileSync(kbJournalFile(dir), "utf8")) as { ledgerOffset: number; ledgerAppend: string };
+    expect(j.ledgerOffset).toBe(base.length);
+    expect(readFileSync(ledgerFile(roots)).subarray(j.ledgerOffset).equals(Buffer.from(j.ledgerAppend, "base64"))).toBe(true);
+  });
+
+  it("recovery cuts a partial-prefix ledger append back to the offset", () => {
+    const { dir, roots } = bare("prefix");
+    applyKbCommit(roots, dir, { changes: [create("alpha", ID1)] });
+    const base = readFileSync(ledgerFile(roots));
+    expect(() => applyKbCommit(roots, dir, { changes: [create("alpha", ID2)] }, crashAt("journal-drop"))).toThrow();
+    const full = readFileSync(ledgerFile(roots));
+    writeFileSync(ledgerFile(roots), full.subarray(0, base.length + Math.floor((full.length - base.length) / 2))); // torn append
+    expect(recoverKbCommit(roots, dir)).toBe(true);
+    expect(readFileSync(ledgerFile(roots)).equals(base)).toBe(true);
+    expect(existsSync(join(roots.kbBase, "domains/alpha/entries", `${ID2}.md`))).toBe(false);
+  });
+
+  it("recovery interrupted after the files were restored (before the ledger step) completes on re-run", () => {
+    const { dir, roots } = bare("midrec");
+    const prior = entry("alpha", ID1);
+    applyKbCommit(roots, dir, { changes: [create("alpha", ID1, prior)] });
+    const snap = () => ({ f: readFileSync(join(roots.kbBase, "domains/alpha/entries", `${ID1}.md`), "base64"), has2: existsSync(join(roots.kbBase, "domains/alpha/entries", `${ID2}.md`)), led: readFileSync(ledgerFile(roots), "base64") });
+    const before = snap();
+    expect(() => applyKbCommit(roots, dir, { changes: [update("alpha", ID1, prior, entry("alpha", ID1, "n")), create("alpha", ID2)] }, crashAt("journal-drop"))).toThrow();
+    expect(() => recoverKbCommit(roots, dir, (st) => { if (st === "files-restored") throw new Error("crash in recovery"); })).toThrow(/crash in recovery/);
+    expect(existsSync(kbJournalFile(dir))).toBe(true);
+    expect(snap().led).not.toBe(before.led); // ledger step not done yet
+    expect(recoverKbCommit(roots, dir)).toBe(true);
+    expect(snap()).toEqual(before);
+    expect(existsSync(kbJournalFile(dir))).toBe(false);
+  });
+
+  it("lock takeover: a third linker that wins after the stale lock is unlinked keeps its lock (no restore, no deletion)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-third-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    const live = JSON.stringify({ pid: process.pid, startedAt: "third" });
+    expect(() => acquireKbWriterLock(dir, process.pid, { afterUnlinked: () => writeFileSync(lock, live, { flag: "wx" }) })).toThrow(/already has a writer.*remove .* by hand/s);
+    expect(readFileSync(lock, "utf8")).toBe(live);
+    expect(existsSync(`${lock}.takeover`)).toBe(false);
+    expect(readdirSync(join(dir, "run")).filter((n) => n.includes(".stale."))).toEqual([]);
+  });
+
+  it("lock takeover retries are bounded when the lock keeps changing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kb-bound-"));
+    tmp.push(dir);
+    mkdirSync(join(dir, "run"), { recursive: true });
+    const lock = join(dir, "run", "kb-writer.lock");
+    let n = 0;
+    const dead = () => JSON.stringify({ pid: 2 ** 22 + 20000 + ++n });
+    writeFileSync(lock, dead());
+    expect(() => acquireKbWriterLock(dir, process.pid, { afterJudgedStale: () => writeFileSync(lock, dead()) })).toThrow(/cannot take the KB writer lock.*kept changing/);
+    expect(n).toBeGreaterThan(2);
+    expect(n).toBeLessThan(20);
+    // a lock that appears and disappears: still bounded (each pass re-links or errors)
+    let m = 0;
+    writeFileSync(lock, dead());
+    expect(() => acquireKbWriterLock(dir, process.pid, { afterJudgedStale: () => { rmSync(lock, { force: true }); writeFileSync(lock, dead()); m++; } })).toThrow(/cannot take/);
+    expect(m).toBeLessThan(20);
+  });
 });
+

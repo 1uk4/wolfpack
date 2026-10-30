@@ -29,7 +29,7 @@
  */
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { parseFrontmatter } from "@wolfpack/engine";
 import { appendLedger } from "@wolfpack/kb/librarian";
 import { KbEventSchema, contentHash, ev, ledgerFile, readDomainRegistry, type KbRoots } from "@wolfpack/kb/shared";
@@ -58,18 +58,56 @@ function pidAlive(pid: number): boolean {
 }
 
 export interface KbLockHooks {
-  /** @internal TEST-ONLY: runs after a lock was judged dead, before it is moved aside (simulates a racing contender). */
+  /** @internal TEST-ONLY: runs after a lock was judged dead, before the takeover starts (simulates a racing contender). */
   afterJudgedStale?: () => void;
+  /** @internal TEST-ONLY: runs after the stale lock was unlinked, before we link our own (simulates a third linker). */
+  afterUnlinked?: () => void;
 }
 
-/** Cross-process KB writer lock (`run/kb-writer.lock`, holds the owner pid). Throws when a live process holds it. */
+const LOCK_MAX_ATTEMPTS = 6;
+const clearHint = (file: string) => `if no hubd is running on this data directory, remove ${file} by hand`;
+
+/**
+ * Cross-process KB writer lock (`run/kb-writer.lock`, holds the owner pid). Throws when a live process holds it.
+ *
+ * A dead owner's lock is taken over WITHOUT renaming the lock file: a takeover mutex (`kb-writer.lock.takeover`, exclusive link,
+ * holds the contender's pid) serialises contenders; under it the lock is re-read, and only if it is still exactly the content that
+ * was judged dead is it unlinked, then our fresh lock is linked (atomic, EEXIST = someone else won). A live owner's lock is never
+ * unlinked, and no path can leave the live owner without a lock file. Residual: a contender that crashes while holding the
+ * mutex leaves it behind; a dead-pid mutex is cleared by the next contender (the same judge-then-act window, one level down).
+ */
 export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: KbLockHooks = {}): { release(): void } {
   const file = kbLockFile(dataDir);
+  const mutexFile = `${file}.takeover`;
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${pid}.${randomBytes(4).toString("hex")}`;
   writeFileSync(tmp, JSON.stringify({ pid, startedAt: new Date().toISOString() }), { mode: 0o600 });
+  const withMutex = (fn: () => void): void => {
+    try {
+      linkSync(tmp, mutexFile);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      let holder: number | undefined;
+      try {
+        holder = (JSON.parse(readFileSync(mutexFile, "utf8")) as { pid?: number }).pid;
+      } catch {
+        holder = undefined;
+      }
+      if (holder !== undefined && !pidAlive(holder)) {
+        rmSync(mutexFile, { force: true }); // a dead contender's mutex
+        return; // the caller's loop retries (bounded)
+      }
+      throw new Error(`another process is taking over the KB writer lock ${file}; retry (${clearHint(mutexFile)})`);
+    }
+    try {
+      fn();
+    } finally {
+      rmSync(mutexFile, { force: true });
+    }
+  };
   try {
     for (let attempt = 0; ; attempt++) {
+      if (attempt > LOCK_MAX_ATTEMPTS) throw new Error(`cannot take the KB writer lock ${file}: it kept changing; ${clearHint(file)}`);
       try {
         linkSync(tmp, file); // atomic: the lock appears complete or not at all
         break;
@@ -91,34 +129,21 @@ export function acquireKbWriterLock(dataDir: string, pid = process.pid, hooks: K
       } catch {
         held = Date.now() - (statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0) < LOCK_TORN_MAX_AGE_MS;
       }
-      if (held) throw new Error(`the KB in ${dataDir} already has a writer (${holder ? `pid ${holder}` : "unreadable lock, still fresh"}); a second hubd would corrupt it`);
-      if (attempt > 3) throw new Error(`cannot take the KB writer lock ${file}`);
+      if (held) {
+        throw new Error(`the KB in ${dataDir} already has a writer (${holder ? `pid ${holder}` : "unreadable lock, still fresh"}); a second hubd would corrupt it. If that process is gone, ${clearHint(file)}`);
+      }
       hooks.afterJudgedStale?.();
-      // Take it over: move it aside (atomic, one contender wins), then verify we moved exactly what we judged dead.
-      const moved = `${file}.stale.${pid}.${randomBytes(4).toString("hex")}`;
-      try {
-        renameSync(file, moved);
-      } catch {
-        continue; // someone else moved it first
-      }
-      let movedRaw: string | undefined;
-      try {
-        movedRaw = readFileSync(moved, "utf8");
-      } catch {
-        movedRaw = undefined;
-      }
-      if (movedRaw === raw) {
-        rmSync(moved, { force: true });
-        continue;
-      }
-      // A different (possibly live) lock slipped in between judging and moving: put it back, never delete it.
-      try {
-        linkSync(moved, file);
-      } catch {
-        rmSync(moved, { force: true });
-        throw new Error(`the KB writer lock ${file} changed during takeover and could not be restored; retry`);
-      }
-      rmSync(moved, { force: true });
+      withMutex(() => {
+        let cur: string | undefined;
+        try {
+          cur = readFileSync(file, "utf8");
+        } catch {
+          cur = undefined;
+        }
+        if (cur !== raw) return; // changed since we judged it: do nothing, the loop re-judges
+        rmSync(file, { force: true });
+        hooks.afterUnlinked?.();
+      });
     }
   } finally {
     rmSync(tmp, { force: true });
@@ -199,11 +224,27 @@ interface Journal {
   files: { rel: string; prev: string | null }[];
 }
 
-/** A journal path -> absolute path, refusing anything that is not under kb/base/domains/ (a tampered journal must not escape). */
-function resolveRel(dataDir: string, rel: string): string {
-  const parts = rel.split(/[\\/]/);
-  if (isAbsolute(rel) || parts.includes("..") || parts.slice(0, 3).join("/") !== "kb/base/domains") throw new Error(`journal path outside the KB: ${JSON.stringify(rel.slice(0, 80))}`);
-  return join(dataDir, ...parts);
+/** `<dataDir>/kb/base` must be the KB base: journal paths are relative to dataDir and anchored there. */
+function assertKbLayout(roots: KbRoots, dataDir: string): void {
+  if (resolve(roots.kbBase) !== resolve(dataDir, "kb", "base")) throw new Error("kb commits require roots.kbBase to be <dataDir>/kb/base");
+}
+
+/**
+ * A journal path -> absolute path. Requires exactly `kb/base/domains/<valid domain>/<KB_COMMIT_PATH>` and applies the same
+ * per-component lstat checks as a live commit (`confine`: no symlink, directories on the way, a regular file at the end).
+ */
+function resolveRel(roots: KbRoots, dataDir: string, rel: string): string {
+  const parts = rel.split("/");
+  if (parts.length < 5 || parts.slice(0, 3).join("/") !== "kb/base/domains") throw new Error(`journal path outside the KB: ${JSON.stringify(rel.slice(0, 80))}`);
+  const domain = parts[3];
+  const path = parts.slice(4).join("/");
+  try {
+    const abs = confinePath(roots, domain, path);
+    if (resolve(abs) !== resolve(dataDir, ...parts)) throw new Error("path mismatch");
+    return abs;
+  } catch (e) {
+    throw new Error(`journal path rejected (${JSON.stringify(rel.slice(0, 80))}): ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 function ledgerSize(roots: KbRoots): number {
@@ -237,56 +278,76 @@ function rollbackLedger(roots: KbRoots, j: Journal): void {
   fsyncPath(file);
 }
 
-/** Restore every journalled file, cut the ledger back, drop the journal. Idempotent. */
-function rollback(roots: KbRoots, dataDir: string, j: Journal, hook?: () => void): void {
-  hook?.();
-  for (const f of j.files) {
-    const abs = resolveRel(dataDir, f.rel);
-    if (f.prev === null) removeDurable(abs);
-    else writeDurable(abs, Buffer.from(f.prev, "base64"));
-  }
+/**
+ * Restore every journalled file, cut the ledger back, drop the journal. Idempotent. Every journal path is validated FIRST
+ * (no partial recovery from a tampered journal). `at` is a test seam: "rollback" at the start, "files-restored" before the ledger step.
+ */
+function rollback(roots: KbRoots, dataDir: string, j: Journal, at?: (stage: string) => void): void {
+  const abs = j.files.map((f) => resolveRel(roots, dataDir, f.rel));
+  at?.("rollback");
+  j.files.forEach((f, i) => {
+    if (f.prev === null) removeDurable(abs[i]);
+    else writeDurable(abs[i], Buffer.from(f.prev, "base64"));
+  });
+  at?.("files-restored");
   rollbackLedger(roots, j);
   rmSync(kbJournalFile(dataDir), { force: true });
   fsyncDir(join(dataDir, "run"));
 }
 
-function sweepTmp(dir: string): void {
+function sweepTmp(dir: string): number {
   let names: string[];
   try {
     names = readdirSync(dir);
   } catch {
-    return;
+    return 0;
   }
-  for (const n of names) if (TMP_RE.test(n) || /^kb-commit\.journal\.json\.tmp-/.test(n)) rmSync(join(dir, n), { force: true });
+  let n = 0;
+  for (const name of names) {
+    if (TMP_RE.test(name)) {
+      rmSync(join(dir, name), { force: true });
+      n++;
+    }
+  }
+  return n;
 }
 
 /**
  * Startup recovery: a journal left by a crash (or by a failed rollback) means an unacknowledged batch; roll it back, sweep the
  * `*.tmp-*` leftovers of the domains it touched. MUST run under the KB writer lock. Returns whether a rollback happened.
- * An unparseable journal cannot come from a crash (it is renamed into place complete); it is removed with a warning.
+ * The journal is written tmp + fsync + rename, so an UNPARSEABLE or malformed one is not a crash artefact but real corruption:
+ * it is never deleted, startup is refused, and the operator inspects it (the KB may be half-applied) and moves it aside by hand.
+ * Torn `*.tmp-*` journals are plain sweep targets.
  */
-export function recoverKbCommit(roots: KbRoots, dataDir: string): boolean {
-  sweepTmp(join(dataDir, "run"));
+export function recoverKbCommit(roots: KbRoots, dataDir: string, at?: (stage: string) => void): boolean {
+  assertKbLayout(roots, dataDir);
   const jf = kbJournalFile(dataDir);
-  if (!existsSync(jf)) return false;
+  const jrel = relative(dataDir, jf).split(sep).join("/");
+  const swept = sweepTmp(join(dataDir, "run"));
+  if (!existsSync(jf)) {
+    if (swept > 0) console.warn(`hubd: swept ${swept} leftover temp file(s) in run/`);
+    return false;
+  }
+  const refuse = (why: string): never => {
+    throw new Error(`the KB commit journal ${jrel} is ${why}; the KB may be half-applied. Refusing to start: inspect it and move it aside by hand (it is not deleted)`);
+  };
   let j: Journal;
   try {
     j = JSON.parse(readFileSync(jf, "utf8")) as Journal;
   } catch {
-    console.warn("hubd: unparseable KB commit journal removed");
-    rmSync(jf, { force: true });
-    return true;
+    return refuse("unparseable");
   }
-  if (j?.v !== 1 || !Array.isArray(j.files) || typeof j.ledgerAppend !== "string" || typeof j.ledgerOffset !== "number") throw new Error("the KB commit journal is malformed; refusing to start (inspect run/kb-commit.journal.json)");
-  rollback(roots, dataDir, j);
+  if (j?.v !== 1 || !Array.isArray(j.files) || typeof j.ledgerAppend !== "string" || typeof j.ledgerOffset !== "number" || j.files.some((f) => typeof f?.rel !== "string" || (f.prev !== null && typeof f.prev !== "string"))) return refuse("malformed");
+  rollback(roots, dataDir, j, at);
   const dirs = new Set<string>();
   for (const f of j.files) {
-    const abs = resolveRel(dataDir, f.rel);
+    const abs = resolveRel(roots, dataDir, f.rel);
     dirs.add(dirname(abs));
-    dirs.add(join(dataDir, ...f.rel.split(/[\\/]/).slice(0, 5))); // kb/base/domains/<domain>
+    dirs.add(join(dataDir, ...f.rel.split("/").slice(0, 4))); // kb/base/domains/<domain>
   }
-  for (const d of dirs) sweepTmp(d);
-  console.warn(`hubd: recovered an interrupted KB commit: rolled back ${j.files.length} file(s) and the KB ledger append`);
+  let n = swept;
+  for (const d of dirs) n += sweepTmp(d);
+  console.warn(`hubd: recovered an interrupted KB commit: rolled back ${j.files.length} file(s) and the KB ledger append (${n} temp file(s) swept)`);
   return true;
 }
 
@@ -305,6 +366,11 @@ function bad(msg: string): never {
 
 /** The absolute path of a change; every existing component under kbBase/domains must be a real directory (no symlink escape). */
 function confine(roots: KbRoots, c: KbChange): string {
+  return confinePath(roots, c.domain, c.path);
+}
+
+function confinePath(roots: KbRoots, domain: string, path: string): string {
+  const c = { domain, path };
   if (!DOMAIN.test(c.domain)) bad(`bad domain name ${JSON.stringify(c.domain.slice(0, 60))}`);
   if (!KB_COMMIT_PATH.test(c.path)) bad(`path not allowed: ${JSON.stringify(c.path.slice(0, 80))}`);
   const parts = ["domains", c.domain, ...c.path.split("/")];
@@ -394,6 +460,7 @@ export class KbRollbackError extends HubError {
 
 /** Validate then apply one batch. MUST run under the KB writer lock and queue. */
 export function applyKbCommit(roots: KbRoots, dataDir: string, req: KbCommitRequest, faults: KbCommitFaults = {}): KbCommitResponse {
+  assertKbLayout(roots, dataDir);
   if (existsSync(kbJournalFile(dataDir))) throw new HubError("engine_error", "an interrupted KB commit is awaiting recovery; restart the hub");
   const stage = (s: string) => faults.at?.(s);
   let planned: Planned[];
@@ -415,7 +482,7 @@ export function applyKbCommit(roots: KbRoots, dataDir: string, req: KbCommitRequ
       ledgerAppend: appendBytes.toString("base64"),
       files: planned.map((p) => {
         const rel = relative(dataDir, p.abs);
-        resolveRel(dataDir, rel); // the journal must be able to name it
+        resolveRel(roots, dataDir, rel); // the journal must be able to name it
         return { rel: rel.split(sep).join("/"), prev: p.prev === null ? null : p.prev.toString("base64") };
       }),
     };
@@ -443,7 +510,7 @@ export function applyKbCommit(roots: KbRoots, dataDir: string, req: KbCommitRequ
     console.error("hubd: kb commit failed:", e);
     if (faults.crash) throw new HubError("engine_error", "kb commit failed (simulated crash)");
     try {
-      rollback(roots, dataDir, journal, () => stage("rollback"));
+      rollback(roots, dataDir, journal, stage);
     } catch (re) {
       console.error("hubd: kb commit rollback FAILED; the journal is kept for recovery:", re);
       throw new KbRollbackError();

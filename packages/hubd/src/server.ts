@@ -589,6 +589,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const q = url.searchParams;
           const sinceRaw = q.get("since");
           if (sinceRaw !== null && !/^\d{1,15}$/.test(sinceRaw)) throw new HubError("invalid_request", "since must be a non-negative integer");
+          if (sinceRaw !== null && Number(sinceRaw) > 0 && q.get("epoch") === null) throw new HubError("invalid_request", "epoch is required when since > 0");
           const mb = q.get("maxBytes");
           if (mb !== null && !/^[1-9]\d{0,12}$/.test(mb)) throw new HubError("invalid_request", "maxBytes must be a positive integer");
           return send(res, 200, revisions.changesSince(params.domain, sinceRaw === null ? 0 : Number(sinceRaw), q.get("epoch") ?? undefined, mb === null ? undefined : Math.min(Number(mb), KB_COMMIT_BODY_LIMIT)));

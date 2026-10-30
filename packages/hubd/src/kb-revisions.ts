@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { contentHash, type KbRoots } from "@wolfpack/kb/shared";
 import { KB_COMMIT_BODY_LIMIT, KB_SYNC_PATH, type KbChangesResponse, type KbCommitResponse, type KbManifestDiffResponse, type KbManifestResponse, type KbSyncFile } from "@wolfpack/protocol";
 import { HubError } from "./errors.js";
-import { writeDurable } from "./kb-commits.js";
+import { fsyncDir, writeDurable } from "./kb-commits.js";
 
 const DOMAIN = /^[a-z0-9][a-z0-9-]*$/;
 const TMP_RE = /\.tmp-\d+-[0-9a-f]{8}$/;
@@ -46,7 +46,11 @@ interface Row {
   op: "create" | "update" | "delete";
   contentHash: string | null;
 }
-type Stat = { mtimeMs: number; size: number; ino: number };
+/** ns-resolution stat (bigint) incl. ctime: a same-size rewrite with a restored mtime still moves ctime. */
+type Stat = { mtimeNs: bigint; ctimeNs: bigint; size: bigint; ino: bigint };
+const statOf = (st: { mtimeNs: bigint; ctimeNs: bigint; size: bigint; ino: bigint }): Stat => ({ mtimeNs: st.mtimeNs, ctimeNs: st.ctimeNs, size: st.size, ino: st.ino });
+const sameStat = (a: Stat, b: Stat) => a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs && a.size === b.size && a.ino === b.ino;
+const missing = (e: unknown) => ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "");
 interface Dom {
   epoch: string;
   rev: number;
@@ -84,6 +88,8 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
   let lastPrune = 0;
   let timer: NodeJS.Timeout | undefined;
   let scanning = false;
+  /** Domains whose persist failed: dropped from memory; the next load gets a fresh epoch so revision numbers are never reused under one epoch. */
+  const rotateNext = new Set<string>();
   const warnOnce = (k: string, m: string) => {
     if (warned.has(k)) return;
     warned.add(k);
@@ -105,8 +111,9 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     const list = (dir: string) => {
       try {
         return readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return [];
+      } catch (e) {
+        if (missing(e)) return []; // really gone; anything else (EACCES, EMFILE, ...) propagates and fails this domain's scan
+        throw e;
       }
     };
     for (const e of list(base)) {
@@ -130,32 +137,41 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
   /** lstat + read one synced file; undefined when it is gone, not a regular file, or not UTF-8. */
   function readSynced(domain: string, rel: string): { text: string; st: Stat } | undefined {
     const abs = join(domainsDir, domain, ...rel.split("/"));
-    const st = lstatSync(abs, { throwIfNoEntry: false });
+    const st = lstatSync(abs, { bigint: true, throwIfNoEntry: false });
     if (!st || !st.isFile() || st.isSymbolicLink()) return undefined;
     let buf: Buffer;
     try {
       buf = readFileSync(abs);
-    } catch {
-      return undefined;
+    } catch (e) {
+      if (missing(e)) return undefined;
+      throw e;
     }
     const text = utf8(buf);
     if (text === undefined) {
       warnOnce(`${domain}/${rel}`, `hubd: kb revisions: ${domain}/${rel} is not valid UTF-8; ignored`);
       return undefined;
     }
-    return { text, st: { mtimeMs: st.mtimeMs, size: st.size, ino: st.ino } };
+    return { text, st: statOf(st) };
   }
 
   // ------------------------------------------------------------- persistence
   function appendRows(d: string, rows: Row[]): void {
     if (rows.length === 0) return;
+    const f = join(dirOf(d), "changes.jsonl");
+    const fresh = !existsSync(f);
     mkdirSync(dirOf(d), { recursive: true });
-    const fd = openSync(join(dirOf(d), "changes.jsonl"), "a", 0o644);
+    const fd = openSync(f, "a", 0o644);
     try {
       writeSync(fd, rows.map(rowLine).join(""));
       fsyncSync(fd);
     } finally {
       closeSync(fd);
+    }
+    if (fresh) {
+      // the new directory entry (and the dirs created on the way) must survive power loss too, or state.rev could outlive the log
+      fsyncDir(dirOf(d));
+      fsyncDir(revRoot);
+      fsyncDir(opts.dataDir);
     }
   }
   const writeManifest = (d: string, s: Dom) => writeDurable(join(dirOf(d), "manifest.json"), JSON.stringify({ v: 1, rev: s.rev, files: Object.fromEntries(s.files) }));
@@ -191,21 +207,38 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     } catch {
       /* no log yet */
     }
-    const lastRow = rows.length ? rows[rows.length - 1].rev : 0;
     const stRev = typeof state?.rev === "number" ? state.rev : 0;
+    const lastRow = rows.length ? Math.max(...rows.map((r) => r.rev)) : 0;
+    const floor0 = typeof state?.floor === "number" ? state.floor : 0;
     const s: Dom = {
-      epoch: typeof state?.epoch === "string" ? state.epoch : randomBytes(8).toString("hex"),
+      epoch: !rotateNext.has(d) && typeof state?.epoch === "string" ? state.epoch : randomBytes(8).toString("hex"),
       rev: Math.max(stRev, lastRow),
-      floor: typeof state?.floor === "number" ? state.floor : 0,
+      floor: floor0,
       rows,
       files: new Map(),
       stat: new Map(),
     };
-    if (middleBad) s.floor = s.rev; // a hole in the log: nobody may rely on it
-    if (torn || middleBad) {
-      console.warn(`hubd: kb revisions: repaired the change log of ${d}`);
+    let dirty = rotateNext.has(d) || typeof state?.epoch !== "string";
+    // The log must be contiguous over (floor, rev]. A missing head or hole raises the floor past it; a missing tail (state.rev ahead
+    // of the last row, e.g. the log file lost) means floor = rev. Rows at or below the floor are dropped.
+    const kept = rows.filter((r) => r.rev > s.floor).sort((x, y) => x.rev - y.rev);
+    let i = kept.length;
+    let expect = s.rev;
+    while (i > 0 && kept[i - 1].rev === expect) {
+      i--;
+      expect--;
+    }
+    const suffix = kept.slice(i);
+    const newFloor = Math.max(s.floor, expect);
+    const repaired = newFloor !== s.floor || suffix.length !== rows.length;
+    if (newFloor !== s.floor) console.warn(`hubd: kb revisions: the change log of ${d} does not cover (${s.floor}, ${s.rev}]; floor raised to ${newFloor}`);
+    s.floor = newFloor;
+    s.rows = suffix;
+    if (newFloor !== floor0) dirty = true;
+    if (torn || repaired || middleBad) {
+      if (torn) console.warn(`hubd: kb revisions: dropped a torn last row of ${d}`);
       mkdirSync(dir, { recursive: true });
-      rewriteRows(d, rows);
+      rewriteRows(d, s.rows);
     }
     let man: { rev?: unknown; files?: unknown } | undefined;
     try {
@@ -233,19 +266,26 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
           s.stat.set(p, r.st);
         }
       }
+      // A synthetic revision, so a client sitting exactly at the old head (since == rev) is below the new floor and resets too.
+      s.rev++;
       s.floor = s.rev;
-      console.warn(`hubd: kb revisions: rebuilt the manifest of ${d} from disk (floor ${s.floor})`);
+      s.rows = [];
+      mkdirSync(dir, { recursive: true });
+      rewriteRows(d, []);
+      console.warn(`hubd: kb revisions: rebuilt the manifest of ${d} from disk (revision ${s.rev}, floor ${s.floor})`);
     }
-    if (rebuilt || !state || !validFiles || (man!.rev as number) !== s.rev || stRev !== s.rev) {
+    if (rebuilt || dirty || !state || !validFiles || (man!.rev as number) !== s.rev || stRev !== s.rev) {
       mkdirSync(dir, { recursive: true });
       writeManifest(d, s);
       writeState(d, s);
     }
+    rotateNext.delete(d);
     return s;
   }
-  function dom(d: string, create: boolean): Dom | undefined {
+  /** Load (and persist) a domain. Scan/record paths only; never called from a request. */
+  function dom(d: string): Dom {
     let s = doms.get(d);
-    if (!s && (create || existsSync(dirOf(d)))) {
+    if (!s) {
       s = loadDomain(d);
       doms.set(d, s);
     }
@@ -255,7 +295,7 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
   // ------------------------------------------------------------- recording
   /** Apply path->hash|null changes to the domain, one revision each. Queue-only. */
   function apply(d: string, changes: { path: string; hash: string | null }[], stats?: Map<string, Stat>): number {
-    const s = dom(d, true)!;
+    const s = dom(d);
     const rows: Row[] = [];
     const ts = now();
     for (const c of changes) {
@@ -272,9 +312,17 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     for (const [p, st] of stats ?? []) if (s.files.has(p)) s.stat.set(p, st);
     if (rows.length === 0) return 0;
     s.rows.push(...rows);
-    appendRows(d, rows);
-    writeManifest(d, s);
-    writeState(d, s); // LAST
+    try {
+      appendRows(d, rows);
+      writeManifest(d, s);
+      writeState(d, s); // LAST
+    } catch (e) {
+      // Memory is now ahead of disk. Drop the domain; its next load reads the disk and takes a NEW epoch, so a revision number is never
+      // reused for different content under one epoch.
+      doms.delete(d);
+      rotateNext.add(d);
+      throw e;
+    }
     return rows.length;
   }
 
@@ -284,15 +332,18 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     const stats = new Map<string, Map<string, Stat>>();
     for (const f of out.files) {
       if (!DOMAIN.test(f.domain) || !KB_SYNC_PATH.test(f.path)) continue;
-      if (!by.has(f.domain)) by.set(f.domain, []);
-      by.get(f.domain)!.push({ path: f.path, hash: f.op === "delete" ? null : f.contentHash });
+      let hash: string | null = null;
       if (f.op !== "delete") {
+        // Hash and stat come from ONE read of the file as it is now (not the committed hash): if Dewey overwrote it since the commit,
+        // the manifest says what is really on disk, and the cached stat belongs to those bytes.
         const r = readSynced(f.domain, f.path);
-        if (r) {
-          if (!stats.has(f.domain)) stats.set(f.domain, new Map());
-          stats.get(f.domain)!.set(f.path, r.st);
-        }
+        if (!r) continue; // gone or unreadable already: the scan decides
+        hash = contentHash(r.text);
+        if (!stats.has(f.domain)) stats.set(f.domain, new Map());
+        stats.get(f.domain)!.set(f.path, r.st);
       }
+      if (!by.has(f.domain)) by.set(f.domain, []);
+      by.get(f.domain)!.push({ path: f.path, hash });
     }
     for (const [d, ch] of by) apply(d, ch, stats.get(d));
   }
@@ -315,19 +366,44 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     return [...set].sort();
   }
 
-  function scanDomain(d: string, settle: boolean): void {
-    const s = dom(d, true)!;
-    const cutoff = Date.now() - settleMs;
+  /** ok | gone (domains/ is readable and domains/<d> is really absent) | unavailable (anything else: unmounted target, EACCES, a symlink...). */
+  function domainStatus(d: string): "ok" | "gone" | "unavailable" {
+    let st;
+    try {
+      st = lstatSync(join(domainsDir, d), { throwIfNoEntry: false });
+    } catch {
+      return "unavailable";
+    }
+    if (st) return st.isDirectory() ? "ok" : "unavailable";
+    try {
+      readdirSync(domainsDir);
+      return "gone";
+    } catch {
+      return "unavailable";
+    }
+  }
+
+  /** Returns the number of revisions recorded. */
+  function scanDomain(d: string, settle: boolean): number {
+    const s = dom(d);
+    const status = domainStatus(d);
+    if (status === "unavailable") {
+      // Never turn a transient failure (unmounted symlink target, permissions) into a mass delete.
+      if (s.files.size > 0) warnOnce(`unavailable:${d}`, `hubd: kb revisions: domains/${d} is not readable; scan skipped (${s.files.size} file(s) kept)`);
+      return 0;
+    }
+    warned.delete(`unavailable:${d}`);
+    const cutoff = now() - settleMs;
     const seen = new Set<string>();
     const changes: { path: string; hash: string | null }[] = [];
     const stats = new Map<string, Stat>();
     for (const p of walk(d)) {
-      const st = lstatSync(join(domainsDir, d, ...p.split("/")), { throwIfNoEntry: false });
+      const st = lstatSync(join(domainsDir, d, ...p.split("/")), { bigint: true, throwIfNoEntry: false });
       if (!st || !st.isFile()) continue;
       seen.add(p);
       const c = s.stat.get(p);
-      if (c && c.mtimeMs === st.mtimeMs && c.size === st.size && c.ino === st.ino && s.files.has(p)) continue;
-      if (settle && st.mtimeMs > cutoff) continue; // still being written: look again next scan
+      if (c && sameStat(c, statOf(st)) && s.files.has(p)) continue;
+      if (settle && Number(st.mtimeMs) > cutoff) continue; // still being written: look again next scan
       const r = readSynced(d, p);
       if (!r) continue; // unreadable / non-UTF-8: keep whatever we had
       stats.set(p, r.st);
@@ -335,19 +411,24 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
     }
     // Gone from disk -> delete. A file inside the settle window or unreadable is "seen" above, so it is not deleted.
     for (const p of [...s.files.keys()]) if (!seen.has(p)) changes.push({ path: p, hash: null });
-    apply(d, changes, stats);
+    return apply(d, changes, stats);
   }
 
   /** One pass over every domain. Queue-only. `settle:false` (startup) also takes files modified a moment ago. */
-  function scan(o: { settle?: boolean; prune?: boolean } = {}): void {
-    for (const d of diskDomains()) {
+  function scan(o: { settle?: boolean; prune?: boolean; log?: boolean } = {}): void {
+    const t0 = Date.now();
+    let changed = 0;
+    const names = diskDomains();
+    for (const d of names) {
       try {
-        scanDomain(d, o.settle !== false);
+        changed += scanDomain(d, o.settle !== false);
       } catch (e) {
         console.error(`hubd: kb scan of ${d} failed:`, e);
       }
     }
     if (o.prune || now() - lastPrune >= 3_600_000) prune();
+    const ms = Date.now() - t0;
+    if (o.log || changed > 0 || ms > 1000) console.log(`hubd: kb scan: ${names.length} domain(s), ${changed} change(s), ${ms}ms`);
   }
 
   function prune(): void {
@@ -369,12 +450,12 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
   }
 
   // ------------------------------------------------------------- reads
+  /** Request path: reads memory only. A domain exists once a scan (startup, poll) or a commit has created it; 404 until then. */
   const need = (d: string): Dom => {
     if (!DOMAIN.test(d)) throw new HubError("invalid_request", `bad domain name ${JSON.stringify(d.slice(0, 60))}`);
-    const s = dom(d, false);
-    if (s) return s;
-    if (isRealDir(join(domainsDir, d))) return dom(d, true)!;
-    throw new HubError("not_found", `no KB domain ${d}`);
+    const s = doms.get(d);
+    if (!s) throw new HubError("not_found", `no KB domain ${d} (not scanned yet)`);
+    return s;
   };
   const size = (f: KbSyncFile) => Buffer.byteLength(f.content, "utf8") + f.path.length + 128;
   const fileOf = (d: string, path: string): KbSyncFile | undefined => {
@@ -409,7 +490,10 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
         continue;
       }
       const f = fileOf(d, r.path); // current bytes (may be newer than the row; the later scan row re-delivers it)
-      if (!f) continue; // vanished since: the next scan records the delete
+      // fileOf is undefined when the file vanished or is unreadable / not valid UTF-8 now. Such a file never enters the log as live
+      // content (the scanner skips it too), so skipping it cannot drop a real change: a vanish is recorded as a delete by the next
+      // scan, and an unreadable file keeps its last good revision.
+      if (!f) continue;
       if (files.length + deletes.length > 0 && bytes + size(f) > maxBytes) {
         truncated = true;
         revision = items[i - 1].rev;
@@ -471,7 +555,7 @@ export function createKbRevisions(opts: KbRevisionsOptions) {
   /** Startup: load every known domain and scan once (also prunes). Run after KB recovery, before listening. */
   function init(): void {
     mkdirSync(revRoot, { recursive: true });
-    scan({ settle: false, prune: true });
+    scan({ settle: false, prune: true, log: true });
   }
 
   return { head, record, scan, prune, changesSince, manifest, diff, start, stop, init };

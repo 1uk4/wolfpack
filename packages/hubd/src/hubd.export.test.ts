@@ -118,7 +118,19 @@ describe("hubd export / import", () => {
     importHub({ dataDir: target, in: out });
     const a = tree(s.dir);
     for (const k of Object.keys(a)) if (k === "run" || k.startsWith("run/") || k === "tmp" || k.startsWith("tmp/")) delete a[k];
-    expect(tree(target)).toEqual(a);
+    // import gives every KB revision log a NEW epoch (a new lineage); everything else is byte-identical
+    const b = tree(target);
+    const stateKeys = Object.keys(a).filter((k) => /^kb-rev\/[^/]+\/state\.json$/.test(k));
+    expect(stateKeys.length).toBeGreaterThan(0);
+    for (const k of stateKeys) {
+      const before = JSON.parse(Buffer.from(a[k]!, "base64").toString("utf8"));
+      const got = JSON.parse(Buffer.from(b[k]!, "base64").toString("utf8"));
+      expect(got.epoch).not.toBe(before.epoch);
+      expect({ ...got, epoch: "" }).toEqual({ ...before, epoch: "" });
+      delete a[k];
+      delete b[k];
+    }
+    expect(b).toEqual(a);
 
     const hub = await createHubServer({ dataDir: target, apiKey: KEY });
     servers.push(hub);

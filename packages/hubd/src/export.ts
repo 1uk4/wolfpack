@@ -7,7 +7,7 @@
  *   kb/base/**                       the KB (domains.yaml, domains/<d>/entries + work/*.md, _registry.md, _digest.json, INDEX.md)
  *   kb/ops/contributions/**          contributions incl. _processed and _bad
  *   registry/registry.json           the registry
- *   kb-rev/**                        KB revision counters, change logs and manifests (keeps the epoch, so workers need no resync)
+ *   kb-rev/**                        KB revision counters, change logs and manifests (import gives each domain a NEW epoch, so workers resync)
  * EXCLUDED: run/ (locks, run file, KB commit journal: process state), tmp/ (write scratch), and anything else (e.g. a
  * DEV-SNAPSHOT marker, other kb/ops lanes, other ledger/ files); they are reported in `skipped`.
  *
@@ -258,7 +258,18 @@ export function importHub(opts: { dataDir: string; in: string }): ExportManifest
       mkdirSync(join(tmp, d), { recursive: true, mode: DIR_MODE });
       chmodSync(join(tmp, d), DIR_MODE);
     }
-    for (const [p, b] of data) {
+    for (const [p, b0] of data) {
+      let b = b0;
+      // An imported hub is a new lineage (the source may keep running, or be restored again): give every KB revision log a NEW epoch,
+      // so no worker cursor from the source is taken for a cursor of this hub. Revisions and floor are kept.
+      if (/^kb-rev\/[^/]+\/state\.json$/.test(p)) {
+        try {
+          const st = JSON.parse(b0.toString("utf8")) as Record<string, unknown>;
+          b = Buffer.from(JSON.stringify({ ...st, epoch: randomBytes(8).toString("hex") }));
+        } catch {
+          throw new ExportError(`${p} is not valid JSON`);
+        }
+      }
       const abs = join(tmp, p);
       if (!abs.startsWith(tmp + sep)) throw new ExportError(`unsafe path in archive: ${p}`);
       mkdirSync(dirname(abs), { recursive: true, mode: DIR_MODE });

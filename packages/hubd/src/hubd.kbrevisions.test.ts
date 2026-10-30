@@ -1,5 +1,5 @@
 /** KB revisions + change log: commit and scan detection, changes-since, manifest diff, retention fallback, durability, access. */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,6 +63,8 @@ async function setup(over: Partial<HubOptions> = {}, existing?: string) {
     },
     get: (path: string, headers: Record<string, string> = { "X-API-Key": KEY }) => fetch(hub.url + path, { headers }),
     async changes(d: string, q = "") {
+      // since > 0 needs an epoch: add the hub's current one unless the test passes its own
+      if (/since=[1-9]/.test(q) && !q.includes("epoch=")) q += `&epoch=${((await (await fetch(`${hub.url}/v1/kb/domains/${d}/manifest`, { headers: { "X-API-Key": KEY } })).json()) as { epoch: string }).epoch}`;
       const r = await fetch(`${hub.url}/v1/kb/domains/${d}/changes${q}`, { headers: { "X-API-Key": KEY } });
       expect(r.status).toBe(200);
       return (await r.json()) as KbChangesResponse;
@@ -235,7 +237,7 @@ describe("KB revisions", () => {
     writeFileSync(join(s.dir, "kb-rev", "alpha", "manifest.json"), "{not json");
     await s.restart();
     const m = (await (await s.get("/v1/kb/domains/alpha/manifest")).json()) as { revision: number; floor: number; epoch: string; files: Record<string, string> };
-    expect(m).toMatchObject({ revision: 2, floor: 2, epoch });
+    expect(m).toMatchObject({ revision: 3, floor: 3, epoch }); // rebuilt: one synthetic revision
     expect(Object.keys(m.files)).toHaveLength(2);
     expect((await s.changes("alpha", "?since=0")).status).toBe("reset"); // rebuilt manifest: older cursors resync
   });
@@ -376,5 +378,127 @@ describe("KB revisions", () => {
     s.write("alpha", `entries/${A1}.md`, entry("alpha", A1));
     for (let i = 0; i < 100 && (await s.rev("alpha")) === 0; i++) await new Promise((r) => setTimeout(r, 25));
     expect(await s.rev("alpha")).toBe(1);
+  });
+
+  it("kb/base as a symlink: scan and serve work; an unavailable target is never a mass delete", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hubd-kbrev-link-"));
+    tmp.push(dir);
+    const real = join(dir, "real-base");
+    mkdirSync(join(real, "domains", "alpha", "entries"), { recursive: true });
+    writeFileSync(join(real, "domains.yaml"), "domains:\n  alpha:\n    label: Alpha\n");
+    mkdirSync(join(dir, "kb"), { recursive: true });
+    symlinkSync(real, join(dir, "kb", "base"));
+    const f = join(real, "domains", "alpha", "entries", `${A1}.md`);
+    writeFileSync(f, entry("alpha", A1));
+    utimesSync(f, long / 1000, long / 1000);
+    const s = await setup({}, dir);
+    expect(await s.rev("alpha")).toBe(1);
+    expect((await s.commit(create("alpha", A2))).status).toBe(200);
+    expect(await s.rev("alpha")).toBe(2);
+    expect(ok(await s.changes("alpha")).files.map((x) => x.path).sort()).toEqual([`entries/${A1}.md`, `entries/${A2}.md`]);
+    // the target goes away (unmounted): nothing is deleted, nothing is raised
+    renameSync(real, `${real}.off`);
+    await s.hub.scanKb();
+    expect(await s.rev("alpha")).toBe(2);
+    expect(Object.keys(((await (await s.get("/v1/kb/domains/alpha/manifest")).json()) as { files: object }).files)).toHaveLength(2);
+    renameSync(`${real}.off`, real);
+    await s.hub.scanKb();
+    expect(await s.rev("alpha")).toBe(2);
+    // a domain that is really gone (domains/ readable, domains/<d> absent) IS deleted
+    rmSync(join(real, "domains", "alpha"), { recursive: true });
+    await s.hub.scanKb();
+    expect(await s.rev("alpha")).toBe(4);
+  });
+
+  it("state.json written but the log missing: the revision is kept and the floor covers the gap", async () => {
+    const s = await setup();
+    await s.commit(create("alpha", A1), create("alpha", A2));
+    const epoch = ok(await s.changes("alpha")).epoch;
+    await s.hub.close();
+    servers = servers.filter((x) => x !== s.hub);
+    rmSync(join(s.dir, "kb-rev", "alpha", "changes.jsonl"));
+    await s.restart();
+    expect(await s.rev("alpha")).toBe(2);
+    expect(await s.changes("alpha", `?since=1&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 2 });
+    expect(ok(await s.changes("alpha", `?since=2&epoch=${epoch}`)).files).toEqual([]);
+    // a missing head: drop the first row of the log
+    s.write("alpha", "_registry.md", "# r\n");
+    await s.hub.scanKb();
+    await s.hub.close();
+    servers = servers.filter((x) => x !== s.hub);
+    const log = join(s.dir, "kb-rev", "alpha", "changes.jsonl");
+    writeFileSync(log, readFileSync(log, "utf8").split("\n").slice(1).join("\n") + "");
+    s.write("alpha", "INDEX.md", "# i\n");
+    await s.restart();
+    expect(await s.rev("alpha")).toBe(4);
+    // the only row (3) was lost, row 4 survives: the log no longer reaches back past 3
+    expect(await s.changes("alpha", `?since=2&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 3 });
+    expect(ok(await s.changes("alpha", `?since=3&epoch=${epoch}`)).files.map((f) => f.path)).toEqual(["INDEX.md"]);
+  });
+
+  it("after a manifest rebuild a client at exactly the old head is reset (synthetic revision)", async () => {
+    const s = await setup();
+    await s.commit(create("alpha", A1), create("alpha", A2));
+    const epoch = ok(await s.changes("alpha")).epoch;
+    await s.hub.close();
+    servers = servers.filter((x) => x !== s.hub);
+    rmSync(join(s.dir, "kb-rev", "alpha", "manifest.json"));
+    await s.restart();
+    expect(await s.rev("alpha")).toBe(3);
+    expect(await s.changes("alpha", `?since=2&epoch=${epoch}`)).toMatchObject({ status: "reset", reason: "below_floor", floor: 3, revision: 3, epoch });
+    expect(ok(await s.changes("alpha", `?since=3&epoch=${epoch}`)).files).toEqual([]);
+  });
+
+  it("a Dewey overwrite between the commit and its record is not hidden", async () => {
+    const dewey = entry("alpha", A1, "dewey");
+    let hit = false;
+    let writeIt = () => {};
+    const s = await setup({ kbFaults: { at: (st) => { if (st === "committed") { hit = true; writeIt(); } } } });
+    writeIt = () => writeFileSync(s.file("alpha", `entries/${A1}.md`), dewey);
+    expect((await s.commit(create("alpha", A1))).status).toBe(200);
+    expect(hit).toBe(true);
+    const m = (await (await s.get("/v1/kb/domains/alpha/manifest")).json()) as { files: Record<string, string>; revision: number };
+    expect(m.files[`entries/${A1}.md`]).toBe(contentHash(dewey)); // what is on disk, not what was committed
+    const c = ok(await s.changes("alpha"));
+    expect(c.files[0]).toMatchObject({ content: dewey, contentHash: contentHash(dewey) });
+    await s.hub.scanKb({ settle: false });
+    expect(await s.rev("alpha")).toBe(m.revision); // nothing further to record
+  });
+
+  it("a same-size rewrite with a restored mtime is detected (ctime)", async () => {
+    const s = await setup();
+    s.write("alpha", `entries/${A1}.md`, entry("alpha", A1, "AAAA"));
+    await s.hub.scanKb();
+    expect(await s.rev("alpha")).toBe(1);
+    const f = s.file("alpha", `entries/${A1}.md`);
+    const { mtime } = statSync(f);
+    await new Promise((r) => setTimeout(r, 20));
+    writeFileSync(f, entry("alpha", A1, "BBBB")); // same size
+    utimesSync(f, mtime, mtime);
+    await s.hub.scanKb();
+    expect(await s.rev("alpha")).toBe(2);
+    expect(ok(await s.changes("alpha", "?since=1")).files[0]!.content).toContain("BBBB");
+  });
+
+  it("a failed persist drops the domain and the next load takes a new epoch (revisions are never reused under one epoch)", async () => {
+    const s = await setup();
+    const epoch0 = ok(await s.changes("alpha")).epoch;
+    mkdirSync(join(s.dir, "kb-rev", "alpha", "changes.jsonl")); // appending to a directory throws
+    s.write("alpha", `entries/${A1}.md`, entry("alpha", A1));
+    await s.hub.scanKb(); // fails, logged
+    expect((await s.get("/v1/kb/domains/alpha/manifest")).status).toBe(404); // dropped until the next scan
+    rmSync(join(s.dir, "kb-rev", "alpha", "changes.jsonl"), { recursive: true });
+    await s.hub.scanKb();
+    const c = ok(await s.changes("alpha"));
+    expect(c.revision).toBe(1);
+    expect(c.epoch).not.toBe(epoch0);
+    expect(c.files.map((f) => f.path)).toEqual([`entries/${A1}.md`]);
+  });
+
+  it("requires the epoch when since > 0", async () => {
+    const s = await setup();
+    await s.commit(create("alpha", A1));
+    expect((await s.get("/v1/kb/domains/alpha/changes?since=1")).status).toBe(400);
+    expect((await s.get("/v1/kb/domains/alpha/changes?since=0")).status).toBe(200);
   });
 });

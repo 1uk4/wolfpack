@@ -374,8 +374,8 @@ export const ROUTES = {
   hubKbCommit: { scope: "hub", method: "POST", path: "/v1/kb/commits", body: KbCommitRequestSchema, response: { kind: "json", schema: KbCommitResponseSchema }, status: [200], error: err },
   /**
    * PUBLIC (no token): exchange a single-use pairing code (minted by `hubd pair`, valid ~10 minutes) for a per-device bearer token.
-   * Body `{code, label, kind: worker|console|browser}`; answers `{token, tokenId}`. The token is shown once; the hub keeps only its hash.
-   * 401 `unauthorized` for an unknown, used or expired code; 400 `invalid_request` for a bad body. Every other hub route needs
+   * Body `{code, label, kind?, hostId?}`: the token's kind and hostId are fixed by the CODE (`hubd pair --kind worker|console|browser [--host-id]`); `kind`/`hostId` in the body are optional and must match the code (401 otherwise, the code is not consumed). Answers `{token, tokenId}`. The token is shown once; the hub keeps only its hash.
+   * 401 `unauthorized` for an unknown, used, expired or mismatched code; 409 `busy` (retryable) while the token store is locked; 429 after 10 failed attempts a minute from one peer address; 400 `invalid_request` for a bad body. Every other hub route needs
    * `Authorization: Bearer <token>`; with a token the identity comes from the token and `X-Wolfpack-Actor` is IGNORED.
    */
   hubPair: { scope: "hub", public: true, method: "POST", path: "/v1/pair", body: PairRequestSchema, response: { kind: "json", schema: PairResponseSchema }, status: [200], error: err },

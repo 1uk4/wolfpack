@@ -1,12 +1,12 @@
 /** Token auth: bearer required, identity from the token (forged actor ignored), pairing, revocation (incl. SSE close), CLI, legacy key. */
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { seedFixture, FIXTURE_DOMAIN } from "./testing/fixture.js";
-import { main } from "./cli.js";
-import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
+import { main, parseArgs } from "./cli.js";
+import { createTokenStore, PAIRING_TTL_MS, tryBreakStaleLock } from "./auth.js";
 import { createHubServer, type HubServer } from "./server.js";
 
 let dir = "";
@@ -15,6 +15,7 @@ let featureId = "";
 let hub: HubServer;
 let store: ReturnType<typeof createTokenStore>;
 const KEY = "legacy-key-0123456789";
+const CON = { kind: "console" } as const;
 const asOp = JSON.stringify({ id: "forged-operator", kind: "operator" });
 
 beforeEach(async () => {
@@ -29,7 +30,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const pairVia = async (body: Record<string, unknown>, code = store.mintPairingCode().code) =>
+const pairVia = async (body: Record<string, unknown>, code = store.mintPairingCode({ kind: (body.kind as "console") ?? "console", hostId: body.hostId as string | undefined }).code) =>
   fetch(`${hub.url}/v1/pair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, ...body }) });
 async function mint(kind: "console" | "worker" | "browser", extra: Record<string, unknown> = {}) {
   const r = await pairVia({ label: "dev", kind, ...extra });
@@ -52,7 +53,7 @@ describe("hubd token auth", () => {
   });
 
   it("pairing: code is single-use, expires, and the store keeps only hashes", async () => {
-    const { code } = store.mintPairingCode();
+    const { code } = store.mintPairingCode(CON);
     const ok = await pairVia({ label: "laptop", kind: "console" }, code);
     expect(ok.status).toBe(200);
     const { token, tokenId } = await ok.json();
@@ -67,16 +68,16 @@ describe("hubd token auth", () => {
   });
 
   it("a pairing code is valid just under 10 minutes and expired just over (hub and store share the clock)", async () => {
-    const a = store.mintPairingCode().code;
+    const a = store.mintPairingCode(CON).code;
     clock += PAIRING_TTL_MS - 1000;
     expect((await pairVia({ label: "x", kind: "console" }, a)).status).toBe(200);
-    const b = store.mintPairingCode().code;
+    const b = store.mintPairingCode(CON).code;
     clock += PAIRING_TTL_MS + 1000;
     expect((await pairVia({ label: "x", kind: "console" }, b)).status).toBe(401);
   });
 
   it("redeeming the same code in parallel gives exactly one 200", async () => {
-    const { code } = store.mintPairingCode();
+    const { code } = store.mintPairingCode(CON);
     const rs = await Promise.all(Array.from({ length: 8 }, () => pairVia({ label: "p", kind: "console" }, code)));
     expect(rs.filter((r) => r.status === 200)).toHaveLength(1);
     expect(rs.filter((r) => r.status === 401)).toHaveLength(7);
@@ -85,11 +86,11 @@ describe("hubd token auth", () => {
 
   it("concurrent store writers from two instances lose nothing (pair, redeem, revoke)", async () => {
     const other = createTokenStore(dir, () => clock);
-    const codes = Array.from({ length: 6 }, (_, i) => (i % 2 ? store : other).mintPairingCode().code);
+    const codes = Array.from({ length: 6 }, (_, i) => (i % 2 ? store : other).mintPairingCode(CON).code);
     const ids = codes.map((c, i) => (i % 2 ? other : store).redeem(c, "d", "console").tokenId);
     expect(store.list().map((t) => t.id).sort()).toEqual([...ids].sort());
     other.revoke(ids[0]!);
-    store.redeem(store.mintPairingCode().code, "d", "console");
+    store.redeem(store.mintPairingCode(CON).code, "d", "console");
     expect(store.list().map((t) => t.id)).not.toContain(ids[0]);
     expect(store.list()).toHaveLength(6);
   });
@@ -116,7 +117,7 @@ describe("hubd token auth", () => {
     writeFileSync(store.file, "{not json");
     const r = await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: bearer(token) });
     expect(r.status).toBe(401);
-    expect(() => store.mintPairingCode()).toThrow();
+    expect(() => store.mintPairingCode(CON)).toThrow();
     expect(readFileSync(store.file, "utf8")).toBe("{not json");
   });
 
@@ -150,7 +151,8 @@ describe("hubd token auth", () => {
   });
 
   it("a worker pairing needs a hostId; it is stored on the token and the worker acts as that host", async () => {
-    expect((await pairVia({ label: "w", kind: "worker" })).status).toBe(400);
+    expect(() => store.mintPairingCode({ kind: "worker" })).toThrow(/hostId/); // a worker code is minted for a host
+    expect(() => store.mintPairingCode({ kind: "console", hostId: "x" })).toThrow(/worker/);
     const { token, tokenId } = await mint("worker", { hostId: "sfo-01" });
     expect(store.list().find((x) => x.id === tokenId)).toMatchObject({ kind: "worker", hostId: "sfo-01" });
     const id = hub.authenticate({ headers: { authorization: `Bearer ${token}` } } as never);
@@ -229,9 +231,114 @@ describe("hubd token auth", () => {
     expect((await fetch(`${hub.url}/v1/work?domain=${FIXTURE_DOMAIN}`, { headers: { Authorization: "Bearer bad", "X-API-Key": KEY } })).status).toBe(401);
   });
 
+  it("the code fixes kind and hostId: a mismatch is 401 (and does not consume the code), a match or omission works", async () => {
+    const { code } = store.mintPairingCode({ kind: "worker", hostId: "sfo-01" });
+    expect((await pairVia({ label: "w", kind: "console" }, code)).status).toBe(401);
+    expect((await pairVia({ label: "w", kind: "worker", hostId: "1uk4" }, code)).status).toBe(401); // cannot choose another host
+    expect((await pairVia({ label: "w", hostId: "1uk4" }, code)).status).toBe(401);
+    const ok = await pairVia({ label: "w" }, code); // omitted: taken from the code
+    expect(ok.status).toBe(200);
+    const { tokenId } = (await ok.json()) as { tokenId: string };
+    expect(store.list().find((t) => t.id === tokenId)).toMatchObject({ kind: "worker", hostId: "sfo-01" });
+  });
+
+  it("CLI pair: --kind is required, worker needs --host-id, others refuse it", () => {
+    expect(() => parseArgs(["pair", "--data-dir", "/d"])).toThrow(/--kind/);
+    expect(() => parseArgs(["pair", "--kind", "worker", "--data-dir", "/d"])).toThrow(/--host-id/);
+    expect(() => parseArgs(["pair", "--kind", "console", "--host-id", "x", "--data-dir", "/d"])).toThrow(/only for --kind worker/);
+    expect(parseArgs(["pair", "--kind", "worker", "--host-id", "sfo-01", "--data-dir", "/d"])).toMatchObject({ kind: "worker", hostId: "sfo-01" });
+  });
+
+  it("a worker token's tokenId and hostId land in attribution.jsonl", async () => {
+    const w = await mint("worker", { hostId: "sfo-01" });
+    expect((await createWork(bearer(w.token))).status).toBe(201);
+    const last = readFileSync(join(dir, "auth", "attribution.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+    expect(last).toMatchObject({ tokenId: w.tokenId, hostId: "sfo-01", actor: { id: "sfo-01", kind: "wolf" } });
+  });
+
+  describe("token store lock", () => {
+    const lockPath = () => {
+      mkdirSync(join(dir, "auth"), { recursive: true });
+      return `${store.file}.lock`;
+    };
+    const old = (f: string) => utimesSync(f, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+
+    it("a fresh lock held by someone else means `busy` at once (injectable wait), through the hub and the store", async () => {
+      writeFileSync(lockPath(), "someone-else");
+      const t0 = Date.now();
+      const impatient = createTokenStore(dir, () => clock, { waitMs: 0 });
+      expect(() => impatient.mintPairingCode(CON)).toThrow(/locked/);
+      const code = "x"; // the hub itself fails fast too (default authLockWaitMs 0): 409 busy, retryable, no stall
+      const r = await pairVia({ label: "x", kind: "console" }, code);
+      expect([401, 409]).toContain(r.status);
+      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(readFileSync(lockPath(), "utf8")).toBe("someone-else"); // not stolen, not removed
+    });
+
+    it("a stale lock (old mtime) is broken and the write succeeds", () => {
+      writeFileSync(lockPath(), "dead-holder");
+      old(lockPath());
+      const c = createTokenStore(dir, () => clock, { waitMs: 0 }).mintPairingCode(CON);
+      expect(c.code).toBeTruthy();
+      expect(existsSync(lockPath())).toBe(false); // released
+    });
+
+    it("hub redeem is busy (409, retryable) while another process holds a fresh lock", async () => {
+      const { code } = store.mintPairingCode(CON);
+      writeFileSync(lockPath(), "someone-else");
+      const r = await pairVia({ label: "x", kind: "console" }, code);
+      expect(r.status).toBe(409);
+      expect((await r.json()).retryable).toBe(true);
+      rmSync(lockPath());
+      expect((await pairVia({ label: "x", kind: "console" }, code)).status).toBe(200); // the code survived
+    });
+
+    it("two waiters racing on a stale lock: exactly one breaks it", () => {
+      writeFileSync(lockPath(), "dead-holder");
+      old(lockPath());
+      const results = [tryBreakStaleLock(lockPath(), 10_000), tryBreakStaleLock(lockPath(), 10_000)];
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("breaking a lock that turns out fresh puts it back", () => {
+      writeFileSync(lockPath(), "live-holder"); // fresh: not stale
+      expect(tryBreakStaleLock(lockPath(), 10_000)).toBe(false);
+      expect(readFileSync(lockPath(), "utf8")).toBe("live-holder");
+    });
+
+    it("release only removes a lock that still holds our nonce", () => {
+      const s2 = createTokenStore(dir, () => clock, { waitMs: 0 });
+      // another process replaced our lock mid-operation (we were judged stale): its lock must survive our release
+      const orig = s2.mintPairingCode;
+      void orig;
+      let swapped = false;
+      const c = s2.withLockForTest(() => {
+        rmSync(lockPath());
+        writeFileSync(lockPath(), "other-nonce");
+        swapped = true;
+      });
+      void c;
+      expect(swapped).toBe(true);
+      expect(readFileSync(lockPath(), "utf8")).toBe("other-nonce");
+    });
+  });
+
+  it("flush does not wipe last-used.json while tokens.json is corrupt", async () => {
+    const { tokenId } = await mint("console");
+    store.touch(tokenId);
+    store.flush();
+    const before = readFileSync(store.lastUsedFile, "utf8");
+    expect(before).toContain(tokenId);
+    writeFileSync(store.file, "{corrupt");
+    store.touch(tokenId);
+    store.flush();
+    expect(readFileSync(store.lastUsedFile, "utf8")).toBe(before);
+  });
+
   it("CLI: pair prints a code that pairs; tokens list never shows secrets; tokens revoke removes", async () => {
     const out: string[] = [];
-    await main(["pair", "--data-dir", dir], {}, (m) => out.push(m));
+    await main(["pair", "--kind", "browser", "--data-dir", dir], {}, (m) => out.push(m));
     const code = /pairing code: (\S+)/.exec(out.join("\n"))![1]!;
     const { token, tokenId } = await (await pairVia({ label: "cli", kind: "browser" }, code)).json();
     out.length = 0;

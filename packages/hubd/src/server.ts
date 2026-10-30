@@ -79,6 +79,10 @@ export interface HubOptions {
   authPollMs?: number;
   /** Clock (ms since epoch) for pairing-code expiry and last-used stamps. Tests inject one; default Date.now. */
   now?: () => number;
+  /** How long a token-store mutation waits for the cross-process lock before `busy`, ms. Default 0 (fail fast; never stall the event loop). */
+  authLockWaitMs?: number;
+  /** Age after which a token-store lock is considered abandoned, ms. Default 10000. */
+  authLockStaleMs?: number;
   /** 0 picks an ephemeral port. Default 0. */
   port?: number;
   /** Default 127.0.0.1. */
@@ -134,6 +138,7 @@ const WORK_ID = /^work-[a-z0-9-]+-[a-z0-9]{4,}$/i;
 const retryable = (c: ErrorCode) => c === "busy" || c === "engine_error";
 
 const PAIR_FAILS_PER_MIN = 10;
+const PAIR_LIMITER_MAX_KEYS = 10_000;
 const ACTOR_KEY = ACTOR_HEADER.toLowerCase();
 /** Requests authenticated with a bearer token -> the actor the token maps to. */
 const TOKEN_ACTOR = new WeakMap<object, Actor>();
@@ -316,8 +321,30 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     const digest = (v: string) => createHash("sha256").update(v).digest();
     const expected = opts.apiKey ? digest(opts.apiKey) : undefined;
     const legacyOk = (req: IncomingMessage): boolean => expected !== undefined && timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
-    const pairFailures = new Map<string, number[]>(); // remote address -> times of failed redeems (in memory)
-    const tokens = createTokenStore(opts.dataDir, opts.now);
+    // Failed-redeem limiter, in memory, keyed by the socket peer address (behind a reverse proxy every client shares the proxy's
+    // address; X-Forwarded-For is NOT trusted because anyone could forge it). Only failures are stored; empty entries are deleted,
+    // a sweep runs every minute and the map is capped.
+    const pairFailures = new Map<string, number[]>();
+    const clock = () => (opts.now ?? Date.now)();
+    const pairFailureCount = (addr: string, t: number): number => {
+      const cur = (pairFailures.get(addr) ?? []).filter((x) => t - x < 60_000);
+      if (cur.length === 0) pairFailures.delete(addr);
+      else pairFailures.set(addr, cur);
+      return cur.length;
+    };
+    const recordPairFailure = (addr: string, t: number): void => {
+      // Read the CURRENT list now (not a snapshot from before the body was awaited): parallel requests must not lose counts.
+      const cur = pairFailures.get(addr) ?? [];
+      cur.push(t);
+      pairFailures.set(addr, cur);
+      if (pairFailures.size > PAIR_LIMITER_MAX_KEYS) pairFailures.delete(pairFailures.keys().next().value as string);
+    };
+    const sweeper = setInterval(() => {
+      const t = clock();
+      for (const addr of [...pairFailures.keys()]) pairFailureCount(addr, t);
+    }, 60_000);
+    sweeper.unref();
+    const tokens = createTokenStore(opts.dataDir, opts.now, { waitMs: opts.authLockWaitMs ?? 0, staleMs: opts.authLockStaleMs });
     /** Open SSE responses per token id, so a revoke can close them. */
     const streams = new Map<string, Set<ServerResponse>>();
     const revokeListeners = new Set<(tokenId: string) => void>();
@@ -354,7 +381,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       }
     }, opts.authPollMs ?? 1000);
     watcher.unref();
-    stopWatcher = () => clearInterval(watcher);
+    stopWatcher = () => {
+      clearInterval(watcher);
+      clearInterval(sweeper);
+    };
     tokensFlush = () => tokens.flush();
     /** The shared check for dispatch AND the coming HTTP `upgrade` path. */
     function authenticate(req: IncomingMessage): AuthIdentity | null {
@@ -417,21 +447,19 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       const { params } = m;
       switch (m.name) {
         case "hubPair": {
-          const addr = req.socket.remoteAddress ?? "?";
+          const addr = req.socket.remoteAddress ?? "?"; // the socket peer; X-Forwarded-For is deliberately NOT trusted
           const t = (opts.now ?? Date.now)();
-          const recent = (pairFailures.get(addr) ?? []).filter((x) => t - x < 60_000);
-          pairFailures.set(addr, recent);
-          if (recent.length >= PAIR_FAILS_PER_MIN) {
+          if (pairFailureCount(addr, t) >= PAIR_FAILS_PER_MIN) {
             res.setHeader("Retry-After", "60");
             return send(res, 429, { code: "busy", message: "too many failed pairing attempts; retry in a minute", retryable: true } satisfies ErrorEnvelope);
           }
           const body = parseBody(PairRequestSchema, await readBody(req));
           try {
             const out = tokens.redeem(body.code, body.label, body.kind, body.hostId);
-            console.log(`hubd: paired token ${out.tokenId} kind=${body.kind} label=${JSON.stringify(body.label)}${body.hostId ? ` hostId=${body.hostId}` : ""}`);
-            return send(res, 200, out);
+            console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(body.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
+            return send(res, 200, { token: out.token, tokenId: out.tokenId });
           } catch (e) {
-            if (e instanceof HubError && e.code === "unauthorized") pairFailures.set(addr, [...recent, t]);
+            if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
             throw e;
           }
         }

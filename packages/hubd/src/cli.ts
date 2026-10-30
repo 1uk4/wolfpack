@@ -9,6 +9,9 @@ import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotS
 
 export interface CliArgs {
   command: "serve" | "dev" | "export" | "import" | "pair" | "tokens";
+  /** pair: what the code is for. */
+  kind?: "worker" | "console" | "browser";
+  hostId?: string;
   /** tokens: list | revoke */
   sub?: "list" | "revoke";
   /** tokens revoke: the token id. */
@@ -40,7 +43,8 @@ const USAGE = `usage:
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
   hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
   hubd import --data-dir <dir> --in <file.tar>                restore into a missing or empty dir
-  hubd pair --data-dir <dir>                                  print a single-use pairing code (valid 10 minutes); a device trades it at POST /v1/pair for a token
+  hubd pair --kind worker|console|browser [--host-id <id>] --data-dir <dir>
+                                                              print a single-use pairing code (valid 10 minutes) for that kind of device (--host-id: required for worker, forbidden otherwise); the device trades it at POST /v1/pair for a token
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
 env: HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
@@ -65,6 +69,19 @@ export function parseArgs(argv: string[]): CliArgs {
   const out: CliArgs = { command, port: 3142, host: "127.0.0.1", allowNetwork: false, seedWolves: [], ...(sub ? { sub } : {}), ...(tokenId ? { tokenId } : {}) };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
+    const val0 = () => {
+      const v = rest[++i];
+      if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
+      return v;
+    };
+    if (command === "pair" && (flag === "--kind" || flag === "--host-id")) {
+      const v = val0();
+      if (flag === "--kind") {
+        if (v !== "worker" && v !== "console" && v !== "browser") throw new Error("--kind must be worker, console or browser");
+        out.kind = v;
+      } else out.hostId = v;
+      continue;
+    }
     if ((command === "pair" || command === "tokens") && flag !== "--data-dir") throw new Error(`${command} does not take ${flag}\n${USAGE}`);
     if ((command === "export" || command === "import") && !["--data-dir", command === "export" ? "--out" : "--in"].includes(flag)) throw new Error(`${command} does not take ${flag}\n${USAGE}`);
     const val = () => {
@@ -89,6 +106,11 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if (command === "export" && (!out.dataDir || !out.out)) throw new Error("export requires --data-dir and --out");
   if (command === "import" && (!out.dataDir || !out.in)) throw new Error("import requires --data-dir and --in");
+  if (command === "pair") {
+    if (!out.kind) throw new Error("pair requires --kind worker|console|browser");
+    if (out.kind === "worker" && !out.hostId) throw new Error("pair --kind worker requires --host-id <id>");
+    if (out.kind !== "worker" && out.hostId) throw new Error("--host-id is only for --kind worker");
+  }
   if ((command === "pair" || command === "tokens") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
   if (command === "dev" && !out.snapshot && !out.dataDir) throw new Error("dev requires --snapshot <host> or --data-dir <existing snapshot>");
@@ -109,8 +131,8 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
     return;
   }
   if (args.command === "pair") {
-    const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode();
-    log(`pairing code: ${code}\nsingle-use, expires ${expiresAt} (${PAIRING_TTL_MS / 60000} minutes)`);
+    const { code, expiresAt } = createTokenStore(args.dataDir!).mintPairingCode({ kind: args.kind!, ...(args.hostId ? { hostId: args.hostId } : {}) });
+    log(`pairing code: ${code}\nfor a ${args.kind}${args.hostId ? ` token for host ${args.hostId}` : " token"}; single-use, expires ${expiresAt} (${PAIRING_TTL_MS / 60000} minutes)`);
     return;
   }
   if (args.command === "tokens") {

@@ -8,7 +8,7 @@
  * change by the CLI is seen on the next request. The server also watches the stamp to close SSE streams of revoked tokens.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Actor, TokenKind } from "@wolfpack/protocol";
 import { HubError } from "./errors.js";
@@ -25,8 +25,9 @@ export interface AuthIdentity {
 
 export const PAIRING_TTL_MS = 10 * 60 * 1000;
 const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
+const LOCK_WAIT_MS = 2_000; // default for the CLI; hubd passes 0
 const LAST_USED_FLUSH_MS = 5_000;
+const RACY_MS = 2_000;
 /** The single owner identity for now (console/browser tokens act as this operator). */
 export const OWNER = "owner";
 
@@ -44,6 +45,9 @@ export interface TokenRecord {
 export type TokenView = Omit<TokenRecord, "hash"> & { lastUsedAt: string | null };
 interface PairingRecord {
   hash: string;
+  /** What this code may become: fixed when the code is minted (`hubd pair --kind ... --host-id ...`). */
+  kind?: TokenKind;
+  hostId?: string;
   createdAt: string;
   expiresAt: string;
 }
@@ -85,33 +89,80 @@ function writeAtomic(file: string, text: string): void {
 }
 const save = (file: string, s: StoreFile) => writeAtomic(file, JSON.stringify(s, null, 2) + "\n");
 
-/** Cross-process exclusive lock: create `<file>.lock` with O_EXCL, retry briefly, break a lock older than LOCK_STALE_MS. */
-function withLock<T>(file: string, fn: () => T): T {
+/** Lock options. `waitMs` 0 = fail fast with `busy` (the hub, so it never stalls its event loop); the CLI waits a little. */
+export interface LockOptions {
+  waitMs?: number;
+  staleMs?: number;
+}
+
+/**
+ * Break a stale lock without ever letting two waiters both win: rename it to a name unique to this caller (atomic; exactly one
+ * waiter's rename succeeds, the rest get ENOENT), then check what we moved really was stale. If a live lock slipped in between our
+ * stat and our rename, put it back (link fails if yet another took the path). Returns true when WE removed a stale lock.
+ */
+export function tryBreakStaleLock(lock: string, staleMs: number): boolean {
+  try {
+    if (Date.now() - statSync(lock).mtimeMs <= staleMs) return false;
+  } catch {
+    return false; // gone meanwhile
+  }
+  const moved = `${lock}.${randomBytes(8).toString("hex")}`;
+  try {
+    renameSync(lock, moved);
+  } catch {
+    return false; // another waiter won the break
+  }
+  try {
+    if (Date.now() - statSync(moved).mtimeMs <= staleMs) {
+      try {
+        linkSync(moved, lock); // we grabbed a live lock: restore it
+      } catch {
+        /* someone else already took the path */
+      }
+      return false;
+    }
+    return true;
+  } finally {
+    try {
+      unlinkSync(moved);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Cross-process exclusive lock: `<file>.lock` created O_EXCL holding a random nonce. A lock older than `staleMs` (holder died) is
+ * broken via tryBreakStaleLock. Release removes the lock only while it still holds OUR nonce.
+ */
+function withLock<T>(file: string, fn: () => T, o: LockOptions = {}): T {
   const lock = `${file}.lock`;
+  const waitMs = o.waitMs ?? LOCK_WAIT_MS;
+  const staleMs = o.staleMs ?? LOCK_STALE_MS;
   mkdirSync(dirname(file), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let fd: number | undefined;
+  const nonce = randomBytes(12).toString("hex");
+  const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      fd = openSync(lock, "wx", 0o600);
+      const fd = openSync(lock, "wx", 0o600);
+      try {
+        writeSync(fd, nonce);
+      } finally {
+        closeSync(fd);
+      }
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     }
-    try {
-      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) unlinkSync(lock); // holder died
-    } catch {
-      /* released meanwhile */
-    }
-    if (Date.now() > deadline) throw new HubError("busy", "token store is locked by another process; retry");
-    sleepSync(10 + Math.floor(Math.random() * 20));
+    if (tryBreakStaleLock(lock, staleMs)) continue;
+    if (Date.now() >= deadline) throw new HubError("busy", "token store is locked by another process; retry");
+    sleepSync(Math.min(10 + Math.floor(Math.random() * 20), Math.max(1, deadline - Date.now())));
   }
   try {
     return fn();
   } finally {
-    closeSync(fd);
     try {
-      unlinkSync(lock);
+      if (readFileSync(lock, "utf8") === nonce) unlinkSync(lock);
     } catch {
       /* already broken as stale */
     }
@@ -127,7 +178,9 @@ export function actorOf(t: Pick<TokenRecord, "kind" | "hostId" | "owner">): Acto
   return t.kind === "worker" ? { id: t.hostId ?? "unknown-host", kind: "wolf" } : { id: t.owner, kind: "operator" };
 }
 
-export function createTokenStore(dataDir: string, now: () => number = Date.now) {
+export const HOST_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function createTokenStore(dataDir: string, now: () => number = Date.now, lockOpts: LockOptions = {}) {
   const file = tokensFile(dataDir);
   const lastUsedFile = join(dirname(file), "last-used.json");
   const mutate = <T>(fn: (s: StoreFile) => T): T =>
@@ -139,34 +192,40 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now) 
       } finally {
         if (JSON.stringify(s) !== before) save(file, s); // also persists a prune when the op then throws
       }
-    });
+    }, lockOpts);
 
   // verify(): parsed file cached by stamp.
-  let cache: { stamp: string; tokens: TokenRecord[] } | undefined;
+  let cache: { stamp: string; tokens: TokenRecord[]; ok: boolean } | undefined;
   let warnedStamp = "";
-  const stamp = (): string => {
+  /** mtime/ctime in ns + size + inode (bigint), so a replaced file is not mistaken for the cached one. */
+  const statStamp = (): { stamp: string; ageMs: number } => {
     try {
-      const st = statSync(file);
-      return `${st.mtimeMs}:${st.size}:${st.ino}`;
+      const st = statSync(file, { bigint: true });
+      return { stamp: `${st.mtimeNs}:${st.ctimeNs}:${st.size}:${st.ino}`, ageMs: Date.now() - Number(st.mtimeMs) };
     } catch {
-      return "none";
+      return { stamp: "none", ageMs: Infinity };
     }
   };
-  const readTokens = (): TokenRecord[] => {
-    const st = stamp();
-    if (cache?.stamp === st) return cache.tokens;
+  const stamp = (): string => statStamp().stamp;
+  /** `ok: false` = the file exists but is unreadable/corrupt (tokens read as none). */
+  const readTokensState = (): { tokens: TokenRecord[]; ok: boolean } => {
+    const { stamp: st, ageMs } = statStamp();
+    if (cache?.stamp === st) return { tokens: cache.tokens, ok: cache.ok };
+    let result: { tokens: TokenRecord[]; ok: boolean };
     try {
-      cache = { stamp: st, tokens: load(file).tokens };
-      return cache.tokens;
+      result = { tokens: load(file).tokens, ok: true };
     } catch (e) {
       if (warnedStamp !== st) {
         warnedStamp = st;
         console.error(`hubd: ${file} is unreadable (${e instanceof Error ? e.message : String(e)}); all tokens are refused until it is fixed`);
       }
-      cache = { stamp: st, tokens: [] };
-      return cache.tokens;
+      result = { tokens: [], ok: false };
     }
+    // Racy-git rule: a file modified within RACY_MS may change again without moving the stamp, so do not trust a cache of it.
+    cache = ageMs >= RACY_MS ? { stamp: st, ...result } : undefined;
+    return result;
   };
+  const readTokens = (): TokenRecord[] => readTokensState().tokens;
 
   // lastUsedAt: in memory, flushed (debounced) to last-used.json by the running hub only.
   const lastUsed = new Map<string, string>();
@@ -183,9 +242,11 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now) 
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (!dirty) return;
-    dirty = false;
     try {
-      const live = new Set(readTokens().map((t) => t.id));
+      const state = readTokensState();
+      if (!state.ok) return; // tokens.json unreadable: do not wipe last-used.json; keep the data in memory and retry on the next touch
+      dirty = false;
+      const live = new Set(state.tokens.map((t) => t.id));
       const out: Record<string, string> = {};
       for (const [id, at] of Object.entries({ ...readLastUsed(), ...Object.fromEntries(lastUsed) })) if (live.has(id)) out[id] = at;
       writeAtomic(lastUsedFile, JSON.stringify(out) + "\n");
@@ -197,30 +258,43 @@ export function createTokenStore(dataDir: string, now: () => number = Date.now) 
   return {
     file,
     lastUsedFile,
+    /** @internal TEST-ONLY: run `fn` under the store lock. */
+    withLockForTest<T>(fn: () => T): T {
+      return withLock(file, fn, lockOpts);
+    },
     /** Mint a single-use pairing code (valid PAIRING_TTL_MS). Expired codes are pruned. */
-    mintPairingCode(): { code: string; expiresAt: string } {
+    mintPairingCode(bind: { kind: TokenKind; hostId?: string }): { code: string; expiresAt: string } {
+      if (bind.kind === "worker" && !bind.hostId) throw new HubError("invalid_request", "a worker pairing code needs a hostId");
+      if (bind.kind !== "worker" && bind.hostId) throw new HubError("invalid_request", "only a worker pairing code takes a hostId");
+      if (bind.hostId && !HOST_ID.test(bind.hostId)) throw new HubError("invalid_request", "hostId must be lower-case letters, digits and hyphens");
       const code = randomBytes(12).toString("base64url");
       const expiresAt = new Date(now() + PAIRING_TTL_MS).toISOString();
       mutate((s) => {
         s.pairings = s.pairings.filter((p) => Date.parse(p.expiresAt) > now());
-        s.pairings.push({ hash: sha256(code), createdAt: new Date(now()).toISOString(), expiresAt });
+        s.pairings.push({ hash: sha256(code), kind: bind.kind, ...(bind.hostId ? { hostId: bind.hostId } : {}), createdAt: new Date(now()).toISOString(), expiresAt });
       });
       return { code, expiresAt };
     },
-    /** Exchange a code for a token (atomic under the lock: a code redeems at most once). 401 for unknown/used/expired. */
-    redeem(code: string, label: string, kind: TokenKind, hostId?: string): { token: string; tokenId: string } {
-      if (kind === "worker" && !hostId) throw new HubError("invalid_request", "hostId is required for a worker token");
+    /**
+     * Exchange a code for a token (atomic under the lock: a code redeems at most once). The token's kind and hostId come from the
+     * CODE; `kind` / `hostId` in the request are optional and must match it. 401 for unknown/used/expired/mismatched (a mismatch
+     * does not consume the code).
+     */
+    redeem(code: string, label: string, kind?: TokenKind, hostId?: string): { token: string; tokenId: string; kind: TokenKind; hostId?: string } {
       const token = randomBytes(32).toString("base64url");
       const tokenId = `tok-${randomBytes(5).toString("hex")}`;
       const h = sha256(code);
-      mutate((s) => {
+      return mutate((s) => {
         const live = s.pairings.filter((p) => Date.parse(p.expiresAt) > now());
         const hit = live.find((p) => eq(p.hash, h));
-        s.pairings = live.filter((p) => p !== hit); // changes the file only if something was pruned or consumed
-        if (!hit) throw new HubError("unauthorized", "unknown, used or expired pairing code");
-        s.tokens.push({ id: tokenId, hash: sha256(token), label, kind, ...(hostId ? { hostId } : {}), owner: OWNER, createdAt: new Date(now()).toISOString() });
+        s.pairings = live; // a prune changes the file; a miss without a prune does not
+        if (!hit || !hit.kind) throw new HubError("unauthorized", "unknown, used or expired pairing code");
+        if ((kind !== undefined && kind !== hit.kind) || (hostId !== undefined && hostId !== hit.hostId))
+          throw new HubError("unauthorized", "this pairing code was issued for a different kind or host");
+        s.pairings = live.filter((p) => p !== hit);
+        s.tokens.push({ id: tokenId, hash: sha256(token), label, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}), owner: OWNER, createdAt: new Date(now()).toISOString() });
+        return { token, tokenId, kind: hit.kind, ...(hit.hostId ? { hostId: hit.hostId } : {}) };
       });
-      return { token, tokenId };
     },
     /** Resolve a bearer token (cached by file stamp, so a revoke is seen on the next request). Corrupt file = undefined (401). */
     verify(token: string): TokenRecord | undefined {

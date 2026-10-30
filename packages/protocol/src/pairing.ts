@@ -10,12 +10,12 @@ export const PairRequestSchema = z
     code: z.string().min(1).max(128),
     /** Human label of the device (free text). */
     label: z.string().min(1).max(64),
-    kind: TokenKindSchema,
-    /** The host a worker token belongs to (lower-case letters, digits, hyphens). REQUIRED for kind `worker`; it is that token's actor id. */
+    /** Optional: the kind is FIXED by the code (`hubd pair --kind`). If given it must match, else 401. */
+    kind: TokenKindSchema.optional(),
+    /** Optional: the host is FIXED by the code (`hubd pair --host-id`, worker codes only). If given it must match, else 401. */
     hostId: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(64).optional(),
   })
-  .strict()
-  .refine((v) => v.kind !== "worker" || v.hostId !== undefined, { message: "hostId is required for a worker token", path: ["hostId"] });
+  .strict();
 export type PairRequest = z.infer<typeof PairRequestSchema>;
 
 export const PairResponseSchema = z.object({ token: z.string().min(1), tokenId: z.string().min(1) });

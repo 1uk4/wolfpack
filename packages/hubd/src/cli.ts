@@ -2,9 +2,9 @@
 /** hubd CLI: `hubd serve` and `hubd dev`. Clients authenticate with device tokens (`hubd pair`); the optional LEGACY API key comes from env HUBD_API_KEY only (never argv, never logged). */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { exportHub, importHub } from "./export.js";
-import qr from "qrcode-terminal";
 import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
+import { exportHub, importHub } from "./export.js";
+import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
@@ -104,7 +104,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (flag === "--seed-wolf") out.seedWolves.push(val());
     else if (flag === "--out" && command === "export") out.out = val();
     else if (flag === "--in" && command === "import") out.in = val();
-    else if (flag === "--console-url" && (command === "serve" || command === "dev")) out.consoleUrl = val();
+    else if (flag === "--console-url" && (command === "serve" || command === "dev")) out.consoleUrl = normalizeConsoleUrl(val());
     else if (flag === "--host") out.host = val();
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
@@ -149,6 +149,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (!base) log("no QR code: pass --url <hub base url> (or set HUBD_PUBLIC_URL) to print one");
       else {
         const link = `${base}/pair?code=${encodeURIComponent(code)}`;
+        const { default: qr } = await import("qrcode-terminal"); // lazy: only the browser-pair path needs it
         const art = await new Promise<string>((r) => qr.generate(link, { small: true }, r));
         log(`${art}\n${link}`);
       }
@@ -185,7 +186,7 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
-  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: (args.consoleUrl ?? env.HUBD_CONSOLE_URL)?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

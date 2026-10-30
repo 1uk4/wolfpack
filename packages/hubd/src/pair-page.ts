@@ -6,10 +6,24 @@
  * Without one, the token is saved in this origin's localStorage ("wolfpack.hub.token") and a message says so.
  */
 
+/**
+ * Validate and normalise the console URL (operator config): it must parse, use http: or https:, and is reduced to origin + pathname
+ * (no credentials, query or fragment; no trailing slash). Throws otherwise, so a bad value fails at startup, not in a visitor's browser.
+ */
+export function normalizeConsoleUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    throw new Error(`console URL is not a valid URL: ${JSON.stringify(raw)}`);
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error(`console URL must be http: or https: (got ${u.protocol})`);
+  return (u.origin + u.pathname).replace(/\/+$/, "");
+}
 
-/** `consoleUrl` is operator config (flag/env), embedded as a JSON string literal with `<` escaped so it cannot close the script tag. */
+/** `consoleUrl` is operator config (flag/env), embedded as a JSON string literal with `<`, U+2028 and U+2029 escaped (it cannot close the script tag or break the literal). */
 export function pairPageHtml(consoleUrl?: string): string {
-  const cfg = JSON.stringify({ consoleUrl: consoleUrl ?? null }).replace(/</g, "\\u003c");
+  const cfg = JSON.stringify({ consoleUrl: consoleUrl ?? null }).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pair this browser</title>

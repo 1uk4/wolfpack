@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { seedFixture, FIXTURE_DOMAIN } from "./testing/fixture.js";
-import { main } from "./cli.js";
+import { main, parseArgs } from "./cli.js";
+import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createTokenStore } from "./auth.js";
 import { createHubServer, type HubServer } from "./server.js";
 
@@ -27,6 +28,8 @@ describe("pairing page", () => {
     expect(r.headers.get("content-type")).toContain("text/html");
     expect(r.headers.get("cache-control")).toBe("no-store");
     expect(r.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(r.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(r.headers.get("x-frame-options")).toBe("DENY");
     const html = await r.text();
     expect(html).toContain("/v1/pair");
     expect(html).toContain('"consoleUrl":null');
@@ -34,10 +37,19 @@ describe("pairing page", () => {
   });
 
   it("embeds the configured console URL safely", async () => {
-    hub = await createHubServer({ dataDir: dir, port: 0, consoleUrl: "http://console.ts.net:3000</script>" });
+    hub = await createHubServer({ dataDir: dir, port: 0, consoleUrl: "http://console.ts.net:3000/app/?x=1#f" });
     const html = await (await fetch(`${hub.url}/pair`)).text();
-    expect(html).toContain("http://console.ts.net:3000\\u003c/script>");
+    expect(html).toContain('"consoleUrl":"http://console.ts.net:3000/app"');
     expect(html.match(/<\/script>/g)).toHaveLength(1);
+    expect(pairPageHtml("http://a/\u2028\u2029")).not.toMatch(/[\u2028\u2029]/);
+  });
+
+  it("rejects a bad console URL at startup (server option and CLI flag)", async () => {
+    for (const bad of ["javascript:alert(1)", "ftp://x", "not a url"]) {
+      await expect(createHubServer({ dataDir: dir, port: 0, consoleUrl: bad })).rejects.toThrow(/console URL/);
+      expect(() => parseArgs(["serve", "--data-dir", dir, "--console-url", bad])).toThrow(/console URL/);
+    }
+    expect(normalizeConsoleUrl("https://c.example:8443/")).toBe("https://c.example:8443");
   });
 
   it("the page's request shape pairs a browser token that works on a hub route", async () => {

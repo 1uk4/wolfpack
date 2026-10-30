@@ -8,7 +8,7 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
-import { pairPageHtml } from "./pair-page.js";
+import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -244,6 +244,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 export async function createHubServer(opts: HubOptions): Promise<HubServer> {
+  const consoleUrl = opts.consoleUrl ? normalizeConsoleUrl(opts.consoleUrl) : undefined; // throws on a bad URL before anything starts
   const roots = hubRoots(opts.dataDir);
   mkdirSync(`${opts.dataDir}/ledger`, { recursive: true });
   // hubd is the ONLY writer of the work ledger. Take the cross-process lock before anything listens; a live second hubd on this
@@ -450,14 +451,15 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       const { params } = m;
       switch (m.name) {
         case "hubPairPage": {
-          const html = pairPageHtml(opts.consoleUrl);
+          const html = pairPageHtml(consoleUrl);
           res.writeHead(200, {
             "Content-Type": "text/html; charset=utf-8",
             "Content-Length": Buffer.byteLength(html),
             "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "X-Frame-Options": "DENY",
           });
           return void res.end(html);
         }

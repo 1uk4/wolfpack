@@ -98,7 +98,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     link = new HubLink({
       ...hubCfg,
       kbRevisions: () => kbSync!.revisions(),
-      onWelcome: (w) => kbSync!.setGranted(w.grantedDomains),
+      onWelcome: (w) => kbSync!.applyWelcome(w.grantedDomains),
       onGrants: (d) => kbSync!.setGranted(d),
       onKbChanged: (d, rev, epoch) => kbSync!.notify(d, rev, epoch),
       outbox,
@@ -121,7 +121,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   }
   const server = new WorkerdServer({
     registry: supervisor,
-    health: () => ({ ok: true, wolves: supervisor.status(), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
+    health: () => ({ ok: true, wolves: supervisor.status(), ...(kbSync ? { kb: kbSync.status() } : {}), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
   });
   const url = await server.listen(opts.port ?? 7141, opts.host);
   serverUrl = url;

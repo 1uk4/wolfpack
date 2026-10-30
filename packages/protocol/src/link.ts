@@ -84,8 +84,8 @@ export const LinkWelcomeSchema = z.object({
   /** Informational: wolves whose self-reported domains differ from what the registry grants. The registry decides; the worker never writes domains. */
   domainMismatch: z.array(z.object({ wolf: z.string(), reported: z.array(z.string()), granted: z.array(z.string()) })).default([]),
   hubRevisions: Revisions.default({}),
-  /** Additive: the KB domains the registry grants this host (union over its non-retired wolves). The worker syncs ONLY these. */
-  grantedDomains: z.array(z.string().min(1).max(64)).max(1024).default([]),
+  /** Additive: the KB domains the registry grants this host (union over its non-retired wolves). The worker syncs ONLY these. Absent (older hub, or a registry read failed) = keep the current set; only an explicit array replaces it. */
+  grantedDomains: z.array(z.string().min(1).max(64)).max(1024).optional(),
 });
 /** Additive, hub -> worker: the host's granted KB domain union changed (registry edit, wolf.add accepted, retire). Replaces the previous set. */
 export const LinkGrantsSchema = z.object({ t: z.literal("grants"), domains: z.array(z.string().min(1).max(64)).max(1024) });

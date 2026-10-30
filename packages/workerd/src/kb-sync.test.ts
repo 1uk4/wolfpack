@@ -240,7 +240,7 @@ describe("worker KB sync (hubd + workerd rig)", () => {
     expect(existsSync(join(a.mirrorDir, ".sync", "alpha.json"))).toBe(false);
   });
 
-  it("mass-delete guard: an empty 200 manifest-diff for a populated mirror deletes nothing", async () => {
+  const guardSetup = async () => {
     const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
     for (const id of [E1, E2, "kb-alpha-ccccccc"]) await r.kbWrite("alpha", `entries/${id}.md`, entry(id));
     await online(r);
@@ -249,18 +249,73 @@ describe("worker KB sync (hubd + workerd rig)", () => {
     await settle(r, a.sync, "alpha", 3);
     a.sync.stop();
     const st = stateOf(a.mirrorDir, "alpha");
-    const b = direct(r, ["alpha"], {
-      fetchImpl: (async (u: string, init?: RequestInit) => {
-        if (!u.includes("manifest-diff")) return fetch(u, init);
-        const have = Object.keys((JSON.parse(String(init!.body)) as { files: object }).files);
-        return new Response(JSON.stringify({ domain: "alpha", epoch: st.epoch, revision: 0, files: [], deletes: have.map((path) => ({ path })), pending: [] }), { status: 200 });
-      }) as typeof fetch,
-    }, a.mirrorDir);
+    // the hub now claims the domain is empty
+    const emptyFetch = (async (u: string, init?: RequestInit) => {
+      if (!u.includes("manifest-diff")) return fetch(u, init);
+      const have = Object.keys((JSON.parse(String(init!.body)) as { files: object }).files);
+      return new Response(JSON.stringify({ domain: "alpha", epoch: st.epoch, revision: 0, files: [], deletes: have.map((path) => ({ path })), pending: [] }), { status: 200 });
+    }) as typeof fetch;
+    return { r, a, st, emptyFetch };
+  };
+
+  it("mass-delete guard: no saved state + an empty 200 manifest-diff deletes nothing; status shows the refusals", async () => {
+    const { r, a, emptyFetch } = await guardSetup();
+    rmSync(join(a.mirrorDir, ".sync", "alpha.json"));
+    const b = direct(r, ["alpha"], { fetchImpl: emptyFetch }, a.mirrorDir);
     b.sync.start();
-    await r.eventually(() => (b.sync.status().alpha?.failures ?? 0) >= 2, "guard keeps refusing");
+    await r.eventually(() => (b.sync.status().alpha?.refusals ?? 0) >= 2, "guard keeps refusing");
     expect(b.sync.status().alpha!.lastError).toMatch(/mass-delete guard/);
+    expect(b.sync.status().alpha!.lastRefusalAt).toBeGreaterThan(0);
     expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(3);
-    expect(stateOf(a.mirrorDir, "alpha").rev).toBe(st.rev);
+  });
+
+  it("no saved state + allowMassDelete (or the flag file) lets the delete through, once", async () => {
+    const { r, a, st, emptyFetch } = await guardSetup();
+    rmSync(join(a.mirrorDir, ".sync", "alpha.json"));
+    const b = direct(r, ["alpha"], { fetchImpl: emptyFetch }, a.mirrorDir);
+    b.sync.start();
+    await r.eventually(() => (b.sync.status().alpha?.refusals ?? 0) >= 1, "refused first");
+    b.sync.allowMassDelete("alpha");
+    await r.eventually(() => readdirSync(join(a.mirrorDir, "alpha", "entries")).length === 0, "deleted");
+    await b.sync.idle();
+    expect(stateOf(a.mirrorDir, "alpha").epoch).toBe(st.epoch);
+    // flag file variant
+    writeFileSync(join(a.mirrorDir, "alpha", "entries", `${E1}.md`), entry(E1));
+    writeFileSync(join(a.mirrorDir, "alpha", "entries", `${E2}.md`), entry(E2));
+    rmSync(join(a.mirrorDir, ".sync", "alpha.json"));
+    writeFileSync(join(a.mirrorDir, ".sync", "alpha.allow-mass-delete"), "");
+    const c = direct(r, ["alpha"], { fetchImpl: emptyFetch }, a.mirrorDir);
+    c.sync.start();
+    await r.eventually(() => readdirSync(join(a.mirrorDir, "alpha", "entries")).length === 0 && !existsSync(join(a.mirrorDir, ".sync", "alpha.allow-mass-delete")), "flag consumed, deleted");
+  });
+
+  it("a refused verify diff with saved state is non-fatal: incremental updates continue", async () => {
+    const { r, a, emptyFetch } = await guardSetup();
+    await r.kbWrite("alpha", "entries/kb-alpha-ddddddd.md", entry("kb-alpha-ddddddd"));
+    const b = direct(r, ["alpha"], { fetchImpl: emptyFetch }, a.mirrorDir); // verifyOnStart default true
+    b.sync.start();
+    await settle(r, b.sync, "alpha", 4);
+    expect(b.sync.status().alpha!.refusals).toBe(1);
+    expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(4);
+    await r.kbWrite("alpha", "entries/kb-alpha-eeeeeee.md", entry("kb-alpha-eeeeeee"));
+    b.sync.notify("alpha", 5, "e");
+    await settle(r, b.sync, "alpha", 5);
+    expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(5);
+  });
+
+  it("a welcome without grantedDomains keeps the current set", async () => {
+    const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
+    await r.kbWrite("alpha", `entries/${E1}.md`, entry(E1));
+    await online(r);
+    const a = direct(r, ["alpha"]);
+    a.sync.start();
+    await settle(r, a.sync, "alpha", 1);
+    a.sync.applyWelcome(undefined);
+    await a.sync.idle();
+    expect(a.sync.status().alpha!.active).toBe(true);
+    expect(stateOf(a.mirrorDir, "alpha").active).toBe(true);
+    a.sync.applyWelcome([]);
+    expect(a.sync.status().alpha!.active).toBe(false);
   });
 
   it("registry-only: a domain granted in the registry but absent from wolf.yaml syncs", async () => {

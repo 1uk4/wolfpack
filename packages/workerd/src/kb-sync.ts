@@ -15,6 +15,9 @@
  * TRIGGERS: setGranted() (welcome / grants frame), notify() (kb.changed hint; ignored for unsubscribed domains and for domains in backoff),
  *   and a slow safety poll (which also respects backoff). The first sync of a domain after start, and every 12th poll, ALSO runs a manifest
  *   diff even with a saved revision, so deleted or corrupted mirror files get repaired.
+ * The INCREMENTAL `changes` path is deliberately NOT guarded: its deletes come from the hub's real change log (one row per file actually
+ *   removed), so a legitimate large prune arrives as such; only the manifest diff, which infers deletes from "the hub lacks it", can be fooled
+ *   by an empty/partial hub view.
  * SAFETY: a diff that would delete more than half of the local files (or all of them, when there are 2+) is refused and retried with
  *   backoff (a mass-delete guard against a hub that wrongly reports an empty domain). Paths are KB_SYNC_PATH-checked and every parent
  *   directory is lstat'ed for symlinks before any write or delete. Nothing is written after stop().
@@ -22,7 +25,7 @@
  * REMOVAL: a domain that leaves the subscribed set stops syncing; its mirror is KEPT and marked `active:false` (stale, ignore it).
  */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync } from "node:fs";
+import { existsSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync, lstatSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { KB_SYNC_PATH, KbChangesResponseSchema, KbManifestDiffResponseSchema, type KbSyncFile } from "@wolfpack/protocol";
 
@@ -57,6 +60,9 @@ export interface KbDomainStatus {
   syncing: boolean;
   lastError?: string;
   failures: number;
+  /** Mass-delete guard refusals for this domain since start, and when the last one happened (ms epoch). */
+  refusals: number;
+  lastRefusalAt?: number;
 }
 
 interface DomState {
@@ -65,6 +71,22 @@ interface DomState {
   active: boolean;
 }
 class Retry extends Error {}
+/** The mass-delete guard refused a manifest diff (nothing was changed). */
+class Refused extends Retry {}
+/** AbortSignal.any needs Node >= 20.3 (no `engines` is declared; sfo-01 runs v22): fall back by hand. */
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  const any = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  if (any) return any.call(AbortSignal, signals);
+  const ac = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) {
+      ac.abort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", () => ac.abort(s.reason), { once: true });
+  }
+  return ac.signal;
+}
 /** The domain was unsubscribed or the sync stopped mid-flight: abandon quietly. */
 class Abandon extends Error {}
 
@@ -76,6 +98,8 @@ export class KbSync {
   private readonly failures = new Map<string, number>();
   private readonly errors = new Map<string, string>();
   private readonly full = new Set<string>();
+  private readonly refusals = new Map<string, { n: number; at: number }>();
+  private readonly overrides = new Set<string>();
   private poll?: NodeJS.Timeout;
   private pollTicks = 0;
   private ac = new AbortController();
@@ -135,7 +159,7 @@ export class KbSync {
     for (const d of names) {
       if (!DOMAIN.test(d)) continue;
       const s = this.load(d);
-      out[d] = { active: this.subscribed.has(d), ...(s ? { epoch: s.epoch } : {}), rev: s?.rev ?? 0, syncing: this.running.has(d), ...(this.errors.has(d) ? { lastError: this.errors.get(d) } : {}), failures: this.failures.get(d) ?? 0 };
+      out[d] = { active: this.subscribed.has(d), ...(s ? { epoch: s.epoch } : {}), rev: s?.rev ?? 0, syncing: this.running.has(d), ...(this.errors.has(d) ? { lastError: this.errors.get(d) } : {}), failures: this.failures.get(d) ?? 0, refusals: this.refusals.get(d)?.n ?? 0, ...(this.refusals.has(d) ? { lastRefusalAt: this.refusals.get(d)!.at } : {}) };
     }
     return out;
   }
@@ -159,6 +183,28 @@ export class KbSync {
     this.poll = undefined;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+  }
+
+  /**
+   * Allow ONE manifest diff of `domain` to delete more than half of the local files (a legitimate big prune on a first sync).
+   * Consumed by the first diff that needs it. Also honoured: a flag file `<mirrorDir>/.sync/<domain>.allow-mass-delete`, consumed once.
+   */
+  allowMassDelete(domain: string): void {
+    this.overrides.add(domain);
+    if (this.subscribed.has(domain)) this.syncAll();
+  }
+  private takeOverride(d: string): boolean {
+    if (this.overrides.delete(d)) return true;
+    const f = join(this.o.mirrorDir, ".sync", `${d}.allow-mass-delete`);
+    if (!existsSync(f)) return false;
+    rmSync(f, { force: true });
+    return true;
+  }
+
+  /** A welcome: only an explicit array replaces the set; absent (older hub / hub registry read failed) keeps it and just re-pulls. */
+  applyWelcome(granted: string[] | undefined): void {
+    if (granted) this.setGranted(granted);
+    else this.syncAll();
   }
 
   /** The registry-granted domains for this host (welcome / grants frame). Replaces the previous set. */
@@ -278,7 +324,7 @@ export class KbSync {
         method,
         headers: { Authorization: `Bearer ${this.o.token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.any([this.ac.signal, AbortSignal.timeout(30_000)]),
+        signal: anySignal([this.ac.signal, AbortSignal.timeout(30_000)]),
       });
     } catch (e) {
       throw new Retry(`network: ${(e as Error).message}`);
@@ -319,7 +365,19 @@ export class KbSync {
         if (!c.truncated) return;
       }
     }
-    await this.diffSync(d);
+    try {
+      await this.diffSync(d);
+    } catch (e) {
+      // A refused VERIFY diff (saved state, nothing forced it) is not fatal: the mirror is still consistent with its saved revision, so
+      // drop the verify request and carry on incrementally. Without saved state, or after a hub `reset`, the diff is the only way
+      // forward, so the refusal stands (retry with backoff) until the override is given.
+      if (e instanceof Refused && st && st.rev > 0 && this.full.has(d)) {
+        this.full.delete(d);
+        this.log(`WARNING ${d}: verify diff refused (${e.message}); continuing incrementally. If the prune is legitimate: allowMassDelete("${d}") or create .sync/${d}.allow-mass-delete`);
+        return this.syncOnce(d);
+      }
+      throw e;
+    }
     this.full.delete(d);
   }
 
@@ -338,8 +396,10 @@ export class KbSync {
       if (!r.success) throw new Retry("unexpected manifest-diff response");
       const x = r.data;
       const have = Object.keys(local).length;
-      if (have >= 2 && x.deletes.length * 2 > have) {
-        throw new Retry(`mass-delete guard: the hub's diff would delete ${x.deletes.length} of ${have} local files; refusing (nothing changed)`);
+      if (have >= 2 && x.deletes.length * 2 > have && !this.takeOverride(d)) {
+        const r = this.refusals.get(d);
+        this.refusals.set(d, { n: (r?.n ?? 0) + 1, at: Date.now() });
+        throw new Refused(`mass-delete guard: the hub's diff would delete ${x.deletes.length} of ${have} local files; refusing (nothing changed)`);
       }
       this.applyFiles(d, x.files, x.deletes.map((e) => e.path));
       if (x.pending.length === 0) {

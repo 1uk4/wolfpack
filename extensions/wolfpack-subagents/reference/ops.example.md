@@ -35,7 +35,7 @@ Service/user/home names use the **id**, not the name: `wolf-<id>`.
 - Unit `wolf-<id>.service` (runs `agent/launch.sh` as user `wolf-<id>`, env from `.env`).
 - `systemctl status wolf-<id> --no-pager -n 20`; `systemctl is-active wolf-<id>`
 - `journalctl -u wolf-<id> --since "1 hour ago" --no-pager -n 200` (also `-p err`, `--until`)
-- Agent API service: `wolfpack-agent` (`/opt/wolfpack-agent/wolfpack-agent.cjs`); `journalctl -u wolfpack-agent --since …`
+- Agent API service: `wolfpack-agent` (`/opt/wolfpack-agent/wolfpack-agent.cjs`; its env must set `WOLFPACK_KB_WRITER=1`: it writes the KB tree, so the worker-mirror write guard stays off there); `journalctl -u wolfpack-agent --since …`
 - Other services: `tailscaled`, `ollama` (KB embeddings). `systemctl list-units 'wolf*' --no-pager`.
 - `restart|stop|start|enable|disable|daemon-reload` change state — don't.
 

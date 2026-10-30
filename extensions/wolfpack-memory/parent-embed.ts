@@ -5,6 +5,7 @@
  * $WOLF_DEN/work-spill/<parentId>-<ts>.md (outside KB_BASE) so it can be replayed; it never falls back to a write into the mirror.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkItem, KbRoots } from "@wolfpack/kb/client";
 import { commitWorkItem } from "@wolfpack/kb/client";
@@ -33,29 +34,29 @@ export async function writeParentBody(
   }
   const token = env.WORK_TOKEN ?? "";
   const scrub = (m: string): string => (token ? m.split(token).join("***") : m);
-  if (!token.trim()) {
-    const w = `WORK_ENDPOINT is set but WORK_TOKEN is missing: the Work API will reject the parent summary update`;
-    log(`[work] ${w}`);
-    notify(w, "warning");
-  }
+  const tokenMissing = !token.trim();
+  if (tokenMissing) log(`[work] WORK_ENDPOINT is set but WORK_TOKEN is missing: the Work API will reject the parent summary update`);
   try {
     await (opts.client ?? new WorkClient(env.WORK_ENDPOINT, token)).updateBody(String(parent.id), body);
     return { status: "remote" };
   } catch (e: any) {
     const error = scrub(String(e?.message ?? e));
     let spillPath: string | undefined;
-    if (env.WOLF_DEN) {
-      try {
-        const dir = join(env.WOLF_DEN, "work-spill");
-        mkdirSync(dir, { recursive: true });
-        spillPath = join(dir, `${parent.id}-${(opts.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-")}.md`);
-        writeFileSync(spillPath, body);
-      } catch (se: any) {
-        log(`[work] could not spill parent body: ${scrub(String(se?.message ?? se))}`);
-        spillPath = undefined;
-      }
+    try {
+      const dir = env.WOLF_DEN ? join(env.WOLF_DEN, "work-spill") : join(tmpdir(), "wolfpack-work-spill");
+      mkdirSync(dir, { recursive: true });
+      const safeId = String(parent.id).replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 80);
+      spillPath = join(dir, `${safeId}-${(opts.now?.() ?? new Date()).toISOString().replace(/[:.]/g, "-")}.md`);
+      writeFileSync(spillPath, body);
+    } catch (se: any) {
+      log(`[work] could not spill parent body: ${scrub(String(se?.message ?? se))}`);
+      spillPath = undefined;
     }
-    const msg = `Parent ${parent.id} summary NOT saved: Work API update failed (${error}); not writing into the KB mirror.${spillPath ? ` Body saved to ${spillPath} for replay.` : ""}`;
+    // One notification: failure + (missing token) + where the body went + how to replay it.
+    const msg =
+      `Parent ${parent.id} summary NOT saved: Work API update failed (${error}); not writing into the KB mirror.` +
+      (tokenMissing ? " WORK_TOKEN is missing." : "") +
+      (spillPath ? ` Body saved to ${spillPath}; replay with PATCH /work/${parent.id} {"body": <file contents>}.` : "");
     log(`[work] ${msg}`);
     notify(msg, "error");
     return { status: "failed", spillPath, error };

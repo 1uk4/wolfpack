@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNotHubMirror, findHubMirror, workerdMirrorDir } from "./mirror-guard.js";
@@ -47,6 +47,18 @@ describe("hub mirror guard", () => {
     const cfg = tmp();
     expect(() => assertNotHubMirror(join(cfg, "kb-mirror", "x"), { WORKERD_CONFIG_DIR: cfg, WOLFPACK_KB_WRITER: "1" })).not.toThrow();
   });
+  it("a relative WORKERD_KB_MIRROR warns and falls back to the default dir; commitWorkItem still writes elsewhere", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = tmp(); const kbBase = tmp();
+    vi.stubEnv("WORKERD_KB_MIRROR", "relative/mirror"); vi.stubEnv("WORKERD_CONFIG_DIR", cfg);
+    try {
+      expect(() => commitWorkItem({ kbBase, opsRoot: kbBase, denLocal: kbBase } as any, { id: "work-d-1", domain: "d", kind: "task", title: "t", log: [] } as any, "b")).not.toThrow();
+      expect(existsSync(join(kbBase, "domains", "d", "work", "work-d-1.md"))).toBe(true);
+      // the default mirror still protects
+      expect(() => assertNotHubMirror(join(cfg, "kb-mirror", "x"))).toThrow(/hub KB mirror/);
+    } finally { vi.unstubAllEnvs(); warn.mockRestore(); }
+    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+  });
   it("allows a write elsewhere", () => {
     expect(() => assertNotHubMirror(join(tmp(), "domains", "d"), { WORKERD_CONFIG_DIR: tmp() })).not.toThrow();
   });
@@ -59,5 +71,4 @@ describe("hub mirror guard", () => {
     } finally { if (old === undefined) delete process.env.WORKERD_CONFIG_DIR; else process.env.WORKERD_CONFIG_DIR = old; }
   });
 });
-import { existsSync } from "node:fs";
 function readdirSyncSafe(p: string) { if (existsSync(p)) throw new Error("written"); }

@@ -25,6 +25,21 @@ export function workerdMirrorDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(expandHome(env.WORKERD_CONFIG_DIR || join(homedir(), ".wolfpack", "workerd")), "kb-mirror");
 }
 
+let warned = false;
+/** workerdMirrorDir, but an invalid WORKERD_KB_MIRROR (relative, ...) warns once and falls back to the default dir instead of throwing on every write. */
+function safeMirrorDir(env: NodeJS.ProcessEnv): string {
+  try {
+    return workerdMirrorDir(env);
+  } catch (e) {
+    if (!warned) {
+      warned = true;
+      console.warn(`[kb] ${e instanceof Error ? e.message : e}; using the default mirror dir`);
+    }
+    const { WORKERD_KB_MIRROR: _ignored, ...rest } = env;
+    return workerdMirrorDir(rest);
+  }
+}
+
 /** Fully resolved form of `p`: realpath of the deepest existing part (dangling symlinks followed via readlink) + the not-yet-existing rest. */
 function realish(p: string, depth = 0): string {
   if (depth > 40) return resolve(p);
@@ -74,7 +89,7 @@ function hasWorkerdState(dir: string): boolean {
 export function findHubMirror(target: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.WOLFPACK_KB_WRITER === "1") return undefined;
   const real = realish(target);
-  const configured = realish(workerdMirrorDir(env));
+  const configured = realish(safeMirrorDir(env));
   if (within(real, configured)) return configured;
   let dir = real;
   for (;;) {

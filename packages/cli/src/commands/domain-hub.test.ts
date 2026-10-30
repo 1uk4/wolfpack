@@ -63,7 +63,7 @@ describe("domain add/rm with a hub configured", () => {
 
   it("rm in hub mode treats a hub 404 as success", async () => {
     hubEnv(); h.registry.domains = { olddom: { label: "o", description: "", created: "2026-01-01" } };
-    vi.stubGlobal("fetch", respond(404, { error: "domain olddom not found" }));
+    vi.stubGlobal("fetch", respond(404, { code: "not_found", message: "domain olddom not found" }));
     await domainCmd(["rm", "olddom"], { yes: true } as any);
     expect(h.saved).toHaveBeenCalledTimes(1);
   });

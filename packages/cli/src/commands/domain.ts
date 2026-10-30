@@ -35,7 +35,7 @@ import {
   type DomainEntry,
 } from "../domains.js";
 import { assertNotHubMirror } from "@wolfpack/kb/shared";
-import { hubFromEnv, redactUrl, registerDomainOnHub, removeDomainOnHub } from "../hub-registry.js";
+import { hubFromEnv, redactUrl, getDomainOnHub, scrubHub, registerDomainOnHub, removeDomainOnHub } from "../hub-registry.js";
 import { deployDomainsRegistry } from "../librarian-registry.js";
 import { c } from "../render.js";
 import { prompt, confirm, multiSelect } from "../prompts.js";
@@ -204,7 +204,7 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
     try {
       hubResult = await registerDomainOnHub(hub, { name, label, description, created: entry.created });
     } catch (err) {
-      console.error(c.red(`✗ ${err instanceof Error ? err.message : err}`));
+      console.error(c.red(`✗ ${scrubHub(hub, redactUrl(err instanceof Error ? err.message : String(err)))}`));
       process.exit(1);
     }
   }
@@ -212,6 +212,12 @@ async function domainAdd(name: string | undefined, opts: DomainOpts): Promise<vo
   saveRegistry(reg);
 
   if (hub) {
+    if (hubResult === "exists") {
+      const theirs = await getDomainOnHub(hub, name);
+      if (theirs && ((theirs.label ?? name) !== label || (theirs.description ?? "") !== description)) {
+        console.log(c.yellow(`  note: the hub has label "${theirs.label ?? name}" / description "${theirs.description ?? ""}"; yours differ and were not applied.`));
+      }
+    }
     console.log(hubResult === "exists" ? c.yellow(`· Domain "${name}" is already registered on the hub`) : c.green(`✓ Declared domain "${name}" on the hub`));
     console.log(c.dim("  Local scaffold skipped: the hub creates the domain folder."));
     await offerSubscription(name, opts);
@@ -445,7 +451,7 @@ async function domainRm(name: string | undefined, opts: DomainOpts): Promise<voi
     try {
       hubResult = await removeDomainOnHub(hub, name);
     } catch (err) {
-      console.error(c.red(`✗ ${err instanceof Error ? err.message : err}`));
+      console.error(c.red(`✗ ${scrubHub(hub, redactUrl(err instanceof Error ? err.message : String(err)))}`));
       process.exit(1);
     }
   }

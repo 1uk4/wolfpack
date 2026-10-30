@@ -45,10 +45,18 @@ describe("writeParentBody", () => {
     expect(readdirSync(r.kbBase)).toEqual([]);
     s.close();
   });
-  it("warns when WORK_ENDPOINT is set but WORK_TOKEN is missing", async () => {
-    const s = await stub(401); const logs: string[] = [];
-    await writeParentBody(roots(), parent, "B", { env: { WORK_ENDPOINT: s.url }, log: (m) => logs.push(m), notify: () => {} });
-    expect(logs[0]).toContain("WORK_TOKEN is missing");
+  it("missing token + failure: ONE notification with the spill path and replay hint; no WOLF_DEN spills to tmpdir; id sanitized", async () => {
+    const s = await stub(401); const notes: string[] = []; const logs: string[] = [];
+    const res = await writeParentBody(roots(), { ...parent, id: "../evil/id" }, "B", { env: { WORK_ENDPOINT: s.url }, log: (m) => logs.push(m), notify: (m) => notes.push(m) });
+    const spill = (res as any).spillPath as string;
+    dirs.push(spill);
+    expect(spill.startsWith(join(tmpdir(), "wolfpack-work-spill") + "/")).toBe(true);
+    expect(spill.slice(tmpdir().length)).not.toContain("..");
+    expect(readFileSync(spill, "utf8")).toBe("B");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("WORK_TOKEN is missing");
+    expect(notes[0]).toContain(spill);
+    expect(notes[0]).toContain("PATCH /work/");
     s.close();
   });
   it("writes locally when no endpoint is configured", async () => {

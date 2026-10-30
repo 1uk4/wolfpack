@@ -10,7 +10,7 @@ export interface HubTarget {
 
 /** A non-2xx answer from the hub. */
 export class HubHttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
   }
 }
@@ -21,17 +21,34 @@ export function hubFromEnv(env: Record<string, string | undefined> = process.env
   return baseUrl ? { baseUrl: baseUrl.replace(/\/+$/, ""), token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined } : undefined;
 }
 
+/** Remove URL credentials, the base URL's userinfo and the token from any text shown to the user. */
+export function scrubHub(hub: HubTarget, text: string): string {
+  let out = text.replace(/(\/\/)[^/@\s]*@/g, "$1");
+  if (hub.token) out = out.split(hub.token).join("***");
+  return out;
+}
+
 async function call(hub: HubTarget, method: string, path: string, body?: unknown): Promise<void> {
-  const res = await (hub.fetch ?? fetch)(`${hub.baseUrl}${path}`, {
-    method,
-    headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(15_000),
-  });
+  let res: Response;
+  try {
+    res = await (hub.fetch ?? fetch)(`${hub.baseUrl}${path}`, {
+      method,
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(hub.token ? { Authorization: `Bearer ${hub.token}` } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw new Error(scrubHub(hub, `hub ${method} ${path} failed (${e instanceof Error ? e.message : String(e)})`));
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const j = (await res.json()) as { error?: unknown }; if (j.error) msg += `: ${String(j.error)}`; } catch { /* no body */ }
-    throw new HubHttpError(res.status, `hub ${method} ${path} failed (${msg})`);
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: unknown; code?: unknown; message?: unknown };
+      if (j.error || j.message) msg += `: ${String(j.error ?? j.message)}`;
+      code = [j.code, j.error].find((x) => x === "not_found") as string | undefined;
+    } catch { /* no body */ }
+    throw new HubHttpError(res.status, scrubHub(hub, `hub ${method} ${path} failed (${msg})`), code);
   }
 }
 
@@ -52,7 +69,7 @@ export async function removeDomainOnHub(hub: HubTarget, name: string): Promise<"
     await call(hub, "DELETE", `/v1/registry/domains/${encodeURIComponent(name)}`);
     return "removed";
   } catch (e) {
-    if (e instanceof HubHttpError && e.status === 404) return "absent";
+    if (e instanceof HubHttpError && e.status === 404 && e.code === "not_found") return "absent";
     throw e;
   }
 }
@@ -65,5 +82,20 @@ export function redactUrl(url: string): string {
     return u.toString().replace(/\/+$/, "");
   } catch {
     return url.replace(/\/\/[^/@\s]*@/g, "//").replace(/\/+$/, "");
+  }
+}
+
+/** The hub's label/description for a domain (best effort: undefined on any failure). */
+export async function getDomainOnHub(hub: HubTarget, name: string): Promise<{ label?: string; description?: string } | undefined> {
+  try {
+    const res = await (hub.fetch ?? fetch)(`${hub.baseUrl}/v1/registry/domains/${encodeURIComponent(name)}`, {
+      headers: hub.token ? { Authorization: `Bearer ${hub.token}` } : {},
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return undefined;
+    const j = (await res.json()) as { domain?: { label?: string; description?: string } };
+    return j.domain;
+  } catch {
+    return undefined;
   }
 }

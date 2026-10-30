@@ -6,6 +6,7 @@ import { createTokenStore, PAIRING_TTL_MS } from "./auth.js";
 import { exportHub, importHub } from "./export.js";
 import { normalizeConsoleUrl } from "./pair-page.js";
 import { createHubServer } from "./server.js";
+import { assertSocketPath, parseSocketMode } from "./socket.js";
 import { assertNotLiveMirror, assertSafeDevDataDir, defaultDevDataDir, snapshotState, takeSnapshot } from "./snapshot.js";
 
 export interface CliArgs {
@@ -27,6 +28,12 @@ export interface CliArgs {
   dataDir?: string;
   port: number;
   host: string;
+  /** serve: listen on this unix socket instead of TCP (behind a reverse proxy). Env HUBD_SOCKET when unset. Exclusive with --port/--host. */
+  socket?: string;
+  /** serve: socket file mode, octal, no world bits. Default 0660. Env HUBD_SOCKET_MODE when unset. */
+  socketMode?: number;
+  /** True when --port or --host was given (so --socket can refuse the mix). */
+  tcpExplicit?: boolean;
   snapshot?: string;
   allowNetwork: boolean;
   /** One-time registry seed sources (explicit; used only while the registry file does not exist). */
@@ -43,7 +50,7 @@ export const isLoopback = (h: string): boolean => {
 };
 
 const USAGE = `usage:
-  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1] [--console-url <url>] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
+  hubd serve --data-dir <dir> [--port N] [--host 127.0.0.1 | --socket /abs/path.sock [--socket-mode 0660]] [--console-url <url>] [--seed-domains <domains.yaml>] [--seed-wolf <wolf.yaml>]...
   hubd dev --snapshot <host> [--data-dir <dir>] [--port N] [--allow-network]    pull a read-only copy of <host>, then serve it
   hubd dev --data-dir <dir> [--port N]                        re-serve an earlier snapshot (no pull)
   hubd export --data-dir <dir> --out <file.tar>               write the hub state + manifest (hub must be stopped; creates run/ in <dir> to take the locks, so <dir> must be writable)
@@ -53,7 +60,8 @@ const USAGE = `usage:
                                                               browser: also prints a QR code for <url>/pair?code=<code> (--url, else env HUBD_PUBLIC_URL; no QR when neither is set)
   hubd tokens list --data-dir <dir>                           list device tokens (never the secrets)
   hubd tokens revoke <id> --data-dir <dir>                    revoke a token; a running hubd honours it at once and closes its event streams
-env: HUBD_INBOX_ROOT / HUBD_RECEIPTS_ROOT (librarian inbox + receipts roots, e.g. /home/wolf-W1hOrJ/librarian/inbox; default <data-dir>/kb/ops/contributions and /receipts)
+env: HUBD_SOCKET / HUBD_SOCKET_MODE (serve over a unix socket instead of TCP; not together with --port/--host)
+     HUBD_INBOX_ROOT / HUBD_RECEIPTS_ROOT (librarian inbox + receipts roots, e.g. /home/wolf-W1hOrJ/librarian/inbox; default <data-dir>/kb/ops/contributions and /receipts)
      HUBD_API_KEY (optional LEGACY shared key, >= 16 chars when set; being removed)
 --host other than loopback needs "dev --allow-network" (dev serves production data copies)`;
 
@@ -106,7 +114,9 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (flag === "--out" && command === "export") out.out = val();
     else if (flag === "--in" && command === "import") out.in = val();
     else if (flag === "--console-url" && (command === "serve" || command === "dev")) out.consoleUrl = normalizeConsoleUrl(val());
-    else if (flag === "--host") out.host = val();
+    else if (flag === "--socket" && command === "serve") out.socket = val();
+    else if (flag === "--socket-mode" && command === "serve") out.socketMode = parseSocketMode(val());
+    else if (flag === "--host") (out.host = val(), (out.tcpExplicit = true));
     else if (flag === "--snapshot" && command === "dev") out.snapshot = val();
     else if (flag === "--allow-network" && command === "dev") out.allowNetwork = true;
     else if (flag === "--port") {
@@ -114,6 +124,7 @@ export function parseArgs(argv: string[]): CliArgs {
       const p = /^\d+$/.test(raw) ? Number(raw) : NaN;
       if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error("--port must be an integer from 1 to 65535");
       out.port = p;
+      out.tcpExplicit = true;
     } else throw new Error(`unknown argument ${flag}\n${USAGE}`);
   }
   if (command === "export" && (!out.dataDir || !out.out)) throw new Error("export requires --data-dir and --out");
@@ -125,6 +136,11 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if ((command === "pair" || command === "tokens") && !out.dataDir) throw new Error(`${command} requires --data-dir`);
   if (command === "serve" && !out.dataDir) throw new Error("serve requires --data-dir");
+  if (out.socket !== undefined) {
+    if (out.tcpExplicit) throw new Error("--socket cannot be combined with --port/--host: pick TCP or a unix socket");
+    assertSocketPath(out.socket);
+  }
+  if (out.socketMode !== undefined && out.socket === undefined) throw new Error("--socket-mode needs --socket");
   if (command === "dev" && !out.snapshot && !out.dataDir) throw new Error("dev requires --snapshot <host> or --data-dir <existing snapshot>");
   if (command === "dev" && !isLoopback(out.host) && !out.allowNetwork) throw new Error(`refusing to bind dev mode (production data copy) to non-loopback host ${out.host} without --allow-network`);
   return out;
@@ -187,7 +203,13 @@ export async function main(argv: string[], env = process.env, log: (m: string) =
       if (state === "incomplete") throw new Error(`${dataDir} is an INCOMPLETE snapshot (a pull did not finish); re-run \`hubd dev --snapshot <host> --data-dir ${dataDir}\` to retry, or use a fresh dir`);
     }
   } else dataDir = assertNotLiveMirror(args.dataDir!); // serve: no live mirror/den; /var/wolfpack is allowed (VPS hub)
-  const hub = await createHubServer({ dataDir, apiKey, port: args.port, host: args.host, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
+  const socket = args.socket ?? (env.HUBD_SOCKET?.trim() || undefined);
+  if (socket !== undefined && args.command !== "serve") throw new Error("a unix socket is only supported by serve");
+  if (socket !== undefined && args.tcpExplicit) throw new Error("HUBD_SOCKET cannot be combined with --port/--host: pick TCP or a unix socket");
+  const socketMode = args.socketMode ?? (env.HUBD_SOCKET_MODE?.trim() ? parseSocketMode(env.HUBD_SOCKET_MODE) : undefined);
+  if (socket !== undefined) assertSocketPath(socket);
+  const listen = socket !== undefined ? { socketPath: socket, ...(socketMode !== undefined ? { socketMode } : {}) } : { port: args.port, host: args.host };
+  const hub = await createHubServer({ dataDir, apiKey, ...listen, consoleUrl: args.consoleUrl ?? (env.HUBD_CONSOLE_URL?.trim() ? normalizeConsoleUrl(env.HUBD_CONSOLE_URL) : undefined), inboxRoot: env.HUBD_INBOX_ROOT?.trim() || undefined, receiptsRoot: env.HUBD_RECEIPTS_ROOT?.trim() || undefined, registrySeed: { domainsYaml: args.seedDomains, wolfYamls: args.seedWolves } });
   if (args.command === "dev") log("hubd dev: DEV MODE. Writes are local-only to this snapshot and are NEVER pushed back to the source host.");
   log(`hubd listening on ${hub.url} (data dir ${dataDir})`);
   const stop = () => void hub.close().then(() => process.exit(0));

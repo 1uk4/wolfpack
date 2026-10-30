@@ -35,6 +35,7 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
+import { DEFAULT_SOCKET_MODE, listenOnSocket, removeSocket } from "./socket.js";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -97,6 +98,10 @@ export interface HubOptions {
   port?: number;
   /** Default 127.0.0.1. */
   host?: string;
+  /** Listen on this unix socket (absolute path) instead of TCP; mutually exclusive with port/host. For use behind a reverse proxy such as Caddy. */
+  socketPath?: string;
+  /** Socket file mode. Default 0660; any world bit is refused. */
+  socketMode?: number;
   /** One-time registry seed (explicit paths only; used when the registry file does not exist yet). devices.yaml is never read. */
   registrySeed?: RegistrySeed;
   /** Max time to receive a request body, ms. Default 10000. */
@@ -277,6 +282,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 export async function createHubServer(opts: HubOptions): Promise<HubServer> {
+  if (opts.socketPath !== undefined && (opts.port !== undefined || opts.host !== undefined)) throw new Error("socketPath cannot be combined with port/host");
   const consoleUrl = opts.consoleUrl ? normalizeConsoleUrl(opts.consoleUrl) : undefined; // throws on a bad URL before anything starts
   const roots = hubRoots(opts.dataDir);
   mkdirSync(`${opts.dataDir}/ledger`, { recursive: true });
@@ -706,15 +712,19 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       }
     });
     await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(opts.port ?? 0, host, () => resolve());
+      if (opts.socketPath !== undefined) listenOnSocket(server, opts.socketPath, opts.socketMode ?? DEFAULT_SOCKET_MODE).then(resolve, reject);
+      else {
+        server.once("error", reject);
+        server.listen(opts.port ?? 0, host, () => resolve());
+      }
     });
-    port = (server.address() as AddressInfo).port;
+    if (opts.socketPath === undefined) port = (server.address() as AddressInfo).port;
     revisions.start();
   } catch (e) {
     // Anything between acquire and listening failed. Nothing is queued on this path, so release the lock SYNCHRONOUSLY: a caller
     // that retries the moment this rejects must not still see it held.
     server?.close();
+    if (opts.socketPath !== undefined && server?.listening) removeSocket(opts.socketPath);
     stopWatcher();
     revisions.stop();
     kbWriter?.abort(); // synchronous: a caller that retries the moment this rejects must not see the KB lock held
@@ -725,7 +735,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     dataDir: opts.dataDir,
     roots,
     port,
-    url: `http://${host}:${port}`,
+    url: opts.socketPath !== undefined ? `unix:${opts.socketPath}` : `http://${host}:${port}`,
     get link() {
       return link;
     },
@@ -747,7 +757,10 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         linkContrib?.stop();
         link.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
-        server.close(() => void drained.then(() => resolve()));
+        server.close(() => {
+          if (opts.socketPath !== undefined) removeSocket(opts.socketPath);
+          void drained.then(() => resolve());
+        });
         server.closeIdleConnections?.();
         // bus.closeAll() ended the SSE streams, but a response that has just been ended only counts as idle once its final bytes
         // flush, so the sweep above misses it; sweep again shortly after so shutdown doesn't wait for the 5s forced close.

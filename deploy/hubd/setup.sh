@@ -158,6 +158,15 @@ cmd_setup() {
       fi
     done
   done
+  # Dirs hubd (storeContribution) or Dewey's intake would create inside an inbox lane: _bad/ (quarantine) and _processed/ (handled).
+  # Dewey moves files INTO them (renameSync), so they must be Dewey-writable even if hubd created them first: pre-create, only when missing.
+  for w in "${WOLVES[@]}"; do
+    for sub in _bad _processed; do
+      if [[ -d $INBOX/$w/$sub ]]; then echo "exists: $INBOX/$w/$sub ($(stat -c '%U %a' "$INBOX/$w/$sub"))"; else
+        run install -d -o "$WOLF_USER" -g "$WOLF_USER" -m 0777 "$INBOX/$w/$sub"
+      fi
+    done
+  done
 
   log "env file (written only if missing)"
   if [[ -e $ENV_FILE ]]; then
@@ -181,10 +190,13 @@ cmd_setup() {
     # Work writes (POST /v1/work ...) render domains/<d>/work/<id>.md; with domains/ read-only they fail. Make just those dirs writable.
     local rw=()
     while IFS= read -r d; do rw+=("$d"); done < <(find -L "$DOMAINS" -mindepth 2 -maxdepth 2 -type d -name work 2>/dev/null | sort)
-    echo "hub-writes: work dirs writable: ${rw[*]:-none found}"
-    if ((DRY)); then echo "DRY-RUN: write $DROPIN_DIR/work-writes.conf (BindPaths for the work dirs above)"; else
+    echo "hub-writes (UNTESTED under real systemd): work dirs writable: ${rw[*]:-none found}"
+    if ((${#rw[@]} == 0)); then
+      warn "no domains/*/work dirs found; NOT writing the drop-in (an empty BindPaths= would reset the unit's inbox/receipts binds)"
+    elif ((DRY)); then echo "DRY-RUN: write $DROPIN_DIR/work-writes.conf (BindPaths= and ReadWritePaths= for ${#rw[@]} work dir(s); systemd does not expand globs, re-run after adding a domain or work dir)"; else
       install -d -m 0755 "$DROPIN_DIR"
-      printf '[Service]\nBindPaths=%s\n' "${rw[*]}" >"$DROPIN_DIR/work-writes.conf"
+      # BindPaths= is a list: the drop-in must repeat the unit's own entries, or it would replace them.
+      printf '[Service]\nBindPaths=%s %s %s\nReadWritePaths=%s\n' "$INBOX" "$RECEIPTS" "${rw[*]}" "${rw[*]}" >"$DROPIN_DIR/work-writes.conf"
     fi
   else
     echo "domains/ stays read-only for hubd: work-item writes and KB commits fail by design (use --hub-writes to allow work/ dirs)"
@@ -235,7 +247,7 @@ cmd_rollback() {
 
 cmd_uninstall() {
   log "uninstall hubd (Dewey's dirs are never touched; lane dirs created by setup are left in place)"
-  run systemctl disable --now hubd.service
+  if ((DRY)) || systemctl cat hubd.service >/dev/null 2>&1; then run systemctl disable --now hubd.service; else echo "hubd.service not installed; skipping disable"; fi
   run rm -f "$UNIT"
   run rm -rf "$DROPIN_DIR"
   run systemctl daemon-reload

@@ -21,10 +21,12 @@ Prepared, NOT yet run. Run only after owner confirmation. Never print `/etc/wolf
 - **UMask=0022**, data dir 0700. hubd's contribution files are written with the default mode, so they are 644 and Dewey can read them; Dewey moves/deletes them via write on the 777 lane dir. 0022 does not expose `/var/lib/hubd` (0700 dir) and `tokens.json` is written 0600 explicitly.
 - **Lane dirs**: if hubd creates a NEW `inbox/<wolf>` dir it is hubd-owned 755 and Dewey cannot write into it. `setup.sh` pre-creates `inbox/<wolf>` and `receipts/<wolf>` (owner wolf-W1hOrJ, mode 777) for `--wolf` names (default `1uk4`). **A new wolf needs its lanes created before it contributes** (`setup.sh setup --wolf <name>`, idempotent; or `install -d -o wolf-W1hOrJ -g wolf-W1hOrJ -m 0777 .../inbox/<wolf> .../receipts/<wolf>`).
 
+- **Lane subdirs**: inside an inbox lane, hubd creates `_bad/` (quarantine, `contributions.ts`) and Dewey's intake creates `_bad/` (`intake.ts quarantineBad`) and `_processed/` (`commit.ts markProcessed`, `renameSync` of handled files into it); both use `mkdir -p`, so whoever runs first owns the dir at 755 and the other cannot write into it. `setup.sh` therefore pre-creates `inbox/<wolf>/_bad` and `inbox/<wolf>/_processed` (wolf-W1hOrJ, 777) only when missing. Receipts: Dewey's pipeline writes `receipts/<wolf>/` (`pipeline.ts`); hubd writes nothing there yet, and no subdirs were found. A lane created later by someone else with a different owner/mode needs fixing by hand (`chown wolf-W1hOrJ`, `chmod 777`).
+
 ### What hubd writes into `domains/` (tested on a read-only copy, bundle from this branch)
 - **Startup and serving work**: recovery, the KB revisions scan (`kb-rev/` is under the data dir), the registry (incl. `domains.yaml`, which lives in the hub-owned `kb/base`), pairing, tokens, link, event stream, reads. Verified: `hubd serve` started, scanned 2 domains, answered 401/201 with `domains/` unwritable.
 - **Fails with domains/ read-only**: work-item writes (`POST /v1/work`, patch, claim, graduate…) render `domains/<d>/work/<id>.md` and return **502 engine_error** (EACCES; EROFS under the real sandbox); KB commits (`POST /v1/kb/commits`) write `domains/<d>/…` and fail the same way. Reads of work items are fine.
-- No code change was needed for startup. Decision for the owner: if the hub should take work writes on sfo-01 now, run `setup.sh setup --hub-writes` — it adds a drop-in that makes only `domains/*/work` dirs writable (not tested under real systemd). KB commits stay disabled until the hub is the KB's only writer (then the whole `domains/` bind becomes read-write, a unit change; stop Dewey's sweep writing the same tree first).
+- No code change was needed for startup. Decision for the owner: if the hub should take work writes on sfo-01 now, run `setup.sh setup --hub-writes` — it adds a drop-in that makes only `domains/*/work` dirs writable. **UNTESTED under real systemd, and the owner has decided not to use it for now.** systemd does not expand globs, so the drop-in lists the work dirs found at setup time: after adding a domain or a work dir, re-run `setup --hub-writes`. If no work dirs exist, setup warns and writes no drop-in (an empty `BindPaths=` would drop the inbox/receipts binds). KB commits stay disabled until the hub is the KB's only writer (then the whole `domains/` bind becomes read-write, a unit change; stop Dewey's sweep writing the same tree first).
 - Contributions land in `/var/lib/hubd/kb/ops/contributions/<wolf>/` until ticket 7 (`HUBD_INBOX_ROOT`, `HUBD_RECEIPTS_ROOT`, already set in the env template; this branch ignores them) points them at Dewey's inbox.
 
 ## 0. Build (Mac)
@@ -80,9 +82,15 @@ runuser -u hubd -- find -L /home/wolf-W1hOrJ/knowledge/base/domains -type f ! -r
 runuser -u hubd -- test -w /home/wolf-W1hOrJ/librarian/inbox/1uk4 && echo inbox-lane-write ok
 runuser -u hubd -- test -w /home/wolf-W1hOrJ/librarian/receipts/1uk4 && echo receipts-lane-write ok
 runuser -u hubd -- test ! -r /home/wolf-W1hOrJ/.env && echo secrets-unreadable ok
-# the unit's sandbox itself (read-only KB, writable inbox):
-systemd-run --wait --pipe -p User=hubd -p ProtectHome=tmpfs -p BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains -p BindPaths=/home/wolf-W1hOrJ/librarian/inbox \
+# the unit file itself, and the unit's sandbox (same properties as hubd.service):
+systemd-analyze verify /etc/systemd/system/hubd.service              # no output = ok (warnings about /opt/.../current before install are expected)
+systemd-run --wait --pipe -p User=hubd -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=tmpfs -p PrivateTmp=yes -p PrivateDevices=yes \
+  -p RestrictAddressFamilies="AF_INET AF_INET6 AF_UNIX" -p CapabilityBoundingSet= -p SystemCallFilter=@system-service -p SystemCallErrorNumber=EPERM \
+  -p BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains -p BindPaths="/home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts" \
+  -p ReadWritePaths="/var/lib/hubd /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts" \
   /bin/sh -c 'touch /home/wolf-W1hOrJ/knowledge/base/domains/.p 2>&1 | grep -q "Read-only" && echo kb-ro-in-sandbox ok; touch /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && rm /home/wolf-W1hOrJ/librarian/inbox/1uk4/.p && echo inbox-rw-in-sandbox ok'
+# ExecStartPre address wait works inside the sandbox (no `ip`, reads /proc):
+grep -Fq "|-- 100.120.154.69" /proc/net/fib_trie && echo addr-visible ok
 systemctl is-active wolf-W1hOrJ wolfpack-agent                       # unchanged
 ```
 Contribution mode check (after the first contribution): `stat -c '%U %a' /home/wolf-W1hOrJ/librarian/inbox/1uk4/*` should be `hubd 644`; if it is not readable by Dewey, tell the owner (an explicit file mode would go into ticket 7).
@@ -92,9 +100,9 @@ workerd announces wolves by **name** (`1uk4`), not by id (ddkyhT). Wolves must b
 
 1. A console (owner) token for the registry calls. On sfo-01 (single-use, 10 minutes):
 ```
-umask 077; sudo -u hubd /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd
+umask 077; runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind console --data-dir /var/lib/hubd
 H=http://100.120.154.69:3150
-TOKEN=$(curl -sS -H 'Content-Type: application/json' -X POST $H/v1/pair -d '{"code":"<code>","label":"sfo-admin","kind":"console"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')   # keep in the shell, never echo
+TOKEN=$(curl -sS -H 'Content-Type: application/json' -X POST $H/v1/pair -d '{"code":"<code>","label":"sfo-admin","kind":"console"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')   # keep in the shell, never echo
 A="Authorization: Bearer $TOKEN"; J='Content-Type: application/json'
 ```
 2. Register (each returns 201):
@@ -106,7 +114,7 @@ curl -sS -H "$A" $H/v1/registry/wolves
 ```
 3. Pair the Mac (single-use code for exactly this host id). On sfo-01:
 ```
-sudo -u hubd /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id mac-1uk4 --data-dir /var/lib/hubd
+runuser -u hubd -- /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worker --host-id mac-1uk4 --data-dir /var/lib/hubd
 ```
    On the Mac, within 10 minutes: `workerd pair http://100.120.154.69:3150 <code>` (writes `~/.wolfpack/workerd/hub.json`, mode 0600; plain http is accepted inside Tailscale only; workerd prints a warning).
 4. Start workerd on the Mac as usual. `runWorkerd` reads `hub.json` at startup (`packages/workerd/src/run.ts:61-71`, called from `bin/workerd.ts`) and opens the link.
@@ -116,5 +124,5 @@ sudo -u hubd /usr/bin/node /opt/wolfpack-hubd/current/hubd.mjs pair --kind worke
 
 ## 6. Rollback / removal
 - Bad release: `./setup.sh rollback` (swaps `current` and `previous`).
-- Remove hubd (leaves Dewey, the KB and the lane dirs untouched): `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. It keeps `/var/lib/hubd`, the env file and the user; `uninstall --purge` removes them too (stop first and `hubd export --data-dir /var/lib/hubd --out hub.tar` if the state matters).
+- Remove hubd (leaves Dewey, the KB and the lane dirs untouched): `./setup.sh --dry-run uninstall`, then `./setup.sh uninstall`. It keeps `/var/lib/hubd`, the env file and the user; `uninstall --purge` removes them too (stop first and back the state up if it matters). **`hubd export` does not work on sfo-01**: its tree walk refuses symlinks (`refusing to export a symlink: kb/base/domains`, `export.ts walk`), so it fails safely and never reads Dewey's KB, but it also produces no backup. Back up with the service stopped: `systemctl stop hubd && tar --one-file-system -C /var/lib -cf /root/hubd-state.tar hubd` (GNU tar stores the `domains` symlink as a link, not its contents) then `systemctl start hubd`.
 - No ACLs were set, so nothing in Dewey's tree needs undoing. Pre-created lane dirs are empty and harmless.

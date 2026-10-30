@@ -17,9 +17,9 @@ Group=hubd
 # Root-owned, mode 600; systemd reads it as root before dropping privileges.
 EnvironmentFile=/etc/wolfpack/hubd.env
 # Guards (bash; $$ is a literal $ for systemd): port is numeric, 1024-65535 and not 3141 (wolfpack-agent); bind is IPv4 and not a wildcard.
-ExecStartPre=/bin/bash -c '[[ "$${HUBD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${HUBD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 )) || { echo "bad HUBD_PORT=$${HUBD_PORT} (1024-65535, not 3141)" >&2; exit 1; }; [[ "$${HUBD_HOST}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$$ && "$${HUBD_HOST}" != 0.0.0.0 ]] || { echo "bad HUBD_HOST" >&2; exit 1; }'
-# Wait (up to 30 s) for the bind address to exist.
-ExecStartPre=/bin/bash -c 'for i in $$(seq 1 30); do ip -o -4 addr show | grep -Fq " $${HUBD_HOST}/" && exit 0; sleep 1; done; echo "address $${HUBD_HOST} not present" >&2; exit 1'
+ExecStartPre=/bin/bash -c '[[ "$${HUBD_PORT}" =~ ^[0-9]+$$ ]] && p=$$((10#$${HUBD_PORT})) && (( p >= 1024 && p <= 65535 && p != 3141 )) || { echo "bad HUBD_PORT=$${HUBD_PORT} (1024-65535, not 3141)" >&2; exit 1; }; [[ "$${HUBD_HOST}" =~ ^([0-9]{1,3}[.]){3}[0-9]{1,3}$$ && "$${HUBD_HOST}" != 0.0.0.0 ]] || { echo "bad HUBD_HOST" >&2; exit 1; }'
+# Wait (up to 30 s) for the bind address to exist. Pure bash on /proc (no `ip`: it needs AF_NETLINK, which RestrictAddressFamilies denies).
+ExecStartPre=/bin/bash -c 'for i in $$(seq 1 30); do grep -Fq "|-- $${HUBD_HOST}" /proc/net/fib_trie && exit 0; sleep 1; done; echo "address $${HUBD_HOST} not present" >&2; exit 1'
 ExecStart=@NODE@ /opt/wolfpack-hubd/current/hubd.mjs serve --data-dir ${HUBD_DATA_DIR} --host ${HUBD_HOST} --port ${HUBD_PORT}
 Restart=on-failure
 RestartSec=5
@@ -41,7 +41,7 @@ ProtectHome=tmpfs
 BindReadOnlyPaths=/home/wolf-W1hOrJ/knowledge/base/domains
 # inbox/ and receipts/ are writable (contribution intake; per-wolf lane dirs are pre-created by setup.sh).
 BindPaths=/home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
-ReadWritePaths=/var/lib/hubd
+ReadWritePaths=/var/lib/hubd /home/wolf-W1hOrJ/librarian/inbox /home/wolf-W1hOrJ/librarian/receipts
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

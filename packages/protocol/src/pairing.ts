@@ -18,5 +18,5 @@ export const PairRequestSchema = z
   .strict();
 export type PairRequest = z.infer<typeof PairRequestSchema>;
 
-export const PairResponseSchema = z.object({ token: z.string().min(1), tokenId: z.string().min(1) });
+export const PairResponseSchema = z.object({ token: z.string().min(1), tokenId: z.string().min(1), hostId: z.string().optional() });
 export type PairResponse = z.infer<typeof PairResponseSchema>;

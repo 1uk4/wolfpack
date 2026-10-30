@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { WolfFileSchema } from "@wolfpack/engine";
 import { WolfIdSchema } from "@wolfpack/kb/client";
+import type { LinkWolf } from "@wolfpack/protocol";
 import { RegistryFileSchema, RegistrySubscriptionSchema, RegistryHostSchema, RegistryWolfSchema, RegistryDomainSchema, type RegistryFile } from "@wolfpack/protocol";
 import { loadWorkState } from "@wolfpack/kb/client";
 import type { KbRoots } from "@wolfpack/kb/shared";
@@ -128,6 +129,12 @@ export interface Registry {
   remove(c: Collection, name: string): Promise<string>;
   isRetired(name: string): boolean;
   retire(name: string): Promise<{ wolf: unknown; released: string[] }>;
+  /** Worker link: register `hostId` and its wolves from a hello. Returns the retired wolf names the worker must not serve. */
+  applyHello(hostId: string, wolves: LinkWolf[]): Promise<{ retired: string[] }>;
+  /** Worker link: a wolf appeared on `hostId`. Returns false when it is retired or invalid (not registered). */
+  addWolf(hostId: string, wolf: LinkWolf): Promise<boolean>;
+  /** Worker link: a wolf left `hostId`: its host is cleared, the entry is kept. */
+  removeWolf(hostId: string, name: string): Promise<void>;
   /** Resolves when queued writes are done. */
   idle(): Promise<void>;
 }
@@ -171,11 +178,12 @@ export function createRegistry(opts: RegistryOptions): Registry {
 
   // One queue for every registry write; a failed write does not poison the next.
   let tail: Promise<unknown> = Promise.resolve();
-  function mutate<T>(fn: (draft: RegistryFile) => T): Promise<T> {
+  function mutate<T>(fn: (draft: RegistryFile) => T, skipIfUnchanged = false): Promise<T> {
     const run = tail.then(() => {
       const draft = structuredClone(reg);
       const out = fn(draft);
       resync(draft);
+      if (skipIfUnchanged && JSON.stringify(draft) === JSON.stringify(reg)) return out; // nothing changed: no write
       persist(draft); // if this throws, memory is untouched and still equals disk
       reg = draft; // disk now has the new state: memory must follow it immediately
       regenYaml(draft);
@@ -203,7 +211,53 @@ export function createRegistry(opts: RegistryOptions): Registry {
   const conflict = (m: string) => new HubError("conflict", m);
   const notFound = (c: Collection, n: string) => new HubError("not_found", `${c.replace(/s$/, "")} ${n} not found`);
 
+  /** Register one wolf from a worker link into `d`. Returns false (and logs) when it cannot be registered. */
+  function upsertLinkWolf(d: RegistryFile, hostId: string, w: LinkWolf): boolean {
+    if (!WolfIdSchema.safeParse(w.name).success) {
+      log(`hubd: link ${hostId}: ignoring wolf with invalid name ${JSON.stringify(w.name)}`);
+      return false;
+    }
+    const existing = d.wolves.find((x) => x.name === w.name);
+    if (existing?.status === "retired") return false; // never resurrect
+    const known = new Set(d.domains.map((x) => x.name));
+    const domains = [...new Set(w.domains)].filter((dom) => {
+      if (known.has(dom)) return true;
+      log(`hubd: link ${hostId}: wolf ${w.name} lists unknown domain ${JSON.stringify(dom)}; dropped`);
+      return false;
+    });
+    if (existing) {
+      existing.host = hostId; // operator fields (tiers, workspace, tools, status) stay
+      existing.domains = domains;
+    } else d.wolves.push({ name: w.name, host: hostId, domains, tools: [], status: "active" });
+    return true;
+  }
+  const ensureHost = (d: RegistryFile, hostId: string) => {
+    if (!d.hosts.some((h) => h.name === hostId)) d.hosts.push({ name: hostId });
+  };
+
   return {
+    async applyHello(hostId, wolves) {
+      if (!HOST_NAME.test(hostId)) throw bad("invalid host name");
+      return mutate((d) => {
+        ensureHost(d, hostId);
+        const names = new Set(wolves.map((w) => w.name));
+        const retired = new Set<string>();
+        for (const w of wolves) if (!upsertLinkWolf(d, hostId, w) && d.wolves.find((x) => x.name === w.name)?.status === "retired") retired.add(w.name);
+        // Wolves the hub had on this host but the hello omits: host cleared, entry kept.
+        for (const w of d.wolves) if (w.host === hostId && !names.has(w.name)) delete w.host;
+        return { retired: [...retired] };
+      }, true);
+    },
+    addWolf: (hostId, wolf) =>
+      mutate((d) => {
+        ensureHost(d, hostId);
+        return upsertLinkWolf(d, hostId, wolf);
+      }, true),
+    removeWolf: (hostId, name) =>
+      mutate((d) => {
+        const w = d.wolves.find((x) => x.name === name);
+        if (w && w.host === hostId) delete w.host;
+      }, true),
     list: (c) => items(c).map((x) => strip2(c, x)),
     get(c, name) {
       const x = find(c, name);

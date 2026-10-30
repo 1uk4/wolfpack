@@ -57,6 +57,8 @@ import { createKbWriter, type KbCommitFaults } from "./kb-commits.js";
 import { createKbRevisions, type KbRetention } from "./kb-revisions.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
+import { createLink, type Link, type LinkTimers } from "./link.js";
+import { LINK_PATH } from "@wolfpack/protocol";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
@@ -113,6 +115,8 @@ export interface HubOptions {
   kbSettleMs?: number;
   /** @internal TEST-ONLY: KB change log retention (default 30 days or 10,000 changes, whichever keeps more). */
   kbRetention?: KbRetention;
+  /** @internal TEST-ONLY: shrink the worker-link heartbeat / dead / hello timers. */
+  linkTimers?: Partial<LinkTimers>;
 }
 
 /** Fired after a write appended to the work ledger (inside the write queue, in ledger order). The events ticket subscribes here. */
@@ -137,6 +141,8 @@ export interface HubServer {
   onRevoke(listener: (tokenId: string) => void): () => void;
   /** Scan the KB folders now (on the KB writer queue) and record direct writes as revisions; `prune` applies retention too. Resolves when done. */
   scanKb(opts?: { settle?: boolean; prune?: boolean }): Promise<void>;
+  /** The worker link (GET /v1/link): presence, closeByToken/closeByHost, sendToWolf. */
+  readonly link: Link;
   readonly dataDir: string;
   readonly roots: KbRoots;
   /** Base URL once listening. */
@@ -336,6 +342,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
   let stopWatcher: () => void = () => {};
   let tokensFlush: () => void = () => {};
   let authenticateFn!: (req: IncomingMessage) => AuthIdentity | null;
+  let link!: Link;
   let onRevokeFn!: (l: (tokenId: string) => void) => () => void;
   const host = opts.host ?? "127.0.0.1";
   try {
@@ -432,6 +439,8 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       revokeListeners.add(l);
       return () => void revokeListeners.delete(l);
     };
+    link = createLink({ authenticate, registry, timers: opts.linkTimers });
+    revokeListeners.add((id) => link.closeByToken(id));
     async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
       if (r.op === "get") return send(res, 200, { [singular(r.c)]: registry.get(r.c, params.name!) });
@@ -505,7 +514,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           try {
             const out = tokens.redeem(body.code, body.label, body.kind, body.hostId);
             console.log(`hubd: paired token ${out.tokenId} kind=${out.kind} label=${JSON.stringify(body.label)}${out.hostId ? ` hostId=${out.hostId}` : ""}`);
-            return send(res, 200, { token: out.token, tokenId: out.tokenId });
+            return send(res, 200, { token: out.token, tokenId: out.tokenId, ...(out.hostId ? { hostId: out.hostId } : {}) });
           } catch (e) {
             if (e instanceof HubError && e.code === "unauthorized") recordPairFailure(addr, t);
             throw e;
@@ -641,6 +650,13 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         else res.end();
       });
     });
+    server.on("upgrade", (req, socket, head) => {
+      if ((req.url ?? "").split("?")[0] === LINK_PATH) link.handleUpgrade(req, socket, head);
+      else {
+        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        socket.destroy();
+      }
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(opts.port ?? 0, host, () => resolve());
@@ -662,6 +678,9 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     roots,
     port,
     url: `http://${host}:${port}`,
+    get link() {
+      return link;
+    },
     authenticate: (req) => authenticateFn(req),
     onRevoke: (l) => onRevokeFn(l),
     emitKbChanged: (ids, domain) => bus.emitKbChanged(ids, domain),
@@ -677,6 +696,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         stopWatcher();
         tokensFlush();
         bus.closeAll();
+        link.closeAll();
         // 2. stop listening and drop idle connections; in-flight requests finish and get their responses;
         server.close(() => void drained.then(() => resolve()));
         server.closeIdleConnections?.();

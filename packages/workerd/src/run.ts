@@ -1,6 +1,10 @@
 import { discoverWolves } from "@wolfpack/engine";
 import { startSharedWorkServer, type SharedWorkServer, type StartWorkServer } from "@wolfpack/harness/sandbox";
 import { WorkerdServer } from "./proxy.js";
+import { HubLink, type LinkStatus } from "./link.js";
+import { loadHubConfig, type HubConfig } from "./hub-config.js";
+import { startWakeMonitor, type WakeOptions } from "./wake.js";
+import type { LinkWolf } from "@wolfpack/protocol";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 
 export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
@@ -11,11 +15,22 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   only?: string[];
   /** Test seam: how the shared sandbox work server is started (default: the local work server). */
   startWorkServer?: StartWorkServer;
+  /** Hub link config. Default: ~/.wolfpack/workerd/hub.json when paired; none = no link. */
+  hub?: HubConfig | false;
+  /** Config dir for hub.json (default ~/.wolfpack/workerd). */
+  configDir?: string;
+  /** Laptop flag for presence (clean close = asleep). Default: macOS. */
+  laptop?: boolean;
+  /** Test seams for the link. */
+  linkOptions?: { baseMs?: number; capMs?: number; rand?: () => number };
+  wake?: Partial<WakeOptions>;
 }
 
 export interface RunningWorkerd {
   url: string;
   supervisor: Supervisor;
+  /** The hub link, when paired. */
+  link?: HubLink;
   server: WorkerdServer;
   /** Discovery problems (broken wolf.yaml files), already logged. */
   errors: string[];
@@ -43,18 +58,38 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     }
   }
   const supervisor = new Supervisor({ ...opts, wolves, log });
+  const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
+  const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
+  let link: HubLink | undefined;
+  let wake: { stop(): void } | undefined;
+  if (hubCfg) {
+    link = new HubLink({
+      ...hubCfg,
+      laptop: opts.laptop,
+      wolves: () => supervisor.configs().map(linkWolf),
+      log,
+      onRetired: (names) => log(`[workerd] hub retired wolves: ${names.join(", ")}`),
+      ...opts.linkOptions,
+    });
+    supervisor.onChange((e) => (e.type === "add" ? link!.wolfAdded(linkWolf(e.config)) : link!.wolfRemoved(e.name)));
+    wake = startWakeMonitor({ ...opts.wake, onWake: (reason) => (log(`[workerd] ${reason}: reconnecting hub link`), link!.kick()) });
+  }
   const server = new WorkerdServer({
     registry: supervisor,
-    health: () => ({ ok: true, wolves: supervisor.status() }),
+    health: () => ({ ok: true, wolves: supervisor.status(), ...(link ? { hub: link.status() satisfies LinkStatus } : {}) }),
   });
   const url = await server.listen(opts.port ?? 7141, opts.host);
   supervisor.start();
+  link?.start();
   return {
     url,
     supervisor,
+    link,
     server,
     errors,
     async close() {
+      wake?.stop();
+      await link?.stop();
       await server.close();
       await supervisor.stop();
       for (const w of workServers) await w.close().catch(() => {});

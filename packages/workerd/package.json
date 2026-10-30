@@ -24,6 +24,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@wolfpack/client": "*",
-    "typescript": "^5.7.0"
+    "@wolfpack/hubd": "*",
+    "typescript": "^5.7.0",
+    "ws": "^8.22.0"
   }
 }

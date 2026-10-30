@@ -411,6 +411,10 @@ export const ROUTES = {
    * The hub registry: hosts, wolves, domains, subscriptions (subscription id = `<wolf>:<domain>`). Reads: any actor. Writes
    * (create/update/delete/retire) need an operator actor, else 403 `forbidden`. Creating a wolf writes ONLY the entry (no provisioning).
    * `registryRetireWolf` sets status retired and releases every claim the wolf holds (work.unbound); `released` lists the item ids.
+   * Retire order: the registry entry is written FIRST (status retired), the claims are released SECOND. If the release fails the
+   * answer is an error saying the wolf is retired but claims remain; retrying retire is safe (it releases what is still held).
+   * A retired wolf's `hubClaimWork` is 403 `forbidden`; a wolf with no registry entry is unaffected. Creating a wolf with a `status`
+   * field is 400; deleting a wolf that holds claims is 409 `conflict` (retire it first).
    * Every write regenerates domains.yaml in the hub data dir. 404 unknown name, 409 `conflict` on a duplicate create.
    */
   registryListHosts: { scope: "hub", method: "GET", path: "/v1/registry/hosts", response: { kind: "json", schema: R.RegistryHostsResponseSchema }, status: [200], error: err },

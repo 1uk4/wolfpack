@@ -45,16 +45,21 @@ import {
 import { createEventBus } from "./events.js";
 import { loadWorkState } from "@wolfpack/kb/client";
 import { createRegistry, releaseWolfClaims, type Collection, type RegistrySeed } from "./registry.js";
+import { loadWorkState } from "@wolfpack/kb/client";
 import { listWorkItems, readWorkRecordFor } from "./work-reads.js";
 
 const singular = (c: Collection) => (c === "wolves" ? "wolf" : c.slice(0, -1));
-const REGISTRY_ROUTE = /^registry(List|Get|Create|Update|Delete|Retire)(Host|Wolves|Wolf|Domain|Subscription)s?$/;
-function registryRoute(name: string): { c: Collection; op: string } | undefined {
-  const m = REGISTRY_ROUTE.exec(name);
-  if (!m) return undefined;
-  const c = ({ Host: "hosts", Wolves: "wolves", Wolf: "wolves", Domain: "domains", Subscription: "subscriptions" } as const)[m[2] as "Host"];
-  return { c, op: m[1]!.toLowerCase() };
+type RegRoute = { c: Collection; op: "list" | "get" | "create" | "update" | "delete" | "retire" };
+const REGISTRY_ROUTES: Record<string, RegRoute> = {};
+for (const [c, S, P] of [["hosts", "Host", "Hosts"], ["wolves", "Wolf", "Wolves"], ["domains", "Domain", "Domains"], ["subscriptions", "Subscription", "Subscriptions"]] as const) {
+  REGISTRY_ROUTES[`registryList${P}`] = { c, op: "list" };
+  REGISTRY_ROUTES[`registryGet${S}`] = { c, op: "get" };
+  REGISTRY_ROUTES[`registryCreate${S}`] = { c, op: "create" };
+  REGISTRY_ROUTES[`registryUpdate${S}`] = { c, op: "update" };
+  REGISTRY_ROUTES[`registryDelete${S}`] = { c, op: "delete" };
 }
+REGISTRY_ROUTES.registryRetireWolf = { c: "wolves", op: "retire" };
+const registryRoute = (name: string): RegRoute | undefined => REGISTRY_ROUTES[name];
 
 export const API_KEY_HEADER = "x-api-key";
 
@@ -245,6 +250,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     registry = createRegistry({
       dataDir: opts.dataDir,
       seed: opts.registrySeed,
+      heldBy: (wolf) => [...loadWorkState(roots).values()].filter((i) => i.boundBy === wolf).map((i) => i.id as string),
       releaseClaims: (wolf) => writeWork({ id: "system", kind: "system" }, () => releaseWolfClaims(roots, wolf)),
     });
   } catch (e) {
@@ -260,7 +266,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
     const expected = digest(opts.apiKey);
     const authed = (req: IncomingMessage): boolean => timingSafeEqual(digest(String(req.headers[API_KEY_HEADER] ?? "")), expected);
 
-    async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: { c: Collection; op: string }, params: Record<string, string>): Promise<void> {
+    async function registryDispatch(req: IncomingMessage, res: ServerResponse, r: RegRoute, params: Record<string, string>): Promise<void> {
       if (r.op === "list") return send(res, 200, { [r.c]: registry.list(r.c) });
       if (r.op === "get") return send(res, 200, { [singular(r.c)]: registry.get(r.c, params.name!) });
       const actor = writeActor(req);
@@ -346,7 +352,11 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
           const actor = writeActor(req);
           const wolf = parseWolfId(actor);
           if (!WORK_ID.test(params.id)) throw new HubError("invalid_request", "malformed work item id");
-          const item = await writeWork(actor, () => claimItem(roots, params.id, wolf));
+          // Checked inside the queue, so it is ordered against a retire. A wolf with no registry entry is not refused (registry optional until cutover).
+          const item = await writeWork(actor, () => {
+            if (registry.isRetired(wolf)) throw new HubError("forbidden", `wolf ${wolf} is retired and cannot claim work`);
+            return claimItem(roots, params.id, wolf);
+          });
           return send(res, 200, { item });
         }
         case "hubUnclaimWork": {

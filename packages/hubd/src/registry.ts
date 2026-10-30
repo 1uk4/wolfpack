@@ -34,6 +34,19 @@ export interface RegistryOptions {
   seed?: RegistrySeed;
   /** Release every claim held by `wolf` (hub work writer queue); returns the item ids released. */
   releaseClaims: (wolf: string) => Promise<string[]>;
+  /** Item ids `wolf` currently holds (sync read of the work state); used to refuse deleting a wolf that still holds claims. */
+  heldBy?: (wolf: string) => string[];
+  /** Log sink (seed applied, domains.yaml regeneration failures). Default console. */
+  log?: (m: string) => void;
+  /** @internal TEST-ONLY seam: replaces the atomic domains.yaml write (failure injection). */
+  writeDomainsYaml?: (file: string, text: string) => void;
+}
+
+/** Mirrors the CLI's `assertValidDomainName` (packages/cli/src/domains.ts): hubd does not depend on the cli package. */
+const RESERVED_DOMAINS = new Set(["_unclassified", "entries", "registry", "domains"]);
+export function assertValidDomainName(name: string): void {
+  if (!DOMAIN_NAME.test(name)) throw bad(`invalid domain name "${name}" (lower-case letters, digits, hyphens, 2-40 chars, no leading/trailing hyphen)`);
+  if (RESERVED_DOMAINS.has(name)) throw bad(`"${name}" is a reserved name and cannot be a domain`);
 }
 
 const DOMAIN_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -58,6 +71,7 @@ export function buildSeed(seed: RegistrySeed): RegistryFile {
       throw bad(`seed domains.yaml unreadable: ${(e as Error).message.split("\n")[0]}`);
     }
     for (const [name, v] of Object.entries(doc.domains ?? {})) {
+      assertValidDomainName(name);
       const str = (x: unknown) => (x === undefined || x === null || x === "" ? undefined : String(x));
       reg.domains.push(strip({ name, label: str(v?.label), description: str(v?.description), color: str(v?.color), created: str(v?.created) }));
     }
@@ -75,6 +89,11 @@ export function buildSeed(seed: RegistrySeed): RegistryFile {
     if (!WolfIdSchema.safeParse(w.name).success) throw bad(`seed wolf name "${w.name}" is not a valid wolf id`);
     if (reg.wolves.some((x) => x.name === w.name)) throw bad(`seed wolf "${w.name}" appears twice`);
     reg.wolves.push(strip({ name: w.name, domains: w.domains, tools: w.tools, workspace: w.workspace, tiers: w.tiers, status: "active" as const }));
+  }
+  for (const w of reg.wolves) {
+    for (const d of w.domains) {
+      if (!reg.domains.some((x) => x.name === d)) throw bad(`seed wolf "${w.name}" subscribes to domain "${d}", which is not in the seeded domains`);
+    }
   }
   resync(reg);
   return reg;
@@ -107,6 +126,7 @@ export interface Registry {
   create(c: Collection, body: unknown): Promise<unknown>;
   update(c: Collection, name: string, body: Record<string, unknown>): Promise<unknown>;
   remove(c: Collection, name: string): Promise<string>;
+  isRetired(name: string): boolean;
   retire(name: string): Promise<{ wolf: unknown; released: string[] }>;
   /** Resolves when queued writes are done. */
   idle(): Promise<void>;
@@ -114,19 +134,39 @@ export interface Registry {
 
 export function createRegistry(opts: RegistryOptions): Registry {
   const file = registryFile(opts.dataDir);
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const writeYaml = opts.writeDomainsYaml ?? atomicWrite;
+  const yamlFile = domainsYamlFile(opts.dataDir);
   let reg: RegistryFile;
   if (existsSync(file)) {
-    const p = RegistryFileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
-    if (!p.success) throw new Error(`hubd: registry file is invalid: ${p.error.issues[0]?.message}`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch (e) {
+      throw new Error(`hubd: registry file ${file} is not valid JSON: ${(e as Error).message}`);
+    }
+    const p = RegistryFileSchema.safeParse(parsed);
+    if (!p.success) throw new Error(`hubd: registry file ${file} is invalid: ${p.error.issues[0]?.path.join(".")}: ${p.error.issues[0]?.message}`);
     reg = p.data;
   } else if (opts.seed && (opts.seed.domainsYaml || opts.seed.wolfYamls?.length)) {
     reg = buildSeed(opts.seed);
-    persist(reg);
+    atomicWrite(file, JSON.stringify(reg, null, 2) + "\n");
+    log(`hubd: registry seeded (${reg.domains.length} domains, ${reg.wolves.length} wolves) into ${file}`);
   } else reg = empty();
+  // registry.json is the source of truth; domains.yaml is derived. Regenerate it at every startup so a crash between the two
+  // renames, or a lost or hand-edited domains.yaml, is repaired. Skipped for a brand-new empty registry (no file yet).
+  if (existsSync(file)) writeYaml(yamlFile, renderDomainsYaml(reg));
 
+  /** Persist registry.json (the commit point). The caller flips in-memory state right after; domains.yaml is derived and best effort. */
   function persist(next: RegistryFile): void {
     atomicWrite(file, JSON.stringify(next, null, 2) + "\n");
-    atomicWrite(domainsYamlFile(opts.dataDir), renderDomainsYaml(next));
+  }
+  function regenYaml(next: RegistryFile): void {
+    try {
+      writeYaml(yamlFile, renderDomainsYaml(next));
+    } catch (e) {
+      log(`hubd: domains.yaml regeneration failed (will retry on the next registry write or at startup): ${(e as Error).message}`);
+    }
   }
 
   // One queue for every registry write; a failed write does not poison the next.
@@ -136,8 +176,9 @@ export function createRegistry(opts: RegistryOptions): Registry {
       const draft = structuredClone(reg);
       const out = fn(draft);
       resync(draft);
-      persist(draft);
-      reg = draft;
+      persist(draft); // if this throws, memory is untouched and still equals disk
+      reg = draft; // disk now has the new state: memory must follow it immediately
+      regenYaml(draft);
       return out;
     });
     tail = run.catch(() => {});
@@ -179,6 +220,8 @@ export function createRegistry(opts: RegistryOptions): Registry {
           return h;
         }
         if (c === "wolves") {
+          // A new wolf is always active; a `status` in the body is refused (retire has its own route).
+          if (body && typeof body === "object" && "status" in body) throw bad("status cannot be set on create (new wolves are active; use retire)");
           const w = strip(parse(RegistryWolfSchema, body));
           checkWolf(w, d);
           if (d.wolves.some((x) => x.name === w.name)) throw conflict(`wolf ${w.name} exists`);
@@ -187,7 +230,7 @@ export function createRegistry(opts: RegistryOptions): Registry {
         }
         if (c === "domains") {
           const dom = strip(parse(RegistryDomainSchema, body));
-          if (!DOMAIN_NAME.test(dom.name)) throw bad("invalid domain name (lower-case letters, digits, hyphens, 2-40 chars)");
+          assertValidDomainName(dom.name);
           if (d.domains.some((x) => x.name === dom.name)) throw conflict(`domain ${dom.name} exists`);
           d.domains.push({ ...dom, created: dom.created ?? today() });
           return d.domains.at(-1);
@@ -229,6 +272,10 @@ export function createRegistry(opts: RegistryOptions): Registry {
         const list = d[c] as { name: string }[];
         const i = list.findIndex((x) => x.name === name);
         if (i < 0) throw notFound(c, name);
+        if (c === "wolves") {
+          const held = opts.heldBy?.(name) ?? [];
+          if (held.length) throw conflict(`wolf ${name} still holds ${held.length} claim(s); retire it first (retire releases them)`);
+        }
         if (c === "hosts" && d.wolves.some((w) => w.host === name)) throw conflict(`host ${name} still has wolves`);
         if (c === "domains" && d.wolves.some((w) => w.domains.includes(name))) throw conflict(`domain ${name} still has subscribers`);
         list.splice(i, 1);
@@ -242,9 +289,16 @@ export function createRegistry(opts: RegistryOptions): Registry {
         return structuredClone(w);
       });
       // Safe to repeat: a retry after a partial failure releases whatever is still held.
-      const released = await opts.releaseClaims(name);
+      let released: string[];
+      try {
+        released = await opts.releaseClaims(name);
+      } catch (e) {
+        const detail = e instanceof HubError ? e.message : "internal error";
+        throw new HubError("engine_error", `wolf ${name} is retired but its claims were not all released (${detail}); retrying retire is safe`);
+      }
       return { wolf, released };
     },
+    isRetired: (name) => reg.wolves.find((w) => w.name === name)?.status === "retired",
     idle: () => tail.then(() => {}),
   };
 }

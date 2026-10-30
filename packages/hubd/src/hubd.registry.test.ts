@@ -1,5 +1,5 @@
 /** Registry: one-time seed, domains.yaml regeneration (parsed by the existing readers), create/retire wolf, claim release. */
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
@@ -8,6 +8,7 @@ import { ACTOR_HEADER } from "@wolfpack/protocol";
 import { loadWorkState, stageWork } from "@wolfpack/kb/client";
 import { createWork } from "@wolfpack/kb/client";
 import { readDomainRegistry } from "@wolfpack/kb/shared";
+import { createRegistry } from "./registry.js";
 import { createHubServer, type HubServer } from "./server.js";
 import { domainsYamlFile, hubRoots, registryFile } from "./layout.js";
 import { FIXTURE_DOMAIN, seedFixture } from "./testing/fixture.js";
@@ -138,5 +139,132 @@ describe("hub registry", () => {
     // the failed start released the writer lock
     const { hub } = await start(dir);
     expect(hub.url).toBeTruthy();
+  });
+
+  it("restart regenerates a deleted or corrupted domains.yaml from registry.json", async () => {
+    const dir = mkdir();
+    const a = await start(dir);
+    await a.call("POST", "/v1/registry/domains", { name: "docs", label: "Docs", description: "d" });
+    const good = readFileSync(domainsYamlFile(dir), "utf8");
+    await a.hub.close();
+    servers.pop();
+    rmSync(domainsYamlFile(dir));
+    const b = await start(dir);
+    expect(readFileSync(domainsYamlFile(dir), "utf8")).toBe(good);
+    await b.hub.close();
+    servers.pop();
+    writeFileSync(domainsYamlFile(dir), "garbage: [");
+    await start(dir);
+    expect(readFileSync(domainsYamlFile(dir), "utf8")).toBe(good);
+  });
+
+  it("a corrupt registry.json fails startup with an error naming the file, and releases the lock", async () => {
+    const dir = mkdir();
+    mkdirSync(join(dir, "registry"), { recursive: true });
+    writeFileSync(registryFile(dir), "{not json");
+    await expect(createHubServer({ dataDir: dir, apiKey: KEY })).rejects.toThrow(/registry\.json is not valid JSON/);
+    rmSync(registryFile(dir));
+    await start(dir);
+  });
+
+  it("memory follows disk when the domains.yaml regeneration fails; the next write or restart repairs it", async () => {
+    const dir = mkdir();
+    const logs: string[] = [];
+    let fail = false;
+    const real = (f: string, t: string) => {
+      mkdirSync(join(f, ".."), { recursive: true });
+      writeFileSync(f, t);
+    };
+    const reg = createRegistry({ dataDir: dir, releaseClaims: async () => [], log: (m) => logs.push(m), writeDomainsYaml: (f, t) => (fail ? (() => { throw new Error("disk full"); })() : real(f, t)) });
+    fail = true;
+    await reg.create("domains", { name: "docs", label: "Docs" }); // resolves: registry.json committed
+    expect(reg.list("domains")).toHaveLength(1);
+    expect(JSON.parse(readFileSync(registryFile(dir), "utf8")).domains).toHaveLength(1);
+    expect(logs.some((l) => /regeneration failed.*disk full/.test(l))).toBe(true);
+    expect(existsSync(domainsYamlFile(dir))).toBe(false);
+    fail = false;
+    await reg.create("domains", { name: "ops" });
+    expect(Object.keys(readDomainRegistry(hubRoots(dir).kbBase))).toEqual(["docs", "ops"]);
+  });
+
+  it("a failed registry.json write leaves memory unchanged", async () => {
+    const dir = mkdir();
+    const reg = createRegistry({ dataDir: dir, releaseClaims: async () => [], log: () => {} });
+    await reg.create("domains", { name: "docs" });
+    // a directory squatting on the tmp path makes the next persist fail
+    mkdirSync(registryFile(dir) + ".tmp");
+    await expect(reg.create("domains", { name: "ops" })).rejects.toThrow();
+    expect(reg.list("domains")).toHaveLength(1);
+  });
+
+  it("reserved and malformed domain names are refused on create and in the seed", async () => {
+    const dir = mkdir();
+    const { call } = await start(dir);
+    for (const n of ["_unclassified", "entries", "registry", "domains", "A", "-ab"]) {
+      expect((await call("POST", "/v1/registry/domains", { name: n })).status).toBe(400);
+    }
+    const src = mkdir();
+    const f = join(src, "domains.yaml");
+    writeFileSync(f, stringify({ domains: { registry: { label: "R" } } }));
+    await expect(createHubServer({ dataDir: mkdir(), apiKey: KEY, registrySeed: { domainsYaml: f } })).rejects.toThrow(/reserved name/);
+  });
+
+  it("a seeded wolf subscribing to an unseeded domain fails startup naming wolf and domain, and releases the lock", async () => {
+    const src = mkdir();
+    const d = join(src, "domains.yaml");
+    writeFileSync(d, stringify({ domains: { personal: { label: "P" } } }));
+    const w = join(src, "w.yaml");
+    writeFileSync(w, "name: gamma\ndomains: [personal, ghosts]\n");
+    const dir = mkdir();
+    await expect(createHubServer({ dataDir: dir, apiKey: KEY, registrySeed: { domainsYaml: d, wolfYamls: [w] } })).rejects.toThrow(/"gamma".*"ghosts"/);
+    await start(dir);
+  });
+
+  it("create wolf rejects a status field; delete wolf is 409 while it holds claims", async () => {
+    const dir = mkdir();
+    seedFixture(dir);
+    const roots = hubRoots(dir);
+    const id = createWork(roots, { kind: "task", domain: FIXTURE_DOMAIN, title: "t", assignee: "1uk4", successCriteria: "ok" } as never).id as string;
+    stageWork(roots, id, "approved");
+    const { call } = await start(dir);
+    expect((await call("POST", "/v1/registry/wolves", { name: "w1", status: "retired" })).status).toBe(400);
+    expect((await call("POST", "/v1/registry/wolves", { name: "w1" })).status).toBe(201);
+    await call("POST", `/v1/work/${id}/claim`, undefined, as("w1", "wolf"));
+    const del = await call("DELETE", "/v1/registry/wolves/w1");
+    expect(del.status).toBe(409);
+    expect(((await del.json()) as { message: string }).message).toMatch(/retire it first/);
+    await call("POST", "/v1/registry/wolves/w1/retire");
+    expect((await call("DELETE", "/v1/registry/wolves/w1")).status).toBe(200);
+  });
+
+  it("a retired wolf's claim is 403 forbidden; an unregistered wolf can still claim", async () => {
+    const dir = mkdir();
+    seedFixture(dir);
+    const roots = hubRoots(dir);
+    const mk = () => {
+      const id = createWork(roots, { kind: "task", domain: FIXTURE_DOMAIN, title: "t", assignee: "1uk4", successCriteria: "ok" } as never).id as string;
+      stageWork(roots, id, "approved");
+      return id;
+    };
+    const [a, b] = [mk(), mk()];
+    const { call } = await start(dir);
+    await call("POST", "/v1/registry/wolves", { name: "wolf-a" });
+    await call("POST", "/v1/registry/wolves/wolf-a/retire");
+    const res = await call("POST", `/v1/work/${a}/claim`, undefined, as("wolf-a", "wolf"));
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe("forbidden");
+    expect(loadWorkState(roots).get(a as never)!.boundBy).toBeFalsy();
+    expect((await call("POST", `/v1/work/${b}/claim`, undefined, as("unregistered", "wolf"))).status).toBe(200);
+  });
+
+  it("a release failure on retire says the wolf is retired but claims remain, and a retry works", async () => {
+    const dir = mkdir();
+    let fail = true;
+    const reg = createRegistry({ dataDir: dir, log: () => {}, releaseClaims: async () => { if (fail) throw new Error("boom"); return ["x"]; } });
+    await reg.create("wolves", { name: "w1" });
+    await expect(reg.retire("w1")).rejects.toThrow(/retired but its claims were not all released.*retrying retire is safe/);
+    expect(reg.isRetired("w1")).toBe(true);
+    fail = false;
+    expect((await reg.retire("w1")).released).toEqual(["x"]);
   });
 });

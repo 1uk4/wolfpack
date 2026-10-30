@@ -11,7 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { renderContribution } from "@wolfpack/kb/client";
 import { parseContribution } from "@wolfpack/kb/librarian/intake";
 import { contentHash, hashTag } from "@wolfpack/kb/shared";
@@ -80,15 +80,18 @@ export function feedContributions(
   warned: Set<string> = new Set(),
 ): FeedResult {
   const res: FeedResult = { queued: 0, skipped: 0 };
-  const leave = (file: string, why: string): void => {
+  // Newly refused files of the lane being scanned; reported as ONE summary line per lane per scan (each file only once per process).
+  let fresh: string[] = [];
+  const leave = (file: string, _why: string): void => {
     res.skipped++;
     if (warned.has(file)) return;
     warned.add(file);
-    log(`[workerd] contribution ${JSON.stringify(file)} left in place (not sent over the link): ${why}`);
+    fresh.push(file);
   };
   for (const wolf of wolves) {
     if (!WOLF_RE.test(wolf)) continue;
     const lane = join(kbOps, "inbox", wolf);
+    fresh = [];
     let names: string[];
     try {
       names = readdirSync(lane).sort();
@@ -119,7 +122,8 @@ export function feedContributions(
         const { filePath: _filePath, ...c } = parsed;
         // The kb parser returns summary + body together as `body` (the file is `summary \n\n body`); the link carries them apart.
         if (c.body.startsWith(`${c.summary}\n\n`)) c.body = c.body.slice(c.summary.length + 2);
-        if (renderContribution(c) !== text) throw new Error("file does not round-trip through parse and render (it would arrive changed)");
+        // Trailing whitespace is not content (the parser trims the body), so only that difference is tolerated.
+        if (renderContribution(c).trimEnd() !== text.trimEnd()) throw new Error("file does not round-trip through parse and render (it would arrive changed)");
         if (contentHash(c.body) !== c.contentHash) throw new Error("content_hash does not match the body (the hub would refuse it)");
         id = feedId(wolf, parsed.denTopicId, parsed.contentHash);
         contribution = c as unknown as Record<string, unknown>;
@@ -148,6 +152,9 @@ export function feedContributions(
       } catch (e) {
         log(`[workerd] contribution ${JSON.stringify(file)} queued but not moved to sent/: ${(e as Error).message}`); // re-queue next scan is a no-op
       }
+    }
+    if (fresh.length) {
+      log(`[workerd] feed: ${fresh.length} contribution(s) left in place in ${lane} (not sent: failed parse, round-trip, hash or size checks; first: ${basename(fresh[0]!)})`);
     }
   }
   return res;

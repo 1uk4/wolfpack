@@ -131,13 +131,43 @@ describe("feeding emitDelta files into the link", () => {
     expect(feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned)).toEqual({ queued: 1, skipped: 3 });
     feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned);
     feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned);
-    expect(logs).toHaveLength(3); // once per path
-    expect(logs.find((l) => l.includes("hash.md"))).toMatch(/content_hash does not match/);
+    expect(logs).toHaveLength(1); // one summary for the three new files, nothing on later scans
+    expect(logs[0]).toMatch(/3 contribution\(s\) left in place.*first: broken\.md/);
     expect(queued).toHaveLength(1);
     expect(readdirSync(lane(r, "alpha")).sort()).toEqual(["broken.md", "drift.md", "hash.md", "sent"]);
     expect(["broken.md", "drift.md", "hash.md"].map((n) => readFileSync(join(lane(r, "alpha"), n), "utf8"))).toEqual(before);
     expect(existsSync(join(lane(r, "alpha"), "_bad"))).toBe(false);
     expect(existsSync(join(lane(r, "alpha"), "sent", good))).toBe(true);
+  });
+
+  it("a file ending in an extra blank line is sent (trailing whitespace only)", async () => {
+    const r = await rig({ noHub: true });
+    const name = emit(r, make("alpha", "blank"));
+    writeFileSync(join(lane(r, "alpha"), name), `${readFileSync(join(lane(r, "alpha"), name), "utf8")}\n\n`);
+    const queued: Array<Record<string, unknown>> = [];
+    const res = feedContributions(r.kbOps, ["alpha"], { contribute: (_w, c) => void queued.push(c) }, () => {});
+    expect(res).toEqual({ queued: 1, skipped: 0 });
+    expect(queued[0]!.body).toBe("The body.");
+    expect(top(r, "alpha")).toEqual([]);
+  });
+
+  it("a legacy graduation file (keys the parser drops) is refused and left in place; the summary is logged once", async () => {
+    const r = await rig({ noHub: true });
+    mkdirSync(lane(r, "alpha"), { recursive: true });
+    const text = [
+      "---", "from: alpha", "den_topic_id: work-personal-86q5DKH", "change: create", `content_hash: ${contentHash("Week body")}`, "prev_hash: null",
+      "domain_hint: personal", "origin: wolf", "currency: live", "graduation: feature", "entry_id: kb-personal-86q5DKH", "part_of: kb-personal-i3bnKu1",
+      "preserve_body: true", 'summary: "Sessions 4"', "submitted: 2026-10-19T19:55:42.349Z", "---", "", "Week body", "",
+    ].join("\n");
+    const f = join(lane(r, "alpha"), "grad-feature-work-personal-86q5DKH-1.md");
+    writeFileSync(f, text);
+    const logs: string[] = [];
+    const warned = new Set<string>();
+    const target = { contribute: () => { throw new Error("must not be queued"); } };
+    for (let i = 0; i < 3; i++) expect(feedContributions(r.kbOps, ["alpha"], target, (m) => logs.push(m), warned).skipped).toBe(1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/1 contribution\(s\) left in place.*first: grad-feature-work-personal-86q5DKH-1\.md/);
+    expect(readFileSync(f, "utf8")).toBe(text);
   });
 
   it("an I/O error is retried on the next scan, not quarantined", async () => {

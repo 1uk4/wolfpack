@@ -89,12 +89,15 @@ describe("grants pushes", () => {
     expect(frames.find((f) => f.t === "grants")).toEqual({ t: "grants", domains: ["alpha"] });
   });
 
-  it("sentGrants is pruned on disconnect: a reconnect with the same union still gets the welcome set", async () => {
+  it("after a disconnect the next connection gets the correct set and later pushes (nothing stale is cached)", async () => {
     const s = setup();
     const a = await connect(s.srv);
     await until(() => a.frames.some((f) => f.t === "welcome"));
+    expect(a.frames.find((f) => f.t === "welcome")).toMatchObject({ grantedDomains: ["alpha"] });
     a.ws.close();
     await until(() => s.link.presence("h") === "offline");
+    // reconnect while the registry is unreadable: the welcome carries no set and nothing is cached for the host
+    s.setThrowing(true);
     const port = (s.srv.address() as AddressInfo).port;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/link`);
     const frames: LinkFrame[] = [];
@@ -106,8 +109,11 @@ describe("grants pushes", () => {
     await new Promise<void>((r) => ws.once("open", () => r()));
     ws.send(JSON.stringify({ t: "hello", v: LINK_PROTOCOL_VERSION, hostId: "h", laptop: false, wolves: [], kbRevisions: {} }));
     await until(() => frames.some((f) => f.t === "welcome"));
-    s.set([{ name: "w", host: "h", domains: ["beta"] }]);
+    expect((frames.find((f) => f.t === "welcome") as { grantedDomains?: unknown }).grantedDomains).toBeUndefined();
+    // recovery with the SAME union as before the disconnect: it must still be pushed (a stale "sent" cache would suppress it)
+    s.setThrowing(false);
     s.fire();
     await until(() => frames.some((f) => f.t === "grants"));
+    expect(frames.find((f) => f.t === "grants")).toEqual({ t: "grants", domains: ["alpha"] });
   });
 });

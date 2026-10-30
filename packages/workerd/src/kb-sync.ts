@@ -71,21 +71,31 @@ interface DomState {
   active: boolean;
 }
 class Retry extends Error {}
+/** State of one syncOnce run. `allow` covers every round of its manifest diff; `flag` = the flag file existed at the start. */
+interface RunCtx {
+  allow: boolean;
+  flag: boolean;
+  reset: boolean;
+}
 /** The mass-delete guard refused a manifest diff (nothing was changed). */
 class Refused extends Retry {}
 /** AbortSignal.any needs Node >= 20.3 (no `engines` is declared; sfo-01 runs v22): fall back by hand. */
-function anySignal(signals: AbortSignal[]): AbortSignal {
+function anySignal(signals: AbortSignal[]): { signal: AbortSignal; dispose(): void } {
   const any = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
-  if (any) return any.call(AbortSignal, signals);
+  if (any) return { signal: any.call(AbortSignal, signals), dispose() {} };
   const ac = new AbortController();
-  for (const s of signals) {
-    if (s.aborted) {
-      ac.abort(s.reason);
+  const subs: Array<[AbortSignal, () => void]> = [];
+  for (const sg of signals) {
+    if (sg.aborted) {
+      ac.abort(sg.reason);
       break;
     }
-    s.addEventListener("abort", () => ac.abort(s.reason), { once: true });
+    const fn = () => ac.abort(sg.reason);
+    sg.addEventListener("abort", fn, { once: true });
+    subs.push([sg, fn]);
   }
-  return ac.signal;
+  // The listeners on the long-lived signal (stop()'s controller) must not pile up, one per fetch.
+  return { signal: ac.signal, dispose: () => subs.forEach(([sg, fn]) => sg.removeEventListener("abort", fn)) };
 }
 /** The domain was unsubscribed or the sync stopped mid-flight: abandon quietly. */
 class Abandon extends Error {}
@@ -186,19 +196,17 @@ export class KbSync {
   }
 
   /**
-   * Allow ONE manifest diff of `domain` to delete more than half of the local files (a legitimate big prune on a first sync).
-   * Consumed by the first diff that needs it. Also honoured: a flag file `<mirrorDir>/.sync/<domain>.allow-mass-delete`, consumed once.
+   * Allow the NEXT sync run of `domain` (all rounds of its manifest diff) to delete more than half of the local files (a legitimate big
+   * prune on a first sync). Scoped to that one run: it is taken when the run starts and gone when the run ends, used or not.
+   * The durable operator route is the flag file `<mirrorDir>/.sync/<domain>.allow-mass-delete`: it is honoured by the next run and
+   * deleted only after a manifest diff has been applied and its state saved (a failed diff keeps it).
    */
   allowMassDelete(domain: string): void {
     this.overrides.add(domain);
     if (this.subscribed.has(domain)) this.syncAll();
   }
-  private takeOverride(d: string): boolean {
-    if (this.overrides.delete(d)) return true;
-    const f = join(this.o.mirrorDir, ".sync", `${d}.allow-mass-delete`);
-    if (!existsSync(f)) return false;
-    rmSync(f, { force: true });
-    return true;
+  private flagFile(d: string): string {
+    return join(this.o.mirrorDir, ".sync", `${d}.allow-mass-delete`);
   }
 
   /** A welcome: only an explicit array replaces the set; absent (older hub / hub registry read failed) keeps it and just re-pulls. */
@@ -318,13 +326,21 @@ export class KbSync {
 
   // ---------------------------------------------------------------- http
   private async call(method: string, path: string, body?: unknown): Promise<unknown> {
+    const sig = anySignal([this.ac.signal, AbortSignal.timeout(30_000)]);
+    try {
+      return await this.doCall(method, path, body, sig.signal);
+    } finally {
+      sig.dispose();
+    }
+  }
+  private async doCall(method: string, path: string, body: unknown, signal: AbortSignal): Promise<unknown> {
     let res: Response;
     try {
       res = await this.f(this.o.hubUrl.replace(/\/+$/, "") + path, {
         method,
         headers: { Authorization: `Bearer ${this.o.token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: anySignal([this.ac.signal, AbortSignal.timeout(30_000)]),
+        signal,
       });
     } catch (e) {
       throw new Retry(`network: ${(e as Error).message}`);
@@ -346,39 +362,50 @@ export class KbSync {
 
   // ---------------------------------------------------------------- sync
   private async syncOnce(d: string): Promise<void> {
-    const base = `/v1/kb/domains/${d}`;
-    let st = this.load(d);
-    if (st && st.rev > 0 && !this.full.has(d)) {
-      for (;;) {
-        const raw = await this.call("GET", `${base}/changes?since=${st.rev}&epoch=${encodeURIComponent(st.epoch)}&maxBytes=${this.o.maxBytes ?? MAX_BYTES}`);
-        this.alive(d);
-        const r = KbChangesResponseSchema.safeParse(raw);
-        if (!r.success) throw new Retry("unexpected changes response");
-        const c = r.data;
-        if (c.status === "reset") {
-          this.log(`${d}: ${c.reason}; falling back to manifest diff`);
-          break;
-        }
-        this.applyFiles(d, c.files, c.deletes.map((x) => x.path));
-        st = { epoch: c.epoch, rev: c.revision, active: this.subscribed.has(d) };
-        this.save(d, st);
-        if (!c.truncated) return;
-      }
+    // Per-run context: the override (memory, flag file) is read once here and lives only for this run.
+    const ctx: RunCtx = { allow: this.overrides.delete(d), flag: existsSync(this.flagFile(d)), reset: false };
+    ctx.allow ||= ctx.flag;
+    const st = this.load(d);
+    const saved = !!st && st.rev > 0;
+    if (saved && !this.full.has(d)) {
+      if (await this.incremental(d, st!, ctx)) return;
     }
     try {
-      await this.diffSync(d);
+      await this.diffSync(d, ctx);
     } catch (e) {
-      // A refused VERIFY diff (saved state, nothing forced it) is not fatal: the mirror is still consistent with its saved revision, so
-      // drop the verify request and carry on incrementally. Without saved state, or after a hub `reset`, the diff is the only way
-      // forward, so the refusal stands (retry with backoff) until the override is given.
-      if (e instanceof Refused && st && st.rev > 0 && this.full.has(d)) {
+      // A refused VERIFY diff (saved state, nothing forced it, and no hub reset in this run) is not fatal: the mirror is still consistent
+      // with its saved revision, so drop the verify request and carry on incrementally. Without saved state, or after a hub `reset`,
+      // the diff is the only way forward, so the refusal stands (retry with backoff) until the operator allows it.
+      if (e instanceof Refused && saved && this.full.has(d) && !ctx.reset) {
         this.full.delete(d);
-        this.log(`WARNING ${d}: verify diff refused (${e.message}); continuing incrementally. If the prune is legitimate: allowMassDelete("${d}") or create .sync/${d}.allow-mass-delete`);
-        return this.syncOnce(d);
-      }
-      throw e;
+        this.log(`WARNING ${d}: verify diff refused (${e.message}); continuing incrementally. If the prune is legitimate: allowMassDelete("${d}") or create ${this.flagFile(d)}`);
+        if (await this.incremental(d, this.load(d)!, ctx)) return;
+        await this.diffSync(d, ctx); // the hub reset us meanwhile: the diff is now required and the guard stands
+      } else throw e;
     }
     this.full.delete(d);
+  }
+
+  /** Follow the change log from the saved revision. True when caught up; false when the hub asked for a manifest diff (ctx.reset set). */
+  private async incremental(d: string, from: DomState, ctx: RunCtx): Promise<boolean> {
+    const base = `/v1/kb/domains/${d}`;
+    let st = from;
+    for (;;) {
+      const raw = await this.call("GET", `${base}/changes?since=${st.rev}&epoch=${encodeURIComponent(st.epoch)}&maxBytes=${this.o.maxBytes ?? MAX_BYTES}`);
+      this.alive(d);
+      const r = KbChangesResponseSchema.safeParse(raw);
+      if (!r.success) throw new Retry("unexpected changes response");
+      const c = r.data;
+      if (c.status === "reset") {
+        ctx.reset = true;
+        this.log(`${d}: ${c.reason}; falling back to manifest diff`);
+        return false;
+      }
+      this.applyFiles(d, c.files, c.deletes.map((x) => x.path));
+      st = { epoch: c.epoch, rev: c.revision, active: this.subscribed.has(d) };
+      this.save(d, st);
+      if (!c.truncated) return true;
+    }
   }
 
   /** Throws Abandon when stopped or unsubscribed. Called after every await and before any write, so nothing lands after stop()/removal. */
@@ -386,7 +413,7 @@ export class KbSync {
     if (this.stopped || !this.subscribed.has(d)) throw new Abandon();
   }
 
-  private async diffSync(d: string): Promise<void> {
+  private async diffSync(d: string, ctx: RunCtx): Promise<void> {
     const base = `/v1/kb/domains/${d}`;
     for (let round = 0; round < 10_000; round++) {
       const local = this.localManifest(d);
@@ -396,14 +423,15 @@ export class KbSync {
       if (!r.success) throw new Retry("unexpected manifest-diff response");
       const x = r.data;
       const have = Object.keys(local).length;
-      if (have >= 2 && x.deletes.length * 2 > have && !this.takeOverride(d)) {
+      if (have >= 2 && x.deletes.length * 2 > have && !ctx.allow) {
         const r = this.refusals.get(d);
         this.refusals.set(d, { n: (r?.n ?? 0) + 1, at: Date.now() });
-        throw new Refused(`mass-delete guard: the hub's diff would delete ${x.deletes.length} of ${have} local files; refusing (nothing changed)`);
+        throw new Refused(`mass-delete guard: the hub's diff would delete ${x.deletes.length} of ${have} local files; refusing (nothing changed). If this is a legitimate prune, create the flag file ${this.flagFile(d)} (or call allowMassDelete) and it will be applied on the next run`);
       }
       this.applyFiles(d, x.files, x.deletes.map((e) => e.path));
       if (x.pending.length === 0) {
         this.save(d, { epoch: x.epoch, rev: x.revision, active: this.subscribed.has(d) });
+        if (ctx.flag) rmSync(this.flagFile(d), { force: true }); // consumed only now that the diff is applied and saved
         return;
       }
       if (x.files.length === 0) throw new Retry("manifest-diff made no progress");

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -301,6 +302,94 @@ describe("worker KB sync (hubd + workerd rig)", () => {
     b.sync.notify("alpha", 5, "e");
     await settle(r, b.sync, "alpha", 5);
     expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(5);
+  });
+
+  it("the override is scoped to one run: an unused allowMassDelete does not fire on a later guarded diff after a hub reset", async () => {
+    const { r, a, st, emptyFetch } = await guardSetup();
+    const logs: string[] = [];
+    const b = direct(r, ["alpha"], { verifyOnStart: false, fetchImpl: emptyFetch, log: (m) => logs.push(m) }, a.mirrorDir);
+    b.sync.start();
+    await settle(r, b.sync, "alpha", 3);
+    b.sync.allowMassDelete("alpha"); // the next run is incremental and never needs it
+    await b.sync.idle();
+    expect((b.sync as unknown as { overrides: Set<string> }).overrides.has("alpha")).toBe(false);
+    // an epoch rotation: the hub answers reset, the diff is required and the (cleared) override must not apply
+    writeFileSync(join(a.mirrorDir, ".sync", "alpha.json"), JSON.stringify({ v: 1, ...st, epoch: "rotated" }));
+    b.sync.syncAll();
+    await r.eventually(() => (b.sync.status().alpha?.refusals ?? 0) >= 1, "refused after reset");
+    expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(3);
+    expect(logs.some((l) => l.includes("continuing incrementally"))).toBe(false); // reset seen: refusal is not mislabelled as non-fatal verify
+  });
+
+  it("the override covers every round of a multi-round diff", async () => {
+    const { r, a, st } = await guardSetup();
+    rmSync(join(a.mirrorDir, ".sync", "alpha.json"));
+    const hash = (t: string) => "sha256:" + createHash("sha256").update(t, "utf-8").digest("hex");
+    const N = "kb-alpha-nnnnnnn";
+    const content = entry(N);
+    let round = 0;
+    const fake = (async (u: string, init?: RequestInit) => {
+      if (!u.includes("manifest-diff")) return fetch(u, init);
+      round++;
+      const have = Object.keys((JSON.parse(String(init!.body)) as { files: object }).files);
+      const body = round === 1
+        ? { domain: "alpha", epoch: st.epoch, revision: 7, files: [{ path: `entries/${N}.md`, contentHash: hash(content), encoding: "utf8", content }], deletes: have.slice(0, 2).map((path) => ({ path })), pending: ["entries/kb-alpha-zzzzzzz.md"] }
+        : { domain: "alpha", epoch: st.epoch, revision: 7, files: [], deletes: have.map((path) => ({ path })), pending: [] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    const b = direct(r, ["alpha"], { fetchImpl: fake }, a.mirrorDir);
+    b.sync.allowMassDelete("alpha"); // armed before start: taken by the first run
+    b.sync.start();
+    await settle(r, b.sync, "alpha", 7);
+    expect(round).toBe(2);
+    expect(b.sync.status().alpha!.refusals).toBe(0);
+    expect((b.sync as unknown as { overrides: Set<string> }).overrides.size).toBe(0);
+  });
+
+  it("a failed diff keeps the flag file; it is deleted only after the diff is applied and saved", async () => {
+    const { r, a, emptyFetch } = await guardSetup();
+    rmSync(join(a.mirrorDir, ".sync", "alpha.json"));
+    const flag = join(a.mirrorDir, ".sync", "alpha.allow-mass-delete");
+    writeFileSync(flag, "");
+    let fail = true;
+    const flaky = (async (u: string, init?: RequestInit) => {
+      if (fail && u.includes("manifest-diff")) {
+        const bad = { path: "entries/kb-alpha-bad0000.md", contentHash: "sha256:" + "0".repeat(64), encoding: "utf8", content: "x" };
+        return new Response(JSON.stringify({ domain: "alpha", epoch: "e", revision: 1, files: [bad], deletes: [], pending: [] }), { status: 200 });
+      }
+      return emptyFetch(u, init);
+    }) as typeof fetch;
+    const b = direct(r, ["alpha"], { fetchImpl: flaky }, a.mirrorDir);
+    b.sync.start();
+    await r.eventually(() => (b.sync.status().alpha?.failures ?? 0) >= 2, "diff keeps failing");
+    expect(existsSync(flag)).toBe(true);
+    expect(readdirSync(join(a.mirrorDir, "alpha", "entries")).length).toBe(3);
+    fail = false;
+    await r.eventually(() => !existsSync(flag) && readdirSync(join(a.mirrorDir, "alpha", "entries")).length === 0, "applied, then flag consumed");
+  });
+
+  it("the anySignal fallback removes its listeners from the long-lived signal", async () => {
+    const r = await rig({ kbDomains: ["alpha"], grants: { alpha: ["alpha"] } });
+    await r.kbWrite("alpha", `entries/${E1}.md`, entry(E1));
+    await online(r);
+    const orig = (AbortSignal as unknown as { any?: unknown }).any;
+    (AbortSignal as unknown as { any?: unknown }).any = undefined; // force the manual fallback
+    try {
+      const a = direct(r, ["alpha"]);
+      const ac = (a.sync as unknown as { ac: AbortController }).ac;
+      let added = 0;
+      let removed = 0;
+      const add = ac.signal.addEventListener.bind(ac.signal);
+      const rem = ac.signal.removeEventListener.bind(ac.signal);
+      ac.signal.addEventListener = ((t: string, f: never, o: never) => (t === "abort" && added++, add(t, f, o))) as typeof add;
+      ac.signal.removeEventListener = ((t: string, f: never, o: never) => (t === "abort" && removed++, rem(t, f, o))) as typeof rem;
+      a.sync.start();
+      await settle(r, a.sync, "alpha", 1);
+      expect(added).toBeGreaterThan(0);
+      expect(removed).toBe(added);
+    } finally {
+      (AbortSignal as unknown as { any?: unknown }).any = orig;
+    }
   });
 
   it("a welcome without grantedDomains keeps the current set", async () => {

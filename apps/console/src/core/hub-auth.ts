@@ -7,11 +7,17 @@
  * wrong: clear it and go back to /pair.
  *
  * Pairing hands the token over in a URL FRAGMENT (`/pair#token=...`, from the hub's /pair page): fragments are never sent to a server
- * or logged; `takeTokenFromHash` stores it and the page then strips it from the address bar.
+ * or logged; the console's /pair page reads it with `tokenFromHash`, stores it, then strips it from the address bar.
+ *
+ * Only a HUB-AUTH 401 signs the browser out: the console's server marks those with `X-Wolfpack-Hub-Auth: required`. Any other 401
+ * under /api/ (a wolf host, anything else) keeps the token. And the token is cleared only if it is still the one that request sent, so a
+ * slow in-flight request cannot wipe a freshly paired token.
  */
 
 export const HUB_TOKEN_KEY = "wolfpack.hub.token";
 export const PAIR_PATH = "/pair";
+/** Set (to `required`) on the console server's 401s that come from hub authentication. */
+export const HUB_AUTH_HEADER = "X-Wolfpack-Hub-Auth";
 
 export interface TokenStorage {
 	getItem(k: string): string | null;
@@ -54,8 +60,9 @@ export function withHubAuth(base: FetchFn, o: { storage: TokenStorage; origin: s
 		const headers = new Headers(init?.headers ?? (typeof input === "object" && "headers" in input ? input.headers : undefined));
 		const token = readHubToken(o.storage);
 		if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+		const sent = bearerOf(headers.get("Authorization"));
 		const res = await base(input, { ...init, headers });
-		if (res.status === 401) {
+		if (res.status === 401 && res.headers.get(HUB_AUTH_HEADER)?.toLowerCase() === "required" && readHubToken(o.storage) === sent) {
 			clearHubToken(o.storage);
 			o.onUnauthorized();
 		}

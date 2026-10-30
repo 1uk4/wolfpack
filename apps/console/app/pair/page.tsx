@@ -7,7 +7,6 @@
  */
 import { useEffect, useState } from "react";
 import { saveHubToken, tokenFromHash } from "@/src/core/hub-auth";
-import "@/components/hub-auth";
 
 const HUB_URL = process.env.NEXT_PUBLIC_WOLFPACK_HUB_URL?.replace(/\/+$/, "");
 

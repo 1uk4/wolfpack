@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
-import { bearerOf, clearHubToken, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
+import { bearerOf, clearHubToken, HUB_AUTH_HEADER, HUB_TOKEN_KEY, readHubToken, saveHubToken, tokenFromHash, withHubAuth, type TokenStorage } from "../src/core/hub-auth.ts";
+import { createMemoryApi } from "../src/server/memory-api.ts";
 import { createConsoleClient } from "../src/server/console-client.ts";
 
 const mem = (): TokenStorage & { m: Map<string, string> } => {
@@ -32,15 +33,35 @@ describe("withHubAuth", () => {
 		await f("/api/a");
 		assert.equal(auth, null);
 	});
-	it("a 401 from /api clears the token and signals sign-in", async () => {
+	const hub401 = () => new Response("{}", { status: 401, headers: { [HUB_AUTH_HEADER]: "required" } });
+	it("a hub-auth 401 from /api clears the token and signals sign-in", async () => {
 		const storage = mem();
 		saveHubToken(storage, "tok");
 		let called = 0;
-		const f = withHubAuth((async () => new Response("{}", { status: 401 })) as typeof fetch, { storage, origin: ORIGIN, onUnauthorized: () => called++ });
+		const f = withHubAuth((async () => hub401()) as typeof fetch, { storage, origin: ORIGIN, onUnauthorized: () => called++ });
 		assert.equal((await f("/api/a")).status, 401);
 		assert.equal(readHubToken(storage), undefined);
 		assert.equal(storage.m.has(HUB_TOKEN_KEY), false);
 		assert.equal(called, 1);
+	});
+	it("a 401 without the hub-auth marker keeps the token", async () => {
+		const storage = mem();
+		saveHubToken(storage, "tok");
+		const f = withHubAuth((async () => new Response("{}", { status: 401 })) as typeof fetch, { storage, origin: ORIGIN, onUnauthorized: () => assert.fail("not a hub 401") });
+		await f("/api/a");
+		assert.equal(readHubToken(storage), "tok");
+	});
+	it("a stale-token 401 arriving after re-pairing keeps the new token", async () => {
+		const storage = mem();
+		saveHubToken(storage, "old");
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const f = withHubAuth((async () => (await gate, hub401())) as typeof fetch, { storage, origin: ORIGIN, onUnauthorized: () => assert.fail("stale") });
+		const pending = f("/api/a"); // sent with "old"
+		saveHubToken(storage, "new"); // re-paired meanwhile
+		release();
+		await pending;
+		assert.equal(readHubToken(storage), "new");
 	});
 	it("helpers: fragment token, bearer parsing, clear", () => {
 		assert.equal(tokenFromHash("#token=a%2Bb"), "a+b");
@@ -55,7 +76,7 @@ describe("withHubAuth", () => {
 });
 
 describe("server: forwarded token", () => {
-	it("hub work reads use the browser's forwarded token, else the env token", async () => {
+	const startHub = async () => {
 		const seen: (string | undefined)[] = [];
 		const hub = createServer((req, res) => {
 			seen.push(req.headers.authorization);
@@ -63,14 +84,39 @@ describe("server: forwarded token", () => {
 			res.end(JSON.stringify({ items: [] }));
 		});
 		await new Promise<void>((r) => hub.listen(0, "127.0.0.1", r));
-		const url = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+		return { hub, seen, url: `http://127.0.0.1:${(hub.address() as AddressInfo).port}` };
+	};
+	it("uses the forwarded token; no token in a request scope rejects as hub-auth and never reaches the hub", async () => {
+		const { hub, seen, url } = await startHub();
 		try {
-			let fwd: string | undefined = "browser";
+			let fwd: string | null | undefined = "browser";
 			const c = createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "env" }, async () => fwd);
 			await c.listWork!("w", { domain: "d" });
-			fwd = undefined;
+			fwd = null;
+			await assert.rejects(c.listWork!("w", { domain: "d" }), (e: Error & { code?: string; hubAuth?: boolean }) => e.name === "ProtocolError" && e.code === "unauthorized" && e.hubAuth === true);
+			await assert.rejects(c.getWorkRecord!("w", "id"), /not paired/);
+			assert.deepEqual(seen, ["Bearer browser"]);
+		} finally {
+			hub.close();
+		}
+	});
+	it("with no request scope at all, the env token is used", async () => {
+		const { hub, seen, url } = await startHub();
+		try {
+			const c = createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "env" }, async () => undefined);
 			await c.listWork!("w", { domain: "d" });
-			assert.deepEqual(seen, ["Bearer browser", "Bearer env"]);
+			assert.deepEqual(seen, ["Bearer env"]);
+		} finally {
+			hub.close();
+		}
+	});
+	it("the route handler answers an unpaired request 401 with the hub-auth marker (not 500)", async () => {
+		const { hub, url } = await startHub();
+		try {
+			const c = createConsoleClient({ WOLFPACK_HUB_URL: url, WOLFPACK_HUB_TOKEN: "env" }, async () => null);
+			const res = await createMemoryApi(() => c).workList("w", "d", false);
+			assert.equal(res.status, 401);
+			assert.equal(res.headers.get(HUB_AUTH_HEADER), "required");
 		} finally {
 			hub.close();
 		}

@@ -33,21 +33,40 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
 	});
 }
 
-/** The bearer token the browser forwarded on the current request, if any (installed by Next's `headers()`; tests inject their own). */
-export type RequestToken = () => Promise<string | undefined>;
+/**
+ * The bearer the browser forwarded on the current request:
+ *   string    a token was sent
+ *   null      there IS a request scope but no (usable) Authorization header: the caller is not paired
+ *   undefined NO request scope at all (background/server jobs, tests, startup): only then may the env token be used
+ */
+export type RequestToken = () => Promise<string | null | undefined>;
 
 export const nextRequestToken: RequestToken = async () => {
+	let h: Headers;
 	try {
 		const { headers } = await import("next/headers");
-		return bearerOf((await headers()).get("authorization"));
+		h = await headers();
 	} catch {
-		return undefined; // no request scope (tests, scripts, startup)
+		return undefined; // outside a request (headers() throws)
 	}
+	return bearerOf(h.get("authorization")) ?? null;
 };
 
+/** A hub authentication failure as the routes see it: a ProtocolError(unauthorized) tagged `hubAuth`, which memory-api answers 401 + X-Wolfpack-Hub-Auth. */
+export class HubAuthError extends Error {
+	readonly code = "unauthorized";
+	readonly hubAuth = true;
+	constructor(message: string) {
+		super(message);
+		this.name = "ProtocolError"; // routes match errors by name (Next bundles the client per route)
+	}
+}
+
 /**
- * Work reads against the hub with a PER-REQUEST token: the browser's forwarded bearer when present, else the env token / legacy key
- * (server-side and dev path). One small client per token, cached.
+ * Work reads against the hub with a PER-REQUEST token. Inside a request scope only the browser's forwarded token is used; no token
+ * rejects (the route answers 401, the browser goes to /pair): the env token/key never stands in for a request that did not authenticate.
+ * The env credentials serve only callers with NO request scope (background jobs). One small client per token, cached: each client
+ * holds nothing but its own base URL and token (no response or per-user state), so the cache cannot carry data between tokens.
  */
 export function requestScopedWork(hub: { baseUrl: string; token?: string; apiKey?: string }, requestToken: RequestToken): WorkReads {
 	const clients = new Map<string, ConsoleClient>();
@@ -61,9 +80,19 @@ export function requestScopedWork(hub: { baseUrl: string; token?: string; apiKey
 		}
 		return c;
 	};
+	const run = async <T>(fn: (c: ConsoleClient) => Promise<T>): Promise<T> => {
+		const t = await requestToken();
+		if (t === null) throw new HubAuthError("this browser is not paired with the hub (no bearer token)");
+		try {
+			return await fn(forToken(t));
+		} catch (err) {
+			if (err instanceof Error && err.name === "ProtocolError" && (err as Error & { code?: string }).code === "unauthorized") throw new HubAuthError(err.message);
+			throw err;
+		}
+	};
 	return {
-		listWork: async (wolf, q) => forToken(await requestToken()).listWork!(wolf, q),
-		getWorkRecord: async (wolf, id) => forToken(await requestToken()).getWorkRecord!(wolf, id),
+		listWork: (wolf, q) => run((c) => c.listWork!(wolf, q)),
+		getWorkRecord: (wolf, id) => run((c) => c.getWorkRecord!(wolf, id)),
 	};
 }
 

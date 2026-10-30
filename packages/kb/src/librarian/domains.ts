@@ -15,13 +15,13 @@ import { ENTRY_KINDS, FACET_KEYS, RELATION_KINDS } from "@wolfpack/engine";
 import { DIGEST } from "@wolfpack/engine";
 import {
   type KbRoots,
-  domainsRegistryFile,
   domainIndex,
   domainDigest,
   entriesDir,
   type ContextDigest,
   type DigestSection,
 } from "../shared/index.js";
+import { resolveDomainsFile } from "../shared/domain-registry.js";
 import { entrySummary } from "./embed.js";
 import { anchorOf, groupDateOf, groupOf } from "./anchors.js";
 import { readSections, getRoots, buildParentIndex } from "./sections.js";
@@ -32,8 +32,8 @@ import type { Section, SectionId, Currency } from "../schema/knowledge.js";
  * "unconstrained" for back-compat so a bare install still commits).
  */
 export function readDeclaredDomains(roots: KbRoots): Set<string> | null {
-  const file = domainsRegistryFile(roots);
-  if (!existsSync(file)) return null;
+  const file = resolveDomainsFile(roots.kbBase);
+  if (!file || !existsSync(file)) return null;
   try {
     const parsed = (yamlParse(readFileSync(file, "utf-8")) ?? {}) as {
       domains?: Record<string, unknown>;

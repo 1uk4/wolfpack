@@ -3,6 +3,7 @@
  * label and description, as written by `wolfpack domain`.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 
@@ -13,10 +14,29 @@ export interface DomainRegistryEntry {
   color?: string;
 }
 
+/**
+ * The ONE resolver for the declared-domain registry file. Order:
+ *   1. `WOLFPACK_DOMAINS_FILE` (explicit override; returned even if missing)
+ *   2. `<kbBase>/domains.yaml` when it exists
+ *   3. `~/.wolfpack/domains.yaml` (the CLI's own registry, same format) when it exists;
+ *      `WOLFPACK_REGISTRY_DIR` relocates that directory (tests)
+ * Returns null when none applies. A hub mirror carries no top-level domains.yaml, hence the fallback.
+ */
+export function resolveDomainsFile(kbBase?: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = env.WOLFPACK_DOMAINS_FILE?.trim();
+  if (explicit) return explicit;
+  if (kbBase) {
+    const inBase = join(kbBase, "domains.yaml");
+    if (existsSync(inBase)) return inBase;
+  }
+  const cli = join(env.WOLFPACK_REGISTRY_DIR || join(homedir(), ".wolfpack"), "domains.yaml");
+  return existsSync(cli) ? cli : null;
+}
+
 /** Domain name → label/description. Empty when the registry is missing or unreadable. */
-export function readDomainRegistry(kbBase: string): Record<string, DomainRegistryEntry> {
-  const file = join(kbBase, "domains.yaml");
-  if (!existsSync(file)) return {};
+export function readDomainRegistry(kbBase: string, env: NodeJS.ProcessEnv = process.env): Record<string, DomainRegistryEntry> {
+  const file = resolveDomainsFile(kbBase, env);
+  if (!file || !existsSync(file)) return {};
   try {
     const parsed = (yamlParse(readFileSync(file, "utf-8")) ?? {}) as {
       domains?: Record<string, DomainRegistryEntry | null>;
@@ -56,7 +76,7 @@ export function listSubscribedDomains(
   env: NodeJS.ProcessEnv = process.env,
 ): SubscribedDomain[] {
   const kbBase = kbBaseArg ?? env.KB_BASE;
-  const registry = kbBase ? readDomainRegistry(kbBase) : {};
+  const registry = kbBase ? readDomainRegistry(kbBase, env) : {};
   let names = (env.WOLF_DOMAINS ?? "")
     .split(",")
     .map((s) => s.trim())

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatDomainChoices, listSubscribedDomains, readDomainRegistry } from "./domain-registry.js";
+import { formatDomainChoices, listSubscribedDomains, readDomainRegistry, resolveDomainsFile } from "./domain-registry.js";
 
 function kb(): string {
   const base = mkdtempSync(join(tmpdir(), "kb-dom-"));
@@ -38,5 +38,36 @@ describe("readDomainRegistry color", () => {
     const r = readDomainRegistry(base);
     expect(r.a.color).toBe("#123456");
     expect("color" in r.b).toBe(false);
+  });
+});
+
+describe("resolveDomainsFile / fallback", () => {
+  const home = () => {
+    const h = mkdtempSync(join(tmpdir(), "kb-home-"));
+    writeFileSync(join(h, "domains.yaml"), "domains:\n  gamma:\n    label: Gamma\n");
+    return h;
+  };
+  it("keeps <kbBase>/domains.yaml when it exists", () => {
+    const base = kb();
+    expect(resolveDomainsFile(base, { WOLFPACK_REGISTRY_DIR: home() })).toBe(join(base, "domains.yaml"));
+    expect(readDomainRegistry(base, { WOLFPACK_REGISTRY_DIR: home() }).alpha?.label).toBe("Alpha");
+  });
+  it("falls back to ~/.wolfpack/domains.yaml when the mirror has none", () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-mirror-"));
+    const h = home();
+    expect(resolveDomainsFile(base, { WOLFPACK_REGISTRY_DIR: h })).toBe(join(h, "domains.yaml"));
+    expect(readDomainRegistry(base, { WOLFPACK_REGISTRY_DIR: h }).gamma?.label).toBe("Gamma");
+  });
+  it("WOLFPACK_DOMAINS_FILE wins over both", () => {
+    const f = join(mkdtempSync(join(tmpdir(), "kb-ovr-")), "d.yaml");
+    writeFileSync(f, "domains:\n  delta:\n    label: Delta\n");
+    const env = { WOLFPACK_REGISTRY_DIR: home(), WOLFPACK_DOMAINS_FILE: f };
+    expect(Object.keys(readDomainRegistry(kb(), env))).toEqual(["delta"]);
+  });
+  it("is null/empty when nothing exists", () => {
+    const base = mkdtempSync(join(tmpdir(), "kb-none-"));
+    const env = { WOLFPACK_REGISTRY_DIR: mkdtempSync(join(tmpdir(), "kb-nohome-")) };
+    expect(resolveDomainsFile(base, env)).toBeNull();
+    expect(readDomainRegistry(base, env)).toEqual({});
   });
 });

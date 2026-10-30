@@ -27,6 +27,10 @@ describe("WorkerRelay refuses request targets that leave the worker", () => {
       `http://evil:8080/v1/wolves/a/threads`,
       "v1/wolves/a/threads",
       "/v1/a b",
+      " /v1/x",
+      "\t/v1/x",
+      "HtTp://[::1]:1/x",
+      "http://[::1]/x",
     ];
     bad.forEach((path, i) => relay.handle({ t: "req", id: `h-${i}`, method: "GET", path, headers: {} }));
     relay.handle({ t: "req", id: "h-m", method: "CONNECT", path: "/v1/x", headers: {} });
@@ -35,6 +39,16 @@ describe("WorkerRelay refuses request targets that leave the worker", () => {
     expect(canary.hits).toEqual([]);
     expect(worker.hits).toEqual([]);
     expect(relay.inflight()).toBe(0);
+  });
+
+  it("an encoded // is just a path: forwarded unchanged to the worker's own origin", async () => {
+    const worker = await listen(() => {});
+    const sent: LinkFrame[] = [];
+    const relay = new WorkerRelay({ baseUrl: () => worker.base, send: (f) => (sent.push(f), true) });
+    relay.handle({ t: "req", id: "h-1", method: "GET", path: "/%2F%2Fevil/x", headers: {} });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(worker.hits).toEqual(["/%2F%2Fevil/x"]);
+    expect(sent.at(-1)!.t).toBe("end");
   });
 
   it("a good path reaches only the worker's own origin; oversized bodies and floods are refused", async () => {

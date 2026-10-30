@@ -25,3 +25,7 @@ npm test
 ```
 
 Licensed AGPL-3.0 (see the repo-level ATTRIBUTION).
+
+## Hub relay mode (default with a hub)
+
+With `WOLFPACK_HUB_URL` set (plus a token: `WOLFPACK_HUB_TOKEN`, or the browser's paired token) and no `WOLFPACK_API_URL`, the console uses **relay mode**: chat, streams, memory, KB and work all go through the hub, which tunnels wolf requests to the wolf's host over its worker link. An unpaired browser now gets the hub-auth 401 (and is sent to `/pair`) instead of mock threads plus hub work reads. `WOLFPACK_HUB_RELAY=0` restores the old behaviour; `WOLFPACK_HUB_RELAY=1` forces relay even when `WOLFPACK_API_URL` is set. Direct mode (`WOLFPACK_API_URL`) is unchanged. Request bodies through the relay are capped at 2 MB. See `packages/protocol/README.md` (Console relay).

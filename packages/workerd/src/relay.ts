@@ -14,7 +14,7 @@ type Req = Extract<LinkFrame, { t: "req" }>;
 /** Never copied from the worker's response (hop-by-hop, framing, cookies and CORS belong to the worker's origin, not the hub's). */
 const SKIP_RES = (k: string) => HOP.has(k) || k === "set-cookie" || k === "set-cookie2" || k.startsWith("access-control-");
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authenticate", "proxy-authorization", "content-length", "host"]);
-const SKIP_REQ = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authorization", "content-length", "host", "expect"]);
+const SKIP_REQ = new Set(["authorization", "cookie", "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer", "proxy-authorization", "content-length", "host", "expect"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const HIGH_WATER = 1024 * 1024;
 const LOW_WATER = HIGH_WATER / 4;

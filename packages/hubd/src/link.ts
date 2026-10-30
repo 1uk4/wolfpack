@@ -71,6 +71,10 @@ interface Conn {
   hostId: string;
   hello?: LinkHello;
   sleeping: boolean;
+  /** Last time a frame other than ping/pong/sleep arrived (ms), 0 = never. */
+  activeAt: number;
+  /** When the sleep frame arrived (ms). */
+  sleptAt: number;
   bye: boolean;
   /** Why the hub itself closed it (revoke / replaced / shutdown): presence is then decided by that, not by the laptop flag. */
   hubClosed: boolean;
@@ -97,7 +101,13 @@ export function createLink(opts: LinkOptions): Link {
     clearTimeout(asleepTimers.get(hostId));
     asleepTimers.delete(hostId);
     if (p === "asleep") {
-      const tm = setTimeout(() => (asleepTimers.delete(hostId), setPresence(hostId, "offline")), t.asleepOfflineMs);
+      const tm = setTimeout(() => {
+        asleepTimers.delete(hostId);
+        // A live link that has been active since the sleep frame is not asleep, whatever the timer says.
+        const live = byHost.get(hostId);
+        if (live && live.ws.readyState === live.ws.OPEN && live.activeAt > live.sleptAt) return setPresence(hostId, "online");
+        setPresence(hostId, "offline");
+      }, t.asleepOfflineMs);
       tm.unref();
       asleepTimers.set(hostId, tm);
     }
@@ -172,8 +182,9 @@ export function createLink(opts: LinkOptions): Link {
     byHost.set(c.hostId, c);
     c.hello = h;
     // Hello accepted: now allow full-size frames (ws keeps the limit on the receiver; there is no public setter).
-    const receiver = (c.ws as unknown as { _receiver?: { _maxPayload: number } })._receiver;
-    if (receiver) receiver._maxPayload = LINK_MAX_PAYLOAD;
+    const receiver = (c.ws as unknown as { _receiver?: { _maxPayload?: number } })._receiver;
+    if (receiver && typeof receiver._maxPayload === "number") receiver._maxPayload = LINK_MAX_PAYLOAD;
+    else log(`hubd: WARNING link ${c.hostId}: ws internals changed (no _receiver._maxPayload); this connection stays limited to ${LINK_HELLO_MAX_PAYLOAD} bytes per frame`);
     if (result.rejected.length) log(`hubd: link ${c.hostId}: rejected wolves ${result.rejected.map(q).join(", ")}`);
     send(c, { t: "welcome", v: LINK_PROTOCOL_VERSION, heartbeatMs: t.heartbeatMs, deadAfterMs: t.deadAfterMs, retired: result.retired, rejected: result.rejected, domainMismatch: result.domainMismatch, hubRevisions: {} });
     setPresence(c.hostId, "online");
@@ -208,6 +219,14 @@ export function createLink(opts: LinkOptions): Link {
     }
     if (byHost.get(c.hostId) !== c) return;
     armDead(c);
+    if (f.t !== "ping" && f.t !== "pong" && f.t !== "sleep" && f.t !== "bye") {
+      // Real activity: an asleep host that is sending work frames is not asleep.
+      c.activeAt = Date.now();
+      if (c.sleeping) {
+        c.sleeping = false;
+        setPresence(c.hostId, "online");
+      }
+    }
     switch (f.t) {
       case "hello":
         return sendError(c, "bad_frame", "duplicate hello");
@@ -215,6 +234,7 @@ export function createLink(opts: LinkOptions): Link {
         return send(c, { t: "pong", n: f.n });
       case "sleep":
         c.sleeping = true;
+        c.sleptAt = Date.now();
         return setPresence(c.hostId, "asleep");
       case "bye":
         c.bye = true;
@@ -236,12 +256,11 @@ export function createLink(opts: LinkOptions): Link {
   }
 
   function connect(ws: WebSocket, id: AuthIdentity & { tokenId: string; hostId: string }) {
-    const c: Conn = { ws, tokenId: id.tokenId, hostId: id.hostId, sleeping: false, bye: false, hubClosed: false, queue: Promise.resolve() };
+    const c: Conn = { ws, tokenId: id.tokenId, hostId: id.hostId, sleeping: false, activeAt: 0, sleptAt: 0, bye: false, hubClosed: false, queue: Promise.resolve() };
     conns.add(c);
     c.helloTimer = setTimeout(() => hubClose(c, LINK_CLOSE.noHello, "no hello"), t.helloTimeoutMs);
     c.helloTimer.unref();
     ws.on("message", (data, isBinary) => {
-      if (!c.hello && (data as Buffer).length > LINK_HELLO_MAX_PAYLOAD) return hubClose(c, 1009, "too big");
       if (isBinary) return sendError(c, "bad_frame", "text frames only");
       const text = data.toString();
       c.queue = c.queue.then(() => onFrame(c, text)).catch((e) => log(`hubd: link ${c.hostId}: frame failed: ${(e as Error).message}`));

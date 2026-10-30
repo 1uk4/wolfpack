@@ -8,6 +8,7 @@ import { z } from "zod";
 
 export const LINK_PROTOCOL_VERSION = 1;
 export const LINK_PATH = "/v1/link";
+/** Max frame size once the hello is accepted (before that: LINK_HELLO_MAX_PAYLOAD). */
 export const LINK_MAX_PAYLOAD = 8 * 1024 * 1024;
 export const LINK_HELLO_TIMEOUT_MS = 10_000;
 export const LINK_HEARTBEAT_MS = 10_000;

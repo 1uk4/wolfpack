@@ -332,6 +332,24 @@ describe("hubd worker link: presence", () => {
     d.ws.terminate();
   });
 
+  it("work frames after a sleep frame bring the host back online; an active link is not flipped offline by the asleep timer", async () => {
+    await register("alpha");
+    const { token } = await mint("worker", "box");
+    const c = await join_(token, "box", { wolves: [{ name: "alpha", domains: [] }] });
+    c.send({ t: "sleep" });
+    await c.until(() => hub.link.presence("box") === "asleep", "asleep");
+    c.send({ t: "wolf.add", wolf: { name: "alpha", domains: [] } });
+    await c.until(() => hub.link.presence("box") === "online", "online after wolf.add");
+    // Asleep again, but the link keeps sending non-ping frames: the timer (600ms) must not take it offline.
+    c.send({ t: "sleep" });
+    await c.until(() => hub.link.presence("box") === "asleep", "asleep again");
+    const keep = setInterval(() => c.send({ t: "wolf.remove", name: "nobody" }), 100);
+    await sleep(1000); // past asleepOfflineMs
+    clearInterval(keep);
+    expect(hub.link.presence("box")).not.toBe("offline");
+    expect(c.closed).toBeUndefined();
+  });
+
   it("a newer connection from the same host replaces the old one (4409) without flipping presence offline", async () => {
     const seen = watch();
     const { token } = await mint("worker", "box");

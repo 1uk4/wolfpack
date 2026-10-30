@@ -53,8 +53,6 @@ export function linkBackoff(failures: number, rand: () => number, baseMs = 1000,
   return Math.min(capMs, Math.round(raw * (0.8 + 0.4 * rand())));
 }
 
-const REPLACED_DELAY_FACTOR = 1; // replaced: retry at the cap (a long delay), so two workerds with one host id do not fight
-
 export class HubLink {
   private ws: WebSocket | null = null;
   private st: LinkState = "idle";
@@ -254,7 +252,7 @@ export class HubLink {
         for (const m of f.domainMismatch) this.log(`wolf ${JSON.stringify(m.wolf.slice(0, 64))}: wolf.yaml domains [${m.reported.join(", ")}] differ from the hub's [${m.granted.join(", ")}]; the hub decides`);
         this.o.onDomainMismatch?.(f.domainMismatch);
       }
-      this.syncDiff(ws);
+      this.syncDiff();
     } else if (f.t === "ping") {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeLinkFrame({ t: "pong", n: f.n }));
     } else if (f.t === "error") {
@@ -273,13 +271,12 @@ export class HubLink {
   }
 
   /** Wolves added/removed between the hello snapshot and the welcome were not sent as frames: send the difference now. */
-  private syncDiff(ws: WebSocket): void {
+  private syncDiff(): void {
     const now = new Map(this.o.wolves().map((w) => [w.name, w] as const));
     for (const [name, w] of now) {
       if (this.sentWolves.get(name) !== JSON.stringify(w.domains)) this.wolfAdded(w);
     }
     for (const name of [...this.sentWolves.keys()]) if (!now.has(name)) this.wolfRemoved(name);
-    void ws;
   }
 
   private fail(detail: string): void {
@@ -293,7 +290,7 @@ export class HubLink {
     this.failures += 1;
     const cap = this.o.capMs ?? 60_000;
     // Sticky reasons retry at the cap; the failure count keeps growing across them.
-    const delay = this.sticky() ? linkBackoff(Number.MAX_SAFE_INTEGER, this.rand, this.o.baseMs, cap) * REPLACED_DELAY_FACTOR : linkBackoff(this.failures, this.rand, this.o.baseMs, cap);
+    const delay = this.sticky() ? linkBackoff(Number.MAX_SAFE_INTEGER, this.rand, this.o.baseMs, cap) /* sticky reasons (incl. replaced) retry at the cap so two workerds with one host id do not fight */ : linkBackoff(this.failures, this.rand, this.o.baseMs, cap);
     if (!this.sticky()) this.st = "backoff";
     this.retryAt = Date.now() + delay;
     this.timer = setTimeout(() => {

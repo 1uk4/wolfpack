@@ -20,7 +20,7 @@
     "@wolfpack/engine": "*",
     "@wolfpack/harness": "*",
     "@wolfpack/protocol": "*",
-    "ws": "^8.22.0"
+    "ws": "~8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

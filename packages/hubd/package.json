@@ -19,7 +19,7 @@
     "@wolfpack/memory": "*",
     "@wolfpack/protocol": "*",
     "qrcode-terminal": "^0.12.0",
-    "ws": "^8.22.0",
+    "ws": "~8.22.0",
     "yaml": "^2.6.0"
   },
   "devDependencies": {

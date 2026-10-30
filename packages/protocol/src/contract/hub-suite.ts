@@ -185,7 +185,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         expect(env.code).toBe("conflict");
         expect(env.message).toContain("w1");
         expect(env.details?.holder).toBe("w1");
-        await expectError(await unclaim(w2), "conflict");
+        await expectError(await unclaim(w2), "forbidden");
         expect((await unclaim(wolf)).status).toBe(200);
         expect((await record(c.id)).stage).toBe("in_build");
         expect((await claim(w2)).status).toBe(200);

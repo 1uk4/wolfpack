@@ -90,12 +90,12 @@ describe("hub claim", () => {
     expect((await s.claim("work-wolfpack-nope0000", as("w1"))).status).toBe(404);
   });
 
-  it("unclaim: holder or operator releases, others get 409; stage is left alone; the item is claimable again", async () => {
+  it("unclaim: holder or operator releases, others get 403; stage is left alone; the item is claimable again", async () => {
     const s = await setup();
     const id = s.mk("task");
     stageWork(s.roots, id, "approved");
     await s.claim(id, as("w1"));
-    expect((await s.unclaim(id, as("w2"))).status).toBe(409);
+    expect((await s.unclaim(id, as("w2"))).status).toBe(403);
     expect((await s.unclaim(id, as("w1"))).status).toBe(200);
     const item = loadWorkState(s.roots).get(id as never)!;
     expect(item.boundBy).toBeNull();

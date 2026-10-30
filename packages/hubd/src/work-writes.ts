@@ -484,12 +484,12 @@ export function claimItem(roots: KbRoots, id: string, wolf: WolfId): Item {
   return updated;
 }
 
-/** Unclaim: the holder or an operator appends work.unbound; the stage and assignee stay. Inside the write queue. */
+/** Unclaim: the holder or an operator appends work.unbound (anyone else gets 403 `forbidden`); the stage and assignee stay. Inside the write queue. */
 export function unclaimItem(roots: KbRoots, id: string, actor: Actor): Item {
   const item = loadWorkState(roots).get(id as WorkId);
   if (!item) throw new HubError("not_found", `work item ${id} not found`);
   if (!item.boundBy) return item;
-  if (actor.kind !== "operator" && actor.id !== item.boundBy) throw conflict(id, item.boundBy, "only the holder or the owner can release");
+  if (actor.kind !== "operator" && actor.id !== item.boundBy) throw new HubError("forbidden", `only the holder or the owner can release: ${id} is held by ${item.boundBy}`, { holder: item.boundBy });
   appendWorkLedger(roots, [{ type: "work.unbound", id: item.id, at: now(), wolf: item.boundBy }]);
   const updated = loadWorkState(roots).get(item.id)!;
   commitFolded(roots, updated);

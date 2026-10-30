@@ -415,9 +415,10 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("getWorkRecord", { name: wolf, id: workId }, ROUTES.getWorkRecord.response.schema, undefined, wolf)) as WorkRecordResponse;
   }
 
-  async claimWork(workId: string): Promise<WorkItemResponse> {
+  /** `wolf`: which wolf a worker token acts for (sent as the `{wolf}` body); omit for operator tokens. */
+  async claimWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "claimWork needs a hub client", false);
-    return (await this.json("hubClaimWork", { id: workId }, ROUTES.hubClaimWork.response.schema)) as WorkItemResponse;
+    return (await this.json("hubClaimWork", { id: workId }, ROUTES.hubClaimWork.response.schema, wolf === undefined ? undefined : { wolf })) as WorkItemResponse;
   }
 
   /** Hub only: commit a KB batch (operator actor; the hub's all-or-nothing POST /v1/kb/commits). 409 `conflict` on a stale prevHash. */
@@ -426,9 +427,9 @@ export class HttpConsoleClient implements ConsoleClient {
     return (await this.json("hubKbCommit", {}, ROUTES.hubKbCommit.response.schema, req)) as KbCommitResponse;
   }
 
-  async releaseWork(workId: string): Promise<WorkItemResponse> {
+  async releaseWork(workId: string, wolf?: string): Promise<WorkItemResponse> {
     if (!this.hub) throw new ProtocolError("invalid_request", "releaseWork needs a hub client", false);
-    return (await this.json("hubUnclaimWork", { id: workId }, ROUTES.hubUnclaimWork.response.schema)) as WorkItemResponse;
+    return (await this.json("hubUnclaimWork", { id: workId }, ROUTES.hubUnclaimWork.response.schema, wolf === undefined ? undefined : { wolf })) as WorkItemResponse;
   }
 
   async startGraduationPreview(wolf: string, workId: string): Promise<GraduationJob> {

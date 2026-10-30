@@ -874,14 +874,14 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
               if (localHolder !== undefined) return text(`${item.id} is ${heldMessage(localHolder)}.`, true);
               let claimed;
               try {
-                claimed = await h.hub.claimWork!(item.id as string);
+                claimed = await h.hub.claimWork!(item.id as string, wolfName);
               } catch (err) {
                 return text(hubErrorText(err, item.id as string, h.url, h.key), true);
               }
               // The claim is on the hub; if the local bind then fails, give it back so the hub and the wolf agree.
               const undo = async (why: string): Promise<ToolResult> => {
                 try {
-                  await h.hub.releaseWork!(item.id as string);
+                  await h.hub.releaseWork!(item.id as string, wolfName);
                   return text(why, true);
                 } catch {
                   return text(`${why}\nThe feature is still claimed on the hub; run task_release ${item.id}`, true);
@@ -933,7 +933,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
           const h = hubFor();
           if ("error" in h) return text(h.error, true);
           try {
-            const r = await h.hub.claimWork!(args.id);
+            const r = await h.hub.claimWork!(args.id, wolfName);
             return text(`Claimed ${args.id}${r.item?.stage ? ` (stage: ${r.item.stage})` : ""}.`);
           } catch (err) {
             return text(hubErrorText(err, args.id, h.url, h.key), true);
@@ -950,7 +950,7 @@ Domains: ${domainList}${quiet ? "" : `\n\n${BINDING_RULES}`}`;
           const h = hubFor();
           if ("error" in h) return text(h.error, true);
           try {
-            await h.hub.releaseWork!(args.id);
+            await h.hub.releaseWork!(args.id, wolfName);
             return text(`Released ${args.id}.`);
           } catch (err) {
             return text(hubErrorText(err, args.id, h.url, h.key), true);

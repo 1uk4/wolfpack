@@ -374,6 +374,22 @@ describe("HttpConsoleClient hub work reads", () => {
     await c.releaseWork("work-x-1234567").catch(() => undefined);
     expect(seen).toEqual(["POST http://hub.invalid/v1/work/work-x-1234567/claim", "POST http://hub.invalid/v1/work/work-x-1234567/unclaim"]);
   });
+  it("claimWork / releaseWork send {wolf} as a JSON body when given, and no body otherwise", async () => {
+    const seen: { url: string; body: unknown; ct: string | null }[] = [];
+    const f: typeof fetch = async (u, init) => {
+      seen.push({ url: String(u), body: init?.body, ct: new Headers(init?.headers).get("content-type") });
+      return Response.json({ code: "conflict", message: "x", retryable: false }, { status: 409 });
+    };
+    const c = new HttpConsoleClient({ baseUrl: "http://wolf.invalid", hub: { baseUrl: "http://hub.invalid", token: "t" }, fetch: f });
+    await c.claimWork("work-x-1234567", "wolf-a").catch(() => undefined);
+    await c.releaseWork("work-x-1234567", "wolf-a").catch(() => undefined);
+    await c.claimWork("work-x-1234567").catch(() => undefined);
+    expect(seen.map((s) => [s.url.split("/").pop(), s.body, s.ct])).toEqual([
+      ["claim", '{"wolf":"wolf-a"}', "application/json"],
+      ["unclaim", '{"wolf":"wolf-a"}', "application/json"],
+      ["claim", undefined, null],
+    ]);
+  });
   it("without a hub, work reads still use the wolf-scoped routes", async () => {
     const c = make();
     await expect(c.listWork("1uk4", { domain: "x" })).rejects.toBeInstanceOf(ProtocolError); // stub: no Work API

@@ -143,6 +143,54 @@ describe("hub claim", () => {
     expect((await post("w1b")).status).toBe(403);
   });
 
+  it("a host with two active wolves: claim and unclaim with {wolf} succeed and are attributed to that wolf; without it, 400", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    const op = as("x", "operator");
+    expect((await fetch(`${s.hub.url}/v1/registry/wolves`, { method: "POST", headers: { "Content-Type": "application/json", ...op }, body: JSON.stringify({ name: "w1b", host: "h-w1" }) })).status).toBe(201);
+    const post = (verb: string, wolf?: string) =>
+      fetch(`${s.hub.url}/v1/work/${id}/${verb}`, { method: "POST", headers: { "Content-Type": "application/json", ...as("w1") }, body: wolf ? JSON.stringify({ wolf }) : undefined });
+    expect((await post("claim")).status).toBe(400);
+    expect((await post("unclaim")).status).toBe(400);
+    expect((await post("claim", "w1b")).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("w1b");
+    const events = readFileSync(join(s.dir, "ledger/work-events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.filter((e) => e.type === "work.bound").pop()).toMatchObject({ by: "w1b" });
+    expect((await post("claim", "w1")).status).toBe(409); // the other wolf of the same host is a different holder
+    expect((await post("unclaim", "w1")).status).toBe(403); // not the holder
+    expect((await post("unclaim", "w1b")).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy ?? null).toBeNull();
+    expect((await post("claim", "w1")).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("w1");
+  });
+
+  it("single-wolf fallback: with no body the host's only wolf claims; with none active it is 403", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    expect((await s.claim(id, as("w1"))).status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("w1");
+    expect((await s.unclaim(id, as("w1"))).status).toBe(200);
+    expect((await fetch(`${s.hub.url}/v1/registry/wolves/w1/retire`, { method: "POST", headers: as("x", "operator") })).status).toBe(200);
+    expect((await s.claim(id, as("w1"))).status).toBe(403); // no active wolf on the host
+    expect((await s.unclaim(id, as("w1"))).status).toBe(403);
+  });
+
+  it("the {wolf} body is read when chunked, and a non-JSON body is 400", async () => {
+    const s = await setup();
+    const id = s.mk("task");
+    stageWork(s.roots, id, "approved");
+    const op = as("x", "operator");
+    expect((await fetch(`${s.hub.url}/v1/registry/wolves`, { method: "POST", headers: { "Content-Type": "application/json", ...op }, body: JSON.stringify({ name: "w1b", host: "h-w1" }) })).status).toBe(201);
+    const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"wolf":')); c.enqueue(new TextEncoder().encode('"w1b"}')); c.close(); } });
+    const chunked = await fetch(`${s.hub.url}/v1/work/${id}/claim`, { method: "POST", headers: { "Content-Type": "application/json", ...as("w1") }, body: stream, duplex: "half" } as RequestInit);
+    expect(chunked.status).toBe(200);
+    expect(loadWorkState(s.roots).get(id as never)!.boundBy).toBe("w1b");
+    const bad = await fetch(`${s.hub.url}/v1/work/${id}/unclaim`, { method: "POST", headers: { "Content-Type": "application/json", ...as("w1") }, body: "{not json" });
+    expect(bad.status).toBe(400);
+  });
+
   it("an unknown id is 404 on claim and unclaim", async () => {
     const s = await setup();
     expect((await s.claim("work-wolfpack-nope0000", as("w1"))).status).toBe(404);

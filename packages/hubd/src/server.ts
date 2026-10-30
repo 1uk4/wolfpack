@@ -12,7 +12,6 @@ import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  ActorSchema,
   CreateWorkRequestSchema,
   PairRequestSchema,
   PatchWorkBatchSchema,
@@ -75,7 +74,6 @@ for (const [c, S, P] of [["hosts", "Host", "Hosts"], ["wolves", "Wolf", "Wolves"
 }
 REGISTRY_ROUTES.registryRetireWolf = { c: "wolves", op: "retire" };
 const registryRoute = (name: string): RegRoute | undefined => REGISTRY_ROUTES[name];
-
 
 export interface HubOptions {
   dataDir: string;
@@ -506,11 +504,17 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       TOKEN_INFO.set(out, info);
       return out;
     }
-    /** The optional `{wolf}` a worker token's claim/unclaim names (only read for worker tokens, and only when a body is sent). */
+    /** The optional `{wolf}` a worker token's claim/unclaim names. Read whenever a body is present (Content-Length > 0 or Transfer-Encoding set; same cap as other JSON bodies); invalid JSON is 400. */
     async function namedWolf(req: IncomingMessage, actor: Actor): Promise<string | undefined> {
-      if (!TOKEN_INFO.get(actor)?.hostId || !(Number(req.headers["content-length"]) > 0)) return undefined;
+      if (!TOKEN_INFO.get(actor)?.hostId) return undefined;
+      const hasBody = Number(req.headers["content-length"]) > 0 || req.headers["transfer-encoding"] !== undefined;
+      if (!hasBody) return undefined;
       const b = await readBody(req);
-      return b && typeof b === "object" && typeof (b as { wolf?: unknown }).wolf === "string" ? (b as { wolf: string }).wolf : undefined;
+      if (b === undefined || b === null) return undefined;
+      if (typeof b !== "object" || Array.isArray(b)) throw new HubError("invalid_request", "body must be a JSON object");
+      const w = (b as { wolf?: unknown }).wolf;
+      if (w !== undefined && typeof w !== "string") throw new HubError("invalid_request", "wolf must be a string");
+      return w;
     }
 
     /** KB sync reads: a worker token sees only the domains its host's wolves subscribe to; console/browser tokens see all. */
@@ -541,7 +545,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
         if (!/^\d+$/.test(v.trim())) throw new HubError("invalid_request", `bad ${PROTOCOL_VERSION_HEADER}`);
         if (Number(v) !== PROTOCOL_VERSION) throw new HubError("version_mismatch", `server speaks protocol ${PROTOCOL_VERSION}, client sent ${v}`);
       }
-      readActor(req); // validated for every request; write routes (later tickets) call writeActor() and record it on the ledger event
+      readActor(req); // validated for every request; write routes call writeActor() and record the token identity on the ledger event
       const { params } = m;
       switch (m.name) {
         case "hubPairPage": {

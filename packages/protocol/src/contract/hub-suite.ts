@@ -63,7 +63,7 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
     });
 
     describe("contributions", () => {
-      const asWolf = (_id: string) => ({ ...options.wolf, "Content-Type": "application/json" });
+      const asWolf = () => ({ ...options.wolf, "Content-Type": "application/json" });
       const post = (body: unknown, headers: Record<string, string>) =>
         fetch(baseUrl() + buildPath("submitContribution"), { method: "POST", headers, body: typeof body === "string" ? body : JSON.stringify(body) });
       const contribution = (from: string) => {
@@ -83,21 +83,21 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
 
       it("a valid contribution is accepted (201), and posting it again is an idempotent 200", async () => {
         const c = contribution("w1");
-        const res = await post(c, asWolf("w1"));
+        const res = await post(c, asWolf());
         expect(res.status).toBe(201);
         const ack = ROUTES.submitContribution.response.schema.parse(await res.json()) as { id: string; wolf: string; duplicate: boolean };
         expect(ack).toMatchObject({ wolf: "w1", duplicate: false });
         expect(ack.id).toMatch(new RegExp(`^${c.denTopicId}-[0-9a-f]{10}\\.md$`));
-        const again = await post(c, asWolf("w1"));
+        const again = await post(c, asWolf());
         expect(again.status).toBe(200);
         expect(((await again.json()) as { duplicate: boolean }).duplicate).toBe(true);
       });
 
       it("a malformed contribution is invalid_request", async () => {
         const { contentHash: _drop, ...noHash } = contribution("w1");
-        await expectError(await post(noHash, asWolf("w1")), "invalid_request");
-        await expectError(await post({ ...contribution("w1"), change: "rewrite" }, asWolf("w1")), "invalid_request");
-        await expectError(await post("not json", asWolf("w1")), "invalid_request");
+        await expectError(await post(noHash, asWolf()), "invalid_request");
+        await expectError(await post({ ...contribution("w1"), change: "rewrite" }, asWolf()), "invalid_request");
+        await expectError(await post("not json", asWolf()), "invalid_request");
       });
 
       it("a request without credentials is rejected", async () => {
@@ -105,8 +105,8 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
       });
 
       it("a wolf posting as a wolf that is not on its host (or unregistered) is rejected", async () => {
-        await expectError(await post(contribution("someone-else"), asWolf("w1")), "forbidden");
-        await expectError(await post(contribution("w2"), asWolf("w1")), "forbidden");
+        await expectError(await post(contribution("someone-else"), asWolf()), "forbidden");
+        await expectError(await post(contribution("w2"), asWolf()), "forbidden");
       });
     });
 
@@ -382,6 +382,8 @@ export function runHubSuite(baseUrl: () => string, options: HubSuiteOptions): vo
         const body = { changes: [{ op: "create", domain: options.domain, path: "INDEX.md", content: "x", contentHash: "sha256:" + createHash("sha256").update("x").digest("hex"), prevHash: null }] };
         const res = await fetch(baseUrl() + buildPath("hubKbCommit"), { method: "POST", headers: { "Content-Type": "application/json", ...options.wolf, ...forged }, body: JSON.stringify(body) });
         await expectError(res, "forbidden"); // still the wolf, not the operator it claims to be
+        // a registry write is operator-only: a wolf token with a forged operator header is still refused
+        await expectError(await fetch(baseUrl() + buildPath("registryCreateDomain"), { method: "POST", headers: { "Content-Type": "application/json", ...options.wolf, ...forged }, body: JSON.stringify({ name: "forged-dom" }) }), "forbidden");
       });
     });
   });

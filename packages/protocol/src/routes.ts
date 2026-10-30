@@ -76,6 +76,8 @@ export const ListCardsResponseSchema = z.object({ cards: z.array(PendingCardSche
  * prevHash, domainHint, summary, submitted, body, + optional provenance) as JSON. The protocol only requires an object; hubd validates
  * it against the kb schema and quarantines a non-conforming one.
  */
+/** Optional body of hubClaimWork / hubUnclaimWork: the wolf a worker token acts for (see the route docs). */
+export const ClaimWorkBodySchema = z.object({ wolf: z.string().optional() });
 export const SubmitContributionBodySchema = z.record(z.string(), z.unknown());
 export const SubmitContributionResponseSchema = z.object({
   /** The stored file name, `<denTopicId>-<10 hex of contentHash>.md`. */
@@ -315,9 +317,9 @@ export const ROUTES = {
   /**
    * Submit a wolf contribution to the hub (the hub-side librarian inbox). Body: the contribution fields as JSON. Needs a bearer token; the actor is the token's identity.
    * A wolf may only submit as itself (`from` must be the acting wolf; an operator token may submit for any wolf, a worker token for any active wolf on its host). 201 when stored,
-   * 200 `duplicate: true` when the same topic + content hash is already stored (idempotent). 400 `invalid_request` for non-JSON, a
-   * `from`/actor mismatch, or a contribution that fails the contribution schema (the latter is also quarantined under
-   * `contributions/<wolf>/_bad/` with a `.reason.txt`).
+   * 200 `duplicate: true` when the same topic + content hash is already stored (idempotent). 400 `invalid_request` for non-JSON or a contribution that fails the contribution schema (the latter is also quarantined under
+   * `contributions/<wolf>/_bad/` with a `.reason.txt`). 403 `forbidden` when `from` is not the acting wolf: for a worker token, a wolf that is
+   * not registered, not active or not on the token's host; for an operator token there is no such check.
    */
   submitContribution: { scope: "hub", method: "POST", path: "/v1/contributions", body: SubmitContributionBodySchema, response: { kind: "json", schema: SubmitContributionResponseSchema }, status: [200, 201], error: err },
   /**
@@ -349,13 +351,17 @@ export const ROUTES = {
    * when held by another wolf, or when the item's feature is; 400 `invalid_request` for idea/initiative/container items or items
    * not in stage approved or in_build (idea, plan, feasibility and the terminal stages are refused). Inheritance runs both ways: a
    * child of a held feature, and a feature with a held child, are 409. An actor id that is not a valid wolf id is 400.
+   * Optional JSON body `{ wolf?: string }` (read for worker tokens only; operator/console tokens act as themselves): a worker token's actor is
+   * its host, so it names the active wolf on its host that claims. With no body the host's single active wolf is used: 400 `invalid_request`
+   * when the host has several, 403 `forbidden` when it has none. A named wolf that is unregistered, retired or on another host is 403.
+   * A body that is not valid JSON is 400.
    * LEGACY: an old work.bound with no matching work.unbound reads as held (last writer wins, no origin filter); an operator clears it
    * with unclaim. task_bind outside the hub can displace a hub claim until wolves are repointed (JPhfaEL / cutover).
-   * `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone.
+   * `hubUnclaimWork`: the holder or an operator appends work.unbound; the stage is left alone. Takes the same optional `{ wolf }` body and wolf resolution as claim.
    * 409 `conflict` for any other actor. No timeout or presence expiry.
    */
-  hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
-  hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubClaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/claim", body: ClaimWorkBodySchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
+  hubUnclaimWork: { scope: "hub", method: "POST", path: "/v1/work/:id/unclaim", body: ClaimWorkBodySchema, response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   hubGraduateWork: { scope: "hub", method: "POST", path: "/v1/work/:id/graduate", response: { kind: "json", schema: WorkItemResponseSchema }, status: [200], error: err },
   /**
    * KB commit (hubd): a batch of create/update/delete changes to entries/*.md, _registry.md, _digest.json and INDEX.md of declared

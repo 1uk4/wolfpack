@@ -174,9 +174,9 @@ export interface ConsoleClient {
    * Hub only: claim a work item for the client's actor (compare-and-set on the hub). Rejects ProtocolError `conflict` (the message names
    * the holder) when another wolf holds it or its feature. Optional like watchMemory.
    */
-  claimWork?(workId: string): Promise<WorkItemResponse>;
+  claimWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** Hub only: release a claim (the holder or the operator). Leaves the stage alone. Rejects `conflict` for anyone else. */
-  releaseWork?(workId: string): Promise<WorkItemResponse>;
+  releaseWork?(workId: string, wolf?: string): Promise<WorkItemResponse>;
   /** The Record of a work item, via the wolf's Work API client. Rejects NotFoundError for an unknown item. */
   getWorkRecord?(wolf: string, workId: string): Promise<WorkRecordResponse>;
   /**

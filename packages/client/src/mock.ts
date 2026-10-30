@@ -275,7 +275,7 @@ export class MockConsoleClient implements ConsoleClient {
     if (!w) throw new NotFoundError(`work item ${workId}`);
     return w;
   }
-  async claimWork(workId: string): Promise<WorkItemResponse> {
+  async claimWork(workId: string, _wolf?: string): Promise<WorkItemResponse> {
     const w = this.claimTarget(workId);
     if (w.kind !== "feature" && w.kind !== "task" && w.kind !== "issue" && w.kind !== "spike") throw new ProtocolError("invalid_request", `a ${w.kind} cannot be claimed`, false);
     if ((w as { container?: boolean }).container) throw new ProtocolError("invalid_request", "a holding container cannot be claimed", false);
@@ -287,7 +287,7 @@ export class MockConsoleClient implements ConsoleClient {
     this.claims.set(workId, this.claimActor.id);
     return { item: { id: w.id, title: w.title, kind: w.kind, stage: w.stage === "approved" ? "in_build" : w.stage, domain: w.domain, assignee: this.claimActor.id, partOf: w.partOf, boundBy: this.claimActor.id } };
   }
-  async releaseWork(workId: string): Promise<WorkItemResponse> {
+  async releaseWork(workId: string, _wolf?: string): Promise<WorkItemResponse> {
     const w = this.claimTarget(workId);
     const holder = this.claims.get(workId);
     if (holder && this.claimActor.kind !== "operator" && holder !== this.claimActor.id) throw new ProtocolError("conflict", `only the holder or the owner can release: ${workId} is held by ${holder}`, false);

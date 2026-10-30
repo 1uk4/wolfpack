@@ -117,6 +117,18 @@ describe("hub claim tools", () => {
     expect(r.text).not.toContain(KEY);
   });
 
+  it("two wolves share one host token: each claim and release names its own wolf", async () => {
+    const op = { "Content-Type": "application/json", ...OP };
+    expect((await realFetch(`${hub.url}/v1/registry/wolves`, { method: "POST", headers: op, body: JSON.stringify({ name: "wolf-c", host: "h-wolf-a" }) })).status).toBe(201);
+    const a = wolf("wolf-a", cfg("wolf-a"));
+    const c = wolf("wolf-c", cfg("wolf-a")); // same host token as wolf-a
+    expect((await c.run("task_claim", { id: featureId })).isError).toBe(false);
+    expect((await a.run("task_claim", { id: featureId })).text).toBe(`${featureId} is held by wolf-c`);
+    expect((await a.run("task_release", { id: featureId })).isError).toBe(true); // not the holder
+    expect((await c.run("task_release", { id: featureId })).isError).toBe(false);
+    expect((await a.run("task_claim", { id: featureId })).isError).toBe(false);
+  });
+
   it("shows the stage from the claim response (approved -> in_build), not the local copy", async () => {
     const a = wolf("wolf-a", cfg("wolf-a"));
     expect((await a.run("task_bind", { id: featureId })).text).toContain("Stage: in_build");

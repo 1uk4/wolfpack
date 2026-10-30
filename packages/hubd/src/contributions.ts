@@ -6,7 +6,7 @@
  * quarantined in the wolf's `_bad/` (bounded: truncated raw body, deduped by its hash, capped per lane) with a reason.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { Actor } from "@wolfpack/protocol";
@@ -107,6 +107,19 @@ function lineBreakIn(c: Contribution): string | undefined {
   return undefined;
 }
 
+function syncDir(dir: string): void {
+  try {
+    const fd = openSync(dir, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    /* some platforms cannot fsync a directory */
+  }
+}
+
 const shorten = (v: unknown) => JSON.stringify(String(v)).slice(0, 60);
 
 /** Validate + store one contribution submitted by `actor`. Throws ContributionError (invalid_request) when rejected. */
@@ -149,7 +162,13 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
 
   const tmp = join(dir, `.${name}.${randomBytes(4).toString("hex")}.tmp`); // not *.md: the intake never lists it
   try {
-    writeFileSync(tmp, renderContribution(c));
+    const fd = openSync(tmp, "w", 0o644);
+    try {
+      writeSync(fd, renderContribution(c));
+      fsyncSync(fd); // durable before it can become visible under its final name
+    } finally {
+      closeSync(fd);
+    }
     let back;
     try {
       back = parseContribution(tmp, wolf); // what the curator's intake will do
@@ -165,6 +184,7 @@ export function storeContribution(dataDir: string, actor: Actor, submitted: Subm
       if ((back as unknown as Record<string, unknown>)[k] !== v) return reject(`${k} does not survive the contribution file format (read back ${shorten((back as unknown as Record<string, unknown>)[k])})`);
     }
     renameSync(tmp, join(dir, name));
+    syncDir(dir);
   } finally {
     rmSync(tmp, { force: true });
   }

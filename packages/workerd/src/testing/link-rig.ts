@@ -31,6 +31,8 @@ export interface LinkRig {
   /** A bare WebSocket speaking raw frames (for impersonating a second worker or a version-skewed one). */
   rawLink(token: string): Promise<RawLink>;
   /** Librarian-ops dirs: the hub's inbox + receipts roots, and the worker's receipts root (kbOps) and outbox dir. */
+  /** workerd log lines. */
+  logs: string[];
   inboxRoot: string;
   receiptsRoot: string;
   kbOps: string;
@@ -64,6 +66,7 @@ export interface LinkRigOptions {
   /** Extra createHubServer options (limits, poll intervals). */
   hubOptions?: Partial<Parameters<typeof createHubServer>[0]>;
   ackTimeoutMs?: number;
+  linkOptions?: { retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
 }
 
 const KEY = "rig-legacy-key-0123456789";
@@ -96,6 +99,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     if (!r.ok) throw new Error(`pre-register ${name} failed: ${r.status}`);
   };
   for (const n of [...wolfNames, ...(o.preRegister ?? [])]) await registerWolf(n);
+  const logs: string[] = [];
   const startWorkerd = (url: string) =>
     runWorkerd({
       wolvesDir: root,
@@ -103,12 +107,12 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
       command: FAKE_COMMAND,
       laptop: o.laptop,
       hub: o.noHub ? false : { hubUrl: url, token, hostId },
-      linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5 },
+      linkOptions: { baseMs: 20, capMs: 200, rand: () => 0.5, retryBaseMs: 20, ...o.linkOptions },
       wake: { intervalMs: 3_600_000, netPollMs: 3_600_000 },
       kbOps,
       outboxDir,
       ackTimeoutMs: o.ackTimeoutMs ?? 400,
-      log: () => {},
+      log: (m) => void logs.push(m),
     });
   const workerd = await startWorkerd(hub.url);
   const client = new HttpConsoleClient({ baseUrl: workerd.url, hub: { baseUrl: hub.url, token } });
@@ -131,6 +135,7 @@ export async function startLinkRig(o: LinkRigOptions = {}): Promise<LinkRig> {
     },
     mintWorker,
     registerWolf,
+    logs,
     inboxRoot,
     receiptsRoot,
     kbOps,

@@ -14,6 +14,8 @@ export {
   deleteWorkItemFile,
   readWorkLedger,
   appendWorkLedger,
+  withLedgerAttribution,
+  type LedgerAttribution,
   loadWorkState,
   type ResolvedWorkItem,
 } from "./work-store.js";

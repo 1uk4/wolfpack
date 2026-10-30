@@ -121,7 +121,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("work.created"),
     id: WorkId,
-    at: z.string(), ...ATTR,
+    at: z.string(),
+    ...ATTR,
     kind: WorkKind,
     domain: DomainId,
     title: z.string().min(1).max(200),
@@ -141,7 +142,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("work.criteria"),
     id: WorkId,
-    at: z.string(), ...ATTR,
+    at: z.string(),
+    ...ATTR,
     successCriteria: z.string().nullable(),
   }),
   z.object({ type: z.literal("work.area"), id: WorkId, at: z.string(), ...ATTR, area: Slug.nullable() }),
@@ -162,7 +164,8 @@ export const WorkEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("work.scheduled"),
     id: WorkId,
-    at: z.string(), ...ATTR,
+    at: z.string(),
+    ...ATTR,
     scheduledFor: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable(),
     durationMinutes: z.number().int().positive().nullable(),
   }),

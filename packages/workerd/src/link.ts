@@ -46,6 +46,12 @@ export interface HubLinkOptions {
   onContributionRejected?: (id: string, code: string | undefined, message: string | undefined) => void;
   /** Resend an unacknowledged contribution after this long while online, ms. Default 15000. */
   ackTimeoutMs?: number;
+  /** Contributions sent but not yet acknowledged at once. Default 32. */
+  sendWindow?: number;
+  /** Retry backoff for `internal` / `foreign_wolf` acks: base * 2^tries, capped at 60s. Default base 1000 ms. */
+  retryBaseMs?: number;
+  /** `foreign_wolf` rejections retried before the item is dead-lettered. Default 3. */
+  foreignRetries?: number;
 }
 
 export interface LinkStatus {
@@ -75,6 +81,8 @@ export class HubLink {
   private heartbeatDeadMs = 0;
   private sentWolves = new Map<string, string>();
   private inflight = new Map<string, number>();
+  /** Per-item retry state after a non-terminal rejection (in memory; a restart starts over). */
+  private retry = new Map<string, { tries: number; foreign: number; notBefore: number }>();
   private resendTimer: NodeJS.Timeout | null = null;
   private readonly laptop: boolean;
   private readonly rand: () => number;
@@ -147,16 +155,43 @@ export class HubLink {
     return item.id;
   }
 
-  /** Send every outbox item not already in flight (or whose ack is overdue). Oldest first. */
+  /** Send outbox items (oldest first) while fewer than `sendWindow` are awaiting an ack; skip those backing off. */
   private flushOutbox(): void {
     if (!this.o.outbox || this.st !== "online") return;
     const now = Date.now();
     const timeout = this.o.ackTimeoutMs ?? 15_000;
-    for (const it of this.o.outbox.list()) {
-      const at = this.inflight.get(it.id);
-      if (at !== undefined && now - at < timeout) continue;
-      if (this.send({ t: "contribute", id: it.id, wolf: it.wolf, contribution: it.contribution })) this.inflight.set(it.id, now);
+    const window = this.o.sendWindow ?? 32;
+    let awaiting = 0;
+    for (const [id, at] of this.inflight) {
+      if (now - at >= timeout) this.inflight.delete(id); // overdue: eligible to resend
+      else awaiting++;
     }
+    for (const it of this.o.outbox.list()) {
+      if (awaiting >= window) break;
+      if (this.inflight.has(it.id)) continue;
+      if ((this.retry.get(it.id)?.notBefore ?? 0) > now) continue;
+      if (this.send({ t: "contribute", id: it.id, wolf: it.wolf, contribution: it.contribution })) {
+        this.inflight.set(it.id, now);
+        awaiting++;
+      }
+    }
+  }
+
+  /** A non-terminal rejection: keep the item and try again later. */
+  private backoffItem(id: string, foreign: boolean): number {
+    const r = this.retry.get(id) ?? { tries: 0, foreign: 0, notBefore: 0 };
+    r.tries++;
+    if (foreign) r.foreign++;
+    r.notBefore = Date.now() + Math.min(60_000, (this.o.retryBaseMs ?? 1000) * 2 ** (r.tries - 1));
+    this.retry.set(id, r);
+    return r.foreign;
+  }
+
+  private terminal(id: string, code: string | undefined, message: string | undefined): void {
+    this.log(`hub rejected contribution ${JSON.stringify(id.slice(0, 64))}: ${code ?? "?"} ${message ?? ""}`);
+    this.o.outbox?.reject(id, `${code ?? "rejected"}: ${message ?? ""}`); // throws (item stays queued) if the dead letter cannot be made durable
+    this.retry.delete(id);
+    this.o.onContributionRejected?.(id, code ?? "rejected", message);
   }
 
   private clearTimers(): void {
@@ -288,6 +323,8 @@ export class HubLink {
       this.syncDiff();
       this.inflight.clear(); // a new connection: everything unacked is replayed (the hub dedups on the idempotency id)
       this.flushOutbox();
+      if (this.resendTimer) clearInterval(this.resendTimer);
+      this.resendTimer = null;
       if (this.o.outbox) {
         this.resendTimer = setInterval(() => this.flushOutbox(), Math.max(50, Math.floor((this.o.ackTimeoutMs ?? 15_000) / 2)));
         this.resendTimer.unref();
@@ -295,11 +332,20 @@ export class HubLink {
     } else if (f.t === "contribute.ack") {
       this.inflight.delete(f.id);
       try {
-        if (f.status === "rejected") {
-          this.log(`hub rejected contribution ${JSON.stringify(f.id.slice(0, 64))}: ${f.code ?? "?"} ${f.message ?? ""}`);
-          this.o.outbox?.reject(f.id, `${f.code ?? "rejected"}: ${f.message ?? ""}`);
-          this.o.onContributionRejected?.(f.id, f.code, f.message);
-        } else this.o.outbox?.remove(f.id);
+        if (f.status !== "rejected") {
+          this.retry.delete(f.id);
+          this.o.outbox?.remove(f.id);
+        } else if (f.code === "invalid" || f.code === "too_large") {
+          this.terminal(f.id, f.code, f.message);
+        } else if (f.code === "foreign_wolf") {
+          // Ownership can lag a registry change: retry a few times before giving up.
+          if (this.backoffItem(f.id, true) > (this.o.foreignRetries ?? 3)) this.terminal(f.id, f.code, f.message);
+          else this.log(`hub says wolf of contribution ${JSON.stringify(f.id.slice(0, 64))} is not on this host; will retry`);
+        } else {
+          // internal (or an unknown code from a newer hub): NOT terminal; stays in the outbox with backoff.
+          this.backoffItem(f.id, false);
+          this.log(`hub could not take contribution ${JSON.stringify(f.id.slice(0, 64))} (${f.code ?? "?"}); will retry`);
+        }
       } catch (e) {
         this.log(`outbox update for ${JSON.stringify(f.id.slice(0, 64))} failed: ${(e as Error).message}`);
       }

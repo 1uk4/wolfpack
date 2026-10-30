@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,5 +23,22 @@ describe("link contributions id set", () => {
     expect(b.onContribute("box", { t: "contribute", id: "id11", wolf: "alpha", contribution: c(11) }).status).toBe("duplicate");
     a.stop();
     b.stop();
+  });
+});
+
+describe("IdSet torn line", () => {
+  it("drops a torn last line and the next add starts on a fresh line", async () => {
+    const { IdSet } = await import("./link-contributions.js");
+    const dir = mkdtempSync(join(tmpdir(), "idset-"));
+    dirs.push(dir);
+    const f = join(dir, "ids.jsonl");
+    writeFileSync(f, JSON.stringify({ k: "a", at: 1 }) + "\n" + '{"k":"b","at"');
+    const s = new IdSet(f, 100, 1e12, () => 5, () => {});
+    expect(s.has("a")).toBe(true);
+    expect(s.has("b")).toBe(false);
+    expect(readFileSync(f, "utf8")).toBe(JSON.stringify({ k: "a", at: 1 }) + "\n"); // compacted on load
+    s.add("c");
+    const again = new IdSet(f, 100, 1e12, () => 5, () => {});
+    expect([again.has("a"), again.has("c")]).toEqual([true, true]);
   });
 });

@@ -200,6 +200,27 @@ export function readWorkLedger(roots: KbRoots): WorkEvent[] {
   return out;
 }
 
+/** Who made a write: stamped on each appended event (never over a field the event already has). */
+export interface LedgerAttribution {
+  by?: string;
+  tokenId?: string;
+  hostId?: string;
+}
+let ambientAttribution: LedgerAttribution | undefined;
+/**
+ * Run a SYNCHRONOUS work-ops call with `attr` merged into every event it appends (at append time, in the one append; the ledger is
+ * never rewritten). The hub calls it inside its serial write queue, so one attribution is active at a time.
+ */
+export function withLedgerAttribution<T>(attr: LedgerAttribution | undefined, fn: () => T): T {
+  const prev = ambientAttribution;
+  ambientAttribution = attr;
+  try {
+    return fn();
+  } finally {
+    ambientAttribution = prev;
+  }
+}
+
 /**
  * Append events to the work ledger. Every event is validated first and nothing
  * is written if any fails — the reader silently skips invalid lines, so an
@@ -207,8 +228,10 @@ export function readWorkLedger(roots: KbRoots): WorkEvent[] {
  */
 export function appendWorkLedger(roots: KbRoots, events: WorkEvent[]): void {
   if (events.length === 0) return;
+  const attr = ambientAttribution;
   const valid = events.map((e) => {
-    const r = WorkEvent.safeParse(e);
+    const stamped = attr ? { ...Object.fromEntries(Object.entries(attr).filter(([, v]) => v !== undefined)), ...e } : e;
+    const r = WorkEvent.safeParse(stamped);
     if (!r.success) {
       const issues = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
       throw new Error(`Invalid ${e.type} event for ${e.id} — ${issues}`);

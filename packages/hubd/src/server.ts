@@ -8,6 +8,7 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { normalizeConsoleUrl, pairPageHtml } from "./pair-page.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -34,7 +35,6 @@ import {
 import type { KbRoots } from "@wolfpack/kb/shared";
 import { acquireWorkWriterLock } from "@wolfpack/engine";
 import { HubError } from "./errors.js";
-import { join } from "node:path";
 import { contributionsRoot, hubRoots } from "./layout.js";
 import { ContributionError, readJsonObject, storeContribution } from "./contributions.js";
 import {
@@ -117,11 +117,13 @@ export interface HubOptions {
   kbSettleMs?: number;
   /** @internal TEST-ONLY: KB change log retention (default 30 days or 10,000 changes, whichever keeps more). */
   kbRetention?: KbRetention;
+  /** @internal TEST-ONLY: failure injection in link contribution handling. */
+  linkFaults?: { beforeSeenAdd?: () => void };
   /** @internal TEST-ONLY: shrink the worker-link heartbeat / dead / hello timers. */
   linkTimers?: Partial<LinkTimers>;
-  /** Librarian inbox root the hub delivers contributions into (`<root>/<wolf>/`). Default `<dataDir>/kb/ops/contributions`; on sfo-01 Dewey's `.../librarian/inbox`. CLI: --inbox-root / env HUBD_INBOX_ROOT. */
+  /** Librarian inbox root the hub delivers contributions into (`<root>/<wolf>/`). Default `<dataDir>/kb/ops/contributions`; on sfo-01 Dewey's `.../librarian/inbox`. Set by the `hubd` CLI from env HUBD_INBOX_ROOT (no flag). */
   inboxRoot?: string;
-  /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. CLI: --receipts-root / env HUBD_RECEIPTS_ROOT. */
+  /** Librarian receipts root the hub watches (`<root>/<wolf>/*.md`). Default `<dataDir>/kb/ops/receipts`. Set by the `hubd` CLI from env HUBD_RECEIPTS_ROOT (no flag). */
   receiptsRoot?: string;
   /** Receipts lane poll, ms (default 3000; 0 = off). */
   receiptPollMs?: number;
@@ -470,6 +472,7 @@ export async function createHubServer(opts: HubOptions): Promise<HubServer> {
       receiptAckTimeoutMs: opts.receiptAckTimeoutMs,
       maxItemBytes: opts.linkContributionMaxBytes,
       seenMax: opts.linkSeenMax,
+      faults: opts.linkFaults,
     });
     link = createLink({ authenticate, registry, timers: opts.linkTimers, contributions: { onContribute: (h, f) => linkContrib.onContribute(h, f), onReceiptAck: (h, id) => linkContrib.onReceiptAck(h, id) } });
     link.onPresence((h, p) => p === "online" && linkContrib.onHostOnline(h));

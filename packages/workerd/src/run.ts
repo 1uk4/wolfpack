@@ -24,7 +24,7 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   /** Laptop flag for presence (clean close = asleep). Default: macOS. */
   laptop?: boolean;
   /** Test seams for the link. */
-  linkOptions?: { baseMs?: number; capMs?: number; rand?: () => number };
+  linkOptions?: { baseMs?: number; capMs?: number; rand?: () => number; retryBaseMs?: number; foreignRetries?: number; sendWindow?: number };
   wake?: Partial<WakeOptions>;
   /** Librarian-ops root where receipts are written (`<kbOps>/receipts/<wolf>/`). Default env KB_OPS, else `<wolvesDir>/../librarian`. */
   kbOps?: string;

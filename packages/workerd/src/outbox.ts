@@ -51,13 +51,30 @@ export function writeFileDurable(file: string, data: string): void {
   fsyncDir(dir);
 }
 
+const FILE_RE = /^(\d{15})-(\d{6})-(.+)\.json$/;
+/** The idempotency id encoded in an outbox file name (exact: the two numeric prefixes are fixed width). */
+export const outboxFileId = (file: string): string | undefined => FILE_RE.exec(file)?.[3];
+
+/**
+ * The directory is read ONCE at construction; afterwards an in-memory index (id -> file + item) answers list/enqueue/remove, so
+ * nothing re-parses the whole outbox per call. This process is the only writer of the directory.
+ */
 export class Outbox {
   private n = 0;
+  private index = new Map<string, { file: string; item: OutboxItem }>();
   constructor(
     readonly dir: string,
     private readonly opts: { maxItemBytes?: number; maxItems?: number } = {},
   ) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir).filter((x) => FILE_RE.test(x)).sort()) {
+      try {
+        const o = JSON.parse(readFileSync(join(dir, f), "utf8")) as OutboxItem;
+        if (typeof o.id === "string" && o.id === outboxFileId(f) && typeof o.wolf === "string" && o.contribution && typeof o.contribution === "object") this.index.set(o.id, { file: f, item: o });
+      } catch {
+        /* torn or foreign file */
+      }
+    }
   }
 
   /** Queue an item durably. Throws OutboxError when it is too large or the outbox is full. */
@@ -66,62 +83,44 @@ export class Outbox {
     const max = this.opts.maxItemBytes ?? LINK_CONTRIBUTION_MAX_BYTES;
     const bytes = Buffer.byteLength(JSON.stringify(contribution));
     if (bytes > max) throw new OutboxError(`contribution is ${bytes} bytes; the limit is ${max}`);
-    const existing = this.list();
-    if (existing.some((i) => i.id === id)) return existing.find((i) => i.id === id)!;
-    if (existing.length >= (this.opts.maxItems ?? 10_000)) throw new OutboxError(`outbox is full (${existing.length} items)`);
+    const have = this.index.get(id);
+    if (have) return have.item;
+    if (this.index.size >= (this.opts.maxItems ?? 10_000)) throw new OutboxError(`outbox is full (${this.index.size} items)`);
     const item: OutboxItem = { id, wolf, contribution, queuedAt: new Date().toISOString() };
-    writeFileDurable(join(this.dir, `${String(Date.now()).padStart(15, "0")}-${String(this.n++).padStart(6, "0")}-${id}.json`), JSON.stringify(item));
+    const file = `${String(Date.now()).padStart(15, "0")}-${String(this.n++ % 1_000_000).padStart(6, "0")}-${id}.json`;
+    writeFileDurable(join(this.dir, file), JSON.stringify(item));
+    this.index.set(id, { file, item });
     return item;
   }
 
-  private files(): string[] {
-    return readdirSync(this.dir).filter((f) => f.endsWith(".json") && !f.startsWith(".")).sort();
-  }
-
-  /** Pending items, oldest first. Unreadable files are skipped. */
+  /** Pending items, oldest first. */
   list(): OutboxItem[] {
-    const out: OutboxItem[] = [];
-    for (const f of this.files()) {
-      try {
-        const o = JSON.parse(readFileSync(join(this.dir, f), "utf8")) as OutboxItem;
-        if (typeof o.id === "string" && typeof o.wolf === "string" && o.contribution && typeof o.contribution === "object") out.push(o);
-      } catch {
-        /* torn or foreign file */
-      }
-    }
-    return out;
-  }
-
-  private fileOf(id: string): string | undefined {
-    return this.files().find((f) => f.endsWith(`-${id}.json`));
+    return [...this.index.values()].map((e) => e.item);
   }
 
   /** The hub has it: forget the item. */
   remove(id: string): void {
-    const f = this.fileOf(id);
-    if (f) {
-      rmSync(join(this.dir, f), { force: true });
-      fsyncDir(this.dir);
-    }
+    const e = this.index.get(id);
+    if (!e) return;
+    rmSync(join(this.dir, e.file), { force: true });
+    fsyncDir(this.dir);
+    this.index.delete(id);
   }
 
-  /** Terminal rejection: keep the item (with the reason) under rejected/ and stop retrying it. */
+  /** Terminal rejection: keep the item (with the reason) under rejected/ and stop retrying it. The original goes only once the copy is durable. */
   reject(id: string, reason: string): void {
-    const f = this.fileOf(id);
-    if (!f) return;
+    const e = this.index.get(id);
+    if (!e) return;
     const dest = join(this.dir, "rejected");
     mkdirSync(dest, { recursive: true });
-    try {
-      const o = JSON.parse(readFileSync(join(this.dir, f), "utf8"));
-      writeFileDurable(join(dest, f), JSON.stringify({ ...o, rejectedAt: new Date().toISOString(), reason }));
-    } finally {
-      rmSync(join(this.dir, f), { force: true });
-      fsyncDir(this.dir);
-    }
+    writeFileDurable(join(dest, e.file), JSON.stringify({ ...e.item, rejectedAt: new Date().toISOString(), reason })); // throws -> original stays
+    rmSync(join(this.dir, e.file), { force: true });
+    fsyncDir(this.dir);
+    this.index.delete(id);
   }
 
   get size(): number {
-    return this.files().length;
+    return this.index.size;
   }
 }
 

@@ -47,7 +47,18 @@ export interface RunWorkerdOptions extends Omit<SupervisorOptions, "wolves"> {
   hubInboxRoot?: string;
   /** Turn the inbox feed off. Also env WORKERD_FEED=0. A workerd that shares a host (and lanes) with hubd, e.g. on sfo-01 hosting a wolf, MUST set it. */
   feed?: boolean;
+  /**
+   * Link-only mode (env WORKERD_LINK_ONLY=1): open the hub link and the KB sync, announce `announce` to the hub, and supervise NOTHING:
+   * no wolf discovery, no wolfd spawned, no work server. For a host whose wolves run from their own units (sfo-01 hosting Hal).
+   */
+  linkOnly?: boolean;
+  /** Link-only: the wolf names announced in hello (env WORKERD_ANNOUNCE, comma separated). Domains are sent empty: the hub registry is the source. */
+  announce?: string[];
 }
+
+/** Parse WORKERD_LINK_ONLY (1/true/yes/on). */
+export const envLinkOnly = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|yes|on)$/i.test(env.WORKERD_LINK_ONLY ?? "");
+export const envAnnounce = (env: NodeJS.ProcessEnv = process.env): string[] => (env.WORKERD_ANNOUNCE ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
 export interface RunningWorkerd {
   url: string;
@@ -65,7 +76,14 @@ export interface RunningWorkerd {
 export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningWorkerd> {
   const log = opts.log ?? ((l: string) => process.stderr.write(`${l}\n`));
   const root = opts.wolvesDir ?? `${process.env.HOME}/wolves/local`;
-  const found = discoverWolves(root);
+  const linkOnly = opts.linkOnly ?? envLinkOnly();
+  const announce = linkOnly ? [...new Set(opts.announce ?? envAnnounce())] : [];
+  if (linkOnly) {
+    if (!announce.length) throw new Error("link-only mode needs at least one announced wolf (--announce <name> or WORKERD_ANNOUNCE)");
+    if (opts.hub === false) throw new Error("link-only mode needs a hub link");
+    log(`[workerd] link-only: supervising no wolves; announcing ${announce.join(", ")}`);
+  }
+  const found = linkOnly ? { wolves: [], errors: [] } : discoverWolves(root);
   const errors = found.errors.map((e) => e.message);
   for (const e of errors) log(`[workerd] skipping wolf: ${e}`);
   const wolves = found.wolves.map((l) => l.config).filter((w) => !opts.only?.length || opts.only.includes(w.identity.name));
@@ -85,6 +103,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   const supervisor = new Supervisor({ ...opts, wolves, log });
   const hubCfg = opts.hub === false ? undefined : (opts.hub ?? loadHubConfig(opts.configDir));
   const linkWolf = (c: { identity: { name: string; domains: string[] } }): LinkWolf => ({ name: c.identity.name, domains: c.identity.domains });
+  const wolfNames = (): string[] => (linkOnly ? announce : supervisor.configs().map((c) => c.identity.name));
   let link: HubLink | undefined;
   let kbSync: KbSync | undefined;
   let wake: { stop(): void } | undefined;
@@ -118,11 +137,11 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
       outbox,
       ackTimeoutMs: opts.ackTimeoutMs,
       onReceipt: (r) => {
-        if (!supervisor.configs().some((c) => c.identity.name === r.wolf)) return log(`[workerd] receipt for ${JSON.stringify(r.wolf.slice(0, 64))} ignored: not a wolf on this host`);
+        if (!wolfNames().includes(r.wolf)) return log(`[workerd] receipt for ${JSON.stringify(r.wolf.slice(0, 64))} ignored: not a wolf on this host`);
         writeReceiptFile(kbOps, r.wolf, r.name, r.content);
       },
       laptop: opts.laptop,
-      wolves: () => supervisor.configs().map(linkWolf),
+      wolves: () => (linkOnly ? announce.map((name): LinkWolf => ({ name, domains: [] })) : supervisor.configs().map(linkWolf)),
       log,
       onRelay: (f) => (f.t === "req" ? relay.handle(f) : f.t === "cancel" ? relay.cancel(f.id) : relay.hubPause(f.id, f.t === "pause")),
       onLinkDown: () => relay.abortAll(),
@@ -135,7 +154,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
     if (off) log(`[workerd] contribution feed off: ${off}`);
     else {
       const warned = new Set<string>();
-      const feedOnce = () => void feedContributions(kbOps, supervisor.configs().map((c) => c.identity.name), { contribute: (w, c, id) => link!.contribute(w, c, id) }, log, warned);
+      const feedOnce = () => void feedContributions(kbOps, wolfNames(), { contribute: (w, c, id) => link!.contribute(w, c, id) }, log, warned);
       feedOnce();
       feed = setInterval(feedOnce, opts.feedIntervalMs ?? 5000);
       feed.unref();
@@ -148,7 +167,7 @@ export async function runWorkerd(opts: RunWorkerdOptions = {}): Promise<RunningW
   });
   const url = await server.listen(opts.port ?? 7141, opts.host);
   serverUrl = url;
-  supervisor.start();
+  if (!linkOnly) supervisor.start(); // link-only: never spawn
   link?.start();
   return {
     url,

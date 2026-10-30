@@ -10,6 +10,7 @@
  */
 
 import { HttpConsoleClient, MockConsoleClient, type ConsoleClient } from "@wolfpack/client";
+import { bearerOf } from "../core/hub-auth.ts";
 
 const KEY = Symbol.for("wolfpack.console.client");
 
@@ -32,6 +33,40 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
 	});
 }
 
+/** The bearer token the browser forwarded on the current request, if any (installed by Next's `headers()`; tests inject their own). */
+export type RequestToken = () => Promise<string | undefined>;
+
+export const nextRequestToken: RequestToken = async () => {
+	try {
+		const { headers } = await import("next/headers");
+		return bearerOf((await headers()).get("authorization"));
+	} catch {
+		return undefined; // no request scope (tests, scripts, startup)
+	}
+};
+
+/**
+ * Work reads against the hub with a PER-REQUEST token: the browser's forwarded bearer when present, else the env token / legacy key
+ * (server-side and dev path). One small client per token, cached.
+ */
+export function requestScopedWork(hub: { baseUrl: string; token?: string; apiKey?: string }, requestToken: RequestToken): WorkReads {
+	const clients = new Map<string, ConsoleClient>();
+	const forToken = (t: string | undefined): ConsoleClient => {
+		const key = t ?? "";
+		let c = clients.get(key);
+		if (!c) {
+			if (clients.size >= 32) clients.delete(clients.keys().next().value as string);
+			c = new HttpConsoleClient({ baseUrl: hub.baseUrl, hub: t ? { baseUrl: hub.baseUrl, token: t } : hub });
+			clients.set(key, c);
+		}
+		return c;
+	};
+	return {
+		listWork: async (wolf, q) => forToken(await requestToken()).listWork!(wolf, q),
+		getWorkRecord: async (wolf, id) => forToken(await requestToken()).getWorkRecord!(wolf, id),
+	};
+}
+
 /**
  * Build a client from the environment (exported for tests; no singleton).
  *
@@ -40,20 +75,22 @@ export function composeWorkReads(base: ConsoleClient, work: WorkReads): ConsoleC
  *   WOLFPACK_HUB_TOKEN the hub bearer token from `hubd pair` (optional; preferred)
  *   WOLFPACK_HUB_KEY   LEGACY: the hub's X-API-Key (optional; ignored when a token is set)
  */
-export function createConsoleClient(env: Record<string, string | undefined> = process.env): ConsoleClient {
+export function createConsoleClient(env: Record<string, string | undefined> = process.env, requestToken?: RequestToken): ConsoleClient {
 	const baseUrl = env.WOLFPACK_API_URL?.trim();
 	const hubUrl = env.WOLFPACK_HUB_URL?.trim();
 	const hub = hubUrl ? { baseUrl: hubUrl, token: env.WOLFPACK_HUB_TOKEN?.trim() || undefined, apiKey: env.WOLFPACK_HUB_KEY?.trim() || undefined } : undefined;
-	if (baseUrl) return new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) });
+	const withToken = (c: ConsoleClient): ConsoleClient => (hub && requestToken ? composeWorkReads(c, requestScopedWork(hub, requestToken)) : c);
+	if (baseUrl) return withToken(new HttpConsoleClient({ baseUrl, ...(hub ? { hub } : {}) }));
 	if (!hub) return new MockConsoleClient();
 	// No wolf configured, a hub is: threads stay on the mock; work reads come from the hub. The reader's own baseUrl is the hub's
 	// and moot: the composition exposes only its two work reads, which target `hub` explicitly.
+	if (requestToken) return composeWorkReads(new MockConsoleClient(), requestScopedWork(hub, requestToken));
 	return composeWorkReads(new MockConsoleClient(), new HttpConsoleClient({ baseUrl: hub.baseUrl, hub }));
 }
 
 export function getConsoleClient(): ConsoleClient {
 	const holder = globalThis as Holder;
-	holder[KEY] ??= createConsoleClient();
+	holder[KEY] ??= createConsoleClient(process.env, nextRequestToken);
 	return holder[KEY];
 }
 
